@@ -137,6 +137,7 @@ flowchart TB
 aevatar/
 ├── docs/
 │   ├── FOUNDATION.md       # 底层事件与 Pipeline 设计
+│   ├── ROLE.md             # Role、Workflow YAML、Connector 与外部服务
 │   └── EVENT_SOURCING.md   # Event Sourcing 使用说明
 ├── workflows/              # 示例工作流（simple_qa、summarize、brainstorm）
 ├── src/
@@ -165,8 +166,9 @@ aevatar/
 ## 文档与进阶
 
 - **底层设计**： [docs/FOUNDATION.md](docs/FOUNDATION.md) — 事件模型与 Pipeline。
+- **Role 与 Connector**： [docs/ROLE.md](docs/ROLE.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
 - **Event Sourcing**： [docs/EVENT_SOURCING.md](docs/EVENT_SOURCING.md) — 如何开启事件溯源。
-- **Connector**： [src/Aevatar.Config/README.md](src/Aevatar.Config/README.md#connector-作用与配置) — 配置与示例。
+- **Connector 配置详解**： [src/Aevatar.Config/README.md](src/Aevatar.Config/README.md#connector-作用与配置) — 配置格式与示例。
 - **Maker 示例**： [samples/maker](samples/maker) — 自定义步骤类型与 MAKER 工作流。
 
 ---
