@@ -4,12 +4,12 @@
 // SendToAsync uses MassTransit Stream for async decoupling.
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Orleans.Grain;
+using Aevatar.Orleans.Grains;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Orleans.Actor;
+namespace Aevatar.Orleans.Actors;
 
 /// <summary>
 /// Silo-side event publisher injected into Agent instances inside a Grain.

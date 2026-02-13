@@ -3,7 +3,7 @@
 // Stores metadata only; business state uses IStateStore<TState>.
 // ─────────────────────────────────────────────────────────────
 
-namespace Aevatar.Orleans.Grain;
+namespace Aevatar.Orleans.Grains;
 
 /// <summary>
 /// Grain-level persistent metadata. Business state is managed by

@@ -4,25 +4,27 @@
 // SubscribeAsync creates a dynamic MassTransit receive endpoint.
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Orleans.Consumer;
+using Aevatar.Orleans.Consumers;
 using Google.Protobuf;
 using MassTransit;
 
-namespace Aevatar.Orleans.Stream;
+namespace Aevatar.Orleans.Streaming;
 
 /// <summary>
 /// MassTransit-backed event stream for a single actor.
+/// Uses <see cref="IAgentEventSender"/> for transport-agnostic message sending
+/// and <see cref="IBus"/> for dynamic subscription endpoints.
 /// </summary>
 public sealed class MassTransitStream : IStream
 {
-    private readonly ISendEndpointProvider _sendEndpointProvider;
+    private readonly IAgentEventSender _sender;
     private readonly IBus _bus;
 
     /// <summary>Creates a MassTransit stream for the specified actor.</summary>
-    public MassTransitStream(string streamId, ISendEndpointProvider sendEndpointProvider, IBus bus)
+    public MassTransitStream(string streamId, IAgentEventSender sender, IBus bus)
     {
         StreamId = streamId;
-        _sendEndpointProvider = sendEndpointProvider;
+        _sender = sender;
         _bus = bus;
     }
 
@@ -56,13 +58,11 @@ public sealed class MassTransitStream : IStream
             EnvelopeBytes = bytes,
         };
 
-        var endpoint = await _sendEndpointProvider.GetSendEndpoint(
-            new Uri($"queue:{Constants.AgentEventEndpoint}"));
-        await endpoint.Send(msg, ct);
+        await _sender.SendAsync(msg, ct);
     }
 
     /// <inheritdoc />
-    public Task<IAsyncDisposable> SubscribeAsync<T>(
+    public async Task<IAsyncDisposable> SubscribeAsync<T>(
         Func<T, Task> handler, CancellationToken ct = default) where T : IMessage
     {
         // Create a dynamic receive endpoint for this subscription.
@@ -86,8 +86,10 @@ public sealed class MassTransitStream : IStream
             });
         });
 
-        return Task.FromResult<IAsyncDisposable>(
-            new MassTransitSubscription(handle));
+        // Must await Ready before the endpoint can receive messages
+        await handle.Ready;
+
+        return new MassTransitSubscription(handle);
     }
 
     /// <summary>Disposable subscription handle wrapping a MassTransit endpoint.</summary>

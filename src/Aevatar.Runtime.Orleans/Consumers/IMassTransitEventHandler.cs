@@ -3,7 +3,7 @@
 // Consumer to Orleans Grain.
 // ─────────────────────────────────────────────────────────────
 
-namespace Aevatar.Orleans.Consumer;
+namespace Aevatar.Orleans.Consumers;
 
 /// <summary>
 /// Bridges MassTransit consumer messages to the correct Orleans Grain.

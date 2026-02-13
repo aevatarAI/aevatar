@@ -4,11 +4,11 @@
 // message and calls this handler, which routes to the Grain.
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Orleans.Grain;
+using Aevatar.Orleans.Grains;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Orleans.Consumer;
+namespace Aevatar.Orleans.Consumers;
 
 /// <summary>
 /// Bridges MassTransit consumer messages to Orleans Grains.

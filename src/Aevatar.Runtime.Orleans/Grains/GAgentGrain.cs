@@ -13,21 +13,21 @@ using System.Diagnostics;
 using Aevatar.Deduplication;
 using Aevatar.EventSourcing;
 using Aevatar.Observability;
-using Aevatar.Orleans.Actor;
+using Aevatar.Orleans.Actors;
 using Aevatar.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
 
-namespace Aevatar.Orleans.Grain;
+namespace Aevatar.Orleans.Grains;
 
 /// <summary>
 /// Core Orleans Grain that hosts an IAgent instance. Not marked
 /// [Reentrant] — HandleEventAsync is serialized by Orleans turn-based
 /// concurrency, ensuring agent state consistency.
 /// </summary>
-public class GAgentGrain : Orleans.Grain, IGAgentGrain
+public class GAgentGrain : Grain, IGAgentGrain
 {
     private readonly IPersistentState<OrleansAgentState> _state;
     private IAgent? _agent;
@@ -129,16 +129,34 @@ public class GAgentGrain : Orleans.Grain, IGAgentGrain
         var agentId = this.GetPrimaryKeyString();
         using var activity = AevatarActivitySource.StartHandleEvent(agentId, envelope.Id);
         var sw = Stopwatch.StartNew();
+        var status = "ok";
 
-        await _agent.HandleEventAsync(envelope);
-
-        sw.Stop();
-        AgentMetrics.EventsHandled.Add(1,
-            new KeyValuePair<string, object?>("agent.id", agentId),
-            new KeyValuePair<string, object?>("agent.type", _state.State.AgentTypeName));
-        AgentMetrics.HandlerDuration.Record(sw.Elapsed.TotalMilliseconds,
-            new KeyValuePair<string, object?>("agent.id", agentId),
-            new KeyValuePair<string, object?>("agent.type", _state.State.AgentTypeName));
+        try
+        {
+            await _agent.HandleEventAsync(envelope);
+        }
+        catch (Exception ex)
+        {
+            status = "error";
+            activity?.SetTag("aevatar.error", true);
+            activity?.SetTag("aevatar.error.message", ex.Message);
+            _logger.LogError(ex, "Agent {AgentId} failed to handle event {EventId}",
+                agentId, envelope.Id);
+            // Do NOT rethrow: allow metrics recording and propagation to proceed.
+            // MassTransit retry/DLQ handles the delivery guarantee.
+        }
+        finally
+        {
+            sw.Stop();
+            AgentMetrics.EventsHandled.Add(1,
+                new KeyValuePair<string, object?>("agent.id", agentId),
+                new KeyValuePair<string, object?>("agent.type", _state.State.AgentTypeName),
+                new KeyValuePair<string, object?>("status", status));
+            AgentMetrics.HandlerDuration.Record(sw.Elapsed.TotalMilliseconds,
+                new KeyValuePair<string, object?>("agent.id", agentId),
+                new KeyValuePair<string, object?>("agent.type", _state.State.AgentTypeName),
+                new KeyValuePair<string, object?>("status", status));
+        }
 
         // ── Propagate (fire-and-forget) ──
         _ = PropagateEventAsync(envelope)
@@ -336,15 +354,11 @@ public class GAgentGrain : Orleans.Grain, IGAgentGrain
                 var behavior = ServiceProvider.GetService(behaviorType);
                 if (behavior != null) break; // Already injected via DI
 
-                // Create default EventSourcingBehavior if IEventStore is available
-                var eventStore = ServiceProvider.GetService<IEventStore>();
-                if (eventStore != null)
-                {
-                    var implType = typeof(EventSourcingBehavior<>).MakeGenericType(stateType);
-                    behavior = Activator.CreateInstance(implType, eventStore, actorId);
-                    // Inject into agent if it has a matching property
-                    // (This would require a convention or interface extension)
-                }
+                // MVP: GAgentBase does not expose an EventSourcing property.
+                // ES is a pure mixin — agents access it via:
+                //   Services.GetService<IEventStore>() + new EventSourcingBehavior<TState>(store, Id)
+                // Phase 3 enhancement: add GAgentBase.EventSourcing property
+                // or register a scoped factory in DI for per-agent behavior.
                 break;
             }
             type = type.BaseType;

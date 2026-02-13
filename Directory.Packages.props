@@ -16,7 +16,7 @@
     <!-- OpenTelemetry -->
     <OpenTelemetryVersion>1.15.0</OpenTelemetryVersion>
     <!-- MassTransit -->
-    <MassTransitVersion>9.0.0</MassTransitVersion>
+    <MassTransitVersion>8.5.7</MassTransitVersion>
     <!-- .NET Aspire -->
     <AspireVersion>13.1.0</AspireVersion>
     <!-- Roslyn (Microsoft.CodeAnalysis) -->

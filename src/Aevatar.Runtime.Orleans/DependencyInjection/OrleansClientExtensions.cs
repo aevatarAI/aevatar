@@ -4,8 +4,8 @@
 // and IAgentManifestStore for agent indexing.
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Orleans.Actor;
-using Aevatar.Orleans.Stream;
+using Aevatar.Orleans.Actors;
+using Aevatar.Orleans.Streaming;
 using Aevatar.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;

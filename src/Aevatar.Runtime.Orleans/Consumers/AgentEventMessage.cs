@@ -3,7 +3,7 @@
 // Wraps a serialized EventEnvelope with routing metadata.
 // ─────────────────────────────────────────────────────────────
 
-namespace Aevatar.Orleans.Consumer;
+namespace Aevatar.Orleans.Consumers;
 
 /// <summary>
 /// MassTransit message envelope carrying a serialized EventEnvelope

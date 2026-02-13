@@ -6,7 +6,7 @@
 
 using Orleans.Concurrency;
 
-namespace Aevatar.Orleans.Grain;
+namespace Aevatar.Orleans.Grains;
 
 /// <summary>Orleans Grain interface wrapping an agent instance.</summary>
 public interface IGAgentGrain : IGrainWithStringKey

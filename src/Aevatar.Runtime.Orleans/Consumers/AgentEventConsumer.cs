@@ -7,7 +7,7 @@
 using MassTransit;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Orleans.Consumer;
+namespace Aevatar.Orleans.Consumers;
 
 /// <summary>
 /// MassTransit consumer that receives AgentEventMessage and routes

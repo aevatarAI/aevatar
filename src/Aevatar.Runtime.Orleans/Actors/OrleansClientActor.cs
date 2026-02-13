@@ -5,9 +5,9 @@
 // Results arrive via IStreamProvider subscription on the Client.
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Orleans.Grain;
+using Aevatar.Orleans.Grains;
 
-namespace Aevatar.Orleans.Actor;
+namespace Aevatar.Orleans.Actors;
 
 /// <summary>
 /// Client-side actor proxy. Events are sent via MassTransit Stream

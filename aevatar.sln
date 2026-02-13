@@ -51,6 +51,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Core", "src\Aevatar
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Runtime.Orleans", "src\Aevatar.Runtime.Orleans\Aevatar.Runtime.Orleans.csproj", "{15AA6EDA-DF29-4ABE-B93B-F2A6BD76B81D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Silo", "src\Aevatar.Silo\Aevatar.Silo.csproj", "{E2FDD672-4E24-4474-9214-7E345C65B85F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -301,6 +303,18 @@ Global
 		{15AA6EDA-DF29-4ABE-B93B-F2A6BD76B81D}.Release|x64.Build.0 = Release|Any CPU
 		{15AA6EDA-DF29-4ABE-B93B-F2A6BD76B81D}.Release|x86.ActiveCfg = Release|Any CPU
 		{15AA6EDA-DF29-4ABE-B93B-F2A6BD76B81D}.Release|x86.Build.0 = Release|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Debug|x64.Build.0 = Debug|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Debug|x86.Build.0 = Debug|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Release|x64.ActiveCfg = Release|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Release|x64.Build.0 = Release|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Release|x86.ActiveCfg = Release|Any CPU
+		{E2FDD672-4E24-4474-9214-7E345C65B85F}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -326,6 +340,7 @@ Global
 		{A510C098-C1B6-BD44-9809-B1C69C5A67E0} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{156EE364-74F7-22EA-05A3-4D89B4F376FC} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{15AA6EDA-DF29-4ABE-B93B-F2A6BD76B81D} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{E2FDD672-4E24-4474-9214-7E345C65B85F} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {EA11C864-4448-4252-9CFA-011CB703FD5C}

@@ -6,8 +6,8 @@
 
 using Aevatar.Context;
 using Aevatar.Deduplication;
-using Aevatar.Orleans.Consumer;
-using Aevatar.Orleans.Stream;
+using Aevatar.Orleans.Consumers;
+using Aevatar.Orleans.Streaming;
 using Aevatar.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;

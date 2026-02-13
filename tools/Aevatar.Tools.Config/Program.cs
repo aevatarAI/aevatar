@@ -15,9 +15,7 @@ var portIndex = Array.IndexOf(args, "--port");
 var port = 6677;
 if (portIndex >= 0 && portIndex + 1 < args.Length && int.TryParse(args[portIndex + 1], out var customPort))
     port = customPort;
-var toolDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) ?? Environment.CurrentDirectory;
-var webRootPath = Path.Combine(toolDir, "wwwroot");
-var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, WebRootPath = webRootPath, ContentRootPath = toolDir });
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args });
 var url = $"http://localhost:{port}";
 builder.WebHost.UseUrls(url);
 #else

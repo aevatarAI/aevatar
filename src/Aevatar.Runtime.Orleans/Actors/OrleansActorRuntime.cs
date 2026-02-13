@@ -5,12 +5,12 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Helpers;
-using Aevatar.Orleans.Grain;
+using Aevatar.Orleans.Grains;
 using Aevatar.Persistence;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Aevatar.Orleans.Actor;
+namespace Aevatar.Orleans.Actors;
 
 /// <summary>
 /// Orleans-backed actor runtime (Client-side). Manages agent lifecycle,
