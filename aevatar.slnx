@@ -14,6 +14,9 @@
   <Folder Name="/samples/maker/">
     <Project Path="samples\maker\Aevatar.Sample.Maker.csproj" Type="Classic C#" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" Type="Classic C#" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src\Aevatar.Abstractions\Aevatar.Abstractions.csproj" Type="Classic C#" />
     <Project Path="src\Aevatar.AGUI\Aevatar.AGUI.csproj" Type="Classic C#" />

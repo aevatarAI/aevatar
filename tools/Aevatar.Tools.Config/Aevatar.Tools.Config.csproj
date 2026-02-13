@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Exe</OutputType>
+    <DefineConstants>$(DefineConstants);AEVATAR_CONFIG_TOOL</DefineConstants>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>aevatar-config</ToolCommandName>
+    <PackageId>aevatar-config</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Aevatar</Authors>
+    <Description>Local CLI tool to configure Aevatar user secrets (LLM API keys, etc.) via a web UI. Reads/writes ~/.aevatar/secrets.json.</Description>
+    <PackageTags>aevatar;config;secrets;llm;cli</PackageTags>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Config\Aevatar.Config.csproj" />
+  </ItemGroup>
+</Project>

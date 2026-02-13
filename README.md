@@ -135,7 +135,8 @@ sequenceDiagram
 ```text
 aevatar/
 ├── docs/
-│   └── FOUNDATION.md           # 底层契约与 Pipeline 设计
+│   ├── FOUNDATION.md           # 底层契约与 Pipeline 设计
+│   └── EVENT_SOURCING.md       # Event Sourcing 开启与使用
 ├── workflows/                   # 仓库根工作流（simple_qa / summarize / brainstorm）
 ├── src/
 │   ├── Aevatar.Abstractions    # 契约：IAgent / IActor / IEventModule / IConnector 等
@@ -150,6 +151,8 @@ aevatar/
 │   └── Aevatar.AI.MEAI / .MCP / .Skills  # LLM 与工具扩展
 ├── demos/
 │   └── Aevatar.Demo.Cli       # CLI 演示（事件传播与报告）
+├── tools/
+│   └── Aevatar.Tools.Config   # 配置工具 aevatar-config（Web UI 配置 LLM API Key）
 ├── samples/
 │   └── maker                  # MAKER 模式示例（自定义 Module + Connector）
 └── test/
@@ -174,6 +177,23 @@ dotnet test test/Aevatar.Core.Tests/Aevatar.Core.Tests.csproj
 | **~/.aevatar/secrets.json** | 明文 JSON，例如：`{ "LLMProviders:Providers:deepseek:ApiKey": "sk-..." }` 或 `{ "LLMProviders:Providers:openai:ApiKey": "sk-..." }`。默认 Provider 可通过 `LLMProviders:Default` 指定。详见 [Aevatar.Config 配置说明](src/Aevatar.Config/README.md)。 |
 
 配置后，Api 启动时会从环境变量或 secrets 读取 Key 并注册 MEAI Provider；工作流中的 `llm_call` 步骤会使用对应角色在 YAML 里配置的 `provider` / `model`（未写则用默认 DeepSeek）。
+
+**使用 aevatar-config 配置 LLM API Key（推荐）**
+
+本仓库提供配置工具 **aevatar-config**，通过本地 Web 界面管理 `~/.aevatar/secrets.json` 中的 LLM Provider 与 API Key，无需手写 JSON。
+
+1. **安装为 dotnet tool（可选）**：
+   ```bash
+   dotnet pack tools/Aevatar.Tools.Config/Aevatar.Tools.Config.csproj -c Release
+   dotnet tool install --global --add-source ./tools/Aevatar.Tools.Config/bin/Release aevatar-config
+   ```
+2. **运行**：
+   ```bash
+   aevatar-config
+   ```
+   或从源码直接运行：`dotnet run --project tools/Aevatar.Tools.Config`。默认在浏览器打开 http://localhost:6677。
+3. 在页面中点击 **Providers**，选择要用的 Provider（如 DeepSeek、OpenAI），填写 Endpoint、Model、API Key，点击 **Save**。可将该 Provider 设为 **Default**，Api 会从 `~/.aevatar/secrets.json` 读取并注册。
+4. 使用 `--no-browser` 不自动打开浏览器；`--port 8080` 指定端口。详见 [tools/Aevatar.Tools.Config/README.md](tools/Aevatar.Tools.Config/README.md)。
 
 **推荐从仓库根目录启动**，这样会加载 repo 根目录下的 `workflows/`（无需拷贝到 `~/.aevatar`）：
 
@@ -222,5 +242,6 @@ dotnet run --project demos/Aevatar.Demo.Cli -- run hierarchy --web artifacts/dem
 ## 文档与后续
 
 - 底层事件模型与 Pipeline： [docs/FOUNDATION.md](docs/FOUNDATION.md)
+- **Event Sourcing 开启与使用**： [docs/EVENT_SOURCING.md](docs/EVENT_SOURCING.md)
 - Connector 配置与示例： [src/Aevatar.Config/README.md](src/Aevatar.Config/README.md#connector-作用与配置)
 - 后续方向：更多宿主模板（如默认带 MCP 的 Api）、可观测与调试体验、可视化拓扑与时间线
