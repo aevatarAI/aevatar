@@ -6,4 +6,5 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Aevatar.Runtime")]
+[assembly: InternalsVisibleTo("Aevatar.Runtime.Orleans")]
 [assembly: InternalsVisibleTo("Aevatar.Core.Tests")]
