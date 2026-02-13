@@ -79,6 +79,8 @@ builder.Services.AddSingleton(sp =>
     if (Directory.Exists(repoRootWorkflows)) registry.LoadFromDirectory(repoRootWorkflows);
     if (Directory.Exists(cwdWorkflows)) registry.LoadFromDirectory(cwdWorkflows);
     if (Directory.Exists(aevatarWorkflows)) registry.LoadFromDirectory(aevatarWorkflows);
+    // 内置 direct 覆盖同名，保证未传 workflow 时默认一定带 role: assistant，能正常调 LLM
+    registry.Register("direct", WorkflowRegistry.BuiltInDirectYaml);
     return registry;
 });
 

@@ -26,7 +26,7 @@ public sealed record ChatInput
     /// <summary>用户提示词。</summary>
     public required string Prompt { get; init; }
 
-    /// <summary>工作流名称。agentId 为空时必填。</summary>
+    /// <summary>工作流名称。agentId 为空时必填；未传时默认为 "direct"（直接对话）。</summary>
     public string? Workflow { get; init; }
 
     /// <summary>复用已有 Agent 的 ID。空则新建。</summary>
@@ -78,13 +78,10 @@ public static class ChatEndpoints
         }
         else
         {
-            if (string.IsNullOrWhiteSpace(input.Workflow))
-            {
-                http.Response.StatusCode = StatusCodes.Status400BadRequest;
-                return;
-            }
+            // 未传 workflow 时使用默认工作流 "direct"（直接对话）
+            var workflowName = string.IsNullOrWhiteSpace(input.Workflow) ? "direct" : input.Workflow;
 
-            var yaml = registry.GetYaml(input.Workflow);
+            var yaml = registry.GetYaml(workflowName);
             if (yaml == null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -97,7 +94,7 @@ public static class ChatEndpoints
             if (actor.Agent is WorkflowGAgent wfAgent)
             {
                 wfAgent.State.WorkflowYaml = yaml;
-                wfAgent.State.WorkflowName = input.Workflow;
+                wfAgent.State.WorkflowName = workflowName;
             }
 
             // 重新激活以编译 YAML（OnActivateAsync 会读 State.WorkflowYaml）
@@ -187,8 +184,8 @@ public static class ChatEndpoints
 
         // ─── 6. 生成并写入执行报告（artifacts/chat-runs） ───
 
-        var workflowName = input.Workflow ?? "";
-        if (!string.IsNullOrWhiteSpace(workflowName))
+        var workflowNameForReport = string.IsNullOrWhiteSpace(input.Workflow) ? "direct" : input.Workflow;
+        if (!string.IsNullOrWhiteSpace(workflowNameForReport))
         {
             try
             {
@@ -201,7 +198,7 @@ public static class ChatEndpoints
                         topology.Add(new ChatTopologyEdge(parent, a.Id));
                 }
 
-                var report = recorder.BuildReport(workflowName, runId, startedAt, input.Prompt, topology);
+                var report = recorder.BuildReport(workflowNameForReport, runId, startedAt, input.Prompt, topology);
                 var outputDir = Path.Combine(AevatarPaths.RepoRoot, "artifacts", "chat-runs");
                 var (jsonPath, htmlPath) = ChatRunReportWriter.BuildDefaultPaths(outputDir);
                 await ChatRunReportWriter.WriteAsync(report, jsonPath, htmlPath);

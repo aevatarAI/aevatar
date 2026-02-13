@@ -16,6 +16,22 @@ public sealed class WorkflowRegistry
 {
     private readonly ConcurrentDictionary<string, string> _workflows = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>内置 default 工作流 "direct"：单步 llm_call，role=assistant，保证未传 workflow 时一定有可用默认。</summary>
+    public static string BuiltInDirectYaml { get; } = """
+        name: direct
+        description: Direct chat; default when no workflow name is provided.
+        roles:
+          - id: assistant
+            name: Assistant
+            system_prompt: |
+              You are a helpful assistant. Answer the user clearly and concisely.
+        steps:
+          - id: reply
+            type: llm_call
+            role: assistant
+            parameters: {}
+        """;
+
     /// <summary>手动注册一个 workflow。</summary>
     public void Register(string name, string yaml) => _workflows[name] = yaml;
 
