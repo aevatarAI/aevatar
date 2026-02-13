@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Aevatar.Gateway</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Runtime\Aevatar.Runtime.csproj" />
+    <ProjectReference Include="..\Aevatar.Cognitive\Aevatar.Cognitive.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.MEAI\Aevatar.AI.MEAI.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.LLMTornado\Aevatar.AI.LLMTornado.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.MCP\Aevatar.AI.MCP.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Skills\Aevatar.AI.Skills.csproj" />
+    <ProjectReference Include="..\Aevatar.Config\Aevatar.Config.csproj" />
+  </ItemGroup>
+</Project>

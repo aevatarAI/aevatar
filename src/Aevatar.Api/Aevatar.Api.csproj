@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Aevatar.Api</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.AGUI\Aevatar.AGUI.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.MCP\Aevatar.AI.MCP.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.MEAI\Aevatar.AI.MEAI.csproj" />
+    <ProjectReference Include="..\Aevatar.Cognitive\Aevatar.Cognitive.csproj" />
+    <ProjectReference Include="..\Aevatar.Config\Aevatar.Config.csproj" />
+    <ProjectReference Include="..\Aevatar.Runtime\Aevatar.Runtime.csproj" />
+  </ItemGroup>
+</Project>

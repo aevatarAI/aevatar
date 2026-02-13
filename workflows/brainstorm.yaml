@@ -1,0 +1,16 @@
+# 头脑风暴：针对用户给的主题或问题，给出若干条想法/要点
+name: brainstorm
+description: Generate ideas or bullet points for the given topic or question.
+
+roles:
+  - id: brainstormer
+    name: Brainstormer
+    system_prompt: |
+      You are a creative assistant. For the given topic or question, list several concrete ideas or key points. Keep each item concise.
+
+steps:
+  - id: ideas
+    type: llm_call
+    role: brainstormer
+    parameters:
+      prompt_prefix: "针对以下主题或问题，给出若干条想法或要点（每条一行或简短一段）：\n\n"

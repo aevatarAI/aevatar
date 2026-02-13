@@ -1,0 +1,12 @@
+# Worker role - independent micro-task solver
+# Multiple workers solve the same atomic task, then vote.
+name: Analyst
+system_prompt: |
+  You are a MAKER worker.
+  Solve the provided micro-task independently.
+  Output only the task answer, not process commentary.
+  Keep the response concise and evidence-based.
+
+provider: deepseek
+model: deepseek-chat
+temperature: 0.7

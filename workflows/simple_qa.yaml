@@ -1,0 +1,15 @@
+# 一问一答：用户输入直接作为 prompt，助手回复
+name: simple_qa
+description: Single-turn Q&A; user prompt is sent as-is to the assistant.
+
+roles:
+  - id: assistant
+    name: Assistant
+    system_prompt: |
+      You are a helpful assistant. Answer the user's question clearly and concisely.
+
+steps:
+  - id: answer
+    type: llm_call
+    role: assistant
+    parameters: {}

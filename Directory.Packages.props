@@ -1,0 +1,373 @@
+<Project>
+  <!-- Enable Central Package Management -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <!-- Shared Version Variables -->
+  <PropertyGroup>
+    <!-- .NET 10 platform packages (Extensions / ASP.NET Core / EF Core) -->
+    <MicrosoftExtensionsVersion>10.0.2</MicrosoftExtensionsVersion>
+    <!-- Microsoft Orleans -->
+    <OrleansVersion>10.0.1</OrleansVersion>
+    <!-- ABP Framework (excludes LeptonXLite Theme & Studio.Client) -->
+    <AbpVersion>10.0.3</AbpVersion>
+    <!-- OpenTelemetry -->
+    <OpenTelemetryVersion>1.15.0</OpenTelemetryVersion>
+    <!-- MassTransit -->
+    <MassTransitVersion>9.0.0</MassTransitVersion>
+    <!-- .NET Aspire -->
+    <AspireVersion>13.1.0</AspireVersion>
+    <!-- Roslyn (Microsoft.CodeAnalysis) -->
+    <RoslynVersion>5.0.0</RoslynVersion>
+    <!-- Proto.Actor -->
+    <ProtoActorVersion>1.8.0</ProtoActorVersion>
+    <!-- Model Context Protocol -->
+    <McpVersion>0.4.0-preview.3</McpVersion>
+    <!-- GraphQL Client -->
+    <GraphQLClientVersion>6.1.0</GraphQLClientVersion>
+    <!-- Health Checks UI -->
+    <HealthChecksUIVersion>9.0.0</HealthChecksUIVersion>
+    <!-- EphemeralMongo (test infra) -->
+    <EphemeralMongoVersion>1.1.0</EphemeralMongoVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Microsoft Extensions - .NET 10                              -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.2.0-preview.1.26063.2" />
+    <PackageVersion Include="Microsoft.Extensions.AI.AzureAIInference" Version="10.0.0-preview.1.25559.3" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.CommandLine" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.FileProviders.Embedded" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Polly" Version="$(MicrosoftExtensionsVersion)" />
+
+    <!-- Model Context Protocol -->
+    <PackageVersion Include="ModelContextProtocol" Version="$(McpVersion)" />
+    <PackageVersion Include="ModelContextProtocol.Core" Version="$(McpVersion)" />
+
+    <!-- .NET Runtime -->
+    <PackageVersion Include="System.Text.Json" Version="10.0.0" />
+    <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+
+    <!-- CLI Utilities -->
+    <PackageVersion Include="Spectre.Console" Version="0.54.0" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- ASP.NET Core - .NET 10                                      -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.AspNetCore.StaticFiles" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.AspNetCore.Http.Features" Version="5.0.17" />
+    <PackageVersion Include="Microsoft.AspNetCore.DataProtection.StackExchangeRedis" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="$(MicrosoftExtensionsVersion)" />
+
+    <!-- EF Core / Data -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="$(MicrosoftExtensionsVersion)" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Orleans                                                     -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Microsoft.Orleans.Client" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Microsoft.Orleans.Core" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Microsoft.Orleans.EventSourcing" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.Memory" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.Protobuf" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Microsoft.Orleans.Server" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Microsoft.Orleans.TestingHost" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Orleans.Providers.MongoDB" Version="9.5.0" />
+    <PackageVersion Include="Orleans.Streams.Kafka" Version="8.0.3-serializer.2" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Protobuf & gRPC                                             -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Google.Protobuf" Version="3.33.4" />
+    <PackageVersion Include="Grpc.Tools" Version="2.76.0" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Proto.Actor                                                 -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Proto.Actor" Version="$(ProtoActorVersion)" />
+    <PackageVersion Include="Proto.Remote" Version="$(ProtoActorVersion)" />
+    <PackageVersion Include="Proto.TestKit" Version="$(ProtoActorVersion)" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- AI SDKs                                                     -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
+    <PackageVersion Include="OpenAI" Version="2.8.0" />
+    <PackageVersion Include="Azure.Identity" Version="1.17.1" />
+    <PackageVersion Include="LlmTornado" Version="3.8.43" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Databases & Storage                                         -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="MongoDB.Driver" Version="3.6.0" />
+    <PackageVersion Include="Neo4j.Driver" Version="6.0.0" />
+    <PackageVersion Include="Minio" Version="7.0.0" />
+    <PackageVersion Include="StackExchange.Redis" Version="2.10.1" />
+    <PackageVersion Include="Npgsql" Version="10.0.1" />
+
+    <!-- Elasticsearch -->
+    <PackageVersion Include="Elastic.Clients.Elasticsearch" Version="9.3.0" />
+    <PackageVersion Include="Elastic.Transport" Version="0.5.9" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- OpenTelemetry                                               -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="OpenTelemetry" Version="$(OpenTelemetryVersion)" />
+    <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="$(OpenTelemetryVersion)" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="$(OpenTelemetryVersion)" />
+    <PackageVersion Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="$(OpenTelemetryVersion)-beta.1" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="$(OpenTelemetryVersion)" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="$(OpenTelemetryVersion)" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="$(OpenTelemetryVersion)" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="$(OpenTelemetryVersion)" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- .NET Aspire                                                 -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Aspire.Hosting.AppHost" Version="$(AspireVersion)" />
+    <PackageVersion Include="Aspire.Hosting.MongoDB" Version="$(AspireVersion)" />
+    <PackageVersion Include="Aspire.Hosting.Redis" Version="$(AspireVersion)" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- API Documentation                                           -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.1.0" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Testing                                                     -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageVersion Include="xunit.extensibility.execution" Version="2.9.3" />
+    <PackageVersion Include="Moq" Version="4.20.72" />
+    <PackageVersion Include="FluentAssertions" Version="8.8.0" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="Shouldly" Version="4.3.0" />
+    <PackageVersion Include="NSubstitute" Version="5.3.0" />
+    <PackageVersion Include="NSubstitute.Analyzers.CSharp" Version="1.0.17" />
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+
+    <!-- Testing Infrastructure - EphemeralMongo -->
+    <PackageVersion Include="EphemeralMongo.Core" Version="$(EphemeralMongoVersion)" />
+    <PackageVersion Include="EphemeralMongo6.runtime.linux-x64" Version="$(EphemeralMongoVersion)" />
+    <PackageVersion Include="EphemeralMongo6.runtime.osx-x64" Version="$(EphemeralMongoVersion)" />
+    <PackageVersion Include="EphemeralMongo6.runtime.win-x64" Version="$(EphemeralMongoVersion)" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Serilog                                                     -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageVersion Include="Serilog.Extensions.Logging" Version="10.0.0" />
+    <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
+    <PackageVersion Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
+    <PackageVersion Include="Serilog.Sinks.Async" Version="2.1.0" />
+
+    <!-- log4net (override transitive vulnerable versions) -->
+    <PackageVersion Include="log4net" Version="3.2.0" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Roslyn (align versions to avoid NU1608)                     -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.Common" Version="$(RoslynVersion)" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="$(RoslynVersion)" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Workspaces.Common" Version="$(RoslynVersion)" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- MassTransit                                                 -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="MassTransit" Version="$(MassTransitVersion)" />
+    <PackageVersion Include="MassTransit.Abstractions" Version="$(MassTransitVersion)" />
+    <PackageVersion Include="MassTransit.Kafka" Version="$(MassTransitVersion)" />
+    <PackageVersion Include="MassTransit.RabbitMQ" Version="$(MassTransitVersion)" />
+    <PackageVersion Include="MassTransit.TestFramework" Version="$(MassTransitVersion)" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Health Checks                                               -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="AspNetCore.HealthChecks.UI" Version="$(HealthChecksUIVersion)" />
+    <PackageVersion Include="AspNetCore.HealthChecks.UI.Client" Version="$(HealthChecksUIVersion)" />
+    <PackageVersion Include="AspNetCore.HealthChecks.UI.InMemory.Storage" Version="$(HealthChecksUIVersion)" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- ABP Framework                                               -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Core -->
+    <PackageVersion Include="Volo.Abp.Core" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Ddd.Domain.Shared" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Ddd.Domain" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Ddd.Application.Contracts" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Ddd.Application" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.MongoDB" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.AutoMapper" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Autofac" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Data" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Localization" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Auditing" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Authorization" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Authorization.Abstractions" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Validation" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Caching" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Emailing" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.GlobalFeatures" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Swashbuckle" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.TestBase" Version="$(AbpVersion)" />
+
+    <!-- ASP.NET Core Integration -->
+    <PackageVersion Include="Volo.Abp.AspNetCore.Mvc" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.AspNetCore.Mvc.UI" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.AspNetCore.Mvc.UI.Bootstrap" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.AspNetCore.Mvc.UI.Bundling" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.AspNetCore.Mvc.UI.Theme.LeptonXLite" Version="5.0.1" />
+    <PackageVersion Include="Volo.Abp.AspNetCore.Mvc.UI.Theme.Shared" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.AspNetCore.Serilog" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.AspNetCore.TestBase" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.AspNetCore.Authentication.JwtBearer" Version="$(AbpVersion)" />
+
+    <!-- Account Module -->
+    <PackageVersion Include="Volo.Abp.Account.Web" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Account.Web.OpenIddict" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Account.Application" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Account.Application.Contracts" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Account.HttpApi" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Account.HttpApi.Client" Version="$(AbpVersion)" />
+
+    <!-- Identity Module -->
+    <PackageVersion Include="Volo.Abp.Identity.Application" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Identity.Application.Contracts" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Identity.AspNetCore" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Identity.Domain" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Identity.Domain.Shared" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Identity.HttpApi" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Identity.HttpApi.Client" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Identity.MongoDB" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Identity.Web" Version="$(AbpVersion)" />
+
+    <!-- OpenIddict Module -->
+    <PackageVersion Include="Volo.Abp.OpenIddict.AspNetCore" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.OpenIddict.Domain" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.OpenIddict.Domain.Shared" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.OpenIddict.MongoDB" Version="$(AbpVersion)" />
+
+    <!-- Permission Management Module -->
+    <PackageVersion Include="Volo.Abp.PermissionManagement.Application" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.PermissionManagement.Application.Contracts" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.PermissionManagement.Domain.Identity" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.PermissionManagement.Domain.OpenIddict" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.PermissionManagement.Domain.Shared" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.PermissionManagement.HttpApi" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.PermissionManagement.HttpApi.Client" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.PermissionManagement.MongoDB" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.PermissionManagement.Web" Version="$(AbpVersion)" />
+
+    <!-- Setting Management Module -->
+    <PackageVersion Include="Volo.Abp.SettingManagement.Application" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.SettingManagement.Application.Contracts" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.SettingManagement.Domain" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.SettingManagement.Domain.Shared" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.SettingManagement.HttpApi" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.SettingManagement.HttpApi.Client" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.SettingManagement.MongoDB" Version="$(AbpVersion)" />
+
+    <!-- Feature Management Module -->
+    <PackageVersion Include="Volo.Abp.FeatureManagement.Application" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.FeatureManagement.Application.Contracts" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.FeatureManagement.Domain" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.FeatureManagement.Domain.Shared" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.FeatureManagement.HttpApi" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.FeatureManagement.HttpApi.Client" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.FeatureManagement.MongoDB" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.FeatureManagement.Web" Version="$(AbpVersion)" />
+
+    <!-- Tenant Management Module -->
+    <PackageVersion Include="Volo.Abp.TenantManagement.Application" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.TenantManagement.Application.Contracts" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.TenantManagement.Domain" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.TenantManagement.Domain.Shared" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.TenantManagement.HttpApi" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.TenantManagement.HttpApi.Client" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.TenantManagement.MongoDB" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.TenantManagement.Web" Version="$(AbpVersion)" />
+
+    <!-- Audit Logging Module -->
+    <PackageVersion Include="Volo.Abp.AuditLogging.Domain" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.AuditLogging.Domain.Shared" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.AuditLogging.MongoDB" Version="$(AbpVersion)" />
+
+    <!-- Background Jobs Module -->
+    <PackageVersion Include="Volo.Abp.BackgroundJobs" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.BackgroundJobs.Abstractions" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.BackgroundJobs.Domain" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.BackgroundJobs.Domain.Shared" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.BackgroundJobs.MongoDB" Version="$(AbpVersion)" />
+
+    <!-- Blob Storing Module -->
+    <PackageVersion Include="Volo.Abp.BlobStoring.Database.Domain" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.BlobStoring.Database.Domain.Shared" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.BlobStoring.Database.MongoDB" Version="$(AbpVersion)" />
+
+    <!-- Navigation & HTTP -->
+    <PackageVersion Include="Volo.Abp.UI.Navigation" Version="$(AbpVersion)" />
+    <PackageVersion Include="Volo.Abp.Http.Client.IdentityModel" Version="$(AbpVersion)" />
+
+    <!-- ABP Studio (separate version track) -->
+    <PackageVersion Include="Volo.Abp.Studio.Client.AspNetCore" Version="2.1.3" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- AElf SDK                                                    -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="AElf.Types" Version="1.12.0" />
+    <PackageVersion Include="AElf.Client" Version="1.3.0" />
+    <PackageVersion Include="AElf.Cryptography" Version="1.12.0" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- GraphQL                                                     -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="GraphQL.Client" Version="$(GraphQLClientVersion)" />
+    <PackageVersion Include="GraphQL.Client.Serializer.Newtonsoft" Version="$(GraphQLClientVersion)" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Additional Utilities                                        -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageVersion Include="YamlDotNet" Version="16.3.0" />
+    <PackageVersion Include="Scriban" Version="6.5.2" />
+    <PackageVersion Include="HtmlAgilityPack" Version="1.12.4" />
+    <PackageVersion Include="Supabase" Version="1.1.1" />
+    <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Security overrides (fix NU1902/NU1904 via transitive pin)   -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="KubernetesClient" Version="18.0.13" />
+    <PackageVersion Include="MessagePack" Version="3.1.4" />
+  </ItemGroup>
+</Project>

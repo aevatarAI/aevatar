@@ -1,0 +1,12 @@
+{
+  "solution": {
+    "path": "aevatar.slnx",
+    "projects": [
+      "src\\Aevatar.AI\\Aevatar.AI.csproj",
+      "src\\Aevatar.AI.MEAI\\Aevatar.AI.MEAI.csproj",
+      "src\\Aevatar.AI.LLMTornado\\Aevatar.AI.LLMTornado.csproj",
+      "src\\Aevatar.AI.MCP\\Aevatar.AI.MCP.csproj",
+      "src\\Aevatar.AI.Skills\\Aevatar.AI.Skills.csproj"
+    ]
+  }
+}

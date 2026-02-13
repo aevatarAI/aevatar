@@ -1,0 +1,9 @@
+syntax = "proto3";
+package aevatar.cognitive;
+option csharp_namespace = "Aevatar.Cognitive";
+
+message StartWorkflowEvent    { string workflow_name = 1; string run_id = 2; string input = 3; map<string, string> parameters = 4; }
+message WorkflowCompletedEvent { string workflow_name = 1; string run_id = 2; bool success = 3; string output = 4; string error = 5; }
+message StepRequestEvent      { string step_id = 1; string step_type = 2; string run_id = 3; string input = 4; string target_role = 5; map<string, string> parameters = 6; }
+message StepCompletedEvent    { string step_id = 1; string run_id = 2; bool success = 3; string output = 4; string error = 5; string worker_id = 6; map<string, string> metadata = 7; }
+message WorkflowState         { string workflow_yaml = 1; string workflow_name = 2; int32 version = 3; bool compiled = 4; string compilation_error = 5; int32 total_executions = 6; int32 successful_executions = 7; int32 failed_executions = 8; }

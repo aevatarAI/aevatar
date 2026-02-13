@@ -1,0 +1,19 @@
+{
+  "connectors": [
+    {
+      "name": "maker_post_processor",
+      "type": "cli",
+      "enabled": true,
+      "timeoutMs": 8000,
+      "retry": 0,
+      "cli": {
+        "command": "cat",
+        "fixedArguments": [],
+        "allowedOperations": [],
+        "allowedInputKeys": [],
+        "workingDirectory": "",
+        "environment": {}
+      }
+    }
+  ]
+}

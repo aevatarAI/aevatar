@@ -1,0 +1,16 @@
+# 摘要：用户贴长文，返回简要总结
+name: summarize
+description: Summarize the user's input text in Chinese.
+
+roles:
+  - id: summarizer
+    name: Summarizer
+    system_prompt: |
+      You are a summarizer. Produce a concise summary in Chinese, preserving key points.
+
+steps:
+  - id: summarize_step
+    type: llm_call
+    role: summarizer
+    parameters:
+      prompt_prefix: "请用中文简要总结以下内容：\n\n"

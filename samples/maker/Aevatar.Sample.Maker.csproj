@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Aevatar.Sample.Maker</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Runtime\Aevatar.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Cognitive\Aevatar.Cognitive.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.MEAI\Aevatar.AI.MEAI.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.MCP\Aevatar.AI.MCP.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Config\Aevatar.Config.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="workflows\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="roles\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="connectors\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────
+# MAKER Recursive Workflow
+#
+# Implements a recursive MAKER loop:
+#   1) atomicity decision (vote)
+#   2) if non-atomic -> recursive decomposition
+#   3) if atomic      -> direct solve (vote)
+#   4) recursive composition (vote)
+#
+# Paper reference:
+# https://arxiv.org/html/2511.09030v1
+# ─────────────────────────────────────────────────────────────
+
+name: maker_analysis
+description: >
+  Recursive MAKER analysis with atomicity check, recursive decomposition,
+  first-to-ahead-by-k voting, and optional connector post-processing.
+
+roles:
+  - id: coordinator
+    name: Coordinator
+    system_prompt: |
+      You are the MAKER coordinator.
+      Your responsibilities:
+      1) Atomicity judgment: return ATOMIC or DECOMPOSE.
+      2) Decomposition: split complex tasks into independent subtasks.
+      3) Composition: merge solved subtasks into a parent-level result.
+
+      Rules:
+      - Follow the requested output format strictly.
+      - Keep decomposition balanced and non-overlapping.
+      - Prefer factual, concise text.
+    # 该角色允许调用的 connector（中心化配置在 ~/.aevatar/connectors.json）
+    connectors:
+      - maker_post_processor
+
+  - id: worker_a
+    name: "Analyst A"
+    system_prompt: |
+      You are a careful analyst.
+      Solve one micro-task independently and concisely.
+      Focus on correctness and evidence from the task text.
+
+  - id: worker_b
+    name: "Analyst B"
+    system_prompt: |
+      You are a critical analyst.
+      Solve one micro-task independently and concisely.
+      Actively check assumptions and possible weak points.
+
+  - id: worker_c
+    name: "Analyst C"
+    system_prompt: |
+      You are a technical analyst.
+      Solve one micro-task independently and concisely.
+      Emphasize mechanism, constraints, and practical implications.
+
+steps:
+  # Single recursive entrypoint.
+  # Internal recursion is driven by the maker_recursive module.
+  - id: solve_root
+    type: maker_recursive
+    parameters:
+      depth: "0"
+      max_depth: "3"
+      max_subtasks: "4"
+      delimiter: "\n---\n"
+
+      # Voting / red-flag params
+      k: "1"
+      max_response_length: "2200"
+
+      # Internal module dependency hints (for WorkflowGAgent auto-install)
+      parallel_step_type: "parallel"
+      vote_step_type: "maker_vote"
+
+      # Worker topology for each phase
+      atomic_workers: "coordinator,coordinator,coordinator"
+      decompose_workers: "coordinator,coordinator,coordinator"
+      solve_workers: "worker_a,worker_b,worker_c"
+      compose_workers: "coordinator,coordinator,coordinator"
+
+  # Optional connector post-processing（以 coordinator 身份调用，仅当该 role 的 connectors 包含 maker_post_processor 时允许）
+  - id: connector_post
+    type: connector_call
+    role: coordinator
+    parameters:
+      connector: maker_post_processor
+      timeout_ms: "8000"
+      retry: "1"
+      on_missing: "skip"
+      on_error: "continue"
