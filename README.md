@@ -106,6 +106,110 @@ flowchart TB
 - **Agent 树**：工作流 Agent 为根，按 YAML 中的角色创建子 Agent；事件在父子之间按「方向」路由（当前节点 / 父 / 子）。
 - **步骤模块**：每一步对应一种类型（如 `llm_call`、`connector_call`），由框架内置或你扩展的模块执行。
 
+### 执行时序图（框架 Pipeline）
+
+下面这张图从 `POST /api/chat` 开始，展示通用工作流执行路径：Cognitive 加载 YAML、创建 roles、步骤执行、role 通过 connector 调外部服务、最后 SSE 返回结果。
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant API as ChatAPI
+    participant Registry as WorkflowRegistry
+    participant Runtime as IActorRuntime
+    participant Workflow as WorkflowGAgent
+    participant Engine as workflow_loop
+    participant LlmStep as llm_call
+    participant ConnStep as connector_call
+    participant Role as RoleGAgent
+    participant LLM
+    participant External
+
+    User->>API: POST /api/chat
+    API->>Registry: resolve workflow yaml
+    API->>Runtime: create or reuse workflow agent
+    API->>Workflow: set yaml and activate
+    Workflow->>Runtime: create role agents from workflow roles
+    API->>Workflow: ChatRequestEvent
+    Workflow->>Engine: StartWorkflowEvent
+
+    rect rgb(240, 248, 255)
+        Engine->>Engine: dispatch StepRequestEvent
+        alt llm_call
+            Engine->>LlmStep: step request
+            LlmStep->>Role: send ChatRequestEvent to role
+            Role->>LLM: call model
+            LLM-->>Role: text tokens and final output
+            Role-->>Engine: StepCompletedEvent
+        else connector_call
+            Engine->>ConnStep: step request
+            Note over ConnStep: check role connector allowlist
+            ConnStep->>External: invoke connector
+            External-->>ConnStep: output or error
+            ConnStep-->>Engine: StepCompletedEvent
+        else other steps
+            Engine-->>Engine: conditional parallel vote while
+        end
+        Note right of Engine: repeat for each step
+    end
+
+    Engine-->>Workflow: WorkflowCompletedEvent
+    Workflow-->>API: completion events
+    API-->>User: SSE stream to client
+```
+
+### 执行时序图（Maker Sample）
+
+下面这张图是 maker sample 的同类流程：在通用 pipeline 上叠加 `maker_recursive` / `maker_vote`，并可在末尾通过 connector 做外部后处理。
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant API as ChatAPI
+    participant Runtime as IActorRuntime
+    participant Workflow as WorkflowGAgent
+    participant Engine as workflow_loop
+    participant Recursive as maker_recursive
+    participant Parallel as parallel_fanout
+    participant Vote as maker_vote
+    participant Workers as WorkerRoleGAgents
+    participant LLM
+    participant Post as connector_call
+    participant External
+
+    User->>API: POST /api/chat maker_analysis
+    API->>Runtime: create workflow agent
+    API->>Workflow: set maker yaml and activate
+    Workflow->>Runtime: create coordinator and worker roles
+    API->>Workflow: ChatRequestEvent
+    Workflow->>Engine: StartWorkflowEvent
+
+    rect rgb(255, 248, 240)
+        Engine->>Recursive: enter recursive stage
+        Recursive->>Parallel: fan out subtasks
+        Parallel->>Workers: llm_call for workers
+        Workers->>LLM: generate candidates
+        LLM-->>Workers: candidate outputs
+        Workers-->>Parallel: StepCompletedEvent
+        Parallel-->>Vote: aggregate candidates
+        Vote-->>Engine: select winner
+        alt needs deeper decomposition
+            Engine->>Recursive: recurse on sub tasks
+        else solved
+            Engine-->>Engine: continue to next stage
+        end
+        Note right of Engine: repeat until all tasks solved
+    end
+
+    Engine->>Post: optional connector call by coordinator
+    Post->>External: post process output
+    External-->>Post: processed result
+    Post-->>Engine: StepCompletedEvent
+
+    Engine-->>Workflow: WorkflowCompletedEvent
+    Workflow-->>API: final output events
+    API-->>User: SSE stream and final result
+```
+
 ---
 
 ## 工作流里能写哪些步骤
