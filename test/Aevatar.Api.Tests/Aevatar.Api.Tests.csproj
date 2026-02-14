@@ -8,6 +8,8 @@
     <RootNamespace>Aevatar.Hosts.Api.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Cqrs.Projections.Abstractions\Aevatar.Cqrs.Projections.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Cqrs.Projections\Aevatar.Cqrs.Projections.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Hosts.Api\Aevatar.Hosts.Api.csproj" />
   </ItemGroup>
   <ItemGroup>

@@ -93,6 +93,12 @@ YAML 里写模块名，运行时通过工厂拿到实现对象。
 这个流程的关键点是：  
 **流程控制由模块完成，不再写死在单个 Agent 的方法里。**
 
+### 这条链路和 CQRS 的关系
+
+- 当前默认读侧是“在线事件投影”：`EventEnvelope` -> AG-UI 事件流（SSE）。
+- 它本质是 **事件读模型**，不是直接投影 Agent `State`。
+- 若需要业务查询（列表、统计、检索），建议在此链路旁路增加自定义 projector，把事件投影到独立 read-only model（数据库或缓存）并暴露 Query API。
+
 ---
 
 ## 四、为什么要用 Event Modules（而不是全写 EventHandler）？

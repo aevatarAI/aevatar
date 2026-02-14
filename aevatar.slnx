@@ -5,6 +5,7 @@
   <Folder Name="/docs/">
     <File Path="docs\FOUNDATION.md" />
     <File Path="docs\COGNITIVE.md" />
+    <File Path="docs\CQRS_PROJECTION_ARCHITECTURE.md" />
     <File Path="docs\EVENT_SOURCING.md" />
     <File Path="docs\ROLE.md" />
   </Folder>
@@ -33,6 +34,8 @@
     <Project Path="src\Aevatar.Configuration\Aevatar.Configuration.csproj" Type="Classic C#" />
     <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" Type="Classic C#" />
     <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.Cqrs.Projections.Abstractions\Aevatar.Cqrs.Projections.Abstractions.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.Cqrs.Projections\Aevatar.Cqrs.Projections.csproj" Type="Classic C#" />
     <Project Path="src\Aevatar.Hosts.Api\Aevatar.Hosts.Api.csproj" Type="Classic C#" />
     <Project Path="src\Aevatar.Hosts.Gateway\Aevatar.Hosts.Gateway.csproj" Type="Classic C#" />
   </Folder>
