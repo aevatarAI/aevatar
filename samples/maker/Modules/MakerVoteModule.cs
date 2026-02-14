@@ -1,8 +1,9 @@
-using Aevatar;
-using Aevatar.Cognitive;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.Workflows.Core;
+using Aevatar.Foundation.Abstractions.EventModules;
 
-namespace Aevatar.Sample.Maker.Modules;
+namespace Aevatar.Samples.Maker.Modules;
 
 /// <summary>
 /// MAKER voting primitive:
@@ -14,7 +15,7 @@ public sealed class MakerVoteModule : IEventModule
     public int Priority => 6;
 
     public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.TypeUrl?.Contains("StepRequestEvent") == true;
+        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {

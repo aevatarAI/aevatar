@@ -6,7 +6,7 @@ using System.Diagnostics;
 using Aevatar.Tools.Config;
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using Aevatar.Config;
+using Aevatar.Configuration;
 using Microsoft.AspNetCore.Http.Json;
 
 #if AEVATAR_CONFIG_TOOL
@@ -146,7 +146,7 @@ app.MapGet("/api/llm/default", (ISecretsStore secrets, HttpContext http) =>
     EnsureDefaultProviderKeyBestEffort(secrets, null);
     return Results.Json(new { ok = true, providerName = ResolveEffectiveDefaultProviderName(secrets) });
 });
-app.MapPost("/api/llm/default", (SetLlmDefaultRequest req, ISecretsStore secrets, HttpContext http) =>
+app.MapPost("/api/llm/default", (SetLLMDefaultRequest req, ISecretsStore secrets, HttpContext http) =>
 {
     if (!IsLocal(http)) return Results.Forbid();
     var name = (req.ProviderName ?? "").Trim();
@@ -155,9 +155,9 @@ app.MapPost("/api/llm/default", (SetLlmDefaultRequest req, ISecretsStore secrets
     secrets.Set("LLMProviders:Default", name);
     return Results.Json(new { ok = true, providerName = name });
 });
-app.MapGet("/api/llm/provider/{providerName}", (string providerName, ISecretsStore secrets, HttpContext http) => IsLocal(http) ? Results.Json(new { ok = true, provider = LlmProviderResolver.Resolve(secrets, providerName).Public }) : Results.Forbid());
-app.MapGet("/api/llm/test/{providerName}", async (string providerName, ISecretsStore secrets, HttpContext http, CancellationToken ct) => IsLocal(http) ? Results.Json(await LlmProbe.TestAsync(LlmProviderResolver.Resolve(secrets, providerName), ct)) : Results.Forbid());
-app.MapGet("/api/llm/models/{providerName}", async (string providerName, ISecretsStore secrets, HttpContext http, int? limit, CancellationToken ct) => IsLocal(http) ? Results.Json(await LlmProbe.FetchModelsAsync(LlmProviderResolver.Resolve(secrets, providerName), limit ?? 200, ct)) : Results.Forbid());
+app.MapGet("/api/llm/provider/{providerName}", (string providerName, ISecretsStore secrets, HttpContext http) => IsLocal(http) ? Results.Json(new { ok = true, provider = LLMProviderResolver.Resolve(secrets, providerName).Public }) : Results.Forbid());
+app.MapGet("/api/llm/test/{providerName}", async (string providerName, ISecretsStore secrets, HttpContext http, CancellationToken ct) => IsLocal(http) ? Results.Json(await LLMProbe.TestAsync(LLMProviderResolver.Resolve(secrets, providerName), ct)) : Results.Forbid());
+app.MapGet("/api/llm/models/{providerName}", async (string providerName, ISecretsStore secrets, HttpContext http, int? limit, CancellationToken ct) => IsLocal(http) ? Results.Json(await LLMProbe.FetchModelsAsync(LLMProviderResolver.Resolve(secrets, providerName), limit ?? 200, ct)) : Results.Forbid());
 app.MapGet("/api/llm/api-key/{providerName}", (string providerName, bool? reveal, ISecretsStore secrets, HttpContext http) =>
 {
     if (!IsLocal(http)) return Results.Forbid();
@@ -170,7 +170,7 @@ app.MapGet("/api/llm/api-key/{providerName}", (string providerName, bool? reveal
     if (reveal == true) return Results.Json(new { ok = true, providerName = name, configured = true, masked, value = value.Trim() });
     return Results.Json(new { ok = true, providerName = name, configured = true, masked });
 });
-app.MapPost("/api/llm/api-key", (SetLlmApiKeyRequest req, ISecretsStore secrets, HttpContext http) =>
+app.MapPost("/api/llm/api-key", (SetLLMApiKeyRequest req, ISecretsStore secrets, HttpContext http) =>
 {
     if (!IsLocal(http)) return Results.Forbid();
     var providerName = (req.ProviderName ?? "").Trim();
@@ -182,7 +182,7 @@ app.MapPost("/api/llm/api-key", (SetLlmApiKeyRequest req, ISecretsStore secrets,
     EnsureDefaultProviderKeyBestEffort(secrets, providerName);
     return Results.Json(new { ok = true, providerName, keyPath });
 });
-app.MapPost("/api/llm/instance", (UpsertLlmInstanceRequest req, ISecretsStore secrets, HttpContext http) =>
+app.MapPost("/api/llm/instance", (UpsertLLMInstanceRequest req, ISecretsStore secrets, HttpContext http) =>
 {
     if (!IsLocal(http)) return Results.Forbid();
     var name = (req.ProviderName ?? "").Trim();
@@ -209,7 +209,7 @@ app.MapPost("/api/llm/instance", (UpsertLlmInstanceRequest req, ISecretsStore se
         secrets.Set(apiKeyPath, fromKey!.Trim());
     }
     EnsureDefaultProviderKeyBestEffort(secrets, name);
-    var resolved = LlmProviderResolver.Resolve(secrets, name);
+    var resolved = LLMProviderResolver.Resolve(secrets, name);
     return Results.Json(new { ok = true, providerName = name, providerType, keyPaths = new[] { $"LLMProviders:Providers:{name}:ProviderType", $"LLMProviders:Providers:{name}:Model", endpointPath, apiKeyPath }, provider = resolved.Public });
 });
 app.MapDelete("/api/llm/api-key/{providerName}", (string providerName, ISecretsStore secrets, HttpContext http) =>
@@ -221,7 +221,7 @@ app.MapDelete("/api/llm/api-key/{providerName}", (string providerName, ISecretsS
     var removed = secrets.Remove(keyPath);
     return Results.Json(new { ok = true, providerName = name, keyPath, removed });
 });
-app.MapPost("/api/llm/probe/test", async (ProbeLlmRequest req, HttpContext http, CancellationToken ct) =>
+app.MapPost("/api/llm/probe/test", async (ProbeLLMRequest req, HttpContext http, CancellationToken ct) =>
 {
     if (!IsLocal(http)) return Results.Forbid();
     var providerType = (req.ProviderType ?? "").Trim();
@@ -233,9 +233,9 @@ app.MapPost("/api/llm/probe/test", async (ProbeLlmRequest req, HttpContext http,
     if (string.IsNullOrEmpty(endpoint)) return Results.BadRequest(new { ok = false, error = "endpoint is required" });
     var provider = new ResolvedProvider($"probe:{providerType}", providerType, "probe", profile.DisplayName, profile.Kind, endpoint, "probe", "", "probe", true, apiKey,
         new ResolvedProviderPublic($"probe:{providerType}", providerType, "probe", profile.DisplayName, profile.Kind.ToString(), true, endpoint, "probe", "", "probe"));
-    return Results.Json(await LlmProbe.TestAsync(provider, ct));
+    return Results.Json(await LLMProbe.TestAsync(provider, ct));
 });
-app.MapPost("/api/llm/probe/models", async (ProbeLlmRequest req, int? limit, HttpContext http, CancellationToken ct) =>
+app.MapPost("/api/llm/probe/models", async (ProbeLLMRequest req, int? limit, HttpContext http, CancellationToken ct) =>
 {
     if (!IsLocal(http)) return Results.Forbid();
     var providerType = (req.ProviderType ?? "").Trim();
@@ -247,7 +247,7 @@ app.MapPost("/api/llm/probe/models", async (ProbeLlmRequest req, int? limit, Htt
     if (string.IsNullOrEmpty(endpoint)) return Results.BadRequest(new { ok = false, error = "endpoint is required" });
     var provider = new ResolvedProvider($"probe:{providerType}", providerType, "probe", profile.DisplayName, profile.Kind, endpoint, "probe", "", "probe", true, apiKey,
         new ResolvedProviderPublic($"probe:{providerType}", providerType, "probe", profile.DisplayName, profile.Kind.ToString(), true, endpoint, "probe", "", "probe"));
-    return Results.Json(await LlmProbe.FetchModelsAsync(provider, limit ?? 200, ct));
+    return Results.Json(await LLMProbe.FetchModelsAsync(provider, limit ?? 200, ct));
 });
 
 // ─── Secrets raw & set/remove ───

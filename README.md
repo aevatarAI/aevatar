@@ -25,7 +25,7 @@ Aevatar 是一个 **AI Agent 工作流框架**：用 YAML 定义多步工作流�
 | 方式 | 做法 |
 |------|------|
 | **环境变量** | 终端里执行：`export DEEPSEEK_API_KEY="sk-..."` 或 `export OPENAI_API_KEY="sk-..."`。 |
-| **配置文件** | 在 `~/.aevatar/secrets.json` 里写 Provider 与 API Key，详见 [配置说明](src/Aevatar.Config/README.md)。 |
+| **配置文件** | 在 `~/.aevatar/secrets.json` 里写 Provider 与 API Key，详见 [配置说明](src/Aevatar.Configuration/README.md)。 |
 | **配置工具（推荐）** | 运行 `dotnet run --project tools/Aevatar.Tools.Config`，在浏览器里填 API Key 并保存。 |
 
 ### 2. 启动 API 服务
@@ -33,7 +33,7 @@ Aevatar 是一个 **AI Agent 工作流框架**：用 YAML 定义多步工作流�
 在仓库根目录执行：
 
 ```bash
-dotnet run --project src/Aevatar.Api
+dotnet run --project src/Aevatar.Hosts.Api
 ```
 
 服务会加载根目录下的 `workflows/` 以及 `~/.aevatar` 中的配置与工作流。
@@ -57,13 +57,13 @@ curl -X POST http://localhost:5000/api/chat \
   -d '{"prompt": "什么是 MAKER 模式？", "workflow": "simple_qa"}'
 ```
 
-运行结束后，仓库根目录的 `artifacts/chat-runs/` 下会生成本次运行的 JSON 与 HTML 报告。
+运行结束后，仓库根目录的 `artifacts/workflow-executions/` 下会生成本次运行的 JSON 与 HTML 报告。
 
 ---
 
 ## 架构一眼看懂
 
-- **你**：通过 HTTP 调用 **Aevatar.Api**（Chat 接口）。
+- **你**：通过 HTTP 调用 **Aevatar.Hosts.Api**（Chat 接口）。
 - **Api**：根据工作流名创建或复用「工作流 Agent」，把提示词当事件发进去。
 - **工作流 Agent**：按 YAML 里的步骤顺序，一步步派发任务（例如「这一步调 LLM」「这一步调外部接口」）。
 - **步骤**：由对应的「步骤模块」执行（LLM 调用、并行、投票、Connector 等），结果再交回工作流，进入下一步或结束。
@@ -102,7 +102,7 @@ flowchart TB
     Connectors --> M3
 ```
 
-- **宿主**：提供运行时、步骤执行能力、LLM、Connector。Aevatar.Api 已把这些组装好，开箱可用。
+- **宿主**：提供运行时、步骤执行能力、LLM、Connector。Aevatar.Hosts.Api 已把这些组装好，开箱可用。
 - **Agent 树**：工作流 Agent 为根，按 YAML 中的角色创建子 Agent；事件在父子之间按「方向」路由（当前节点 / 父 / 子）。
 - **步骤模块**：每一步对应一种类型（如 `llm_call`、`connector_call`），由框架内置或你扩展的模块执行。
 
@@ -231,7 +231,7 @@ sequenceDiagram
 | **数据** | `transform` | 对输入做变换或按模板生成。 |
 | | `retrieve_facts` | 从上下文/存储检索事实。 |
 
-更多细节与 Connector 配置见 [Aevatar.Config](src/Aevatar.Config/README.md#connector-作用与配置)。
+更多细节与 Connector 配置见 [Aevatar.Configuration](src/Aevatar.Configuration/README.md#connector-作用与配置)。
 
 ---
 
@@ -245,25 +245,25 @@ aevatar/
 │   └── EVENT_SOURCING.md   # Event Sourcing 使用说明
 ├── workflows/              # 示例工作流（simple_qa、summarize、brainstorm）
 ├── src/
-│   ├── Aevatar.Api         # HTTP 服务入口（Chat 等），日常使用从这里启动
-│   ├── Aevatar.Cognitive   # 工作流引擎与内置步骤模块
-│   ├── Aevatar.AI          # 角色 Agent 与 LLM 集成
-│   ├── Aevatar.Runtime     # 运行时（事件路由、存储、流）
-│   ├── Aevatar.Core        # Agent 基类与事件管道
-│   ├── Aevatar.Abstractions # 接口与契约
-│   ├── Aevatar.Config      # 配置与 Connector 模型
-│   ├── Aevatar.Gateway     # 可组合网关（可选 MCP/Skills）
-│   └── Aevatar.AI.MEAI / .MCP / .Skills  # LLM 与工具扩展
+│   ├── Aevatar.Hosts.Api   # HTTP 服务入口（Chat 等），日常使用从这里启动
+│   ├── Aevatar.Workflows.Core   # 工作流引擎与内置步骤模块
+│   ├── Aevatar.AI.Core     # 角色 Agent 与 LLM 集成
+│   ├── Aevatar.Foundation.Runtime  # 运行时（事件路由、存储、流）
+│   ├── Aevatar.Foundation.Core     # Agent 基类与事件管道
+│   ├── Aevatar.Foundation.Abstractions # 接口与契约
+│   ├── Aevatar.Configuration  # 配置与 Connector 模型
+│   ├── Aevatar.Hosts.Gateway  # 可组合网关（可选 MCP/Skills）
+│   └── Aevatar.AI.LLMProviders.MEAI / Aevatar.AI.ToolProviders.MCP / Aevatar.AI.ToolProviders.Skills  # LLM 与工具扩展
 ├── tools/
 │   └── Aevatar.Tools.Config  # aevatar-config（Web 界面配置 API Key）
 ├── samples/
 │   └── maker               # MAKER 模式示例（自定义步骤 + Connector）
 ├── demos/
-│   └── Aevatar.Demo.Cli    # CLI 演示
+│   └── Aevatar.Demos.Cli   # CLI 演示
 └── test/                   # 测试
 ```
 
-你主要会接触：**workflows/**（改或加 YAML）、**src/Aevatar.Api**（启动服务）、**~/.aevatar/**（配置与 Connector）。其余目录在二次开发或排查问题时再看不迟。
+你主要会接触：**workflows/**（改或加 YAML）、**src/Aevatar.Hosts.Api**（启动服务）、**~/.aevatar/**（配置与 Connector）。其余目录在二次开发或排查问题时再看不迟。
 
 ---
 
@@ -272,14 +272,14 @@ aevatar/
 - **底层设计**： [docs/FOUNDATION.md](docs/FOUNDATION.md) — 事件模型与 Pipeline。
 - **Role 与 Connector**： [docs/ROLE.md](docs/ROLE.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
 - **Event Sourcing**： [docs/EVENT_SOURCING.md](docs/EVENT_SOURCING.md) — 如何开启事件溯源。
-- **Connector 配置详解**： [src/Aevatar.Config/README.md](src/Aevatar.Config/README.md#connector-作用与配置) — 配置格式与示例。
+- **Connector 配置详解**： [src/Aevatar.Configuration/README.md](src/Aevatar.Configuration/README.md#connector-作用与配置) — 配置格式与示例。
 - **Maker 示例**： [samples/maker](samples/maker) — 自定义步骤类型与 MAKER 工作流。
 
 ---
 
 ## 给开发者
 
-- **运行测试**：`dotnet test test/Aevatar.Core.Tests/Aevatar.Core.Tests.csproj`
+- **运行测试**：`dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj`
 - **CLI 演示**（不看 LLM，只看事件流）：  
-  `dotnet run --project demos/Aevatar.Demo.Cli -- run hierarchy --web artifacts/demo/hierarchy.html`
+  `dotnet run --project demos/Aevatar.Demos.Cli -- run hierarchy --web artifacts/demo/hierarchy.html`
 - **Agent 命名约定**：带 **GAgent** 的类负责框架能力（事件分发、状态、路由）；业务逻辑放在基于 GAgent 的扩展或自定义步骤/Connector 里。

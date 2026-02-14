@@ -1,10 +1,11 @@
 using System.Text.RegularExpressions;
-using Aevatar;
-using Aevatar.Cognitive;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.Workflows.Core;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Sample.Maker.Modules;
+namespace Aevatar.Samples.Maker.Modules;
 
 /// <summary>
 /// Recursive MAKER solver module.
@@ -20,20 +21,23 @@ public sealed class MakerRecursiveModule : IEventModule
     public int Priority => 3;
 
     public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.TypeUrl?.Contains("StepRequestEvent") == true ||
-        envelope.Payload?.TypeUrl?.Contains("StepCompletedEvent") == true;
+        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
+        envelope.Payload?.Is(StepCompletedEvent.Descriptor) == true;
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
-        if (envelope.Payload!.TypeUrl.Contains("StepRequestEvent"))
+        var payload = envelope.Payload;
+        if (payload == null) return;
+
+        if (payload.Is(StepRequestEvent.Descriptor))
         {
-            var request = envelope.Payload.Unpack<StepRequestEvent>();
+            var request = payload.Unpack<StepRequestEvent>();
             if (!IsRecursiveStep(request.StepType)) return;
             await HandleRecursiveRequestAsync(request, ctx, ct);
             return;
         }
 
-        var completed = envelope.Payload.Unpack<StepCompletedEvent>();
+        var completed = payload.Unpack<StepCompletedEvent>();
         await HandleStepCompletedAsync(completed, ctx, ct);
     }
 

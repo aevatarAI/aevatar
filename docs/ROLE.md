@@ -269,4 +269,4 @@ Connector 是**按名称调用的外部能力**：在 `~/.aevatar/connectors.jso
 | Connector 配置 | `~/.aevatar/connectors.json`，类型 http / cli / mcp，每类有各自子对象与安全字段。 |
 | 外部服务当能力 | 在 connectors.json 里配好 → 在 role 的 connectors 里写上名 → 步骤里 connector_call + 该 role。 |
 
-更细的 Connector 字段与安全策略见 [Aevatar.Config README](src/Aevatar.Config/README.md#connector-作用与配置)。
+更细的 Connector 字段与安全策略见 [Aevatar.Configuration README](src/Aevatar.Configuration/README.md#connector-作用与配置)。

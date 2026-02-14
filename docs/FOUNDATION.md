@@ -6,9 +6,9 @@
 
 ```
 src/
-├── Aevatar.Abstractions  # 契约层：接口、Proto、基础类型
-├── Aevatar.Core          # 核心层：GAgent 基类、Pipeline、上下文与守卫
-└── Aevatar.Runtime       # 运行时层：Local Actor、Stream、路由、内存存储、DI 装配
+├── Aevatar.Foundation.Abstractions  # 契约层：接口、Proto、基础类型
+├── Aevatar.Foundation.Core          # 核心层：GAgent 基类、Pipeline、上下文与守卫
+└── Aevatar.Foundation.Runtime       # 运行时层：Local Actor、Stream、路由、内存存储、DI 装配
 ```
 
 ## 核心概念
@@ -20,23 +20,37 @@ src/
 | Runtime | Actor 生命周期与拓扑管理器 | `IActorRuntime` |
 | Stream | 事件传播通道 | `IStream` / `IStreamProvider` |
 
-## Aevatar.Abstractions
+## Aevatar.Foundation.Abstractions
 
-`Aevatar.Abstractions` 只放契约，不放实现。主要包括：
+`Aevatar.Foundation.Abstractions` 只放契约，不放实现。主要包括：
 
 - Agent/Actor/Runtime 基础接口：`IAgent`、`IActor`、`IActorRuntime`
 - 事件发布与流接口：`IEventPublisher`、`IStream`、`IStreamProvider`
 - 事件模块体系：`IEventModule`、`IEventModuleFactory`、`IEventHandlerContext`
 - 持久化接口：`IStateStore<TState>`、`IEventStore`、`IAgentManifestStore`
 - 上下文与运行控制：`IAgentContextAccessor`、`IRunManager`
-- Hook 扩展点：`IGAgentHook`、`GAgentHookContext`
+- Hook 扩展点：`IGAgentExecutionHook`、`GAgentExecutionHookContext`
 - 核心 Proto：`agent_messages.proto`
 
 `EventEnvelope` 保持最小语义字段（id、timestamp、payload、publisher、direction、correlation、target、metadata），路由传播细节放在运行时实现中。
 
-## Aevatar.Core
+## 核心主链路（框架最关键理解）
 
-`Aevatar.Core` 提供框架核心实现，重点如下：
+可以把框架主线理解为：
+
+1. **统一传输契约**：所有业务事件先被包进 `EventEnvelope.payload`，再进入运行时流。
+2. **统一路由执行**：`LocalActorPublisher` 按 `EventDirection`（`Self/Down/Up/Both`）路由到目标 Stream。
+3. **统一处理管线**：`GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule` 合并后按优先级执行。
+4. **统一读侧投影**：同一条 `EventEnvelope` 可被投影为多个读模型（例如 AG-UI SSE 事件、运行报告、业务只读模型）。
+
+关键澄清：
+
+- 当前 AG-UI 主要是 **事件投影**，不是直接把 `State` 映射到前端。
+- `State` 是写侧运行态；读侧建议由投影生成独立只读模型（CQRS）。
+
+## Aevatar.Foundation.Core
+
+`Aevatar.Foundation.Core` 提供框架核心实现，重点如下：
 
 - `GAgentBase`：无状态 Agent 基类，统一事件分发与 Hook 管线
 - `GAgentBase<TState>`：状态型基类，集成 `IStateStore<TState>`
@@ -53,7 +67,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 1. 静态处理器（反射发现 `[EventHandler]`）
 2. 动态模块（运行时注册 `IEventModule`）
 
-二者统一按 `Priority` 升序执行，并通过 `IGAgentHook` 提供前后置观测与错误回调。
+二者统一按 `Priority` 升序执行，并通过 `IGAgentExecutionHook` 提供前后置观测与错误回调。
 
 ### 状态写保护
 
@@ -64,9 +78,9 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 这保证了状态修改和消息处理串行模型一致。
 
-## Aevatar.Runtime
+## Aevatar.Foundation.Runtime
 
-`Aevatar.Runtime` 提供本地运行时实现，包含：
+`Aevatar.Foundation.Runtime` 提供本地运行时实现，包含：
 
 - `LocalActorRuntime`：创建/销毁/查找/链接/恢复 Actor
 - `LocalActor`：邮箱串行处理、父流订阅、子节点传播
@@ -92,10 +106,24 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 这让路由逻辑和运行时实现解耦：Actor 可以专注于消费和传播，层级快照则交给 Store 管理。
 
+## CQRS 与 Projection 落点
+
+在当前实现里，Projection 的典型落点在 Host 层：
+
+- 订阅根 Actor Stream，读取 `EventEnvelope`
+- 投影为 AG-UI 事件并通过 SSE 推送
+- 并行聚合为运行报告（JSON/HTML）
+
+如果需要业务读模型（read-only model）：
+
+- 建议新增独立 projector（订阅同一事件流）
+- 将结果写入只读存储（内存/Redis/DB）
+- 暴露独立 Query API 供前端查询
+
 ## 测试项目
 
-- `test/Aevatar.Abstractions.Tests`：契约层测试（ID、属性、Envelope、时间工具）
-- `test/Aevatar.Core.Tests`：核心行为测试（BDD 场景、Pipeline、Hooks、StateGuard、层级流转）
+- `test/Aevatar.Foundation.Abstractions.Tests`：契约层测试（ID、属性、Envelope、时间工具）
+- `test/Aevatar.Foundation.Core.Tests`：核心行为测试（BDD 场景、Pipeline、Hooks、StateGuard、层级流转）
 
 ## 快速上手
 

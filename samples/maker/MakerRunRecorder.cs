@@ -1,9 +1,10 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using Aevatar;
-using Aevatar.AI;
-using Aevatar.Cognitive;
+using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.Workflows.Core;
 
 internal sealed class MakerRunRecorder
 {
@@ -24,23 +25,24 @@ internal sealed class MakerRunRecorder
 
     public void RecordEnvelope(EventEnvelope envelope)
     {
-        if (envelope.Payload == null) return;
-        var typeUrl = envelope.Payload.TypeUrl ?? "";
+        var payload = envelope.Payload;
+        if (payload == null) return;
+        var typeUrl = payload.TypeUrl ?? "";
         var now = DateTimeOffset.UtcNow;
 
         lock (_lock)
         {
-            if (typeUrl.Contains("StartWorkflowEvent"))
+            if (payload.Is(StartWorkflowEvent.Descriptor))
             {
-                var evt = envelope.Payload.Unpack<StartWorkflowEvent>();
+                var evt = payload.Unpack<StartWorkflowEvent>();
                 _runId = string.IsNullOrWhiteSpace(_runId) ? evt.RunId : _runId;
                 AddTimeline(now, "workflow.start", $"run={evt.RunId}", envelope.PublisherId, null, null, typeUrl);
                 return;
             }
 
-            if (typeUrl.Contains("StepRequestEvent"))
+            if (payload.Is(StepRequestEvent.Descriptor))
             {
-                var evt = envelope.Payload.Unpack<StepRequestEvent>();
+                var evt = payload.Unpack<StepRequestEvent>();
                 _runId = string.IsNullOrWhiteSpace(_runId) ? evt.RunId : _runId;
 
                 var step = GetOrCreateStep(evt.StepId);
@@ -62,9 +64,9 @@ internal sealed class MakerRunRecorder
                 return;
             }
 
-            if (typeUrl.Contains("StepCompletedEvent"))
+            if (payload.Is(StepCompletedEvent.Descriptor))
             {
-                var evt = envelope.Payload.Unpack<StepCompletedEvent>();
+                var evt = payload.Unpack<StepCompletedEvent>();
                 _runId = string.IsNullOrWhiteSpace(_runId) ? evt.RunId : _runId;
 
                 var step = GetOrCreateStep(evt.StepId);
@@ -162,9 +164,9 @@ internal sealed class MakerRunRecorder
                 return;
             }
 
-            if (typeUrl.Contains("TextMessageStartEvent"))
+            if (payload.Is(TextMessageStartEvent.Descriptor))
             {
-                var evt = envelope.Payload.Unpack<TextMessageStartEvent>();
+                var evt = payload.Unpack<TextMessageStartEvent>();
                 AddTimeline(
                     now,
                     "llm.start",
@@ -177,9 +179,9 @@ internal sealed class MakerRunRecorder
                 return;
             }
 
-            if (typeUrl.Contains("TextMessageEndEvent"))
+            if (payload.Is(TextMessageEndEvent.Descriptor))
             {
-                var evt = envelope.Payload.Unpack<TextMessageEndEvent>();
+                var evt = payload.Unpack<TextMessageEndEvent>();
                 var publisher = string.IsNullOrWhiteSpace(envelope.PublisherId) ? "(unknown)" : envelope.PublisherId;
 
                 if (!string.Equals(publisher, _rootActorId, StringComparison.Ordinal))
@@ -206,9 +208,9 @@ internal sealed class MakerRunRecorder
                 return;
             }
 
-            if (typeUrl.Contains("WorkflowCompletedEvent"))
+            if (payload.Is(WorkflowCompletedEvent.Descriptor))
             {
-                var evt = envelope.Payload.Unpack<WorkflowCompletedEvent>();
+                var evt = payload.Unpack<WorkflowCompletedEvent>();
                 _runId = string.IsNullOrWhiteSpace(_runId) ? evt.RunId : _runId;
                 _success = evt.Success;
                 _finalOutput = evt.Output ?? "";

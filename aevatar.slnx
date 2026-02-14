@@ -1,10 +1,13 @@
 <Solution>
   <Folder Name="/demos/">
-    <Project Path="demos\Aevatar.Demo.Cli\Aevatar.Demo.Cli.csproj" Type="Classic C#" />
+    <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" Type="Classic C#" />
   </Folder>
   <Folder Name="/docs/">
     <File Path="docs\FOUNDATION.md" />
     <File Path="docs\COGNITIVE.md" />
+    <File Path="docs\CQRS_PROJECTION_ARCHITECTURE.md" />
+    <File Path="docs\EVENT_SOURCING.md" />
+    <File Path="docs\ROLE.md" />
   </Folder>
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
@@ -12,30 +15,34 @@
   </Folder>
   <Folder Name="/samples/" />
   <Folder Name="/samples/maker/">
-    <Project Path="samples\maker\Aevatar.Sample.Maker.csproj" Type="Classic C#" />
+    <Project Path="samples\maker\Aevatar.Samples.Maker.csproj" Type="Classic C#" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" Type="Classic C#" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src\Aevatar.Abstractions\Aevatar.Abstractions.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.AGUI\Aevatar.AGUI.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.AI.LLMTornado\Aevatar.AI.LLMTornado.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.AI.MCP\Aevatar.AI.MCP.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.AI.MEAI\Aevatar.AI.MEAI.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.AI.Skills\Aevatar.AI.Skills.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.AI\Aevatar.AI.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.Api\Aevatar.Api.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.Cognitive\Aevatar.Cognitive.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.Config\Aevatar.Config.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.Core\Aevatar.Core.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.Gateway\Aevatar.Gateway.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.Runtime\Aevatar.Runtime.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.AI.LLMProviders.Tornado\Aevatar.AI.LLMProviders.Tornado.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.AI.ToolProviders.MCP\Aevatar.AI.ToolProviders.MCP.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.Workflows.Core\Aevatar.Workflows.Core.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.Configuration\Aevatar.Configuration.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.CQRS.Projections.Abstractions\Aevatar.CQRS.Projections.Abstractions.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.CQRS.Projections\Aevatar.CQRS.Projections.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.Hosts.Api\Aevatar.Hosts.Api.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.Hosts.Gateway\Aevatar.Hosts.Gateway.csproj" Type="Classic C#" />
   </Folder>
   <Folder Name="/test/">
-    <Project Path="test\Aevatar.Abstractions.Tests\Aevatar.Abstractions.Tests.csproj" Type="Classic C#" />
-    <Project Path="test\Aevatar.Api.Tests\Aevatar.Api.Tests.csproj" Type="Classic C#" />
-    <Project Path="test\Aevatar.Core.Tests\Aevatar.Core.Tests.csproj" Type="Classic C#" />
+    <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" Type="Classic C#" />
+    <Project Path="test\Aevatar.Hosts.Api.Tests\Aevatar.Hosts.Api.Tests.csproj" Type="Classic C#" />
+    <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" Type="Classic C#" />
     <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" Type="Classic C#" />
   </Folder>
 </Solution>

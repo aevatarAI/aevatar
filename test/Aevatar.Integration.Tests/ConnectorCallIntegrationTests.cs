@@ -1,9 +1,10 @@
-using Aevatar;
-using Aevatar.AI;
-using Aevatar.Cognitive;
-using Aevatar.Cognitive.Connectors;
-using Aevatar.Connectors;
-using Aevatar.DependencyInjection;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.AI.Core;
+using Aevatar.Workflows.Core;
+using Aevatar.Workflows.Core.Connectors;
+using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Runtime.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -168,7 +169,7 @@ public class ConnectorCallIntegrationTests
         var services = new ServiceCollection();
         services.AddSingleton(registry);
         services.AddAevatarRuntime();
-        services.AddAevatarCognitive();
+        services.AddAevatarWorkflows();
 
         var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
@@ -183,9 +184,7 @@ public class ConnectorCallIntegrationTests
     {
         var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-root-" + Guid.NewGuid().ToString("N")[..8]);
         var wf = (WorkflowGAgent)actor.Agent;
-        wf.State.WorkflowYaml = workflowYaml;
-        wf.State.WorkflowName = "connector_flow";
-        await wf.ActivateAsync();
+        wf.ConfigureWorkflow(workflowYaml, "connector_flow");
 
         var stream = provider.GetRequiredService<IStreamProvider>().GetStream(actor.Id);
         var stepCompletions = new List<StepCompletedEvent>();
@@ -193,16 +192,16 @@ public class ConnectorCallIntegrationTests
 
         await using var sub = await stream.SubscribeAsync<EventEnvelope>(envelope =>
         {
-            if (envelope.Payload == null) return Task.CompletedTask;
+            var payload = envelope.Payload;
+            if (payload == null) return Task.CompletedTask;
 
-            var typeUrl = envelope.Payload.TypeUrl;
-            if (typeUrl.Contains("StepCompletedEvent"))
+            if (payload.Is(StepCompletedEvent.Descriptor))
             {
-                stepCompletions.Add(envelope.Payload.Unpack<StepCompletedEvent>());
+                stepCompletions.Add(payload.Unpack<StepCompletedEvent>());
             }
-            else if (typeUrl.Contains("WorkflowCompletedEvent"))
+            else if (payload.Is(WorkflowCompletedEvent.Descriptor))
             {
-                workflowCompleted.TrySetResult(envelope.Payload.Unpack<WorkflowCompletedEvent>());
+                workflowCompleted.TrySetResult(payload.Unpack<WorkflowCompletedEvent>());
             }
 
             return Task.CompletedTask;

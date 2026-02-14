@@ -1,8 +1,0 @@
-syntax = "proto3";
-package aevatar.demo;
-option csharp_namespace = "Aevatar.Demo.Messages";
-
-message CounterState { int32 count = 1; string name = 2; }
-message PingEvent { string message = 1; }
-message PongEvent { string reply = 1; }
-message IncrementEvent { int32 amount = 1; }
