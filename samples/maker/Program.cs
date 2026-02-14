@@ -17,16 +17,17 @@
 //   dotnet run -- "Your paper text here..."
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar;
-using Aevatar.AI;
-using Aevatar.AI.MCP;
-using Aevatar.AI.MEAI;
-using Aevatar.Cognitive;
-using Aevatar.Cognitive.Connectors;
-using Aevatar.Config;
-using Aevatar.Connectors;
-using Aevatar.DependencyInjection;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.LLMProviders.MEAI;
+using Aevatar.Workflows.Core;
+using Aevatar.Workflows.Core.Connectors;
+using Aevatar.Configuration;
+using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Sample.Maker;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;

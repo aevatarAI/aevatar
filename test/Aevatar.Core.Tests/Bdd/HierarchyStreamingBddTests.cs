@@ -1,7 +1,7 @@
 // BDD: multi-agent hierarchy with stream communication.
 
-using Aevatar.Actor;
-using Aevatar.Streaming;
+using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 

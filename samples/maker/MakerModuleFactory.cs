@@ -1,4 +1,4 @@
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Sample.Maker.Modules;
 
 namespace Aevatar.Sample.Maker;

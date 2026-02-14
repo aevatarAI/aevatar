@@ -1,6 +1,6 @@
 # Aevatar.Tools.Config
 
-本地 Web 界面配置 Aevatar 用户密钥（LLM API Key 等），读写 `~/.aevatar/secrets.json`。与 Aevatar.Api 使用同一套配置路径，配置完成后直接启动 Api 即可使用。
+本地 Web 界面配置 Aevatar 用户密钥（LLM API Key 等），读写 `~/.aevatar/secrets.json`。与 Aevatar.Hosts.Api 使用同一套配置路径，配置完成后直接启动 Api 即可使用。
 
 ## 安装（可选，作为 dotnet tool）
 
@@ -38,7 +38,7 @@ dotnet run --project tools/Aevatar.Tools.Config
 - **Raw JSON**：直接编辑 `secrets.json` 的嵌套 JSON。
 - **config.json / agents/**：编辑 `~/.aevatar/config.json` 与 `~/.aevatar/agents/` 下的 YAML（如需要）。
 
-配置写入 `~/.aevatar/secrets.json`（支持明文或加密格式，与 [Aevatar.Config](src/Aevatar.Config/README.md) 一致）。环境变量 `AEVATAR_SECRETS_PATH` 可指定密钥文件路径；`AEVATAR_HOME` 可指定 `~/.aevatar` 根目录。
+配置写入 `~/.aevatar/secrets.json`（支持明文或加密格式，与 [Aevatar.Configuration](src/Aevatar.Configuration/README.md) 一致）。环境变量 `AEVATAR_SECRETS_PATH` 可指定密钥文件路径；`AEVATAR_HOME` 可指定 `~/.aevatar` 根目录。
 
 ## 安全
 

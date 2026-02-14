@@ -1,9 +1,10 @@
-using Aevatar;
-using Aevatar.AI;
-using Aevatar.AI.LLM;
-using Aevatar.Cognitive;
-using Aevatar.DependencyInjection;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.AI.Core;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Workflows.Core;
+using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Sample.Maker;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;

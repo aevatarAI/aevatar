@@ -1,6 +1,6 @@
 // ─── EventRouter tests ───
 
-using Aevatar.Routing;
+using Aevatar.Foundation.Runtime.Routing;
 using Shouldly;
 using Google.Protobuf.WellKnownTypes;
 

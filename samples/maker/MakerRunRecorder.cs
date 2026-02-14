@@ -1,9 +1,10 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using Aevatar;
-using Aevatar.AI;
-using Aevatar.Cognitive;
+using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.Workflows.Core;
 
 internal sealed class MakerRunRecorder
 {

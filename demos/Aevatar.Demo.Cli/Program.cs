@@ -1,10 +1,10 @@
 using System.Text;
 using System.Text.Json;
-using Aevatar.Actor;
+using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Demo.Messages;
-using Aevatar.DependencyInjection;
-using Aevatar.EventModules;
-using Aevatar.Hooks;
+using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Hooks;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;

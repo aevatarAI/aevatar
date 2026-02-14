@@ -1,7 +1,7 @@
 // GAgentBase tests.
 
-using Aevatar.Attributes;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Shouldly;
 
 namespace Aevatar.Tests;

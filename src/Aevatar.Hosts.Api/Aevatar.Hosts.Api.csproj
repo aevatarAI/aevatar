@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.Hosts.Api</AssemblyName>
+    <RootNamespace>Aevatar.Hosts.Api</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
+    <ProjectReference Include="..\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
+    <ProjectReference Include="..\Aevatar.Workflows.Core\Aevatar.Workflows.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
+    <ProjectReference Include="..\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
+  </ItemGroup>
+</Project>

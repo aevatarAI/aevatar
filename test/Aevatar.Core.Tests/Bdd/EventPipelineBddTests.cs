@@ -1,6 +1,6 @@
 // BDD: Unified event pipeline behavior.
 
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;

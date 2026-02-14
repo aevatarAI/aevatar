@@ -4,7 +4,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Shouldly;
 
-namespace Aevatar.Abstractions.Tests;
+namespace Aevatar.Foundation.Abstractions.Tests;
 
 public class EventEnvelopeTests
 {

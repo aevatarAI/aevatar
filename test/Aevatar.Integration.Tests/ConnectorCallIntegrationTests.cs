@@ -1,9 +1,10 @@
-using Aevatar;
-using Aevatar.AI;
-using Aevatar.Cognitive;
-using Aevatar.Cognitive.Connectors;
-using Aevatar.Connectors;
-using Aevatar.DependencyInjection;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.AI.Core;
+using Aevatar.Workflows.Core;
+using Aevatar.Workflows.Core.Connectors;
+using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Runtime.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;

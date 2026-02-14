@@ -1,6 +1,7 @@
-using Aevatar;
-using Aevatar.Cognitive;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.Workflows.Core;
+using Aevatar.Foundation.Abstractions.EventModules;
 
 namespace Aevatar.Sample.Maker.Modules;
 

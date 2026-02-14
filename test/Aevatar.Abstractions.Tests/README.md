@@ -1,6 +1,6 @@
-# Aevatar.Abstractions.Tests
+# Aevatar.Foundation.Abstractions.Tests
 
-`Aevatar.Abstractions.Tests` 用于验证契约层的基础行为与工具方法。
+`Aevatar.Foundation.Abstractions.Tests` 用于验证契约层的基础行为与工具方法。
 
 ## 覆盖范围
 
@@ -14,5 +14,5 @@
 在仓库根目录执行：
 
 ```bash
-dotnet test test/Aevatar.Abstractions.Tests/Aevatar.Abstractions.Tests.csproj
+dotnet test test/Aevatar.Foundation.Abstractions.Tests/Aevatar.Foundation.Abstractions.Tests.csproj
 ```

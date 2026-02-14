@@ -3,8 +3,8 @@
 // Feature: Agent acts as replaceable processing node in streaming pipeline
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Attributes;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Shouldly;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;

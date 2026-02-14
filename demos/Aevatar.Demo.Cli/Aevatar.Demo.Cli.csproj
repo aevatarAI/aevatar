@@ -7,8 +7,8 @@
         <RootNamespace>Aevatar.Demo</RootNamespace>
     </PropertyGroup>
     <ItemGroup>
-        <ProjectReference Include="..\..\src\Aevatar.Core\Aevatar.Core.csproj" />
-        <ProjectReference Include="..\..\src\Aevatar.Runtime\Aevatar.Runtime.csproj" />
+        <ProjectReference Include="..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
+        <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Google.Protobuf" />

@@ -1,7 +1,8 @@
 using System.Text.RegularExpressions;
-using Aevatar;
-using Aevatar.Cognitive;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.Workflows.Core;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Sample.Maker.Modules;

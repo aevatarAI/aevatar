@@ -38,7 +38,7 @@ public class HookTrackingAgent : GAgentBase<CounterState>
     public bool HookEndCalled { get; private set; }
     public TimeSpan? LastDuration { get; private set; }
 
-    [Aevatar.Attributes.EventHandler]
+    [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
     public Task Handle(IncrementEvent evt) { State.Count += evt.Amount; return Task.CompletedTask; }
 
     protected override Task OnEventHandlerStartAsync(EventEnvelope e, string h, object? p, CancellationToken ct)
@@ -53,7 +53,7 @@ public class ThrowingAgent : GAgentBase<CounterState>
 {
     public Exception? LastException { get; private set; }
 
-    [Aevatar.Attributes.EventHandler]
+    [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
     public Task Handle(IncrementEvent evt) => throw new InvalidOperationException("test error");
 
     protected override Task OnEventHandlerEndAsync(EventEnvelope e, string h, object? p, TimeSpan d, Exception? ex, CancellationToken ct)

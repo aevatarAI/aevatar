@@ -1,10 +1,10 @@
 // ─── AgUiEventChannel 测试 ───
 // 验证 Channel 驱动的事件收集器
 
-using Aevatar.AGUI;
+using Aevatar.Presentation.AGUI;
 using FluentAssertions;
 
-namespace Aevatar.Api.Tests;
+namespace Aevatar.Hosts.Api.Tests;
 
 public class AgUiEventChannelTests
 {

@@ -4,10 +4,11 @@
 // 验证 EventRoute 解析 + RoutedEventModule 包装 + 路由匹配
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar;
-using Aevatar.AI;
-using Aevatar.AI.Routing;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.AI.Core;
+using Aevatar.AI.Core.Routing;
+using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -174,9 +175,9 @@ internal static class TestEnvironmentHelper
     {
         var mockLlm = new MockLLMProvider();
         var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
-        Aevatar.DependencyInjection.ServiceCollectionExtensions.AddAevatarRuntime(services);
-        Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton<Aevatar.AI.LLM.ILLMProvider>(services, mockLlm);
-        Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton<Aevatar.AI.LLM.ILLMProviderFactory>(services, mockLlm);
+        Aevatar.Foundation.Runtime.DependencyInjection.ServiceCollectionExtensions.AddAevatarRuntime(services);
+        Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton<Aevatar.AI.Abstractions.LLMProviders.ILLMProvider>(services, mockLlm);
+        Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton<Aevatar.AI.Abstractions.LLMProviders.ILLMProviderFactory>(services, mockLlm);
         var sp = Microsoft.Extensions.DependencyInjection.ServiceCollectionContainerBuilderExtensions.BuildServiceProvider(services);
         var runtime = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<IActorRuntime>(sp);
         return (sp, runtime, mockLlm);

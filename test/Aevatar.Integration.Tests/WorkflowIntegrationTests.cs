@@ -12,14 +12,15 @@
 // 使用 MockLLMProvider 替代真实 LLM
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar;
-using Aevatar.AI;
-using Aevatar.AI.LLM;
-using Aevatar.Cognitive;
-using Aevatar.Cognitive.Primitives;
-using Aevatar.Cognitive.Validation;
-using Aevatar.DependencyInjection;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.AI.Core;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Workflows.Core;
+using Aevatar.Workflows.Core.Primitives;
+using Aevatar.Workflows.Core.Validation;
+using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 

@@ -1,4 +1,4 @@
-using Aevatar.Attributes;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Demo.Messages;
 
 namespace Aevatar.Demo;

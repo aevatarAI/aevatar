@@ -1,6 +1,6 @@
-# Aevatar.Core.Tests
+# Aevatar.Foundation.Core.Tests
 
-`Aevatar.Core.Tests` 覆盖 Core 与 Runtime 的关键行为，测试风格以 BDD 场景为主。
+`Aevatar.Foundation.Core.Tests` 覆盖 Core 与 Runtime 的关键行为，测试风格以 BDD 场景为主。
 
 ## 覆盖范围
 
@@ -20,5 +20,5 @@
 在仓库根目录执行：
 
 ```bash
-dotnet test test/Aevatar.Core.Tests/Aevatar.Core.Tests.csproj
+dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj
 ```

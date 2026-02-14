@@ -1,9 +1,9 @@
 // ─── Event Sourcing (IEventSourcingBehavior / EventSourcingBehavior / SnapshotStrategy) tests ───
 
-using Aevatar.Attributes;
-using Aevatar.EventSourcing;
-using Aevatar.Hooks;
-using Aevatar.Persistence;
+using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.Hooks;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;

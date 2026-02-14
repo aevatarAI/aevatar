@@ -5,10 +5,10 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <RootNamespace>Aevatar.Api.Tests</RootNamespace>
+    <RootNamespace>Aevatar.Hosts.Api.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Aevatar.Api\Aevatar.Api.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Hosts.Api\Aevatar.Hosts.Api.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
