@@ -33,7 +33,7 @@ public sealed class InMemoryStream : IStream
     /// <typeparam name="T">Protobuf message type.</typeparam>
     /// <param name="message">Message to send.</param>
     /// <param name="ct">Cancellation token.</param>
-    public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage, new()
+    public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
     {
         if (message is EventEnvelope envelope)
         { _channel.Writer.TryWrite(envelope); return Task.CompletedTask; }
@@ -56,6 +56,8 @@ public sealed class InMemoryStream : IStream
     /// <returns>Disposable subscription handle.</returns>
     public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default) where T : IMessage, new()
     {
+        var descriptor = typeof(T) == typeof(EventEnvelope) ? null : new T().Descriptor;
+
         Func<EventEnvelope, Task> envelopeHandler = async envelope =>
         {
             if (typeof(T) == typeof(EventEnvelope))
@@ -67,8 +69,7 @@ public sealed class InMemoryStream : IStream
             var payload = envelope.Payload;
             if (payload == null) return;
 
-            var descriptor = new T().Descriptor;
-            if (!payload.Is(descriptor)) return;
+            if (descriptor == null || !payload.Is(descriptor)) return;
 
             await handler(payload.Unpack<T>());
         };

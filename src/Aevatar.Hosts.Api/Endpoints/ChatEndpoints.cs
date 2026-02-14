@@ -143,8 +143,9 @@ public static class ChatEndpoints
             Direction = EventDirection.Self,
         };
 
-        // 非阻塞：在后台启动事件处理；sink 由订阅持续推送，直到 WorkflowCompleted → RunFinishedEvent
-        var processingTask = Task.Run(async () =>
+        // 非阻塞：启动事件处理；sink 由订阅持续推送，直到 WorkflowCompleted → RunFinishedEvent
+        var processingTask = ProcessEnvelopeAsync();
+        async Task ProcessEnvelopeAsync()
         {
             try
             {
@@ -160,7 +161,7 @@ public static class ChatEndpoints
                 });
                 sink.Complete();
             }
-        }, ct);
+        }
 
         // ─── 5. 流式写出 AGUI 事件 ───
 

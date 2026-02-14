@@ -4,7 +4,7 @@
     "projects": [
       "src\\Aevatar.Foundation.Abstractions\\Aevatar.Foundation.Abstractions.csproj",
       "src\\Aevatar.Foundation.Core\\Aevatar.Foundation.Core.csproj",
-      "demos\\Aevatar.Demo.Cli\\Aevatar.Demo.Cli.csproj",
+      "demos\\Aevatar.Demo.Cli\\Aevatar.Demos.Cli.csproj",
       "src\\Aevatar.Foundation.Runtime\\Aevatar.Foundation.Runtime.csproj",
       "test\\Aevatar.Abstractions.Tests\\Aevatar.Abstractions.Tests.csproj",
       "test\\Aevatar.Core.Tests\\Aevatar.Core.Tests.csproj"

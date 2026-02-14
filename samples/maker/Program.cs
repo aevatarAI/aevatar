@@ -27,7 +27,7 @@ using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Sample.Maker;
+using Aevatar.Samples.Maker;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;

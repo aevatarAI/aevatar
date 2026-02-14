@@ -47,13 +47,20 @@ builder.Services.AddSingleton(sp =>
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
 builder.Services.AddCors(o => o.AddPolicy("Default", p =>
 {
-    if (builder.Environment.IsDevelopment() || allowedOrigins is not { Length: > 0 })
+    if (builder.Environment.IsDevelopment())
     {
         p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader();
         return;
     }
 
-    p.WithOrigins(allowedOrigins).AllowAnyMethod().AllowAnyHeader();
+    if (allowedOrigins is { Length: > 0 })
+    {
+        p.WithOrigins(allowedOrigins).AllowAnyMethod().AllowAnyHeader();
+        return;
+    }
+
+    // Production default: deny all cross-origin requests unless explicitly configured.
+    p.SetIsOriginAllowed(_ => false);
 }));
 
 var app = builder.Build();

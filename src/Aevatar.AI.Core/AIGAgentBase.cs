@@ -59,19 +59,19 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     // ─── 初始化 ───
 
     /// <summary>激活时初始化历史上限并重建 Runtime。</summary>
-    protected override Task OnActivateAsync(CancellationToken ct)
+    protected override async Task OnActivateAsync(CancellationToken ct)
     {
         History.MaxMessages = Config.MaxHistoryMessages;
+        await RegisterToolsFromSourcesAsync(ct);
         RebuildRuntime();
-        return Task.CompletedTask;
     }
 
     /// <summary>配置变更时更新历史上限并重建 Runtime。</summary>
-    protected override Task OnConfigChangedAsync(AIAgentConfig config, CancellationToken ct)
+    protected override async Task OnConfigChangedAsync(AIAgentConfig config, CancellationToken ct)
     {
         History.MaxMessages = config.MaxHistoryMessages;
+        await RegisterToolsFromSourcesAsync(ct);
         RebuildRuntime();
-        return Task.CompletedTask;
     }
 
     // ─── Chat 快捷方法 ───
@@ -158,5 +158,25 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private void EnsureRuntime()
     {
         if (_chat == null) RebuildRuntime();
+    }
+
+    private async Task RegisterToolsFromSourcesAsync(CancellationToken ct)
+    {
+        var sources = Services.GetServices<IAgentToolSource>().ToList();
+        if (sources.Count == 0) return;
+
+        foreach (var source in sources)
+        {
+            try
+            {
+                var tools = await source.DiscoverToolsAsync(ct);
+                if (tools.Count > 0)
+                    Tools.Register(tools);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Tool source discovery failed: {Source}", source.GetType().Name);
+            }
+        }
     }
 }

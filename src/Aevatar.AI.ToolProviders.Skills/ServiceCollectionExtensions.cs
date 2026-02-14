@@ -4,6 +4,7 @@
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.Skills;
 
@@ -40,6 +41,8 @@ public static class ServiceCollectionExtensions
         configure(options);
         services.TryAddSingleton(options);
         services.TryAddSingleton<SkillDiscovery>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IAgentToolSource, SkillsAgentToolSource>());
         return services;
     }
 }

@@ -4,6 +4,7 @@
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.MCP;
 
@@ -26,6 +27,8 @@ public static class ServiceCollectionExtensions
         configure(options);
         services.TryAddSingleton(options);
         services.TryAddSingleton<MCPClientManager>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IAgentToolSource, MCPAgentToolSource>());
         return services;
     }
 }

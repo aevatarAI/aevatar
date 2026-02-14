@@ -21,6 +21,9 @@ public sealed class ToolManager
     /// <param name="tools">要注册的工具集合。</param>
     public void Register(IEnumerable<IAgentTool> tools) { foreach (var t in tools) _tools[t.Name] = t; }
 
+    /// <summary>清空已注册工具。</summary>
+    public void Clear() => _tools.Clear();
+
     /// <summary>按名称获取工具。未找到返回 null。</summary>
     /// <param name="name">工具名称。</param>
     /// <returns>对应的 IAgentTool，或 null。</returns>

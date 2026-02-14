@@ -19,7 +19,7 @@ public sealed class TransformModule : IEventModule
 
     /// <inheritdoc />
     public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.TypeUrl?.Contains("StepRequestEvent") == true;
+        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)

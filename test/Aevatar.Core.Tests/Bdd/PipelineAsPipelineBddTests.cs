@@ -114,7 +114,7 @@ public class ReplyModule : IEventModule
     }
 
     public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.TypeUrl?.Contains("PingEvent") == true;
+        envelope.Payload?.Is(PingEvent.Descriptor) == true;
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {

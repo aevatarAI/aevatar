@@ -49,7 +49,7 @@ WorkflowGAgent (maker-root)
 
 ```
 samples/maker/
-├── Aevatar.Sample.Maker.csproj   # 可运行 Console 项目
+├── Aevatar.Samples.Maker.csproj  # 可运行 Console 项目
 ├── Program.cs                    # 入口：装配运行时、加载 YAML、执行 workflow
 ├── workflows/
 │   └── maker_analysis.yaml       # MAKER 工作流定义

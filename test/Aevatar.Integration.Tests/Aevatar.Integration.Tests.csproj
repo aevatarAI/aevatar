@@ -12,7 +12,7 @@
     <ProjectReference Include="..\..\src\Aevatar.Workflows.Core\Aevatar.Workflows.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
-    <ProjectReference Include="..\..\samples\maker\Aevatar.Sample.Maker.csproj" />
+    <ProjectReference Include="..\..\samples\maker\Aevatar.Samples.Maker.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

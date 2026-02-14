@@ -4,7 +4,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <OutputType>Exe</OutputType>
-    <RootNamespace>Aevatar.Sample.Maker</RootNamespace>
+    <AssemblyName>Aevatar.Samples.Maker</AssemblyName>
+    <RootNamespace>Aevatar.Samples.Maker</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />

@@ -280,7 +280,7 @@ public class WorkflowIntegrationTests
         var stream = sp.GetRequiredService<IStreamProvider>().GetStream("llm-test-1");
         await stream.SubscribeAsync<EventEnvelope>(async envelope =>
         {
-            if (envelope.Payload?.TypeUrl?.Contains("ChatResponseEvent") == true)
+            if (envelope.Payload?.Is(ChatResponseEvent.Descriptor) == true)
             {
                 var resp = envelope.Payload.Unpack<ChatResponseEvent>();
                 responses.Add(resp.Content);

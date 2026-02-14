@@ -4,7 +4,8 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <OutputType>Exe</OutputType>
-        <RootNamespace>Aevatar.Demo</RootNamespace>
+        <AssemblyName>Aevatar.Demos.Cli</AssemblyName>
+        <RootNamespace>Aevatar.Demos.Cli</RootNamespace>
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />

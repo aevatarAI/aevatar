@@ -1,10 +1,12 @@
 <Solution>
   <Folder Name="/demos/">
-    <Project Path="demos\Aevatar.Demo.Cli\Aevatar.Demo.Cli.csproj" Type="Classic C#" />
+    <Project Path="demos\Aevatar.Demo.Cli\Aevatar.Demos.Cli.csproj" Type="Classic C#" />
   </Folder>
   <Folder Name="/docs/">
     <File Path="docs\FOUNDATION.md" />
     <File Path="docs\COGNITIVE.md" />
+    <File Path="docs\EVENT_SOURCING.md" />
+    <File Path="docs\ROLE.md" />
   </Folder>
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
@@ -12,7 +14,7 @@
   </Folder>
   <Folder Name="/samples/" />
   <Folder Name="/samples/maker/">
-    <Project Path="samples\maker\Aevatar.Sample.Maker.csproj" Type="Classic C#" />
+    <Project Path="samples\maker\Aevatar.Samples.Maker.csproj" Type="Classic C#" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" Type="Classic C#" />
