@@ -11,18 +11,18 @@ public sealed class ChatRunProjectionService : IChatRunProjectionService
     private readonly ChatProjectionOptions _options;
     private readonly IProjectionCoordinator<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>> _coordinator;
     private readonly IProjectionReadModelStore<ChatRunReport, string> _store;
-    private readonly IChatProjectionRunRegistry _runRegistry;
+    private readonly IChatProjectionSubscriptionRegistry _subscriptionRegistry;
 
     public ChatRunProjectionService(
         ChatProjectionOptions options,
         IProjectionCoordinator<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>> coordinator,
         IProjectionReadModelStore<ChatRunReport, string> store,
-        IChatProjectionRunRegistry runRegistry)
+        IChatProjectionSubscriptionRegistry subscriptionRegistry)
     {
         _options = options;
         _coordinator = coordinator;
         _store = store;
-        _runRegistry = runRegistry;
+        _subscriptionRegistry = subscriptionRegistry;
     }
 
     public bool ProjectionEnabled => _options.Enabled;
@@ -60,7 +60,7 @@ public sealed class ChatRunProjectionService : IChatRunProjectionService
         };
 
         await _coordinator.InitializeAsync(context, ct);
-        await _runRegistry.RegisterAsync(context, ct);
+        await _subscriptionRegistry.RegisterAsync(context, ct);
 
         return new ChatRunProjectionSession
         {
@@ -87,7 +87,7 @@ public sealed class ChatRunProjectionService : IChatRunProjectionService
             return Task.FromResult(false);
 
         var waitMs = Math.Max(1, _options.RunProjectionCompletionWaitTimeoutMs);
-        return _runRegistry.WaitForCompletionAsync(runId, TimeSpan.FromMilliseconds(waitMs), ct);
+        return _subscriptionRegistry.WaitForCompletionAsync(runId, TimeSpan.FromMilliseconds(waitMs), ct);
     }
 
     public async Task<ChatRunReport?> CompleteAsync(
@@ -98,7 +98,7 @@ public sealed class ChatRunProjectionService : IChatRunProjectionService
         if (!ProjectionEnabled || session.Context == null)
             return null;
 
-        await _runRegistry.UnregisterAsync(session.Context.RootActorId, session.RunId, ct);
+        await _subscriptionRegistry.UnregisterAsync(session.Context.RootActorId, session.RunId, ct);
         await _coordinator.CompleteAsync(session.Context, topology, ct);
         return await _store.GetAsync(session.RunId, ct);
     }

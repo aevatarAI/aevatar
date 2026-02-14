@@ -1,4 +1,5 @@
 using Aevatar.Workflows.Core;
+using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 
 namespace Aevatar.Cqrs.Projections.Orchestration;
@@ -6,58 +7,87 @@ namespace Aevatar.Cqrs.Projections.Orchestration;
 /// <summary>
 /// Actor-level subscription registry that dispatches envelopes to active run contexts.
 /// </summary>
-public sealed class ChatProjectionRunRegistry : IChatProjectionRunRegistry
+public sealed class ChatProjectionSubscriptionRegistry : IChatProjectionSubscriptionRegistry, IAsyncDisposable
 {
     private static readonly string WorkflowCompletedTypeUrl =
         Google.Protobuf.WellKnownTypes.Any.Pack(new WorkflowCompletedEvent()).TypeUrl;
 
     private readonly IProjectionCoordinator<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>> _coordinator;
     private readonly IStreamProvider _streams;
+    private readonly ILogger<ChatProjectionSubscriptionRegistry>? _logger;
     private readonly ConcurrentDictionary<string, IAsyncDisposable> _subscriptionsByActor = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ActiveRunState>> _activeRunsByActor = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ActiveRunState> _activeRunsByRunId = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _managementGate = new(1, 1);
 
-    public ChatProjectionRunRegistry(
+    public ChatProjectionSubscriptionRegistry(
         IProjectionCoordinator<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>> coordinator,
-        IStreamProvider streams)
+        IStreamProvider streams,
+        ILogger<ChatProjectionSubscriptionRegistry>? logger = null)
     {
         _coordinator = coordinator;
         _streams = streams;
+        _logger = logger;
     }
 
     public async Task RegisterAsync(ChatProjectionContext context, CancellationToken ct = default)
     {
+        var runState = new ActiveRunState(context);
+        var actorId = context.RootActorId;
+        var registered = false;
+
         await _managementGate.WaitAsync(ct);
         try
         {
-            var runs = _activeRunsByActor.GetOrAdd(context.RootActorId, _ =>
+            var runs = _activeRunsByActor.GetOrAdd(actorId, _ =>
                 new ConcurrentDictionary<string, ActiveRunState>(StringComparer.Ordinal));
 
-            var runState = new ActiveRunState(context);
             runs[context.RunId] = runState;
             _activeRunsByRunId[context.RunId] = runState;
+            registered = true;
 
-            if (_subscriptionsByActor.ContainsKey(context.RootActorId))
+            if (_subscriptionsByActor.ContainsKey(actorId))
                 return;
 
-            var actorId = context.RootActorId;
-            var stream = _streams.GetStream(actorId);
-            var subscription = await stream.SubscribeAsync<EventEnvelope>(
-                envelope => DispatchAsync(actorId, envelope),
-                CancellationToken.None);
+            try
+            {
+                var stream = _streams.GetStream(actorId);
+                var subscription = await stream.SubscribeAsync<EventEnvelope>(
+                    envelope => DispatchAsync(actorId, envelope),
+                    CancellationToken.None);
 
-            _subscriptionsByActor[actorId] = subscription;
+                _subscriptionsByActor[actorId] = subscription;
+            }
+            catch
+            {
+                runs.TryRemove(context.RunId, out _);
+                _activeRunsByRunId.TryRemove(context.RunId, out _);
+                runState.MarkProjectionFailed();
+
+                if (runs.IsEmpty)
+                    _activeRunsByActor.TryRemove(actorId, out _);
+
+                throw;
+            }
         }
         finally
         {
             _managementGate.Release();
+        }
+
+        if (registered)
+        {
+            _logger?.LogDebug(
+                "Registered projection run {RunId} for actor {ActorId}.",
+                context.RunId,
+                actorId);
         }
     }
 
     public async Task UnregisterAsync(string actorId, string runId, CancellationToken ct = default)
     {
         IAsyncDisposable? subscriptionToDispose = null;
+        ActiveRunState? removedRunState = null;
 
         await _managementGate.WaitAsync(ct);
         try
@@ -65,7 +95,9 @@ public sealed class ChatProjectionRunRegistry : IChatProjectionRunRegistry
             if (!_activeRunsByActor.TryGetValue(actorId, out var runs))
                 return;
 
-            runs.TryRemove(runId, out _);
+            if (runs.TryRemove(runId, out var state))
+                removedRunState = state;
+
             _activeRunsByRunId.TryRemove(runId, out _);
 
             if (!runs.IsEmpty)
@@ -79,6 +111,8 @@ public sealed class ChatProjectionRunRegistry : IChatProjectionRunRegistry
         {
             _managementGate.Release();
         }
+
+        removedRunState?.MarkProjectionStopped();
 
         if (subscriptionToDispose != null)
             await subscriptionToDispose.DisposeAsync();
@@ -112,15 +146,23 @@ public sealed class ChatProjectionRunRegistry : IChatProjectionRunRegistry
         var isTerminal = IsProjectionTerminalEnvelope(envelope);
         foreach (var runState in runStates)
         {
+            if (!runState.IsProjectionActive)
+                continue;
+
             try
             {
                 await _coordinator.ProjectAsync(runState.Context, envelope, CancellationToken.None);
                 if (isTerminal)
                     runState.MarkProjectionCompleted();
             }
-            catch
+            catch (Exception ex)
             {
-                // Keep dispatcher resilient: one run projection failure must not block others.
+                runState.MarkProjectionFailed();
+                _logger?.LogWarning(
+                    ex,
+                    "Projection dispatch failed for run {RunId} on actor {ActorId}.",
+                    runState.Context.RunId,
+                    actorId);
             }
         }
     }
@@ -128,10 +170,44 @@ public sealed class ChatProjectionRunRegistry : IChatProjectionRunRegistry
     private static bool IsProjectionTerminalEnvelope(EventEnvelope envelope) =>
         string.Equals(envelope.Payload?.TypeUrl, WorkflowCompletedTypeUrl, StringComparison.Ordinal);
 
+    public async ValueTask DisposeAsync()
+    {
+        List<IAsyncDisposable> subscriptions;
+        await _managementGate.WaitAsync();
+        try
+        {
+            foreach (var runState in _activeRunsByRunId.Values)
+                runState.MarkProjectionStopped();
+
+            subscriptions = _subscriptionsByActor.Values.ToList();
+            _subscriptionsByActor.Clear();
+            _activeRunsByActor.Clear();
+            _activeRunsByRunId.Clear();
+        }
+        finally
+        {
+            _managementGate.Release();
+            _managementGate.Dispose();
+        }
+
+        foreach (var subscription in subscriptions)
+        {
+            try
+            {
+                await subscription.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "Failed to dispose projection subscription.");
+            }
+        }
+    }
+
     private sealed class ActiveRunState
     {
         private readonly TaskCompletionSource<bool> _projectionCompleted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _status;
 
         public ActiveRunState(ChatProjectionContext context) => Context = context;
 
@@ -139,6 +215,30 @@ public sealed class ChatProjectionRunRegistry : IChatProjectionRunRegistry
 
         public Task<bool> ProjectionCompletedTask => _projectionCompleted.Task;
 
-        public void MarkProjectionCompleted() => _projectionCompleted.TrySetResult(true);
+        public bool IsProjectionActive => Volatile.Read(ref _status) == 0;
+
+        public void MarkProjectionCompleted()
+        {
+            if (Interlocked.CompareExchange(ref _status, 1, 0) != 0)
+                return;
+
+            _projectionCompleted.TrySetResult(true);
+        }
+
+        public void MarkProjectionFailed()
+        {
+            if (Interlocked.CompareExchange(ref _status, 2, 0) != 0)
+                return;
+
+            _projectionCompleted.TrySetResult(false);
+        }
+
+        public void MarkProjectionStopped()
+        {
+            if (Interlocked.CompareExchange(ref _status, 3, 0) != 0)
+                return;
+
+            _projectionCompleted.TrySetResult(false);
+        }
     }
 }

@@ -143,7 +143,7 @@ public static class ChatEndpoints
         // ─── 4. 订阅 Agent Stream（捕获事件并映射 AG-UI） ───
 
         var stream = streams.GetStream(actor.Id);
-        var subscription = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
+        await using var subscription = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
         {
             foreach (var agUiEvt in AgUiProjector.Project(envelope))
                 sink.Push(agUiEvt);
@@ -179,8 +179,9 @@ public static class ChatEndpoints
             {
                 await actor.HandleEventAsync(requestEnvelope, ct);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                logger?.LogWarning(ex, "Workflow execution failed for actor {ActorId}", actor.Id);
                 sink.Push(new RunErrorEvent
                 {
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -191,64 +192,68 @@ public static class ChatEndpoints
             }
         }
 
-        // ─── 6. 流式写出 AGUI 事件 ───
-
         try
         {
-            await foreach (var evt in sink.ReadAllAsync(ct))
+            // ─── 6. 流式写出 AGUI 事件 ───
+            try
             {
-                await writer.WriteAsync(evt, ct);
+                await foreach (var evt in sink.ReadAllAsync(ct))
+                {
+                    await writer.WriteAsync(evt, ct);
 
-                // RUN_FINISHED / RUN_ERROR 是终止信号
-                if (evt is RunFinishedEvent or RunErrorEvent) break;
+                    // RUN_FINISHED / RUN_ERROR 是终止信号
+                    if (evt is RunFinishedEvent or RunErrorEvent) break;
+                }
             }
-        }
-        catch (OperationCanceledException) { /* 客户端断开 */ }
+            catch (OperationCanceledException) { /* 客户端断开 */ }
 
-        // ─── 7. CQRS 投影收尾 + 写执行报告（artifacts/chat-runs） ───
-        try
-        {
-            var projectionCompleted = await projectionService.WaitForRunProjectionCompletedAsync(
-                projectionSession.RunId,
-                CancellationToken.None);
-            if (!projectionCompleted)
+            // ─── 7. CQRS 投影收尾 + 写执行报告（artifacts/chat-runs） ───
+            try
             {
-                logger?.LogWarning(
-                    "Projection completion signal timeout for run {RunId}; continue with finalize/query.",
+                var projectionCompleted = await projectionService.WaitForRunProjectionCompletedAsync(
                     projectionSession.RunId);
-            }
+                if (!projectionCompleted)
+                {
+                    logger?.LogWarning(
+                        "Projection completion signal timeout for run {RunId}; continue with finalize/query.",
+                        projectionSession.RunId);
+                }
 
-            var topology = await BuildTopologyAsync(runtime);
-            var finalizedReport = await projectionService.CompleteAsync(
-                projectionSession,
-                topology,
-                CancellationToken.None);
-
-            var report = finalizedReport;
-            if (report == null && projectionService.EnableRunQueryEndpoints)
-            {
-                report = await projectionService.GetRunAsync(
-                    projectionSession.RunId,
+                var topology = await BuildTopologyAsync(runtime, actor.Id);
+                var finalizedReport = await projectionService.CompleteAsync(
+                    projectionSession,
+                    topology,
                     CancellationToken.None);
-            }
 
-            if (report != null && projectionService.EnableRunReportArtifacts)
+                var report = finalizedReport;
+                if (report == null && projectionService.EnableRunQueryEndpoints)
+                {
+                    report = await projectionService.GetRunAsync(
+                        projectionSession.RunId,
+                        CancellationToken.None);
+                }
+
+                if (report != null && projectionService.EnableRunReportArtifacts)
+                {
+                    var outputDir = Path.Combine(AevatarPaths.RepoRoot, "artifacts", "chat-runs");
+                    var (jsonPath, htmlPath) = ChatRunReportWriter.BuildDefaultPaths(outputDir);
+                    await ChatRunReportWriter.WriteAsync(report, jsonPath, htmlPath);
+                    logger?.LogInformation("Chat run report saved: json={JsonPath}, html={HtmlPath}", jsonPath, htmlPath);
+                }
+            }
+            catch (Exception ex)
             {
-                var outputDir = Path.Combine(AevatarPaths.RepoRoot, "artifacts", "chat-runs");
-                var (jsonPath, htmlPath) = ChatRunReportWriter.BuildDefaultPaths(outputDir);
-                await ChatRunReportWriter.WriteAsync(report, jsonPath, htmlPath);
-                logger?.LogInformation("Chat run report saved: json={JsonPath}, html={HtmlPath}", jsonPath, htmlPath);
+                logger?.LogWarning(ex, "Failed to finalize CQRS projection or write chat run report");
             }
         }
-        catch (Exception ex)
+        finally
         {
-            logger?.LogWarning(ex, "Failed to finalize CQRS projection or write chat run report");
+            try
+            {
+                await processingTask;
+            }
+            catch (OperationCanceledException) { }
         }
-
-        // ─── 8. 清理 ───
-
-        await subscription.DisposeAsync();
-        await processingTask;
     }
 
     // ─── WS /api/ws/chat ───
@@ -375,7 +380,7 @@ public static class ChatEndpoints
             ct);
 
         var stream = streams.GetStream(actor.Id);
-        var subscription = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
+        await using var subscription = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
         {
             foreach (var agUiEvt in AgUiProjector.Project(envelope))
                 sink.Push(agUiEvt);
@@ -421,8 +426,9 @@ public static class ChatEndpoints
             {
                 await actor.HandleEventAsync(requestEnvelope, ct);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                logger?.LogWarning(ex, "Workflow execution failed for actor {ActorId}", actor.Id);
                 sink.Push(new RunErrorEvent
                 {
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -435,67 +441,76 @@ public static class ChatEndpoints
 
         try
         {
-            await foreach (var evt in sink.ReadAllAsync(ct))
+            try
             {
-                await SendWebSocketMessageAsync(socket, new
+                await foreach (var evt in sink.ReadAllAsync(ct))
                 {
-                    type = "agui.event",
-                    requestId,
-                    payload = evt,
-                }, CancellationToken.None);
+                    await SendWebSocketMessageAsync(socket, new
+                    {
+                        type = "agui.event",
+                        requestId,
+                        payload = evt,
+                    }, CancellationToken.None);
 
-                if (evt is RunFinishedEvent or RunErrorEvent) break;
+                    if (evt is RunFinishedEvent or RunErrorEvent) break;
+                }
             }
-        }
-        catch (OperationCanceledException) { }
+            catch (OperationCanceledException) { }
 
-        try
-        {
-            var projectionCompleted = await projectionService.WaitForRunProjectionCompletedAsync(
-                projectionSession.RunId,
-                CancellationToken.None);
-
-            var topology = await BuildTopologyAsync(runtime);
-            _ = await projectionService.CompleteAsync(
-                projectionSession,
-                topology,
-                CancellationToken.None);
-
-            ChatRunReport? report = null;
-            if (projectionService.EnableRunQueryEndpoints)
+            try
             {
-                report = await projectionService.GetRunAsync(
+                var projectionCompleted = await projectionService.WaitForRunProjectionCompletedAsync(
                     projectionSession.RunId,
                     CancellationToken.None);
-            }
 
-            await SendWebSocketMessageAsync(socket, new
-            {
-                type = "query.result",
-                requestId,
-                payload = new
+                var topology = await BuildTopologyAsync(runtime, actor.Id);
+                _ = await projectionService.CompleteAsync(
+                    projectionSession,
+                    topology,
+                    CancellationToken.None);
+
+                ChatRunReport? report = null;
+                if (projectionService.EnableRunQueryEndpoints)
                 {
-                    runId = projectionSession.RunId,
-                    projectionCompleted,
-                    report,
-                },
-            }, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "Failed to finalize CQRS projection for websocket run");
-            await SendWebSocketMessageAsync(socket, new
-            {
-                type = "command.error",
-                requestId,
-                code = "PROJECTION_FINALIZE_FAILED",
-                message = "Failed to finalize projection/query.",
-            }, CancellationToken.None);
-        }
+                    report = await projectionService.GetRunAsync(
+                        projectionSession.RunId,
+                        CancellationToken.None);
+                }
 
-        await subscription.DisposeAsync();
-        await processingTask;
-        await CloseSocketAsync(socket);
+                await SendWebSocketMessageAsync(socket, new
+                {
+                    type = "query.result",
+                    requestId,
+                    payload = new
+                    {
+                        runId = projectionSession.RunId,
+                        projectionCompleted,
+                        report,
+                    },
+                }, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Failed to finalize CQRS projection for websocket run");
+                await SendWebSocketMessageAsync(socket, new
+                {
+                    type = "command.error",
+                    requestId,
+                    code = "PROJECTION_FINALIZE_FAILED",
+                    message = "Failed to finalize projection/query.",
+                }, CancellationToken.None);
+            }
+        }
+        finally
+        {
+            try
+            {
+                await processingTask;
+            }
+            catch (OperationCanceledException) { }
+
+            await CloseSocketAsync(socket);
+        }
     }
 
     // ─── GET /api/agents ───
@@ -555,15 +570,48 @@ public static class ChatEndpoints
         return report == null ? Results.NotFound() : Results.Ok(report);
     }
 
-    private static async Task<List<ChatTopologyEdge>> BuildTopologyAsync(IActorRuntime runtime)
+    private static async Task<List<ChatTopologyEdge>> BuildTopologyAsync(
+        IActorRuntime runtime,
+        string rootActorId)
     {
         var allActors = await runtime.GetAllAsync();
-        var topology = new List<ChatTopologyEdge>();
+        var childrenByParent = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
         foreach (var actor in allActors)
         {
             var parent = await actor.GetParentIdAsync();
             if (!string.IsNullOrWhiteSpace(parent))
-                topology.Add(new ChatTopologyEdge(parent, actor.Id));
+            {
+                if (!childrenByParent.TryGetValue(parent, out var children))
+                {
+                    children = [];
+                    childrenByParent[parent] = children;
+                }
+
+                children.Add(actor.Id);
+            }
+        }
+
+        var topology = new List<ChatTopologyEdge>();
+        if (string.IsNullOrWhiteSpace(rootActorId))
+            return topology;
+
+        var visited = new HashSet<string>(StringComparer.Ordinal) { rootActorId };
+        var queue = new Queue<string>();
+        queue.Enqueue(rootActorId);
+
+        while (queue.Count > 0)
+        {
+            var parent = queue.Dequeue();
+            if (!childrenByParent.TryGetValue(parent, out var children))
+                continue;
+
+            foreach (var child in children)
+            {
+                topology.Add(new ChatTopologyEdge(parent, child));
+                if (visited.Add(child))
+                    queue.Enqueue(child);
+            }
         }
 
         return topology;

@@ -30,7 +30,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionCoordinator<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>>, ChatProjectionCoordinator>();
         services.TryAddSingleton<IChatProjectionCoordinator>(sp =>
             (IChatProjectionCoordinator)sp.GetRequiredService<IProjectionCoordinator<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>>>());
-        services.TryAddSingleton<IChatProjectionRunRegistry, ChatProjectionRunRegistry>();
+        services.TryAddSingleton<IChatProjectionSubscriptionRegistry, ChatProjectionSubscriptionRegistry>();
         services.TryAddSingleton<IChatRunProjectionService, ChatRunProjectionService>();
         return services;
     }

@@ -10,6 +10,7 @@ using Aevatar.Workflows.Core;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Diagnostics;
 
 namespace Aevatar.Hosts.Api.Tests;
 
@@ -28,7 +29,7 @@ public class ChatRunProjectionServiceTests
         var store = new InMemoryChatRunReadModelStore();
         var projector = new ChatRunReadModelProjector(store, BuildReducers());
         var coordinator = new ChatProjectionCoordinator([projector]);
-        var runRegistry = new ChatProjectionRunRegistry(coordinator, streams);
+        var runRegistry = new ChatProjectionSubscriptionRegistry(coordinator, streams);
         var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
 
         var session = await service.StartAsync("root", "direct", "hello");
@@ -74,7 +75,7 @@ public class ChatRunProjectionServiceTests
         var store = new InMemoryChatRunReadModelStore();
         var projector = new ChatRunReadModelProjector(store, BuildReducers());
         var coordinator = new ChatProjectionCoordinator([projector]);
-        var runRegistry = new ChatProjectionRunRegistry(coordinator, streams);
+        var runRegistry = new ChatProjectionSubscriptionRegistry(coordinator, streams);
         var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
 
         var session = await service.StartAsync("root", "direct", "hello");
@@ -107,7 +108,7 @@ public class ChatRunProjectionServiceTests
         var store = new InMemoryChatRunReadModelStore();
         var projector = new ChatRunReadModelProjector(store, BuildReducers());
         var coordinator = new ChatProjectionCoordinator([projector]);
-        var runRegistry = new ChatProjectionRunRegistry(coordinator, streams);
+        var runRegistry = new ChatProjectionSubscriptionRegistry(coordinator, streams);
         var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
 
         var session = await service.StartAsync("root", "direct", "hello");
@@ -136,7 +137,7 @@ public class ChatRunProjectionServiceTests
         var store = new InMemoryChatRunReadModelStore();
         var projector = new ChatRunReadModelProjector(store, BuildReducers());
         var coordinator = new ChatProjectionCoordinator([projector]);
-        var runRegistry = new ChatProjectionRunRegistry(coordinator, streams);
+        var runRegistry = new ChatProjectionSubscriptionRegistry(coordinator, streams);
         var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
 
         var session1 = await service.StartAsync("root", "direct", "hello-1");
@@ -191,13 +192,95 @@ public class ChatRunProjectionServiceTests
         var store = new InMemoryChatRunReadModelStore();
         var projector = new ChatRunReadModelProjector(store, BuildReducers());
         var coordinator = new ChatProjectionCoordinator([projector]);
-        var runRegistry = new ChatProjectionRunRegistry(coordinator, streams);
+        var runRegistry = new ChatProjectionSubscriptionRegistry(coordinator, streams);
         var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
 
         var session = await service.StartAsync("root", "direct", "hello");
         var completed = await service.WaitForRunProjectionCompletedAsync(session.RunId);
 
         completed.Should().BeFalse();
+        _ = await service.CompleteAsync(session, []);
+    }
+
+    [Fact]
+    public async Task WaitForRunProjectionCompletedAsync_WhenProjectionFails_ShouldReturnFalseWithoutWaitingTimeout()
+    {
+        var options = new ChatProjectionOptions
+        {
+            Enabled = true,
+            EnableRunQueryEndpoints = true,
+            EnableRunReportArtifacts = true,
+            RunProjectionCompletionWaitTimeoutMs = 3000,
+        };
+        var streams = new InMemoryStreamProvider();
+        var coordinator = new ChatProjectionCoordinator([new FailingProjector()]);
+        var store = new InMemoryChatRunReadModelStore();
+        var runRegistry = new ChatProjectionSubscriptionRegistry(coordinator, streams);
+        var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
+
+        var session = await service.StartAsync("root", "direct", "hello");
+        await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "direct",
+            RunId = "wf-run-fail",
+            Input = "hello",
+        }));
+
+        var sw = Stopwatch.StartNew();
+        var completed = await service.WaitForRunProjectionCompletedAsync(session.RunId);
+        sw.Stop();
+
+        completed.Should().BeFalse();
+        sw.ElapsedMilliseconds.Should().BeLessThan(1000);
+        _ = await service.CompleteAsync(session, []);
+    }
+
+    [Fact]
+    public async Task ProjectionRun_ShouldIgnoreEventsAfterTerminalEnvelope_BeforeSessionComplete()
+    {
+        var options = new ChatProjectionOptions
+        {
+            Enabled = true,
+            EnableRunQueryEndpoints = true,
+            EnableRunReportArtifacts = true,
+        };
+        var streams = new InMemoryStreamProvider();
+        var store = new InMemoryChatRunReadModelStore();
+        var projector = new ChatRunReadModelProjector(store, BuildReducers());
+        var coordinator = new ChatProjectionCoordinator([projector]);
+        var runRegistry = new ChatProjectionSubscriptionRegistry(coordinator, streams);
+        var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
+
+        var session = await service.StartAsync("root", "direct", "hello");
+        await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "direct",
+            RunId = "wf-run-1",
+            Input = "hello",
+        }));
+        await streams.GetStream("root").ProduceAsync(Wrap(new WorkflowCompletedEvent
+        {
+            WorkflowName = "direct",
+            RunId = "wf-run-1",
+            Success = true,
+            Output = "done",
+        }));
+
+        var completed = await service.WaitForRunProjectionCompletedAsync(session.RunId);
+        completed.Should().BeTrue();
+
+        await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "direct",
+            RunId = "wf-run-2",
+            Input = "late-event",
+        }));
+
+        await Task.Delay(50);
+        var reportBeforeComplete = await store.GetAsync(session.RunId);
+        reportBeforeComplete.Should().NotBeNull();
+        reportBeforeComplete!.Timeline.Count(x => x.Stage == "workflow.start").Should().Be(1);
+
         _ = await service.CompleteAsync(session, []);
     }
 
@@ -234,5 +317,22 @@ public class ChatRunProjectionServiceTests
         }
 
         throw new TimeoutException("Condition not met before timeout.");
+    }
+
+    private sealed class FailingProjector : IProjectionProjector<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>>
+    {
+        public int Order => 0;
+
+        public ValueTask InitializeAsync(ChatProjectionContext context, CancellationToken ct = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask ProjectAsync(ChatProjectionContext context, EventEnvelope envelope, CancellationToken ct = default) =>
+            ValueTask.FromException(new InvalidOperationException("projection failed"));
+
+        public ValueTask CompleteAsync(
+            ChatProjectionContext context,
+            IReadOnlyList<ChatTopologyEdge> topology,
+            CancellationToken ct = default) =>
+            ValueTask.CompletedTask;
     }
 }

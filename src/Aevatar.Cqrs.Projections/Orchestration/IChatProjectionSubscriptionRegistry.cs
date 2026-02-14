@@ -3,7 +3,7 @@ namespace Aevatar.Cqrs.Projections.Orchestration;
 /// <summary>
 /// Manages projection run registration and actor stream subscription lifecycle.
 /// </summary>
-public interface IChatProjectionRunRegistry
+public interface IChatProjectionSubscriptionRegistry
 {
     Task RegisterAsync(ChatProjectionContext context, CancellationToken ct = default);
 

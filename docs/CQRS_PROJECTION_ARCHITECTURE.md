@@ -22,7 +22,7 @@ Follow strict dependency direction:
 
 ### Directory Layout
 
-- `src/Aevatar.Cqrs.Projections.Abstractions/Abstractions/`
+- `src/Aevatar.Cqrs.Projections.Abstractions/Contracts/`
 - `src/Aevatar.Cqrs.Projections.Abstractions/Orchestration/`
 - `src/Aevatar.Cqrs.Projections.Abstractions/ReadModels/`
 - `src/Aevatar.Cqrs.Projections/Configuration/`
