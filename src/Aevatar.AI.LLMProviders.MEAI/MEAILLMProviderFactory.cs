@@ -17,7 +17,7 @@ namespace Aevatar.AI.LLMProviders.MEAI;
 /// 基于 MEAI 的 LLM Provider 工厂。
 /// 支持注册多个命名 provider，按名字获取。
 /// </summary>
-public sealed class MEAILLMProviderFactory : ILLMProviderFactory
+public sealed class MEAILLMProviderFactory : ILLMProviderFactory, IMEAILLMProviderRegistry
 {
     private readonly ConcurrentDictionary<string, MEAILLMProvider> _providers = new(StringComparer.OrdinalIgnoreCase);
     private string _defaultName = "openai";
@@ -28,14 +28,14 @@ public sealed class MEAILLMProviderFactory : ILLMProviderFactory
     /// <param name="name">名称（如 "openai", "deepseek", "azure"）。</param>
     /// <param name="client">MEAI 的 IChatClient。</param>
     /// <param name="logger">日志记录器。</param>
-    public MEAILLMProviderFactory Register(string name, IChatClient client, ILogger? logger = null)
+    public IMEAILLMProviderRegistry Register(string name, IChatClient client, ILogger? logger = null)
     {
         _providers[name] = new MEAILLMProvider(name, client, logger);
         return this;
     }
 
     /// <summary>设置默认 provider 名称。</summary>
-    public MEAILLMProviderFactory SetDefault(string name)
+    public IMEAILLMProviderRegistry SetDefault(string name)
     {
         _defaultName = name;
         return this;
@@ -63,7 +63,7 @@ public sealed class MEAILLMProviderFactory : ILLMProviderFactory
     /// <param name="apiKey">API Key。</param>
     /// <param name="baseUrl">API 基地址（null 则用 OpenAI 默认）。</param>
     /// <param name="logger">日志记录器。</param>
-    public MEAILLMProviderFactory RegisterOpenAI(
+    public IMEAILLMProviderRegistry RegisterOpenAI(
         string name, string model, string apiKey,
         string? baseUrl = null, ILogger? logger = null)
     {

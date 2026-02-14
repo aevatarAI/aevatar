@@ -17,10 +17,10 @@ public interface IStream
 
     /// <summary>Produces a message to the stream.</summary>
     /// <typeparam name="T">Message type, must implement Protobuf IMessage.</typeparam>
-    Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage;
+    Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage, new();
 
     /// <summary>Subscribes to messages of a specific type and returns a disposable subscription.</summary>
     /// <typeparam name="T">Message type, must implement Protobuf IMessage.</typeparam>
     Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler,
-        CancellationToken ct = default) where T : IMessage;
+        CancellationToken ct = default) where T : IMessage, new();
 }

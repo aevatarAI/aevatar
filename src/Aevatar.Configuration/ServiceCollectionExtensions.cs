@@ -16,6 +16,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddAevatarConfig(this IServiceCollection services)
     {
         AevatarPaths.EnsureDirectories();
+        services.TryAddSingleton<IAevatarSecretsStore, AevatarSecretsStore>();
         services.TryAddSingleton<AevatarSecretsStore>();
         return services;
     }

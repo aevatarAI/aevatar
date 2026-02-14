@@ -23,7 +23,7 @@ public static class ServiceCollectionExtensions
     /// </example>
     public static IServiceCollection AddMEAIProviders(
         this IServiceCollection services,
-        Action<MEAILLMProviderFactory> configure)
+        Action<IMEAILLMProviderRegistry> configure)
     {
         var factory = new MEAILLMProviderFactory();
         configure(factory);

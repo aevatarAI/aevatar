@@ -92,13 +92,7 @@ public static class ChatEndpoints
 
             // 设置 workflow YAML 到 Agent State
             if (actor.Agent is WorkflowGAgent wfAgent)
-            {
-                wfAgent.State.WorkflowYaml = yaml;
-                wfAgent.State.WorkflowName = workflowName;
-            }
-
-            // 重新激活以编译 YAML（OnActivateAsync 会读 State.WorkflowYaml）
-            await actor.Agent.ActivateAsync(ct);
+                wfAgent.ConfigureWorkflow(yaml, workflowName);
         }
 
         // ─── 2. 准备 SSE 响应 ───

@@ -33,8 +33,12 @@ public sealed class MCPClientManager : IAsyncDisposable
         // 创建 stdio transport
         var transport = new StdioClientTransport(new StdioClientTransportOptions
         {
+            Name = config.Name,
             Command = config.Command,
             Arguments = [..config.Arguments],
+            EnvironmentVariables = config.Environment.Count == 0
+                ? null
+                : config.Environment.ToDictionary(static kv => kv.Key, static kv => (string?)kv.Value),
         });
 
         var options = new McpClientOptions

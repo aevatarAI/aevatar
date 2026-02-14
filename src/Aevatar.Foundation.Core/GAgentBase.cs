@@ -174,14 +174,14 @@ public abstract class GAgentBase : IAgent
         current.CopyTo(next, 0);
         next[current.Length] = module;
         _modules = next;
-        _ = PersistModulesAsync();
+        SchedulePersistModules();
     }
 
     /// <summary>Replaces dynamic event modules in batch and persists them.</summary>
     public void SetModules(IEnumerable<IEventModule> modules)
     {
         _modules = modules.ToArray();
-        _ = PersistModulesAsync();
+        SchedulePersistModules();
     }
 
     /// <summary>Gets all currently registered dynamic modules.</summary>
@@ -255,6 +255,23 @@ public abstract class GAgentBase : IAgent
         var manifest = await ManifestStore.LoadAsync(Id) ?? new AgentManifest { AgentId = Id };
         manifest.ModuleNames = _modules.Select(m => m.Name).ToList();
         await ManifestStore.SaveAsync(Id, manifest);
+    }
+
+    private void SchedulePersistModules()
+    {
+        _ = PersistModulesSafeAsync();
+    }
+
+    private async Task PersistModulesSafeAsync()
+    {
+        try
+        {
+            await PersistModulesAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to persist module manifest for agent {AgentId}", Id);
+        }
     }
 
     private EventHandlerMetadata[] GetStaticHandlers() =>

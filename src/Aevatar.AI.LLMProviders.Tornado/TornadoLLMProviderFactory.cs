@@ -16,7 +16,7 @@ namespace Aevatar.AI.LLMProviders.Tornado;
 /// 基于 LlmTornado 的 LLM Provider 工厂。
 /// 支持注册多个命名 provider。
 /// </summary>
-public sealed class TornadoLLMProviderFactory : ILLMProviderFactory
+public sealed class TornadoLLMProviderFactory : ILLMProviderFactory, ITornadoLLMProviderRegistry
 {
     private readonly ConcurrentDictionary<string, TornadoLLMProvider> _providers = new(StringComparer.OrdinalIgnoreCase);
     private string _defaultName = "";
@@ -29,7 +29,7 @@ public sealed class TornadoLLMProviderFactory : ILLMProviderFactory
     /// <param name="apiKey">API Key。</param>
     /// <param name="model">模型名称。</param>
     /// <param name="logger">日志。</param>
-    public TornadoLLMProviderFactory Register(
+    public ITornadoLLMProviderRegistry Register(
         string name, LLmProviders providerType, string apiKey, string model, ILogger? logger = null)
     {
         var api = new TornadoApi(providerType, apiKey);
@@ -39,7 +39,7 @@ public sealed class TornadoLLMProviderFactory : ILLMProviderFactory
     }
 
     /// <summary>注册 OpenAI 兼容 provider（含自定义 baseUrl）。</summary>
-    public TornadoLLMProviderFactory RegisterOpenAICompatible(
+    public ITornadoLLMProviderRegistry RegisterOpenAICompatible(
         string name, string apiKey, string model, string? baseUrl = null, ILogger? logger = null)
     {
         var api = new TornadoApi(LLmProviders.OpenAi, apiKey);
@@ -49,7 +49,7 @@ public sealed class TornadoLLMProviderFactory : ILLMProviderFactory
     }
 
     /// <summary>设置默认 provider。</summary>
-    public TornadoLLMProviderFactory SetDefault(string name) { _defaultName = name; return this; }
+    public ITornadoLLMProviderRegistry SetDefault(string name) { _defaultName = name; return this; }
 
     /// <inheritdoc />
     public ILLMProvider GetProvider(string name) =>

@@ -22,7 +22,7 @@ public static class ServiceCollectionExtensions
     /// </example>
     public static IServiceCollection AddTornadoProviders(
         this IServiceCollection services,
-        Action<TornadoLLMProviderFactory> configure)
+        Action<ITornadoLLMProviderRegistry> configure)
     {
         var factory = new TornadoLLMProviderFactory();
         configure(factory);

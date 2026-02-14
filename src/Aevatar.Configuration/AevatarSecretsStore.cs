@@ -20,7 +20,7 @@ namespace Aevatar.Configuration;
 /// Secrets store that reads/writes ~/.aevatar/secrets.json.
 /// Supports both encrypted (AES-256-GCM) and plaintext JSON formats.
 /// </summary>
-public sealed class AevatarSecretsStore
+public sealed class AevatarSecretsStore : IAevatarSecretsStore
 {
     private const int KeyBytes = 32;   // AES-256
     private const int NonceBytes = 12;
@@ -81,14 +81,14 @@ public sealed class AevatarSecretsStore
     public void Set(string key, string value)
     {
         _secrets[key] = value;
-        SavePlaintext();
+        Save();
     }
 
     /// <summary>Removes key and saves.</summary>
     public void Remove(string key)
     {
         _secrets.Remove(key);
-        SavePlaintext();
+        Save();
     }
 
     // ─── Loading (supports both encrypted and plaintext) ───
@@ -150,11 +150,86 @@ public sealed class AevatarSecretsStore
         }
     }
 
+    private void Save()
+    {
+        var masterKey = TryGetMasterKey();
+        if (masterKey != null && TrySaveEncrypted(masterKey))
+            return;
+
+        SavePlaintext();
+    }
+
+    private bool TrySaveEncrypted(byte[] key)
+    {
+        try
+        {
+            AevatarPaths.EnsureDirectories();
+            var plaintext = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(_secrets, JsonOpts));
+            var nonce = RandomNumberGenerator.GetBytes(NonceBytes);
+            var ciphertext = new byte[plaintext.Length];
+            var tag = new byte[TagBytes];
+
+            using var gcm = new AesGcm(key, TagBytes);
+            gcm.Encrypt(nonce, plaintext, ciphertext, tag, Encoding.UTF8.GetBytes(Aad));
+
+            var envelope = new EncryptedEnvelope
+            {
+                SchemaVersion = 1,
+                Algorithm = "AES-256-GCM",
+                NonceB64 = Convert.ToBase64String(nonce),
+                TagB64 = Convert.ToBase64String(tag),
+                CiphertextB64 = Convert.ToBase64String(ciphertext),
+            };
+
+            var json = JsonSerializer.Serialize(envelope, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true,
+            });
+
+            WriteAtomically(json);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private void SavePlaintext()
     {
         AevatarPaths.EnsureDirectories();
         var json = JsonSerializer.Serialize(_secrets, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(_filePath, json);
+        WriteAtomically(json);
+    }
+
+    private void WriteAtomically(string content)
+    {
+        var directory = Path.GetDirectoryName(_filePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var tempFile = _filePath + ".tmp." + Guid.NewGuid().ToString("N");
+        File.WriteAllText(tempFile, content, Encoding.UTF8);
+
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        {
+            try { File.SetUnixFileMode(tempFile, UnixFileMode.UserRead | UnixFileMode.UserWrite); } catch { }
+        }
+
+        try
+        {
+            File.Move(tempFile, _filePath, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempFile))
+                    File.Delete(tempFile);
+            }
+            catch { }
+        }
     }
 
     // ─── AES-256-GCM Decryption ───

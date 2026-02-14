@@ -64,38 +64,38 @@ public static class ChatEndpoints
 
             await using var sub = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
             {
-                var typeUrl = envelope.Payload?.TypeUrl;
-                if (typeUrl == null) return;
+                var payload = envelope.Payload;
+                if (payload == null) return;
 
                 // AG-UI: TextMessageStart → 通知客户端流开始
-                if (typeUrl.Contains("TextMessageStartEvent"))
+                if (payload.Is(TextMessageStartEvent.Descriptor))
                 {
-                    var evt = envelope.Payload.Unpack<TextMessageStartEvent>();
+                    var evt = payload.Unpack<TextMessageStartEvent>();
                     var data = System.Text.Json.JsonSerializer.Serialize(new { type = "TEXT_MESSAGE_START", session_id = evt.SessionId, agent_id = evt.AgentId });
                     await httpContext.Response.WriteAsync($"data: {data}\n\n", ct);
                     await httpContext.Response.Body.FlushAsync(ct);
                 }
                 // AG-UI: TextMessageContent → 增量 token
-                else if (typeUrl.Contains("TextMessageContentEvent"))
+                else if (payload.Is(TextMessageContentEvent.Descriptor))
                 {
-                    var evt = envelope.Payload.Unpack<TextMessageContentEvent>();
+                    var evt = payload.Unpack<TextMessageContentEvent>();
                     var data = System.Text.Json.JsonSerializer.Serialize(new { type = "TEXT_MESSAGE_CONTENT", delta = evt.Delta });
                     await httpContext.Response.WriteAsync($"data: {data}\n\n", ct);
                     await httpContext.Response.Body.FlushAsync(ct);
                 }
                 // AG-UI: TextMessageEnd → 流结束
-                else if (typeUrl.Contains("TextMessageEndEvent"))
+                else if (payload.Is(TextMessageEndEvent.Descriptor))
                 {
-                    var evt = envelope.Payload.Unpack<TextMessageEndEvent>();
+                    var evt = payload.Unpack<TextMessageEndEvent>();
                     var data = System.Text.Json.JsonSerializer.Serialize(new { type = "TEXT_MESSAGE_END", content = evt.Content });
                     await httpContext.Response.WriteAsync($"data: {data}\n\n", ct);
                     await httpContext.Response.Body.FlushAsync(ct);
                     tcs.TrySetResult();
                 }
                 // 兼容：非流式 ChatResponseEvent
-                else if (typeUrl.Contains("ChatResponseEvent"))
+                else if (payload.Is(ChatResponseEvent.Descriptor))
                 {
-                    var evt = envelope.Payload.Unpack<ChatResponseEvent>();
+                    var evt = payload.Unpack<ChatResponseEvent>();
                     var data = System.Text.Json.JsonSerializer.Serialize(new { type = "CHAT_RESPONSE", content = evt.Content });
                     await httpContext.Response.WriteAsync($"data: {data}\n\n", ct);
                     await httpContext.Response.Body.FlushAsync(ct);
@@ -116,6 +116,15 @@ public static class ChatEndpoints
             CancellationToken ct) =>
         {
             var actor = await runtime.CreateAsync<WorkflowGAgent>(request.Id, ct);
+            if (!string.IsNullOrWhiteSpace(request.WorkflowYaml) &&
+                actor.Agent is WorkflowGAgent workflowAgent)
+            {
+                var workflowName = string.IsNullOrWhiteSpace(request.WorkflowName)
+                    ? actor.Id
+                    : request.WorkflowName;
+                workflowAgent.ConfigureWorkflow(request.WorkflowYaml, workflowName);
+            }
+
             return Results.Created($"/api/agents/{actor.Id}", new { id = actor.Id });
         });
 
@@ -139,5 +148,6 @@ public sealed class ChatRequest
 public sealed class CreateWorkflowRequest
 {
     public string? Id { get; init; }
+    public string? WorkflowName { get; init; }
     public string? WorkflowYaml { get; init; }
 }

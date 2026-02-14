@@ -246,7 +246,7 @@ public class WorkflowIntegrationTests
             """;
 
         // When
-        RoleGAgentFactory.ConfigureFromYaml(agent, yaml, sp);
+        await RoleGAgentFactory.ConfigureFromYaml(agent, yaml, sp);
 
         // Then
         agent.RoleName.Should().Be("Expert Analyst");

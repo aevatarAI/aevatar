@@ -37,26 +37,26 @@ public static class RoleGAgentFactory
         .Build();
 
     /// <summary>从 YAML 字符串配置 RoleGAgent。</summary>
-    public static void ConfigureFromYaml(RoleGAgent agent, string yaml, IServiceProvider services)
+    public static Task ConfigureFromYaml(RoleGAgent agent, string yaml, IServiceProvider services)
     {
         var config = Yaml.Deserialize<RoleYamlConfig>(yaml);
-        ApplyConfig(agent, config, services);
+        return ApplyConfig(agent, config, services);
     }
 
     /// <summary>应用 RoleYamlConfig 到 RoleGAgent。</summary>
-    public static void ApplyConfig(RoleGAgent agent, RoleYamlConfig config, IServiceProvider services)
+    public static async Task ApplyConfig(RoleGAgent agent, RoleYamlConfig config, IServiceProvider services)
     {
         // ─── 基础配置 ───
         if (!string.IsNullOrEmpty(config.Name))
             agent.SetRoleName(config.Name);
 
-        agent.ConfigureAsync(new AIAgentConfig
+        await agent.ConfigureAsync(new AIAgentConfig
         {
             SystemPrompt = config.SystemPrompt ?? "",
             ProviderName = config.Provider ?? "deepseek",
             Model = config.Model,
             Temperature = config.Temperature,
-        }).GetAwaiter().GetResult();
+        });
 
         // ─── EventModules 创建 ───
         if (string.IsNullOrEmpty(config.Extensions?.EventModules)) return;

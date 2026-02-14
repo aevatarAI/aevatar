@@ -29,21 +29,23 @@ public sealed class LLMCallModule : IEventModule
     /// <inheritdoc />
     public bool CanHandle(EventEnvelope envelope)
     {
-        var typeUrl = envelope.Payload?.TypeUrl;
-        return typeUrl?.Contains("StepRequestEvent") == true
-            || typeUrl?.Contains("TextMessageEndEvent") == true
-            || typeUrl?.Contains("ChatResponseEvent") == true;
+        var payload = envelope.Payload;
+        return payload != null &&
+               (payload.Is(StepRequestEvent.Descriptor)
+                || payload.Is(TextMessageEndEvent.Descriptor)
+                || payload.Is(ChatResponseEvent.Descriptor));
     }
 
     /// <inheritdoc />
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
-        var typeUrl = envelope.Payload!.TypeUrl;
+        var payload = envelope.Payload;
+        if (payload == null) return;
 
         // ─── Handle StepRequestEvent: send ChatRequestEvent to target role ───
-        if (typeUrl.Contains("StepRequestEvent"))
+        if (payload.Is(StepRequestEvent.Descriptor))
         {
-            var request = envelope.Payload.Unpack<StepRequestEvent>();
+            var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "llm_call") return;
 
             var prompt = request.Input;
@@ -86,9 +88,9 @@ public sealed class LLMCallModule : IEventModule
         }
 
         // ─── Handle TextMessageEndEvent: convert to StepCompletedEvent ───
-        if (typeUrl.Contains("TextMessageEndEvent"))
+        if (payload.Is(TextMessageEndEvent.Descriptor))
         {
-            var evt = envelope.Payload.Unpack<TextMessageEndEvent>();
+            var evt = payload.Unpack<TextMessageEndEvent>();
             var sessionId = evt.SessionId;
             if (string.IsNullOrEmpty(sessionId)) return;
             if (!_pending.TryGetValue(sessionId, out var pending)) return;
@@ -109,9 +111,9 @@ public sealed class LLMCallModule : IEventModule
         }
 
         // ─── Handle ChatResponseEvent (non-streaming fallback) ───
-        if (typeUrl.Contains("ChatResponseEvent"))
+        if (payload.Is(ChatResponseEvent.Descriptor))
         {
-            var evt = envelope.Payload.Unpack<ChatResponseEvent>();
+            var evt = payload.Unpack<ChatResponseEvent>();
             var sessionId = evt.SessionId;
             if (string.IsNullOrEmpty(sessionId)) return;
             if (!_pending.TryGetValue(sessionId, out var pending)) return;

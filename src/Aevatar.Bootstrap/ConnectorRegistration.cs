@@ -1,26 +1,23 @@
-// ─────────────────────────────────────────────────────────────
-// ConnectorRegistration — 从 ~/.aevatar/connectors.json 加载并注册到 IConnectorRegistry
-// ─────────────────────────────────────────────────────────────
-
-using Aevatar.Workflows.Core.Connectors;
+using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.Workflows.Core.Connectors;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Hosts.Api;
+namespace Aevatar.Bootstrap;
 
-internal static class ConnectorRegistration
+public static class ConnectorRegistration
 {
-    public static void RegisterConnectors(
+    public static int RegisterConnectors(
         IConnectorRegistry registry,
         ILogger logger,
         string? connectorsJsonPath = null)
     {
         var entries = AevatarConnectorConfig.LoadConnectors(connectorsJsonPath);
         if (entries.Count == 0)
-            return;
+            return 0;
 
+        var added = 0;
         foreach (var entry in entries)
         {
             switch (entry.Type.ToLowerInvariant())
@@ -31,6 +28,7 @@ internal static class ConnectorRegistration
                         logger.LogWarning("Skip connector {Name}: http.baseUrl is required", entry.Name);
                         break;
                     }
+
                     registry.Register(new HttpConnector(
                         entry.Name,
                         entry.Http.BaseUrl,
@@ -39,6 +37,7 @@ internal static class ConnectorRegistration
                         entry.Http.AllowedInputKeys,
                         entry.Http.DefaultHeaders,
                         entry.TimeoutMs));
+                    added++;
                     break;
 
                 case "cli":
@@ -47,11 +46,13 @@ internal static class ConnectorRegistration
                         logger.LogWarning("Skip connector {Name}: cli.command is required", entry.Name);
                         break;
                     }
+
                     if (entry.Cli.Command.Contains("://", StringComparison.OrdinalIgnoreCase))
                     {
                         logger.LogWarning("Skip connector {Name}: cli.command must be a preinstalled command", entry.Name);
                         break;
                     }
+
                     registry.Register(new CliConnector(
                         entry.Name,
                         entry.Cli.Command,
@@ -61,6 +62,7 @@ internal static class ConnectorRegistration
                         entry.Cli.WorkingDirectory,
                         entry.Cli.Environment,
                         entry.TimeoutMs));
+                    added++;
                     break;
 
                 case "mcp":
@@ -69,6 +71,7 @@ internal static class ConnectorRegistration
                         logger.LogWarning("Skip connector {Name}: mcp.command is required", entry.Name);
                         break;
                     }
+
                     var server = new MCPServerConfig
                     {
                         Name = string.IsNullOrWhiteSpace(entry.Mcp.ServerName) ? entry.Name : entry.Mcp.ServerName,
@@ -76,6 +79,7 @@ internal static class ConnectorRegistration
                         Arguments = entry.Mcp.Arguments,
                         Environment = entry.Mcp.Environment,
                     };
+
                     registry.Register(new MCPConnector(
                         entry.Name,
                         server,
@@ -83,6 +87,7 @@ internal static class ConnectorRegistration
                         entry.Mcp.AllowedTools,
                         entry.Mcp.AllowedInputKeys,
                         logger: logger));
+                    added++;
                     break;
 
                 default:
@@ -90,5 +95,7 @@ internal static class ConnectorRegistration
                     break;
             }
         }
+
+        return added;
     }
 }

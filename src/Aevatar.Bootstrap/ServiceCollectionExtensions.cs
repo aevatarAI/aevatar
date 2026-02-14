@@ -3,12 +3,10 @@ using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Configuration;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Workflows.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Bootstrap;
 
@@ -17,6 +15,7 @@ public sealed class AevatarBootstrapOptions
     public bool EnableMEAIProviders { get; set; } = true;
     public bool EnableMCPTools { get; set; }
     public bool EnableSkills { get; set; }
+    public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
     public string DefaultProvider { get; set; } = "deepseek";
     public string OpenAIModel { get; set; } = "gpt-4o-mini";
@@ -37,7 +36,6 @@ public static class ServiceCollectionExtensions
         services.AddAevatarConfig();
         services.AddAevatarRuntime();
         services.AddAevatarCognitive();
-        services.TryAddSingleton<IEventModuleFactory, CognitiveModuleFactory>();
 
         RegisterMeaiProviders(services, configuration, options);
 
@@ -67,7 +65,7 @@ public static class ServiceCollectionExtensions
 
         if (string.IsNullOrEmpty(apiKey))
         {
-            var secrets = new AevatarSecretsStore();
+            var secrets = options.SecretsStore ?? new AevatarSecretsStore();
             provider = secrets.GetDefaultProvider() ?? configuration["Models:DefaultProvider"] ?? options.DefaultProvider;
             apiKey = secrets.GetApiKey(provider);
             if (string.IsNullOrEmpty(apiKey))

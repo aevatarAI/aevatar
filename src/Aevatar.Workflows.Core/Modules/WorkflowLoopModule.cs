@@ -40,9 +40,13 @@ public sealed class WorkflowLoopModule : IEventModule
     /// </summary>
     /// <param name="envelope">事件信封。</param>
     /// <returns>若为 StartWorkflowEvent 或 StepCompletedEvent 则返回 true。</returns>
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.TypeUrl?.Contains("StartWorkflowEvent") == true ||
-        envelope.Payload?.TypeUrl?.Contains("StepCompletedEvent") == true;
+    public bool CanHandle(EventEnvelope envelope)
+    {
+        var payload = envelope.Payload;
+        return payload != null &&
+               (payload.Is(StartWorkflowEvent.Descriptor) ||
+                payload.Is(StepCompletedEvent.Descriptor));
+    }
 
     /// <summary>
     /// 处理事件。启动时取入口步骤并下发；完成时取后继步骤并下发，无后继则发布 WorkflowCompletedEvent。
@@ -53,17 +57,20 @@ public sealed class WorkflowLoopModule : IEventModule
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
         if (_workflow == null) return;
-        if (envelope.Payload!.TypeUrl.Contains("StartWorkflowEvent"))
+        var payload = envelope.Payload;
+        if (payload == null) return;
+
+        if (payload.Is(StartWorkflowEvent.Descriptor))
         {
-            var evt = envelope.Payload.Unpack<StartWorkflowEvent>();
+            var evt = payload.Unpack<StartWorkflowEvent>();
             _currentRunId = evt.RunId;
             var entry = _workflow.Steps.FirstOrDefault();
             if (entry == null) { await ctx.PublishAsync(new WorkflowCompletedEvent { WorkflowName = _workflow.Name, RunId = evt.RunId, Success = false, Error = "无步骤" }, EventDirection.Both, ct); return; }
             await DispatchStep(entry, evt.Input, evt.RunId, ctx, ct);
         }
-        else
+        else if (payload.Is(StepCompletedEvent.Descriptor))
         {
-            var evt = envelope.Payload.Unpack<StepCompletedEvent>();
+            var evt = payload.Unpack<StepCompletedEvent>();
             if (evt.RunId != _currentRunId) return;
             var current = _workflow.GetStep(evt.StepId);
 
@@ -82,7 +89,7 @@ public sealed class WorkflowLoopModule : IEventModule
             if (!evt.Success) { await ctx.PublishAsync(new WorkflowCompletedEvent { WorkflowName = _workflow.Name, RunId = evt.RunId, Success = false, Error = evt.Error }, EventDirection.Both, ct); return; }
             var next = _workflow.GetNextStep(current.Id);
             if (next == null) { await ctx.PublishAsync(new WorkflowCompletedEvent { WorkflowName = _workflow.Name, RunId = evt.RunId, Success = true, Output = evt.Output }, EventDirection.Both, ct); return; }
-            await DispatchStep(next, evt.Output, evt.RunId, ctx, ct);
+            await DispatchStep(next, evt.Output ?? string.Empty, evt.RunId, ctx, ct);
         }
     }
 

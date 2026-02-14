@@ -20,15 +20,18 @@ public sealed class WhileModule : IEventModule
 
     /// <inheritdoc />
     public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.TypeUrl?.Contains("StepRequestEvent") == true ||
-        envelope.Payload?.TypeUrl?.Contains("StepCompletedEvent") == true;
+        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
+        envelope.Payload?.Is(StepCompletedEvent.Descriptor) == true;
 
     /// <inheritdoc />
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
-        if (envelope.Payload!.TypeUrl.Contains("StepRequestEvent"))
+        var payload = envelope.Payload;
+        if (payload == null) return;
+
+        if (payload.Is(StepRequestEvent.Descriptor))
         {
-            var request = envelope.Payload.Unpack<StepRequestEvent>();
+            var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "while") return;
 
             var maxIterations = int.TryParse(request.Parameters.GetValueOrDefault("max_iterations", "10"), out var max) ? max : 10;
@@ -47,9 +50,9 @@ public sealed class WhileModule : IEventModule
                 TargetRole = request.TargetRole,
             }, EventDirection.Down, ct);
         }
-        else if (envelope.Payload.TypeUrl.Contains("StepCompletedEvent"))
+        else if (payload.Is(StepCompletedEvent.Descriptor))
         {
-            var completed = envelope.Payload.Unpack<StepCompletedEvent>();
+            var completed = payload.Unpack<StepCompletedEvent>();
 
             // 找到对应的 while 步骤
             var whileStepId = GetWhileStepId(completed.StepId);

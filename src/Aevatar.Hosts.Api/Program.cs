@@ -43,9 +43,18 @@ builder.Services.AddSingleton(sp =>
     return registry;
 });
 
-// ─── CORS（开发用） ───
-builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
-    p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
+// ─── CORS（开发默认放开；生产要求显式白名单） ───
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
+builder.Services.AddCors(o => o.AddPolicy("Default", p =>
+{
+    if (builder.Environment.IsDevelopment() || allowedOrigins is not { Length: > 0 })
+    {
+        p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader();
+        return;
+    }
+
+    p.WithOrigins(allowedOrigins).AllowAnyMethod().AllowAnyHeader();
+}));
 
 var app = builder.Build();
 
@@ -53,13 +62,13 @@ var app = builder.Build();
 {
     var registry = app.Services.GetRequiredService<IConnectorRegistry>();
     var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Aevatar.Hosts.Api.Connectors");
-    Aevatar.Hosts.Api.ConnectorRegistration.RegisterConnectors(registry, logger);
+    ConnectorRegistration.RegisterConnectors(registry, logger);
     var names = registry.ListNames();
     if (names.Count > 0)
         logger.LogInformation("Connectors loaded: {Count} [{Names}]", names.Count, string.Join(", ", names));
 }
 
-app.UseCors();
+app.UseCors("Default");
 app.MapChatEndpoints();
 app.MapGet("/", () => Results.Ok(new { name = "Aevatar.Hosts.Api", status = "running" }));
 

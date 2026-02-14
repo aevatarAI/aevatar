@@ -6,7 +6,6 @@
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
-using Aevatar.AI.Core;
 using Aevatar.AI.Core.Routing;
 using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
@@ -102,27 +101,8 @@ public class EventRoutingTests
     }
 
     [Fact(DisplayName = "RoleGAgentFactory 从 YAML 配置路由规则并包装模块")]
-    public async Task Factory_AppliesRoutesFromYaml()
+    public void Factory_AppliesRoutesFromYaml()
     {
-        var (sp, runtime, _) = TestEnvironmentHelper.Build();
-        using var _ = sp;
-
-        var actor = await runtime.CreateAsync<RoleGAgent>("route-test");
-        var agent = (RoleGAgent)actor.Agent;
-
-        var yaml = """
-            name: RoutedAgent
-            system_prompt: "test"
-            provider: mock
-            extensions:
-              event_modules: "test_a,test_b"
-              event_routes: |
-                - when: event.type == "ChatRequestEvent"
-                  to: test_a
-            """;
-
-        // 注册测试模块工厂
-        // （由于 DI 中没有注册 test_a/test_b 的工厂，模块创建会失败）
         // 验证 Route 解析本身是正确的
         var routes = EventRoute.Parse("""
             - when: event.type == "ChatRequestEvent"

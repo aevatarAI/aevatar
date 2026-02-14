@@ -32,15 +32,18 @@ public sealed class ForEachModule : IEventModule
 
     /// <inheritdoc />
     public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.TypeUrl?.Contains("StepRequestEvent") == true ||
-        envelope.Payload?.TypeUrl?.Contains("StepCompletedEvent") == true;
+        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
+        envelope.Payload?.Is(StepCompletedEvent.Descriptor) == true;
 
     /// <inheritdoc />
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
-        if (envelope.Payload!.TypeUrl.Contains("StepRequestEvent"))
+        var payload = envelope.Payload;
+        if (payload == null) return;
+
+        if (payload.Is(StepRequestEvent.Descriptor))
         {
-            var evt = envelope.Payload.Unpack<StepRequestEvent>();
+            var evt = payload.Unpack<StepRequestEvent>();
             if (evt.StepType != "foreach") return;
 
             // ─── Parameters ───
@@ -92,7 +95,7 @@ public sealed class ForEachModule : IEventModule
         else
         {
             // ─── Collect sub-step completions ───
-            var evt = envelope.Payload.Unpack<StepCompletedEvent>();
+            var evt = payload.Unpack<StepCompletedEvent>();
             // Only collect direct foreach item completions: "<parent>_item_<index>".
             // Ignore nested children like "_item_0_sub_1" or "_item_0_vote".
             var parent = TryGetParentFromDirectItemStepId(evt.StepId);

@@ -37,8 +37,8 @@ public sealed class ParallelFanOutModule : IEventModule
     /// <param name="envelope">事件信封。</param>
     /// <returns>若为 StepRequestEvent 或 StepCompletedEvent 则返回 true。</returns>
     public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.TypeUrl?.Contains("StepRequestEvent") == true ||
-        envelope.Payload?.TypeUrl?.Contains("StepCompletedEvent") == true;
+        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
+        envelope.Payload?.Is(StepCompletedEvent.Descriptor) == true;
 
     /// <summary>
     /// 处理事件。请求时拆分并行子步骤；完成时合并子步骤结果，满足数量后发布父步骤完成。
@@ -48,9 +48,12 @@ public sealed class ParallelFanOutModule : IEventModule
     /// <param name="ct">取消令牌。</param>
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
-        if (envelope.Payload!.TypeUrl.Contains("StepRequestEvent"))
+        var payload = envelope.Payload;
+        if (payload == null) return;
+
+        if (payload.Is(StepRequestEvent.Descriptor))
         {
-            var evt = envelope.Payload.Unpack<StepRequestEvent>();
+            var evt = payload.Unpack<StepRequestEvent>();
             if (evt.StepType != "parallel") return;
             var count = evt.Parameters.TryGetValue("parallel_count", out var cs) && int.TryParse(cs, out var n) ? n : 3;
             _expected[evt.StepId] = count; _collected[evt.StepId] = [];
@@ -92,7 +95,7 @@ public sealed class ParallelFanOutModule : IEventModule
         }
         else
         {
-            var evt = envelope.Payload.Unpack<StepCompletedEvent>();
+            var evt = payload.Unpack<StepCompletedEvent>();
 
             // Vote result: map back to parent parallel step.
             if (_voteStepToParent.TryGetValue(evt.StepId, out var voteParent))

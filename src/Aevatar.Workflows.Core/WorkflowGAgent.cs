@@ -49,6 +49,31 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         await base.OnActivateAsync(ct);
     }
 
+    /// <summary>
+    /// 配置工作流 YAML 并立即编译、重装模块。
+    /// </summary>
+    public void ConfigureWorkflow(string workflowYaml, string workflowName)
+    {
+        State.WorkflowYaml = workflowYaml ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(workflowName))
+            State.WorkflowName = workflowName;
+
+        _childAgentIds.Clear();
+
+        if (string.IsNullOrWhiteSpace(State.WorkflowYaml))
+        {
+            State.Compiled = false;
+            State.CompilationError = "workflow yaml is empty";
+            _compiledWorkflow = null;
+        }
+        else
+        {
+            TryCompile(State.WorkflowYaml);
+        }
+
+        InstallCognitiveModules();
+    }
+
     /// <inheritdoc />
     public override Task<string> GetDescriptionAsync()
     {

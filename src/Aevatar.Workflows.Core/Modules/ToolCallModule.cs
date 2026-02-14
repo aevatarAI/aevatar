@@ -18,12 +18,15 @@ public sealed class ToolCallModule : IEventModule
 
     /// <inheritdoc />
     public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.TypeUrl?.Contains("StepRequestEvent") == true;
+        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
-        var request = envelope.Payload!.Unpack<StepRequestEvent>();
+        var payload = envelope.Payload;
+        if (payload == null) return;
+
+        var request = payload.Unpack<StepRequestEvent>();
         if (request.StepType != "tool_call") return;
 
         var toolName = request.Parameters.GetValueOrDefault("tool", "");
