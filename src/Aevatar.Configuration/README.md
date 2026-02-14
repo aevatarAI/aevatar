@@ -14,7 +14,7 @@
 
 - `AevatarConfigLoader`：把本地配置合并到 `IConfigurationBuilder`
 - `AevatarSecretsStore`：按 key 读取/写入敏感配置
-- `AevatarMcpConfig`：读取 MCP 服务器配置
+- `AevatarMCPConfig`：读取 MCP 服务器配置
 - `AevatarConnectorConfig`：读取命名 connector 配置（含 allowlist/timeout/retry）
 - `AevatarAgentYamlLoader`：扫描并读取 Agent/Workflow YAML
 - `AevatarPaths`：统一路径定义与目录初始化；另提供 `RepoRoot` / `RepoRootWorkflows`，宿主（如 Api）会从仓库根目录的 `workflows/` 加载 YAML（若存在），用户无需拷贝到 `~/.aevatar`。

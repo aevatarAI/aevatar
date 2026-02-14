@@ -58,7 +58,7 @@ public static class AevatarPaths
     }
 
     /// <summary>MCP 服务器配置文件（Cursor 兼容格式）。</summary>
-    public static string McpJson => Path.Combine(Root, "mcp.json");
+    public static string MCPJson => Path.Combine(Root, "mcp.json");
 
     /// <summary>Connector 配置文件（命名连接器 + 安全策略）。</summary>
     public static string ConnectorsJson => Path.Combine(Root, "connectors.json");
@@ -84,7 +84,7 @@ public static class AevatarPaths
     public static string Logs => Path.Combine(Root, "logs");
 
     /// <summary>MCP 服务器配置目录。</summary>
-    public static string Mcp => Path.Combine(Root, "mcp");
+    public static string MCP => Path.Combine(Root, "mcp");
 
     /// <summary>
     /// 仓库根目录下的 workflows 路径（用于从 repo 根加载 YAML，用户无需拷贝到 ~/.aevatar）。
@@ -137,7 +137,7 @@ public static class AevatarPaths
         Directory.CreateDirectory(Tools);
         Directory.CreateDirectory(Sessions);
         Directory.CreateDirectory(Logs);
-        Directory.CreateDirectory(Mcp);
+        Directory.CreateDirectory(MCP);
     }
 
     /// <summary>获取指定 Agent 的 YAML 配置文件路径。</summary>

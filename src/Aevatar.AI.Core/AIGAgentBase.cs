@@ -105,8 +105,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
     // ─── Hook 双通道说明 ───
     // 1. Foundation 级（Event Handler hooks）：由 GAgentBase._hooks pipeline 驱动
-    //    → RebuildRuntime 中通过 RegisterHook() 注册 built-in IAgentHook 到 Foundation pipeline
-    //    → IAgentHook : IGAgentHook，所以 Foundation 可以调用 OnEventHandlerStart/End/OnError
+    //    → RebuildRuntime 中通过 RegisterHook() 注册 built-in IAIGAgentExecutionHook 到 Foundation pipeline
+    //    → IAIGAgentExecutionHook : IGAgentExecutionHook，所以 Foundation 可以调用 OnEventHandlerStart/End/OnError
     // 2. AI 级（LLM / Tool hooks）：由 AIGAgentBase._hooks (AgentHookPipeline) 驱动
     //    → ChatRuntime / ToolCallLoop 在 LLM/Tool 前后调用 AI pipeline
 
@@ -115,18 +115,18 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private void RebuildRuntime()
     {
         // 构建 AI Hook Pipeline（内置 + DI 注入）
-        var hooks = new List<IAgentHook>
+        var hooks = new List<IAIGAgentExecutionHook>
         {
             new ExecutionTraceHook(Logger),
             new ToolTruncationHook(),
             new BudgetMonitorHook(Logger),
         };
-        var additional = Services.GetServices<IAgentHook>();
+        var additional = Services.GetServices<IAIGAgentExecutionHook>();
         hooks.AddRange(additional);
         _hooks = new AgentHookPipeline(hooks, Logger);
 
-        // 注册 AI hooks 到 Foundation 的 IGAgentHook pipeline
-        // IAgentHook : IGAgentHook，所以 Foundation 层能调用 Event Handler hooks
+        // 注册 AI hooks 到 Foundation 的 IGAgentExecutionHook pipeline
+        // IAIGAgentExecutionHook : IGAgentExecutionHook，所以 Foundation 层能调用 Event Handler hooks
         foreach (var hook in hooks)
             RegisterHook(hook);
 

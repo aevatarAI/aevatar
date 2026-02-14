@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.AI.Core.Hooks.BuiltIn;
 
 /// <summary>Token 预算监控。LLM 调用前检查历史消息数。</summary>
-public sealed class BudgetMonitorHook : IAgentHook
+public sealed class BudgetMonitorHook : IAIGAgentExecutionHook
 {
     private readonly ILogger _logger;
 
@@ -22,7 +22,7 @@ public sealed class BudgetMonitorHook : IAgentHook
     public string Name => "budget_monitor";
     public int Priority => -500; // 较高优先级
 
-    public Task OnLLMRequestStartAsync(AIHookContext ctx, CancellationToken ct)
+    public Task OnLLMRequestStartAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
     {
         if (ctx.Metadata.TryGetValue("history_count", out var val) &&
             val is int count && count > WarningThreshold)

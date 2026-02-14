@@ -71,7 +71,7 @@ public class WorkflowIntegrationTests
         services.AddSingleton<ILLMProviderFactory>(mockLlm);
 
         // 注册 Cognitive Module Factory
-        services.AddSingleton<IEventModuleFactory, CognitiveModuleFactory>();
+        services.AddSingleton<IEventModuleFactory, WorkflowModuleFactory>();
 
         var sp = services.BuildServiceProvider();
         var runtime = sp.GetRequiredService<IActorRuntime>();
@@ -409,14 +409,14 @@ public class WorkflowIntegrationTests
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  Scenario 7: CognitiveModuleFactory 创建所有模块
+    //  Scenario 7: WorkflowModuleFactory 创建所有模块
     // ═══════════════════════════════════════════════════════════
 
-    [Fact(DisplayName = "CognitiveModuleFactory 应能创建所有 13 种核心原语模块")]
+    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有 13 种核心原语模块")]
     [Trait("Feature", "ModuleFactory")]
     public void Scenario7_AllCoreModules()
     {
-        var factory = new CognitiveModuleFactory();
+        var factory = new WorkflowModuleFactory();
 
         // ─── 流程控制 ───
         factory.TryCreate("workflow_loop", out var m).Should().BeTrue(); m!.Name.Should().Be("workflow_loop");

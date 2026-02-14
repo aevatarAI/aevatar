@@ -14,7 +14,7 @@ public sealed class ConnectorConfigEntry
     public int Retry { get; init; } = 0;
     public HttpConnectorConfig Http { get; init; } = new();
     public CliConnectorConfig Cli { get; init; } = new();
-    public McpConnectorConfig Mcp { get; init; } = new();
+    public MCPConnectorConfig MCP { get; init; } = new();
 }
 
 /// <summary>HTTP connector policy settings.</summary>
@@ -39,7 +39,7 @@ public sealed class CliConnectorConfig
 }
 
 /// <summary>MCP connector policy settings.</summary>
-public sealed class McpConnectorConfig
+public sealed class MCPConnectorConfig
 {
     public string ServerName { get; init; } = "";
     public string Command { get; init; } = "";
@@ -140,8 +140,8 @@ public static class AevatarConnectorConfig
             ? ParseCli(cliNode)
             : new CliConnectorConfig();
         var mcp = TryGetPropertyIgnoreCase(obj, "mcp", out var mcpNode)
-            ? ParseMcp(mcpNode)
-            : new McpConnectorConfig();
+            ? ParseMCP(mcpNode)
+            : new MCPConnectorConfig();
 
         return new ConnectorConfigEntry
         {
@@ -152,7 +152,7 @@ public static class AevatarConnectorConfig
             Retry = retry,
             Http = http,
             Cli = cli,
-            Mcp = mcp,
+            MCP = mcp,
         };
     }
 
@@ -183,10 +183,10 @@ public static class AevatarConnectorConfig
         };
     }
 
-    private static McpConnectorConfig ParseMcp(JsonElement obj)
+    private static MCPConnectorConfig ParseMCP(JsonElement obj)
     {
-        if (obj.ValueKind != JsonValueKind.Object) return new McpConnectorConfig();
-        return new McpConnectorConfig
+        if (obj.ValueKind != JsonValueKind.Object) return new MCPConnectorConfig();
+        return new MCPConnectorConfig
         {
             ServerName = ReadString(obj, "serverName"),
             Command = ReadString(obj, "command"),

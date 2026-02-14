@@ -169,7 +169,7 @@ public class ConnectorCallIntegrationTests
         var services = new ServiceCollection();
         services.AddSingleton(registry);
         services.AddAevatarRuntime();
-        services.AddAevatarCognitive();
+        services.AddAevatarWorkflows();
 
         var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();

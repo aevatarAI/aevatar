@@ -4,7 +4,7 @@
 // Responsibilities:
 // 1. Unified event pipeline ([EventHandler] + IEventModule interleaved by priority)
 // 2. Module management APIs (RegisterModule / SetModules / manifest persistence)
-// 3. Dual hook channels (virtual methods + IGAgentHook pipeline)
+// 3. Dual hook channels (virtual methods + IGAgentExecutionHook pipeline)
 // 4. Publishing helpers (PublishAsync / SendToAsync)
 // ─────────────────────────────────────────────────────────────
 
@@ -22,13 +22,13 @@ namespace Aevatar.Foundation.Core;
 
 /// <summary>
 /// Stateless GAgent base class with unified event pipeline, module management,
-/// and dual hook channels (virtual methods + IGAgentHook pipeline).
+/// and dual hook channels (virtual methods + IGAgentExecutionHook pipeline).
 /// </summary>
 public abstract class GAgentBase : IAgent
 {
     private EventHandlerMetadata[]? _staticHandlers;
     private volatile IEventModule[] _modules = [];
-    private volatile IGAgentHook[] _hooks = [];
+    private volatile IGAgentExecutionHook[] _hooks = [];
 
     // Identity
 
@@ -81,9 +81,9 @@ public abstract class GAgentBase : IAgent
     /// <summary>
     /// Unified event dispatch entry. For each matching handler:
     /// 1. Calls virtual OnEventHandlerStartAsync (subclass extension point)
-    /// 2. Calls IGAgentHook pipeline OnEventHandlerStartAsync (DI-injected hooks)
+    /// 2. Calls IGAgentExecutionHook pipeline OnEventHandlerStartAsync (DI-injected hooks)
     /// 3. Executes handler
-    /// 4. Calls IGAgentHook pipeline OnEventHandlerEndAsync
+    /// 4. Calls IGAgentExecutionHook pipeline OnEventHandlerEndAsync
     /// 5. Calls virtual OnEventHandlerEndAsync
     /// </summary>
     public async Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
@@ -97,7 +97,7 @@ public abstract class GAgentBase : IAgent
             ct.ThrowIfCancellationRequested();
             if (!handler.CanHandle(envelope)) continue;
 
-            var hookCtx = new GAgentHookContext
+            var hookCtx = new GAgentExecutionHookContext
             {
                 AgentId = Id,
                 AgentType = GetType().Name,
@@ -148,13 +148,13 @@ public abstract class GAgentBase : IAgent
         TimeSpan duration, Exception? exception, CancellationToken ct)
         => Task.CompletedTask;
 
-    // Dual hook channels #2: IGAgentHook pipeline (DI-injected)
+    // Dual hook channels #2: IGAgentExecutionHook pipeline (DI-injected)
 
     /// <summary>Registers a foundation-level hook.</summary>
-    public void RegisterHook(IGAgentHook hook)
+    public void RegisterHook(IGAgentExecutionHook hook)
     {
         var current = _hooks;
-        var next = new IGAgentHook[current.Length + 1];
+        var next = new IGAgentExecutionHook[current.Length + 1];
         current.CopyTo(next, 0);
         next[current.Length] = hook;
         Array.Sort(next, (a, b) => a.Priority.CompareTo(b.Priority));
@@ -162,7 +162,7 @@ public abstract class GAgentBase : IAgent
     }
 
     /// <summary>Gets all currently registered hooks.</summary>
-    public IReadOnlyList<IGAgentHook> GetHooks() => _hooks;
+    public IReadOnlyList<IGAgentExecutionHook> GetHooks() => _hooks;
 
     // Module management APIs
 
@@ -208,10 +208,10 @@ public abstract class GAgentBase : IAgent
     /// <summary>Generates and sets a default ID.</summary>
     protected void InitializeId() => Id = AgentId.New(GetType());
 
-    /// <summary>Loads registered IGAgentHook instances from DI.</summary>
+    /// <summary>Loads registered IGAgentExecutionHook instances from DI.</summary>
     private void LoadHooksFromDI()
     {
-        var hooks = Services.GetServices<IGAgentHook>().ToList();
+        var hooks = Services.GetServices<IGAgentExecutionHook>().ToList();
         if (hooks.Count > 0)
         {
             hooks.Sort((a, b) => a.Priority.CompareTo(b.Priority));
@@ -220,7 +220,7 @@ public abstract class GAgentBase : IAgent
     }
 
     /// <summary>Runs hook pipeline in best-effort mode.</summary>
-    private async Task RunHooksAsync(Func<IGAgentHook, Task> action, string phase)
+    private async Task RunHooksAsync(Func<IGAgentExecutionHook, Task> action, string phase)
     {
         foreach (var hook in _hooks)
         {

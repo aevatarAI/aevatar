@@ -6,7 +6,7 @@
 
 - 提供工作流根 Agent：`WorkflowGAgent`
 - 提供工作流 DSL 解析与校验（YAML -> WorkflowDefinition）
-- 提供可插拔认知模块工厂：`CognitiveModuleFactory`
+- 提供可插拔认知模块工厂：`WorkflowModuleFactory`
 - 提供框架级 connector 调用原语：`connector_call`
 - 覆盖流程控制、并行协作、投票共识、工具/connector 调用、数据变换等原语
 
@@ -17,12 +17,12 @@
 - `Validation/WorkflowValidator`：编译前校验
 - `Modules/*`：`workflow_loop`、`parallel_fanout`、`vote_consensus`、`llm_call` 等
 - `Connectors/InMemoryConnectorRegistry`：框架默认命名 connector 注册表
-- `ServiceCollectionExtensions.AddAevatarCognitive()`：一键注册 `CognitiveModuleFactory + IConnectorRegistry`
+- `ServiceCollectionExtensions.AddAevatarWorkflows()`：一键注册 `WorkflowModuleFactory + IConnectorRegistry`
 - `cognitive_messages.proto`：工作流执行事件协议
 
 ## 模块工厂能力
 
-`CognitiveModuleFactory` 支持按名称创建模块（示例）：
+`WorkflowModuleFactory` 支持按名称创建模块（示例）：
 
 - `workflow_loop` / `conditional` / `while` / `checkpoint`
 - `parallel_fanout` / `vote_consensus`

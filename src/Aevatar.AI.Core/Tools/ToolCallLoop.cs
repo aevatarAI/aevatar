@@ -41,11 +41,11 @@ public sealed class ToolCallLoop
             };
 
             // ─── Hook: LLM Request Start ───
-            var llmCtx = new AIHookContext { LlmRequest = request };
+            var llmCtx = new AIGAgentExecutionHookContext { LLMRequest = request };
             if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmCtx, ct);
 
             var response = await provider.ChatAsync(request, ct);
-            llmCtx.LlmResponse = response;
+            llmCtx.LLMResponse = response;
 
             // ─── Hook: LLM Request End ───
             if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);
@@ -64,7 +64,7 @@ public sealed class ToolCallLoop
             foreach (var call in response.ToolCalls!)
             {
                 // ─── Hook: Tool Execute Start ───
-                var toolCtx = new AIHookContext
+                var toolCtx = new AIGAgentExecutionHookContext
                 {
                     ToolName = call.Name, ToolArguments = call.ArgumentsJson, ToolCallId = call.Id,
                 };

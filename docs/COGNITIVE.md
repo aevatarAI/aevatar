@@ -2,7 +2,7 @@
 
 这份文档回答三个问题：
 
-1. 为什么需要 `Aevatar.Cognitive` 和 `Event Modules`？
+1. 为什么需要 `Aevatar.Workflows.Core` 和 `Event Modules`？
 2. 它们在代码里是怎么实现的？
 3. 实际开发时应该怎么用（附示例）？
 
@@ -21,7 +21,7 @@
 - **流程变更成本高**：改一次步骤顺序就要改代码
 - **复用性差**：`if/while/并行/投票` 这些控制逻辑会重复出现在很多 Agent 里
 
-`Aevatar.Cognitive` 的思路是：
+`Aevatar.Workflows.Core` 的思路是：
 
 - 把“流程控制能力”做成通用模块（Event Modules）
 - 把“业务流程”写成 YAML（可配置）
@@ -58,9 +58,9 @@
 模块和静态 `[EventHandler]` 一起进入统一 pipeline。  
 这意味着你可以在不改业务代码的情况下替换流程行为。
 
-### 3) CognitiveModuleFactory
+### 3) WorkflowModuleFactory
 
-`CognitiveModuleFactory` 负责“按名字创建模块实例”，例如：
+`WorkflowModuleFactory` 负责“按名字创建模块实例”，例如：
 
 - `workflow_loop`
 - `conditional`
@@ -183,13 +183,13 @@ steps:
 
 建议阅读顺序：
 
-1. `src/Aevatar.Cognitive/WorkflowGAgent.cs`  
+1. `src/Aevatar.Workflows.Core/WorkflowGAgent.cs`  
    看入口、编译、模块装配、子 Agent 创建
-2. `src/Aevatar.Cognitive/CognitiveModuleFactory.cs`  
+2. `src/Aevatar.Workflows.Core/WorkflowModuleFactory.cs`  
    看“模块名 -> 模块实现”映射
-3. `src/Aevatar.Cognitive/Modules/*`  
+3. `src/Aevatar.Workflows.Core/Modules/*`  
    看每个原语的具体行为
-4. `src/Aevatar.Core/GAgentBase.cs` 与 `EventPipelineBuilder`  
+4. `src/Aevatar.Foundation.Core/GAgentBase.cs` 与 `EventPipelineBuilder`  
    看模块如何进入统一 pipeline
 
 ---
@@ -198,10 +198,10 @@ steps:
 
 `connector_call` 把外部能力（MCP / HTTP / CLI）收敛到统一契约：
 
-- 契约层：`src/Aevatar.Abstractions/Connectors/IConnector.cs`
-- 默认注册表：`src/Aevatar.Cognitive/Connectors/InMemoryConnectorRegistry.cs`
-- 执行模块：`src/Aevatar.Cognitive/Modules/ConnectorCallModule.cs`
-- 配置模型：`src/Aevatar.Config/AevatarConnectorConfig.cs`（读取 `~/.aevatar/connectors.json`）
+- 契约层：`src/Aevatar.Foundation.Abstractions/Connectors/IConnector.cs`
+- 默认注册表：`src/Aevatar.Workflows.Core/Connectors/InMemoryConnectorRegistry.cs`
+- 执行模块：`src/Aevatar.Workflows.Core/Modules/ConnectorCallModule.cs`
+- 配置模型：`src/Aevatar.Configuration/AevatarConnectorConfig.cs`（读取 `~/.aevatar/connectors.json`）
 
 推荐约定：
 
@@ -276,7 +276,7 @@ extensions:
 
 ## 九、总结
 
-`Aevatar.Cognitive` 的核心价值不是“更复杂”，而是“把复杂流程结构化”。
+`Aevatar.Workflows.Core` 的核心价值不是“更复杂”，而是“把复杂流程结构化”。
 
 - `WorkflowGAgent` 负责编排入口
 - `Event Modules` 负责流程原语执行

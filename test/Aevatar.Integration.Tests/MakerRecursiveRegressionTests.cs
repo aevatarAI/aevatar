@@ -75,7 +75,7 @@ public class MakerRecursiveRegressionTests
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
-        services.AddAevatarCognitive();
+        services.AddAevatarWorkflows();
         services.AddSingleton<IEventModuleFactory, MakerModuleFactory>();
         services.AddSingleton<ILLMProvider>(provider);
         services.AddSingleton<ILLMProviderFactory>(provider);

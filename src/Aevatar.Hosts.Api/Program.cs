@@ -10,7 +10,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Hosts.Api.Endpoints;
-using Aevatar.Cqrs.Projections.DependencyInjection;
+using Aevatar.CQRS.Projections.DependencyInjection;
 using Aevatar.Hosts.Api.Workflows;
 using Aevatar.Bootstrap;
 using Aevatar.Configuration;
@@ -26,8 +26,8 @@ builder.Services.AddAevatarBootstrap(builder.Configuration, options =>
     options.EnableMCPTools = true;
     options.EnableSkills = true;
 });
-builder.Services.AddChatProjectionCqrs(options =>
-    builder.Configuration.GetSection("ChatProjection").Bind(options));
+builder.Services.AddWorkflowExecutionProjectionCQRS(options =>
+    builder.Configuration.GetSection("WorkflowExecutionProjection").Bind(options));
 
 // ─── 工作流注册表（应用目录 + repo 根 workflows + CWD + ~/.aevatar/workflows） ───
 builder.Services.AddSingleton(sp =>

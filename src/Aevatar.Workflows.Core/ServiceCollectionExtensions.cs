@@ -14,12 +14,12 @@ public static class ServiceCollectionExtensions
 {
     /// <summary>
     /// Registers Cognitive defaults:
-    /// - <see cref="CognitiveModuleFactory"/>
+    /// - <see cref="WorkflowModuleFactory"/>
     /// - <see cref="IConnectorRegistry"/> (in-memory)
     /// </summary>
-    public static IServiceCollection AddAevatarCognitive(this IServiceCollection services)
+    public static IServiceCollection AddAevatarWorkflows(this IServiceCollection services)
     {
-        services.TryAddSingleton<IEventModuleFactory, CognitiveModuleFactory>();
+        services.TryAddSingleton<IEventModuleFactory, WorkflowModuleFactory>();
         services.TryAddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
         services.TryAddSingleton<IRoleAgentTypeResolver, ReflectionRoleAgentTypeResolver>();
         return services;

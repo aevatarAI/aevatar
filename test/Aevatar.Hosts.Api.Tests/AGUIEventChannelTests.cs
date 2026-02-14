@@ -1,0 +1,68 @@
+// ─── AGUIEventChannel 测试 ───
+// 验证 Channel 驱动的事件收集器
+
+using Aevatar.Presentation.AGUI;
+using FluentAssertions;
+
+namespace Aevatar.Hosts.Api.Tests;
+
+public class AGUIEventChannelTests
+{
+    [Fact]
+    public async Task PushAndRead_RoundTrip()
+    {
+        await using var channel = new AGUIEventChannel();
+
+        channel.Push(new RunStartedEvent { ThreadId = "t1", RunId = "r1" });
+        channel.Push(new StepStartedEvent { StepName = "step1" });
+        channel.Complete();
+
+        var events = new List<AGUIEvent>();
+        await foreach (var evt in channel.ReadAllAsync())
+            events.Add(evt);
+
+        events.Should().HaveCount(2);
+        events[0].Should().BeOfType<RunStartedEvent>();
+        events[1].Should().BeOfType<StepStartedEvent>();
+    }
+
+    [Fact]
+    public async Task Complete_TerminatesReader()
+    {
+        await using var channel = new AGUIEventChannel();
+
+        var readTask = Task.Run(async () =>
+        {
+            var count = 0;
+            await foreach (var _ in channel.ReadAllAsync())
+                count++;
+            return count;
+        });
+
+        channel.Push(new RunStartedEvent { ThreadId = "t", RunId = "r" });
+        channel.Complete();
+
+        var result = await readTask;
+        result.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Cancellation_StopsReader()
+    {
+        await using var channel = new AGUIEventChannel();
+        using var cts = new CancellationTokenSource();
+
+        channel.Push(new RunStartedEvent { ThreadId = "t", RunId = "r" });
+
+        var events = new List<AGUIEvent>();
+        await cts.CancelAsync();
+
+        var act = async () =>
+        {
+            await foreach (var evt in channel.ReadAllAsync(cts.Token))
+                events.Add(evt);
+        };
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+}

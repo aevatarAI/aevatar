@@ -2,49 +2,49 @@
 
 ## Goal
 
-Build a maintainable read-side projection pipeline for chat workflow runs with clear boundaries:
+Build a maintainable read-side projection pipeline for workflow executions with clear boundaries:
 
 - Event ingress: `EventEnvelope`
-- Contracts + read model: `src/Aevatar.Cqrs.Projections.Abstractions/*`
-- Projection implementation core: `src/Aevatar.Cqrs.Projections/*`
+- Contracts + read model: `src/Aevatar.CQRS.Projections.Abstractions/*`
+- Projection implementation core: `src/Aevatar.CQRS.Projections/*`
 - Output adapters: API query endpoints and report writer
 
 ## Dependency Rules
 
 Follow strict dependency direction:
 
-1. `Endpoints` depends on `Aevatar.Cqrs.Projections.Abstractions` and `Aevatar.Cqrs.Projections.DependencyInjection`.
-2. `Reporting` depends on `Aevatar.Cqrs.Projections.Abstractions.ReadModels`, not the other way around.
-3. `Aevatar.Cqrs.Projections` depends on `Aevatar.Cqrs.Projections.Abstractions`, never on endpoint or report rendering details.
+1. `Endpoints` depends on `Aevatar.CQRS.Projections.Abstractions` and `Aevatar.CQRS.Projections.DependencyInjection`.
+2. `Reporting` depends on `Aevatar.CQRS.Projections.Abstractions.ReadModels`, not the other way around.
+3. `Aevatar.CQRS.Projections` depends on `Aevatar.CQRS.Projections.Abstractions`, never on endpoint or report rendering details.
 4. Reducers depend on event contracts and read model contracts only.
 
 ## Current Design
 
 ### Directory Layout
 
-- `src/Aevatar.Cqrs.Projections.Abstractions/Contracts/`
-- `src/Aevatar.Cqrs.Projections.Abstractions/Orchestration/`
-- `src/Aevatar.Cqrs.Projections.Abstractions/ReadModels/`
-- `src/Aevatar.Cqrs.Projections/Configuration/`
-- `src/Aevatar.Cqrs.Projections/DependencyInjection/`
-- `src/Aevatar.Cqrs.Projections/Orchestration/`
-- `src/Aevatar.Cqrs.Projections/Projectors/`
-- `src/Aevatar.Cqrs.Projections/Reducers/`
-- `src/Aevatar.Cqrs.Projections/Stores/`
+- `src/Aevatar.CQRS.Projections.Abstractions/Contracts/`
+- `src/Aevatar.CQRS.Projections.Abstractions/Orchestration/`
+- `src/Aevatar.CQRS.Projections.Abstractions/ReadModels/`
+- `src/Aevatar.CQRS.Projections/Configuration/`
+- `src/Aevatar.CQRS.Projections/DependencyInjection/`
+- `src/Aevatar.CQRS.Projections/Orchestration/`
+- `src/Aevatar.CQRS.Projections/Projectors/`
+- `src/Aevatar.CQRS.Projections/Reducers/`
+- `src/Aevatar.CQRS.Projections/Stores/`
 
 ### Core Pipeline
 
-- `IChatRunProjectionService`: application-facing facade used by hosts/endpoints.
+- `IWorkflowExecutionProjectionService`: application-facing facade used by hosts/endpoints.
 - `IProjectionCoordinator<TContext, TTopology>`: generic run-scoped projection orchestrator contract.
 - `IProjectionProjector<TContext, TTopology>`: generic projector contract.
 - `IProjectionEventReducer<TReadModel, TContext>`: generic event folding contract.
 - `IProjectionReadModelStore<TReadModel, TKey>`: generic read-model store contract.
-- `IChatProjectionCoordinator`/`IChatRunProjector`/`IChatRunEventReducer`/`IChatRunReadModelStore`: chat-domain aliases over generic contracts.
-- `ChatRunProjectionService`: creates run context and manages actor-level stream subscription for projection (shared across active runs on the same actor).
+- `IWorkflowExecutionProjectionCoordinator`/`IWorkflowExecutionProjector`/`IWorkflowExecutionEventReducer`/`IWorkflowExecutionReadModelStore`: chat-domain aliases over generic contracts.
+- `WorkflowExecutionProjectionService`: creates run context and manages actor-level stream subscription for projection (shared across active runs on the same actor).
 - `WaitForRunProjectionCompletedAsync(runId)`: completion signal for one run projection; use this signal before querying read model.
-- `ChatRunReadModelProjector`: routes event by protobuf `TypeUrl`, deduplicates by `EventEnvelope.Id`, and executes reducers.
-- `IChatRunEventReducer`: single-event mutation unit.
-- `InMemoryChatRunReadModelStore`: run read model store with clone-on-read.
+- `WorkflowExecutionReadModelProjector`: routes event by protobuf `TypeUrl`, deduplicates by `EventEnvelope.Id`, and executes reducers.
+- `IWorkflowExecutionEventReducer`: single-event mutation unit.
+- `InMemoryWorkflowExecutionReadModelStore`: run read model store with clone-on-read.
 
 Endpoint no longer pushes envelopes into projection pipeline directly; projection runs from stream subscription in CQRS service.
 Projection completion signal does not carry query payload. Query is a separate read-model call.
@@ -54,7 +54,7 @@ WebSocket async path follows this sequence: `chat.command -> wait projection com
 
 Read model types are now isolated under:
 
-- `src/Aevatar.Cqrs.Projections.Abstractions/ReadModels/ChatRunReadModel.cs`
+- `src/Aevatar.CQRS.Projections.Abstractions/ReadModels/WorkflowExecutionReadModel.cs`
 
 This removes previous coupling where read model contracts lived inside reporting code.
 
@@ -71,13 +71,13 @@ Current reducers:
 Adding a new event projection no longer requires editing core projector code:
 
 - same assembly: add reducer class, auto-discovery picks it up
-- external assembly: register via `AddChatProjectionReducer<T>()` or `AddChatProjectionExtensionsFromAssembly(assembly)`
+- external assembly: register via `AddWorkflowExecutionProjectionReducer<T>()` or `AddWorkflowExecutionProjectionExtensionsFromAssembly(assembly)`
 - extension auto-discovery scope: public concrete reducer/projector types only
-- extension components are registered as both domain aliases (`IChat*`) and generic projection contracts (`IProjection*`)
+- extension components are registered as both domain aliases (`IWorkflowExecution*`) and generic projection contracts (`IProjection*`)
 
 ## Projection as Optional Feature
 
-`ChatProjectionOptions` controls feature toggles:
+`WorkflowExecutionProjectionOptions` controls feature toggles:
 
 - `Enabled`
 - `EnableRunQueryEndpoints`
@@ -93,7 +93,7 @@ Example:
 
 ```json
 {
-  "ChatProjection": {
+  "WorkflowExecutionProjection": {
     "Enabled": false,
     "EnableRunQueryEndpoints": false,
     "EnableRunReportArtifacts": false
@@ -101,7 +101,7 @@ Example:
 }
 ```
 
-Configuration source is bound once at startup and reused through DI (`ChatProjectionOptions` singleton), avoiding duplicated runtime config paths.
+Configuration source is bound once at startup and reused through DI (`WorkflowExecutionProjectionOptions` singleton), avoiding duplicated runtime config paths.
 Core CQRS services remain registered; `Enabled` controls runtime projection behavior and endpoint exposure.
 
 ## Why Not AutoMapper for Event Projection
@@ -121,8 +121,8 @@ AutoMapper is suitable only for read-model-to-DTO/view mapping at API boundary.
 Projection core should not assume one business = one fixed report model.
 
 - Keep pipeline logic on generic contracts (`IProjection*`).
-- Keep chat types as alias layer for current domain.
-- New domains should add their own `Context + ReadModel + Reducer + Projector` set and register via extension methods, without changing existing chat projection internals.
+- Keep execution-domain aliases (`IWorkflowExecution*`) as current domain layer.
+- New domains should add their own `Context + ReadModel + Reducer + Projector` set and register via extension methods, without changing existing projection internals.
 
 ## Best-Practice Gaps (Remaining)
 
@@ -133,7 +133,7 @@ Projection core should not assume one business = one fixed report model.
 
 ### P1 (Recommended)
 
-1. Move projection execution into an application service (`IChatRunExecutionService`) and keep endpoint thin.
+1. Move projection execution into an application service (`IWorkflowExecutionOrchestrationService`) and keep endpoint thin.
 2. Add reducer-level unit tests per event type and failure-path tests (out-of-order and duplicate events).
 3. Promote idempotency from in-run dedup to durable dedup (e.g., checkpoint by `runId + eventId` in persistent store).
 

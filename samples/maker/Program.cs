@@ -115,7 +115,7 @@ var services = new ServiceCollection();
 services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Information));
 services.AddAevatarRuntime();
 services.AddAevatarConfig();
-services.AddAevatarCognitive();
+services.AddAevatarWorkflows();
 services.AddSingleton<IEventModuleFactory, MakerModuleFactory>();
 
 if (isDeepSeek)

@@ -32,7 +32,7 @@ public static class AevatarConfigLoader
         builder.AddJsonFile(AevatarPaths.SecretsJson, optional: true, reloadOnChange: false);
 
         // mcp.json — MCP 服务器配置（Cursor 兼容格式）
-        builder.AddJsonFile(AevatarPaths.McpJson, optional: true, reloadOnChange: true);
+        builder.AddJsonFile(AevatarPaths.MCPJson, optional: true, reloadOnChange: true);
 
         // connectors.json — 命名连接器配置（MCP/HTTP/CLI）
         builder.AddJsonFile(AevatarPaths.ConnectorsJson, optional: true, reloadOnChange: true);

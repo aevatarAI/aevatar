@@ -66,7 +66,7 @@ public static class ConnectorRegistration
                     break;
 
                 case "mcp":
-                    if (string.IsNullOrWhiteSpace(entry.Mcp.Command))
+                    if (string.IsNullOrWhiteSpace(entry.MCP.Command))
                     {
                         logger.LogWarning("Skip connector {Name}: mcp.command is required", entry.Name);
                         break;
@@ -74,18 +74,18 @@ public static class ConnectorRegistration
 
                     var server = new MCPServerConfig
                     {
-                        Name = string.IsNullOrWhiteSpace(entry.Mcp.ServerName) ? entry.Name : entry.Mcp.ServerName,
-                        Command = entry.Mcp.Command,
-                        Arguments = entry.Mcp.Arguments,
-                        Environment = entry.Mcp.Environment,
+                        Name = string.IsNullOrWhiteSpace(entry.MCP.ServerName) ? entry.Name : entry.MCP.ServerName,
+                        Command = entry.MCP.Command,
+                        Arguments = entry.MCP.Arguments,
+                        Environment = entry.MCP.Environment,
                     };
 
                     registry.Register(new MCPConnector(
                         entry.Name,
                         server,
-                        entry.Mcp.DefaultTool,
-                        entry.Mcp.AllowedTools,
-                        entry.Mcp.AllowedInputKeys,
+                        entry.MCP.DefaultTool,
+                        entry.MCP.AllowedTools,
+                        entry.MCP.AllowedInputKeys,
                         logger: logger));
                     added++;
                     break;

@@ -1,6 +1,6 @@
 <Solution>
   <Folder Name="/demos/">
-    <Project Path="demos\Aevatar.Demo.Cli\Aevatar.Demos.Cli.csproj" Type="Classic C#" />
+    <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" Type="Classic C#" />
   </Folder>
   <Folder Name="/docs/">
     <File Path="docs\FOUNDATION.md" />
@@ -34,15 +34,15 @@
     <Project Path="src\Aevatar.Configuration\Aevatar.Configuration.csproj" Type="Classic C#" />
     <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" Type="Classic C#" />
     <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.Cqrs.Projections.Abstractions\Aevatar.Cqrs.Projections.Abstractions.csproj" Type="Classic C#" />
-    <Project Path="src\Aevatar.Cqrs.Projections\Aevatar.Cqrs.Projections.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.CQRS.Projections.Abstractions\Aevatar.CQRS.Projections.Abstractions.csproj" Type="Classic C#" />
+    <Project Path="src\Aevatar.CQRS.Projections\Aevatar.CQRS.Projections.csproj" Type="Classic C#" />
     <Project Path="src\Aevatar.Hosts.Api\Aevatar.Hosts.Api.csproj" Type="Classic C#" />
     <Project Path="src\Aevatar.Hosts.Gateway\Aevatar.Hosts.Gateway.csproj" Type="Classic C#" />
   </Folder>
   <Folder Name="/test/">
-    <Project Path="test\Aevatar.Abstractions.Tests\Aevatar.Abstractions.Tests.csproj" Type="Classic C#" />
-    <Project Path="test\Aevatar.Api.Tests\Aevatar.Api.Tests.csproj" Type="Classic C#" />
-    <Project Path="test\Aevatar.Core.Tests\Aevatar.Core.Tests.csproj" Type="Classic C#" />
+    <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" Type="Classic C#" />
+    <Project Path="test\Aevatar.Hosts.Api.Tests\Aevatar.Hosts.Api.Tests.csproj" Type="Classic C#" />
+    <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" Type="Classic C#" />
     <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" Type="Classic C#" />
   </Folder>
 </Solution>

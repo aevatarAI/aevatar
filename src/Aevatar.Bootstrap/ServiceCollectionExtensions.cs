@@ -35,12 +35,12 @@ public static class ServiceCollectionExtensions
 
         services.AddAevatarConfig();
         services.AddAevatarRuntime();
-        services.AddAevatarCognitive();
+        services.AddAevatarWorkflows();
 
         RegisterMeaiProviders(services, configuration, options);
 
         if (options.EnableMCPTools)
-            RegisterMcpTools(services);
+            RegisterMCPTools(services);
 
         if (options.EnableSkills)
             RegisterSkills(services, options);
@@ -102,9 +102,9 @@ public static class ServiceCollectionExtensions
             .SetDefault("openai"));
     }
 
-    private static void RegisterMcpTools(IServiceCollection services)
+    private static void RegisterMCPTools(IServiceCollection services)
     {
-        var servers = AevatarMcpConfig.LoadServers();
+        var servers = AevatarMCPConfig.LoadServers();
         if (servers.Count == 0)
             return;
 

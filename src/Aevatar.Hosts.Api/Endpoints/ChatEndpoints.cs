@@ -8,8 +8,8 @@
 
 using Aevatar.Presentation.AGUI;
 using Aevatar.AI.Abstractions;
-using Aevatar.Cqrs.Projections.Abstractions;
-using Aevatar.Cqrs.Projections.Abstractions.ReadModels;
+using Aevatar.CQRS.Projections.Abstractions;
+using Aevatar.CQRS.Projections.Abstractions.ReadModels;
 using Aevatar.Hosts.Api.Projection;
 using Aevatar.Hosts.Api.Reporting;
 using Aevatar.Hosts.Api.Workflows;
@@ -47,7 +47,7 @@ public static class ChatEndpoints
 
     public static IEndpointRouteBuilder MapChatEndpoints(this IEndpointRouteBuilder app)
     {
-        var projectionService = app.ServiceProvider.GetRequiredService<IChatRunProjectionService>();
+        var projectionService = app.ServiceProvider.GetRequiredService<IWorkflowExecutionProjectionService>();
         var group = app.MapGroup("/api").WithTags("Chat");
 
         group.MapPost("/chat", HandleChat)
@@ -85,7 +85,7 @@ public static class ChatEndpoints
         IStreamProvider streams,
         WorkflowRegistry registry,
         ILoggerFactory loggerFactory,
-        IChatRunProjectionService projectionService,
+        IWorkflowExecutionProjectionService projectionService,
         CancellationToken ct = default)
     {
         // ─── 1. 创建或复用 Agent ───
@@ -128,8 +128,8 @@ public static class ChatEndpoints
         http.Response.Headers["X-Accel-Buffering"] = "no";
         await http.Response.StartAsync(ct);
 
-        await using var sink = new AgUiEventChannel();
-        await using var writer = new AgUiSseWriter(http.Response);
+        await using var sink = new AGUIEventChannel();
+        await using var writer = new AGUISseWriter(http.Response);
         var logger = loggerFactory?.CreateLogger("Aevatar.Hosts.Api.Chat");
 
         // ─── 3. 初始化 CQRS Projection Session ───
@@ -145,8 +145,8 @@ public static class ChatEndpoints
         var stream = streams.GetStream(actor.Id);
         await using var subscription = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
         {
-            foreach (var agUiEvt in AgUiProjector.Project(envelope))
-                sink.Push(agUiEvt);
+            foreach (var aguiEvent in AGUIProjector.Project(envelope))
+                sink.Push(aguiEvent);
         }, ct);
 
         // ─── 5. 发送 RUN_STARTED + ChatRequestEvent ───
@@ -207,7 +207,7 @@ public static class ChatEndpoints
             }
             catch (OperationCanceledException) { /* 客户端断开 */ }
 
-            // ─── 7. CQRS 投影收尾 + 写执行报告（artifacts/chat-runs） ───
+            // ─── 7. CQRS 投影收尾 + 写执行报告（artifacts/workflow-executions） ───
             try
             {
                 var projectionCompleted = await projectionService.WaitForRunProjectionCompletedAsync(
@@ -235,9 +235,9 @@ public static class ChatEndpoints
 
                 if (report != null && projectionService.EnableRunReportArtifacts)
                 {
-                    var outputDir = Path.Combine(AevatarPaths.RepoRoot, "artifacts", "chat-runs");
-                    var (jsonPath, htmlPath) = ChatRunReportWriter.BuildDefaultPaths(outputDir);
-                    await ChatRunReportWriter.WriteAsync(report, jsonPath, htmlPath);
+                    var outputDir = Path.Combine(AevatarPaths.RepoRoot, "artifacts", "workflow-executions");
+                    var (jsonPath, htmlPath) = WorkflowExecutionReportWriter.BuildDefaultPaths(outputDir);
+                    await WorkflowExecutionReportWriter.WriteAsync(report, jsonPath, htmlPath);
                     logger?.LogInformation("Chat run report saved: json={JsonPath}, html={HtmlPath}", jsonPath, htmlPath);
                 }
             }
@@ -264,7 +264,7 @@ public static class ChatEndpoints
         IStreamProvider streams,
         WorkflowRegistry registry,
         ILoggerFactory loggerFactory,
-        IChatRunProjectionService projectionService,
+        IWorkflowExecutionProjectionService projectionService,
         CancellationToken ct = default)
     {
         if (!http.WebSockets.IsWebSocketRequest)
@@ -372,7 +372,7 @@ public static class ChatEndpoints
                 wfAgent.ConfigureWorkflow(yaml, workflowNameForRun);
         }
 
-        await using var sink = new AgUiEventChannel();
+        await using var sink = new AGUIEventChannel();
         var projectionSession = await projectionService.StartAsync(
             actor.Id,
             workflowNameForRun,
@@ -382,8 +382,8 @@ public static class ChatEndpoints
         var stream = streams.GetStream(actor.Id);
         await using var subscription = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
         {
-            foreach (var agUiEvt in AgUiProjector.Project(envelope))
-                sink.Push(agUiEvt);
+            foreach (var aguiEvent in AGUIProjector.Project(envelope))
+                sink.Push(aguiEvent);
         }, ct);
 
         await SendWebSocketMessageAsync(socket, new
@@ -469,7 +469,7 @@ public static class ChatEndpoints
                     topology,
                     CancellationToken.None);
 
-                ChatRunReport? report = null;
+                WorkflowExecutionReport? report = null;
                 if (projectionService.EnableRunQueryEndpoints)
                 {
                     report = await projectionService.GetRunAsync(
@@ -540,7 +540,7 @@ public static class ChatEndpoints
     // ─── GET /api/runs ───
 
     private static async Task<IResult> ListRuns(
-        IChatRunProjectionService projectionService,
+        IWorkflowExecutionProjectionService projectionService,
         int take = 50,
         CancellationToken ct = default)
     {
@@ -563,14 +563,14 @@ public static class ChatEndpoints
 
     private static async Task<IResult> GetRun(
         string runId,
-        IChatRunProjectionService projectionService,
+        IWorkflowExecutionProjectionService projectionService,
         CancellationToken ct = default)
     {
         var report = await projectionService.GetRunAsync(runId, ct);
         return report == null ? Results.NotFound() : Results.Ok(report);
     }
 
-    private static async Task<List<ChatTopologyEdge>> BuildTopologyAsync(
+    private static async Task<List<WorkflowExecutionTopologyEdge>> BuildTopologyAsync(
         IActorRuntime runtime,
         string rootActorId)
     {
@@ -592,7 +592,7 @@ public static class ChatEndpoints
             }
         }
 
-        var topology = new List<ChatTopologyEdge>();
+        var topology = new List<WorkflowExecutionTopologyEdge>();
         if (string.IsNullOrWhiteSpace(rootActorId))
             return topology;
 
@@ -608,7 +608,7 @@ public static class ChatEndpoints
 
             foreach (var child in children)
             {
-                topology.Add(new ChatTopologyEdge(parent, child));
+                topology.Add(new WorkflowExecutionTopologyEdge(parent, child));
                 if (visited.Add(child))
                     queue.Enqueue(child);
             }

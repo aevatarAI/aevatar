@@ -22,15 +22,15 @@
 ## 核心组件
 
 - `Endpoints/ChatEndpoints.cs`：API 入口与请求处理
-- `Projection/AgUiProjector.cs`：`EventEnvelope` -> `AgUiEvent` 投影
-- `Aevatar.Cqrs.Projections.Abstractions`：CQRS 契约与读模型定义（供查询与 reporting 复用）
-- `Aevatar.Cqrs.Projections`：读模型存储、projector、coordinator、event reducer 与 DI 组合
+- `Projection/AGUIProjector.cs`：`EventEnvelope` -> `AGUIEvent` 投影
+- `Aevatar.CQRS.Projections.Abstractions`：CQRS 契约与读模型定义（供查询与 reporting 复用）
+- `Aevatar.CQRS.Projections`：读模型存储、projector、coordinator、event reducer 与 DI 组合
 - `Workflows/WorkflowRegistry.cs`：workflow YAML 注册与发现
 - `Program.cs`：Runtime、Cognitive 模块、CORS 与端点装配
 
 详细设计见 `docs/CQRS_PROJECTION_ARCHITECTURE.md`。
 
-`ChatProjection` 配置节可控制是否启用投影、查询端点和报告落盘。
+`WorkflowExecutionProjection` 配置节可控制是否启用投影、查询端点和报告落盘。
 
 ## 依赖
 

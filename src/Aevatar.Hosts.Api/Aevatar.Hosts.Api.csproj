@@ -8,8 +8,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
-    <ProjectReference Include="..\Aevatar.Cqrs.Projections.Abstractions\Aevatar.Cqrs.Projections.Abstractions.csproj" />
-    <ProjectReference Include="..\Aevatar.Cqrs.Projections\Aevatar.Cqrs.Projections.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Projections.Abstractions\Aevatar.CQRS.Projections.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Projections\Aevatar.CQRS.Projections.csproj" />
     <ProjectReference Include="..\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
     <ProjectReference Include="..\Aevatar.Workflows.Core\Aevatar.Workflows.Core.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />

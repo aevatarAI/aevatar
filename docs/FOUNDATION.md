@@ -6,9 +6,9 @@
 
 ```
 src/
-├── Aevatar.Abstractions  # 契约层：接口、Proto、基础类型
-├── Aevatar.Core          # 核心层：GAgent 基类、Pipeline、上下文与守卫
-└── Aevatar.Runtime       # 运行时层：Local Actor、Stream、路由、内存存储、DI 装配
+├── Aevatar.Foundation.Abstractions  # 契约层：接口、Proto、基础类型
+├── Aevatar.Foundation.Core          # 核心层：GAgent 基类、Pipeline、上下文与守卫
+└── Aevatar.Foundation.Runtime       # 运行时层：Local Actor、Stream、路由、内存存储、DI 装配
 ```
 
 ## 核心概念
@@ -20,16 +20,16 @@ src/
 | Runtime | Actor 生命周期与拓扑管理器 | `IActorRuntime` |
 | Stream | 事件传播通道 | `IStream` / `IStreamProvider` |
 
-## Aevatar.Abstractions
+## Aevatar.Foundation.Abstractions
 
-`Aevatar.Abstractions` 只放契约，不放实现。主要包括：
+`Aevatar.Foundation.Abstractions` 只放契约，不放实现。主要包括：
 
 - Agent/Actor/Runtime 基础接口：`IAgent`、`IActor`、`IActorRuntime`
 - 事件发布与流接口：`IEventPublisher`、`IStream`、`IStreamProvider`
 - 事件模块体系：`IEventModule`、`IEventModuleFactory`、`IEventHandlerContext`
 - 持久化接口：`IStateStore<TState>`、`IEventStore`、`IAgentManifestStore`
 - 上下文与运行控制：`IAgentContextAccessor`、`IRunManager`
-- Hook 扩展点：`IGAgentHook`、`GAgentHookContext`
+- Hook 扩展点：`IGAgentExecutionHook`、`GAgentExecutionHookContext`
 - 核心 Proto：`agent_messages.proto`
 
 `EventEnvelope` 保持最小语义字段（id、timestamp、payload、publisher、direction、correlation、target、metadata），路由传播细节放在运行时实现中。
@@ -48,9 +48,9 @@ src/
 - 当前 AG-UI 主要是 **事件投影**，不是直接把 `State` 映射到前端。
 - `State` 是写侧运行态；读侧建议由投影生成独立只读模型（CQRS）。
 
-## Aevatar.Core
+## Aevatar.Foundation.Core
 
-`Aevatar.Core` 提供框架核心实现，重点如下：
+`Aevatar.Foundation.Core` 提供框架核心实现，重点如下：
 
 - `GAgentBase`：无状态 Agent 基类，统一事件分发与 Hook 管线
 - `GAgentBase<TState>`：状态型基类，集成 `IStateStore<TState>`
@@ -67,7 +67,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 1. 静态处理器（反射发现 `[EventHandler]`）
 2. 动态模块（运行时注册 `IEventModule`）
 
-二者统一按 `Priority` 升序执行，并通过 `IGAgentHook` 提供前后置观测与错误回调。
+二者统一按 `Priority` 升序执行，并通过 `IGAgentExecutionHook` 提供前后置观测与错误回调。
 
 ### 状态写保护
 
@@ -78,9 +78,9 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 这保证了状态修改和消息处理串行模型一致。
 
-## Aevatar.Runtime
+## Aevatar.Foundation.Runtime
 
-`Aevatar.Runtime` 提供本地运行时实现，包含：
+`Aevatar.Foundation.Runtime` 提供本地运行时实现，包含：
 
 - `LocalActorRuntime`：创建/销毁/查找/链接/恢复 Actor
 - `LocalActor`：邮箱串行处理、父流订阅、子节点传播
@@ -122,8 +122,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 ## 测试项目
 
-- `test/Aevatar.Abstractions.Tests`：契约层测试（ID、属性、Envelope、时间工具）
-- `test/Aevatar.Core.Tests`：核心行为测试（BDD 场景、Pipeline、Hooks、StateGuard、层级流转）
+- `test/Aevatar.Foundation.Abstractions.Tests`：契约层测试（ID、属性、Envelope、时间工具）
+- `test/Aevatar.Foundation.Core.Tests`：核心行为测试（BDD 场景、Pipeline、Hooks、StateGuard、层级流转）
 
 ## 快速上手
 
