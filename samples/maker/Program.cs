@@ -257,12 +257,21 @@ logger.LogInformation("Loaded workflow: {Path}", workflowPath);
 
 var actor = await runtime.CreateAsync<WorkflowGAgent>("maker-root");
 var workflowName = "maker_analysis";
-if (actor.Agent is WorkflowGAgent wf)
 {
-    wf.State.WorkflowYaml = workflowYaml;
-    wf.State.WorkflowName = workflowName;
-    await wf.ActivateAsync();
-    workflowName = wf.State.WorkflowName;
+    var setWf = new SetWorkflowEvent
+    {
+        WorkflowYaml = workflowYaml,
+        WorkflowName = workflowName,
+    };
+    var initEnvelope = new EventEnvelope
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+        Payload = Google.Protobuf.WellKnownTypes.Any.Pack(setWf),
+        PublisherId = "maker",
+        Direction = EventDirection.Self,
+    };
+    await actor.HandleEventAsync(initEnvelope);
 }
 
 logger.LogInformation("WorkflowGAgent created: {Id}", actor.Id);

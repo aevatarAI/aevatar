@@ -1,8 +1,7 @@
 // ─────────────────────────────────────────────────────────────
-// OrleansClientActor - Client-side IActor proxy.
-// HandleEventAsync sends to MassTransit Stream (fire-and-forget).
-// Hierarchy queries use Grain RPC ([AlwaysInterleave]).
-// Results arrive via IStreamProvider subscription on the Client.
+// OrleansClientActor - IActor proxy (works from Client or Silo).
+// All methods delegate to Grain RPC or MassTransit Stream.
+// No in-process IAgent reference — fully distribution-safe.
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Orleans.Grains;
@@ -10,18 +9,15 @@ using Aevatar.Orleans.Grains;
 namespace Aevatar.Orleans.Actors;
 
 /// <summary>
-/// Client-side actor proxy. Events are sent via MassTransit Stream
-/// (fire-and-forget). Results are received through stream subscription.
+/// Actor proxy. Events are sent via MassTransit Stream (fire-and-forget).
+/// Metadata queries use Grain RPC ([AlwaysInterleave]).
 /// </summary>
 public sealed class OrleansClientActor : IActor
 {
     private readonly IGAgentGrain _grain;
     private readonly IStream _stream;
 
-    /// <summary>Creates a client-side actor proxy.</summary>
-    /// <param name="id">Actor ID.</param>
-    /// <param name="grain">Orleans Grain reference.</param>
-    /// <param name="stream">MassTransit stream for this actor.</param>
+    /// <summary>Creates an actor proxy.</summary>
     public OrleansClientActor(string id, IGAgentGrain grain, IStream stream)
     {
         Id = id;
@@ -31,14 +27,6 @@ public sealed class OrleansClientActor : IActor
 
     /// <inheritdoc />
     public string Id { get; }
-
-    /// <summary>
-    /// Agent runs inside the Grain (Silo). Direct access is not supported.
-    /// Subscribe to the stream for output events instead.
-    /// </summary>
-    public IAgent Agent => throw new NotSupportedException(
-        "Agent runs inside Grain (Silo). " +
-        "Use IStreamProvider.GetStream(Id).SubscribeAsync(...) for output events.");
 
     /// <summary>Grain is already initialized during CreateAsync; no-op.</summary>
     public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
@@ -54,13 +42,21 @@ public sealed class OrleansClientActor : IActor
     public async Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
         await _stream.ProduceAsync(envelope, ct);
-        // Fire-and-forget: returns as soon as the message is enqueued.
-        // The Grain consumes from MassTransit at its own pace.
     }
 
-    /// <summary>Gets parent actor ID via Grain RPC (read-only, [AlwaysInterleave]).</summary>
+    /// <summary>Gets parent actor ID via Grain RPC.</summary>
     public Task<string?> GetParentIdAsync() => _grain.GetParentAsync();
 
-    /// <summary>Gets child actor IDs via Grain RPC (read-only, [AlwaysInterleave]).</summary>
+    /// <summary>Gets child actor IDs via Grain RPC.</summary>
     public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => _grain.GetChildrenAsync();
+
+    /// <summary>Gets agent description via Grain RPC.</summary>
+    public Task<string> GetDescriptionAsync() => _grain.GetDescriptionAsync();
+
+    /// <summary>Gets agent type name via Grain RPC.</summary>
+    public Task<string> GetAgentTypeNameAsync() => _grain.GetAgentTypeNameAsync();
+
+    /// <summary>Sends JSON config to agent via Grain RPC.</summary>
+    public Task ConfigureAsync(string configJson, CancellationToken ct = default) =>
+        _grain.ConfigureAsync(configJson);
 }

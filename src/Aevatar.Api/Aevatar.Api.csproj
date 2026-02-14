@@ -12,5 +12,6 @@
     <ProjectReference Include="..\Aevatar.Cognitive\Aevatar.Cognitive.csproj" />
     <ProjectReference Include="..\Aevatar.Config\Aevatar.Config.csproj" />
     <ProjectReference Include="..\Aevatar.Runtime\Aevatar.Runtime.csproj" />
+    <ProjectReference Include="..\Aevatar.Runtime.Orleans\Aevatar.Runtime.Orleans.csproj" />
   </ItemGroup>
 </Project>

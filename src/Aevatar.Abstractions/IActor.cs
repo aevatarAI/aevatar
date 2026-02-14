@@ -1,20 +1,20 @@
 // ─────────────────────────────────────────────────────────────
 // IActor - actor wrapper contract.
-// Wraps IAgent and provides hierarchy, activation, and event dispatch capabilities.
+// Pure RPC surface: no in-process IAgent reference exposed.
+// Works identically for Local and Orleans runtimes.
 // ─────────────────────────────────────────────────────────────
 
 namespace Aevatar;
 
 /// <summary>
-/// Actor wrapper contract around an agent.
+/// Actor wrapper contract. All methods are RPC-safe — they work
+/// identically whether the agent runs in-process (Local) or in
+/// a remote Grain (Orleans).
 /// </summary>
 public interface IActor
 {
     /// <summary>Unique actor identifier.</summary>
     string Id { get; }
-
-    /// <summary>Embedded agent instance.</summary>
-    IAgent Agent { get; }
 
     /// <summary>Activates the actor and its agent.</summary>
     Task ActivateAsync(CancellationToken ct = default);
@@ -30,4 +30,17 @@ public interface IActor
 
     /// <summary>Gets child actor IDs.</summary>
     Task<IReadOnlyList<string>> GetChildrenIdsAsync();
+
+    /// <summary>Gets a human-readable agent description.</summary>
+    Task<string> GetDescriptionAsync();
+
+    /// <summary>Gets the agent type name (short name, e.g. "RoleGAgent").</summary>
+    Task<string> GetAgentTypeNameAsync();
+
+    /// <summary>
+    /// Sends a JSON configuration to the agent. The agent interprets it
+    /// based on its <c>TConfig</c> type (see GAgentBase&lt;TState,TConfig&gt;).
+    /// </summary>
+    /// <param name="configJson">JSON-serialized config object.</param>
+    Task ConfigureAsync(string configJson, CancellationToken ct = default);
 }

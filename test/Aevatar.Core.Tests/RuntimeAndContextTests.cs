@@ -145,6 +145,6 @@ public class LocalActorRuntimeTests : IAsyncLifetime
         var restored = await _runtime.GetAsync(agentId);
         restored.Should().NotBeNull();
         restored!.Id.Should().Be(agentId);
-        restored.Agent.Should().BeOfType<CollectorAgent>();
+        ((LocalActor)restored).Agent.Should().BeOfType<CollectorAgent>();
     }
 }

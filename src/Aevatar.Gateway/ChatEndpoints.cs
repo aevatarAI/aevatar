@@ -122,7 +122,10 @@ public static class ChatEndpoints
         app.MapGet("/api/agents", async ([FromServices] IActorRuntime runtime) =>
         {
             var actors = await runtime.GetAllAsync();
-            return Results.Ok(actors.Select(a => new { id = a.Id, type = a.Agent.GetType().Name }));
+            var result = new List<object>();
+            foreach (var a in actors)
+                result.Add(new { id = a.Id, type = await a.GetAgentTypeNameAsync() });
+            return Results.Ok(result);
         });
     }
 }

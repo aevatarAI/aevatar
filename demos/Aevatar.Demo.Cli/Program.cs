@@ -399,10 +399,10 @@ internal static class DemoScenarioRunner
         await AttachTracingPublisherAsync(runtime, parent, traceStore);
         await AttachTracingPublisherAsync(runtime, child, traceStore);
 
-        await ((GAgentBase)parent.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "hello-child" }, EventDirection.Down);
-        await WaitForAsync(() => ((DemoCollectorAgent)child.Agent).Received.Count > 0);
+        await ((GAgentBase)((LocalActor)parent).Agent).EventPublisher.PublishAsync(new PingEvent { Message = "hello-child" }, EventDirection.Down);
+        await WaitForAsync(() => ((DemoCollectorAgent)((LocalActor)child).Agent).Received.Count > 0);
 
-        traceStore.SetSummary("childReceived", string.Join(",", ((DemoCollectorAgent)child.Agent).Received));
+        traceStore.SetSummary("childReceived", string.Join(",", ((DemoCollectorAgent)((LocalActor)child).Agent).Received));
         return await BuildResultAsync(runtime, "hierarchy", "Parent publishes Down event to child.", traceStore);
     }
 
@@ -422,15 +422,15 @@ internal static class DemoScenarioRunner
         await AttachTracingPublisherAsync(runtime, w2, traceStore);
         await AttachTracingPublisherAsync(runtime, w3, traceStore);
 
-        await ((GAgentBase)coord.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "task" }, EventDirection.Down);
+        await ((GAgentBase)((LocalActor)coord).Agent).EventPublisher.PublishAsync(new PingEvent { Message = "task" }, EventDirection.Down);
         await WaitForAsync(() =>
-            ((DemoCollectorAgent)w1.Agent).Received.Count > 0 &&
-            ((DemoCollectorAgent)w2.Agent).Received.Count > 0 &&
-            ((DemoCollectorAgent)w3.Agent).Received.Count > 0);
+            ((DemoCollectorAgent)((LocalActor)w1).Agent).Received.Count > 0 &&
+            ((DemoCollectorAgent)((LocalActor)w2).Agent).Received.Count > 0 &&
+            ((DemoCollectorAgent)((LocalActor)w3).Agent).Received.Count > 0);
 
-        traceStore.SetSummary("w1", string.Join(",", ((DemoCollectorAgent)w1.Agent).Received));
-        traceStore.SetSummary("w2", string.Join(",", ((DemoCollectorAgent)w2.Agent).Received));
-        traceStore.SetSummary("w3", string.Join(",", ((DemoCollectorAgent)w3.Agent).Received));
+        traceStore.SetSummary("w1", string.Join(",", ((DemoCollectorAgent)((LocalActor)w1).Agent).Received));
+        traceStore.SetSummary("w2", string.Join(",", ((DemoCollectorAgent)((LocalActor)w2).Agent).Received));
+        traceStore.SetSummary("w3", string.Join(",", ((DemoCollectorAgent)((LocalActor)w3).Agent).Received));
         return await BuildResultAsync(runtime, "fanout", "Coordinator broadcasts task to three workers.", traceStore);
     }
 
@@ -444,16 +444,16 @@ internal static class DemoScenarioRunner
 
         var moduleA = new ReplyModule("module_a", "A");
         var moduleB = new ReplyModule("module_b", "B");
-        var agent = (DemoTransformerAgent)transformer.Agent;
+        var agent = (DemoTransformerAgent)((LocalActor)transformer).Agent;
         agent.SetModules([moduleA]);
-        await ((GAgentBase)transformer.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "pipeline" }, EventDirection.Self);
-        await WaitForAsync(() => ((DemoCollectorAgent)collector.Agent).Received.Count > 0);
+        await ((GAgentBase)((LocalActor)transformer).Agent).EventPublisher.PublishAsync(new PingEvent { Message = "pipeline" }, EventDirection.Self);
+        await WaitForAsync(() => ((DemoCollectorAgent)((LocalActor)collector).Agent).Received.Count > 0);
 
         agent.SetModules([moduleB]);
-        await ((GAgentBase)transformer.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "pipeline" }, EventDirection.Self);
-        await WaitForAsync(() => ((DemoCollectorAgent)collector.Agent).Received.Count > 1);
+        await ((GAgentBase)((LocalActor)transformer).Agent).EventPublisher.PublishAsync(new PingEvent { Message = "pipeline" }, EventDirection.Self);
+        await WaitForAsync(() => ((DemoCollectorAgent)((LocalActor)collector).Agent).Received.Count > 1);
 
-        traceStore.SetSummary("pipelineReplies", string.Join(",", ((DemoCollectorAgent)collector.Agent).Received));
+        traceStore.SetSummary("pipelineReplies", string.Join(",", ((DemoCollectorAgent)((LocalActor)collector).Agent).Received));
         return await BuildResultAsync(runtime, "pipeline", "Swap module to change pipeline behavior.", traceStore);
     }
 
@@ -474,18 +474,18 @@ internal static class DemoScenarioRunner
         await AttachTracingPublisherAsync(runtime, actor, traceStore);
 
         await actor.HandleEventAsync(CreateEnvelope(new IncrementEvent { Amount = 7 }));
-        await WaitForAsync(() => ((DemoCounterAgent)actor.Agent).State.Count == 7);
+        await WaitForAsync(() => ((DemoCounterAgent)((LocalActor)actor).Agent).State.Count == 7);
 
         await runtime.DestroyAsync(actor.Id);
         var restored = await runtime.CreateAsync<DemoCounterAgent>("stateful");
-        var state = ((DemoCounterAgent)restored.Agent).State.Count;
+        var state = ((DemoCounterAgent)((LocalActor)restored).Agent).State.Count;
         traceStore.SetSummary("restoredCount", state);
         return await BuildResultAsync(runtime, "lifecycle", "Deactivate/save and reactivate/load state.", traceStore);
     }
 
     private static async Task AttachTracingPublisherAsync(LocalActorRuntime runtime, IActor actor, DemoTraceStore traceStore)
     {
-        if (actor.Agent is not GAgentBase gab) return;
+        if (((LocalActor)actor).Agent is not GAgentBase gab) return;
         var inner = gab.EventPublisher;
         var wrapped = new TracingPublisher(
             actor.Id,

@@ -2,6 +2,7 @@ syntax = "proto3";
 package aevatar.cognitive;
 option csharp_namespace = "Aevatar.Cognitive";
 
+message SetWorkflowEvent       { string workflow_yaml = 1; string workflow_name = 2; }
 message StartWorkflowEvent    { string workflow_name = 1; string run_id = 2; string input = 3; map<string, string> parameters = 4; }
 message WorkflowCompletedEvent { string workflow_name = 1; string run_id = 2; bool success = 3; string output = 4; string error = 5; }
 message StepRequestEvent      { string step_id = 1; string step_type = 2; string run_id = 3; string input = 4; string target_role = 5; map<string, string> parameters = 6; }

@@ -13,6 +13,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar;
+using Aevatar.Actor;
 using Aevatar.AI;
 using Aevatar.AI.LLM;
 using Aevatar.Cognitive;
@@ -22,6 +23,7 @@ using Aevatar.DependencyInjection;
 using Aevatar.EventModules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
 
 namespace Aevatar.Integration.Tests;
 
@@ -152,7 +154,7 @@ public class WorkflowIntegrationTests
 
         // 创建 WorkflowGAgent 并手动设置 workflow YAML
         var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-1");
-        var wfAgent = (WorkflowGAgent)actor.Agent;
+        var wfAgent = (WorkflowGAgent)((LocalActor)actor).Agent;
 
         // 直接设置 State 中的 YAML（模拟初始化）
         // 由于 State 只能在 handler scope 修改，我们通过发送事件触发
@@ -188,15 +190,13 @@ public class WorkflowIntegrationTests
         foreach (var role in workflow.Roles)
         {
             var childActor = await runtime.CreateAsync<RoleGAgent>(role.Id);
-            if (childActor.Agent is RoleGAgent roleAgent)
+            var roleAgent = (RoleGAgent)((LocalActor)childActor).Agent;
+            roleAgent.SetRoleName(role.Name);
+            await childActor.ConfigureAsync(JsonSerializer.Serialize(new AIAgentConfig
             {
-                roleAgent.SetRoleName(role.Name);
-                await roleAgent.ConfigureAsync(new AIAgentConfig
-                {
-                    SystemPrompt = role.SystemPrompt,
-                    ProviderName = "mock",
-                });
-            }
+                SystemPrompt = role.SystemPrompt,
+                ProviderName = "mock",
+            }));
             await runtime.LinkAsync("wf-1", childActor.Id);
             childIds.Add(childActor.Id);
         }
@@ -217,7 +217,7 @@ public class WorkflowIntegrationTests
         // 验证每个 RoleGAgent 的配置
         var researcherActor = await runtime.GetAsync("researcher");
         researcherActor.Should().NotBeNull();
-        var researcher = (RoleGAgent)researcherActor!.Agent;
+        var researcher = (RoleGAgent)((LocalActor)researcherActor!).Agent;
         researcher.RoleName.Should().Be("Researcher");
     }
 
@@ -234,7 +234,7 @@ public class WorkflowIntegrationTests
         using var _ = sp;
 
         var actor = await runtime.CreateAsync<RoleGAgent>("role-test-1");
-        var agent = (RoleGAgent)actor.Agent;
+        var agent = (RoleGAgent)((LocalActor)actor).Agent;
 
         var yaml = """
             name: Expert Analyst
@@ -267,12 +267,11 @@ public class WorkflowIntegrationTests
         using var _ = sp;
 
         var actor = await runtime.CreateAsync<RoleGAgent>("llm-test-1");
-        var agent = (RoleGAgent)actor.Agent;
-        await agent.ConfigureAsync(new AIAgentConfig
+        await actor.ConfigureAsync(JsonSerializer.Serialize(new AIAgentConfig
         {
             SystemPrompt = "你是一个 researcher",
             ProviderName = "mock",
-        });
+        }));
 
         // 收集 Up 事件
         var responses = new List<string>();
@@ -327,10 +326,10 @@ public class WorkflowIntegrationTests
         var r1 = await runtime.CreateAsync<RoleGAgent>("r1");
         var r2 = await runtime.CreateAsync<RoleGAgent>("r2");
 
-        ((RoleGAgent)r1.Agent).SetRoleName("Agent-R1");
-        ((RoleGAgent)r2.Agent).SetRoleName("Agent-R2");
-        await ((RoleGAgent)r1.Agent).ConfigureAsync(new AIAgentConfig { ProviderName = "mock", SystemPrompt = "r1" });
-        await ((RoleGAgent)r2.Agent).ConfigureAsync(new AIAgentConfig { ProviderName = "mock", SystemPrompt = "r2" });
+        ((RoleGAgent)((LocalActor)r1).Agent).SetRoleName("Agent-R1");
+        ((RoleGAgent)((LocalActor)r2).Agent).SetRoleName("Agent-R2");
+        await r1.ConfigureAsync(JsonSerializer.Serialize(new AIAgentConfig { ProviderName = "mock", SystemPrompt = "r1" }));
+        await r2.ConfigureAsync(JsonSerializer.Serialize(new AIAgentConfig { ProviderName = "mock", SystemPrompt = "r2" }));
 
         await runtime.LinkAsync("root", "r1");
         await runtime.LinkAsync("root", "r2");

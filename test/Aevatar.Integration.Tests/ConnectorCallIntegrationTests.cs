@@ -182,10 +182,16 @@ public class ConnectorCallIntegrationTests
         string input)
     {
         var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-root-" + Guid.NewGuid().ToString("N")[..8]);
-        var wf = (WorkflowGAgent)actor.Agent;
-        wf.State.WorkflowYaml = workflowYaml;
-        wf.State.WorkflowName = "connector_flow";
-        await wf.ActivateAsync();
+        var setWf = new SetWorkflowEvent { WorkflowYaml = workflowYaml, WorkflowName = "connector_flow" };
+        var initEnvelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(setWf),
+            PublisherId = "test",
+            Direction = EventDirection.Self,
+        };
+        await actor.HandleEventAsync(initEnvelope);
 
         var stream = provider.GetRequiredService<IStreamProvider>().GetStream(actor.Id);
         var stepCompletions = new List<StepCompletedEvent>();

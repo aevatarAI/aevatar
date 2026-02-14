@@ -256,12 +256,52 @@ public class GAgentGrain : Grain, IGAgentGrain
         Task.FromResult(_state.State.ParentId);
 
     // ═══════════════════════════════════════════════════════
-    // Description & Deactivation
+    // Description, Metadata & Configuration
     // ═══════════════════════════════════════════════════════
 
     /// <inheritdoc />
     public async Task<string> GetDescriptionAsync() =>
         _agent != null ? await _agent.GetDescriptionAsync() : $"Uninitialized:{this.GetPrimaryKeyString()}";
+
+    /// <inheritdoc />
+    public Task<string> GetAgentTypeNameAsync() =>
+        Task.FromResult(_agent?.GetType().Name ?? "Unknown");
+
+    /// <inheritdoc />
+    public Task ConfigureAsync(string configJson)
+    {
+        if (_agent == null)
+            throw new InvalidOperationException("Grain not initialized");
+
+        // Walk type hierarchy to find GAgentBase<TState, TConfig>
+        var type = _agent.GetType();
+        while (type != null)
+        {
+            if (type.IsGenericType)
+            {
+                var genDef = type.GetGenericTypeDefinition();
+                if (genDef.GetGenericArguments().Length == 2 &&
+                    genDef.FullName?.Contains("GAgentBase") == true)
+                {
+                    var configType = type.GetGenericArguments()[1];
+                    var config = System.Text.Json.JsonSerializer.Deserialize(configJson, configType);
+                    if (config != null)
+                    {
+                        var method = type.GetMethod("ConfigureAsync",
+                            [configType, typeof(CancellationToken)]);
+                        if (method != null)
+                            return (Task)method.Invoke(_agent, [config, CancellationToken.None])!;
+                    }
+                    break;
+                }
+            }
+            type = type.BaseType;
+        }
+
+        _logger.LogWarning("Agent {Id} does not support ConfigureAsync",
+            this.GetPrimaryKeyString());
+        return Task.CompletedTask;
+    }
 
     /// <inheritdoc />
     public Task DeactivateAsync()

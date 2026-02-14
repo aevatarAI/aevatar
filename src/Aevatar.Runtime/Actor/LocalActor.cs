@@ -2,6 +2,7 @@
 // Focuses on two responsibilities: mailbox serialization and stream subscription management.
 
 using System.Diagnostics;
+using System.Text.Json;
 using Aevatar.Routing;
 using Aevatar.Observability;
 using Microsoft.Extensions.Logging;
@@ -23,7 +24,13 @@ public sealed class LocalActor : IActor
     }
 
     public string Id { get; }
+
+    /// <summary>
+    /// Agent instance. Available on LocalActor but NOT on IActor interface —
+    /// use IActor.GetDescriptionAsync / ConfigureAsync etc. for runtime-agnostic code.
+    /// </summary>
     public IAgent Agent { get; }
+
     internal EventRouter Router => _router;
 
     public async Task ActivateAsync(CancellationToken ct = default)
@@ -56,6 +63,45 @@ public sealed class LocalActor : IActor
         if (_parentSubscription != null) { await _parentSubscription.DisposeAsync(); _parentSubscription = null; }
         if (_selfSubscription != null) { await _selfSubscription.DisposeAsync(); _selfSubscription = null; }
         await Agent.DeactivateAsync(ct);
+    }
+
+    public Task<string> GetDescriptionAsync() => Agent.GetDescriptionAsync();
+
+    public Task<string> GetAgentTypeNameAsync() =>
+        Task.FromResult(Agent.GetType().Name);
+
+    public Task ConfigureAsync(string configJson, CancellationToken ct = default)
+    {
+        // Walk the type hierarchy to find GAgentBase<TState, TConfig>
+        var agentType = Agent.GetType();
+        var current = agentType;
+        while (current != null)
+        {
+            if (current.IsGenericType)
+            {
+                var genDef = current.GetGenericTypeDefinition();
+                // Match GAgentBase<TState, TConfig> (3 generic params at the open type)
+                if (genDef.GetGenericArguments().Length == 2 &&
+                    genDef.FullName?.Contains("GAgentBase") == true)
+                {
+                    var configType = current.GetGenericArguments()[1];
+                    var config = JsonSerializer.Deserialize(configJson, configType);
+                    if (config != null)
+                    {
+                        var method = current.GetMethod("ConfigureAsync",
+                            [configType, typeof(CancellationToken)]);
+                        if (method != null)
+                            return (Task)method.Invoke(Agent, [config, ct])!;
+                    }
+                    break;
+                }
+            }
+            current = current.BaseType;
+        }
+
+        _logger.LogWarning("Agent {Id} ({Type}) does not support ConfigureAsync",
+            Id, agentType.Name);
+        return Task.CompletedTask;
     }
 
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>

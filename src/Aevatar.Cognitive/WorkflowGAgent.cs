@@ -56,6 +56,22 @@ public class WorkflowGAgent : AIGAgentBase<WorkflowState>
         return Task.FromResult($"WorkflowGAgent[{State.WorkflowName}] v{State.Version} ({status})");
     }
 
+    // ─── Workflow 初始化（通过事件，支持 Orleans） ───
+
+    /// <summary>
+    /// Sets workflow YAML and name, compiles, and re-installs modules.
+    /// Called via HandleEventAsync — works across Local and Orleans runtimes.
+    /// </summary>
+    [EventHandler]
+    public Task HandleSetWorkflow(SetWorkflowEvent evt)
+    {
+        State.WorkflowYaml = evt.WorkflowYaml;
+        State.WorkflowName = evt.WorkflowName;
+        TryCompile(evt.WorkflowYaml);
+        InstallCognitiveModules();
+        return Task.CompletedTask;
+    }
+
     // ─── 用户消息入口 ───
 
     /// <summary>处理用户聊天请求：触发工作流执行。</summary>
@@ -110,16 +126,18 @@ public class WorkflowGAgent : AIGAgentBase<WorkflowState>
         foreach (var role in _compiledWorkflow.Roles)
         {
             var actor = await runtime.CreateAsync<RoleGAgent>(role.Id);
-            if (actor.Agent is RoleGAgent roleAgent)
+
+            // Configure via IActor.ConfigureAsync (RPC-safe, works in Orleans)
+            var config = new AIAgentConfig
             {
-                roleAgent.SetRoleName(role.Name);
-                await roleAgent.ConfigureAsync(new AIAgentConfig
-                {
-                    SystemPrompt = role.SystemPrompt,
-                    ProviderName = role.Provider ?? "deepseek",
-                    Model = role.Model,
-                });
-            }
+                SystemPrompt = role.SystemPrompt,
+                ProviderName = role.Provider ?? "deepseek",
+                Model = role.Model,
+                // RoleName is set via SystemPrompt context; for display:
+            };
+            await actor.ConfigureAsync(
+                System.Text.Json.JsonSerializer.Serialize(config));
+
             await runtime.LinkAsync(Id, actor.Id);
             _childAgentIds.Add(actor.Id);
         }

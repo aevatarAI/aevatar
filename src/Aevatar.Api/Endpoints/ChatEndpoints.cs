@@ -90,15 +90,21 @@ public static class ChatEndpoints
 
             actor = await runtime.CreateAsync<WorkflowGAgent>(ct: ct);
 
-            // 设置 workflow YAML 到 Agent State
-            if (actor.Agent is WorkflowGAgent wfAgent)
+            // Initialize workflow via event (RPC-safe: works for Local + Orleans)
+            var setWf = new SetWorkflowEvent
             {
-                wfAgent.State.WorkflowYaml = yaml;
-                wfAgent.State.WorkflowName = workflowName;
-            }
-
-            // 重新激活以编译 YAML（OnActivateAsync 会读 State.WorkflowYaml）
-            await actor.Agent.ActivateAsync(ct);
+                WorkflowYaml = yaml,
+                WorkflowName = workflowName,
+            };
+            var initEnvelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+                Payload = Google.Protobuf.WellKnownTypes.Any.Pack(setWf),
+                PublisherId = "api",
+                Direction = EventDirection.Self,
+            };
+            await actor.HandleEventAsync(initEnvelope, ct);
         }
 
         // ─── 2. 准备 SSE 响应 ───
@@ -227,11 +233,12 @@ public static class ChatEndpoints
         var result = new List<object>();
         foreach (var actor in actors)
         {
-            var desc = await actor.Agent.GetDescriptionAsync();
+            var desc = await actor.GetDescriptionAsync();
+            var typeName = await actor.GetAgentTypeNameAsync();
             result.Add(new
             {
                 id = actor.Id,
-                type = actor.Agent.GetType().Name,
+                type = typeName,
                 description = desc,
             });
         }

@@ -1,12 +1,18 @@
 // ─────────────────────────────────────────────────────────────
-// Aevatar.Api — Agent-Actor Host HTTP 入口
+// Aevatar.Api — Agent-Actor Host HTTP entry point
 //
-// POST /api/chat   → 创建/复用 WorkflowGAgent，SSE 返回 AGUI 事件
-// GET  /api/agents → 活跃 Agent 列表
-// GET  /api/workflows → 可用工作流列表
+// POST /api/chat   → Create/reuse WorkflowGAgent, SSE return AGUI events
+// GET  /api/agents → Active Agent list
+// GET  /api/workflows → Available workflow list
 //
-// 依赖 ~/.aevatar/ 配置：config.json、secrets.json、connectors.json；
-// LLM API Key 可从环境变量 DEEPSEEK_API_KEY / OPENAI_API_KEY 或 secrets 读取。
+// Runtime selection (env: AEVATAR_RUNTIME or config Runtime:Provider):
+//   "Local"   (default) → In-process LocalActorRuntime
+//   "Orleans" → Distributed Orleans + Kafka (requires running Silo)
+//
+// Environment variables (Orleans mode):
+//   KAFKA_BOOTSTRAP     - Kafka bootstrap servers (default: localhost:9092)
+//   ORLEANS_CLUSTER_ID  - Cluster ID (default: aevatar-dev)
+//   ORLEANS_SERVICE_ID  - Service ID (default: aevatar)
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Api.Endpoints;
@@ -17,15 +23,32 @@ using Aevatar.Connectors;
 using Aevatar.DependencyInjection;
 using Aevatar.EventModules;
 using Aevatar.AI.MEAI;
+using Aevatar.Orleans.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ─── ~/.aevatar/ 配置 ───
+// ─── ~/.aevatar/ config ───
 builder.Configuration.AddAevatarConfig();
 builder.Services.AddAevatarConfig();
 
-// ─── 运行时 + Cognitive（含 IConnectorRegistry） ───
+// ─── Runtime selection ───
+// Default: "Local" (in-process), set to "Orleans" for distributed mode.
+var runtimeProvider = Environment.GetEnvironmentVariable("AEVATAR_RUNTIME")
+                   ?? builder.Configuration["Runtime:Provider"]
+                   ?? "Local";
+
+if (string.Equals(runtimeProvider, "Orleans", StringComparison.OrdinalIgnoreCase))
+{
+    // Orleans mode: connect to external Silo via Orleans Client + Kafka
+    var kafkaBootstrap = Environment.GetEnvironmentVariable("KAFKA_BOOTSTRAP") ?? "localhost:9092";
+    var clusterId = Environment.GetEnvironmentVariable("ORLEANS_CLUSTER_ID") ?? "aevatar-dev";
+    var serviceId = Environment.GetEnvironmentVariable("ORLEANS_SERVICE_ID") ?? "aevatar";
+
+    builder.UseAevatarOrleansRuntime(kafkaBootstrap, clusterId, serviceId);
+}
+
+// Common services (TryAdd: Orleans registrations take priority if present)
 builder.Services.AddAevatarRuntime();
 builder.Services.AddAevatarCognitive();
 builder.Services.AddSingleton<IEventModuleFactory, CognitiveModuleFactory>();

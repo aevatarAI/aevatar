@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar;
+using Aevatar.Actor;
 using Aevatar.AI;
 using Aevatar.AI.Routing;
 using Aevatar.EventModules;
@@ -107,7 +108,7 @@ public class EventRoutingTests
         using var _ = sp;
 
         var actor = await runtime.CreateAsync<RoleGAgent>("route-test");
-        var agent = (RoleGAgent)actor.Agent;
+        var agent = (RoleGAgent)((LocalActor)actor).Agent;
 
         var yaml = """
             name: RoutedAgent

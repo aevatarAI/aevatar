@@ -54,11 +54,20 @@ public interface IGAgentGrain : IGrainWithStringKey
     [AlwaysInterleave]
     Task<string?> GetParentAsync();
 
-    // ── Description ──
+    // ── Description & Metadata ──
 
     /// <summary>Gets a human-readable agent description.</summary>
     [AlwaysInterleave]
     Task<string> GetDescriptionAsync();
+
+    /// <summary>Gets the agent type short name (e.g. "RoleGAgent").</summary>
+    [AlwaysInterleave]
+    Task<string> GetAgentTypeNameAsync();
+
+    // ── Configuration ──
+
+    /// <summary>Sends a JSON configuration to the agent.</summary>
+    Task ConfigureAsync(string configJson);
 
     // ── Lifecycle ──
 
