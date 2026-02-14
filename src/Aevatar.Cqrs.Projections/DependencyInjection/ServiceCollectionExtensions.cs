@@ -12,6 +12,9 @@ namespace Aevatar.Cqrs.Projections.DependencyInjection;
 /// </summary>
 public static class ServiceCollectionExtensions
 {
+    private static readonly Type ProjectionReducerContract = typeof(IProjectionEventReducer<,>);
+    private static readonly Type ProjectionProjectorContract = typeof(IProjectionProjector<,>);
+
     public static IServiceCollection AddChatProjectionCqrs(
         this IServiceCollection services,
         Action<ChatProjectionOptions>? configure = null)
@@ -21,8 +24,13 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
 
         services.TryAddSingleton<IChatRunReadModelStore, InMemoryChatRunReadModelStore>();
+        services.TryAddSingleton<IProjectionReadModelStore<ChatRunReport, string>>(sp =>
+            sp.GetRequiredService<IChatRunReadModelStore>());
         RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
-        services.TryAddSingleton<IChatProjectionCoordinator, ChatProjectionCoordinator>();
+        services.TryAddSingleton<IProjectionCoordinator<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>>, ChatProjectionCoordinator>();
+        services.TryAddSingleton<IChatProjectionCoordinator>(sp =>
+            (IChatProjectionCoordinator)sp.GetRequiredService<IProjectionCoordinator<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>>>());
+        services.TryAddSingleton<IChatProjectionRunRegistry, ChatProjectionRunRegistry>();
         services.TryAddSingleton<IChatRunProjectionService, ChatRunProjectionService>();
         return services;
     }
@@ -34,6 +42,9 @@ public static class ServiceCollectionExtensions
         where TReducer : class, IChatRunEventReducer
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatRunEventReducer, TReducer>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton(
+            typeof(IProjectionEventReducer<ChatRunReport, ChatProjectionContext>),
+            typeof(TReducer)));
         return services;
     }
 
@@ -44,6 +55,9 @@ public static class ServiceCollectionExtensions
         where TProjector : class, IChatRunProjector
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatRunProjector, TProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton(
+            typeof(IProjectionProjector<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>>),
+            typeof(TProjector)));
         return services;
     }
 
@@ -65,6 +79,8 @@ public static class ServiceCollectionExtensions
         where TStore : class, IChatRunReadModelStore
     {
         services.Replace(ServiceDescriptor.Singleton<IChatRunReadModelStore, TStore>());
+        services.Replace(ServiceDescriptor.Singleton<IProjectionReadModelStore<ChatRunReport, string>>(sp =>
+            sp.GetRequiredService<IChatRunReadModelStore>()));
         return services;
     }
 
@@ -80,7 +96,10 @@ public static class ServiceCollectionExtensions
             .ToList();
 
         foreach (var reducerType in reducerTypes)
+        {
             services.TryAddEnumerable(ServiceDescriptor.Singleton(typeof(IChatRunEventReducer), reducerType));
+            RegisterProjectionContracts(services, reducerType, ProjectionReducerContract);
+        }
 
         var projectorTypes = GetLoadableTypes(assembly)
             .Where(x =>
@@ -92,7 +111,26 @@ public static class ServiceCollectionExtensions
             .ToList();
 
         foreach (var projectorType in projectorTypes)
+        {
             services.TryAddEnumerable(ServiceDescriptor.Singleton(typeof(IChatRunProjector), projectorType));
+            RegisterProjectionContracts(services, projectorType, ProjectionProjectorContract);
+        }
+    }
+
+    private static void RegisterProjectionContracts(
+        IServiceCollection services,
+        Type implementationType,
+        Type genericContract)
+    {
+        var contractTypes = implementationType.GetInterfaces()
+            .Where(x =>
+                x.IsGenericType &&
+                x.GetGenericTypeDefinition() == genericContract)
+            .Distinct()
+            .ToList();
+
+        foreach (var contractType in contractTypes)
+            services.TryAddEnumerable(ServiceDescriptor.Singleton(contractType, implementationType));
     }
 
     private static IEnumerable<Type> GetLoadableTypes(Assembly assembly)

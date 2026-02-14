@@ -87,6 +87,24 @@ public class ChatProjectionRegistrationTests
         store.Should().NotBeNull();
     }
 
+    [Fact]
+    public void AddChatProjectionCqrs_ShouldExposeGenericProjectionContracts()
+    {
+        var services = new ServiceCollection();
+        services.AddChatProjectionCqrs();
+
+        using var provider = services.BuildServiceProvider();
+        var coordinator = provider.GetRequiredService<IProjectionCoordinator<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>>>();
+        var store = provider.GetRequiredService<IProjectionReadModelStore<ChatRunReport, string>>();
+        var reducers = provider.GetServices<IProjectionEventReducer<ChatRunReport, ChatProjectionContext>>();
+        var projectors = provider.GetServices<IProjectionProjector<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>>>();
+
+        coordinator.Should().NotBeNull();
+        store.Should().NotBeNull();
+        reducers.Should().NotBeEmpty();
+        projectors.Should().NotBeEmpty();
+    }
+
     private static EventEnvelope Wrap(IMessage evt, string publisherId = "test") => new()
     {
         Id = Guid.NewGuid().ToString("N"),

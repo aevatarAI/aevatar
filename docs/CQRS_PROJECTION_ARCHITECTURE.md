@@ -35,8 +35,11 @@ Follow strict dependency direction:
 ### Core Pipeline
 
 - `IChatRunProjectionService`: application-facing facade used by hosts/endpoints.
-- `IChatProjectionCoordinator`: run-scoped projection orchestrator.
-- `IChatRunProjector`: projector contract.
+- `IProjectionCoordinator<TContext, TTopology>`: generic run-scoped projection orchestrator contract.
+- `IProjectionProjector<TContext, TTopology>`: generic projector contract.
+- `IProjectionEventReducer<TReadModel, TContext>`: generic event folding contract.
+- `IProjectionReadModelStore<TReadModel, TKey>`: generic read-model store contract.
+- `IChatProjectionCoordinator`/`IChatRunProjector`/`IChatRunEventReducer`/`IChatRunReadModelStore`: chat-domain aliases over generic contracts.
 - `ChatRunProjectionService`: creates run context and manages actor-level stream subscription for projection (shared across active runs on the same actor).
 - `WaitForRunProjectionCompletedAsync(runId)`: completion signal for one run projection; use this signal before querying read model.
 - `ChatRunReadModelProjector`: routes event by protobuf `TypeUrl`, deduplicates by `EventEnvelope.Id`, and executes reducers.
@@ -70,6 +73,7 @@ Adding a new event projection no longer requires editing core projector code:
 - same assembly: add reducer class, auto-discovery picks it up
 - external assembly: register via `AddChatProjectionReducer<T>()` or `AddChatProjectionExtensionsFromAssembly(assembly)`
 - extension auto-discovery scope: public concrete reducer/projector types only
+- extension components are registered as both domain aliases (`IChat*`) and generic projection contracts (`IProjection*`)
 
 ## Projection as Optional Feature
 
@@ -111,6 +115,14 @@ Core CQRS services remain registered; `Enabled` controls runtime projection beha
 
 So reducer-based domain logic is used for projection.  
 AutoMapper is suitable only for read-model-to-DTO/view mapping at API boundary.
+
+## Model-Agnostic Projection Guidance
+
+Projection core should not assume one business = one fixed report model.
+
+- Keep pipeline logic on generic contracts (`IProjection*`).
+- Keep chat types as alias layer for current domain.
+- New domains should add their own `Context + ReadModel + Reducer + Projector` set and register via extension methods, without changing existing chat projection internals.
 
 ## Best-Practice Gaps (Remaining)
 

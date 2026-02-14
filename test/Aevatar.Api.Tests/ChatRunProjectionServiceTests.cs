@@ -28,7 +28,8 @@ public class ChatRunProjectionServiceTests
         var store = new InMemoryChatRunReadModelStore();
         var projector = new ChatRunReadModelProjector(store, BuildReducers());
         var coordinator = new ChatProjectionCoordinator([projector]);
-        var service = new ChatRunProjectionService(options, coordinator, store, streams);
+        var runRegistry = new ChatProjectionRunRegistry(coordinator, streams);
+        var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
 
         var session = await service.StartAsync("root", "direct", "hello");
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
@@ -73,7 +74,8 @@ public class ChatRunProjectionServiceTests
         var store = new InMemoryChatRunReadModelStore();
         var projector = new ChatRunReadModelProjector(store, BuildReducers());
         var coordinator = new ChatProjectionCoordinator([projector]);
-        var service = new ChatRunProjectionService(options, coordinator, store, streams);
+        var runRegistry = new ChatProjectionRunRegistry(coordinator, streams);
+        var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
 
         var session = await service.StartAsync("root", "direct", "hello");
         await service.ProjectAsync(session, Wrap(new StartWorkflowEvent
@@ -105,7 +107,8 @@ public class ChatRunProjectionServiceTests
         var store = new InMemoryChatRunReadModelStore();
         var projector = new ChatRunReadModelProjector(store, BuildReducers());
         var coordinator = new ChatProjectionCoordinator([projector]);
-        var service = new ChatRunProjectionService(options, coordinator, store, streams);
+        var runRegistry = new ChatProjectionRunRegistry(coordinator, streams);
+        var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
 
         var session = await service.StartAsync("root", "direct", "hello");
         await service.ProjectAsync(session, Wrap(new StartWorkflowEvent
@@ -133,7 +136,8 @@ public class ChatRunProjectionServiceTests
         var store = new InMemoryChatRunReadModelStore();
         var projector = new ChatRunReadModelProjector(store, BuildReducers());
         var coordinator = new ChatProjectionCoordinator([projector]);
-        var service = new ChatRunProjectionService(options, coordinator, store, streams);
+        var runRegistry = new ChatProjectionRunRegistry(coordinator, streams);
+        var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
 
         var session1 = await service.StartAsync("root", "direct", "hello-1");
         var session2 = await service.StartAsync("root", "direct", "hello-2");
@@ -187,7 +191,8 @@ public class ChatRunProjectionServiceTests
         var store = new InMemoryChatRunReadModelStore();
         var projector = new ChatRunReadModelProjector(store, BuildReducers());
         var coordinator = new ChatProjectionCoordinator([projector]);
-        var service = new ChatRunProjectionService(options, coordinator, store, streams);
+        var runRegistry = new ChatProjectionRunRegistry(coordinator, streams);
+        var service = new ChatRunProjectionService(options, coordinator, store, runRegistry);
 
         var session = await service.StartAsync("root", "direct", "hello");
         var completed = await service.WaitForRunProjectionCompletedAsync(session.RunId);

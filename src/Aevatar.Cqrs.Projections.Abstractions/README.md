@@ -4,11 +4,16 @@ Contracts-only project for CQRS projection.
 
 ## Contains
 
-- Projection service/orchestrator/projector/reducer/store interfaces
+- Generic projection contracts:
+  - `IProjectionCoordinator<TContext, TTopology>`
+  - `IProjectionProjector<TContext, TTopology>`
+  - `IProjectionEventReducer<TReadModel, TContext>`
+  - `IProjectionReadModelStore<TReadModel, TKey>`
+- Chat-specific aliases over generic contracts (`IChat*`)
 - Run-scoped projection context/session contracts
 - Read-model contracts (`ChatRunReport` and related types)
 
 ## Rules
 
 - No endpoint, DI, store implementation, or rendering concerns.
-- Keep this project stable; implementation details belong to `Aevatar.Cqrs.Projections`.
+- Keep generic contracts stable; implementation details belong to `Aevatar.Cqrs.Projections`.

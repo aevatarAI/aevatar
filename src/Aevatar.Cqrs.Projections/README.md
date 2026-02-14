@@ -13,7 +13,8 @@
 ## Project Boundaries
 
 - `Aevatar.Cqrs.Projections.Abstractions`
-  - projection contracts (`IChat*`)
+  - generic projection contracts (`IProjection*`)
+  - chat aliases (`IChat*`)
   - run context/session contracts
   - read-model contracts (`ChatRunReport/*`)
 - `Aevatar.Cqrs.Projections`
@@ -28,6 +29,7 @@
 - Use `EventEnvelope.Id` for in-run dedup and envelope timestamp as projection time source.
 - Run projection is event-driven: `ChatRunProjectionService` keeps one actor-level stream subscription and reuses it across active runs.
 - Query remains separate from completion signal: wait with `WaitForRunProjectionCompletedAsync(runId)`, then read model via query API/service.
+- Coordinator/projector/reducer/store runtime wiring should consume `IProjection*` contracts; `IChat*` is a domain alias layer.
 
 ## Extensibility (OCP)
 
@@ -36,4 +38,5 @@
   - `AddChatProjectionReducer<TReducer>()`
   - `AddChatProjectionProjector<TProjector>()`
   - `AddChatProjectionExtensionsFromAssembly(assembly)`
+- Extension components are also exposed under generic contracts (`IProjectionEventReducer<,>`, `IProjectionProjector<,>`) for model-agnostic composition.
 - Auto-discovery only registers public concrete types (for predictable plugin boundaries).

@@ -8,12 +8,12 @@ namespace Aevatar.Cqrs.Projections.Projectors;
 /// </summary>
 public sealed class ChatRunReadModelProjector : IChatRunProjector
 {
-    private readonly IChatRunReadModelStore _store;
-    private readonly IReadOnlyDictionary<string, IReadOnlyList<IChatRunEventReducer>> _reducersByType;
+    private readonly IProjectionReadModelStore<ChatRunReport, string> _store;
+    private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<ChatRunReport, ChatProjectionContext>>> _reducersByType;
 
     public ChatRunReadModelProjector(
-        IChatRunReadModelStore store,
-        IEnumerable<IChatRunEventReducer> reducers)
+        IProjectionReadModelStore<ChatRunReport, string> store,
+        IEnumerable<IProjectionEventReducer<ChatRunReport, ChatProjectionContext>> reducers)
     {
         _store = store;
         _reducersByType = reducers
@@ -21,7 +21,7 @@ public sealed class ChatRunReadModelProjector : IChatRunProjector
             .GroupBy(x => x.EventTypeUrl, StringComparer.Ordinal)
             .ToDictionary(
                 x => x.Key,
-                x => (IReadOnlyList<IChatRunEventReducer>)x.ToList(),
+                x => (IReadOnlyList<IProjectionEventReducer<ChatRunReport, ChatProjectionContext>>)x.ToList(),
                 StringComparer.Ordinal);
     }
 

@@ -7,9 +7,10 @@ namespace Aevatar.Cqrs.Projections.Orchestration;
 /// </summary>
 public sealed class ChatProjectionCoordinator : IChatProjectionCoordinator
 {
-    private readonly IReadOnlyList<IChatRunProjector> _projectors;
+    private readonly IReadOnlyList<IProjectionProjector<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>>> _projectors;
 
-    public ChatProjectionCoordinator(IEnumerable<IChatRunProjector> projectors) =>
+    public ChatProjectionCoordinator(
+        IEnumerable<IProjectionProjector<ChatProjectionContext, IReadOnlyList<ChatTopologyEdge>>> projectors) =>
         _projectors = projectors.OrderBy(x => x.Order).ToList();
 
     public async Task InitializeAsync(ChatProjectionContext context, CancellationToken ct = default)
