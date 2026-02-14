@@ -25,7 +25,7 @@ public class CounterAgent : GAgentBase<CounterState>
 {
     public int HandleCount { get; private set; }
 
-    [Aevatar.Attributes.EventHandler]
+    [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
     public Task HandleIncrement(IncrementEvent evt)
     {
         State.Count += evt.Amount;
@@ -33,7 +33,7 @@ public class CounterAgent : GAgentBase<CounterState>
         return Task.CompletedTask;
     }
 
-    [Aevatar.Attributes.EventHandler(Priority = 10)]
+    [Aevatar.Foundation.Abstractions.Attributes.EventHandler(Priority = 10)]
     public Task HandleDecrement(DecrementEvent evt)
     {
         State.Count -= evt.Amount;
@@ -48,10 +48,10 @@ public class CollectorAgent : GAgentBase<CounterState>
 {
     public List<string> ReceivedMessages { get; } = [];
 
-    [Aevatar.Attributes.EventHandler]
+    [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
     public Task HandlePing(PingEvent evt) { ReceivedMessages.Add(evt.Message); return Task.CompletedTask; }
 
-    [Aevatar.Attributes.EventHandler]
+    [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
     public Task HandlePong(PongEvent evt) { ReceivedMessages.Add(evt.Reply); return Task.CompletedTask; }
 }
 

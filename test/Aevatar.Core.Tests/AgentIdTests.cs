@@ -1,6 +1,6 @@
 // ─── AgentId utility tests ───
 
-using Aevatar.Helpers;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Shouldly;
 
 namespace Aevatar.Tests;

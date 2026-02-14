@@ -1,6 +1,6 @@
 syntax = "proto3";
 package aevatar.demo;
-option csharp_namespace = "Aevatar.Demo.Messages";
+option csharp_namespace = "Aevatar.Demos.Cli.Messages";
 
 message CounterState { int32 count = 1; string name = 2; }
 message PingEvent { string message = 1; }

@@ -1,7 +1,7 @@
-using Aevatar.Attributes;
-using Aevatar.Demo.Messages;
+using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Demos.Cli.Messages;
 
-namespace Aevatar.Demo;
+namespace Aevatar.Demos.Cli;
 
 internal sealed class DemoFaultyAgent : GAgentBase<CounterState>
 {

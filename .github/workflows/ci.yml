@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - dev
+      - refactor/**
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore aevatar.slnx --nologo
+
+      - name: Build
+        run: dotnet build aevatar.slnx --nologo --no-restore --tl:off -m:1 -p:UseSharedCompilation=false -p:NuGetAudit=false
+
+      - name: Test
+        run: dotnet test aevatar.slnx --nologo --no-build --tl:off -m:1 -p:UseSharedCompilation=false -p:NuGetAudit=false
+
+      - name: Architecture Guards
+        run: |
+          if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
+            echo "Found sync-over-async usage."
+            exit 1
+          fi
+
+          if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src samples; then
+            echo "Found string-based event type matching."
+            exit 1
+          fi
+
+          if rg -n "Aevatar\.AI\.Core\.csproj" src/Aevatar.Workflows.Core/Aevatar.Workflows.Core.csproj; then
+            echo "Workflows.Core must not reference AI.Core."
+            exit 1
+          fi

@@ -3,8 +3,8 @@
 // Feature: Agent acts as replaceable processing node in streaming pipeline
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Attributes;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Shouldly;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -114,7 +114,7 @@ public class ReplyModule : IEventModule
     }
 
     public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.TypeUrl?.Contains("PingEvent") == true;
+        envelope.Payload?.Is(PingEvent.Descriptor) == true;
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {

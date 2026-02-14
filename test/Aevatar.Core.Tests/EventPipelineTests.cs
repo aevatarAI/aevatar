@@ -1,6 +1,6 @@
 // ─── EventPipeline tests: Verify unified pipeline priority ordering ───
 
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Shouldly;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;

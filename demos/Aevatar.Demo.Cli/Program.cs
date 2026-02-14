@@ -1,15 +1,15 @@
 using System.Text;
 using System.Text.Json;
-using Aevatar.Actor;
-using Aevatar.Demo.Messages;
-using Aevatar.DependencyInjection;
-using Aevatar.EventModules;
-using Aevatar.Hooks;
+using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Demos.Cli.Messages;
+using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Hooks;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Aevatar.Demo;
+namespace Aevatar.Demos.Cli;
 
 internal static class Program
 {
@@ -185,8 +185,8 @@ internal static class Program
         Console.WriteLine("  run <scenario> [--json <path>] [--web <path>]");
         Console.WriteLine("  web <jsonPath> [--out <htmlPath>]");
         Console.WriteLine("Examples:");
-        Console.WriteLine("  dotnet run --project src/Aevatar.Demo.Cli -- list");
-        Console.WriteLine("  dotnet run --project src/Aevatar.Demo.Cli -- run hierarchy --web artifacts/demo/hierarchy.html");
+        Console.WriteLine("  dotnet run --project demos/Aevatar.Demo.Cli -- list");
+        Console.WriteLine("  dotnet run --project demos/Aevatar.Demo.Cli -- run hierarchy --web artifacts/demo/hierarchy.html");
     }
 }
 

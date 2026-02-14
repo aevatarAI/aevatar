@@ -1,4 +1,4 @@
-using Aevatar.Config;
+using Aevatar.Configuration;
 using FluentAssertions;
 
 namespace Aevatar.Integration.Tests;

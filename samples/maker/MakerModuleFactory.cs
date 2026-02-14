@@ -1,7 +1,7 @@
-using Aevatar.EventModules;
-using Aevatar.Sample.Maker.Modules;
+using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Samples.Maker.Modules;
 
-namespace Aevatar.Sample.Maker;
+namespace Aevatar.Samples.Maker;
 
 /// <summary>
 /// Sample-scoped module factory for MAKER-specific primitives.

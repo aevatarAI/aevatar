@@ -1,9 +1,9 @@
 // ─── TimestampHelper tests ───
 
-using Aevatar.Helpers;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Shouldly;
 
-namespace Aevatar.Abstractions.Tests;
+namespace Aevatar.Foundation.Abstractions.Tests;
 
 public class TimestampHelperTests
 {

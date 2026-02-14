@@ -1,7 +1,7 @@
-using Aevatar.Actor;
-using Aevatar.Context;
-using Aevatar.DependencyInjection;
-using Aevatar.Persistence;
+using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Abstractions.Context;
+using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 

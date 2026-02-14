@@ -1,6 +1,6 @@
 // ─── InMemoryStateStore + InMemoryEventStore tests ───
 
-using Aevatar.Helpers;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Shouldly;
 using Google.Protobuf.WellKnownTypes;
 

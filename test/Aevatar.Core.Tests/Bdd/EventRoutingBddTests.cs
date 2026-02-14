@@ -3,7 +3,7 @@
 // Feature: EventRouter dispatches events by direction and detects cycles
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Routing;
+using Aevatar.Foundation.Runtime.Routing;
 using Shouldly;
 using Google.Protobuf.WellKnownTypes;
 

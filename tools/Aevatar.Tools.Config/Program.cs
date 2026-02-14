@@ -6,7 +6,7 @@ using System.Diagnostics;
 using Aevatar.Tools.Config;
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using Aevatar.Config;
+using Aevatar.Configuration;
 using Microsoft.AspNetCore.Http.Json;
 
 #if AEVATAR_CONFIG_TOOL

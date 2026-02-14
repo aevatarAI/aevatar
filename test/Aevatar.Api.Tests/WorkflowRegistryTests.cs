@@ -1,9 +1,9 @@
 // ─── WorkflowRegistry 测试 ───
 
-using Aevatar.Api.Workflows;
+using Aevatar.Hosts.Api.Workflows;
 using FluentAssertions;
 
-namespace Aevatar.Api.Tests;
+namespace Aevatar.Hosts.Api.Tests;
 
 public class WorkflowRegistryTests
 {

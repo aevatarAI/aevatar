@@ -1,9 +1,9 @@
 // ─── Attribute tests ───
 
-using Aevatar.Attributes;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Shouldly;
 
-namespace Aevatar.Abstractions.Tests;
+namespace Aevatar.Foundation.Abstractions.Tests;
 
 public class AttributeTests
 {

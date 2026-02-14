@@ -1,10 +1,11 @@
-using Aevatar;
-using Aevatar.AI;
-using Aevatar.AI.LLM;
-using Aevatar.Cognitive;
-using Aevatar.DependencyInjection;
-using Aevatar.EventModules;
-using Aevatar.Sample.Maker;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.AI.Core;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Workflows.Core;
+using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Samples.Maker;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -92,9 +93,7 @@ public class MakerRecursiveRegressionTests
     {
         var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-maker-" + Guid.NewGuid().ToString("N")[..8]);
         var wf = (WorkflowGAgent)actor.Agent;
-        wf.State.WorkflowYaml = workflowYaml;
-        wf.State.WorkflowName = "maker_regression";
-        await wf.ActivateAsync();
+        wf.ConfigureWorkflow(workflowYaml, "maker_regression");
 
         var stream = provider.GetRequiredService<IStreamProvider>().GetStream(actor.Id);
         var stepCompletions = new List<StepCompletedEvent>();
@@ -102,12 +101,13 @@ public class MakerRecursiveRegressionTests
 
         await using var sub = await stream.SubscribeAsync<EventEnvelope>(envelope =>
         {
-            if (envelope.Payload == null) return Task.CompletedTask;
+            var payload = envelope.Payload;
+            if (payload == null) return Task.CompletedTask;
 
-            if (envelope.Payload.TypeUrl.Contains("StepCompletedEvent"))
-                stepCompletions.Add(envelope.Payload.Unpack<StepCompletedEvent>());
-            else if (envelope.Payload.TypeUrl.Contains("WorkflowCompletedEvent"))
-                workflowCompleted.TrySetResult(envelope.Payload.Unpack<WorkflowCompletedEvent>());
+            if (payload.Is(StepCompletedEvent.Descriptor))
+                stepCompletions.Add(payload.Unpack<StepCompletedEvent>());
+            else if (payload.Is(WorkflowCompletedEvent.Descriptor))
+                workflowCompleted.TrySetResult(payload.Unpack<WorkflowCompletedEvent>());
 
             return Task.CompletedTask;
         });

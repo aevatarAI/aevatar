@@ -17,17 +17,17 @@
 //   dotnet run -- "Your paper text here..."
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar;
-using Aevatar.AI;
-using Aevatar.AI.MCP;
-using Aevatar.AI.MEAI;
-using Aevatar.Cognitive;
-using Aevatar.Cognitive.Connectors;
-using Aevatar.Config;
-using Aevatar.Connectors;
-using Aevatar.DependencyInjection;
-using Aevatar.EventModules;
-using Aevatar.Sample.Maker;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.AI.Abstractions;
+using Aevatar.Bootstrap;
+using Aevatar.AI.LLMProviders.MEAI;
+using Aevatar.Workflows.Core;
+using Aevatar.Configuration;
+using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Samples.Maker;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -139,8 +139,8 @@ var connectorLogger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Make
 
 // ─── Register named connectors from ~/.aevatar/connectors.json ───
 var connectorRegistry = sp.GetRequiredService<IConnectorRegistry>();
-var connectorEntries = AevatarConnectorConfig.LoadConnectors();
-if (connectorEntries.Count == 0)
+var loadedConnectorCount = ConnectorRegistration.RegisterConnectors(connectorRegistry, connectorLogger);
+if (loadedConnectorCount == 0)
 {
     var localConnectorPath = Path.Combine(AppContext.BaseDirectory, "connectors", "maker.connectors.json");
     if (!File.Exists(localConnectorPath))
@@ -148,85 +148,7 @@ if (connectorEntries.Count == 0)
     if (File.Exists(localConnectorPath))
     {
         connectorLogger.LogInformation("Loading sample connectors from {Path}", localConnectorPath);
-        connectorEntries = AevatarConnectorConfig.LoadConnectors(localConnectorPath);
-    }
-}
-
-foreach (var entry in connectorEntries)
-{
-    switch (entry.Type.ToLowerInvariant())
-    {
-        case "http":
-        {
-            if (string.IsNullOrWhiteSpace(entry.Http.BaseUrl))
-            {
-                connectorLogger.LogWarning("Skip connector {Name}: http.baseUrl is required", entry.Name);
-                break;
-            }
-
-            connectorRegistry.Register(new HttpConnector(
-                entry.Name,
-                entry.Http.BaseUrl,
-                entry.Http.AllowedMethods,
-                entry.Http.AllowedPaths,
-                entry.Http.AllowedInputKeys,
-                entry.Http.DefaultHeaders,
-                entry.TimeoutMs));
-            break;
-        }
-        case "cli":
-        {
-            if (string.IsNullOrWhiteSpace(entry.Cli.Command))
-            {
-                connectorLogger.LogWarning("Skip connector {Name}: cli.command is required", entry.Name);
-                break;
-            }
-            if (entry.Cli.Command.Contains("://", StringComparison.OrdinalIgnoreCase))
-            {
-                connectorLogger.LogWarning("Skip connector {Name}: cli.command must be a preinstalled command, got {Command}",
-                    entry.Name, entry.Cli.Command);
-                break;
-            }
-
-            connectorRegistry.Register(new CliConnector(
-                entry.Name,
-                entry.Cli.Command,
-                entry.Cli.FixedArguments,
-                entry.Cli.AllowedOperations,
-                entry.Cli.AllowedInputKeys,
-                entry.Cli.WorkingDirectory,
-                entry.Cli.Environment,
-                entry.TimeoutMs));
-            break;
-        }
-        case "mcp":
-        {
-            if (string.IsNullOrWhiteSpace(entry.Mcp.Command))
-            {
-                connectorLogger.LogWarning("Skip connector {Name}: mcp.command is required", entry.Name);
-                break;
-            }
-
-            var server = new MCPServerConfig
-            {
-                Name = string.IsNullOrWhiteSpace(entry.Mcp.ServerName) ? entry.Name : entry.Mcp.ServerName,
-                Command = entry.Mcp.Command,
-                Arguments = entry.Mcp.Arguments,
-                Environment = entry.Mcp.Environment,
-            };
-
-            connectorRegistry.Register(new MCPConnector(
-                entry.Name,
-                server,
-                entry.Mcp.DefaultTool,
-                entry.Mcp.AllowedTools,
-                entry.Mcp.AllowedInputKeys,
-                logger: connectorLogger));
-            break;
-        }
-        default:
-            connectorLogger.LogWarning("Skip connector {Name}: unsupported type {Type}", entry.Name, entry.Type);
-            break;
+        ConnectorRegistration.RegisterConnectors(connectorRegistry, connectorLogger, localConnectorPath);
     }
 }
 
@@ -259,9 +181,7 @@ var actor = await runtime.CreateAsync<WorkflowGAgent>("maker-root");
 var workflowName = "maker_analysis";
 if (actor.Agent is WorkflowGAgent wf)
 {
-    wf.State.WorkflowYaml = workflowYaml;
-    wf.State.WorkflowName = workflowName;
-    await wf.ActivateAsync();
+    wf.ConfigureWorkflow(workflowYaml, workflowName);
     workflowName = wf.State.WorkflowName;
 }
 
@@ -280,21 +200,21 @@ logger.LogInformation("Run timeout: {TimeoutMinutes} minutes", timeoutMinutes);
 
 await using var sub = await stream.SubscribeAsync<EventEnvelope>(envelope =>
 {
-    if (envelope.Payload == null) return Task.CompletedTask;
+    var payload = envelope.Payload;
+    if (payload == null) return Task.CompletedTask;
     recorder.RecordEnvelope(envelope);
-    var typeUrl = envelope.Payload.TypeUrl;
 
-    if (typeUrl.Contains("TextMessageStartEvent"))
+    if (payload.Is(TextMessageStartEvent.Descriptor))
     {
-        var evt = envelope.Payload.Unpack<TextMessageStartEvent>();
+        var evt = payload.Unpack<TextMessageStartEvent>();
         logger.LogInformation("Role stream started: agent={AgentId}, session={SessionId}",
             string.IsNullOrWhiteSpace(evt.AgentId) ? envelope.PublisherId : evt.AgentId,
             evt.SessionId);
     }
 
-    if (typeUrl.Contains("TextMessageEndEvent"))
+    if (payload.Is(TextMessageEndEvent.Descriptor))
     {
-        var evt = envelope.Payload.Unpack<TextMessageEndEvent>();
+        var evt = payload.Unpack<TextMessageEndEvent>();
         var publisher = string.IsNullOrWhiteSpace(envelope.PublisherId) ? "(unknown)" : envelope.PublisherId;
 
         // Print every role agent's full LLM reply.
@@ -308,9 +228,9 @@ await using var sub = await stream.SubscribeAsync<EventEnvelope>(envelope =>
         }
     }
 
-    if (typeUrl.Contains("WorkflowCompletedEvent"))
+    if (payload.Is(WorkflowCompletedEvent.Descriptor))
     {
-        var evt = envelope.Payload.Unpack<WorkflowCompletedEvent>();
+        var evt = payload.Unpack<WorkflowCompletedEvent>();
         if (evt.Success)
         {
             logger.LogInformation("Workflow completed successfully");
@@ -323,9 +243,9 @@ await using var sub = await stream.SubscribeAsync<EventEnvelope>(envelope =>
         }
     }
 
-    if (typeUrl.Contains("StepCompletedEvent"))
+    if (payload.Is(StepCompletedEvent.Descriptor))
     {
-        var evt = envelope.Payload.Unpack<StepCompletedEvent>();
+        var evt = payload.Unpack<StepCompletedEvent>();
         var preview = evt.Output.Length > 100 ? evt.Output[..100] + "..." : evt.Output;
         logger.LogInformation("Step {StepId}: success={Success} | {Preview}",
             evt.StepId, evt.Success, preview);
