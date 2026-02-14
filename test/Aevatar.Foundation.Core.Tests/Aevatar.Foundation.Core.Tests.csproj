@@ -13,6 +13,7 @@
         <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     </ItemGroup>
     <ItemGroup>
+        <PackageReference Include="coverlet.collector" />
         <PackageReference Include="Microsoft.NET.Test.Sdk" />
         <PackageReference Include="xunit" />
         <PackageReference Include="xunit.runner.visualstudio" />

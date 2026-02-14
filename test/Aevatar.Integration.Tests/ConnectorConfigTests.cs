@@ -88,6 +88,132 @@ public class ConnectorConfigTests
         }
     }
 
+    [Fact]
+    public void LoadConnectors_ShouldParseDefinitionsShape_AndClampRanges()
+    {
+        var path = WriteTempJson("""
+            {
+              "connectors": {
+                "definitions": [
+                  {
+                    "name": "mcp_demo",
+                    "type": "mcp",
+                    "enabled": "true",
+                    "timeoutMs": 999999,
+                    "retry": 9,
+                    "mcp": {
+                      "serverName": "local-mcp",
+                      "command": "node",
+                      "arguments": ["server.js", 1],
+                      "environment": { "TOKEN": "abc", "PORT": 3000 },
+                      "defaultTool": "search",
+                      "allowedTools": ["search", "", 12],
+                      "allowedInputKeys": ["query", null]
+                    }
+                  },
+                  {
+                    "name": "disabled_one",
+                    "type": "http",
+                    "enabled": false
+                  }
+                ]
+              }
+            }
+            """);
+
+        try
+        {
+            var connectors = AevatarConnectorConfig.LoadConnectors(path);
+            connectors.Should().ContainSingle();
+
+            var mcp = connectors[0];
+            mcp.Name.Should().Be("mcp_demo");
+            mcp.Type.Should().Be("mcp");
+            mcp.TimeoutMs.Should().Be(300000);
+            mcp.Retry.Should().Be(5);
+            mcp.MCP.ServerName.Should().Be("local-mcp");
+            mcp.MCP.Command.Should().Be("node");
+            mcp.MCP.Arguments.Should().Equal("server.js");
+            mcp.MCP.Environment.Should().ContainKey("TOKEN").WhoseValue.Should().Be("abc");
+            mcp.MCP.Environment.Should().ContainKey("PORT").WhoseValue.Should().Be("3000");
+            mcp.MCP.DefaultTool.Should().Be("search");
+            mcp.MCP.AllowedTools.Should().Equal("search");
+            mcp.MCP.AllowedInputKeys.Should().Equal("query");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadConnectors_ShouldSupportCaseInsensitiveKeys_AndFilterInvalidEntries()
+    {
+        var path = WriteTempJson("""
+            {
+              "CONNECTORS": {
+                "NoType": {
+                  "Name": "bad"
+                },
+                "MixedCase": {
+                  "TyPe": "http",
+                  "ENABLED": "true",
+                  "TIMEOUTMS": "80",
+                  "RETRY": "-3",
+                  "Http": {
+                    "BaseUrl": "https://example.com",
+                    "AllowedMethods": ["POST", "GET"],
+                    "AllowedPaths": ["/a", "/b"],
+                    "AllowedInputKeys": ["q"],
+                    "DefaultHeaders": { "X-Token": "abc" }
+                  }
+                },
+                "DisabledAsString": {
+                  "Type": "cli",
+                  "Enabled": "false"
+                }
+              }
+            }
+            """);
+
+        try
+        {
+            var connectors = AevatarConnectorConfig.LoadConnectors(path);
+            connectors.Should().ContainSingle();
+
+            var http = connectors[0];
+            http.Name.Should().Be("MixedCase");
+            http.Type.Should().Be("http");
+            http.TimeoutMs.Should().Be(100);
+            http.Retry.Should().Be(0);
+            http.Http.BaseUrl.Should().Be("https://example.com");
+            http.Http.AllowedMethods.Should().Contain(["POST", "GET"]);
+            http.Http.AllowedPaths.Should().Contain(["/a", "/b"]);
+            http.Http.AllowedInputKeys.Should().ContainSingle().Which.Should().Be("q");
+            http.Http.DefaultHeaders.Should().ContainKey("X-Token").WhoseValue.Should().Be("abc");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadConnectors_WhenJsonInvalid_ShouldReturnEmpty()
+    {
+        var path = WriteTempJson("{ \"connectors\": [");
+
+        try
+        {
+            var connectors = AevatarConnectorConfig.LoadConnectors(path);
+            connectors.Should().BeEmpty();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private static string WriteTempJson(string json)
     {
         var file = Path.Combine(Path.GetTempPath(), "aevatar-connectors-" + Guid.NewGuid().ToString("N") + ".json");
