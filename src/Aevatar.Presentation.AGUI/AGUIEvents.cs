@@ -37,6 +37,7 @@ public sealed record RunErrorEvent : AGUIEvent
 {
     public override string Type => "RUN_ERROR";
     public required string Message { get; init; }
+    public string? RunId { get; init; }
     public string? Code { get; init; }
 }
 

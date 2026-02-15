@@ -1,11 +1,11 @@
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.CQRS.Projection.WorkflowExecution;
-using Aevatar.CQRS.Projection.WorkflowExecution.ReadModels;
-using Aevatar.CQRS.Projection.WorkflowExecution.Orchestration;
-using Aevatar.CQRS.Projection.WorkflowExecution.Projectors;
-using Aevatar.CQRS.Projection.WorkflowExecution.Reducers;
-using Aevatar.CQRS.Projection.WorkflowExecution.Stores;
+using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Orchestration;
+using Aevatar.Workflow.Projection.Projectors;
+using Aevatar.Workflow.Projection.Reducers;
+using Aevatar.Workflow.Projection.Stores;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;

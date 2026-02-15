@@ -1,9 +1,9 @@
 using Aevatar.CQRS.Projection.Abstractions;
-using Aevatar.CQRS.Projection.WorkflowExecution;
-using Aevatar.CQRS.Projection.WorkflowExecution.ReadModels;
-using Aevatar.CQRS.Projection.WorkflowExecution.Configuration;
-using Aevatar.CQRS.Projection.WorkflowExecution.DependencyInjection;
-using Aevatar.CQRS.Projection.WorkflowExecution.Reducers;
+using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Configuration;
+using Aevatar.Workflow.Projection.DependencyInjection;
+using Aevatar.Workflow.Projection.Reducers;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;

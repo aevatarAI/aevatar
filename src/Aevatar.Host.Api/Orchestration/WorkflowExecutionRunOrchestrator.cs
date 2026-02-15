@@ -1,8 +1,8 @@
-using Aevatar.CQRS.Projection.WorkflowExecution;
-using Aevatar.CQRS.Projection.WorkflowExecution.ReadModels;
+using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Presentation.AGUI;
-using Aevatar.Presentation.AGUI.Adapter.WorkflowExecution;
+using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Host.Api.Orchestration;

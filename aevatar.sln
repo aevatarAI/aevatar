@@ -35,7 +35,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Presentation.AGUI",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.AI.Core", "src\Aevatar.AI.Core\Aevatar.AI.Core.csproj", "{5EF4AEC8-4FE9-270F-A4BF-A714BC47A8A7}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Workflow.Core", "src\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj", "{C4D47FCA-A33D-AAED-22BA-F02078E466DD}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Workflow.Core", "src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj", "{C4D47FCA-A33D-AAED-22BA-F02078E466DD}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Host.Api", "src\Aevatar.Host.Api\Aevatar.Host.Api.csproj", "{1F9E7139-8D7E-61A0-9EC4-EB5D0E8FB587}"
 EndProject
@@ -59,7 +59,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.CQRS.Projection.Cor
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.AI.Abstractions", "src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj", "{42CA4449-727F-2DBB-D373-ECB315D84F28}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.CQRS.Projection.WorkflowExecution", "src\Aevatar.CQRS.Projection.WorkflowExecution\Aevatar.CQRS.Projection.WorkflowExecution.csproj", "{F9B61BD4-650C-4BF4-9814-22EE5E5A6DC7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Workflow.Projection", "src\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj", "{F9B61BD4-650C-4BF4-9814-22EE5E5A6DC7}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjection.Abstractions", "demos\Aevatar.Demos.CaseProjection.Abstractions\Aevatar.Demos.CaseProjection.Abstractions.csproj", "{9AA68784-537C-4878-875C-5D29F3ECFBF3}"
 EndProject
@@ -69,7 +69,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjectio
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjection.Host", "demos\Aevatar.Demos.CaseProjection.Host\Aevatar.Demos.CaseProjection.Host.csproj", "{F25E14EA-78AC-40CF-A63E-FBAD44174CF4}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Presentation.AGUI.Adapter.WorkflowExecution", "src\Aevatar.Presentation.AGUI.Adapter.WorkflowExecution\Aevatar.Presentation.AGUI.Adapter.WorkflowExecution.csproj", "{405559DE-FD53-4DB1-B6A4-465625049594}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Workflow.Presentation.AGUIAdapter", "src\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj", "{405559DE-FD53-4DB1-B6A4-465625049594}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

@@ -8,8 +8,8 @@
 
 using Aevatar.Presentation.AGUI;
 using Aevatar.AI.Abstractions;
-using Aevatar.CQRS.Projection.WorkflowExecution;
-using Aevatar.CQRS.Projection.WorkflowExecution.ReadModels;
+using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Host.Api.Orchestration;
 using Aevatar.Host.Api.Reporting;
 using Aevatar.Host.Api.Workflows;
@@ -170,6 +170,7 @@ public static class ChatEndpoints
                 {
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     Message = "工作流执行异常",
+                    RunId = runId,
                     Code = "INTERNAL_ERROR",
                 });
                 sink.Complete();
@@ -185,8 +186,8 @@ public static class ChatEndpoints
                 {
                     await writer.WriteAsync(evt, ct);
 
-                    // RUN_FINISHED / RUN_ERROR 是终止信号
-                    if (evt is RunFinishedEvent or RunErrorEvent) break;
+                    // 当前请求只在“本 run”终止，事件流本身仍可收到同 Actor 的其他 run 事件。
+                    if (IsTerminalEventForRun(evt, runId)) break;
                 }
             }
             catch (OperationCanceledException) { /* 客户端断开 */ }
@@ -399,6 +400,7 @@ public static class ChatEndpoints
                 {
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     Message = "工作流执行异常",
+                    RunId = runId,
                     Code = "INTERNAL_ERROR",
                 });
                 sink.Complete();
@@ -418,7 +420,7 @@ public static class ChatEndpoints
                         payload = evt,
                     }, CancellationToken.None);
 
-                    if (evt is RunFinishedEvent or RunErrorEvent) break;
+                    if (IsTerminalEventForRun(evt, runId)) break;
                 }
             }
             catch (OperationCanceledException) { }
@@ -597,6 +599,16 @@ public static class ChatEndpoints
     private static string CreateInternalChatSessionId()
     {
         return $"chat-{Guid.NewGuid():N}";
+    }
+
+    private static bool IsTerminalEventForRun(AGUIEvent evt, string runId)
+    {
+        return evt switch
+        {
+            RunFinishedEvent finished => string.Equals(finished.RunId, runId, StringComparison.Ordinal),
+            RunErrorEvent error => string.Equals(error.RunId, runId, StringComparison.Ordinal),
+            _ => false,
+        };
     }
 }
 

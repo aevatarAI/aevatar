@@ -11,13 +11,13 @@
 
 ## 依赖关系
 
-- `Aevatar.CQRS.Projection.WorkflowExecution`
+- `Aevatar.Workflow.Projection`
   - WorkflowExecution 读侧模型与投影服务
 - `Aevatar.CQRS.Projection.Core`
   - 由 WorkflowExecution 间接依赖的通用内核
 - `Aevatar.Presentation.AGUI`
   - AGUI 实时事件通道与映射
-- `Aevatar.Presentation.AGUI.Adapter.WorkflowExecution`
+- `Aevatar.Workflow.Presentation.AGUIAdapter`
   - WorkflowExecution 到 AGUI 的适配器（mapper + projector）
 
 ## 关键组件

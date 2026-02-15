@@ -5,7 +5,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using Aevatar.CQRS.Projection.WorkflowExecution.ReadModels;
+using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Host.Api.Reporting;
 

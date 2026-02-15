@@ -114,7 +114,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `ProjectionSubscriptionRegistry<,>` 统一订阅 Actor Stream
   - `ProjectionCoordinator<,>` 一对多分发 projector
   - `ProjectionLifecycleService<,>` 统一 run 生命周期
-- **WorkflowExecution 业务扩展** 在 `Aevatar.CQRS.Projection.WorkflowExecution`：
+- **WorkflowExecution 业务扩展** 在 `Aevatar.Workflow.Projection`：
   - `IWorkflowExecutionProjectionService` 管理 run 级投影生命周期与查询
   - `WorkflowExecutionReadModelProjector` + reducers 生成读模型
 - **宿主职责** 在 `Aevatar.Host.Api`：
@@ -123,9 +123,9 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - 暴露 `/api/runs` 与 `/api/runs/{runId}` 查询端点（可配置开关）
 - **输出分支**：
   - `WorkflowExecutionReadModelProjector` 写入 read model store
-  - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Presentation.AGUI.Adapter.WorkflowExecution`）输出 AG-UI 实时事件（SSE/WS）
+  - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS）
 
-详细关系见 `src/Aevatar.CQRS.Projection.Core/README.md` 与 `src/Aevatar.CQRS.Projection.WorkflowExecution/README.md`。
+详细关系见 `src/Aevatar.CQRS.Projection.Core/README.md` 与 `src/Aevatar.Workflow.Projection/README.md`。
 
 ## 测试项目
 

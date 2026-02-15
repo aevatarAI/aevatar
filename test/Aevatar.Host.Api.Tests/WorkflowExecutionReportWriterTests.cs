@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.WorkflowExecution.ReadModels;
+using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Host.Api.Reporting;
 using FluentAssertions;
 using System.Text.Json;

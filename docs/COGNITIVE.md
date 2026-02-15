@@ -96,7 +96,7 @@ YAML 里写模块名，运行时通过工厂拿到实现对象。
 ### 这条链路和 CQRS 的关系
 
 - 当前默认读侧已经是统一投影链路：同一条 `EventEnvelope` 会并行进入多个 projector。
-- 内置分支包括：`WorkflowExecutionReadModelProjector`（读模型查询）与 `WorkflowExecutionAGUIEventProjector`（在 `Aevatar.Presentation.AGUI.Adapter.WorkflowExecution` 中提供，负责 SSE/WS 实时输出）。
+- 内置分支包括：`WorkflowExecutionReadModelProjector`（读模型查询）与 `WorkflowExecutionAGUIEventProjector`（在 `Aevatar.Workflow.Presentation.AGUIAdapter` 中提供，负责 SSE/WS 实时输出）。
 - 它本质是 **事件读模型**，不是直接投影 Agent `State`。
 - 如需列表/统计/检索等领域读模型，可继续扩展自定义 projector 与 read-only store，并通过独立 Query API 暴露。
 
@@ -184,11 +184,11 @@ steps:
 
 建议阅读顺序：
 
-1. `src/Aevatar.Workflow.Core/WorkflowGAgent.cs`  
+1. `src/workflow/Aevatar.Workflow.Core/WorkflowGAgent.cs`  
    看入口、编译、模块装配、子 Agent 创建
-2. `src/Aevatar.Workflow.Core/WorkflowModuleFactory.cs`  
+2. `src/workflow/Aevatar.Workflow.Core/WorkflowModuleFactory.cs`  
    看“模块名 -> 模块实现”映射
-3. `src/Aevatar.Workflow.Core/Modules/*`  
+3. `src/workflow/Aevatar.Workflow.Core/Modules/*`  
    看每个原语的具体行为
 4. `src/Aevatar.Foundation.Core/GAgentBase.cs` 与 `EventPipelineBuilder`  
    看模块如何进入统一 pipeline
@@ -200,8 +200,8 @@ steps:
 `connector_call` 把外部能力（MCP / HTTP / CLI）收敛到统一契约：
 
 - 契约层：`src/Aevatar.Foundation.Abstractions/Connectors/IConnector.cs`
-- 默认注册表：`src/Aevatar.Workflow.Core/Connectors/InMemoryConnectorRegistry.cs`
-- 执行模块：`src/Aevatar.Workflow.Core/Modules/ConnectorCallModule.cs`
+- 默认注册表：`src/workflow/Aevatar.Workflow.Core/Connectors/InMemoryConnectorRegistry.cs`
+- 执行模块：`src/workflow/Aevatar.Workflow.Core/Modules/ConnectorCallModule.cs`
 - 配置模型：`src/Aevatar.Configuration/AevatarConnectorConfig.cs`（读取 `~/.aevatar/connectors.json`）
 
 推荐约定：
