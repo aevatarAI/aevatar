@@ -13,7 +13,7 @@
 - `src/`：生产代码，按能力与分层组织（`Aevatar.Foundation.*`、`Aevatar.Workflow.Core`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Abstractions/Core/WorkflowExecution`、`Aevatar.Host.*`）。
 - `test/`：与 `src/` 对应的测试项目（单元、集成、API）。
 - `docs/`：架构与设计文档；`workflows/`：YAML 工作流定义。
-- `tools/`：开发工具；`samples/` 与 `demos/`：示例与演示程序。
+- `tools/`：开发工具；`demos/`：示例与演示程序。
 
 ## 构建、测试与本地运行
 - `dotnet restore aevatar.slnx --nologo`：还原依赖。

@@ -17,7 +17,7 @@
 - `Validation/WorkflowValidator`：编译前校验
 - `Modules/*`：`workflow_loop`、`parallel_fanout`、`vote_consensus`、`llm_call` 等
 - `Connectors/InMemoryConnectorRegistry`：框架默认命名 connector 注册表
-- `ServiceCollectionExtensions.AddAevatarWorkflows()`：一键注册 `WorkflowModuleFactory + IConnectorRegistry`
+- `ServiceCollectionExtensions.AddAevatarWorkflow()`：一键注册 `WorkflowModuleFactory + IConnectorRegistry`
 - `cognitive_messages.proto`：工作流执行事件协议
 
 ## 模块工厂能力

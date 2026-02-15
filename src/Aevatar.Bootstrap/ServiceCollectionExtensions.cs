@@ -35,7 +35,7 @@ public static class ServiceCollectionExtensions
 
         services.AddAevatarConfig();
         services.AddAevatarRuntime();
-        services.AddAevatarWorkflows();
+        services.AddAevatarWorkflow();
 
         RegisterMeaiProviders(services, configuration, options);
 

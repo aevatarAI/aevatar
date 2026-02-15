@@ -7,8 +7,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{07C2787E
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "test", "test", "{0C88DD14-F956-CE84-757C-A364CCF449FC}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{5D20AA90-6969-D8BD-9DCD-8634F4692FDA}"
-EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "demos", "demos", "{FA8A28C8-4B59-8028-2ACF-626D05B08DB7}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
@@ -23,7 +21,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Integration.Tests",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Foundation.Abstractions.Tests", "test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj", "{F7077A4E-909A-A8A8-AE76-DFB334B1931D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Samples.Maker", "samples\maker\Aevatar.Samples.Maker.csproj", "{7E558B6D-FAF3-9D44-7003-32608EE62C22}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.Maker", "demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj", "{7E558B6D-FAF3-9D44-7003-32608EE62C22}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.Cli", "demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj", "{DFC846F5-8806-E488-BB37-95E350C0216F}"
 EndProject
@@ -63,13 +61,13 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.AI.Abstractions", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.CQRS.Projection.WorkflowExecution", "src\Aevatar.CQRS.Projection.WorkflowExecution\Aevatar.CQRS.Projection.WorkflowExecution.csproj", "{F9B61BD4-650C-4BF4-9814-22EE5E5A6DC7}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjections.Abstractions", "demos\Aevatar.Demos.CaseProjections.Abstractions\Aevatar.Demos.CaseProjections.Abstractions.csproj", "{9AA68784-537C-4878-875C-5D29F3ECFBF3}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjection.Abstractions", "demos\Aevatar.Demos.CaseProjection.Abstractions\Aevatar.Demos.CaseProjection.Abstractions.csproj", "{9AA68784-537C-4878-875C-5D29F3ECFBF3}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjections", "demos\Aevatar.Demos.CaseProjections\Aevatar.Demos.CaseProjections.csproj", "{430F5169-E7C6-476E-B95E-0770BB881F9B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjection", "demos\Aevatar.Demos.CaseProjection\Aevatar.Demos.CaseProjection.csproj", "{430F5169-E7C6-476E-B95E-0770BB881F9B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjections.Extensions.Sla", "demos\Aevatar.Demos.CaseProjections.Extensions.Sla\Aevatar.Demos.CaseProjections.Extensions.Sla.csproj", "{7E0CBD82-93D7-4935-8AAC-FF89EF894B99}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjection.Extensions.Sla", "demos\Aevatar.Demos.CaseProjection.Extensions.Sla\Aevatar.Demos.CaseProjection.Extensions.Sla.csproj", "{7E0CBD82-93D7-4935-8AAC-FF89EF894B99}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjections.Host", "demos\Aevatar.Demos.CaseProjections.Host\Aevatar.Demos.CaseProjections.Host.csproj", "{F25E14EA-78AC-40CF-A63E-FBAD44174CF4}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjection.Host", "demos\Aevatar.Demos.CaseProjection.Host\Aevatar.Demos.CaseProjection.Host.csproj", "{F25E14EA-78AC-40CF-A63E-FBAD44174CF4}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -439,7 +437,7 @@ Global
 		{91377FCD-C16F-DB7A-4339-F7075EAA263C} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 		{748EB379-4BD8-5B84-9ACC-B83377C2A88D} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 		{F7077A4E-909A-A8A8-AE76-DFB334B1931D} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
-		{7E558B6D-FAF3-9D44-7003-32608EE62C22} = {5D20AA90-6969-D8BD-9DCD-8634F4692FDA}
+		{7E558B6D-FAF3-9D44-7003-32608EE62C22} = {FA8A28C8-4B59-8028-2ACF-626D05B08DB7}
 		{DFC846F5-8806-E488-BB37-95E350C0216F} = {FA8A28C8-4B59-8028-2ACF-626D05B08DB7}
 		{69B0B48D-1173-3283-B229-722E327186CB} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{B7F0D4A8-5F0A-5F91-86FA-4C6A99FE1D69} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}

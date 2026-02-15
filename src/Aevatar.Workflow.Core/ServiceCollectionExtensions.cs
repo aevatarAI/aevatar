@@ -17,7 +17,7 @@ public static class ServiceCollectionExtensions
     /// - <see cref="WorkflowModuleFactory"/>
     /// - <see cref="IConnectorRegistry"/> (in-memory)
     /// </summary>
-    public static IServiceCollection AddAevatarWorkflows(this IServiceCollection services)
+    public static IServiceCollection AddAevatarWorkflow(this IServiceCollection services)
     {
         services.TryAddSingleton<IEventModuleFactory, WorkflowModuleFactory>();
         services.TryAddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();

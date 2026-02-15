@@ -5,7 +5,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Core;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Samples.Maker;
+using Aevatar.Demos.Maker;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -75,7 +75,7 @@ public class MakerRecursiveRegressionTests
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
-        services.AddAevatarWorkflows();
+        services.AddAevatarWorkflow();
         services.AddSingleton<IEventModuleFactory, MakerModuleFactory>();
         services.AddSingleton<ILLMProvider>(provider);
         services.AddSingleton<ILLMProviderFactory>(provider);

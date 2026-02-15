@@ -257,10 +257,9 @@ aevatar/
 │   └── Aevatar.AI.LLMProviders.MEAI / Aevatar.AI.ToolProviders.MCP / Aevatar.AI.ToolProviders.Skills  # LLM 与工具扩展
 ├── tools/
 │   └── Aevatar.Tools.Config  # aevatar-config（Web 界面配置 API Key）
-├── samples/
-│   └── maker               # MAKER 模式示例（自定义步骤 + Connector）
 ├── demos/
-│   └── Aevatar.Demos.Cli   # CLI 演示
+│   ├── Aevatar.Demos.Cli    # Runtime CLI 演示
+│   └── Aevatar.Demos.Maker  # MAKER 模式示例（自定义步骤 + Connector）
 └── test/                   # 测试
 ```
 
@@ -275,7 +274,7 @@ aevatar/
 - **Role 与 Connector**： [docs/ROLE.md](docs/ROLE.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
 - **Event Sourcing**： [docs/EVENT_SOURCING.md](docs/EVENT_SOURCING.md) — 如何开启事件溯源。
 - **Connector 配置详解**： [src/Aevatar.Configuration/README.md](src/Aevatar.Configuration/README.md#connector-作用与配置) — 配置格式与示例。
-- **Maker 示例**： [samples/maker](samples/maker) — 自定义步骤类型与 MAKER 工作流。
+- **Maker 示例**： [demos/Aevatar.Demos.Maker](demos/Aevatar.Demos.Maker) — 自定义步骤类型与 MAKER 工作流。
 
 ---
 
