@@ -64,23 +64,24 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
         await runState.Subscription.DisposeAsync();
     }
 
-    public async Task<bool> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default)
+    public async Task<ProjectionRunCompletionStatus> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default)
     {
         if (!_activeRunsByRunId.TryGetValue(runId, out var runState))
-            return false;
+            return ProjectionRunCompletionStatus.NotFound;
 
         if (runState.ProjectionCompletedTask.IsCompleted)
-            return await runState.ProjectionCompletedTask;
+            return runState.Status;
 
         var timeoutTask = Task.Delay(timeout, ct);
         var completedTask = await Task.WhenAny(runState.ProjectionCompletedTask, timeoutTask);
         if (completedTask == timeoutTask)
         {
             ct.ThrowIfCancellationRequested();
-            return false;
+            return ProjectionRunCompletionStatus.TimedOut;
         }
 
-        return await runState.ProjectionCompletedTask;
+        _ = await runState.ProjectionCompletedTask;
+        return runState.Status;
     }
 
     private async ValueTask DispatchAsync(string actorId, TContext context, EventEnvelope envelope)
@@ -138,7 +139,7 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
 
     private sealed class ActiveRunState
     {
-        private readonly TaskCompletionSource<bool> _projectionCompleted =
+        private readonly TaskCompletionSource<ProjectionRunCompletionStatus> _projectionCompleted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _status;
 
@@ -153,15 +154,23 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
         public TContext Context { get; }
         public IAsyncDisposable Subscription { get; }
 
-        public Task<bool> ProjectionCompletedTask => _projectionCompleted.Task;
+        public Task<ProjectionRunCompletionStatus> ProjectionCompletedTask => _projectionCompleted.Task;
         public bool IsProjectionActive => Volatile.Read(ref _status) == 0;
+        public ProjectionRunCompletionStatus Status =>
+            Volatile.Read(ref _status) switch
+            {
+                1 => ProjectionRunCompletionStatus.Completed,
+                2 => ProjectionRunCompletionStatus.Failed,
+                3 => ProjectionRunCompletionStatus.Stopped,
+                _ => ProjectionRunCompletionStatus.TimedOut,
+            };
 
         public void MarkProjectionCompleted()
         {
             if (Interlocked.CompareExchange(ref _status, 1, 0) != 0)
                 return;
 
-            _projectionCompleted.TrySetResult(true);
+            _projectionCompleted.TrySetResult(ProjectionRunCompletionStatus.Completed);
         }
 
         public void MarkProjectionFailed()
@@ -169,7 +178,7 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
             if (Interlocked.CompareExchange(ref _status, 2, 0) != 0)
                 return;
 
-            _projectionCompleted.TrySetResult(false);
+            _projectionCompleted.TrySetResult(ProjectionRunCompletionStatus.Failed);
         }
 
         public void MarkProjectionStopped()
@@ -177,7 +186,7 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
             if (Interlocked.CompareExchange(ref _status, 3, 0) != 0)
                 return;
 
-            _projectionCompleted.TrySetResult(false);
+            _projectionCompleted.TrySetResult(ProjectionRunCompletionStatus.Stopped);
         }
     }
 }

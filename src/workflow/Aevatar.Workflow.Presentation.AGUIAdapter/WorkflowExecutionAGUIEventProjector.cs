@@ -20,19 +20,28 @@ public sealed class WorkflowExecutionAGUIEventProjector
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
+    public async ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
 
         var sink = context.GetAGUIEventSink();
         if (sink == null)
-            return ValueTask.CompletedTask;
+            return;
 
         IReadOnlyList<AGUIEvent> events = EventEnvelopeToAGUIEventMapper.Map(envelope);
         foreach (var aguiEvent in events)
-            sink.Push(aguiEvent);
-
-        return ValueTask.CompletedTask;
+        {
+            try
+            {
+                await sink.PushAsync(aguiEvent, ct);
+            }
+            catch (InvalidOperationException)
+            {
+                // Sink is completed/full in non-wait mode; do not fail the whole projection pipeline.
+                context.DetachAGUIEventSink();
+                break;
+            }
+        }
     }
 
     public ValueTask CompleteAsync(

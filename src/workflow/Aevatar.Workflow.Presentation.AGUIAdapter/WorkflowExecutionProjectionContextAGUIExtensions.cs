@@ -12,4 +12,7 @@ public static class WorkflowExecutionProjectionContextAGUIExtensions
 
     public static IAGUIEventSink? GetAGUIEventSink(this WorkflowExecutionProjectionContext context) =>
         context.TryGetProperty<IAGUIEventSink>(AGUIEventSinkProperty, out var sink) ? sink : null;
+
+    public static void DetachAGUIEventSink(this WorkflowExecutionProjectionContext context) =>
+        context.RemoveProperty(AGUIEventSinkProperty);
 }

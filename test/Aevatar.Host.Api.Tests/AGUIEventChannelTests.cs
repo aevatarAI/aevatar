@@ -81,4 +81,28 @@ public class AGUIEventChannelTests
 
         act.Should().Throw<InvalidOperationException>();
     }
+
+    [Fact]
+    public async Task PushAsync_WhenChannelFullWithWaitMode_ShouldResumeAfterRead()
+    {
+        await using var channel = new AGUIEventChannel(new AGUIEventChannelOptions
+        {
+            Capacity = 1,
+            FullMode = BoundedChannelFullMode.Wait,
+        });
+
+        channel.Push(new RunStartedEvent { ThreadId = "t1", RunId = "r1" });
+
+        var pushTask = channel.PushAsync(new RunStartedEvent { ThreadId = "t2", RunId = "r2" }).AsTask();
+        pushTask.IsCompleted.Should().BeFalse();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        await foreach (var _ in channel.ReadAllAsync(cts.Token))
+        {
+            channel.Complete();
+            break;
+        }
+
+        await pushTask;
+    }
 }

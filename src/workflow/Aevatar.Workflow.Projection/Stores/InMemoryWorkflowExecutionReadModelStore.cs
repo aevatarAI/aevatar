@@ -63,6 +63,9 @@ public sealed class InMemoryWorkflowExecutionReadModelStore
     private static WorkflowExecutionReport CloneReport(WorkflowExecutionReport source) => new()
     {
         ReportVersion = source.ReportVersion,
+        ProjectionScope = source.ProjectionScope,
+        TopologySource = source.TopologySource,
+        CompletionStatus = source.CompletionStatus,
         WorkflowName = source.WorkflowName,
         RootActorId = source.RootActorId,
         RunId = source.RunId,

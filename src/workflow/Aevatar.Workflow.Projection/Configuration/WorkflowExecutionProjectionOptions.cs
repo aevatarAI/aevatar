@@ -25,4 +25,15 @@ public sealed class WorkflowExecutionProjectionOptions
     /// Max wait time for one run projection completion signal.
     /// </summary>
     public int RunProjectionCompletionWaitTimeoutMs { get; set; } = 3000;
+
+    /// <summary>
+    /// Extra grace wait before force-finalize when completion status is timeout.
+    /// </summary>
+    public int RunProjectionFinalizeGraceTimeoutMs { get; set; } = 1500;
+
+    /// <summary>
+    /// When true, projectors should ignore envelopes whose run id doesn't match the current run.
+    /// Default false keeps actor-scoped shared stream semantics.
+    /// </summary>
+    public bool EnableRunEventIsolation { get; set; } = false;
 }

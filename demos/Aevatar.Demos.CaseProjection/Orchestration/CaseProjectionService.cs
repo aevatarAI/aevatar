@@ -1,4 +1,5 @@
 using Aevatar.Demos.CaseProjection.Configuration;
+using Aevatar.CQRS.Projection.Abstractions;
 
 namespace Aevatar.Demos.CaseProjection.Orchestration;
 
@@ -84,7 +85,13 @@ public sealed class CaseProjectionService : ICaseProjectionService
             return Task.FromResult(false);
 
         var waitMs = Math.Max(1, _options.RunProjectionCompletionWaitTimeoutMs);
-        return _lifecycle.WaitForCompletionAsync(runId, TimeSpan.FromMilliseconds(waitMs), ct);
+        return WaitAsync(runId, waitMs, ct);
+
+        async Task<bool> WaitAsync(string id, int timeoutMs, CancellationToken token)
+        {
+            var status = await _lifecycle.WaitForCompletionAsync(id, TimeSpan.FromMilliseconds(timeoutMs), token);
+            return status == ProjectionRunCompletionStatus.Completed;
+        }
     }
 
     public async Task<CaseProjectionReadModel?> CompleteAsync(

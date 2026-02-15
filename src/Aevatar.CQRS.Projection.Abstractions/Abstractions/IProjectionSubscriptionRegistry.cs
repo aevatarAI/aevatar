@@ -10,5 +10,5 @@ public interface IProjectionSubscriptionRegistry<in TContext>
 
     Task UnregisterAsync(string actorId, string runId, CancellationToken ct = default);
 
-    Task<bool> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default);
+    Task<ProjectionRunCompletionStatus> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default);
 }

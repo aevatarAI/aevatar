@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.CQRS.Projection.Abstractions;
 
 namespace Aevatar.Workflow.Projection;
 
@@ -19,12 +20,10 @@ public interface IWorkflowExecutionProjectionService
         string input,
         CancellationToken ct = default);
 
-    Task ProjectAsync(
-        WorkflowExecutionProjectionSession session,
-        EventEnvelope envelope,
+    Task<ProjectionRunCompletionStatus> WaitForRunProjectionCompletionStatusAsync(
+        string runId,
+        TimeSpan? timeoutOverride = null,
         CancellationToken ct = default);
-
-    Task<bool> WaitForRunProjectionCompletedAsync(string runId, CancellationToken ct = default);
 
     Task<WorkflowExecutionReport?> CompleteAsync(
         WorkflowExecutionProjectionSession session,

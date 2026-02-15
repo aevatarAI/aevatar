@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Configuration;
+using Aevatar.CQRS.Projection.Abstractions;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
@@ -68,24 +69,16 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         };
     }
 
-    public Task ProjectAsync(
-        WorkflowExecutionProjectionSession session,
-        EventEnvelope envelope,
+    public Task<ProjectionRunCompletionStatus> WaitForRunProjectionCompletionStatusAsync(
+        string runId,
+        TimeSpan? timeoutOverride = null,
         CancellationToken ct = default)
     {
-        if (!ProjectionEnabled || session.Context == null)
-            return Task.CompletedTask;
-
-        return _lifecycle.ProjectAsync(session.Context, envelope, ct);
-    }
-
-    public Task<bool> WaitForRunProjectionCompletedAsync(string runId, CancellationToken ct = default)
-    {
         if (!ProjectionEnabled)
-            return Task.FromResult(false);
+            return Task.FromResult(ProjectionRunCompletionStatus.Disabled);
 
-        var waitMs = Math.Max(1, _options.RunProjectionCompletionWaitTimeoutMs);
-        return _lifecycle.WaitForCompletionAsync(runId, TimeSpan.FromMilliseconds(waitMs), ct);
+        var timeout = timeoutOverride ?? TimeSpan.FromMilliseconds(Math.Max(1, _options.RunProjectionCompletionWaitTimeoutMs));
+        return _lifecycle.WaitForCompletionAsync(runId, timeout, ct);
     }
 
     public async Task<WorkflowExecutionReport?> CompleteAsync(

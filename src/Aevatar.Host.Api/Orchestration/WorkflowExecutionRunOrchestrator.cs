@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Microsoft.Extensions.Logging;
@@ -29,14 +30,18 @@ public interface IWorkflowExecutionRunOrchestrator
 
 public sealed class WorkflowExecutionRunOrchestrator : IWorkflowExecutionRunOrchestrator
 {
+    private static readonly TimeSpan FinalizeGraceTimeout = TimeSpan.FromMilliseconds(1500);
     private readonly IWorkflowExecutionProjectionService _projectionService;
+    private readonly IWorkflowExecutionTopologyResolver _topologyResolver;
     private readonly ILogger<WorkflowExecutionRunOrchestrator> _logger;
 
     public WorkflowExecutionRunOrchestrator(
         IWorkflowExecutionProjectionService projectionService,
+        IWorkflowExecutionTopologyResolver topologyResolver,
         ILogger<WorkflowExecutionRunOrchestrator> logger)
     {
         _projectionService = projectionService;
+        _topologyResolver = topologyResolver;
         _logger = logger;
     }
 
@@ -59,22 +64,37 @@ public sealed class WorkflowExecutionRunOrchestrator : IWorkflowExecutionRunOrch
         CancellationToken ct = default)
     {
         var runId = projectionRun.RunId;
-        var projectionCompleted = await _projectionService.WaitForRunProjectionCompletedAsync(runId, ct);
+        var completionStatus = await _projectionService.WaitForRunProjectionCompletionStatusAsync(runId, ct: ct);
 
-        if (!projectionCompleted)
+        if (completionStatus == ProjectionRunCompletionStatus.TimedOut)
         {
             _logger.LogWarning(
-                "Projection completion signal timeout for run {RunId}; continue with finalize/query.",
+                "Projection completion signal timeout for run {RunId}; wait grace window before finalize.",
                 runId);
+
+            completionStatus = await _projectionService.WaitForRunProjectionCompletionStatusAsync(
+                runId,
+                timeoutOverride: FinalizeGraceTimeout,
+                ct: ct);
         }
 
-        var topology = await BuildTopologyAsync(runtime, actorId);
+        if (completionStatus != ProjectionRunCompletionStatus.Completed)
+        {
+            _logger.LogWarning(
+                "Projection completion status for run {RunId}: {Status}. Continue with finalize/query.",
+                runId,
+                completionStatus);
+        }
+
+        var topology = await _topologyResolver.ResolveAsync(runtime, actorId, ct);
         var report = await _projectionService.CompleteAsync(projectionRun.Session, topology, ct);
         if (report == null && _projectionService.EnableRunQueryEndpoints)
             report = await _projectionService.GetRunAsync(runId, ct);
+        if (report != null)
+            report.CompletionStatus = ToCompletionStatusName(completionStatus);
 
         projectionRun.WorkflowExecutionReport = report;
-        return new WorkflowProjectionFinalizeResult(projectionCompleted, report);
+        return new WorkflowProjectionFinalizeResult(completionStatus, report);
     }
 
     public async Task RollbackAsync(
@@ -91,52 +111,17 @@ public sealed class WorkflowExecutionRunOrchestrator : IWorkflowExecutionRunOrch
         }
     }
 
-    private static async Task<List<WorkflowExecutionTopologyEdge>> BuildTopologyAsync(
-        IActorRuntime runtime,
-        string rootActorId)
-    {
-        var allActors = await runtime.GetAllAsync();
-        var childrenByParent = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-
-        foreach (var actor in allActors)
+    private static string ToCompletionStatusName(ProjectionRunCompletionStatus status) =>
+        status switch
         {
-            var parent = await actor.GetParentIdAsync();
-            if (!string.IsNullOrWhiteSpace(parent))
-            {
-                if (!childrenByParent.TryGetValue(parent, out var children))
-                {
-                    children = [];
-                    childrenByParent[parent] = children;
-                }
-
-                children.Add(actor.Id);
-            }
-        }
-
-        var topology = new List<WorkflowExecutionTopologyEdge>();
-        if (string.IsNullOrWhiteSpace(rootActorId))
-            return topology;
-
-        var visited = new HashSet<string>(StringComparer.Ordinal) { rootActorId };
-        var queue = new Queue<string>();
-        queue.Enqueue(rootActorId);
-
-        while (queue.Count > 0)
-        {
-            var parent = queue.Dequeue();
-            if (!childrenByParent.TryGetValue(parent, out var children))
-                continue;
-
-            foreach (var child in children)
-            {
-                topology.Add(new WorkflowExecutionTopologyEdge(parent, child));
-                if (visited.Add(child))
-                    queue.Enqueue(child);
-            }
-        }
-
-        return topology;
-    }
+            ProjectionRunCompletionStatus.Completed => "completed",
+            ProjectionRunCompletionStatus.TimedOut => "timed_out",
+            ProjectionRunCompletionStatus.Failed => "failed",
+            ProjectionRunCompletionStatus.Stopped => "stopped",
+            ProjectionRunCompletionStatus.NotFound => "not_found",
+            ProjectionRunCompletionStatus.Disabled => "disabled",
+            _ => "unknown",
+        };
 }
 
 public sealed class WorkflowProjectionRun
@@ -152,5 +137,8 @@ public sealed class WorkflowProjectionRun
 }
 
 public sealed record WorkflowProjectionFinalizeResult(
-    bool ProjectionCompleted,
-    WorkflowExecutionReport? WorkflowExecutionReport);
+    ProjectionRunCompletionStatus ProjectionCompletionStatus,
+    WorkflowExecutionReport? WorkflowExecutionReport)
+{
+    public bool ProjectionCompleted => ProjectionCompletionStatus == ProjectionRunCompletionStatus.Completed;
+}

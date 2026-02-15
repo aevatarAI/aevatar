@@ -69,7 +69,7 @@ public static class EventEnvelopeToAGUIEventMapper
         if (payload.Is(AIEvents.TextMessageStartEvent.Descriptor))
         {
             var evt = payload.Unpack<AIEvents.TextMessageStartEvent>();
-            var msgId = $"msg:{envelope.Id}";
+            var msgId = ResolveMessageId(evt.SessionId, envelope.Id);
             return [new AGUI.TextMessageStartEvent
             {
                 Timestamp = ts, MessageId = msgId, Role = "assistant",
@@ -80,7 +80,7 @@ public static class EventEnvelopeToAGUIEventMapper
         if (payload.Is(AIEvents.TextMessageContentEvent.Descriptor))
         {
             var evt = payload.Unpack<AIEvents.TextMessageContentEvent>();
-            var msgId = $"msg:{envelope.Id}";
+            var msgId = ResolveMessageId(evt.SessionId, envelope.Id);
             return [new AGUI.TextMessageContentEvent
             {
                 Timestamp = ts, MessageId = msgId, Delta = evt.Delta,
@@ -90,7 +90,8 @@ public static class EventEnvelopeToAGUIEventMapper
         // ─── AI TextMessageEndEvent → AGUI TEXT_MESSAGE_END ───
         if (payload.Is(AIEvents.TextMessageEndEvent.Descriptor))
         {
-            var msgId = $"msg:{envelope.Id}";
+            var evt = payload.Unpack<AIEvents.TextMessageEndEvent>();
+            var msgId = ResolveMessageId(evt.SessionId, envelope.Id);
             return [new AGUI.TextMessageEndEvent
             {
                 Timestamp = ts, MessageId = msgId,
@@ -101,7 +102,7 @@ public static class EventEnvelopeToAGUIEventMapper
         if (payload.Is(AIEvents.ChatResponseEvent.Descriptor))
         {
             var evt = payload.Unpack<AIEvents.ChatResponseEvent>();
-            var msgId = $"msg:{envelope.Id}";
+            var msgId = ResolveMessageId(evt.SessionId, envelope.Id);
             return
             [
                 new AGUI.TextMessageStartEvent
@@ -177,5 +178,13 @@ public static class EventEnvelopeToAGUIEventMapper
         return string.IsNullOrWhiteSpace(envelope.PublisherId)
             ? fallback
             : envelope.PublisherId;
+    }
+
+    private static string ResolveMessageId(string? sessionId, string? envelopeId)
+    {
+        if (!string.IsNullOrWhiteSpace(sessionId))
+            return $"msg:{sessionId}";
+
+        return $"msg:{envelopeId}";
     }
 }

@@ -66,6 +66,9 @@ public static class WorkflowExecutionReportWriter
         AppendRow(sb, "Workflow", report.WorkflowName);
         AppendRow(sb, "RunId", report.RunId);
         AppendRow(sb, "RootActor", report.RootActorId);
+        AppendRow(sb, "ProjectionScope", report.ProjectionScope);
+        AppendRow(sb, "CompletionStatus", report.CompletionStatus);
+        AppendRow(sb, "TopologySource", report.TopologySource);
         AppendRow(sb, "Success", report.Success?.ToString() ?? "(unknown)");
         AppendRow(sb, "DurationMs", report.DurationMs.ToString("F2"));
         AppendRow(sb, "StartedAt", report.StartedAt.ToString("O"));

@@ -27,7 +27,7 @@ public sealed class ProjectionLifecycleService<TContext, TCompletion>
     public Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default) =>
         _coordinator.ProjectAsync(context, envelope, ct);
 
-    public Task<bool> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default) =>
+    public Task<ProjectionRunCompletionStatus> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default) =>
         _subscriptionRegistry.WaitForCompletionAsync(runId, timeout, ct);
 
     public async Task CompleteAsync(TContext context, TCompletion completion, CancellationToken ct = default)

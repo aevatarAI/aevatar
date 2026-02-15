@@ -59,7 +59,7 @@ public sealed class LocalActor : IActor
     }
 
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>
-        EnqueueAsync(envelope);
+        EnqueueAsync(envelope, propagateFailure: true);
 
     public Task<string?> GetParentIdAsync() => Task.FromResult(_router.ParentId);
     public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
@@ -104,7 +104,7 @@ public sealed class LocalActor : IActor
 
     // ─── Mailbox ───
 
-    private async Task EnqueueAsync(EventEnvelope envelope)
+    private async Task EnqueueAsync(EventEnvelope envelope, bool propagateFailure = false)
     {
         using var activity = AevatarActivitySource.StartHandleEvent(Id, envelope.Id);
         activity?.SetTag("aevatar.event.direction", envelope.Direction.ToString());
@@ -124,6 +124,8 @@ public sealed class LocalActor : IActor
             activity?.SetTag("aevatar.error", true);
             activity?.SetTag("aevatar.error.message", ex.Message);
             _logger.LogError(ex, "LocalActor {Id} failed to handle event", Id);
+            if (propagateFailure)
+                throw;
         }
         finally
         {

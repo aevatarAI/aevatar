@@ -14,6 +14,7 @@ namespace Aevatar.Presentation.AGUI;
 public sealed class AGUIEventChannel : IAGUIEventSink
 {
     private readonly Channel<AGUIEvent> _channel;
+    private readonly BoundedChannelFullMode _fullMode;
 
     public AGUIEventChannel()
         : this(new AGUIEventChannelOptions())
@@ -23,6 +24,7 @@ public sealed class AGUIEventChannel : IAGUIEventSink
     public AGUIEventChannel(AGUIEventChannelOptions options)
     {
         var capacity = options.Capacity > 0 ? options.Capacity : 1024;
+        _fullMode = options.FullMode;
         _channel = Channel.CreateBounded<AGUIEvent>(new BoundedChannelOptions(capacity)
         {
             FullMode = options.FullMode,
@@ -33,10 +35,20 @@ public sealed class AGUIEventChannel : IAGUIEventSink
 
     public void Push(AGUIEvent evt)
     {
-        if (_channel.Writer.TryWrite(evt))
-            return;
+        if (!_channel.Writer.TryWrite(evt))
+            throw new InvalidOperationException("AGUI event channel is full or completed.");
+    }
 
-        throw new InvalidOperationException("AGUI event channel is full or completed.");
+    public async ValueTask PushAsync(AGUIEvent evt, CancellationToken ct = default)
+    {
+        if (_fullMode == BoundedChannelFullMode.Wait)
+        {
+            await _channel.Writer.WriteAsync(evt, ct);
+            return;
+        }
+
+        if (!_channel.Writer.TryWrite(evt))
+            throw new InvalidOperationException("AGUI event channel is full or completed.");
     }
 
     public void Complete() => _channel.Writer.TryComplete();

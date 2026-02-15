@@ -10,7 +10,7 @@ public interface IProjectionLifecycleService<in TContext, in TCompletion>
 
     Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default);
 
-    Task<bool> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default);
+    Task<ProjectionRunCompletionStatus> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default);
 
     Task CompleteAsync(TContext context, TCompletion completion, CancellationToken ct = default);
 }

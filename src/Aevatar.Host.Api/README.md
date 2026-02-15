@@ -14,6 +14,7 @@
 - 同一 `Actor` 的多个 `run` 不做事件隔离：订阅端可看到该 Actor 的全量事件流。
 - 单次请求仅以当前 `runId` 的终止事件（`RUN_FINISHED`/`RUN_ERROR`）作为收尾条件。
 - `RUN_STARTED` 统一由 `StartWorkflowEvent` 投影产出，`threadId` 统一使用发布事件的 `ActorId`。
+- projection completion 采用显式状态：`Completed` / `TimedOut` / `Failed` / `Stopped` / `NotFound` / `Disabled`。
 
 ## 依赖关系
 
@@ -29,11 +30,19 @@
 ## 关键组件
 
 - `Endpoints/ChatEndpoints.cs`
-  - 请求校验、协议响应（SSE/WS）、端点映射
+  - Chat/WS 路由与协议入口
+- `Endpoints/ChatQueryEndpoints.cs`
+  - `agents/workflows/runs` 查询端点映射
+- `Endpoints/ChatRunExecution.cs`
+  - chat run 准备、执行、投影收尾
+- `Endpoints/ChatWebSocketProtocol.cs`
+  - WebSocket 收发协议封装
 - `Orchestration/WorkflowExecutionRunOrchestrator.cs`
-  - run 生命周期编排（start/wait/complete/rollback/topology）
+  - run 生命周期编排（start/wait-status/complete/rollback/topology）
+- `Orchestration/WorkflowExecutionTopologyResolver.cs`
+  - 拓扑解析策略（默认 runtime snapshot，可替换）
 - `Reporting/WorkflowExecutionReportWriter.cs`
-  - 可选报告输出（json/html）
+  - 可选报告输出（json/html，best-effort，不影响 projection finalize）
 
 ## 默认装配
 

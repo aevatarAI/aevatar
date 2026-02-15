@@ -41,6 +41,7 @@ public class ChatEndpointsInternalTests
         builder.Services.AddSingleton<IWorkflowExecutionRunOrchestrator>(sp =>
             new WorkflowExecutionRunOrchestrator(
                 projectionService,
+                new ActorRuntimeWorkflowExecutionTopologyResolver(),
                 sp.GetRequiredService<ILogger<WorkflowExecutionRunOrchestrator>>()));
         var app = builder.Build();
         var endpoints = (IEndpointRouteBuilder)app;
@@ -67,7 +68,7 @@ public class ChatEndpointsInternalTests
         var registry = new WorkflowRegistry();
         registry.Register("custom", "name: custom");
 
-        var result = InvokeSync<IResult>("ListWorkflows", registry);
+        var result = InvokeSync<IResult>(typeof(ChatQueryEndpoints), "ListWorkflows", registry);
         var (statusCode, body) = await ExecuteResultAsync(result);
         using var doc = JsonDocument.Parse(body);
 
@@ -93,6 +94,7 @@ public class ChatEndpointsInternalTests
         var projectionService = new FakeProjectionService([report]);
 
         var result = await InvokeTask<IResult>(
+            typeof(ChatQueryEndpoints),
             "ListRuns",
             projectionService,
             50,
@@ -114,6 +116,7 @@ public class ChatEndpointsInternalTests
         var projectionService = new FakeProjectionService([]);
 
         var result = await InvokeTask<IResult>(
+            typeof(ChatQueryEndpoints),
             "GetRun",
             "missing",
             projectionService,
@@ -132,6 +135,7 @@ public class ChatEndpointsInternalTests
         ]);
 
         var result = await InvokeTask<IResult>(
+            typeof(ChatQueryEndpoints),
             "GetRun",
             "run-2",
             projectionService,
@@ -152,7 +156,7 @@ public class ChatEndpointsInternalTests
             new FakeActor("a-2", parentId: "a-1", new FakeAgent("agent-2", "desc-2")),
         ]);
 
-        var result = await InvokeTask<IResult>("ListAgents", runtime);
+        var result = await InvokeTask<IResult>(typeof(ChatQueryEndpoints), "ListAgents", runtime);
         var (statusCode, body) = await ExecuteResultAsync(result);
         using var doc = JsonDocument.Parse(body);
 
@@ -389,7 +393,7 @@ public class ChatEndpointsInternalTests
         var existingActor = new FakeActor(
             "actor-existing",
             parentId: null,
-            new FakeAgent("agent-existing", "ok"),
+            new WorkflowGAgent(),
             async (requestEnvelope, _) =>
             {
                 var runId = ResolveRunIdFromChatRequestEnvelope(requestEnvelope);
@@ -489,17 +493,23 @@ public class ChatEndpointsInternalTests
             "run-current").Should().BeTrue();
     }
 
-    private static T InvokeSync<T>(string methodName, params object?[] args)
+    private static T InvokeSync<T>(string methodName, params object?[] args) =>
+        InvokeSync<T>(typeof(ChatEndpoints), methodName, args);
+
+    private static T InvokeSync<T>(System.Type targetType, string methodName, params object?[] args)
     {
-        var method = typeof(ChatEndpoints).GetMethod(methodName, BindingFlags.Static | BindingFlags.NonPublic);
+        var method = targetType.GetMethod(methodName, BindingFlags.Static | BindingFlags.NonPublic);
         method.Should().NotBeNull($"private method {methodName} should exist");
         var invocationArgs = ResolveInvocationArgs(method!, args);
         return (T)method!.Invoke(null, invocationArgs)!;
     }
 
-    private static async Task<T> InvokeTask<T>(string methodName, params object?[] args)
+    private static Task<T> InvokeTask<T>(string methodName, params object?[] args) =>
+        InvokeTask<T>(typeof(ChatEndpoints), methodName, args);
+
+    private static async Task<T> InvokeTask<T>(System.Type targetType, string methodName, params object?[] args)
     {
-        var method = typeof(ChatEndpoints).GetMethod(methodName, BindingFlags.Static | BindingFlags.NonPublic);
+        var method = targetType.GetMethod(methodName, BindingFlags.Static | BindingFlags.NonPublic);
         method.Should().NotBeNull($"private method {methodName} should exist");
         var invocationArgs = ResolveInvocationArgs(method!, args);
         var task = method!.Invoke(null, invocationArgs).Should().BeAssignableTo<Task>().Subject;
@@ -617,6 +627,7 @@ public class ChatEndpointsInternalTests
         ILoggerFactory loggerFactory) =>
         new(
             projectionService,
+            new ActorRuntimeWorkflowExecutionTopologyResolver(),
             loggerFactory.CreateLogger<WorkflowExecutionRunOrchestrator>());
 
     private static IWorkflowExecutionProjectionService CreateLiveProjectionService(
@@ -656,7 +667,7 @@ public class ChatEndpointsInternalTests
         private readonly IReadOnlyList<WorkflowExecutionReport> _reports;
         private readonly bool _enableRunQueryEndpoints;
         private readonly bool _enableRunReportArtifacts;
-        private readonly bool _waitForRunCompletionResult;
+        private readonly ProjectionRunCompletionStatus _runCompletionStatus;
         private readonly WorkflowExecutionReport? _completeResult;
         private int _runSeed;
 
@@ -673,7 +684,9 @@ public class ChatEndpointsInternalTests
             _reports = reports ?? [];
             _enableRunQueryEndpoints = enableRunQueryEndpoints;
             _enableRunReportArtifacts = enableRunReportArtifacts;
-            _waitForRunCompletionResult = waitForRunCompletionResult;
+            _runCompletionStatus = waitForRunCompletionResult
+                ? ProjectionRunCompletionStatus.Completed
+                : ProjectionRunCompletionStatus.TimedOut;
             _completeResult = completeResult;
         }
 
@@ -700,11 +713,11 @@ public class ChatEndpointsInternalTests
             });
         }
 
-        public Task ProjectAsync(WorkflowExecutionProjectionSession session, EventEnvelope envelope, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task<bool> WaitForRunProjectionCompletedAsync(string runId, CancellationToken ct = default) =>
-            Task.FromResult(_waitForRunCompletionResult);
+        public Task<ProjectionRunCompletionStatus> WaitForRunProjectionCompletionStatusAsync(
+            string runId,
+            TimeSpan? timeoutOverride = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(_runCompletionStatus);
 
         public Task<WorkflowExecutionReport?> CompleteAsync(WorkflowExecutionProjectionSession session, IReadOnlyList<WorkflowExecutionTopologyEdge> topology, CancellationToken ct = default)
         {

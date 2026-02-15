@@ -57,11 +57,11 @@ public class WorkflowExecutionProjectionServiceTests
             var report = await store.GetAsync(session.RunId);
             return report?.Timeline.Any(x => x.Stage == "workflow.start") == true;
         });
-        var completed = await service.WaitForRunProjectionCompletedAsync(session.RunId);
+        var completed = await service.WaitForRunProjectionCompletionStatusAsync(session.RunId);
 
         var report = await service.CompleteAsync(session, []);
 
-        completed.Should().BeTrue();
+        completed.Should().Be(ProjectionRunCompletionStatus.Completed);
         report.Should().NotBeNull();
         report!.RunId.Should().Be(session.RunId);
         report.Timeline.Should().ContainSingle(x => x.Stage == "workflow.start");
@@ -86,24 +86,18 @@ public class WorkflowExecutionProjectionServiceTests
         var service = CreateService(options, lifecycle, store);
 
         var session = await service.StartAsync("root", "direct", "hello");
-        await service.ProjectAsync(session, Wrap(new StartWorkflowEvent
-        {
-            WorkflowName = "direct",
-            RunId = "wf-run-1",
-            Input = "hello",
-        }));
         var report = await service.CompleteAsync(session, []);
         var runs = await service.ListRunsAsync();
-        var completed = await service.WaitForRunProjectionCompletedAsync(session.RunId);
+        var completed = await service.WaitForRunProjectionCompletionStatusAsync(session.RunId);
 
         session.Enabled.Should().BeFalse();
         report.Should().BeNull();
         runs.Should().BeEmpty();
-        completed.Should().BeFalse();
+        completed.Should().Be(ProjectionRunCompletionStatus.Disabled);
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldRemainAvailable_ForManualProjection()
+    public async Task StartComplete_WhenEnabled_ShouldProjectViaSubscriptionOnly()
     {
         var options = new WorkflowExecutionProjectionOptions
         {
@@ -121,12 +115,19 @@ public class WorkflowExecutionProjectionServiceTests
         var service = CreateService(options, lifecycle, store);
 
         var session = await service.StartAsync("root", "direct", "hello");
-        await service.ProjectAsync(session, Wrap(new StartWorkflowEvent
+        await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
         {
             WorkflowName = "direct",
             RunId = session.RunId,
             Input = "hello",
         }));
+
+        await WaitUntilAsync(async () =>
+        {
+            var report = await store.GetAsync(session.RunId);
+            return report?.Timeline.Any(x => x.Stage == "workflow.start") == true;
+        });
+
         var report = await service.CompleteAsync(session, []);
 
         report.Should().NotBeNull();
@@ -203,7 +204,7 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     [Fact]
-    public async Task WaitForRunProjectionCompletedAsync_WhenNoTerminalEvent_ShouldTimeoutFalse()
+    public async Task WaitForRunProjectionCompletionStatusAsync_WhenNoTerminalEvent_ShouldReturnTimedOut()
     {
         var options = new WorkflowExecutionProjectionOptions
         {
@@ -222,14 +223,14 @@ public class WorkflowExecutionProjectionServiceTests
         var service = CreateService(options, lifecycle, store);
 
         var session = await service.StartAsync("root", "direct", "hello");
-        var completed = await service.WaitForRunProjectionCompletedAsync(session.RunId);
+        var completed = await service.WaitForRunProjectionCompletionStatusAsync(session.RunId);
 
-        completed.Should().BeFalse();
+        completed.Should().Be(ProjectionRunCompletionStatus.TimedOut);
         _ = await service.CompleteAsync(session, []);
     }
 
     [Fact]
-    public async Task WaitForRunProjectionCompletedAsync_WhenProjectionFails_ShouldReturnFalseWithoutWaitingTimeout()
+    public async Task WaitForRunProjectionCompletionStatusAsync_WhenProjectionFails_ShouldReturnFailedWithoutWaitingTimeout()
     {
         var options = new WorkflowExecutionProjectionOptions
         {
@@ -255,10 +256,10 @@ public class WorkflowExecutionProjectionServiceTests
         }));
 
         var sw = Stopwatch.StartNew();
-        var completed = await service.WaitForRunProjectionCompletedAsync(session.RunId);
+        var completed = await service.WaitForRunProjectionCompletionStatusAsync(session.RunId);
         sw.Stop();
 
-        completed.Should().BeFalse();
+        completed.Should().Be(ProjectionRunCompletionStatus.Failed);
         sw.ElapsedMilliseconds.Should().BeLessThan(1000);
         _ = await service.CompleteAsync(session, []);
     }
@@ -296,8 +297,8 @@ public class WorkflowExecutionProjectionServiceTests
             Output = "done",
         }));
 
-        var completed = await service.WaitForRunProjectionCompletedAsync(session.RunId);
-        completed.Should().BeTrue();
+        var completed = await service.WaitForRunProjectionCompletionStatusAsync(session.RunId);
+        completed.Should().Be(ProjectionRunCompletionStatus.Completed);
 
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
         {

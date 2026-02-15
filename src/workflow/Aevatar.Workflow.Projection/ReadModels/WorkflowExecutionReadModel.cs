@@ -6,6 +6,9 @@ namespace Aevatar.Workflow.Projection.ReadModels;
 public sealed class WorkflowExecutionReport
 {
     public string ReportVersion { get; set; } = "1.0";
+    public string ProjectionScope { get; set; } = "actor_shared";
+    public string TopologySource { get; set; } = "runtime_snapshot";
+    public string CompletionStatus { get; set; } = "unknown";
     public string WorkflowName { get; set; } = "";
     public string RootActorId { get; set; } = "";
     public string RunId { get; set; } = "";

@@ -31,6 +31,7 @@ builder.Services.AddAevatarBootstrap(builder.Configuration, options =>
 builder.Services.AddWorkflowExecutionProjectionCQRS(options =>
     builder.Configuration.GetSection("WorkflowExecutionProjection").Bind(options));
 builder.Services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
+builder.Services.AddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
 builder.Services.AddSingleton<IWorkflowExecutionRunOrchestrator, WorkflowExecutionRunOrchestrator>();
 
 // ─── 工作流注册表（应用目录 + repo 根 workflows + CWD + ~/.aevatar/workflows） ───

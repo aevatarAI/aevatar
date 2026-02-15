@@ -13,6 +13,8 @@
 
 - `AGUIEvents.cs`：`RunStartedEvent`、`TextMessageContentEvent` 等事件定义
 - `AGUIEventChannel`：基于有界 `Channel<T>` 的事件聚合与异步读取（支持容量与满队列策略）
+  - `Push`：同步非阻塞写入（满队列时抛错）
+  - `PushAsync`：异步写入（`FullMode=Wait` 时执行背压等待）
 - `AGUISseWriter`：将 `AGUIEvent` 序列化为 `data: {json}\n\n` 输出
 
 ## 使用场景
