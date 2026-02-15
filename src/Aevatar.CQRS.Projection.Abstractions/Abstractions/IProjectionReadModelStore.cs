@@ -1,4 +1,4 @@
-namespace Aevatar.CQRS.Projection.Contracts;
+namespace Aevatar.CQRS.Projection.Abstractions;
 
 /// <summary>
 /// Generic read-model store contract for projection state persistence/query.

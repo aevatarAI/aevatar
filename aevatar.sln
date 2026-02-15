@@ -27,7 +27,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Samples.Maker", "sa
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.Cli", "demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj", "{DFC846F5-8806-E488-BB37-95E350C0216F}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.CQRS.Projection.Contracts", "src\Aevatar.CQRS.Projection.Contracts\Aevatar.CQRS.Projection.Contracts.csproj", "{69B0B48D-1173-3283-B229-722E327186CB}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.CQRS.Projection.Abstractions", "src\Aevatar.CQRS.Projection.Abstractions\Aevatar.CQRS.Projection.Abstractions.csproj", "{69B0B48D-1173-3283-B229-722E327186CB}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.AI.ToolProviders.MCP", "src\Aevatar.AI.ToolProviders.MCP\Aevatar.AI.ToolProviders.MCP.csproj", "{B7F0D4A8-5F0A-5F91-86FA-4C6A99FE1D69}"
 EndProject

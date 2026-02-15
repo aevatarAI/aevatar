@@ -17,4 +17,4 @@
 dotnet run --project demos/Aevatar.Demos.CaseProjections.Host
 ```
 
-该示例不依赖 WorkflowExecution 业务模型，直接复用 `Aevatar.CQRS.Projection.Contracts` + `Aevatar.CQRS.Projection.Core`，用于展示 OCP 扩展能力。
+该示例不依赖 WorkflowExecution 业务模型，直接复用 `Aevatar.CQRS.Projection.Abstractions` + `Aevatar.CQRS.Projection.Core`，用于展示 OCP 扩展能力。

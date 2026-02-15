@@ -1,4 +1,4 @@
-namespace Aevatar.CQRS.Projection.Contracts;
+namespace Aevatar.CQRS.Projection.Abstractions;
 
 /// <summary>
 /// Generic reducer contract for projecting one event envelope into one read model.

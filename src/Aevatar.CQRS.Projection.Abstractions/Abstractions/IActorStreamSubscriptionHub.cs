@@ -1,6 +1,6 @@
 using Google.Protobuf;
 
-namespace Aevatar.CQRS.Projection.Contracts;
+namespace Aevatar.CQRS.Projection.Abstractions;
 
 /// <summary>
 /// Shared actor-stream subscription hub that multiplexes one actor stream subscription

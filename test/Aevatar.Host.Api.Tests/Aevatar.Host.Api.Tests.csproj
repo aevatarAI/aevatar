@@ -9,7 +9,7 @@
     <RootNamespace>Aevatar.Host.Api.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Contracts\Aevatar.CQRS.Projection.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Abstractions\Aevatar.CQRS.Projection.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.WorkflowExecution\Aevatar.CQRS.Projection.WorkflowExecution.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Host.Api\Aevatar.Host.Api.csproj" />

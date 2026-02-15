@@ -1,4 +1,4 @@
-namespace Aevatar.CQRS.Projection.Contracts;
+namespace Aevatar.CQRS.Projection.Abstractions;
 
 /// <summary>
 /// Detects whether one envelope marks projection completion for the specified context.

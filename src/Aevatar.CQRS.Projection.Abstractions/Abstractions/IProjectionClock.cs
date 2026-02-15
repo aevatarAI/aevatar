@@ -1,4 +1,4 @@
-namespace Aevatar.CQRS.Projection.Contracts;
+namespace Aevatar.CQRS.Projection.Abstractions;
 
 /// <summary>
 /// Provides current UTC time for projection runtime.

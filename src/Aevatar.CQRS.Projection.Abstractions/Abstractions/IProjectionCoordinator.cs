@@ -1,4 +1,4 @@
-namespace Aevatar.CQRS.Projection.Contracts;
+namespace Aevatar.CQRS.Projection.Abstractions;
 
 /// <summary>
 /// Generic coordinator contract for projection pipeline lifecycle.

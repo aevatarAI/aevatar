@@ -1,6 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
-using Aevatar.CQRS.Projection.Contracts;
+using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.WorkflowExecution;
 using Aevatar.CQRS.Projection.WorkflowExecution.ReadModels;

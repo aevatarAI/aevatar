@@ -5,7 +5,7 @@
 
 ## 1. 重构范围
 
-- `src/Aevatar.CQRS.Projection.Contracts`
+- `src/Aevatar.CQRS.Projection.Abstractions`
 - `src/Aevatar.CQRS.Projection.Core`
 - `src/Aevatar.CQRS.Projection.WorkflowExecution`
 - `src/Aevatar.Host.Api`（仅保留协议宿主职责）
@@ -15,7 +15,7 @@
 
 1. 项目组织与命名统一
 - 完成 `Projection` 命名收敛，移除旧命名残留。
-- CQRS 主体固定为 `Contracts / Core / WorkflowExecution` 三层结构。
+- CQRS 主体固定为 `Abstractions / Core / WorkflowExecution` 三层结构。
 
 2. 冗余抽象删除
 - 删除无业务增益的“别名接口+转发类”层。
@@ -40,8 +40,8 @@
 ## 3. 最终目标架构（落地状态）
 
 1. 分层与依赖方向
-- `Projection.WorkflowExecution -> Projection.Core -> Projection.Contracts`
-- `Hosts.Api -> Projection.WorkflowExecution`
+- `Projection.WorkflowExecution -> Projection.Core -> Projection.Abstractions`
+- `Host.Api -> Projection.WorkflowExecution`
 - API 不直接实现 CQRS 内核机制。
 
 2. 统一投影链路

@@ -12,66 +12,66 @@ public static class ProjectionAssemblyRegistration
     public static void RegisterProjectionExtensionsFromAssembly(
         IServiceCollection services,
         Assembly assembly,
-        Type reducerMarkerContract,
-        Type projectorMarkerContract,
-        Type reducerGenericContract,
-        Type projectorGenericContract)
+        Type reducerMarkerAbstraction,
+        Type projectorMarkerAbstraction,
+        Type reducerGenericAbstraction,
+        Type projectorGenericAbstraction)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(assembly);
-        ArgumentNullException.ThrowIfNull(reducerMarkerContract);
-        ArgumentNullException.ThrowIfNull(projectorMarkerContract);
-        ArgumentNullException.ThrowIfNull(reducerGenericContract);
-        ArgumentNullException.ThrowIfNull(projectorGenericContract);
+        ArgumentNullException.ThrowIfNull(reducerMarkerAbstraction);
+        ArgumentNullException.ThrowIfNull(projectorMarkerAbstraction);
+        ArgumentNullException.ThrowIfNull(reducerGenericAbstraction);
+        ArgumentNullException.ThrowIfNull(projectorGenericAbstraction);
 
-        RegisterMarkerAndGenericContracts(
+        RegisterMarkerAndGenericAbstractions(
             services,
             assembly,
-            reducerMarkerContract,
-            reducerGenericContract);
-        RegisterMarkerAndGenericContracts(
+            reducerMarkerAbstraction,
+            reducerGenericAbstraction);
+        RegisterMarkerAndGenericAbstractions(
             services,
             assembly,
-            projectorMarkerContract,
-            projectorGenericContract);
+            projectorMarkerAbstraction,
+            projectorGenericAbstraction);
     }
 
-    private static void RegisterMarkerAndGenericContracts(
+    private static void RegisterMarkerAndGenericAbstractions(
         IServiceCollection services,
         Assembly assembly,
-        Type markerContract,
-        Type genericContract)
+        Type markerAbstraction,
+        Type genericAbstraction)
     {
         var implementationTypes = GetLoadableTypes(assembly)
             .Where(x =>
                 x is { IsClass: true, IsAbstract: false } &&
                 !x.ContainsGenericParameters &&
                 (x.IsPublic || x.IsNestedPublic) &&
-                markerContract.IsAssignableFrom(x))
+                markerAbstraction.IsAssignableFrom(x))
             .OrderBy(x => x.FullName, StringComparer.Ordinal)
             .ToList();
 
         foreach (var implementationType in implementationTypes)
         {
-            services.TryAddEnumerable(ServiceDescriptor.Singleton(markerContract, implementationType));
-            RegisterGenericContracts(services, implementationType, genericContract);
+            services.TryAddEnumerable(ServiceDescriptor.Singleton(markerAbstraction, implementationType));
+            RegisterGenericAbstractions(services, implementationType, genericAbstraction);
         }
     }
 
-    private static void RegisterGenericContracts(
+    private static void RegisterGenericAbstractions(
         IServiceCollection services,
         Type implementationType,
-        Type genericContract)
+        Type genericAbstraction)
     {
-        var contractTypes = implementationType.GetInterfaces()
+        var abstractionTypes = implementationType.GetInterfaces()
             .Where(x =>
                 x.IsGenericType &&
-                x.GetGenericTypeDefinition() == genericContract)
+                x.GetGenericTypeDefinition() == genericAbstraction)
             .Distinct()
             .ToList();
 
-        foreach (var contractType in contractTypes)
-            services.TryAddEnumerable(ServiceDescriptor.Singleton(contractType, implementationType));
+        foreach (var abstractionType in abstractionTypes)
+            services.TryAddEnumerable(ServiceDescriptor.Singleton(abstractionType, implementationType));
     }
 
     private static IEnumerable<Type> GetLoadableTypes(Assembly assembly)

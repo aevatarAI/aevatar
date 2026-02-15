@@ -4,7 +4,7 @@
 
 ## 项目边界
 
-- `Aevatar.CQRS.Projection.Contracts`
+- `Aevatar.CQRS.Projection.Abstractions`
   - 仅定义通用契约：`IProjection*`、`IActorStreamSubscriptionHub<TMessage>`。
 - `Aevatar.CQRS.Projection.Core`
   - 通用运行时实现：

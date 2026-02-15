@@ -40,7 +40,7 @@
     <Project Path="src\Aevatar.Configuration\Aevatar.Configuration.csproj" Type="C#" />
     <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" Type="C#" />
     <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" Type="C#" />
-    <Project Path="src\Aevatar.CQRS.Projection.Contracts\Aevatar.CQRS.Projection.Contracts.csproj" Type="C#" />
+    <Project Path="src\Aevatar.CQRS.Projection.Abstractions\Aevatar.CQRS.Projection.Abstractions.csproj" Type="C#" />
     <Project Path="src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" Type="C#" />
     <Project Path="src\Aevatar.Host.Api\Aevatar.Host.Api.csproj" Type="C#" />
     <Project Path="src\Aevatar.Host.Gateway\Aevatar.Host.Gateway.csproj" Type="C#" />

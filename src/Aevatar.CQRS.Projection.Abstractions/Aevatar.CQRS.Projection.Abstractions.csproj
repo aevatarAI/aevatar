@@ -3,8 +3,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>Aevatar.CQRS.Projection.Contracts</AssemblyName>
-    <RootNamespace>Aevatar.CQRS.Projection.Contracts</RootNamespace>
+    <AssemblyName>Aevatar.CQRS.Projection.Abstractions</AssemblyName>
+    <RootNamespace>Aevatar.CQRS.Projection.Abstractions</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />

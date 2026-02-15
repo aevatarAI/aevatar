@@ -10,7 +10,7 @@
 
 本项目依赖：
 
-- `Aevatar.CQRS.Projection.Contracts`（通用抽象）
+- `Aevatar.CQRS.Projection.Abstractions`（通用抽象）
 - `Aevatar.CQRS.Projection.Core`（通用生命周期/订阅/协调实现）
 
 ## 统一运行链路

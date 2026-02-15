@@ -10,7 +10,7 @@
 - 变更必须可验证：架构调整需同步文档，且 `build/test` 通过。
 
 ## 项目结构与模块组织
-- `src/`：生产代码，按能力与分层组织（`Aevatar.Foundation.*`、`Aevatar.Workflow.Core`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Contracts/Core/WorkflowExecution`、`Aevatar.Host.*`）。
+- `src/`：生产代码，按能力与分层组织（`Aevatar.Foundation.*`、`Aevatar.Workflow.Core`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Abstractions/Core/WorkflowExecution`、`Aevatar.Host.*`）。
 - `test/`：与 `src/` 对应的测试项目（单元、集成、API）。
 - `docs/`：架构与设计文档；`workflows/`：YAML 工作流定义。
 - `tools/`：开发工具；`samples/` 与 `demos/`：示例与演示程序。

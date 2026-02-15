@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Contracts;
+using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.WorkflowExecution;
 using Aevatar.CQRS.Projection.WorkflowExecution.ReadModels;
 using Aevatar.CQRS.Projection.WorkflowExecution.Configuration;
@@ -89,7 +89,7 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void AddWorkflowExecutionProjectionCQRS_ShouldExposeGenericProjectionContracts()
+    public void AddWorkflowExecutionProjectionCQRS_ShouldExposeGenericProjectionAbstractions()
     {
         var services = new ServiceCollection();
         services.AddWorkflowExecutionProjectionCQRS();
