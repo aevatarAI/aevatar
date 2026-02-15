@@ -4,14 +4,10 @@ namespace Aevatar.Workflow.Core;
 
 public sealed class WorkflowModuleFactory : IEventModuleFactory
 {
-    private readonly IServiceProvider _services;
     private readonly IReadOnlyDictionary<string, IWorkflowModuleDescriptor> _descriptorsByName;
 
-    public WorkflowModuleFactory(
-        IServiceProvider services,
-        IEnumerable<IWorkflowModuleDescriptor> descriptors)
+    public WorkflowModuleFactory(IEnumerable<IWorkflowModuleDescriptor> descriptors)
     {
-        _services = services;
         _descriptorsByName = BuildDescriptorMap(descriptors);
     }
 
@@ -24,7 +20,7 @@ public sealed class WorkflowModuleFactory : IEventModuleFactory
         if (!_descriptorsByName.TryGetValue(name, out var descriptor))
             return false;
 
-        module = descriptor.Create(_services);
+        module = descriptor.Create();
         return module != null;
     }
 

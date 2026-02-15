@@ -1,13 +1,18 @@
 using Aevatar.Foundation.Abstractions.EventModules;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Core;
 
 public sealed class WorkflowModuleDescriptor<TModule> : IWorkflowModuleDescriptor
     where TModule : class, IEventModule
 {
-    public WorkflowModuleDescriptor(params string[] names)
+    private readonly Func<IEventModule> _factory;
+
+    public WorkflowModuleDescriptor(
+        Func<IEventModule> factory,
+        params string[] names)
     {
+        _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+
         if (names.Length == 0)
             throw new ArgumentException("At least one module name is required.", nameof(names));
 
@@ -21,6 +26,5 @@ public sealed class WorkflowModuleDescriptor<TModule> : IWorkflowModuleDescripto
 
     public IReadOnlyList<string> Names { get; }
 
-    public IEventModule Create(IServiceProvider services) =>
-        ActivatorUtilities.CreateInstance<TModule>(services);
+    public IEventModule Create() => _factory();
 }

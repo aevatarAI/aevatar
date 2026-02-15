@@ -9,5 +9,5 @@ public interface IWorkflowModuleDescriptor
 {
     IReadOnlyList<string> Names { get; }
 
-    IEventModule Create(IServiceProvider services);
+    IEventModule Create();
 }

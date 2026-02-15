@@ -125,8 +125,8 @@ public sealed class LocalActorRuntime : IActorRuntime
 
     private IAgent CreateAgentInstance(System.Type agentType)
     {
-        if (_services.GetService(agentType) is IAgent fromDi) return fromDi;
-        return Activator.CreateInstance(agentType) as IAgent
+        var instance = ActivatorUtilities.CreateInstance(_services, agentType);
+        return instance as IAgent
             ?? throw new InvalidOperationException($"Unable to create {agentType.Name}");
     }
 

@@ -21,7 +21,6 @@ using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core;
@@ -36,6 +35,20 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
+    private readonly IActorRuntime _runtime;
+    private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
+    private readonly IReadOnlyList<IEventModuleFactory> _eventModuleFactories;
+
+    public WorkflowGAgent(
+        IActorRuntime runtime,
+        IRoleAgentTypeResolver roleAgentTypeResolver,
+        IEnumerable<IEventModuleFactory> eventModuleFactories)
+    {
+        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
+        _eventModuleFactories = eventModuleFactories?.ToList()
+            ?? throw new ArgumentNullException(nameof(eventModuleFactories));
+    }
 
     // ─── 生命周期 ───
 
@@ -132,13 +145,11 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     {
         if (_childAgentIds.Count > 0 || _compiledWorkflow == null) return;
 
-        var runtime = Services.GetRequiredService<IActorRuntime>();
-        var roleAgentTypeResolver = Services.GetRequiredService<IRoleAgentTypeResolver>();
-        var roleAgentType = roleAgentTypeResolver.ResolveRoleAgentType();
+        var roleAgentType = _roleAgentTypeResolver.ResolveRoleAgentType();
 
         foreach (var role in _compiledWorkflow.Roles)
         {
-            var actor = await runtime.CreateAsync(roleAgentType, role.Id);
+            var actor = await _runtime.CreateAsync(roleAgentType, role.Id);
             if (actor.Agent is IRoleAgent roleAgent)
             {
                 roleAgent.SetRoleName(role.Name);
@@ -155,7 +166,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
                     $"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
             }
 
-            await runtime.LinkAsync(Id, actor.Id);
+            await _runtime.LinkAsync(Id, actor.Id);
             _childAgentIds.Add(actor.Id);
         }
         Logger.LogInformation("Agent 树创建完成: {Count} 个 role agents", _childAgentIds.Count);
@@ -171,8 +182,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     /// </summary>
     private void InstallCognitiveModules()
     {
-        var factories = Services.GetServices<IEventModuleFactory>().ToList();
-        if (factories.Count == 0) return;
+        if (_eventModuleFactories.Count == 0) return;
 
         // workflow_loop is always required (drives step sequencing)
         var needed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "workflow_loop" };
@@ -189,7 +199,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         var modules = new List<IEventModule>();
         foreach (var name in needed)
         {
-            foreach (var factory in factories)
+            foreach (var factory in _eventModuleFactories)
             {
                 if (factory.TryCreate(name, out var m) && m != null)
                 {

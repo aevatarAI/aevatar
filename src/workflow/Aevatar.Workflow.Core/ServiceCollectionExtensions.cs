@@ -30,8 +30,10 @@ public static class ServiceCollectionExtensions
         params string[] names)
         where TModule : class, IEventModule
     {
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModuleDescriptor>(
-            new WorkflowModuleDescriptor<TModule>(names)));
+        services.AddSingleton<IWorkflowModuleDescriptor>(sp =>
+            new WorkflowModuleDescriptor<TModule>(
+                () => ActivatorUtilities.CreateInstance<TModule>(sp),
+                names));
         return services;
     }
 
