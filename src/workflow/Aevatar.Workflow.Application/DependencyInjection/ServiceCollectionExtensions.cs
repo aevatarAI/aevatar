@@ -16,10 +16,13 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddWorkflowApplication(
         this IServiceCollection services,
-        Action<WorkflowDefinitionRegistryOptions>? configureRegistry = null)
+        Action<WorkflowDefinitionRegistryOptions>? configureRegistry = null,
+        Action<WorkflowRunOrchestrationOptions>? configureOrchestration = null)
     {
         var options = new WorkflowDefinitionRegistryOptions();
         configureRegistry?.Invoke(options);
+        var orchestrationOptions = new WorkflowRunOrchestrationOptions();
+        configureOrchestration?.Invoke(orchestrationOptions);
 
         services.AddSingleton<IWorkflowDefinitionRegistry>(_ =>
         {
@@ -31,8 +34,8 @@ public static class ServiceCollectionExtensions
         });
 
         services.AddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
+        services.AddSingleton(orchestrationOptions);
         services.AddSingleton<IWorkflowExecutionRunOrchestrator, WorkflowExecutionRunOrchestrator>();
-        services.AddSingleton<IWorkflowExecutionReportMapper, WorkflowExecutionReportMapper>();
         services.AddSingleton<IWorkflowRunActorResolver, WorkflowRunActorResolver>();
         services.AddSingleton<IWorkflowChatRequestEnvelopeFactory, WorkflowChatRequestEnvelopeFactory>();
         services.AddSingleton<IWorkflowRunRequestExecutor, WorkflowRunRequestExecutor>();

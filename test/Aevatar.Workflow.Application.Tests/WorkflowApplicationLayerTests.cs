@@ -1,5 +1,5 @@
-using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -8,9 +8,6 @@ using Aevatar.Workflow.Application.Orchestration;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Workflows;
-using Aevatar.Workflow.Projection;
-using Aevatar.Workflow.Projection.Orchestration;
-using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -33,7 +30,6 @@ public class WorkflowChatRunApplicationServiceTests
             new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance),
             new WorkflowRunOutputStreamer(),
             new NoopReportSink(),
-            new WorkflowExecutionReportMapper(),
             NullLogger<WorkflowChatRunApplicationService>.Instance);
 
         var result = await service.ExecuteAsync(
@@ -50,20 +46,26 @@ public class WorkflowChatRunApplicationServiceTests
 public class WorkflowExecutionQueryApplicationServiceTests
 {
     [Fact]
-    public async Task ListRunsAsync_ShouldMapProjectionReportToTypedSummary()
+    public async Task ListRunsAsync_ShouldReturnProjectionPortResult()
     {
-        var report = new WorkflowExecutionReport
+        var summary = new WorkflowRunSummary(
+            "run-1",
+            "direct",
+            "actor-1",
+            DateTimeOffset.UtcNow.AddSeconds(-2),
+            DateTimeOffset.UtcNow,
+            200,
+            true,
+            3,
+            WorkflowRunProjectionScope.ActorShared,
+            WorkflowRunCompletionStatus.Completed);
+        var report = new WorkflowRunReport
         {
             RunId = "run-1",
             WorkflowName = "direct",
             RootActorId = "actor-1",
-            StartedAt = DateTimeOffset.UtcNow.AddSeconds(-2),
-            EndedAt = DateTimeOffset.UtcNow,
-            DurationMs = 200,
-            Success = true,
-            ProjectionScope = WorkflowExecutionProjectionScope.ActorShared,
-            CompletionStatus = WorkflowExecutionCompletionStatus.Completed,
-            Summary = new WorkflowExecutionSummary { TotalSteps = 3 },
+            ProjectionScope = WorkflowRunProjectionScope.ActorShared,
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
         };
 
         var runtime = new FakeActorRuntime([]);
@@ -75,13 +77,12 @@ public class WorkflowExecutionQueryApplicationServiceTests
             new FakeProjectionService
             {
                 EnableRunQueryEndpointsValue = true,
-                Runs = [report],
-                ReportByRunId = new Dictionary<string, WorkflowExecutionReport>(StringComparer.Ordinal)
+                Runs = [summary],
+                ReportByRunId = new Dictionary<string, WorkflowRunReport>(StringComparer.Ordinal)
                 {
                     ["run-1"] = report,
                 },
-            },
-            new WorkflowExecutionReportMapper());
+            });
 
         var runs = await queryService.ListRunsAsync(50, CancellationToken.None);
         var run = runs.Should().ContainSingle().Subject;
@@ -115,40 +116,50 @@ public class ActorRuntimeWorkflowExecutionTopologyResolverTests
         var topology = await resolver.ResolveAsync(runtime, "root", CancellationToken.None);
 
         topology.Should().HaveCount(2);
-        topology.Should().Contain(new WorkflowExecutionTopologyEdge("root", "child-1"));
-        topology.Should().Contain(new WorkflowExecutionTopologyEdge("child-1", "child-2"));
-        topology.Should().NotContain(new WorkflowExecutionTopologyEdge("unknown-parent", "orphan"));
+        topology.Should().Contain(new WorkflowRunTopologyEdge("root", "child-1"));
+        topology.Should().Contain(new WorkflowRunTopologyEdge("child-1", "child-2"));
+        topology.Should().NotContain(new WorkflowRunTopologyEdge("unknown-parent", "orphan"));
     }
 }
 
-internal sealed class FakeProjectionService : IWorkflowExecutionProjectionService
+internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
 {
     public bool ProjectionEnabled { get; set; } = true;
     public bool EnableRunQueryEndpointsValue { get; set; } = true;
-    public bool EnableRunReportArtifacts { get; set; }
-    public IReadOnlyList<WorkflowExecutionReport> Runs { get; set; } = [];
-    public Dictionary<string, WorkflowExecutionReport> ReportByRunId { get; set; } = new(StringComparer.Ordinal);
+    public IReadOnlyList<WorkflowRunSummary> Runs { get; set; } = [];
+    public Dictionary<string, WorkflowRunReport> ReportByRunId { get; set; } = new(StringComparer.Ordinal);
 
     public bool EnableRunQueryEndpoints => EnableRunQueryEndpointsValue;
 
-    public Task<WorkflowExecutionProjectionSession> StartAsync(string rootActorId, string workflowName, string input, CancellationToken ct = default) =>
-        Task.FromResult(new WorkflowExecutionProjectionSession
+    public Task<WorkflowProjectionSession> StartAsync(
+        string rootActorId,
+        string workflowName,
+        string input,
+        IWorkflowRunEventSink sink,
+        CancellationToken ct = default) =>
+        Task.FromResult(new WorkflowProjectionSession
         {
             RunId = Guid.NewGuid().ToString("N"),
             StartedAt = DateTimeOffset.UtcNow,
-            Context = null,
+            Enabled = ProjectionEnabled,
         });
 
-    public Task<ProjectionRunCompletionStatus> WaitForRunProjectionCompletionStatusAsync(string runId, TimeSpan? timeoutOverride = null, CancellationToken ct = default) =>
-        Task.FromResult(ProjectionRunCompletionStatus.Completed);
+    public Task<WorkflowProjectionCompletionStatus> WaitForRunProjectionCompletionStatusAsync(
+        string runId,
+        TimeSpan? timeoutOverride = null,
+        CancellationToken ct = default) =>
+        Task.FromResult(WorkflowProjectionCompletionStatus.Completed);
 
-    public Task<WorkflowExecutionReport?> CompleteAsync(WorkflowExecutionProjectionSession session, IReadOnlyList<WorkflowExecutionTopologyEdge> topology, CancellationToken ct = default) =>
-        Task.FromResult<WorkflowExecutionReport?>(null);
+    public Task<WorkflowRunReport?> CompleteAsync(
+        WorkflowProjectionSession session,
+        IReadOnlyList<WorkflowRunTopologyEdge> topology,
+        CancellationToken ct = default) =>
+        Task.FromResult<WorkflowRunReport?>(null);
 
-    public Task<IReadOnlyList<WorkflowExecutionReport>> ListRunsAsync(int take = 50, CancellationToken ct = default) =>
+    public Task<IReadOnlyList<WorkflowRunSummary>> ListRunsAsync(int take = 50, CancellationToken ct = default) =>
         Task.FromResult(Runs);
 
-    public Task<WorkflowExecutionReport?> GetRunAsync(string runId, CancellationToken ct = default)
+    public Task<WorkflowRunReport?> GetRunAsync(string runId, CancellationToken ct = default)
     {
         ReportByRunId.TryGetValue(runId, out var report);
         return Task.FromResult(report);

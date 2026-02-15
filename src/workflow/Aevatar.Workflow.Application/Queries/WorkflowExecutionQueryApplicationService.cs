@@ -1,7 +1,7 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
-using Aevatar.Workflow.Projection;
 
 namespace Aevatar.Workflow.Application.Queries;
 
@@ -9,22 +9,19 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
 {
     private readonly IActorRuntime _runtime;
     private readonly IWorkflowDefinitionRegistry _workflowRegistry;
-    private readonly IWorkflowExecutionProjectionService _projectionService;
-    private readonly IWorkflowExecutionReportMapper _reportMapper;
+    private readonly IWorkflowExecutionProjectionPort _projectionPort;
 
     public WorkflowExecutionQueryApplicationService(
         IActorRuntime runtime,
         IWorkflowDefinitionRegistry workflowRegistry,
-        IWorkflowExecutionProjectionService projectionService,
-        IWorkflowExecutionReportMapper reportMapper)
+        IWorkflowExecutionProjectionPort projectionPort)
     {
         _runtime = runtime;
         _workflowRegistry = workflowRegistry;
-        _projectionService = projectionService;
-        _reportMapper = reportMapper;
+        _projectionPort = projectionPort;
     }
 
-    public bool RunQueryEnabled => _projectionService.EnableRunQueryEndpoints;
+    public bool RunQueryEnabled => _projectionPort.EnableRunQueryEndpoints;
 
     public async Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default)
     {
@@ -48,8 +45,7 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         if (!RunQueryEnabled)
             return [];
 
-        var reports = await _projectionService.ListRunsAsync(take, ct);
-        return reports.Select(_reportMapper.ToSummary).ToList();
+        return await _projectionPort.ListRunsAsync(take, ct);
     }
 
     public async Task<WorkflowRunReport?> GetRunAsync(string runId, CancellationToken ct = default)
@@ -57,7 +53,6 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         if (!RunQueryEnabled)
             return null;
 
-        var report = await _projectionService.GetRunAsync(runId, ct);
-        return report == null ? null : _reportMapper.ToReport(report);
+        return await _projectionPort.GetRunAsync(runId, ct);
     }
 }

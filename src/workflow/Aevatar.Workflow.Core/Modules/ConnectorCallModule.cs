@@ -13,6 +13,13 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class ConnectorCallModule : IEventModule
 {
+    private readonly IConnectorRegistry _registry;
+
+    public ConnectorCallModule(IConnectorRegistry registry)
+    {
+        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+    }
+
     public string Name => "connector_call";
     public int Priority => 9;
 
@@ -34,20 +41,13 @@ public sealed class ConnectorCallModule : IEventModule
         var onMissing = request.Parameters.GetValueOrDefault("on_missing", "fail");
         var onError = request.Parameters.GetValueOrDefault("on_error", "fail");
 
-        var registry = ctx.Services.GetService(typeof(IConnectorRegistry)) as IConnectorRegistry;
-        if (registry == null)
-        {
-            await PublishFailureAsync(ctx, request, "connector registry is not registered", ct);
-            return;
-        }
-
         if (string.IsNullOrWhiteSpace(connectorName))
         {
             await PublishFailureAsync(ctx, request, "connector_call missing required parameter: connector", ct);
             return;
         }
 
-        if (!registry.TryGet(connectorName, out var connector) || connector == null)
+        if (!_registry.TryGet(connectorName, out var connector) || connector == null)
         {
             if (optional || string.Equals(onMissing, "skip", StringComparison.OrdinalIgnoreCase))
             {

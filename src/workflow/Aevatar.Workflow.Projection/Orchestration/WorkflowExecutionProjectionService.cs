@@ -1,13 +1,17 @@
-using Aevatar.Workflow.Projection.ReadModels;
+using System.Collections.Concurrent;
+using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.Configuration;
+using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.CQRS.Projection.Abstractions;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 /// <summary>
-/// Application-facing facade for chat run projection lifecycle and read-model queries.
+/// Application-facing facade for workflow run projection lifecycle and read-model queries.
 /// </summary>
-public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProjectionService
+public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProjectionPort
 {
     private readonly IProjectionRuntimeOptions _options;
     private readonly IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> _lifecycle;
@@ -15,6 +19,8 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
     private readonly IProjectionRunIdGenerator _runIdGenerator;
     private readonly IProjectionClock _clock;
     private readonly IWorkflowExecutionProjectionContextFactory _contextFactory;
+    private readonly WorkflowExecutionReadModelMapper _mapper;
+    private readonly ConcurrentDictionary<string, WorkflowExecutionProjectionContext> _contexts = new(StringComparer.Ordinal);
 
     public WorkflowExecutionProjectionService(
         IProjectionRuntimeOptions options,
@@ -22,7 +28,8 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         IProjectionReadModelStore<WorkflowExecutionReport, string> store,
         IProjectionRunIdGenerator runIdGenerator,
         IProjectionClock clock,
-        IWorkflowExecutionProjectionContextFactory contextFactory)
+        IWorkflowExecutionProjectionContextFactory contextFactory,
+        WorkflowExecutionReadModelMapper mapper)
     {
         _options = options;
         _lifecycle = lifecycle;
@@ -30,18 +37,18 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         _runIdGenerator = runIdGenerator;
         _clock = clock;
         _contextFactory = contextFactory;
+        _mapper = mapper;
     }
 
     public bool ProjectionEnabled => _options.Enabled;
 
     public bool EnableRunQueryEndpoints => _options.Enabled && _options.EnableRunQueryEndpoints;
 
-    public bool EnableRunReportArtifacts => _options.Enabled && _options.EnableRunReportArtifacts;
-
-    public async Task<WorkflowExecutionProjectionSession> StartAsync(
+    public async Task<WorkflowProjectionSession> StartAsync(
         string rootActorId,
         string workflowName,
         string input,
+        IWorkflowRunEventSink sink,
         CancellationToken ct = default)
     {
         var runId = _runIdGenerator.NextRunId();
@@ -49,63 +56,87 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
 
         if (!ProjectionEnabled)
         {
-            return new WorkflowExecutionProjectionSession
+            return new WorkflowProjectionSession
             {
                 RunId = runId,
                 StartedAt = startedAt,
-                Context = null,
+                Enabled = false,
             };
         }
 
         var context = _contextFactory.Create(runId, rootActorId, workflowName, input, startedAt);
-
+        context.SetRunEventSink(sink);
         await _lifecycle.StartAsync(context, ct);
+        _contexts[runId] = context;
 
-        return new WorkflowExecutionProjectionSession
+        return new WorkflowProjectionSession
         {
             RunId = runId,
             StartedAt = startedAt,
-            Context = context,
+            Enabled = true,
         };
     }
 
-    public Task<ProjectionRunCompletionStatus> WaitForRunProjectionCompletionStatusAsync(
+    public async Task<WorkflowProjectionCompletionStatus> WaitForRunProjectionCompletionStatusAsync(
         string runId,
         TimeSpan? timeoutOverride = null,
         CancellationToken ct = default)
     {
         if (!ProjectionEnabled)
-            return Task.FromResult(ProjectionRunCompletionStatus.Disabled);
+            return WorkflowProjectionCompletionStatus.Disabled;
 
         var timeout = timeoutOverride ?? TimeSpan.FromMilliseconds(Math.Max(1, _options.RunProjectionCompletionWaitTimeoutMs));
-        return _lifecycle.WaitForCompletionAsync(runId, timeout, ct);
+        var status = await _lifecycle.WaitForCompletionAsync(runId, timeout, ct);
+        return ToProjectionCompletionStatus(status);
     }
 
-    public async Task<WorkflowExecutionReport?> CompleteAsync(
-        WorkflowExecutionProjectionSession session,
-        IReadOnlyList<WorkflowExecutionTopologyEdge> topology,
+    public async Task<WorkflowRunReport?> CompleteAsync(
+        WorkflowProjectionSession session,
+        IReadOnlyList<WorkflowRunTopologyEdge> topology,
         CancellationToken ct = default)
     {
-        if (!ProjectionEnabled || session.Context == null)
+        if (!ProjectionEnabled || !session.Enabled)
             return null;
 
-        await _lifecycle.CompleteAsync(session.Context, topology, ct);
-        return await _store.GetAsync(session.RunId, ct);
+        if (_contexts.TryRemove(session.RunId, out var context))
+        {
+            var projectionTopology = topology.Select(x => new WorkflowExecutionTopologyEdge(x.Parent, x.Child)).ToList();
+            await _lifecycle.CompleteAsync(context, projectionTopology, ct);
+        }
+
+        var report = await _store.GetAsync(session.RunId, ct);
+        return report == null ? null : _mapper.ToReport(report);
     }
 
-    public async Task<IReadOnlyList<WorkflowExecutionReport>> ListRunsAsync(int take = 50, CancellationToken ct = default)
+    public async Task<IReadOnlyList<WorkflowRunSummary>> ListRunsAsync(int take = 50, CancellationToken ct = default)
     {
         if (!EnableRunQueryEndpoints)
             return [];
 
-        return await _store.ListAsync(take, ct);
+        var reports = await _store.ListAsync(take, ct);
+        return reports.Select(_mapper.ToSummary).ToList();
     }
 
-    public async Task<WorkflowExecutionReport?> GetRunAsync(string runId, CancellationToken ct = default)
+    public async Task<WorkflowRunReport?> GetRunAsync(string runId, CancellationToken ct = default)
     {
         if (!EnableRunQueryEndpoints)
             return null;
 
-        return await _store.GetAsync(runId, ct);
+        var report = await _store.GetAsync(runId, ct);
+        return report == null ? null : _mapper.ToReport(report);
+    }
+
+    private static WorkflowProjectionCompletionStatus ToProjectionCompletionStatus(ProjectionRunCompletionStatus status)
+    {
+        return status switch
+        {
+            ProjectionRunCompletionStatus.Completed => WorkflowProjectionCompletionStatus.Completed,
+            ProjectionRunCompletionStatus.TimedOut => WorkflowProjectionCompletionStatus.TimedOut,
+            ProjectionRunCompletionStatus.Failed => WorkflowProjectionCompletionStatus.Failed,
+            ProjectionRunCompletionStatus.Stopped => WorkflowProjectionCompletionStatus.Stopped,
+            ProjectionRunCompletionStatus.NotFound => WorkflowProjectionCompletionStatus.NotFound,
+            ProjectionRunCompletionStatus.Disabled => WorkflowProjectionCompletionStatus.Disabled,
+            _ => WorkflowProjectionCompletionStatus.Unknown,
+        };
     }
 }

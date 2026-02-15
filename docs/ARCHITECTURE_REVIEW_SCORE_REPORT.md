@@ -68,7 +68,7 @@
 2. **再修 P1**：抽 `IWorkflowProjectionPort` 到 Application.Abstractions，Application 不再直接依赖 Projection 实现。  
 3. **修 P1（边界）**：报告开关改为 `IOptions<WorkflowExecutionReportArtifactOptions>`，Infrastructure 不再读 Projection Service。  
 4. **修 P1（DI）**：Connector registry 改构造注入，移除 Service Locator。  
-5. **修 P2**：提供可替换持久化 read model store（SQLite/Redis/Postgres 至少一种）及 TTL/清理策略。
+5. **修 P2**：提供可替换持久化 read model store（文件系统/Redis/Postgres 至少一种）及 TTL/清理策略。
 
 ## 五、复评门槛
 

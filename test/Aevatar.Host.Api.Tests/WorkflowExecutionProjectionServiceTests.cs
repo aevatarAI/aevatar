@@ -9,6 +9,7 @@ using Aevatar.Workflow.Projection.Reducers;
 using Aevatar.Workflow.Projection.Stores;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;
@@ -37,7 +38,7 @@ public class WorkflowExecutionProjectionServiceTests
         var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
         var service = CreateService(options, lifecycle, store);
 
-        var session = await service.StartAsync("root", "direct", "hello");
+        var session = await service.StartAsync("root", "direct", "hello", CreateSink());
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
         {
             WorkflowName = "direct",
@@ -61,7 +62,7 @@ public class WorkflowExecutionProjectionServiceTests
 
         var report = await service.CompleteAsync(session, []);
 
-        completed.Should().Be(ProjectionRunCompletionStatus.Completed);
+        completed.Should().Be(WorkflowProjectionCompletionStatus.Completed);
         report.Should().NotBeNull();
         report!.RunId.Should().Be(session.RunId);
         report.Timeline.Should().ContainSingle(x => x.Stage == "workflow.start");
@@ -85,7 +86,7 @@ public class WorkflowExecutionProjectionServiceTests
         var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
         var service = CreateService(options, lifecycle, store);
 
-        var session = await service.StartAsync("root", "direct", "hello");
+        var session = await service.StartAsync("root", "direct", "hello", CreateSink());
         var report = await service.CompleteAsync(session, []);
         var runs = await service.ListRunsAsync();
         var completed = await service.WaitForRunProjectionCompletionStatusAsync(session.RunId);
@@ -93,7 +94,7 @@ public class WorkflowExecutionProjectionServiceTests
         session.Enabled.Should().BeFalse();
         report.Should().BeNull();
         runs.Should().BeEmpty();
-        completed.Should().Be(ProjectionRunCompletionStatus.Disabled);
+        completed.Should().Be(WorkflowProjectionCompletionStatus.Disabled);
     }
 
     [Fact]
@@ -114,7 +115,7 @@ public class WorkflowExecutionProjectionServiceTests
         var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
         var service = CreateService(options, lifecycle, store);
 
-        var session = await service.StartAsync("root", "direct", "hello");
+        var session = await service.StartAsync("root", "direct", "hello", CreateSink());
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
         {
             WorkflowName = "direct",
@@ -152,8 +153,8 @@ public class WorkflowExecutionProjectionServiceTests
         var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
         var service = CreateService(options, lifecycle, store);
 
-        var session1 = await service.StartAsync("root", "direct", "hello-1");
-        var session2 = await service.StartAsync("root", "direct", "hello-2");
+        var session1 = await service.StartAsync("root", "direct", "hello-1", CreateSink());
+        var session2 = await service.StartAsync("root", "direct", "hello-2", CreateSink());
 
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
         {
@@ -222,10 +223,10 @@ public class WorkflowExecutionProjectionServiceTests
         var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
         var service = CreateService(options, lifecycle, store);
 
-        var session = await service.StartAsync("root", "direct", "hello");
+        var session = await service.StartAsync("root", "direct", "hello", CreateSink());
         var completed = await service.WaitForRunProjectionCompletionStatusAsync(session.RunId);
 
-        completed.Should().Be(ProjectionRunCompletionStatus.TimedOut);
+        completed.Should().Be(WorkflowProjectionCompletionStatus.TimedOut);
         _ = await service.CompleteAsync(session, []);
     }
 
@@ -247,7 +248,7 @@ public class WorkflowExecutionProjectionServiceTests
         var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
         var service = CreateService(options, lifecycle, store);
 
-        var session = await service.StartAsync("root", "direct", "hello");
+        var session = await service.StartAsync("root", "direct", "hello", CreateSink());
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
         {
             WorkflowName = "direct",
@@ -259,7 +260,7 @@ public class WorkflowExecutionProjectionServiceTests
         var completed = await service.WaitForRunProjectionCompletionStatusAsync(session.RunId);
         sw.Stop();
 
-        completed.Should().Be(ProjectionRunCompletionStatus.Failed);
+        completed.Should().Be(WorkflowProjectionCompletionStatus.Failed);
         sw.ElapsedMilliseconds.Should().BeLessThan(1000);
         _ = await service.CompleteAsync(session, []);
     }
@@ -282,7 +283,7 @@ public class WorkflowExecutionProjectionServiceTests
         var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
         var service = CreateService(options, lifecycle, store);
 
-        var session = await service.StartAsync("root", "direct", "hello");
+        var session = await service.StartAsync("root", "direct", "hello", CreateSink());
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
         {
             WorkflowName = "direct",
@@ -298,7 +299,7 @@ public class WorkflowExecutionProjectionServiceTests
         }));
 
         var completed = await service.WaitForRunProjectionCompletionStatusAsync(session.RunId);
-        completed.Should().Be(ProjectionRunCompletionStatus.Completed);
+        completed.Should().Be(WorkflowProjectionCompletionStatus.Completed);
 
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
         {
@@ -342,7 +343,10 @@ public class WorkflowExecutionProjectionServiceTests
             store,
             new GuidProjectionRunIdGenerator(),
             new SystemProjectionClock(),
-            new DefaultWorkflowExecutionProjectionContextFactory());
+            new DefaultWorkflowExecutionProjectionContextFactory(),
+            new WorkflowExecutionReadModelMapper());
+
+    private static IWorkflowRunEventSink CreateSink() => new WorkflowRunEventChannel();
 
     private static EventEnvelope Wrap(IMessage evt, string publisherId = "root") => new()
     {

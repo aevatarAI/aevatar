@@ -2,6 +2,8 @@ using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.RunIdResolvers;
 using Aevatar.Workflow.Projection.Stores;
+using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
@@ -35,6 +37,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionRunIdGenerator, GuidProjectionRunIdGenerator>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
+        services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowExecutionRunIdResolver, WorkflowCoreRunIdResolver>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowExecutionRunIdResolver, AIChatSessionRunIdResolver>());
         RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
@@ -43,7 +46,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>, ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
         services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
         services.TryAddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        services.TryAddSingleton<IWorkflowExecutionProjectionService, WorkflowExecutionProjectionService>();
+        services.TryAddSingleton<IWorkflowExecutionProjectionPort, WorkflowExecutionProjectionService>();
         return services;
     }
 

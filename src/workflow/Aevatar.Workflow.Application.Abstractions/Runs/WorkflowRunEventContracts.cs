@@ -1,12 +1,8 @@
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 
-namespace Aevatar.Workflow.Projection.Orchestration;
+namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
-/// <summary>
-/// Workflow run output event contract. Presentation adapters may map these
-/// events to protocol-specific payloads (SSE/WebSocket/AGUI/etc).
-/// </summary>
 public abstract record WorkflowRunEvent
 {
     public abstract string Type { get; }
@@ -118,9 +114,6 @@ public sealed record WorkflowCustomEvent : WorkflowRunEvent
     public object? Value { get; init; }
 }
 
-/// <summary>
-/// Run-scoped event sink used by projection projectors and application streamers.
-/// </summary>
 public interface IWorkflowRunEventSink : IAsyncDisposable
 {
     void Push(WorkflowRunEvent evt);
@@ -132,15 +125,30 @@ public interface IWorkflowRunEventSink : IAsyncDisposable
     IAsyncEnumerable<WorkflowRunEvent> ReadAllAsync(CancellationToken ct = default);
 }
 
-/// <summary>
-/// In-memory bounded channel implementation for run event streaming.
-/// </summary>
+public sealed class WorkflowRunEventSinkBackpressureException : InvalidOperationException
+{
+    public WorkflowRunEventSinkBackpressureException()
+        : base("Workflow run event channel is full.")
+    {
+    }
+}
+
+public sealed class WorkflowRunEventSinkCompletedException : InvalidOperationException
+{
+    public WorkflowRunEventSinkCompletedException()
+        : base("Workflow run event channel is completed.")
+    {
+    }
+}
+
 public sealed class WorkflowRunEventChannel : IWorkflowRunEventSink
 {
     private readonly Channel<WorkflowRunEvent> _channel;
     private readonly BoundedChannelFullMode _fullMode;
 
-    public WorkflowRunEventChannel(int capacity = 1024, BoundedChannelFullMode fullMode = BoundedChannelFullMode.DropWrite)
+    public WorkflowRunEventChannel(
+        int capacity = 1024,
+        BoundedChannelFullMode fullMode = BoundedChannelFullMode.Wait)
     {
         var resolvedCapacity = capacity > 0 ? capacity : 1024;
         _fullMode = fullMode;
@@ -155,19 +163,27 @@ public sealed class WorkflowRunEventChannel : IWorkflowRunEventSink
     public void Push(WorkflowRunEvent evt)
     {
         if (!_channel.Writer.TryWrite(evt))
-            throw new InvalidOperationException("Workflow run event channel is full or completed.");
+            throw ResolveWriteFailureException();
     }
 
     public async ValueTask PushAsync(WorkflowRunEvent evt, CancellationToken ct = default)
     {
         if (_fullMode == BoundedChannelFullMode.Wait)
         {
-            await _channel.Writer.WriteAsync(evt, ct);
+            try
+            {
+                await _channel.Writer.WriteAsync(evt, ct);
+            }
+            catch (ChannelClosedException)
+            {
+                throw new WorkflowRunEventSinkCompletedException();
+            }
+
             return;
         }
 
         if (!_channel.Writer.TryWrite(evt))
-            throw new InvalidOperationException("Workflow run event channel is full or completed.");
+            throw ResolveWriteFailureException();
     }
 
     public void Complete() => _channel.Writer.TryComplete();
@@ -183,5 +199,12 @@ public sealed class WorkflowRunEventChannel : IWorkflowRunEventSink
     {
         _channel.Writer.TryComplete();
         return ValueTask.CompletedTask;
+    }
+
+    private Exception ResolveWriteFailureException()
+    {
+        return _channel.Reader.Completion.IsCompleted
+            ? new WorkflowRunEventSinkCompletedException()
+            : new WorkflowRunEventSinkBackpressureException();
     }
 }

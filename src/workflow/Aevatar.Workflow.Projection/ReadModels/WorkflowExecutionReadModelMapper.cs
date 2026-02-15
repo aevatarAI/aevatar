@@ -1,9 +1,8 @@
 using Aevatar.Workflow.Application.Abstractions.Queries;
-using Aevatar.Workflow.Projection.ReadModels;
 
-namespace Aevatar.Workflow.Application.Queries;
+namespace Aevatar.Workflow.Projection.ReadModels;
 
-public sealed class WorkflowExecutionReportMapper : IWorkflowExecutionReportMapper
+public sealed class WorkflowExecutionReadModelMapper
 {
     public WorkflowRunSummary ToSummary(WorkflowExecutionReport report)
     {

@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Orchestration;
-using Aevatar.Workflow.Projection.Orchestration;
 
 namespace Aevatar.Workflow.Application.Runs;
 

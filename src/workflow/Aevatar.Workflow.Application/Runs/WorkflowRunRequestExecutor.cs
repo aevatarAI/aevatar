@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Workflow.Projection.Orchestration;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Application.Runs;
@@ -30,13 +30,13 @@ public sealed class WorkflowRunRequestExecutor : IWorkflowRunRequestExecutor
             _logger.LogWarning(ex, "Workflow execution failed for actor {ActorId}", actorId);
             try
             {
-                sink.Push(new WorkflowRunErrorEvent
+                await sink.PushAsync(new WorkflowRunErrorEvent
                 {
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     Message = "工作流执行异常",
                     RunId = runId,
                     Code = "INTERNAL_ERROR",
-                });
+                }, ct);
             }
             catch (InvalidOperationException)
             {

@@ -1,12 +1,8 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Orchestration;
-using Aevatar.Workflow.Application.Queries;
-using Aevatar.Workflow.Projection;
-using Aevatar.Workflow.Projection.Orchestration;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Application.Runs;
@@ -22,7 +18,6 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
     private readonly IWorkflowRunRequestExecutor _requestExecutor;
     private readonly IWorkflowRunOutputStreamer _outputStreamer;
     private readonly IWorkflowExecutionReportArtifactSink _reportArtifactSink;
-    private readonly IWorkflowExecutionReportMapper _reportMapper;
     private readonly ILogger<WorkflowChatRunApplicationService> _logger;
 
     public WorkflowChatRunApplicationService(
@@ -33,7 +28,6 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         IWorkflowRunRequestExecutor requestExecutor,
         IWorkflowRunOutputStreamer outputStreamer,
         IWorkflowExecutionReportArtifactSink reportArtifactSink,
-        IWorkflowExecutionReportMapper reportMapper,
         ILogger<WorkflowChatRunApplicationService> logger)
     {
         _runtime = runtime;
@@ -43,7 +37,6 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         _requestExecutor = requestExecutor;
         _outputStreamer = outputStreamer;
         _reportArtifactSink = reportArtifactSink;
-        _reportMapper = reportMapper;
         _logger = logger;
     }
 
@@ -83,15 +76,13 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
                 ct);
             finalized = true;
 
-            var report = finalizeResult.WorkflowExecutionReport == null
-                ? null
-                : _reportMapper.ToReport(finalizeResult.WorkflowExecutionReport);
+            var report = finalizeResult.WorkflowExecutionReport;
 
             await PersistReportBestEffortAsync(report, ct);
             await JoinProcessingTaskAsync(processingTask);
 
             var result = new WorkflowChatRunFinalizeResult(
-                ToCompletionStatus(finalizeResult.ProjectionCompletionStatus),
+                finalizeResult.ProjectionCompletionStatus,
                 finalizeResult.ProjectionCompleted,
                 report);
 
@@ -227,19 +218,5 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
     {
         sink.Complete();
         await sink.DisposeAsync();
-    }
-
-    private static WorkflowProjectionCompletionStatus ToCompletionStatus(ProjectionRunCompletionStatus status)
-    {
-        return status switch
-        {
-            ProjectionRunCompletionStatus.Completed => WorkflowProjectionCompletionStatus.Completed,
-            ProjectionRunCompletionStatus.TimedOut => WorkflowProjectionCompletionStatus.TimedOut,
-            ProjectionRunCompletionStatus.Failed => WorkflowProjectionCompletionStatus.Failed,
-            ProjectionRunCompletionStatus.Stopped => WorkflowProjectionCompletionStatus.Stopped,
-            ProjectionRunCompletionStatus.NotFound => WorkflowProjectionCompletionStatus.NotFound,
-            ProjectionRunCompletionStatus.Disabled => WorkflowProjectionCompletionStatus.Disabled,
-            _ => WorkflowProjectionCompletionStatus.Unknown,
-        };
     }
 }

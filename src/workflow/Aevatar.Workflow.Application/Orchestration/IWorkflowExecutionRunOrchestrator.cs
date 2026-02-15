@@ -1,8 +1,7 @@
-using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Workflow.Projection;
-using Aevatar.Workflow.Projection.Orchestration;
-using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Orchestration;
 
@@ -28,19 +27,19 @@ public interface IWorkflowExecutionRunOrchestrator
 
 public sealed class WorkflowProjectionRun
 {
-    public WorkflowProjectionRun(WorkflowExecutionProjectionSession session) =>
+    public WorkflowProjectionRun(WorkflowProjectionSession session) =>
         Session = session;
 
-    public WorkflowExecutionProjectionSession Session { get; }
+    public WorkflowProjectionSession Session { get; }
 
     public string RunId => Session.RunId;
 
-    public WorkflowExecutionReport? WorkflowExecutionReport { get; set; }
+    public WorkflowRunReport? WorkflowExecutionReport { get; set; }
 }
 
 public sealed record WorkflowProjectionFinalizeResult(
-    ProjectionRunCompletionStatus ProjectionCompletionStatus,
-    WorkflowExecutionReport? WorkflowExecutionReport)
+    WorkflowProjectionCompletionStatus ProjectionCompletionStatus,
+    WorkflowRunReport? WorkflowExecutionReport)
 {
-    public bool ProjectionCompleted => ProjectionCompletionStatus == ProjectionRunCompletionStatus.Completed;
+    public bool ProjectionCompleted => ProjectionCompletionStatus == WorkflowProjectionCompletionStatus.Completed;
 }

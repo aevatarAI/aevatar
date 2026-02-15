@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Presentation.AGUI;
 
@@ -43,6 +44,16 @@ public sealed class WorkflowExecutionAGUIEventProjector
             {
                 var runEvent = AGUIEventToWorkflowRunEventMapper.Map(aguiEvent);
                 await sink.PushAsync(runEvent, ct);
+            }
+            catch (WorkflowRunEventSinkBackpressureException)
+            {
+                // Non-terminal backpressure overflow in non-wait mode: drop current event but keep sink attached.
+                continue;
+            }
+            catch (WorkflowRunEventSinkCompletedException)
+            {
+                context.DetachRunEventSink();
+                break;
             }
             catch (InvalidOperationException)
             {
