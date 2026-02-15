@@ -1,7 +1,6 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -26,7 +25,6 @@ public static class ChatEndpoints
 
     public static IEndpointRouteBuilder MapChatEndpoints(this IEndpointRouteBuilder app)
     {
-        var queryService = app.ServiceProvider.GetRequiredService<IWorkflowExecutionQueryApplicationService>();
         var group = app.MapGroup("/api").WithTags("Chat");
 
         group.MapPost("/chat", HandleChat)
@@ -35,7 +33,7 @@ public static class ChatEndpoints
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/ws/chat", HandleChatWebSocket);
-        ChatQueryEndpoints.Map(group, queryService);
+        ChatQueryEndpoints.Map(group);
 
         return app;
     }

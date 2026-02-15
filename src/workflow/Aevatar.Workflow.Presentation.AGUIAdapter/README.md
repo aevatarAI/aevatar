@@ -5,8 +5,8 @@
 ## 职责
 
 - 将 `EventEnvelope` 映射为 `AGUIEvent`（`EventEnvelopeToAGUIEventMapper`）
+- 将 `AGUIEvent` 映射为领域中立 `WorkflowRunEvent`（`AGUIEventToWorkflowRunEventMapper`）
 - 提供 WorkflowExecution 的 AGUI projector（`WorkflowExecutionAGUIEventProjector`）
-- 提供 run context 的 AGUI sink 挂载扩展（`WorkflowExecutionProjectionContextAGUIExtensions`）
 
 ## 边界
 

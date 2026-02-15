@@ -24,6 +24,8 @@
   - 应用层实现（run 编排 + query 服务）
 - `Aevatar.Workflow.Projection`
   - 由 Workflow 应用层间接依赖的读侧实现
+- `Aevatar.Workflow.Infrastructure`
+  - Workflow 基础设施实现（报告工件落盘等）
 - `Aevatar.Presentation.AGUI`
   - AGUI 实时事件通道与映射
 - `Aevatar.Workflow.Presentation.AGUIAdapter`
@@ -44,6 +46,7 @@
 builder.Services.AddWorkflowExecutionProjectionCQRS(...);
 builder.Services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
 builder.Services.AddWorkflowApplication(...);
+builder.Services.AddWorkflowInfrastructure(...);
 ```
 
-即：API 只负责协议与组合；run 编排、拓扑策略、报告写出下沉到 `workflow` 应用层。
+即：API 只负责协议与组合；run 编排在 `Application`，报告写出在 `Infrastructure`。

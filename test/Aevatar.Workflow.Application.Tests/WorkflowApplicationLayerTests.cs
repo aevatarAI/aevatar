@@ -9,9 +9,10 @@ using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
-using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -23,13 +24,16 @@ public class WorkflowChatRunApplicationServiceTests
         var runtime = new FakeActorRuntime([]);
         var registry = new WorkflowDefinitionRegistry();
         var orchestrator = new SpyRunOrchestrator();
+        var actorResolver = new WorkflowRunActorResolver(runtime, registry);
         var service = new WorkflowChatRunApplicationService(
             runtime,
-            registry,
+            actorResolver,
             orchestrator,
             new FakeEnvelopeFactory(),
+            new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance),
+            new WorkflowRunOutputStreamer(),
             new NoopReportSink(),
-            LoggerFactory.Create(_ => { }).CreateLogger<WorkflowChatRunApplicationService>());
+            NullLogger<WorkflowChatRunApplicationService>.Instance);
 
         var result = await service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "missing", null),
@@ -56,8 +60,8 @@ public class WorkflowExecutionQueryApplicationServiceTests
             EndedAt = DateTimeOffset.UtcNow,
             DurationMs = 200,
             Success = true,
-            ProjectionScope = "actor_shared",
-            CompletionStatus = "completed",
+            ProjectionScope = WorkflowExecutionProjectionScope.ActorShared,
+            CompletionStatus = WorkflowExecutionCompletionStatus.Completed,
             Summary = new WorkflowExecutionSummary { TotalSteps = 3 },
         };
 
@@ -153,7 +157,7 @@ internal sealed class SpyRunOrchestrator : IWorkflowExecutionRunOrchestrator
 {
     public bool StartCalled { get; private set; }
 
-    public Task<WorkflowProjectionRun> StartAsync(string actorId, string workflowName, string prompt, Aevatar.Presentation.AGUI.IAGUIEventSink sink, CancellationToken ct = default)
+    public Task<WorkflowProjectionRun> StartAsync(string actorId, string workflowName, string prompt, IWorkflowRunEventSink sink, CancellationToken ct = default)
     {
         StartCalled = true;
         throw new InvalidOperationException("StartAsync should not be called in this test.");

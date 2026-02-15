@@ -419,7 +419,10 @@ public class WorkflowIntegrationTests
     [Trait("Feature", "ModuleFactory")]
     public void Scenario7_AllCoreModules()
     {
-        var factory = new WorkflowModuleFactory();
+        var services = new ServiceCollection();
+        services.AddAevatarWorkflow();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<IEventModuleFactory>();
 
         // ─── 流程控制 ───
         factory.TryCreate("workflow_loop", out var m).Should().BeTrue(); m!.Name.Should().Be("workflow_loop");

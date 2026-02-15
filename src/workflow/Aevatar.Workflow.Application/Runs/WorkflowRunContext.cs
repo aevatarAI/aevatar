@@ -1,7 +1,7 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Orchestration;
+using Aevatar.Workflow.Projection.Orchestration;
 
 namespace Aevatar.Workflow.Application.Runs;
 
@@ -13,7 +13,7 @@ internal sealed class WorkflowRunContext
 
     public required WorkflowProjectionRun ProjectionRun { get; init; }
 
-    public required AGUIEventChannel Sink { get; init; }
+    public required IWorkflowRunEventSink Sink { get; init; }
 
     public string ActorId => Actor.Id;
 

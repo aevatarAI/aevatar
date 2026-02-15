@@ -23,6 +23,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Core.Agents;
 using Aevatar.Bootstrap;
+using Aevatar.Bootstrap.Connectors;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.Workflow.Core;
 using Aevatar.Configuration;
@@ -139,10 +140,11 @@ var runtime = sp.GetRequiredService<IActorRuntime>();
 var streams = sp.GetRequiredService<IStreamProvider>();
 var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Maker");
 var connectorLogger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Maker.Connectors");
+var connectorBuilders = sp.GetServices<IConnectorBuilder>();
 
 // ─── Register named connectors from ~/.aevatar/connectors.json ───
 var connectorRegistry = sp.GetRequiredService<IConnectorRegistry>();
-var loadedConnectorCount = ConnectorRegistration.RegisterConnectors(connectorRegistry, connectorLogger);
+var loadedConnectorCount = ConnectorRegistration.RegisterConnectors(connectorRegistry, connectorBuilders, connectorLogger);
 if (loadedConnectorCount == 0)
 {
     var localConnectorPath = Path.Combine(AppContext.BaseDirectory, "connectors", "maker.connectors.json");
@@ -151,7 +153,7 @@ if (loadedConnectorCount == 0)
     if (File.Exists(localConnectorPath))
     {
         connectorLogger.LogInformation("Loading demo connectors from {Path}", localConnectorPath);
-        ConnectorRegistration.RegisterConnectors(connectorRegistry, connectorLogger, localConnectorPath);
+        ConnectorRegistration.RegisterConnectors(connectorRegistry, connectorBuilders, connectorLogger, localConnectorPath);
     }
 }
 

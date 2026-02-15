@@ -1,20 +1,25 @@
 using Aevatar.Configuration;
+using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
-namespace Aevatar.Workflow.Application.Reporting;
+namespace Aevatar.Workflow.Infrastructure.Reporting;
 
 internal sealed class FileSystemWorkflowExecutionReportArtifactSink : IWorkflowExecutionReportArtifactSink
 {
     private readonly IWorkflowExecutionProjectionService _projectionService;
+    private readonly IOptions<WorkflowExecutionReportArtifactOptions> _options;
     private readonly ILogger<FileSystemWorkflowExecutionReportArtifactSink> _logger;
 
     public FileSystemWorkflowExecutionReportArtifactSink(
         IWorkflowExecutionProjectionService projectionService,
+        IOptions<WorkflowExecutionReportArtifactOptions> options,
         ILogger<FileSystemWorkflowExecutionReportArtifactSink> logger)
     {
         _projectionService = projectionService;
+        _options = options;
         _logger = logger;
     }
 
@@ -27,9 +32,19 @@ internal sealed class FileSystemWorkflowExecutionReportArtifactSink : IWorkflowE
 
         ct.ThrowIfCancellationRequested();
 
-        var outputDir = Path.Combine(AevatarPaths.RepoRoot, "artifacts", "workflow-executions");
+        var outputDir = ResolveOutputDirectory();
         var (jsonPath, htmlPath) = WorkflowExecutionReportWriter.BuildDefaultPaths(outputDir);
         await WorkflowExecutionReportWriter.WriteAsync(report, jsonPath, htmlPath);
+
         _logger.LogInformation("Chat run report saved: json={JsonPath}, html={HtmlPath}", jsonPath, htmlPath);
+    }
+
+    private string ResolveOutputDirectory()
+    {
+        var configured = _options.Value.OutputDirectory;
+        if (!string.IsNullOrWhiteSpace(configured))
+            return configured;
+
+        return Path.Combine(AevatarPaths.RepoRoot, "artifacts", "workflow-executions");
     }
 }

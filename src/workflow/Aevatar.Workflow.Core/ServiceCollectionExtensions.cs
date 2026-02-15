@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Core.Connectors;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,8 +19,40 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddAevatarWorkflow(this IServiceCollection services)
     {
+        RegisterDefaultWorkflowModules(services);
         services.TryAddSingleton<IEventModuleFactory, WorkflowModuleFactory>();
         services.TryAddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
         return services;
+    }
+
+    public static IServiceCollection AddWorkflowModule<TModule>(
+        this IServiceCollection services,
+        params string[] names)
+        where TModule : class, IEventModule
+    {
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModuleDescriptor>(
+            new WorkflowModuleDescriptor<TModule>(names)));
+        return services;
+    }
+
+    private static void RegisterDefaultWorkflowModules(IServiceCollection services)
+    {
+        services.AddWorkflowModule<WorkflowLoopModule>("workflow_loop");
+        services.AddWorkflowModule<ConditionalModule>("conditional");
+        services.AddWorkflowModule<WhileModule>("while", "loop");
+        services.AddWorkflowModule<WorkflowCallModule>("workflow_call", "sub_workflow");
+        services.AddWorkflowModule<CheckpointModule>("checkpoint");
+        services.AddWorkflowModule<AssignModule>("assign");
+
+        services.AddWorkflowModule<ParallelFanOutModule>("parallel_fanout", "parallel", "fan_out");
+        services.AddWorkflowModule<VoteConsensusModule>("vote_consensus", "vote");
+        services.AddWorkflowModule<ForEachModule>("foreach", "for_each");
+
+        services.AddWorkflowModule<LLMCallModule>("llm_call");
+        services.AddWorkflowModule<ToolCallModule>("tool_call");
+        services.AddWorkflowModule<ConnectorCallModule>("connector_call", "bridge_call");
+
+        services.AddWorkflowModule<TransformModule>("transform");
+        services.AddWorkflowModule<RetrieveFactsModule>("retrieve_facts");
     }
 }

@@ -7,6 +7,7 @@ using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Workflows;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Workflow.Application.DependencyInjection;
 
@@ -33,8 +34,11 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
         services.AddSingleton<IWorkflowExecutionRunOrchestrator, WorkflowExecutionRunOrchestrator>();
+        services.AddSingleton<IWorkflowRunActorResolver, WorkflowRunActorResolver>();
         services.AddSingleton<IWorkflowChatRequestEnvelopeFactory, WorkflowChatRequestEnvelopeFactory>();
-        services.AddSingleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>();
+        services.AddSingleton<IWorkflowRunRequestExecutor, WorkflowRunRequestExecutor>();
+        services.AddSingleton<IWorkflowRunOutputStreamer, WorkflowRunOutputStreamer>();
+        services.TryAddSingleton<IWorkflowExecutionReportArtifactSink, NoopWorkflowExecutionReportArtifactSink>();
         services.AddSingleton<IWorkflowChatRunApplicationService, WorkflowChatRunApplicationService>();
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
         return services;

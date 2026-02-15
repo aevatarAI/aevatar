@@ -1,14 +1,37 @@
 namespace Aevatar.Workflow.Projection.ReadModels;
 
+public enum WorkflowExecutionProjectionScope
+{
+    ActorShared = 0,
+    RunIsolated = 1,
+}
+
+public enum WorkflowExecutionTopologySource
+{
+    RuntimeSnapshot = 0,
+}
+
+public enum WorkflowExecutionCompletionStatus
+{
+    Running = 0,
+    Completed = 1,
+    TimedOut = 2,
+    Failed = 3,
+    Stopped = 4,
+    NotFound = 5,
+    Disabled = 6,
+    Unknown = 99,
+}
+
 /// <summary>
 /// Read model for one workflow execution.
 /// </summary>
 public sealed class WorkflowExecutionReport
 {
     public string ReportVersion { get; set; } = "1.0";
-    public string ProjectionScope { get; set; } = "actor_shared";
-    public string TopologySource { get; set; } = "runtime_snapshot";
-    public string CompletionStatus { get; set; } = "unknown";
+    public WorkflowExecutionProjectionScope ProjectionScope { get; set; } = WorkflowExecutionProjectionScope.ActorShared;
+    public WorkflowExecutionTopologySource TopologySource { get; set; } = WorkflowExecutionTopologySource.RuntimeSnapshot;
+    public WorkflowExecutionCompletionStatus CompletionStatus { get; set; } = WorkflowExecutionCompletionStatus.Unknown;
     public string WorkflowName { get; set; } = "";
     public string RootActorId { get; set; } = "";
     public string RunId { get; set; } = "";

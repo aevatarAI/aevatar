@@ -17,17 +17,23 @@
 - `Validation/WorkflowValidator`：编译前校验
 - `Modules/*`：`workflow_loop`、`parallel_fanout`、`vote_consensus`、`llm_call` 等
 - `Connectors/InMemoryConnectorRegistry`：框架默认命名 connector 注册表
-- `ServiceCollectionExtensions.AddAevatarWorkflow()`：一键注册 `WorkflowModuleFactory + IConnectorRegistry`
+- `IWorkflowModuleDescriptor` / `WorkflowModuleDescriptor<T>`：模块描述器与别名注册
+- `ServiceCollectionExtensions.AddAevatarWorkflow()`：一键注册默认模块描述器 + `WorkflowModuleFactory + IConnectorRegistry`
 - `cognitive_messages.proto`：工作流执行事件协议
 
 ## 模块工厂能力
 
-`WorkflowModuleFactory` 支持按名称创建模块（示例）：
+`WorkflowModuleFactory` 通过 `IWorkflowModuleDescriptor` 注册表按名称创建模块（示例）：
 
 - `workflow_loop` / `conditional` / `while` / `checkpoint`
 - `parallel_fanout` / `vote_consensus`
 - `llm_call` / `tool_call` / `connector_call`
 - `transform` / `retrieve_facts`
+
+扩展方式（开闭原则）：
+
+- 使用 `services.AddWorkflowModule<TModule>("name", "alias")` 注册新模块与别名
+- 无需修改 `WorkflowModuleFactory` 核心实现
 
 `connector_call` 约定：
 

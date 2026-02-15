@@ -1,12 +1,10 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.CQRS.Projection.Abstractions;
-using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Orchestration;
 using Aevatar.Workflow.Application.Reporting;
-using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 
@@ -17,24 +15,30 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
     private static readonly TimeSpan CleanupTimeout = TimeSpan.FromSeconds(3);
 
     private readonly IActorRuntime _runtime;
-    private readonly IWorkflowDefinitionRegistry _workflowRegistry;
+    private readonly IWorkflowRunActorResolver _actorResolver;
     private readonly IWorkflowExecutionRunOrchestrator _runOrchestrator;
     private readonly IWorkflowChatRequestEnvelopeFactory _requestEnvelopeFactory;
+    private readonly IWorkflowRunRequestExecutor _requestExecutor;
+    private readonly IWorkflowRunOutputStreamer _outputStreamer;
     private readonly IWorkflowExecutionReportArtifactSink _reportArtifactSink;
     private readonly ILogger<WorkflowChatRunApplicationService> _logger;
 
     public WorkflowChatRunApplicationService(
         IActorRuntime runtime,
-        IWorkflowDefinitionRegistry workflowRegistry,
+        IWorkflowRunActorResolver actorResolver,
         IWorkflowExecutionRunOrchestrator runOrchestrator,
         IWorkflowChatRequestEnvelopeFactory requestEnvelopeFactory,
+        IWorkflowRunRequestExecutor requestExecutor,
+        IWorkflowRunOutputStreamer outputStreamer,
         IWorkflowExecutionReportArtifactSink reportArtifactSink,
         ILogger<WorkflowChatRunApplicationService> logger)
     {
         _runtime = runtime;
-        _workflowRegistry = workflowRegistry;
+        _actorResolver = actorResolver;
         _runOrchestrator = runOrchestrator;
         _requestEnvelopeFactory = requestEnvelopeFactory;
+        _requestExecutor = requestExecutor;
+        _outputStreamer = outputStreamer;
         _reportArtifactSink = reportArtifactSink;
         _logger = logger;
     }
@@ -66,7 +70,7 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
             if (onStartedAsync != null)
                 await onStartedAsync(started, ct);
 
-            await StreamOutputAsync(runContext, emitAsync, ct);
+            await _outputStreamer.StreamAsync(runContext.Sink, runContext.RunId, emitAsync, ct);
 
             var finalizeResult = await _runOrchestrator.FinalizeAsync(
                 runContext.ProjectionRun,
@@ -112,13 +116,13 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         WorkflowChatRunRequest request,
         CancellationToken ct)
     {
-        var actorResolution = await ResolveOrCreateActorAsync(request, ct);
+        var actorResolution = await _actorResolver.ResolveOrCreateAsync(request, ct);
         if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Actor == null)
             return new WorkflowRunContextCreateResult(actorResolution.Error, null);
 
         var actor = actorResolution.Actor;
         var workflowNameForRun = actorResolution.WorkflowNameForRun;
-        var sink = new AGUIEventChannel();
+        var sink = new WorkflowRunEventChannel();
 
         WorkflowProjectionRun projectionRun;
         try
@@ -155,83 +159,17 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
             });
     }
 
-    private async Task<WorkflowActorResolutionResult> ResolveOrCreateActorAsync(
-        WorkflowChatRunRequest request,
-        CancellationToken ct)
-    {
-        var workflowNameForRun = string.IsNullOrWhiteSpace(request.WorkflowName) ? "direct" : request.WorkflowName;
-
-        if (!string.IsNullOrWhiteSpace(request.ActorId))
-        {
-            var existing = await _runtime.GetAsync(request.ActorId);
-            if (existing == null)
-                return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentNotFound);
-
-            if (existing.Agent is not WorkflowGAgent)
-                return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentTypeNotSupported);
-
-            return new WorkflowActorResolutionResult(existing, workflowNameForRun, WorkflowChatRunStartError.None);
-        }
-
-        var yaml = _workflowRegistry.GetYaml(workflowNameForRun);
-        if (yaml == null)
-            return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.WorkflowNotFound);
-
-        var actor = await _runtime.CreateAsync<WorkflowGAgent>(ct: ct);
-        if (actor.Agent is WorkflowGAgent workflowAgent)
-            workflowAgent.ConfigureWorkflow(yaml, workflowNameForRun);
-
-        return new WorkflowActorResolutionResult(actor, workflowNameForRun, WorkflowChatRunStartError.None);
-    }
-
     private Task ProcessEnvelopeAsync(
         WorkflowRunContext runContext,
         EventEnvelope requestEnvelope,
-        CancellationToken ct)
-    {
-        return ExecuteAsync();
-
-        async Task ExecuteAsync()
-        {
-            try
-            {
-                await runContext.Actor.HandleEventAsync(requestEnvelope, ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Workflow execution failed for actor {ActorId}", runContext.ActorId);
-                try
-                {
-                    runContext.Sink.Push(new RunErrorEvent
-                    {
-                        Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        Message = "工作流执行异常",
-                        RunId = runContext.RunId,
-                        Code = "INTERNAL_ERROR",
-                    });
-                }
-                catch (InvalidOperationException)
-                {
-                }
-
-                runContext.Sink.Complete();
-            }
-        }
-    }
-
-    private static async Task StreamOutputAsync(
-        WorkflowRunContext runContext,
-        Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
-        CancellationToken ct)
-    {
-        await foreach (var evt in runContext.Sink.ReadAllAsync(ct))
-        {
-            var frame = WorkflowOutputFrameMapper.Map(evt);
-            await emitAsync(frame, ct);
-            if (IsTerminalEventForRun(evt, runContext.RunId))
-                break;
-        }
-    }
+        CancellationToken ct) =>
+        _requestExecutor.ExecuteAsync(
+            runContext.Actor,
+            runContext.ActorId,
+            runContext.RunId,
+            requestEnvelope,
+            runContext.Sink,
+            ct);
 
     private async Task PersistReportBestEffortAsync(
         WorkflowExecutionReport? report,
@@ -277,20 +215,10 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         }
     }
 
-    private static async Task DisposeSinkSafeAsync(AGUIEventChannel sink)
+    private static async Task DisposeSinkSafeAsync(IWorkflowRunEventSink sink)
     {
         sink.Complete();
         await sink.DisposeAsync();
-    }
-
-    private static bool IsTerminalEventForRun(AGUIEvent evt, string runId)
-    {
-        return evt switch
-        {
-            RunFinishedEvent finished => string.Equals(finished.RunId, runId, StringComparison.Ordinal),
-            RunErrorEvent error => string.Equals(error.RunId, runId, StringComparison.Ordinal),
-            _ => false,
-        };
     }
 
     private static WorkflowProjectionCompletionStatus ToCompletionStatus(ProjectionRunCompletionStatus status)
@@ -307,8 +235,3 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         };
     }
 }
-
-internal sealed record WorkflowActorResolutionResult(
-    IActor? Actor,
-    string WorkflowNameForRun,
-    WorkflowChatRunStartError Error);

@@ -70,8 +70,8 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
             report.DurationMs,
             report.Success,
             report.Summary.TotalSteps,
-            ParseProjectionScope(report.ProjectionScope),
-            ParseCompletionStatus(report.CompletionStatus));
+            MapProjectionScope(report.ProjectionScope),
+            MapCompletionStatus(report.CompletionStatus));
     }
 
     private static WorkflowRunReport MapReport(WorkflowExecutionReport source)
@@ -79,9 +79,9 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         return new WorkflowRunReport
         {
             ReportVersion = source.ReportVersion,
-            ProjectionScope = ParseProjectionScope(source.ProjectionScope),
-            TopologySource = ParseTopologySource(source.TopologySource),
-            CompletionStatus = ParseCompletionStatus(source.CompletionStatus),
+            ProjectionScope = MapProjectionScope(source.ProjectionScope),
+            TopologySource = MapTopologySource(source.TopologySource),
+            CompletionStatus = MapCompletionStatus(source.CompletionStatus),
             WorkflowName = source.WorkflowName,
             RootActorId = source.RootActorId,
             RunId = source.RunId,
@@ -146,36 +146,36 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         };
     }
 
-    private static WorkflowRunProjectionScope ParseProjectionScope(string value)
+    private static WorkflowRunProjectionScope MapProjectionScope(WorkflowExecutionProjectionScope value)
     {
-        return value.ToLowerInvariant() switch
+        return value switch
         {
-            "actor_shared" => WorkflowRunProjectionScope.ActorShared,
-            "run_isolated" => WorkflowRunProjectionScope.RunIsolated,
+            WorkflowExecutionProjectionScope.ActorShared => WorkflowRunProjectionScope.ActorShared,
+            WorkflowExecutionProjectionScope.RunIsolated => WorkflowRunProjectionScope.RunIsolated,
             _ => WorkflowRunProjectionScope.Unknown,
         };
     }
 
-    private static WorkflowRunTopologySource ParseTopologySource(string value)
+    private static WorkflowRunTopologySource MapTopologySource(WorkflowExecutionTopologySource value)
     {
-        return value.ToLowerInvariant() switch
+        return value switch
         {
-            "runtime_snapshot" => WorkflowRunTopologySource.RuntimeSnapshot,
+            WorkflowExecutionTopologySource.RuntimeSnapshot => WorkflowRunTopologySource.RuntimeSnapshot,
             _ => WorkflowRunTopologySource.Unknown,
         };
     }
 
-    private static WorkflowRunCompletionStatus ParseCompletionStatus(string value)
+    private static WorkflowRunCompletionStatus MapCompletionStatus(WorkflowExecutionCompletionStatus value)
     {
-        return value.ToLowerInvariant() switch
+        return value switch
         {
-            "running" => WorkflowRunCompletionStatus.Running,
-            "completed" => WorkflowRunCompletionStatus.Completed,
-            "timed_out" => WorkflowRunCompletionStatus.TimedOut,
-            "failed" => WorkflowRunCompletionStatus.Failed,
-            "stopped" => WorkflowRunCompletionStatus.Stopped,
-            "not_found" => WorkflowRunCompletionStatus.NotFound,
-            "disabled" => WorkflowRunCompletionStatus.Disabled,
+            WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
+            WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
+            WorkflowExecutionCompletionStatus.TimedOut => WorkflowRunCompletionStatus.TimedOut,
+            WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
+            WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
+            WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
+            WorkflowExecutionCompletionStatus.Disabled => WorkflowRunCompletionStatus.Disabled,
             _ => WorkflowRunCompletionStatus.Unknown,
         };
     }

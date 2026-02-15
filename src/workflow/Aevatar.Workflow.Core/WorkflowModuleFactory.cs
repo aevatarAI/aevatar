@@ -1,53 +1,43 @@
-// ─────────────────────────────────────────────────────────────
-// WorkflowModuleFactory — 认知事件模块工厂
-// 注册所有核心工作流原语的 IEventModule 实现
-// ─────────────────────────────────────────────────────────────
-
-using Aevatar.Workflow.Core.Modules;
 using Aevatar.Foundation.Abstractions.EventModules;
 
 namespace Aevatar.Workflow.Core;
 
-/// <summary>
-/// 认知模块工厂。按名字创建工作流相关的 Event Module。
-/// 覆盖所有核心原语：llm_call / vote / fan_out / parallel /
-/// conditional / assign / while / workflow_call / transform /
-/// tool_call / connector_call / checkpoint / retrieve_facts。
-/// </summary>
 public sealed class WorkflowModuleFactory : IEventModuleFactory
 {
-    /// <inheritdoc />
+    private readonly IServiceProvider _services;
+    private readonly IReadOnlyDictionary<string, IWorkflowModuleDescriptor> _descriptorsByName;
+
+    public WorkflowModuleFactory(
+        IServiceProvider services,
+        IEnumerable<IWorkflowModuleDescriptor> descriptors)
+    {
+        _services = services;
+        _descriptorsByName = BuildDescriptorMap(descriptors);
+    }
+
     public bool TryCreate(string name, out IEventModule? module)
     {
-        module = name switch
-        {
-            // ─── 流程控制 ───
-            "workflow_loop"                     => new WorkflowLoopModule(),
-            "conditional"                       => new ConditionalModule(),
-            "while" or "loop"                   => new WhileModule(),
-            "workflow_call" or "sub_workflow"    => new WorkflowCallModule(),
-            "checkpoint"                        => new CheckpointModule(),
-            "assign"                            => new AssignModule(),
+        module = null;
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
 
-            // ─── 并行 / 共识 ───
-            "parallel_fanout" or "parallel" or "fan_out" => new ParallelFanOutModule(),
-            "vote_consensus" or "vote"                    => new VoteConsensusModule(),
+        if (!_descriptorsByName.TryGetValue(name, out var descriptor))
+            return false;
 
-            // ─── 迭代 ───
-            "foreach" or "for_each"                       => new ForEachModule(),
-
-            // ─── 执行 ───
-            "llm_call"                          => new LLMCallModule(),
-            "tool_call"                         => new ToolCallModule(),
-            "connector_call" or "bridge_call"  => new ConnectorCallModule(),
-
-            // ─── 数据变换 ───
-            "transform"                         => new TransformModule(),
-            "retrieve_facts"                    => new RetrieveFactsModule(),
-
-            _ => null,
-        };
-
+        module = descriptor.Create(_services);
         return module != null;
+    }
+
+    private static IReadOnlyDictionary<string, IWorkflowModuleDescriptor> BuildDescriptorMap(
+        IEnumerable<IWorkflowModuleDescriptor> descriptors)
+    {
+        var map = new Dictionary<string, IWorkflowModuleDescriptor>(StringComparer.OrdinalIgnoreCase);
+        foreach (var descriptor in descriptors)
+        {
+            foreach (var name in descriptor.Names.Where(x => !string.IsNullOrWhiteSpace(x)))
+                map[name] = descriptor;
+        }
+
+        return map;
     }
 }

@@ -1,9 +1,8 @@
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Presentation.AGUI;
-using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 
@@ -32,11 +31,11 @@ public sealed class WorkflowExecutionRunOrchestrator : IWorkflowExecutionRunOrch
         string actorId,
         string workflowName,
         string prompt,
-        IAGUIEventSink sink,
+        IWorkflowRunEventSink sink,
         CancellationToken ct = default)
     {
         var session = await _projectionService.StartAsync(actorId, workflowName, prompt, ct);
-        session.Context?.SetAGUIEventSink(sink);
+        session.Context?.SetRunEventSink(sink);
         return new WorkflowProjectionRun(session);
     }
 
@@ -74,7 +73,7 @@ public sealed class WorkflowExecutionRunOrchestrator : IWorkflowExecutionRunOrch
         if (report == null && _projectionService.EnableRunQueryEndpoints)
             report = await _projectionService.GetRunAsync(runId, ct);
         if (report != null)
-            report.CompletionStatus = ToCompletionStatusName(completionStatus);
+            report.CompletionStatus = ToCompletionStatus(completionStatus);
 
         projectionRun.WorkflowExecutionReport = report;
         return new WorkflowProjectionFinalizeResult(completionStatus, report);
@@ -90,19 +89,19 @@ public sealed class WorkflowExecutionRunOrchestrator : IWorkflowExecutionRunOrch
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Failed to complete AGUI event-stream projection lifecycle.");
+            _logger.LogDebug(ex, "Failed to complete run-event projection lifecycle.");
         }
     }
 
-    private static string ToCompletionStatusName(ProjectionRunCompletionStatus status) =>
+    private static WorkflowExecutionCompletionStatus ToCompletionStatus(ProjectionRunCompletionStatus status) =>
         status switch
         {
-            ProjectionRunCompletionStatus.Completed => "completed",
-            ProjectionRunCompletionStatus.TimedOut => "timed_out",
-            ProjectionRunCompletionStatus.Failed => "failed",
-            ProjectionRunCompletionStatus.Stopped => "stopped",
-            ProjectionRunCompletionStatus.NotFound => "not_found",
-            ProjectionRunCompletionStatus.Disabled => "disabled",
-            _ => "unknown",
+            ProjectionRunCompletionStatus.Completed => WorkflowExecutionCompletionStatus.Completed,
+            ProjectionRunCompletionStatus.TimedOut => WorkflowExecutionCompletionStatus.TimedOut,
+            ProjectionRunCompletionStatus.Failed => WorkflowExecutionCompletionStatus.Failed,
+            ProjectionRunCompletionStatus.Stopped => WorkflowExecutionCompletionStatus.Stopped,
+            ProjectionRunCompletionStatus.NotFound => WorkflowExecutionCompletionStatus.NotFound,
+            ProjectionRunCompletionStatus.Disabled => WorkflowExecutionCompletionStatus.Disabled,
+            _ => WorkflowExecutionCompletionStatus.Unknown,
         };
 }

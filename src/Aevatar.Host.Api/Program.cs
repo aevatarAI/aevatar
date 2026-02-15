@@ -10,12 +10,13 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Host.Api.Endpoints;
+using Aevatar.Host.Api.Startup;
 using Aevatar.Workflow.Application.DependencyInjection;
+using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Bootstrap;
 using Aevatar.Configuration;
-using Aevatar.Foundation.Abstractions.Connectors;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -37,6 +38,9 @@ builder.Services.AddWorkflowApplication(options =>
     options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "workflows"));
     options.WorkflowDirectories.Add(AevatarPaths.Workflows);
 });
+builder.Services.AddWorkflowInfrastructure(options =>
+    builder.Configuration.GetSection("WorkflowExecutionReportArtifacts").Bind(options));
+builder.Services.AddHostedService<ConnectorBootstrapHostedService>();
 
 // ─── CORS（开发默认放开；生产要求显式白名单） ───
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
@@ -59,16 +63,6 @@ builder.Services.AddCors(o => o.AddPolicy("Default", p =>
 }));
 
 var app = builder.Build();
-
-// ─── 启动时注册 Connector（~/.aevatar/connectors.json） ───
-{
-    var registry = app.Services.GetRequiredService<IConnectorRegistry>();
-    var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Aevatar.Host.Api.Connectors");
-    ConnectorRegistration.RegisterConnectors(registry, logger);
-    var names = registry.ListNames();
-    if (names.Count > 0)
-        logger.LogInformation("Connectors loaded: {Count} [{Names}]", names.Count, string.Join(", ", names));
-}
 
 app.UseCors("Default");
 app.UseWebSockets();

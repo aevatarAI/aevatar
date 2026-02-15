@@ -1,100 +1,89 @@
-using Aevatar.Workflow.Application.Abstractions.Runs;
+using AGUI = Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Projection.Orchestration;
 
-namespace Aevatar.Workflow.Application.Runs;
+namespace Aevatar.Workflow.Presentation.AGUIAdapter;
 
-internal static class WorkflowOutputFrameMapper
+internal static class AGUIEventToWorkflowRunEventMapper
 {
-    public static WorkflowOutputFrame Map(WorkflowRunEvent evt)
+    public static WorkflowRunEvent Map(AGUI.AGUIEvent evt)
     {
         return evt switch
         {
-            WorkflowRunStartedEvent e => new WorkflowOutputFrame
+            AGUI.RunStartedEvent e => new WorkflowRunStartedEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
                 ThreadId = e.ThreadId,
                 RunId = e.RunId,
             },
-            WorkflowRunFinishedEvent e => new WorkflowOutputFrame
+            AGUI.RunFinishedEvent e => new WorkflowRunFinishedEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
                 ThreadId = e.ThreadId,
                 RunId = e.RunId,
                 Result = e.Result,
             },
-            WorkflowRunErrorEvent e => new WorkflowOutputFrame
+            AGUI.RunErrorEvent e => new WorkflowRunErrorEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
-                RunId = e.RunId,
                 Message = e.Message,
+                RunId = e.RunId,
                 Code = e.Code,
             },
-            WorkflowStepStartedEvent e => new WorkflowOutputFrame
+            AGUI.StepStartedEvent e => new WorkflowStepStartedEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
                 StepName = e.StepName,
             },
-            WorkflowStepFinishedEvent e => new WorkflowOutputFrame
+            AGUI.StepFinishedEvent e => new WorkflowStepFinishedEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
                 StepName = e.StepName,
             },
-            WorkflowTextMessageStartEvent e => new WorkflowOutputFrame
+            AGUI.TextMessageStartEvent e => new WorkflowTextMessageStartEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
                 MessageId = e.MessageId,
                 Role = e.Role,
             },
-            WorkflowTextMessageContentEvent e => new WorkflowOutputFrame
+            AGUI.TextMessageContentEvent e => new WorkflowTextMessageContentEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
                 MessageId = e.MessageId,
                 Delta = e.Delta,
             },
-            WorkflowTextMessageEndEvent e => new WorkflowOutputFrame
+            AGUI.TextMessageEndEvent e => new WorkflowTextMessageEndEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
                 MessageId = e.MessageId,
             },
-            WorkflowStateSnapshotEvent e => new WorkflowOutputFrame
+            AGUI.StateSnapshotEvent e => new WorkflowStateSnapshotEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
                 Snapshot = e.Snapshot,
             },
-            WorkflowToolCallStartEvent e => new WorkflowOutputFrame
+            AGUI.ToolCallStartEvent e => new WorkflowToolCallStartEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
                 ToolCallId = e.ToolCallId,
                 ToolName = e.ToolName,
             },
-            WorkflowToolCallEndEvent e => new WorkflowOutputFrame
+            AGUI.ToolCallEndEvent e => new WorkflowToolCallEndEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
                 ToolCallId = e.ToolCallId,
                 Result = e.Result,
             },
-            WorkflowCustomEvent e => new WorkflowOutputFrame
+            AGUI.CustomEvent e => new WorkflowCustomEvent
             {
-                Type = e.Type,
                 Timestamp = e.Timestamp,
                 Name = e.Name,
                 Value = e.Value,
             },
-            _ => new WorkflowOutputFrame
+            _ => new WorkflowCustomEvent
             {
-                Type = evt.Type,
                 Timestamp = evt.Timestamp,
+                Name = evt.Type,
+                Value = null,
             },
         };
     }

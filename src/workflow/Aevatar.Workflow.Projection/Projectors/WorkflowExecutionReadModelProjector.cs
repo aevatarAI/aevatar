@@ -1,7 +1,6 @@
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Reducers;
 using Aevatar.Workflow.Projection.Configuration;
-using Aevatar.Workflow.Projection.RunIdResolvers;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
@@ -24,8 +23,7 @@ public sealed class WorkflowExecutionReadModelProjector
     {
         _store = store;
         _enableRunEventIsolation = options?.EnableRunEventIsolation == true;
-        _runIdResolvers = (runIdResolvers ??
-            [new WorkflowCoreRunIdResolver(), new AIChatSessionRunIdResolver()])
+        _runIdResolvers = (runIdResolvers ?? [])
             .OrderBy(x => x.Order)
             .ToList();
         _reducersByType = reducers
@@ -44,9 +42,11 @@ public sealed class WorkflowExecutionReadModelProjector
         var report = new WorkflowExecutionReport
         {
             ReportVersion = "1.0",
-            ProjectionScope = _enableRunEventIsolation ? "run_isolated" : "actor_shared",
-            TopologySource = "runtime_snapshot",
-            CompletionStatus = "running",
+            ProjectionScope = _enableRunEventIsolation
+                ? WorkflowExecutionProjectionScope.RunIsolated
+                : WorkflowExecutionProjectionScope.ActorShared,
+            TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot,
+            CompletionStatus = WorkflowExecutionCompletionStatus.Running,
             WorkflowName = context.WorkflowName,
             RootActorId = context.RootActorId,
             RunId = context.RunId,
@@ -87,11 +87,11 @@ public sealed class WorkflowExecutionReadModelProjector
         return new ValueTask(_store.MutateAsync(context.RunId, report =>
         {
             report.Topology = topology.Select(x => new WorkflowExecutionTopologyEdge(x.Parent, x.Child)).ToList();
-            report.TopologySource = "runtime_snapshot";
+            report.TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot;
             if (report.EndedAt < report.StartedAt)
                 report.EndedAt = DateTimeOffset.UtcNow;
-            if (string.Equals(report.CompletionStatus, "running", StringComparison.Ordinal))
-                report.CompletionStatus = "completed";
+            if (report.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
+                report.CompletionStatus = WorkflowExecutionCompletionStatus.Completed;
             WorkflowExecutionProjectionMutations.RefreshDerivedFields(report);
         }, ct));
     }

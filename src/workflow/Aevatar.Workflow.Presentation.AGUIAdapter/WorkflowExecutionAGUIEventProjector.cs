@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Presentation.AGUI;
@@ -24,21 +25,22 @@ public sealed class WorkflowExecutionAGUIEventProjector
     {
         ct.ThrowIfCancellationRequested();
 
-        var sink = context.GetAGUIEventSink();
+        var sink = context.GetRunEventSink();
         if (sink == null)
             return;
 
-        IReadOnlyList<AGUIEvent> events = EventEnvelopeToAGUIEventMapper.Map(envelope);
-        foreach (var aguiEvent in events)
+        IReadOnlyList<AGUIEvent> aguiEvents = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        foreach (var aguiEvent in aguiEvents)
         {
             try
             {
-                await sink.PushAsync(aguiEvent, ct);
+                var runEvent = AGUIEventToWorkflowRunEventMapper.Map(aguiEvent);
+                await sink.PushAsync(runEvent, ct);
             }
             catch (InvalidOperationException)
             {
                 // Sink is completed/full in non-wait mode; do not fail the whole projection pipeline.
-                context.DetachAGUIEventSink();
+                context.DetachRunEventSink();
                 break;
             }
         }

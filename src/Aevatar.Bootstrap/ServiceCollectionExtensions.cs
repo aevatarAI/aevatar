@@ -4,6 +4,7 @@ using Aevatar.AI.Core.Agents;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.Bootstrap.Connectors;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Workflow.Core;
@@ -39,6 +40,7 @@ public static class ServiceCollectionExtensions
         services.AddAevatarConfig();
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
+        RegisterConnectorBuilders(services);
         services.TryAddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
         RegisterMeaiProviders(services, configuration, options);
@@ -141,5 +143,12 @@ public static class ServiceCollectionExtensions
             foreach (var directory in options.SkillDirectories)
                 skillOptions.ScanDirectory(directory);
         });
+    }
+
+    private static void RegisterConnectorBuilders(IServiceCollection services)
+    {
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, HttpConnectorBuilder>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, CliConnectorBuilder>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, MCPConnectorBuilder>());
     }
 }

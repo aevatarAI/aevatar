@@ -1,13 +1,9 @@
-// ─────────────────────────────────────────────────────────────
-// WorkflowExecutionReportWriter — 将 WorkflowExecutionReport 写入 JSON 与 HTML
-// ─────────────────────────────────────────────────────────────
-
 using System.Net;
 using System.Text;
 using System.Text.Json;
 using Aevatar.Workflow.Projection.ReadModels;
 
-namespace Aevatar.Workflow.Application.Reporting;
+namespace Aevatar.Workflow.Infrastructure.Reporting;
 
 /// <summary>Writes WorkflowExecutionReport to JSON and HTML files.</summary>
 public static class WorkflowExecutionReportWriter
@@ -66,9 +62,9 @@ public static class WorkflowExecutionReportWriter
         AppendRow(sb, "Workflow", report.WorkflowName);
         AppendRow(sb, "RunId", report.RunId);
         AppendRow(sb, "RootActor", report.RootActorId);
-        AppendRow(sb, "ProjectionScope", report.ProjectionScope);
-        AppendRow(sb, "CompletionStatus", report.CompletionStatus);
-        AppendRow(sb, "TopologySource", report.TopologySource);
+        AppendRow(sb, "ProjectionScope", report.ProjectionScope.ToString());
+        AppendRow(sb, "CompletionStatus", report.CompletionStatus.ToString());
+        AppendRow(sb, "TopologySource", report.TopologySource.ToString());
         AppendRow(sb, "Success", report.Success?.ToString() ?? "(unknown)");
         AppendRow(sb, "DurationMs", report.DurationMs.ToString("F2"));
         AppendRow(sb, "StartedAt", report.StartedAt.ToString("O"));

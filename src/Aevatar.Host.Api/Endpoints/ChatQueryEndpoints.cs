@@ -6,18 +6,13 @@ namespace Aevatar.Host.Api.Endpoints;
 
 public static class ChatQueryEndpoints
 {
-    public static void Map(
-        RouteGroupBuilder group,
-        IWorkflowExecutionQueryApplicationService queryService)
+    public static void Map(RouteGroupBuilder group)
     {
         group.MapGet("/agents", ListAgents)
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/workflows", ListWorkflows)
             .Produces(StatusCodes.Status200OK);
-
-        if (!queryService.RunQueryEnabled)
-            return;
 
         group.MapGet("/runs", ListRuns)
             .Produces(StatusCodes.Status200OK);
