@@ -1,9 +1,10 @@
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.WorkflowExecution;
 using Aevatar.CQRS.Projection.WorkflowExecution.ReadModels;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Presentation.AGUI;
 
-namespace Aevatar.Host.Api.Projection;
+namespace Aevatar.Presentation.AGUI.Adapter.WorkflowExecution;
 
 /// <summary>
 /// Projects workflow execution envelopes to AG-UI live events as a workflow projector branch.

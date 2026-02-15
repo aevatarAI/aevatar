@@ -10,9 +10,10 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Host.Api.Endpoints;
-using Aevatar.Host.Api.Projection;
+using Aevatar.Host.Api.Orchestration;
 using Aevatar.CQRS.Projection.WorkflowExecution.DependencyInjection;
 using Aevatar.Host.Api.Workflows;
+using Aevatar.Presentation.AGUI.Adapter.WorkflowExecution;
 using Aevatar.Bootstrap;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;

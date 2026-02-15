@@ -3,7 +3,7 @@
 
 using Aevatar.Presentation.AGUI;
 using Aevatar.AI.Abstractions;
-using Aevatar.Host.Api.Projection;
+using Aevatar.Presentation.AGUI.Adapter.WorkflowExecution;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;

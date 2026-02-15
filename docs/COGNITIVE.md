@@ -96,7 +96,7 @@ YAML 里写模块名，运行时通过工厂拿到实现对象。
 ### 这条链路和 CQRS 的关系
 
 - 当前默认读侧已经是统一投影链路：同一条 `EventEnvelope` 会并行进入多个 projector。
-- 内置分支包括：`WorkflowExecutionReadModelProjector`（读模型查询）与 `WorkflowExecutionAGUIEventProjector`（SSE/WS 实时输出）。
+- 内置分支包括：`WorkflowExecutionReadModelProjector`（读模型查询）与 `WorkflowExecutionAGUIEventProjector`（在 `Aevatar.Presentation.AGUI.Adapter.WorkflowExecution` 中提供，负责 SSE/WS 实时输出）。
 - 它本质是 **事件读模型**，不是直接投影 Agent `State`。
 - 如需列表/统计/检索等领域读模型，可继续扩展自定义 projector 与 read-only store，并通过独立 Query API 暴露。
 

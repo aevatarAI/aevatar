@@ -10,6 +10,7 @@
     <ProjectReference Include="..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.WorkflowExecution\Aevatar.CQRS.Projection.WorkflowExecution.csproj" />
     <ProjectReference Include="..\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
+    <ProjectReference Include="..\Aevatar.Presentation.AGUI.Adapter.WorkflowExecution\Aevatar.Presentation.AGUI.Adapter.WorkflowExecution.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />

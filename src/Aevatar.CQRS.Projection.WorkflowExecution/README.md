@@ -20,7 +20,8 @@
 3. `WorkflowExecutionReadModelProjector` 驱动 reducers 生成并更新 read model
 4. `CompleteAsync` 解除订阅并完成 run 生命周期
 
-AGUI 输出与 CQRS 读模型共享同一链路，只是在 projector 分支不同。
+AGUI 输出与 CQRS 读模型共享同一链路，只是在 projector 分支不同；
+AGUI 分支实现位于 `Aevatar.Presentation.AGUI.Adapter.WorkflowExecution`，本项目仅保留 WorkflowExecution 领域读侧实现。
 
 ## 扩展方式
 

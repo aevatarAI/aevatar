@@ -9,10 +9,11 @@
 using Aevatar.Presentation.AGUI;
 using AIEvents = Aevatar.AI.Abstractions;
 using AGUI = Aevatar.Presentation.AGUI;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Core;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Host.Api.Projection;
+namespace Aevatar.Presentation.AGUI.Adapter.WorkflowExecution;
 
 /// <summary>
 /// EventEnvelope payload → AG-UI 事件映射。
@@ -97,9 +98,9 @@ public static class EventEnvelopeToAGUIEventMapper
         }
 
         // ─── ChatResponseEvent → AGUI 完整消息（非流式兼容） ───
-        if (payload.Is(ChatResponseEvent.Descriptor))
+        if (payload.Is(AIEvents.ChatResponseEvent.Descriptor))
         {
-            var evt = payload.Unpack<ChatResponseEvent>();
+            var evt = payload.Unpack<AIEvents.ChatResponseEvent>();
             var msgId = $"msg:{envelope.Id}";
             return
             [
@@ -140,9 +141,9 @@ public static class EventEnvelopeToAGUIEventMapper
         }
 
         // ─── ToolCallEvent → TOOL_CALL_START ───
-        if (payload.Is(ToolCallEvent.Descriptor))
+        if (payload.Is(AIEvents.ToolCallEvent.Descriptor))
         {
-            var evt = payload.Unpack<ToolCallEvent>();
+            var evt = payload.Unpack<AIEvents.ToolCallEvent>();
             return [new ToolCallStartEvent
             {
                 Timestamp = ts, ToolCallId = evt.CallId, ToolName = evt.ToolName,
@@ -150,9 +151,9 @@ public static class EventEnvelopeToAGUIEventMapper
         }
 
         // ─── ToolResultEvent → TOOL_CALL_END ───
-        if (payload.Is(ToolResultEvent.Descriptor))
+        if (payload.Is(AIEvents.ToolResultEvent.Descriptor))
         {
-            var evt = payload.Unpack<ToolResultEvent>();
+            var evt = payload.Unpack<AIEvents.ToolResultEvent>();
             return [new ToolCallEndEvent
             {
                 Timestamp = ts, ToolCallId = evt.CallId, Result = evt.ResultJson,
@@ -162,7 +163,7 @@ public static class EventEnvelopeToAGUIEventMapper
         return [];
     }
 
-    private static long? ToUnixMs(Google.Protobuf.WellKnownTypes.Timestamp? ts)
+    private static long? ToUnixMs(Timestamp? ts)
     {
         if (ts == null) return null;
         var dt = ts.ToDateTime();

@@ -2,9 +2,10 @@ using Aevatar.CQRS.Projection.WorkflowExecution;
 using Aevatar.CQRS.Projection.WorkflowExecution.ReadModels;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Presentation.AGUI;
+using Aevatar.Presentation.AGUI.Adapter.WorkflowExecution;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Host.Api.Projection;
+namespace Aevatar.Host.Api.Orchestration;
 
 public interface IWorkflowExecutionRunOrchestrator
 {
@@ -12,7 +13,7 @@ public interface IWorkflowExecutionRunOrchestrator
         string actorId,
         string workflowName,
         string prompt,
-        AGUIEventChannel sink,
+        IAGUIEventSink sink,
         CancellationToken ct = default);
 
     Task<WorkflowProjectionFinalizeResult> FinalizeAsync(
@@ -43,7 +44,7 @@ public sealed class WorkflowExecutionRunOrchestrator : IWorkflowExecutionRunOrch
         string actorId,
         string workflowName,
         string prompt,
-        AGUIEventChannel sink,
+        IAGUIEventSink sink,
         CancellationToken ct = default)
     {
         var session = await _projectionService.StartAsync(actorId, workflowName, prompt, ct);

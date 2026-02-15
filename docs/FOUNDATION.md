@@ -123,7 +123,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - 暴露 `/api/runs` 与 `/api/runs/{runId}` 查询端点（可配置开关）
 - **输出分支**：
   - `WorkflowExecutionReadModelProjector` 写入 read model store
-  - `WorkflowExecutionAGUIEventProjector` 输出 AG-UI 实时事件（SSE/WS）
+  - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Presentation.AGUI.Adapter.WorkflowExecution`）输出 AG-UI 实时事件（SSE/WS）
 
 详细关系见 `src/Aevatar.CQRS.Projection.Core/README.md` 与 `src/Aevatar.CQRS.Projection.WorkflowExecution/README.md`。
 

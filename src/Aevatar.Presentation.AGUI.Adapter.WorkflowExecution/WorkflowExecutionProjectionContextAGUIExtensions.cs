@@ -1,9 +1,9 @@
 using Aevatar.CQRS.Projection.WorkflowExecution;
 using Aevatar.Presentation.AGUI;
 
-namespace Aevatar.Host.Api.Projection;
+namespace Aevatar.Presentation.AGUI.Adapter.WorkflowExecution;
 
-internal static class WorkflowExecutionProjectionContextAGUIExtensions
+public static class WorkflowExecutionProjectionContextAGUIExtensions
 {
     private const string AGUIEventSinkProperty = "aevatar.projection.agui.sink";
 
