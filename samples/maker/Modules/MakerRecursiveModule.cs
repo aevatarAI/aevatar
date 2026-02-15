@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
-using Aevatar.Workflows.Core;
+using Aevatar.Workflow.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.Logging;
 

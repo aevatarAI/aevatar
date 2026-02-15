@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.Demos.CaseProjections.Extensions.Sla</AssemblyName>
+    <RootNamespace>Aevatar.Demos.CaseProjections.Extensions.Sla</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Demos.CaseProjections\Aevatar.Demos.CaseProjections.csproj" />
+    <ProjectReference Include="..\Aevatar.Demos.CaseProjections.Abstractions\Aevatar.Demos.CaseProjections.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

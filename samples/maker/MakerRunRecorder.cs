@@ -4,7 +4,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
-using Aevatar.Workflows.Core;
+using Aevatar.Workflow.Core;
 
 internal sealed class MakerRunRecorder
 {

@@ -1,6 +1,6 @@
 # Aevatar.Tools.Config
 
-本地 Web 界面配置 Aevatar 用户密钥（LLM API Key 等），读写 `~/.aevatar/secrets.json`。与 Aevatar.Hosts.Api 使用同一套配置路径，配置完成后直接启动 Api 即可使用。
+本地 Web 界面配置 Aevatar 用户密钥（LLM API Key 等），读写 `~/.aevatar/secrets.json`。与 Aevatar.Host.Api 使用同一套配置路径，配置完成后直接启动 Api 即可使用。
 
 ## 安装（可选，作为 dotnet tool）
 

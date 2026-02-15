@@ -1,8 +1,8 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
-using Aevatar.Workflows.Core;
-using Aevatar.Workflows.Core.Connectors;
+using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using FluentAssertions;

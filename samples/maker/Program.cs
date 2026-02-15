@@ -22,7 +22,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.AI.Abstractions;
 using Aevatar.Bootstrap;
 using Aevatar.AI.LLMProviders.MEAI;
-using Aevatar.Workflows.Core;
+using Aevatar.Workflow.Core;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Runtime.DependencyInjection;

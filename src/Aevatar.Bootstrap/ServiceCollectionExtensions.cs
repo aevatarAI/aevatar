@@ -4,7 +4,7 @@ using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Runtime.DependencyInjection;
-using Aevatar.Workflows.Core;
+using Aevatar.Workflow.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 

@@ -2,7 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Workflows.Core;
+using Aevatar.Workflow.Core;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Samples.Maker;

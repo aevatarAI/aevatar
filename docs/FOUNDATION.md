@@ -110,19 +110,22 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 当前实现已经收敛为一套统一链路：
 
-- **订阅与编排内核** 在 `Aevatar.CQRS.Projections`：
+- **订阅与编排内核** 在 `Aevatar.CQRS.Projection.Core`：
   - `ProjectionSubscriptionRegistry<,>` 统一订阅 Actor Stream
-  - `WorkflowExecutionProjectionCoordinator` 一对多分发 projector
+  - `ProjectionCoordinator<,>` 一对多分发 projector
   - `ProjectionLifecycleService<,>` 统一 run 生命周期
-- **宿主职责** 在 `Aevatar.Hosts.Api`：
-  - 调用 `IWorkflowExecutionProjectionService.StartAsync/CompleteAsync`
-  - 挂载请求级 `IAGUIEventSink`
+- **WorkflowExecution 业务扩展** 在 `Aevatar.CQRS.Projection.WorkflowExecution`：
+  - `IWorkflowExecutionProjectionService` 管理 run 级投影生命周期与查询
+  - `WorkflowExecutionReadModelProjector` + reducers 生成读模型
+- **宿主职责** 在 `Aevatar.Host.Api`：
+  - `IWorkflowExecutionRunOrchestrator` 编排 start/wait/complete/rollback
+  - 挂载请求级 `IAGUIEventSink` 并输出 SSE/WS
   - 暴露 `/api/runs` 与 `/api/runs/{runId}` 查询端点（可配置开关）
 - **输出分支**：
   - `WorkflowExecutionReadModelProjector` 写入 read model store
   - `WorkflowExecutionAGUIEventProjector` 输出 AG-UI 实时事件（SSE/WS）
 
-详细关系见 `src/Aevatar.CQRS.Projections/README.md`。
+详细关系见 `src/Aevatar.CQRS.Projection.Core/README.md` 与 `src/Aevatar.CQRS.Projection.WorkflowExecution/README.md`。
 
 ## 测试项目
 
