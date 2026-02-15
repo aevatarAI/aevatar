@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.Workflow.Application</AssemblyName>
+    <RootNamespace>Aevatar.Workflow.Application</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
+    <ProjectReference Include="..\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
+    <ProjectReference Include="..\..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
+    <ProjectReference Include="..\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+</Project>

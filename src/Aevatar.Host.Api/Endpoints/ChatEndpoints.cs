@@ -1,16 +1,14 @@
 // ─────────────────────────────────────────────────────────────
 // ChatEndpoints — "用户只关心 chat" 的极简 API
 //
-// POST /api/chat  → 创建或复用 WorkflowGAgent，SSE 返回 AGUI 事件
+// POST /api/chat  → 调用 workflow 应用服务，SSE 返回 AGUI 事件
 // GET  /api/agents → 列出活跃 Agent
 // GET  /api/workflows → 列出可用工作流
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Presentation.AGUI;
-using Aevatar.AI.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
-using Aevatar.Host.Api.Orchestration;
-using Aevatar.Host.Api.Workflows;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
@@ -55,38 +53,31 @@ public static class ChatEndpoints
     private static async Task HandleChat(
         HttpContext http,
         ChatInput input,
-        IActorRuntime runtime,
-        WorkflowRegistry registry,
+        IWorkflowChatRunApplicationService chatRunService,
         ILoggerFactory loggerFactory,
-        IWorkflowExecutionProjectionService projectionService,
-        IWorkflowExecutionRunOrchestrator projectionOrchestrator,
         CancellationToken ct = default)
     {
         // ─── 1. 创建/复用 Actor 并启动投影会话 ───
         await using var sink = new AGUIEventChannel();
         var logger = loggerFactory?.CreateLogger("Aevatar.Host.Api.Chat");
-        var preparation = await ChatRunExecution.PrepareAsync(
-            input,
-            runtime,
-            registry,
-            projectionOrchestrator,
+        var preparation = await chatRunService.PrepareAsync(
+            new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId),
             sink,
-            logger,
             ct);
-        if (preparation.Error != ChatRunStartError.None || preparation.Context == null)
+        if (preparation.Error != WorkflowChatRunStartError.None || preparation.Execution == null)
         {
             http.Response.StatusCode = preparation.Error switch
             {
-                ChatRunStartError.AgentNotFound => StatusCodes.Status404NotFound,
-                ChatRunStartError.WorkflowNotFound => StatusCodes.Status404NotFound,
-                ChatRunStartError.AgentTypeNotSupported => StatusCodes.Status400BadRequest,
-                ChatRunStartError.ProjectionDisabled => StatusCodes.Status503ServiceUnavailable,
+                WorkflowChatRunStartError.AgentNotFound => StatusCodes.Status404NotFound,
+                WorkflowChatRunStartError.WorkflowNotFound => StatusCodes.Status404NotFound,
+                WorkflowChatRunStartError.AgentTypeNotSupported => StatusCodes.Status400BadRequest,
+                WorkflowChatRunStartError.ProjectionDisabled => StatusCodes.Status503ServiceUnavailable,
                 _ => StatusCodes.Status400BadRequest,
             };
             return;
         }
 
-        var context = preparation.Context;
+        var execution = preparation.Execution;
 
         // ─── 2. 准备 SSE 响应 ───
         http.Response.StatusCode = StatusCodes.Status200OK;
@@ -104,9 +95,9 @@ public static class ChatEndpoints
             // ─── 3. 流式写出 AGUI 事件 ───
             try
             {
-                await ChatRunExecution.StreamEventsUntilTerminalAsync(
+                await chatRunService.StreamEventsUntilTerminalAsync(
                     sink,
-                    context.RunId,
+                    execution.RunId,
                     evt => writer.WriteAsync(evt, ct),
                     ct);
             }
@@ -115,18 +106,13 @@ public static class ChatEndpoints
             // ─── 4. CQRS 投影收尾 + 写执行报告（artifacts/workflow-executions） ───
             try
             {
-                var finalizeResult = await ChatRunExecution.FinalizeProjectionAsync(
-                    projectionOrchestrator,
-                    context.ProjectionRun,
-                    runtime,
-                    context.ActorId,
+                var finalizeResult = await chatRunService.FinalizeProjectionAsync(
+                    execution,
                     CancellationToken.None);
                 projectionsFinalized = true;
 
-                await ChatRunExecution.WriteArtifactsBestEffortAsync(
-                    projectionService,
+                await chatRunService.WriteArtifactsBestEffortAsync(
                     finalizeResult,
-                    logger,
                     CancellationToken.None);
             }
             catch (Exception ex)
@@ -136,9 +122,8 @@ public static class ChatEndpoints
         }
         finally
         {
-            await ChatRunExecution.RollbackAndJoinAsync(
-                projectionOrchestrator,
-                context,
+            await chatRunService.RollbackAndJoinAsync(
+                execution,
                 projectionsFinalized,
                 CancellationToken.None);
         }
@@ -148,11 +133,8 @@ public static class ChatEndpoints
 
     private static async Task HandleChatWebSocket(
         HttpContext http,
-        IActorRuntime runtime,
-        WorkflowRegistry registry,
+        IWorkflowChatRunApplicationService chatRunService,
         ILoggerFactory loggerFactory,
-        IWorkflowExecutionProjectionService projectionService,
-        IWorkflowExecutionRunOrchestrator projectionOrchestrator,
         CancellationToken ct = default)
     {
         if (!http.WebSockets.IsWebSocketRequest)
@@ -219,22 +201,18 @@ public static class ChatEndpoints
         }
 
         await using var sink = new AGUIEventChannel();
-        var preparation = await ChatRunExecution.PrepareAsync(
-            input,
-            runtime,
-            registry,
-            projectionOrchestrator,
+        var preparation = await chatRunService.PrepareAsync(
+            new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId),
             sink,
-            logger,
             ct);
-        if (preparation.Error != ChatRunStartError.None || preparation.Context == null)
+        if (preparation.Error != WorkflowChatRunStartError.None || preparation.Execution == null)
         {
             var (code, message) = preparation.Error switch
             {
-                ChatRunStartError.AgentNotFound => ("AGENT_NOT_FOUND", "Agent not found."),
-                ChatRunStartError.WorkflowNotFound => ("WORKFLOW_NOT_FOUND", "Workflow not found."),
-                ChatRunStartError.AgentTypeNotSupported => ("AGENT_TYPE_NOT_SUPPORTED", "Agent is not WorkflowGAgent."),
-                ChatRunStartError.ProjectionDisabled => ("PROJECTION_DISABLED", "Projection pipeline is disabled."),
+                WorkflowChatRunStartError.AgentNotFound => ("AGENT_NOT_FOUND", "Agent not found."),
+                WorkflowChatRunStartError.WorkflowNotFound => ("WORKFLOW_NOT_FOUND", "Workflow not found."),
+                WorkflowChatRunStartError.AgentTypeNotSupported => ("AGENT_TYPE_NOT_SUPPORTED", "Agent is not WorkflowGAgent."),
+                WorkflowChatRunStartError.ProjectionDisabled => ("PROJECTION_DISABLED", "Projection pipeline is disabled."),
                 _ => ("RUN_START_FAILED", "Failed to resolve actor."),
             };
 
@@ -249,7 +227,7 @@ public static class ChatEndpoints
             return;
         }
 
-        var context = preparation.Context;
+        var execution = preparation.Execution;
 
         await ChatWebSocketProtocol.SendAsync(socket, new
         {
@@ -257,9 +235,9 @@ public static class ChatEndpoints
             requestId,
             payload = new
             {
-                runId = context.RunId,
-                threadId = context.ActorId,
-                workflow = context.WorkflowName,
+                runId = execution.RunId,
+                threadId = execution.ActorId,
+                workflow = execution.WorkflowName,
             },
         }, CancellationToken.None);
         var projectionsFinalized = false;
@@ -268,9 +246,9 @@ public static class ChatEndpoints
         {
             try
             {
-                await ChatRunExecution.StreamEventsUntilTerminalAsync(
+                await chatRunService.StreamEventsUntilTerminalAsync(
                     sink,
-                    context.RunId,
+                    execution.RunId,
                     evt => ChatWebSocketProtocol.SendAsync(socket, new
                     {
                         type = "agui.event",
@@ -283,11 +261,8 @@ public static class ChatEndpoints
 
             try
             {
-                var finalizeResult = await ChatRunExecution.FinalizeProjectionAsync(
-                    projectionOrchestrator,
-                    context.ProjectionRun,
-                    runtime,
-                    context.ActorId,
+                var finalizeResult = await chatRunService.FinalizeProjectionAsync(
+                    execution,
                     CancellationToken.None);
                 projectionsFinalized = true;
 
@@ -299,7 +274,7 @@ public static class ChatEndpoints
                     requestId,
                     payload = new
                     {
-                        runId = context.RunId,
+                        runId = execution.RunId,
                         projectionCompletionStatus = finalizeResult.ProjectionCompletionStatus.ToString(),
                         projectionCompleted = finalizeResult.ProjectionCompleted,
                         report,
@@ -320,9 +295,8 @@ public static class ChatEndpoints
         }
         finally
         {
-            await ChatRunExecution.RollbackAndJoinAsync(
-                projectionOrchestrator,
-                context,
+            await chatRunService.RollbackAndJoinAsync(
+                execution,
                 projectionsFinalized,
                 CancellationToken.None);
 
@@ -331,7 +305,14 @@ public static class ChatEndpoints
     }
 
     private static bool IsTerminalEventForRun(AGUIEvent evt, string runId)
-        => ChatRunExecution.IsTerminalEventForRun(evt, runId);
+    {
+        return evt switch
+        {
+            RunFinishedEvent finished => string.Equals(finished.RunId, runId, StringComparison.Ordinal),
+            RunErrorEvent error => string.Equals(error.RunId, runId, StringComparison.Ordinal),
+            _ => false,
+        };
+    }
 }
 
 public sealed record ChatWsCommand

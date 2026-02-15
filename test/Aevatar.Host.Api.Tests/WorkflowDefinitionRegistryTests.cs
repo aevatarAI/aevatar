@@ -1,16 +1,16 @@
-// ─── WorkflowRegistry 测试 ───
+// ─── WorkflowDefinitionRegistry 测试 ───
 
-using Aevatar.Host.Api.Workflows;
+using Aevatar.Workflow.Application.Workflows;
 using FluentAssertions;
 
 namespace Aevatar.Host.Api.Tests;
 
-public class WorkflowRegistryTests
+public class WorkflowDefinitionRegistryTests
 {
     [Fact]
     public void Register_And_GetYaml()
     {
-        var registry = new WorkflowRegistry();
+        var registry = new WorkflowDefinitionRegistry();
         registry.Register("test", "name: test\nsteps: []");
 
         registry.GetYaml("test").Should().Contain("name: test");
@@ -21,7 +21,7 @@ public class WorkflowRegistryTests
     [Fact]
     public void GetNames_ReturnsAll()
     {
-        var registry = new WorkflowRegistry();
+        var registry = new WorkflowDefinitionRegistry();
         registry.Register("alpha", "a");
         registry.Register("beta", "b");
 
@@ -31,7 +31,7 @@ public class WorkflowRegistryTests
     [Fact]
     public void LoadFromDirectory_NonExistent_ReturnsZero()
     {
-        var registry = new WorkflowRegistry();
+        var registry = new WorkflowDefinitionRegistry();
         registry.LoadFromDirectory("/nonexistent/path/12345").Should().Be(0);
     }
 
@@ -48,7 +48,7 @@ public class WorkflowRegistryTests
             File.WriteAllText(Path.Combine(tmpDir, "chat.yml"), "name: chat");
             File.WriteAllText(Path.Combine(tmpDir, "readme.txt"), "not a workflow");
 
-            var registry = new WorkflowRegistry();
+            var registry = new WorkflowDefinitionRegistry();
             var count = registry.LoadFromDirectory(tmpDir);
 
             count.Should().Be(2);

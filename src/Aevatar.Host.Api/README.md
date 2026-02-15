@@ -1,12 +1,11 @@
 # Aevatar.Host.Api
 
-`Aevatar.Host.Api` 是协议接入层（SSE/WebSocket/HTTP Query），不承载 CQRS 内核实现。
+`Aevatar.Host.Api` 是协议接入层（SSE/WebSocket/HTTP Query），不承载工作流编排与 CQRS 内核实现。
 
 ## 职责
 
 - 暴露 `POST /api/chat`（SSE）与 `GET /api/ws/chat`（WebSocket）
-- 创建/复用 `WorkflowGAgent`
-- 调用 `IWorkflowExecutionRunOrchestrator` 启动与收尾投影 run
+- 调用 `IWorkflowChatRunApplicationService` 执行 chat run
 - 提供 `GET /api/runs` / `GET /api/runs/{runId}` 查询（按配置开关）
 
 ## 运行语义契约
@@ -20,6 +19,10 @@
 
 - `Aevatar.Workflow.Projection`
   - WorkflowExecution 读侧模型与投影服务
+- `Aevatar.Workflow.Application.Abstractions`
+  - 应用层契约（run 编排、工作流定义注册、拓扑策略）
+- `Aevatar.Workflow.Application`
+  - 应用层实现（`WorkflowChatRunApplicationService`）
 - `Aevatar.CQRS.Projection.Core`
   - 由 WorkflowExecution 间接依赖的通用内核
 - `Aevatar.Presentation.AGUI`
@@ -33,23 +36,15 @@
   - Chat/WS 路由与协议入口
 - `Endpoints/ChatQueryEndpoints.cs`
   - `agents/workflows/runs` 查询端点映射
-- `Endpoints/ChatRunExecution.cs`
-  - chat run 准备、执行、投影收尾
 - `Endpoints/ChatWebSocketProtocol.cs`
   - WebSocket 收发协议封装
-- `Orchestration/WorkflowExecutionRunOrchestrator.cs`
-  - run 生命周期编排（start/wait-status/complete/rollback/topology）
-- `Orchestration/WorkflowExecutionTopologyResolver.cs`
-  - 拓扑解析策略（默认 runtime snapshot，可替换）
-- `Reporting/WorkflowExecutionReportWriter.cs`
-  - 可选报告输出（json/html，best-effort，不影响 projection finalize）
 
 ## 默认装配
 
 ```csharp
 builder.Services.AddWorkflowExecutionProjectionCQRS(...);
 builder.Services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
-builder.Services.AddSingleton<IWorkflowExecutionRunOrchestrator, WorkflowExecutionRunOrchestrator>();
+builder.Services.AddWorkflowApplication(...);
 ```
 
-即：API 只负责协议与组合，CQRS 运行时由 WorkflowExecution 模块处理，AGUI 映射由 Adapter 层处理。
+即：API 只负责协议与组合；run 编排、拓扑策略、报告写出下沉到 `workflow` 应用层。

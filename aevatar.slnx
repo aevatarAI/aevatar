@@ -41,6 +41,10 @@
     <Project Path="src\Aevatar.Host.Api\Aevatar.Host.Api.csproj" />
     <Project Path="src\Aevatar.Host.Gateway\Aevatar.Host.Gateway.csproj" />
   </Folder>
+  <Folder Name="/src/workflow/">
+    <Project Path="src/workflow/Aevatar.Workflow.Application.Abstractions/Aevatar.Workflow.Application.Abstractions.csproj" />
+    <Project Path="src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
+  </Folder>
   <Folder Name="/test/">
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />
     <Project Path="test\Aevatar.Host.Api.Tests\Aevatar.Host.Api.Tests.csproj" />

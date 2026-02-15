@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // Aevatar.Host.Api — Agent-Actor Host HTTP 入口
 //
-// POST /api/chat   → 创建/复用 WorkflowGAgent，SSE 返回 AGUI 事件
+// POST /api/chat   → 调用 workflow 应用层执行 chat run，SSE 返回 AGUI 事件
 // GET  /api/agents → 活跃 Agent 列表
 // GET  /api/workflows → 可用工作流列表
 //
@@ -10,9 +10,8 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Host.Api.Endpoints;
-using Aevatar.Host.Api.Orchestration;
+using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
-using Aevatar.Host.Api.Workflows;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Bootstrap;
 using Aevatar.Configuration;
@@ -31,24 +30,12 @@ builder.Services.AddAevatarBootstrap(builder.Configuration, options =>
 builder.Services.AddWorkflowExecutionProjectionCQRS(options =>
     builder.Configuration.GetSection("WorkflowExecutionProjection").Bind(options));
 builder.Services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
-builder.Services.AddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
-builder.Services.AddSingleton<IWorkflowExecutionRunOrchestrator, WorkflowExecutionRunOrchestrator>();
-
-// ─── 工作流注册表（应用目录 + repo 根 workflows + CWD + ~/.aevatar/workflows） ───
-builder.Services.AddSingleton(sp =>
+builder.Services.AddWorkflowApplication(options =>
 {
-    var registry = new WorkflowRegistry();
-    var appWorkflows = Path.Combine(AppContext.BaseDirectory, "workflows");
-    var repoRootWorkflows = AevatarPaths.RepoRootWorkflows;
-    var cwdWorkflows = Path.Combine(Directory.GetCurrentDirectory(), "workflows");
-    var aevatarWorkflows = AevatarPaths.Workflows;
-    if (Directory.Exists(appWorkflows)) registry.LoadFromDirectory(appWorkflows);
-    if (Directory.Exists(repoRootWorkflows)) registry.LoadFromDirectory(repoRootWorkflows);
-    if (Directory.Exists(cwdWorkflows)) registry.LoadFromDirectory(cwdWorkflows);
-    if (Directory.Exists(aevatarWorkflows)) registry.LoadFromDirectory(aevatarWorkflows);
-    // 内置 direct 覆盖同名，保证未传 workflow 时默认一定带 role: assistant，能正常调 LLM
-    registry.Register("direct", WorkflowRegistry.BuiltInDirectYaml);
-    return registry;
+    options.WorkflowDirectories.Add(Path.Combine(AppContext.BaseDirectory, "workflows"));
+    options.WorkflowDirectories.Add(AevatarPaths.RepoRootWorkflows);
+    options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "workflows"));
+    options.WorkflowDirectories.Add(AevatarPaths.Workflows);
 });
 
 // ─── CORS（开发默认放开；生产要求显式白名单） ───

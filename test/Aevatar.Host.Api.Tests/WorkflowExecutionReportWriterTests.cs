@@ -1,5 +1,5 @@
 using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Host.Api.Reporting;
+using Aevatar.Workflow.Application.Reporting;
 using FluentAssertions;
 using System.Text.Json;
 

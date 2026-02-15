@@ -10,9 +10,13 @@ using Aevatar.Workflow.Projection.Stores;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Host.Api.Endpoints;
-using Aevatar.Host.Api.Orchestration;
+using Aevatar.Workflow.Application.Abstractions.Orchestration;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Application.Orchestration;
+using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
-using Aevatar.Host.Api.Workflows;
+using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
 using Aevatar.Presentation.AGUI;
 using FluentAssertions;
@@ -35,7 +39,8 @@ public class ChatEndpointsInternalTests
         builder.Services.AddSingleton<IActorRuntime>(new FakeActorRuntime([]));
         builder.Services.AddSingleton<IStreamProvider>(new InMemoryStreamProvider());
         builder.Services.AddSingleton<IActorStreamSubscriptionHub<EventEnvelope>, ActorStreamSubscriptionHub<EventEnvelope>>();
-        builder.Services.AddSingleton(new WorkflowRegistry());
+        var registry = new WorkflowDefinitionRegistry();
+        builder.Services.AddSingleton<IWorkflowDefinitionRegistry>(registry);
         var projectionService = new FakeProjectionService(enableRunQueryEndpoints: true, enableRunReportArtifacts: false);
         builder.Services.AddSingleton<IWorkflowExecutionProjectionService>(projectionService);
         builder.Services.AddSingleton<IWorkflowExecutionRunOrchestrator>(sp =>
@@ -43,6 +48,13 @@ public class ChatEndpointsInternalTests
                 projectionService,
                 new ActorRuntimeWorkflowExecutionTopologyResolver(),
                 sp.GetRequiredService<ILogger<WorkflowExecutionRunOrchestrator>>()));
+        builder.Services.AddSingleton<IWorkflowChatRunApplicationService>(sp =>
+            new WorkflowChatRunApplicationService(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IWorkflowDefinitionRegistry>(),
+                sp.GetRequiredService<IWorkflowExecutionRunOrchestrator>(),
+                projectionService,
+                sp.GetRequiredService<ILogger<WorkflowChatRunApplicationService>>()));
         var app = builder.Build();
         var endpoints = (IEndpointRouteBuilder)app;
 
@@ -65,7 +77,7 @@ public class ChatEndpointsInternalTests
     [Fact]
     public async Task ListWorkflows_ShouldReturnWorkflowNames()
     {
-        var registry = new WorkflowRegistry();
+        var registry = new WorkflowDefinitionRegistry();
         registry.Register("custom", "name: custom");
 
         var result = InvokeSync<IResult>(typeof(ChatQueryEndpoints), "ListWorkflows", registry);
@@ -253,7 +265,7 @@ public class ChatEndpointsInternalTests
         var runtime = new FakeActorRuntime([]);
         var streams = new InMemoryStreamProvider();
         await using var aguiEventStreamSubscriptions = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
-        var registry = new WorkflowRegistry();
+        var registry = new WorkflowDefinitionRegistry();
         var loggerFactory = LoggerFactory.Create(_ => { });
         var projectionService = new FakeProjectionService(enableRunQueryEndpoints: false, enableRunReportArtifacts: false);
 
@@ -277,7 +289,7 @@ public class ChatEndpointsInternalTests
         var runtime = new FakeActorRuntime([]);
         var streams = new InMemoryStreamProvider();
         await using var aguiEventStreamSubscriptions = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
-        var registry = new WorkflowRegistry();
+        var registry = new WorkflowDefinitionRegistry();
         var loggerFactory = LoggerFactory.Create(_ => { });
         var projectionService = new FakeProjectionService(enableRunQueryEndpoints: false, enableRunReportArtifacts: false);
 
@@ -323,8 +335,8 @@ public class ChatEndpointsInternalTests
                         Output = "done",
                     }));
                 }));
-        var registry = new WorkflowRegistry();
-        registry.Register("direct", WorkflowRegistry.BuiltInDirectYaml);
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
         var loggerFactory = LoggerFactory.Create(_ => { });
         var projectionService = CreateLiveProjectionService(
             aguiEventStreamSubscriptions,
@@ -360,8 +372,8 @@ public class ChatEndpointsInternalTests
                 parentId: null,
                 new FakeAgent("agent-" + actorId, "fail"),
                 (_, _) => throw new InvalidOperationException("boom")));
-        var registry = new WorkflowRegistry();
-        registry.Register("direct", WorkflowRegistry.BuiltInDirectYaml);
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
         var loggerFactory = LoggerFactory.Create(_ => { });
         var projectionService = CreateLiveProjectionService(
             aguiEventStreamSubscriptions,
@@ -406,7 +418,7 @@ public class ChatEndpointsInternalTests
                 }));
             });
         var runtime = new FakeActorRuntime([existingActor]);
-        var registry = new WorkflowRegistry();
+        var registry = new WorkflowDefinitionRegistry();
         var loggerFactory = LoggerFactory.Create(_ => { });
         var projectionService = CreateLiveProjectionService(
             aguiEventStreamSubscriptions,
@@ -442,8 +454,8 @@ public class ChatEndpointsInternalTests
                 parentId: null,
                 new FakeAgent("agent-" + actorId, "ok"),
                 (_, _) => throw new InvalidOperationException("boom")));
-        var registry = new WorkflowRegistry();
-        registry.Register("direct", WorkflowRegistry.BuiltInDirectYaml);
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
         var loggerFactory = LoggerFactory.Create(_ => { });
         var projectionService = new FakeProjectionService(
             reports:
@@ -538,17 +550,29 @@ public class ChatEndpointsInternalTests
         if (string.Equals(method.Name, "HandleChat", StringComparison.Ordinal) ||
             string.Equals(method.Name, "HandleChatWebSocket", StringComparison.Ordinal))
         {
+            var runtime = args.OfType<IActorRuntime>().FirstOrDefault();
+            var workflowRegistry = args.OfType<IWorkflowDefinitionRegistry>().FirstOrDefault();
             var projectionService = args.OfType<IWorkflowExecutionProjectionService>().FirstOrDefault();
             projectionService.Should().NotBeNull("projection service is required for chat endpoint invocation");
+            runtime.Should().NotBeNull("actor runtime is required for chat endpoint invocation");
+            workflowRegistry.Should().NotBeNull("workflow registry is required for chat endpoint invocation");
             var loggerFactory = args.OfType<ILoggerFactory>().FirstOrDefault() ?? LoggerFactory.Create(_ => { });
-            var orchestrator = CreateOrchestrator(projectionService!, loggerFactory);
+            var chatRunService = CreateChatRunApplicationService(
+                runtime!,
+                workflowRegistry!,
+                projectionService!,
+                loggerFactory);
 
-            var list = args.ToList();
-            var ctIndex = list.FindLastIndex(x => x is CancellationToken);
-            if (ctIndex < 0)
-                ctIndex = list.Count;
-            list.Insert(ctIndex, orchestrator);
-            return list.ToArray();
+            var cancellationToken = args.OfType<CancellationToken>().DefaultIfEmpty(CancellationToken.None).Last();
+            if (string.Equals(method.Name, "HandleChat", StringComparison.Ordinal))
+            {
+                var httpContext = args.OfType<HttpContext>().First();
+                var chatInput = args.OfType<ChatInput>().First();
+                return [httpContext, chatInput, chatRunService, loggerFactory, cancellationToken];
+            }
+
+            var wsHttpContext = args.OfType<HttpContext>().First();
+            return [wsHttpContext, chatRunService, loggerFactory, cancellationToken];
         }
 
         return args;
@@ -629,6 +653,21 @@ public class ChatEndpointsInternalTests
             projectionService,
             new ActorRuntimeWorkflowExecutionTopologyResolver(),
             loggerFactory.CreateLogger<WorkflowExecutionRunOrchestrator>());
+
+    private static IWorkflowChatRunApplicationService CreateChatRunApplicationService(
+        IActorRuntime runtime,
+        IWorkflowDefinitionRegistry workflowRegistry,
+        IWorkflowExecutionProjectionService projectionService,
+        ILoggerFactory loggerFactory)
+    {
+        var orchestrator = CreateOrchestrator(projectionService, loggerFactory);
+        return new WorkflowChatRunApplicationService(
+            runtime,
+            workflowRegistry,
+            orchestrator,
+            projectionService,
+            loggerFactory.CreateLogger<WorkflowChatRunApplicationService>());
+    }
 
     private static IWorkflowExecutionProjectionService CreateLiveProjectionService(
         IActorStreamSubscriptionHub<EventEnvelope> subscriptionHub,

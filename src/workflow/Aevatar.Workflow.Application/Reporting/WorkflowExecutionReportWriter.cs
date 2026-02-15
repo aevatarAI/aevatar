@@ -7,7 +7,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.Workflow.Projection.ReadModels;
 
-namespace Aevatar.Host.Api.Reporting;
+namespace Aevatar.Workflow.Application.Reporting;
 
 /// <summary>Writes WorkflowExecutionReport to JSON and HTML files.</summary>
 public static class WorkflowExecutionReportWriter

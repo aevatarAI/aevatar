@@ -1,15 +1,8 @@
-using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Orchestration;
+using Aevatar.Workflow.Projection.ReadModels;
 
-namespace Aevatar.Host.Api.Orchestration;
-
-public interface IWorkflowExecutionTopologyResolver
-{
-    Task<IReadOnlyList<WorkflowExecutionTopologyEdge>> ResolveAsync(
-        IActorRuntime runtime,
-        string rootActorId,
-        CancellationToken ct = default);
-}
+namespace Aevatar.Workflow.Application.Orchestration;
 
 public sealed class ActorRuntimeWorkflowExecutionTopologyResolver : IWorkflowExecutionTopologyResolver
 {

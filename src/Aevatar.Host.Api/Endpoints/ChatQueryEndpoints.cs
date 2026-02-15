@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Host.Api.Workflows;
+using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Projection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -46,7 +46,7 @@ public static class ChatQueryEndpoints
         return Results.Ok(result);
     }
 
-    private static IResult ListWorkflows(WorkflowRegistry registry) =>
+    private static IResult ListWorkflows(IWorkflowDefinitionRegistry registry) =>
         Results.Ok(registry.GetNames());
 
     private static async Task<IResult> ListRuns(
