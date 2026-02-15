@@ -9,6 +9,11 @@ Contracts-only project for CQRS projection.
   - `IProjectionProjector<TContext, TTopology>`
   - `IProjectionEventReducer<TReadModel, TContext>`
   - `IProjectionReadModelStore<TReadModel, TKey>`
+  - `IActorStreamSubscriptionHub<TMessage>`
+  - `IProjectionRunContext`
+  - `IProjectionCompletionDetector<TContext>`
+  - `IProjectionSubscriptionRegistry<TContext>`
+  - `IProjectionLifecycleService<TContext, TCompletion>`
 - Workflow-execution aliases over generic contracts (`IWorkflowExecution*`)
 - Run-scoped projection context/session contracts
 - Read-model contracts (`WorkflowExecutionReport` and related types)

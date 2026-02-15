@@ -1,4 +1,4 @@
-// ─── AGUIProjector 投影测试 ───
+// ─── EventEnvelopeToAGUIEventMapper 投影测试 ───
 // 验证 EventEnvelope → AG-UI 事件的映射正确性
 
 using Aevatar.Presentation.AGUI;
@@ -11,7 +11,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Hosts.Api.Tests;
 
-public class AGUIProjectorTests
+public class EventEnvelopeToAGUIEventMapperTests
 {
     private static EventEnvelope Wrap<T>(T evt) where T : IMessage => new()
     {
@@ -30,7 +30,7 @@ public class AGUIProjectorTests
             WorkflowName = "review", RunId = "run-1", Input = "hello",
         });
 
-        var events = AGUIProjector.Project(envelope);
+        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<RunStartedEvent>();
@@ -47,7 +47,7 @@ public class AGUIProjectorTests
             StepId = "analyze", StepType = "llm_call", RunId = "run-1",
         });
 
-        var events = AGUIProjector.Project(envelope);
+        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
 
         events.Should().HaveCount(2);
         events[0].Should().BeOfType<StepStartedEvent>();
@@ -63,7 +63,7 @@ public class AGUIProjectorTests
             StepId = "analyze", RunId = "run-1", Success = true, Output = "done",
         });
 
-        var events = AGUIProjector.Project(envelope);
+        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<StepFinishedEvent>();
@@ -78,7 +78,7 @@ public class AGUIProjectorTests
             Content = "分析结果如下...", SessionId = "s1",
         });
 
-        var events = AGUIProjector.Project(envelope);
+        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
 
         events.Should().HaveCount(3);
         events[0].Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageStartEvent>();
@@ -97,7 +97,7 @@ public class AGUIProjectorTests
             Delta = "部分", SessionId = "s1",
         });
 
-        var events = AGUIProjector.Project(envelope);
+        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageContentEvent>();
@@ -111,7 +111,7 @@ public class AGUIProjectorTests
             WorkflowName = "review", RunId = "run-1", Success = true, Output = "完成",
         });
 
-        var events = AGUIProjector.Project(envelope);
+        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<RunFinishedEvent>();
@@ -125,7 +125,7 @@ public class AGUIProjectorTests
             WorkflowName = "review", RunId = "run-1", Success = false, Error = "超时",
         });
 
-        var events = AGUIProjector.Project(envelope);
+        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<RunErrorEvent>();
@@ -140,7 +140,7 @@ public class AGUIProjectorTests
             ToolName = "search", CallId = "tc-1", ArgumentsJson = "{}",
         });
 
-        var events = AGUIProjector.Project(envelope);
+        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<ToolCallStartEvent>();
@@ -154,7 +154,7 @@ public class AGUIProjectorTests
             CallId = "tc-1", ResultJson = "{\"found\":true}", Success = true,
         });
 
-        var events = AGUIProjector.Project(envelope);
+        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<ToolCallEndEvent>();
@@ -166,7 +166,7 @@ public class AGUIProjectorTests
         // ParentChangedEvent 没有投影规则
         var envelope = Wrap(new ParentChangedEvent { OldParent = "a", NewParent = "b" });
 
-        var events = AGUIProjector.Project(envelope);
+        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
 
         events.Should().BeEmpty();
     }
@@ -179,7 +179,7 @@ public class AGUIProjectorTests
             Id = "test", PublisherId = "x", Direction = EventDirection.Down,
         };
 
-        var events = AGUIProjector.Project(envelope);
+        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
 
         events.Should().BeEmpty();
     }

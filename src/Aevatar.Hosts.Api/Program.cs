@@ -10,6 +10,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Hosts.Api.Endpoints;
+using Aevatar.Hosts.Api.Projection;
 using Aevatar.CQRS.Projections.DependencyInjection;
 using Aevatar.Hosts.Api.Workflows;
 using Aevatar.Bootstrap;
@@ -28,6 +29,7 @@ builder.Services.AddAevatarBootstrap(builder.Configuration, options =>
 });
 builder.Services.AddWorkflowExecutionProjectionCQRS(options =>
     builder.Configuration.GetSection("WorkflowExecutionProjection").Bind(options));
+builder.Services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
 
 // ─── 工作流注册表（应用目录 + repo 根 workflows + CWD + ~/.aevatar/workflows） ───
 builder.Services.AddSingleton(sp =>

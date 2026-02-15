@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projections.Orchestration;
 using Aevatar.CQRS.Projections.Projectors;
 using Aevatar.CQRS.Projections.Reducers;
 using Aevatar.CQRS.Projections.Stores;
+using Aevatar.CQRS.Projections.Streaming;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflows.Core;
 using FluentAssertions;
@@ -26,11 +27,13 @@ public class WorkflowExecutionProjectionServiceTests
             EnableRunReportArtifacts = true,
         };
         var streams = new InMemoryStreamProvider();
+        var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var store = new InMemoryWorkflowExecutionReadModelStore();
         var projector = new WorkflowExecutionReadModelProjector(store, BuildReducers());
         var coordinator = new WorkflowExecutionProjectionCoordinator([projector]);
-        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, streams);
-        var service = new WorkflowExecutionProjectionService(options, coordinator, store, runRegistry);
+        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, subscriptionHub);
+        var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
+        var service = new WorkflowExecutionProjectionService(options, lifecycle, store);
 
         var session = await service.StartAsync("root", "direct", "hello");
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
@@ -72,11 +75,13 @@ public class WorkflowExecutionProjectionServiceTests
             EnableRunReportArtifacts = false,
         };
         var streams = new InMemoryStreamProvider();
+        var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var store = new InMemoryWorkflowExecutionReadModelStore();
         var projector = new WorkflowExecutionReadModelProjector(store, BuildReducers());
         var coordinator = new WorkflowExecutionProjectionCoordinator([projector]);
-        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, streams);
-        var service = new WorkflowExecutionProjectionService(options, coordinator, store, runRegistry);
+        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, subscriptionHub);
+        var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
+        var service = new WorkflowExecutionProjectionService(options, lifecycle, store);
 
         var session = await service.StartAsync("root", "direct", "hello");
         await service.ProjectAsync(session, Wrap(new StartWorkflowEvent
@@ -105,11 +110,13 @@ public class WorkflowExecutionProjectionServiceTests
             EnableRunReportArtifacts = true,
         };
         var streams = new InMemoryStreamProvider();
+        var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var store = new InMemoryWorkflowExecutionReadModelStore();
         var projector = new WorkflowExecutionReadModelProjector(store, BuildReducers());
         var coordinator = new WorkflowExecutionProjectionCoordinator([projector]);
-        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, streams);
-        var service = new WorkflowExecutionProjectionService(options, coordinator, store, runRegistry);
+        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, subscriptionHub);
+        var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
+        var service = new WorkflowExecutionProjectionService(options, lifecycle, store);
 
         var session = await service.StartAsync("root", "direct", "hello");
         await service.ProjectAsync(session, Wrap(new StartWorkflowEvent
@@ -134,11 +141,13 @@ public class WorkflowExecutionProjectionServiceTests
             EnableRunReportArtifacts = true,
         };
         var streams = new InMemoryStreamProvider();
+        var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var store = new InMemoryWorkflowExecutionReadModelStore();
         var projector = new WorkflowExecutionReadModelProjector(store, BuildReducers());
         var coordinator = new WorkflowExecutionProjectionCoordinator([projector]);
-        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, streams);
-        var service = new WorkflowExecutionProjectionService(options, coordinator, store, runRegistry);
+        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, subscriptionHub);
+        var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
+        var service = new WorkflowExecutionProjectionService(options, lifecycle, store);
 
         var session1 = await service.StartAsync("root", "direct", "hello-1");
         var session2 = await service.StartAsync("root", "direct", "hello-2");
@@ -189,11 +198,13 @@ public class WorkflowExecutionProjectionServiceTests
             RunProjectionCompletionWaitTimeoutMs = 50,
         };
         var streams = new InMemoryStreamProvider();
+        var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var store = new InMemoryWorkflowExecutionReadModelStore();
         var projector = new WorkflowExecutionReadModelProjector(store, BuildReducers());
         var coordinator = new WorkflowExecutionProjectionCoordinator([projector]);
-        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, streams);
-        var service = new WorkflowExecutionProjectionService(options, coordinator, store, runRegistry);
+        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, subscriptionHub);
+        var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
+        var service = new WorkflowExecutionProjectionService(options, lifecycle, store);
 
         var session = await service.StartAsync("root", "direct", "hello");
         var completed = await service.WaitForRunProjectionCompletedAsync(session.RunId);
@@ -213,10 +224,12 @@ public class WorkflowExecutionProjectionServiceTests
             RunProjectionCompletionWaitTimeoutMs = 3000,
         };
         var streams = new InMemoryStreamProvider();
+        var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var coordinator = new WorkflowExecutionProjectionCoordinator([new FailingProjector()]);
         var store = new InMemoryWorkflowExecutionReadModelStore();
-        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, streams);
-        var service = new WorkflowExecutionProjectionService(options, coordinator, store, runRegistry);
+        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, subscriptionHub);
+        var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
+        var service = new WorkflowExecutionProjectionService(options, lifecycle, store);
 
         var session = await service.StartAsync("root", "direct", "hello");
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
@@ -245,11 +258,13 @@ public class WorkflowExecutionProjectionServiceTests
             EnableRunReportArtifacts = true,
         };
         var streams = new InMemoryStreamProvider();
+        var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var store = new InMemoryWorkflowExecutionReadModelStore();
         var projector = new WorkflowExecutionReadModelProjector(store, BuildReducers());
         var coordinator = new WorkflowExecutionProjectionCoordinator([projector]);
-        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, streams);
-        var service = new WorkflowExecutionProjectionService(options, coordinator, store, runRegistry);
+        var runRegistry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, subscriptionHub);
+        var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
+        var service = new WorkflowExecutionProjectionService(options, lifecycle, store);
 
         var session = await service.StartAsync("root", "direct", "hello");
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent

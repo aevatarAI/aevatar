@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projections.Configuration;
 using Aevatar.CQRS.Projections.Orchestration;
 using Aevatar.CQRS.Projections.Stores;
+using Aevatar.CQRS.Projections.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Reflection;
@@ -30,7 +31,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, WorkflowExecutionProjectionCoordinator>();
         services.TryAddSingleton<IWorkflowExecutionProjectionCoordinator>(sp =>
             (IWorkflowExecutionProjectionCoordinator)sp.GetRequiredService<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>());
-        services.TryAddSingleton<IWorkflowExecutionProjectionSubscriptionRegistry, WorkflowExecutionProjectionSubscriptionRegistry>();
+        services.TryAddSingleton<IProjectionCompletionDetector<WorkflowExecutionProjectionContext>, WorkflowCompletedEventProjectionCompletionDetector<WorkflowExecutionProjectionContext>>();
+        services.TryAddSingleton<IProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>, WorkflowExecutionProjectionSubscriptionRegistry>();
+        services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
+        services.TryAddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
+        services.TryAddSingleton<IWorkflowExecutionProjectionSubscriptionRegistry>(sp =>
+            (IWorkflowExecutionProjectionSubscriptionRegistry)sp.GetRequiredService<IProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>>());
         services.TryAddSingleton<IWorkflowExecutionProjectionService, WorkflowExecutionProjectionService>();
         return services;
     }

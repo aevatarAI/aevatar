@@ -2,8 +2,13 @@ using System.Reflection;
 using System.Text.Json;
 using Aevatar.CQRS.Projections.Abstractions;
 using Aevatar.CQRS.Projections.Abstractions.ReadModels;
+using Aevatar.CQRS.Projections.Configuration;
+using Aevatar.CQRS.Projections.Orchestration;
+using Aevatar.CQRS.Projections.Stores;
+using Aevatar.CQRS.Projections.Streaming;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Hosts.Api.Endpoints;
+using Aevatar.Hosts.Api.Projection;
 using Aevatar.Hosts.Api.Workflows;
 using Aevatar.Workflows.Core;
 using FluentAssertions;
@@ -25,6 +30,7 @@ public class ChatEndpointsInternalTests
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddSingleton<IActorRuntime>(new FakeActorRuntime([]));
         builder.Services.AddSingleton<IStreamProvider>(new InMemoryStreamProvider());
+        builder.Services.AddSingleton<IActorStreamSubscriptionHub<EventEnvelope>, ActorStreamSubscriptionHub<EventEnvelope>>();
         builder.Services.AddSingleton(new WorkflowRegistry());
         builder.Services.AddSingleton<IWorkflowExecutionProjectionService>(
             new FakeProjectionService(enableRunQueryEndpoints: true, enableRunReportArtifacts: false));
@@ -192,6 +198,7 @@ public class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         var runtime = new FakeActorRuntime([]);
         var streams = new InMemoryStreamProvider();
+        await using var aguiEventStreamSubscriptions = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var registry = new WorkflowRegistry();
         var loggerFactory = LoggerFactory.Create(_ => { });
         var projectionService = new FakeProjectionService(enableRunQueryEndpoints: false, enableRunReportArtifacts: false);
@@ -201,7 +208,6 @@ public class ChatEndpointsInternalTests
             http,
             new ChatInput { Prompt = "hello", AgentId = "missing" },
             runtime,
-            streams,
             registry,
             loggerFactory,
             projectionService,
@@ -216,6 +222,7 @@ public class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         var runtime = new FakeActorRuntime([]);
         var streams = new InMemoryStreamProvider();
+        await using var aguiEventStreamSubscriptions = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var registry = new WorkflowRegistry();
         var loggerFactory = LoggerFactory.Create(_ => { });
         var projectionService = new FakeProjectionService(enableRunQueryEndpoints: false, enableRunReportArtifacts: false);
@@ -225,7 +232,6 @@ public class ChatEndpointsInternalTests
             http,
             new ChatInput { Prompt = "hello", Workflow = "not-found" },
             runtime,
-            streams,
             registry,
             loggerFactory,
             projectionService,
@@ -239,6 +245,7 @@ public class ChatEndpointsInternalTests
     {
         var http = CreateHttpContext();
         var streams = new InMemoryStreamProvider();
+        await using var aguiEventStreamSubscriptions = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var runtime = new FakeActorRuntime(
             [],
             createFactory: actorId => new FakeActor(
@@ -264,17 +271,16 @@ public class ChatEndpointsInternalTests
         var registry = new WorkflowRegistry();
         registry.Register("direct", WorkflowRegistry.BuiltInDirectYaml);
         var loggerFactory = LoggerFactory.Create(_ => { });
-        var projectionService = new FakeProjectionService(
+        var projectionService = CreateLiveProjectionService(
+            aguiEventStreamSubscriptions,
             enableRunQueryEndpoints: false,
-            enableRunReportArtifacts: false,
-            waitForRunCompletionResult: true);
+            enableRunReportArtifacts: false);
 
         await InvokeVoidTask(
             "HandleChat",
             http,
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             runtime,
-            streams,
             registry,
             loggerFactory,
             projectionService,
@@ -284,8 +290,6 @@ public class ChatEndpointsInternalTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"type\":\"RUN_STARTED\"");
         body.Should().Contain("\"type\":\"RUN_FINISHED\"");
-        projectionService.StartCalls.Should().Be(1);
-        projectionService.CompleteCalls.Should().Be(1);
     }
 
     [Fact]
@@ -293,6 +297,7 @@ public class ChatEndpointsInternalTests
     {
         var http = CreateHttpContext();
         var streams = new InMemoryStreamProvider();
+        await using var aguiEventStreamSubscriptions = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var runtime = new FakeActorRuntime(
             [],
             createFactory: actorId => new FakeActor(
@@ -303,17 +308,16 @@ public class ChatEndpointsInternalTests
         var registry = new WorkflowRegistry();
         registry.Register("direct", WorkflowRegistry.BuiltInDirectYaml);
         var loggerFactory = LoggerFactory.Create(_ => { });
-        var projectionService = new FakeProjectionService(
+        var projectionService = CreateLiveProjectionService(
+            aguiEventStreamSubscriptions,
             enableRunQueryEndpoints: false,
-            enableRunReportArtifacts: false,
-            waitForRunCompletionResult: false);
+            enableRunReportArtifacts: false);
 
         await InvokeVoidTask(
             "HandleChat",
             http,
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             runtime,
-            streams,
             registry,
             loggerFactory,
             projectionService,
@@ -323,8 +327,6 @@ public class ChatEndpointsInternalTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"type\":\"RUN_ERROR\"");
         body.Should().Contain("\"code\":\"INTERNAL_ERROR\"");
-        projectionService.StartCalls.Should().Be(1);
-        projectionService.CompleteCalls.Should().Be(1);
     }
 
     [Fact]
@@ -332,6 +334,7 @@ public class ChatEndpointsInternalTests
     {
         var http = CreateHttpContext();
         var streams = new InMemoryStreamProvider();
+        await using var aguiEventStreamSubscriptions = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var existingActor = new FakeActor(
             "actor-existing",
             parentId: null,
@@ -349,14 +352,16 @@ public class ChatEndpointsInternalTests
         var runtime = new FakeActorRuntime([existingActor]);
         var registry = new WorkflowRegistry();
         var loggerFactory = LoggerFactory.Create(_ => { });
-        var projectionService = new FakeProjectionService(enableRunQueryEndpoints: false, enableRunReportArtifacts: false);
+        var projectionService = CreateLiveProjectionService(
+            aguiEventStreamSubscriptions,
+            enableRunQueryEndpoints: false,
+            enableRunReportArtifacts: false);
 
         await InvokeVoidTask(
             "HandleChat",
             http,
             new ChatInput { Prompt = "hello", AgentId = "actor-existing" },
             runtime,
-            streams,
             registry,
             loggerFactory,
             projectionService,
@@ -373,22 +378,14 @@ public class ChatEndpointsInternalTests
     {
         var http = CreateHttpContext();
         var streams = new InMemoryStreamProvider();
+        await using var aguiEventStreamSubscriptions = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         var runtime = new FakeActorRuntime(
             [],
             createFactory: actorId => new FakeActor(
                 actorId,
                 parentId: null,
                 new FakeAgent("agent-" + actorId, "ok"),
-                async (_, _) =>
-                {
-                    await streams.GetStream(actorId).ProduceAsync(Wrap(new WorkflowCompletedEvent
-                    {
-                        WorkflowName = "direct",
-                        RunId = "wf-run-query",
-                        Success = true,
-                        Output = "done",
-                    }));
-                }));
+                (_, _) => throw new InvalidOperationException("boom")));
         var registry = new WorkflowRegistry();
         registry.Register("direct", WorkflowRegistry.BuiltInDirectYaml);
         var loggerFactory = LoggerFactory.Create(_ => { });
@@ -412,7 +409,6 @@ public class ChatEndpointsInternalTests
             http,
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             runtime,
-            streams,
             registry,
             loggerFactory,
             projectionService,
@@ -501,6 +497,29 @@ public class ChatEndpointsInternalTests
         Direction = EventDirection.Self,
     };
 
+    private static IWorkflowExecutionProjectionService CreateLiveProjectionService(
+        IActorStreamSubscriptionHub<EventEnvelope> subscriptionHub,
+        bool enableRunQueryEndpoints,
+        bool enableRunReportArtifacts)
+    {
+        var options = new WorkflowExecutionProjectionOptions
+        {
+            Enabled = true,
+            EnableRunQueryEndpoints = enableRunQueryEndpoints,
+            EnableRunReportArtifacts = enableRunReportArtifacts,
+            RunProjectionCompletionWaitTimeoutMs = 3000,
+        };
+        var store = new InMemoryWorkflowExecutionReadModelStore();
+        var coordinator = new WorkflowExecutionProjectionCoordinator(
+            [new WorkflowExecutionAGUIEventProjector()]);
+        var registry = new WorkflowExecutionProjectionSubscriptionRegistry(coordinator, subscriptionHub);
+        var lifecycle =
+            new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
+                coordinator,
+                registry);
+        return new WorkflowExecutionProjectionService(options, lifecycle, store);
+    }
+
     private sealed class FakeProjectionService : IWorkflowExecutionProjectionService
     {
         private readonly IReadOnlyList<WorkflowExecutionReport> _reports;
@@ -510,8 +529,6 @@ public class ChatEndpointsInternalTests
         private readonly WorkflowExecutionReport? _completeResult;
         private int _runSeed;
 
-        public int StartCalls { get; private set; }
-        public int CompleteCalls { get; private set; }
         public int GetRunCalls { get; private set; }
 
         public FakeProjectionService(
@@ -534,7 +551,6 @@ public class ChatEndpointsInternalTests
 
         public Task<WorkflowExecutionProjectionSession> StartAsync(string rootActorId, string workflowName, string input, CancellationToken ct = default)
         {
-            StartCalls++;
             var startedAt = DateTimeOffset.UtcNow;
             var runId = "run-" + Interlocked.Increment(ref _runSeed);
             return Task.FromResult(new WorkflowExecutionProjectionSession
@@ -560,7 +576,6 @@ public class ChatEndpointsInternalTests
 
         public Task<WorkflowExecutionReport?> CompleteAsync(WorkflowExecutionProjectionSession session, IReadOnlyList<WorkflowExecutionTopologyEdge> topology, CancellationToken ct = default)
         {
-            CompleteCalls++;
             return Task.FromResult(_completeResult);
         }
 

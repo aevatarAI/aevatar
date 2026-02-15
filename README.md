@@ -1,6 +1,6 @@
 # Aevatar
 
-Aevatar 是一个 **AI Agent 工作流框架**：用 YAML 定义多步工作流（调用 LLM、并行、投票、外部接口等），通过 **HTTP Chat 接口** 触发并流式拿到结果。  
+Aevatar 是一个 **AI Agent 工作流框架**：用 YAML 定义多步工作流（调用 LLM、并行、投票、外部接口等），通过 **HTTP Chat 接口（SSE / WebSocket）** 触发并流式拿到结果。  
 适合「略懂技术、熟悉 AI Agent 概念、想快速接工作流或二次开发」的读者；不要求熟悉 .NET。
 
 ---
@@ -58,6 +58,7 @@ curl -X POST http://localhost:5000/api/chat \
 ```
 
 运行结束后，仓库根目录的 `artifacts/workflow-executions/` 下会生成本次运行的 JSON 与 HTML 报告。
+（可通过 `WorkflowExecutionProjection` 配置开关控制）
 
 ---
 
@@ -67,7 +68,7 @@ curl -X POST http://localhost:5000/api/chat \
 - **Api**：根据工作流名创建或复用「工作流 Agent」，把提示词当事件发进去。
 - **工作流 Agent**：按 YAML 里的步骤顺序，一步步派发任务（例如「这一步调 LLM」「这一步调外部接口」）。
 - **步骤**：由对应的「步骤模块」执行（LLM 调用、并行、投票、Connector 等），结果再交回工作流，进入下一步或结束。
-- **结果**：通过事件流推回 Api，再通过 SSE 推给你。
+- **结果**：通过事件流推回 Api，再通过 SSE / WebSocket 推给你。
 
 下面这张图概括了「宿主（API + 运行时 + LLM + Connector）」与「Agent 树 + 工作流步骤」的关系。
 
@@ -270,6 +271,7 @@ aevatar/
 ## 文档与进阶
 
 - **底层设计**： [docs/FOUNDATION.md](docs/FOUNDATION.md) — 事件模型与 Pipeline。
+- **CQRS 投影架构**： [src/Aevatar.CQRS.Projections/README.md](src/Aevatar.CQRS.Projections/README.md) — 统一 Projection Lifecycle、Coordinator 与 ReadModel。
 - **Role 与 Connector**： [docs/ROLE.md](docs/ROLE.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
 - **Event Sourcing**： [docs/EVENT_SOURCING.md](docs/EVENT_SOURCING.md) — 如何开启事件溯源。
 - **Connector 配置详解**： [src/Aevatar.Configuration/README.md](src/Aevatar.Configuration/README.md#connector-作用与配置) — 配置格式与示例。

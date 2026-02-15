@@ -108,17 +108,21 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 ## CQRS 与 Projection 落点
 
-在当前实现里，Projection 的典型落点在 Host 层：
+当前实现已经收敛为一套统一链路：
 
-- 订阅根 Actor Stream，读取 `EventEnvelope`
-- 投影为 AG-UI 事件并通过 SSE 推送
-- 并行聚合为运行报告（JSON/HTML）
+- **订阅与编排内核** 在 `Aevatar.CQRS.Projections`：
+  - `ProjectionSubscriptionRegistry<,>` 统一订阅 Actor Stream
+  - `WorkflowExecutionProjectionCoordinator` 一对多分发 projector
+  - `ProjectionLifecycleService<,>` 统一 run 生命周期
+- **宿主职责** 在 `Aevatar.Hosts.Api`：
+  - 调用 `IWorkflowExecutionProjectionService.StartAsync/CompleteAsync`
+  - 挂载请求级 `IAGUIEventSink`
+  - 暴露 `/api/runs` 与 `/api/runs/{runId}` 查询端点（可配置开关）
+- **输出分支**：
+  - `WorkflowExecutionReadModelProjector` 写入 read model store
+  - `WorkflowExecutionAGUIEventProjector` 输出 AG-UI 实时事件（SSE/WS）
 
-如果需要业务读模型（read-only model）：
-
-- 建议新增独立 projector（订阅同一事件流）
-- 将结果写入只读存储（内存/Redis/DB）
-- 暴露独立 Query API 供前端查询
+详细关系见 `src/Aevatar.CQRS.Projections/README.md`。
 
 ## 测试项目
 
@@ -153,4 +157,4 @@ await ((GAgentBase)parent.Agent).EventPublisher
 
 ## 当前状态说明
 
-仓库仍处于初始化迭代阶段（尚无正式提交历史），接口和目录可能继续调整。建议在变更 Foundation 接口前，先同步更新对应 README、测试与本文档。
+仓库处于持续迭代阶段，接口与目录会按架构约束逐步收敛。变更 Foundation 相关接口前，请同步更新 README、测试与本文档。

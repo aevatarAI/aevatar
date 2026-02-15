@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// AGUIProjector — EventEnvelope → AGUIEvent 投影
+// EventEnvelopeToAGUIEventMapper — EventEnvelope → AGUIEvent 映射
 //
 // 从 Actor Stream 上的 EventEnvelope 解包 payload，
 // 映射为前端可消费的 AG-UI 事件。
@@ -15,14 +15,14 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Hosts.Api.Projection;
 
 /// <summary>
-/// EventEnvelope payload → AG-UI 事件投影。
+/// EventEnvelope payload → AG-UI 事件映射。
 /// </summary>
-public static class AGUIProjector
+public static class EventEnvelopeToAGUIEventMapper
 {
     /// <summary>
-    /// 将一个 EventEnvelope 投影为 0~N 个 AG-UI 事件。
+    /// 将一个 EventEnvelope 映射为 0~N 个 AG-UI 事件。
     /// </summary>
-    public static IReadOnlyList<AGUIEvent> Project(EventEnvelope envelope)
+    public static IReadOnlyList<AGUIEvent> Map(EventEnvelope envelope)
     {
         if (envelope.Payload == null) return [];
 

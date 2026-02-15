@@ -4,11 +4,11 @@
 
 ## 职责
 
-- 暴露 `/api/chat` 对话入口（SSE）
+- 暴露 `/api/chat`（SSE）与 `/api/ws/chat`（WebSocket）对话入口
 - 创建或复用 `WorkflowGAgent`
-- 把 Actor 事件投影为 AG-UI 事件并流式返回
+- 启动同一条 WorkflowExecution 投影链路，并把 Actor 事件投影为 AG-UI 实时事件
 - 提供 Agent 列表和工作流列表查询端点
-- 可选提供 CQRS 投影读侧查询端点（run read model）
+- 可选提供 CQRS 读侧查询端点（run read model）
 
 ## 关键端点
 
@@ -22,15 +22,31 @@
 ## 核心组件
 
 - `Endpoints/ChatEndpoints.cs`：API 入口与请求处理
-- `Projection/AGUIProjector.cs`：`EventEnvelope` -> `AGUIEvent` 投影
+- `WorkflowExecutionProjectionService`：CQRS 投影门面（run 生命周期 + query）
+- `WorkflowExecutionAGUIEventProjector`：作为 WorkflowExecution 投影链路中的 live-output projector，把同一 `EventEnvelope` 流映射到 AGUI 事件
+- `WorkflowExecutionProjectionContextAGUIExtensions`：在 run context 上挂载/读取请求级 `IAGUIEventSink`
+- `Projection/EventEnvelopeToAGUIEventMapper.cs`：纯映射函数（`EventEnvelope` -> `AGUIEvent`）
+- `IActorStreamSubscriptionHub<EventEnvelope>`（来自 `Aevatar.CQRS.Projections`）：按 actor 统一复用底层 stream 订阅并分发到会话回调
 - `Aevatar.CQRS.Projections.Abstractions`：CQRS 契约与读模型定义（供查询与 reporting 复用）
 - `Aevatar.CQRS.Projections`：读模型存储、projector、coordinator、event reducer 与 DI 组合
 - `Workflows/WorkflowRegistry.cs`：workflow YAML 注册与发现
 - `Program.cs`：Runtime、Cognitive 模块、CORS 与端点装配
+- `Endpoints/ChatEndpoints.cs` 中 `StartProjectionRunAsync/FinalizeProjectionRunAsync`：SSE 与 WebSocket 共用同一套投影编排步骤（启动/等待完成/收尾）
 
-详细设计见 `docs/CQRS_PROJECTION_ARCHITECTURE.md`。
+详细设计见 `src/Aevatar.CQRS.Projections/README.md`。
 
 `WorkflowExecutionProjection` 配置节可控制是否启用投影、查询端点和报告落盘。
+
+## 默认装配
+
+`Program.cs` 默认装配以下链路：
+
+```csharp
+builder.Services.AddWorkflowExecutionProjectionCQRS(...);
+builder.Services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
+```
+
+即：读模型 projector（CQRS 项目内置）与 AGUI projector（API 宿主扩展）在同一 coordinator 下并行执行。
 
 ## 依赖
 

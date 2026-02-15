@@ -9,20 +9,17 @@ namespace Aevatar.CQRS.Projections.Orchestration;
 public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProjectionService
 {
     private readonly WorkflowExecutionProjectionOptions _options;
-    private readonly IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> _coordinator;
+    private readonly IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> _lifecycle;
     private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
-    private readonly IWorkflowExecutionProjectionSubscriptionRegistry _subscriptionRegistry;
 
     public WorkflowExecutionProjectionService(
         WorkflowExecutionProjectionOptions options,
-        IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> coordinator,
-        IProjectionReadModelStore<WorkflowExecutionReport, string> store,
-        IWorkflowExecutionProjectionSubscriptionRegistry subscriptionRegistry)
+        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
+        IProjectionReadModelStore<WorkflowExecutionReport, string> store)
     {
         _options = options;
-        _coordinator = coordinator;
+        _lifecycle = lifecycle;
         _store = store;
-        _subscriptionRegistry = subscriptionRegistry;
     }
 
     public bool ProjectionEnabled => _options.Enabled;
@@ -59,8 +56,7 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
             Input = input,
         };
 
-        await _coordinator.InitializeAsync(context, ct);
-        await _subscriptionRegistry.RegisterAsync(context, ct);
+        await _lifecycle.StartAsync(context, ct);
 
         return new WorkflowExecutionProjectionSession
         {
@@ -78,7 +74,7 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         if (!ProjectionEnabled || session.Context == null)
             return Task.CompletedTask;
 
-        return _coordinator.ProjectAsync(session.Context, envelope, ct);
+        return _lifecycle.ProjectAsync(session.Context, envelope, ct);
     }
 
     public Task<bool> WaitForRunProjectionCompletedAsync(string runId, CancellationToken ct = default)
@@ -87,7 +83,7 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
             return Task.FromResult(false);
 
         var waitMs = Math.Max(1, _options.RunProjectionCompletionWaitTimeoutMs);
-        return _subscriptionRegistry.WaitForCompletionAsync(runId, TimeSpan.FromMilliseconds(waitMs), ct);
+        return _lifecycle.WaitForCompletionAsync(runId, TimeSpan.FromMilliseconds(waitMs), ct);
     }
 
     public async Task<WorkflowExecutionReport?> CompleteAsync(
@@ -98,8 +94,7 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         if (!ProjectionEnabled || session.Context == null)
             return null;
 
-        await _subscriptionRegistry.UnregisterAsync(session.Context.RootActorId, session.RunId, ct);
-        await _coordinator.CompleteAsync(session.Context, topology, ct);
+        await _lifecycle.CompleteAsync(session.Context, topology, ct);
         return await _store.GetAsync(session.RunId, ct);
     }
 

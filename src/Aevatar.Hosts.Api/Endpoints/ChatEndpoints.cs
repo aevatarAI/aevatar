@@ -82,7 +82,6 @@ public static class ChatEndpoints
         HttpContext http,
         ChatInput input,
         IActorRuntime runtime,
-        IStreamProvider streams,
         WorkflowRegistry registry,
         ILoggerFactory loggerFactory,
         IWorkflowExecutionProjectionService projectionService,
@@ -131,33 +130,24 @@ public static class ChatEndpoints
         await using var sink = new AGUIEventChannel();
         await using var writer = new AGUISseWriter(http.Response);
         var logger = loggerFactory?.CreateLogger("Aevatar.Hosts.Api.Chat");
-
-        // ─── 3. 初始化 CQRS Projection Session ───
-
-        var projectionSession = await projectionService.StartAsync(
+        var projectionRun = await StartProjectionRunAsync(
+            projectionService,
             actor.Id,
             workflowNameForRun,
             input.Prompt,
+            sink,
             ct);
-
-        // ─── 4. 订阅 Agent Stream（捕获事件并映射 AG-UI） ───
-
-        var stream = streams.GetStream(actor.Id);
-        await using var subscription = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
-        {
-            foreach (var aguiEvent in AGUIProjector.Project(envelope))
-                sink.Push(aguiEvent);
-        }, ct);
+        var runId = projectionRun.RunId;
 
         // ─── 5. 发送 RUN_STARTED + ChatRequestEvent ───
 
-        var ts = projectionSession.StartedAt.ToUnixTimeMilliseconds();
+        var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await writer.WriteAsync(new RunStartedEvent
         {
             Timestamp = ts,
             ThreadId = actor.Id,
-            RunId = projectionSession.RunId,
+            RunId = runId,
         }, ct);
 
         // 构造 ChatRequestEvent → 发送到 Agent
@@ -173,6 +163,7 @@ public static class ChatEndpoints
 
         // 非阻塞：启动事件处理；sink 由订阅持续推送，直到 WorkflowCompleted → RunFinishedEvent
         var processingTask = ProcessEnvelopeAsync();
+        var projectionsFinalized = false;
         async Task ProcessEnvelopeAsync()
         {
             try
@@ -210,28 +201,17 @@ public static class ChatEndpoints
             // ─── 7. CQRS 投影收尾 + 写执行报告（artifacts/workflow-executions） ───
             try
             {
-                var projectionCompleted = await projectionService.WaitForRunProjectionCompletedAsync(
-                    projectionSession.RunId);
-                if (!projectionCompleted)
-                {
-                    logger?.LogWarning(
-                        "Projection completion signal timeout for run {RunId}; continue with finalize/query.",
-                        projectionSession.RunId);
-                }
-
-                var topology = await BuildTopologyAsync(runtime, actor.Id);
-                var finalizedReport = await projectionService.CompleteAsync(
-                    projectionSession,
-                    topology,
+                _ = await FinalizeProjectionRunAsync(
+                    projectionService,
+                    projectionRun,
+                    runtime,
+                    actor.Id,
+                    logger,
+                    logTimeoutWarning: true,
                     CancellationToken.None);
+                projectionsFinalized = true;
 
-                var report = finalizedReport;
-                if (report == null && projectionService.EnableRunQueryEndpoints)
-                {
-                    report = await projectionService.GetRunAsync(
-                        projectionSession.RunId,
-                        CancellationToken.None);
-                }
+                var report = projectionRun.WorkflowExecutionReport;
 
                 if (report != null && projectionService.EnableRunReportArtifacts)
                 {
@@ -248,6 +228,14 @@ public static class ChatEndpoints
         }
         finally
         {
+            if (!projectionsFinalized)
+            {
+                await TryRollbackProjectionRunAsync(
+                    projectionService,
+                    projectionRun,
+                    logger);
+            }
+
             try
             {
                 await processingTask;
@@ -261,7 +249,6 @@ public static class ChatEndpoints
     private static async Task HandleChatWebSocket(
         HttpContext http,
         IActorRuntime runtime,
-        IStreamProvider streams,
         WorkflowRegistry registry,
         ILoggerFactory loggerFactory,
         IWorkflowExecutionProjectionService projectionService,
@@ -373,18 +360,14 @@ public static class ChatEndpoints
         }
 
         await using var sink = new AGUIEventChannel();
-        var projectionSession = await projectionService.StartAsync(
+        var projectionRun = await StartProjectionRunAsync(
+            projectionService,
             actor.Id,
             workflowNameForRun,
             input.Prompt,
+            sink,
             ct);
-
-        var stream = streams.GetStream(actor.Id);
-        await using var subscription = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
-        {
-            foreach (var aguiEvent in AGUIProjector.Project(envelope))
-                sink.Push(aguiEvent);
-        }, ct);
+        var runId = projectionRun.RunId;
 
         await SendWebSocketMessageAsync(socket, new
         {
@@ -392,7 +375,7 @@ public static class ChatEndpoints
             requestId,
             payload = new
             {
-                runId = projectionSession.RunId,
+                runId,
                 threadId = actor.Id,
                 workflow = workflowNameForRun,
             },
@@ -404,9 +387,9 @@ public static class ChatEndpoints
             requestId,
             payload = new RunStartedEvent
             {
-                Timestamp = projectionSession.StartedAt.ToUnixTimeMilliseconds(),
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 ThreadId = actor.Id,
-                RunId = projectionSession.RunId,
+                RunId = runId,
             },
         }, CancellationToken.None);
 
@@ -420,6 +403,7 @@ public static class ChatEndpoints
         };
 
         var processingTask = ProcessEnvelopeAsync();
+        var projectionsFinalized = false;
         async Task ProcessEnvelopeAsync()
         {
             try
@@ -459,23 +443,17 @@ public static class ChatEndpoints
 
             try
             {
-                var projectionCompleted = await projectionService.WaitForRunProjectionCompletedAsync(
-                    projectionSession.RunId,
+                var projectionCompleted = await FinalizeProjectionRunAsync(
+                    projectionService,
+                    projectionRun,
+                    runtime,
+                    actor.Id,
+                    logger,
+                    logTimeoutWarning: true,
                     CancellationToken.None);
+                projectionsFinalized = true;
 
-                var topology = await BuildTopologyAsync(runtime, actor.Id);
-                _ = await projectionService.CompleteAsync(
-                    projectionSession,
-                    topology,
-                    CancellationToken.None);
-
-                WorkflowExecutionReport? report = null;
-                if (projectionService.EnableRunQueryEndpoints)
-                {
-                    report = await projectionService.GetRunAsync(
-                        projectionSession.RunId,
-                        CancellationToken.None);
-                }
+                var report = projectionRun.WorkflowExecutionReport;
 
                 await SendWebSocketMessageAsync(socket, new
                 {
@@ -483,7 +461,7 @@ public static class ChatEndpoints
                     requestId,
                     payload = new
                     {
-                        runId = projectionSession.RunId,
+                        runId,
                         projectionCompleted,
                         report,
                     },
@@ -503,6 +481,14 @@ public static class ChatEndpoints
         }
         finally
         {
+            if (!projectionsFinalized)
+            {
+                await TryRollbackProjectionRunAsync(
+                    projectionService,
+                    projectionRun,
+                    logger);
+            }
+
             try
             {
                 await processingTask;
@@ -568,6 +554,66 @@ public static class ChatEndpoints
     {
         var report = await projectionService.GetRunAsync(runId, ct);
         return report == null ? Results.NotFound() : Results.Ok(report);
+    }
+
+    private static async Task<WorkflowProjectionRun> StartProjectionRunAsync(
+        IWorkflowExecutionProjectionService projectionService,
+        string actorId,
+        string workflowName,
+        string prompt,
+        AGUIEventChannel sink,
+        CancellationToken ct = default)
+    {
+        var session = await projectionService.StartAsync(actorId, workflowName, prompt, ct);
+        session.Context?.SetAGUIEventSink(sink);
+        return new WorkflowProjectionRun(session);
+    }
+
+    private static async Task<bool> FinalizeProjectionRunAsync(
+        IWorkflowExecutionProjectionService projectionService,
+        WorkflowProjectionRun projectionRun,
+        IActorRuntime runtime,
+        string actorId,
+        ILogger? logger,
+        bool logTimeoutWarning,
+        CancellationToken ct = default)
+    {
+        var runId = projectionRun.RunId;
+        var projectionCompleted = await projectionService.WaitForRunProjectionCompletedAsync(runId, ct);
+
+        if (logTimeoutWarning && !projectionCompleted)
+        {
+            logger?.LogWarning(
+                "Projection completion signal timeout for run {RunId}; continue with finalize/query.",
+                runId);
+        }
+
+        var topology = await BuildTopologyAsync(runtime, actorId);
+        var report = await projectionService.CompleteAsync(projectionRun.Session, topology, ct);
+        if (report == null &&
+            projectionService.EnableRunQueryEndpoints)
+        {
+            report = await projectionService.GetRunAsync(runId, ct);
+        }
+
+        projectionRun.WorkflowExecutionReport = report;
+
+        return projectionCompleted;
+    }
+
+    private static async Task TryRollbackProjectionRunAsync(
+        IWorkflowExecutionProjectionService projectionService,
+        WorkflowProjectionRun projectionRun,
+        ILogger? logger)
+    {
+        try
+        {
+            _ = await projectionService.CompleteAsync(projectionRun.Session, [], CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex, "Failed to complete AGUI event-stream projection lifecycle.");
+        }
     }
 
     private static async Task<List<WorkflowExecutionTopologyEdge>> BuildTopologyAsync(
@@ -655,6 +701,18 @@ public static class ChatEndpoints
         if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
             await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None);
     }
+}
+
+internal sealed class WorkflowProjectionRun
+{
+    public WorkflowProjectionRun(WorkflowExecutionProjectionSession session) =>
+        Session = session;
+
+    public WorkflowExecutionProjectionSession Session { get; }
+
+    public string RunId => Session.RunId;
+
+    public WorkflowExecutionReport? WorkflowExecutionReport { get; set; }
 }
 
 public sealed record ChatWsCommand
