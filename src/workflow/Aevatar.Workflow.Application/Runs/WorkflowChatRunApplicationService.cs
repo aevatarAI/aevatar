@@ -48,9 +48,73 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
+        var runContextCreateResult = await CreateRunContextAsync(request, ct);
+        if (runContextCreateResult.Error != WorkflowChatRunStartError.None ||
+            runContextCreateResult.Context == null)
+        {
+            return new WorkflowChatRunExecutionResult(runContextCreateResult.Error, null, null);
+        }
+
+        var runContext = runContextCreateResult.Context;
+        var started = runContext.ToStarted();
+        var requestEnvelope = _requestEnvelopeFactory.Create(request.Prompt, runContext.RunId);
+        var processingTask = ProcessEnvelopeAsync(runContext, requestEnvelope, ct);
+
+        var finalized = false;
+        try
+        {
+            if (onStartedAsync != null)
+                await onStartedAsync(started, ct);
+
+            await StreamOutputAsync(runContext, emitAsync, ct);
+
+            var finalizeResult = await _runOrchestrator.FinalizeAsync(
+                runContext.ProjectionRun,
+                _runtime,
+                runContext.ActorId,
+                ct);
+            finalized = true;
+
+            await PersistReportBestEffortAsync(finalizeResult.WorkflowExecutionReport, ct);
+            await JoinProcessingTaskAsync(processingTask);
+
+            var result = new WorkflowChatRunFinalizeResult(
+                ToCompletionStatus(finalizeResult.ProjectionCompletionStatus),
+                finalizeResult.ProjectionCompleted,
+                finalizeResult.WorkflowExecutionReport);
+
+            return new WorkflowChatRunExecutionResult(
+                WorkflowChatRunStartError.None,
+                started,
+                result);
+        }
+        finally
+        {
+            if (finalized)
+            {
+                await DisposeSinkSafeAsync(runContext.Sink);
+            }
+            else
+            {
+                try
+                {
+                    await AbortCoreAsync(runContext, processingTask);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Abort workflow projection run failed during cleanup.");
+                }
+            }
+        }
+    }
+
+    private async Task<WorkflowRunContextCreateResult> CreateRunContextAsync(
+        WorkflowChatRunRequest request,
+        CancellationToken ct)
+    {
         var actorResolution = await ResolveOrCreateActorAsync(request, ct);
         if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Actor == null)
-            return new WorkflowChatRunExecutionResult(actorResolution.Error, null, null);
+            return new WorkflowRunContextCreateResult(actorResolution.Error, null);
 
         var actor = actorResolution.Actor;
         var workflowNameForRun = actorResolution.WorkflowNameForRun;
@@ -75,62 +139,20 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         if (!projectionRun.Session.Enabled)
         {
             await sink.DisposeAsync();
-            return new WorkflowChatRunExecutionResult(
+            return new WorkflowRunContextCreateResult(
                 WorkflowChatRunStartError.ProjectionDisabled,
-                null,
                 null);
         }
 
-        var started = new WorkflowChatRunStarted(actor.Id, workflowNameForRun, projectionRun.RunId);
-        var requestEnvelope = _requestEnvelopeFactory.Create(request.Prompt, projectionRun.RunId);
-        var processingTask = ProcessEnvelopeAsync(actor, requestEnvelope, sink, projectionRun.RunId, ct);
-
-        var finalized = false;
-        try
-        {
-            if (onStartedAsync != null)
-                await onStartedAsync(started, ct);
-
-            await StreamOutputAsync(sink, projectionRun.RunId, emitAsync, ct);
-
-            var finalizeResult = await _runOrchestrator.FinalizeAsync(
-                projectionRun,
-                _runtime,
-                actor.Id,
-                ct);
-            finalized = true;
-
-            await PersistReportBestEffortAsync(finalizeResult.WorkflowExecutionReport, ct);
-            await JoinProcessingTaskAsync(processingTask);
-
-            var result = new WorkflowChatRunFinalizeResult(
-                ToCompletionStatus(finalizeResult.ProjectionCompletionStatus),
-                finalizeResult.ProjectionCompleted,
-                finalizeResult.WorkflowExecutionReport);
-
-            return new WorkflowChatRunExecutionResult(
-                WorkflowChatRunStartError.None,
-                started,
-                result);
-        }
-        finally
-        {
-            if (finalized)
+        return new WorkflowRunContextCreateResult(
+            WorkflowChatRunStartError.None,
+            new WorkflowRunContext
             {
-                await DisposeSinkSafeAsync(sink);
-            }
-            else
-            {
-                try
-                {
-                    await AbortCoreAsync(projectionRun, sink, processingTask);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Abort workflow projection run failed during cleanup.");
-                }
-            }
-        }
+                Actor = actor,
+                WorkflowName = workflowNameForRun,
+                ProjectionRun = projectionRun,
+                Sink = sink,
+            });
     }
 
     private async Task<WorkflowActorResolutionResult> ResolveOrCreateActorAsync(
@@ -163,10 +185,8 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
     }
 
     private Task ProcessEnvelopeAsync(
-        IActor actor,
+        WorkflowRunContext runContext,
         EventEnvelope requestEnvelope,
-        IAGUIEventSink sink,
-        string runId,
         CancellationToken ct)
     {
         return ExecuteAsync();
@@ -175,18 +195,18 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         {
             try
             {
-                await actor.HandleEventAsync(requestEnvelope, ct);
+                await runContext.Actor.HandleEventAsync(requestEnvelope, ct);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Workflow execution failed for actor {ActorId}", actor.Id);
+                _logger.LogWarning(ex, "Workflow execution failed for actor {ActorId}", runContext.ActorId);
                 try
                 {
-                    sink.Push(new RunErrorEvent
+                    runContext.Sink.Push(new RunErrorEvent
                     {
                         Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                         Message = "工作流执行异常",
-                        RunId = runId,
+                        RunId = runContext.RunId,
                         Code = "INTERNAL_ERROR",
                     });
                 }
@@ -194,22 +214,21 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
                 {
                 }
 
-                sink.Complete();
+                runContext.Sink.Complete();
             }
         }
     }
 
     private static async Task StreamOutputAsync(
-        AGUIEventChannel sink,
-        string runId,
+        WorkflowRunContext runContext,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct)
     {
-        await foreach (var evt in sink.ReadAllAsync(ct))
+        await foreach (var evt in runContext.Sink.ReadAllAsync(ct))
         {
             var frame = WorkflowOutputFrameMapper.Map(evt);
             await emitAsync(frame, ct);
-            if (IsTerminalEventForRun(evt, runId))
+            if (IsTerminalEventForRun(evt, runContext.RunId))
                 break;
         }
     }
@@ -232,19 +251,18 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
     }
 
     private async Task AbortCoreAsync(
-        WorkflowProjectionRun projectionRun,
-        AGUIEventChannel sink,
+        WorkflowRunContext runContext,
         Task processingTask)
     {
         using var cleanupTimeout = new CancellationTokenSource(CleanupTimeout);
         try
         {
-            await _runOrchestrator.RollbackAsync(projectionRun, cleanupTimeout.Token);
+            await _runOrchestrator.RollbackAsync(runContext.ProjectionRun, cleanupTimeout.Token);
         }
         finally
         {
             await JoinProcessingTaskAsync(processingTask);
-            await DisposeSinkSafeAsync(sink);
+            await DisposeSinkSafeAsync(runContext.Sink);
         }
     }
 
