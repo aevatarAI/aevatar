@@ -15,9 +15,7 @@
 - `WorkflowRunOutputStreamer`
   - 读取 run 事件并映射 `WorkflowOutputFrame`。
 - `WorkflowExecutionQueryApplicationService`
-  - `agents/workflows/runs` 查询门面。
-- `WorkflowExecutionReportMapper`
-  - 将 Projection read model 映射到应用层 `WorkflowRunReport/Summary`。
+  - `agents/workflows/runs` 查询门面（经 `IWorkflowExecutionProjectionPort` 读取读侧模型）。
 - `WorkflowDefinitionRegistry`
   - 维护 workflow 名称到 YAML 的内存注册表。
 

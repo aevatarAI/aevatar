@@ -4,8 +4,9 @@
 
 ## 职责边界
 
-- 领域契约与上下文：`IWorkflowExecutionProjectionService`、`IWorkflowExecutionProjectionContextFactory`、`WorkflowExecutionProjectionContext`
-- run 输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`
+- 应用层投影端口实现：`IWorkflowExecutionProjectionPort`（实现类 `WorkflowExecutionProjectionService`）
+- 领域上下文：`IWorkflowExecutionProjectionContextFactory`、`WorkflowExecutionProjectionContext`
+- run 输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
 - 领域投影实现：reducers、projectors、read model store
 - 领域 DI 组合：`AddWorkflowExecutionProjectionCQRS(...)`
 
