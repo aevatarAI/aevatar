@@ -56,7 +56,7 @@ public sealed class LLMCallModule : IEventModule
             }
 
             // Use per-step session id to avoid collisions across concurrent llm_call steps.
-            var chatSessionId = $"{request.RunId}:{request.StepId}";
+            var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(request.RunId, request.StepId);
             _pending[chatSessionId] = request;
 
             var targetRole = request.TargetRole;

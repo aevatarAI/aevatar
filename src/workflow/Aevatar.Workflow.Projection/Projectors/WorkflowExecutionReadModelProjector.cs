@@ -1,8 +1,7 @@
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Reducers;
 using Aevatar.Workflow.Projection.Configuration;
-using Aevatar.Workflow.Core;
-using AIEvents = Aevatar.AI.Abstractions;
+using Aevatar.Workflow.Projection.RunIdResolvers;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
@@ -15,14 +14,20 @@ public sealed class WorkflowExecutionReadModelProjector
     private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>> _reducersByType;
     private readonly bool _enableRunEventIsolation;
+    private readonly IReadOnlyList<IWorkflowExecutionRunIdResolver> _runIdResolvers;
 
     public WorkflowExecutionReadModelProjector(
         IProjectionReadModelStore<WorkflowExecutionReport, string> store,
         IEnumerable<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> reducers,
+        IEnumerable<IWorkflowExecutionRunIdResolver>? runIdResolvers = null,
         WorkflowExecutionProjectionOptions? options = null)
     {
         _store = store;
         _enableRunEventIsolation = options?.EnableRunEventIsolation == true;
+        _runIdResolvers = (runIdResolvers ??
+            [new WorkflowCoreRunIdResolver(), new AIChatSessionRunIdResolver()])
+            .OrderBy(x => x.Order)
+            .ToList();
         _reducersByType = reducers
             .OrderBy(x => x.Order)
             .GroupBy(x => x.EventTypeUrl, StringComparer.Ordinal)
@@ -91,7 +96,7 @@ public sealed class WorkflowExecutionReadModelProjector
         }, ct));
     }
 
-    private static bool IsEnvelopeForCurrentRun(WorkflowExecutionProjectionContext context, EventEnvelope envelope)
+    private bool IsEnvelopeForCurrentRun(WorkflowExecutionProjectionContext context, EventEnvelope envelope)
     {
         if (!TryResolveRunId(envelope, out var runId))
             return true;
@@ -99,64 +104,16 @@ public sealed class WorkflowExecutionReadModelProjector
         return string.Equals(runId, context.RunId, StringComparison.Ordinal);
     }
 
-    private static bool TryResolveRunId(EventEnvelope envelope, out string? runId)
+    private bool TryResolveRunId(EventEnvelope envelope, out string? runId)
     {
+        foreach (var resolver in _runIdResolvers)
+        {
+            if (resolver.TryResolve(envelope, out runId))
+                return true;
+        }
+
         runId = null;
-        var payload = envelope.Payload;
-        if (payload == null)
-            return false;
-
-        if (payload.Is(StartWorkflowEvent.Descriptor))
-        {
-            runId = payload.Unpack<StartWorkflowEvent>().RunId;
-            return !string.IsNullOrWhiteSpace(runId);
-        }
-
-        if (payload.Is(StepRequestEvent.Descriptor))
-        {
-            runId = payload.Unpack<StepRequestEvent>().RunId;
-            return !string.IsNullOrWhiteSpace(runId);
-        }
-
-        if (payload.Is(StepCompletedEvent.Descriptor))
-        {
-            runId = payload.Unpack<StepCompletedEvent>().RunId;
-            return !string.IsNullOrWhiteSpace(runId);
-        }
-
-        if (payload.Is(WorkflowCompletedEvent.Descriptor))
-        {
-            runId = payload.Unpack<WorkflowCompletedEvent>().RunId;
-            return !string.IsNullOrWhiteSpace(runId);
-        }
-
-        if (payload.Is(AIEvents.TextMessageStartEvent.Descriptor))
-            return TryResolveRunIdFromSession(payload.Unpack<AIEvents.TextMessageStartEvent>().SessionId, out runId);
-
-        if (payload.Is(AIEvents.TextMessageContentEvent.Descriptor))
-            return TryResolveRunIdFromSession(payload.Unpack<AIEvents.TextMessageContentEvent>().SessionId, out runId);
-
-        if (payload.Is(AIEvents.TextMessageEndEvent.Descriptor))
-            return TryResolveRunIdFromSession(payload.Unpack<AIEvents.TextMessageEndEvent>().SessionId, out runId);
-
-        if (payload.Is(AIEvents.ChatResponseEvent.Descriptor))
-            return TryResolveRunIdFromSession(payload.Unpack<AIEvents.ChatResponseEvent>().SessionId, out runId);
-
         return false;
-    }
-
-    private static bool TryResolveRunIdFromSession(string? sessionId, out string? runId)
-    {
-        runId = null;
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return false;
-
-        var separatorIndex = sessionId.IndexOf(':');
-        if (separatorIndex <= 0)
-            return false;
-
-        runId = sessionId[..separatorIndex];
-        return !string.IsNullOrWhiteSpace(runId);
     }
 
     private static DateTimeOffset ResolveEventTimestamp(EventEnvelope envelope)

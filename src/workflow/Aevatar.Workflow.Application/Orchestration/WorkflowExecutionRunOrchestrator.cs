@@ -1,8 +1,8 @@
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Presentation.AGUI;
-using Aevatar.Workflow.Application.Abstractions.Orchestration;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
+using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
@@ -11,18 +11,20 @@ namespace Aevatar.Workflow.Application.Orchestration;
 
 public sealed class WorkflowExecutionRunOrchestrator : IWorkflowExecutionRunOrchestrator
 {
-    private static readonly TimeSpan FinalizeGraceTimeout = TimeSpan.FromMilliseconds(1500);
     private readonly IWorkflowExecutionProjectionService _projectionService;
     private readonly IWorkflowExecutionTopologyResolver _topologyResolver;
+    private readonly WorkflowExecutionProjectionOptions _projectionOptions;
     private readonly ILogger<WorkflowExecutionRunOrchestrator> _logger;
 
     public WorkflowExecutionRunOrchestrator(
         IWorkflowExecutionProjectionService projectionService,
         IWorkflowExecutionTopologyResolver topologyResolver,
+        WorkflowExecutionProjectionOptions projectionOptions,
         ILogger<WorkflowExecutionRunOrchestrator> logger)
     {
         _projectionService = projectionService;
         _topologyResolver = topologyResolver;
+        _projectionOptions = projectionOptions;
         _logger = logger;
     }
 
@@ -55,7 +57,7 @@ public sealed class WorkflowExecutionRunOrchestrator : IWorkflowExecutionRunOrch
 
             completionStatus = await _projectionService.WaitForRunProjectionCompletionStatusAsync(
                 runId,
-                timeoutOverride: FinalizeGraceTimeout,
+                timeoutOverride: TimeSpan.FromMilliseconds(Math.Max(1, _projectionOptions.RunProjectionFinalizeGraceTimeoutMs)),
                 ct: ct);
         }
 

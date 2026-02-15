@@ -44,9 +44,9 @@ internal static class ChatWebSocketProtocol
         await socket.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, true, ct);
     }
 
-    public static async Task CloseAsync(WebSocket socket)
+    public static async Task CloseAsync(WebSocket socket, CancellationToken ct = default)
     {
         if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-            await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None);
+            await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", ct);
     }
 }

@@ -4,7 +4,7 @@ using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
 
-namespace Aevatar.Workflow.Application.Abstractions.Orchestration;
+namespace Aevatar.Workflow.Application.Orchestration;
 
 public interface IWorkflowExecutionRunOrchestrator
 {

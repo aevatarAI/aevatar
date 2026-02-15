@@ -1,5 +1,3 @@
-using Aevatar.Workflow.Application.Abstractions.Orchestration;
-
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
 public sealed record WorkflowChatRunRequest(
@@ -16,13 +14,51 @@ public enum WorkflowChatRunStartError
     ProjectionDisabled = 4,
 }
 
-public sealed record WorkflowChatRunPreparationResult(
-    WorkflowChatRunStartError Error,
-    WorkflowChatRunExecution? Execution);
+public enum WorkflowProjectionCompletionStatus
+{
+    Completed = 0,
+    TimedOut = 1,
+    Failed = 2,
+    Stopped = 3,
+    NotFound = 4,
+    Disabled = 5,
+    Unknown = 99,
+}
 
-public sealed record WorkflowChatRunExecution(
+public sealed record WorkflowChatRunStarted(
     string ActorId,
     string WorkflowName,
-    string RunId,
-    WorkflowProjectionRun ProjectionRun,
-    Task ProcessingTask);
+    string RunId);
+
+public sealed record WorkflowChatRunFinalizeResult(
+    WorkflowProjectionCompletionStatus ProjectionCompletionStatus,
+    bool ProjectionCompleted,
+    object? Report);
+
+public sealed record WorkflowChatRunExecutionResult(
+    WorkflowChatRunStartError Error,
+    WorkflowChatRunStarted? Started,
+    WorkflowChatRunFinalizeResult? FinalizeResult)
+{
+    public bool Succeeded => Error == WorkflowChatRunStartError.None;
+}
+
+public sealed record WorkflowOutputFrame
+{
+    public required string Type { get; init; }
+    public long? Timestamp { get; init; }
+    public string? ThreadId { get; init; }
+    public string? RunId { get; init; }
+    public object? Result { get; init; }
+    public string? Message { get; init; }
+    public string? Code { get; init; }
+    public string? StepName { get; init; }
+    public string? MessageId { get; init; }
+    public string? Role { get; init; }
+    public string? Delta { get; init; }
+    public object? Snapshot { get; init; }
+    public string? ToolCallId { get; init; }
+    public string? ToolName { get; init; }
+    public string? Name { get; init; }
+    public object? Value { get; init; }
+}

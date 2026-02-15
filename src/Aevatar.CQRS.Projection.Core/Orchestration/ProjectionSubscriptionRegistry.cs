@@ -61,7 +61,9 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
             return;
 
         runState.MarkProjectionStopped();
+        runState.CancelDispatch();
         await runState.Subscription.DisposeAsync();
+        runState.Dispose();
     }
 
     public async Task<ProjectionRunCompletionStatus> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default)
@@ -94,7 +96,7 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
         var isTerminal = _completionDetector.IsProjectionCompleted(context, envelope);
         try
         {
-            await _coordinator.ProjectAsync(context, envelope, CancellationToken.None);
+            await _coordinator.ProjectAsync(context, envelope, runState.DispatchToken);
             if (isTerminal)
                 runState.MarkProjectionCompleted();
         }
@@ -120,6 +122,7 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
         foreach (var runState in runs)
         {
             runState.MarkProjectionStopped();
+            runState.CancelDispatch();
             try
             {
                 await runState.Subscription.DisposeAsync();
@@ -127,6 +130,10 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
             catch (Exception ex)
             {
                 _logger?.LogDebug(ex, "Failed to dispose projection run subscription.");
+            }
+            finally
+            {
+                runState.Dispose();
             }
         }
     }
@@ -139,6 +146,7 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
 
     private sealed class ActiveRunState
     {
+        private readonly CancellationTokenSource _dispatchCancellation = new();
         private readonly TaskCompletionSource<ProjectionRunCompletionStatus> _projectionCompleted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _status;
@@ -153,6 +161,7 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
 
         public TContext Context { get; }
         public IAsyncDisposable Subscription { get; }
+        public CancellationToken DispatchToken => _dispatchCancellation.Token;
 
         public Task<ProjectionRunCompletionStatus> ProjectionCompletedTask => _projectionCompleted.Task;
         public bool IsProjectionActive => Volatile.Read(ref _status) == 0;
@@ -188,5 +197,15 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
 
             _projectionCompleted.TrySetResult(ProjectionRunCompletionStatus.Stopped);
         }
+
+        public void CancelDispatch()
+        {
+            if (_dispatchCancellation.IsCancellationRequested)
+                return;
+
+            _dispatchCancellation.Cancel();
+        }
+
+        public void Dispose() => _dispatchCancellation.Dispose();
     }
 }

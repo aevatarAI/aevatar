@@ -47,7 +47,7 @@ public sealed class ActorStreamSubscriptionHub<TMessage> : IActorStreamSubscript
                 var stream = _streams.GetStream(actorId);
                 var streamSubscription = await stream.SubscribeAsync<TMessage>(
                     message => DispatchAsync(actorId, message),
-                    CancellationToken.None);
+                    ct);
 
                 state = new ActorSubscriptionState(streamSubscription);
                 _statesByActor[actorId] = state;

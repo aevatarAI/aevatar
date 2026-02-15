@@ -1,6 +1,4 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Workflows;
-using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
@@ -10,7 +8,7 @@ public static class ChatQueryEndpoints
 {
     public static void Map(
         RouteGroupBuilder group,
-        IWorkflowExecutionProjectionService projectionService)
+        IWorkflowExecutionQueryApplicationService queryService)
     {
         group.MapGet("/agents", ListAgents)
             .Produces(StatusCodes.Status200OK);
@@ -18,7 +16,7 @@ public static class ChatQueryEndpoints
         group.MapGet("/workflows", ListWorkflows)
             .Produces(StatusCodes.Status200OK);
 
-        if (!projectionService.EnableRunQueryEndpoints)
+        if (!queryService.RunQueryEnabled)
             return;
 
         group.MapGet("/runs", ListRuns)
@@ -29,52 +27,32 @@ public static class ChatQueryEndpoints
             .Produces(StatusCodes.Status404NotFound);
     }
 
-    private static async Task<IResult> ListAgents(IActorRuntime runtime)
+    internal static async Task<IResult> ListAgents(
+        IWorkflowExecutionQueryApplicationService queryService,
+        CancellationToken ct = default)
     {
-        var actors = await runtime.GetAllAsync();
-        var result = new List<object>();
-        foreach (var actor in actors)
-        {
-            var desc = await actor.Agent.GetDescriptionAsync();
-            result.Add(new
-            {
-                id = actor.Id,
-                type = actor.Agent.GetType().Name,
-                description = desc,
-            });
-        }
-        return Results.Ok(result);
+        var agents = await queryService.ListAgentsAsync(ct);
+        return Results.Ok(agents);
     }
 
-    private static IResult ListWorkflows(IWorkflowDefinitionRegistry registry) =>
-        Results.Ok(registry.GetNames());
+    internal static IResult ListWorkflows(IWorkflowExecutionQueryApplicationService queryService) =>
+        Results.Ok(queryService.ListWorkflows());
 
-    private static async Task<IResult> ListRuns(
-        IWorkflowExecutionProjectionService projectionService,
+    internal static async Task<IResult> ListRuns(
+        IWorkflowExecutionQueryApplicationService queryService,
         int take = 50,
         CancellationToken ct = default)
     {
-        var reports = await projectionService.ListRunsAsync(take, ct);
-        var items = reports.Select(r => new
-        {
-            r.RunId,
-            r.WorkflowName,
-            r.RootActorId,
-            r.StartedAt,
-            r.EndedAt,
-            r.DurationMs,
-            r.Success,
-            totalSteps = r.Summary.TotalSteps,
-        });
-        return Results.Ok(items);
+        var runs = await queryService.ListRunsAsync(take, ct);
+        return Results.Ok(runs);
     }
 
-    private static async Task<IResult> GetRun(
+    internal static async Task<IResult> GetRun(
         string runId,
-        IWorkflowExecutionProjectionService projectionService,
+        IWorkflowExecutionQueryApplicationService queryService,
         CancellationToken ct = default)
     {
-        var report = await projectionService.GetRunAsync(runId, ct);
+        var report = await queryService.GetRunAsync(runId, ct);
         return report == null ? Results.NotFound() : Results.Ok(report);
     }
 }

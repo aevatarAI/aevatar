@@ -1,7 +1,9 @@
-using Aevatar.Workflow.Application.Abstractions.Orchestration;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Orchestration;
+using Aevatar.Workflow.Application.Queries;
+using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Workflows;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,7 +33,10 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
         services.AddSingleton<IWorkflowExecutionRunOrchestrator, WorkflowExecutionRunOrchestrator>();
+        services.AddSingleton<IWorkflowChatRequestEnvelopeFactory, WorkflowChatRequestEnvelopeFactory>();
+        services.AddSingleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>();
         services.AddSingleton<IWorkflowChatRunApplicationService, WorkflowChatRunApplicationService>();
+        services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
         return services;
     }
 }

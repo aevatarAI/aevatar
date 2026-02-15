@@ -5,8 +5,8 @@
 ## 职责
 
 - 暴露 `POST /api/chat`（SSE）与 `GET /api/ws/chat`（WebSocket）
-- 调用 `IWorkflowChatRunApplicationService` 执行 chat run
-- 提供 `GET /api/runs` / `GET /api/runs/{runId}` 查询（按配置开关）
+- 调用 `IWorkflowChatRunApplicationService.ExecuteAsync` 执行 chat run
+- 调用 `IWorkflowExecutionQueryApplicationService` 提供 `GET /api/runs` / `GET /api/runs/{runId}` 查询（按配置开关）
 
 ## 运行语义契约
 
@@ -17,14 +17,12 @@
 
 ## 依赖关系
 
-- `Aevatar.Workflow.Projection`
-  - WorkflowExecution 读侧模型与投影服务
 - `Aevatar.Workflow.Application.Abstractions`
-  - 应用层契约（run 编排、工作流定义注册、拓扑策略）
+  - 应用层契约（run 用例、query DTO、工作流定义注册）
 - `Aevatar.Workflow.Application`
-  - 应用层实现（`WorkflowChatRunApplicationService`）
-- `Aevatar.CQRS.Projection.Core`
-  - 由 WorkflowExecution 间接依赖的通用内核
+  - 应用层实现（run 编排 + query 服务）
+- `Aevatar.Workflow.Projection`
+  - 由 Workflow 应用层间接依赖的读侧实现
 - `Aevatar.Presentation.AGUI`
   - AGUI 实时事件通道与映射
 - `Aevatar.Workflow.Presentation.AGUIAdapter`
