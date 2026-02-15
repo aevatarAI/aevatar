@@ -38,7 +38,7 @@ dotnet run --project tools/Aevatar.Tools.Config
 - **Raw JSON**：直接编辑 `secrets.json` 的嵌套 JSON。
 - **config.json / agents/**：编辑 `~/.aevatar/config.json` 与 `~/.aevatar/agents/` 下的 YAML（如需要）。
 
-配置写入 `~/.aevatar/secrets.json`（支持明文或加密格式，与 [Aevatar.Configuration](src/Aevatar.Configuration/README.md) 一致）。环境变量 `AEVATAR_SECRETS_PATH` 可指定密钥文件路径；`AEVATAR_HOME` 可指定 `~/.aevatar` 根目录。
+配置写入 `~/.aevatar/secrets.json`（支持明文或加密格式，与 [Aevatar.Configuration](../../src/Aevatar.Configuration/README.md) 一致）。环境变量 `AEVATAR_SECRETS_PATH` 可指定密钥文件路径；`AEVATAR_HOME` 可指定 `~/.aevatar` 根目录。
 
 ## 安全
 

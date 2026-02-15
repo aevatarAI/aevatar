@@ -13,6 +13,7 @@
 - 同一 `Actor` 的多个 `run` 不做事件隔离：订阅端可看到该 Actor 的全量事件流。
 - 单次请求仅以当前 `runId` 的终止事件（`RUN_FINISHED`/`RUN_ERROR`）作为收尾条件。
 - `RUN_STARTED` 统一由 `StartWorkflowEvent` 投影产出，`threadId` 统一使用发布事件的 `ActorId`。
+- 客户端不传 `runId/sessionId`；二者都由服务端内部生成与管理。
 - projection completion 采用显式状态：`Completed` / `TimedOut` / `Failed` / `Stopped` / `NotFound` / `Disabled`。
 
 ## 依赖关系

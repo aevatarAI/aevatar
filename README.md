@@ -65,16 +65,18 @@ curl -X POST http://localhost:5000/api/chat \
 ## 架构一眼看懂
 
 - **你**：通过 HTTP 调用 **Aevatar.Host.Api**（Chat 接口）。
-- **Api**：根据工作流名创建或复用「工作流 Agent」，把提示词当事件发进去。
+- **Api**：只做协议适配（HTTP/SSE/WebSocket）并调用 Application 层，不直接编排工作流。
+- **Workflow Application**：解析/创建 Actor、启动投影 run、发送请求事件、等待收敛并输出查询结果。
 - **工作流 Agent**：按 YAML 里的步骤顺序，一步步派发任务（例如「这一步调 LLM」「这一步调外部接口」）。
 - **步骤**：由对应的「步骤模块」执行（LLM 调用、并行、投票、Connector 等），结果再交回工作流，进入下一步或结束。
-- **结果**：通过事件流推回 Api，再通过 SSE / WebSocket 推给你。
+- **结果**：事件先进入统一 Projection Pipeline，再由 API 通过 SSE / WebSocket 推给你。
 
 ### Run 语义（重要）
 
 - 同一 Actor 多次运行时，默认**不按 run 隔离事件流**，客户端可收到该 Actor 的全量事件。
 - 单次请求只在“当前 runId 的终止事件”到达时结束（`RUN_FINISHED` / `RUN_ERROR`）。
 - `RUN_STARTED` 由 `StartWorkflowEvent` 投影统一生成，`threadId` 为发布该事件的 ActorId。
+- `runId` 与内部 `sessionId` 都由服务端生成；客户端请求只需 `prompt/workflow/agentId`。
 
 下面这张图概括了「宿主（API + 运行时 + LLM + Connector）」与「Agent 树 + 工作流步骤」的关系。
 
@@ -121,8 +123,10 @@ flowchart TB
 sequenceDiagram
     participant User
     participant API as ChatAPI
+    participant App as WorkflowApp
     participant Registry as WorkflowRegistry
     participant Runtime as IActorRuntime
+    participant Projection as ProjectionService
     participant Workflow as WorkflowGAgent
     participant Engine as workflow_loop
     participant LlmStep as llm_call
@@ -132,11 +136,13 @@ sequenceDiagram
     participant External
 
     User->>API: POST /api/chat
-    API->>Registry: resolve workflow yaml
-    API->>Runtime: create or reuse workflow agent
-    API->>Workflow: set yaml and activate
+    API->>App: ExecuteAsync(request)
+    App->>Registry: resolve workflow yaml
+    App->>Runtime: create or reuse workflow agent
+    App->>Projection: StartAsync(actorId, workflowName, input)
+    App->>Workflow: set yaml and activate
     Workflow->>Runtime: create role agents from workflow roles
-    API->>Workflow: ChatRequestEvent
+    App->>Workflow: ChatRequestEvent
     Workflow->>Engine: StartWorkflowEvent
 
     rect rgb(240, 248, 255)
@@ -160,7 +166,9 @@ sequenceDiagram
     end
 
     Engine-->>Workflow: WorkflowCompletedEvent
-    Workflow-->>API: completion events
+    Workflow-->>App: completion events
+    App->>Projection: wait + complete
+    App-->>API: output frames + run report
     API-->>User: SSE stream to client
 ```
 
@@ -172,6 +180,7 @@ sequenceDiagram
 sequenceDiagram
     participant User
     participant API as ChatAPI
+    participant App as WorkflowApp
     participant Runtime as IActorRuntime
     participant Workflow as WorkflowGAgent
     participant Engine as workflow_loop
@@ -184,10 +193,11 @@ sequenceDiagram
     participant External
 
     User->>API: POST /api/chat maker_analysis
-    API->>Runtime: create workflow agent
-    API->>Workflow: set maker yaml and activate
+    API->>App: ExecuteAsync(request)
+    App->>Runtime: create workflow agent
+    App->>Workflow: set maker yaml and activate
     Workflow->>Runtime: create coordinator and worker roles
-    API->>Workflow: ChatRequestEvent
+    App->>Workflow: ChatRequestEvent
     Workflow->>Engine: StartWorkflowEvent
 
     rect rgb(255, 248, 240)
@@ -213,7 +223,8 @@ sequenceDiagram
     Post-->>Engine: StepCompletedEvent
 
     Engine-->>Workflow: WorkflowCompletedEvent
-    Workflow-->>API: final output events
+    Workflow-->>App: final output events
+    App-->>API: final output events
     API-->>User: SSE stream and final result
 ```
 
@@ -249,6 +260,7 @@ aevatar/
 ├── docs/
 │   ├── FOUNDATION.md       # 底层事件与 Pipeline 设计
 │   ├── ROLE.md             # Role、Workflow YAML、Connector 与外部服务
+│   ├── IDENTIFIER_RELATIONSHIPS.md # EventEnvelope / RunId / SessionId 关系
 │   └── EVENT_SOURCING.md   # Event Sourcing 使用说明
 ├── workflows/              # 示例工作流（simple_qa、summarize、brainstorm）
 ├── src/
@@ -276,6 +288,7 @@ aevatar/
 ## 文档与进阶
 
 - **底层设计**： [docs/FOUNDATION.md](docs/FOUNDATION.md) — 事件模型与 Pipeline。
+- **标识符关系**： [docs/IDENTIFIER_RELATIONSHIPS.md](docs/IDENTIFIER_RELATIONSHIPS.md) — `EventEnvelope.Id`、`RunId`、`SessionId` 的职责与链路。
 - **CQRS 投影架构**： [src/Aevatar.CQRS.Projection.Core/README.md](src/Aevatar.CQRS.Projection.Core/README.md) / [src/workflow/Aevatar.Workflow.Projection/README.md](src/workflow/Aevatar.Workflow.Projection/README.md) — 统一 Projection Lifecycle、Coordinator 与 ReadModel。
 - **Role 与 Connector**： [docs/ROLE.md](docs/ROLE.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
 - **Event Sourcing**： [docs/EVENT_SOURCING.md](docs/EVENT_SOURCING.md) — 如何开启事件溯源。

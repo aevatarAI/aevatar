@@ -91,7 +91,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 - `MemoryCacheDeduplicator`：事件去重
 - `AddAevatarRuntime()`：一键注册本地运行时依赖
 
-### Routing 细
+### Routing 细节
 
 `Routing` 现在由两部分组成：
 
@@ -111,21 +111,37 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 当前实现已经收敛为一套统一链路：
 
 - **订阅与编排内核** 在 `Aevatar.CQRS.Projection.Core`：
-  - `ProjectionSubscriptionRegistry<,>` 统一订阅 Actor Stream
-  - `ProjectionCoordinator<,>` 一对多分发 projector
-  - `ProjectionLifecycleService<,>` 统一 run 生命周期
+  - `ActorStreamSubscriptionHub<TMessage>`：按 `actorId` 复用底层 stream 订阅
+  - `ProjectionSubscriptionRegistry<,>`：维护 run 级激活态与完成态
+  - `ProjectionCoordinator<,>`：一对多分发 projector
+  - `ProjectionLifecycleService<,>`：统一 `start/wait/complete`
 - **WorkflowExecution 业务扩展** 在 `Aevatar.Workflow.Projection`：
   - `IWorkflowExecutionProjectionService` 管理 run 级投影生命周期与查询
-  - `WorkflowExecutionReadModelProjector` + reducers 生成读模型
+  - `WorkflowExecutionReadModelProjector` + reducers 生成 `WorkflowExecutionReport`
+  - `WorkflowExecutionRunIdResolver` 负责从事件中解析 run 归属
+- **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
+  - `IWorkflowExecutionRunOrchestrator` 负责 start/wait/complete/rollback
+  - `WorkflowChatRunApplicationService` 统一执行入口与异常回滚
+  - `WorkflowExecutionQueryApplicationService` 统一查询与 DTO 映射
 - **宿主职责** 在 `Aevatar.Host.Api`：
-  - `IWorkflowExecutionRunOrchestrator` 编排 start/wait/complete/rollback
-  - 挂载请求级 `IAGUIEventSink` 并输出 SSE/WS
-  - 暴露 `/api/runs` 与 `/api/runs/{runId}` 查询端点（可配置开关）
+  - 仅做协议适配（HTTP/SSE/WebSocket）
+  - 仅依赖 `Aevatar.Workflow.Application.Abstractions`
+  - 暴露 `/api/agents`、`/api/workflows`、`/api/runs*`（运行查询可开关）
 - **输出分支**：
   - `WorkflowExecutionReadModelProjector` 写入 read model store
   - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS）
 
-详细关系见 `src/Aevatar.CQRS.Projection.Core/README.md` 与 `src/workflow/Aevatar.Workflow.Projection/README.md`。
+运行语义约束（当前默认）：
+
+- 订阅粒度是 Actor 级，不是 run 级。
+- `EnableRunEventIsolation = false` 时采用 `actor_shared` 语义（同一 Actor 的事件可被多个 run 上下文观察到）。
+- `EnableRunEventIsolation = true` 时由 projector 基于 runId 做过滤。
+
+详细关系见：
+
+- `src/Aevatar.CQRS.Projection.Core/README.md`
+- `src/workflow/Aevatar.Workflow.Projection/README.md`
+- `docs/IDENTIFIER_RELATIONSHIPS.md`
 
 ## 测试项目
 
