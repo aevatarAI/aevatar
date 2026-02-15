@@ -30,7 +30,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             WorkflowName = "review", RunId = "run-1", Input = "hello",
         });
 
-        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        var events = CreateMapper().Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<RunStartedEvent>();
@@ -47,7 +47,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             StepId = "analyze", StepType = "llm_call", RunId = "run-1",
         });
 
-        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        var events = CreateMapper().Map(envelope);
 
         events.Should().HaveCount(2);
         events[0].Should().BeOfType<StepStartedEvent>();
@@ -63,7 +63,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             StepId = "analyze", RunId = "run-1", Success = true, Output = "done",
         });
 
-        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        var events = CreateMapper().Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<StepFinishedEvent>();
@@ -78,7 +78,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             Content = "分析结果如下...", SessionId = "s1",
         });
 
-        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        var events = CreateMapper().Map(envelope);
 
         events.Should().HaveCount(3);
         events[0].Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageStartEvent>();
@@ -97,7 +97,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             Delta = "部分", SessionId = "s1",
         });
 
-        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        var events = CreateMapper().Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageContentEvent>();
@@ -111,7 +111,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             WorkflowName = "review", RunId = "run-1", Success = true, Output = "完成",
         });
 
-        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        var events = CreateMapper().Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<RunFinishedEvent>();
@@ -126,7 +126,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             WorkflowName = "review", RunId = "run-1", Success = false, Error = "超时",
         });
 
-        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        var events = CreateMapper().Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<RunErrorEvent>();
@@ -141,7 +141,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             ToolName = "search", CallId = "tc-1", ArgumentsJson = "{}",
         });
 
-        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        var events = CreateMapper().Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<ToolCallStartEvent>();
@@ -155,7 +155,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             CallId = "tc-1", ResultJson = "{\"found\":true}", Success = true,
         });
 
-        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        var events = CreateMapper().Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<ToolCallEndEvent>();
@@ -167,7 +167,7 @@ public class EventEnvelopeToAGUIEventMapperTests
         // ParentChangedEvent 没有投影规则
         var envelope = Wrap(new ParentChangedEvent { OldParent = "a", NewParent = "b" });
 
-        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        var events = CreateMapper().Map(envelope);
 
         events.Should().BeEmpty();
     }
@@ -180,8 +180,21 @@ public class EventEnvelopeToAGUIEventMapperTests
             Id = "test", PublisherId = "x", Direction = EventDirection.Down,
         };
 
-        var events = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        var events = CreateMapper().Map(envelope);
 
         events.Should().BeEmpty();
+    }
+
+    private static IEventEnvelopeToAGUIEventMapper CreateMapper()
+    {
+        return new EventEnvelopeToAGUIEventMapper(
+        [
+            new StartWorkflowAGUIEventEnvelopeMappingHandler(),
+            new StepRequestAGUIEventEnvelopeMappingHandler(),
+            new StepCompletedAGUIEventEnvelopeMappingHandler(),
+            new AITextStreamAGUIEventEnvelopeMappingHandler(),
+            new WorkflowCompletedAGUIEventEnvelopeMappingHandler(),
+            new ToolCallAGUIEventEnvelopeMappingHandler(),
+        ]);
     }
 }

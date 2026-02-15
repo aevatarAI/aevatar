@@ -1,6 +1,9 @@
-using Aevatar.Workflow.Application.Reporting;
+using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Infrastructure.Reporting;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Infrastructure.DependencyInjection;
 
@@ -14,7 +17,20 @@ public static class ServiceCollectionExtensions
         if (configureReports != null)
             services.Configure(configureReports);
 
-        services.AddSingleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>();
+        services.TryAddSingleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>();
+        return services;
+    }
+
+    public static IServiceCollection AddWorkflowDefinitionFileSource(
+        this IServiceCollection services,
+        Action<WorkflowDefinitionFileSourceOptions>? configure = null)
+    {
+        services.AddOptions<WorkflowDefinitionFileSourceOptions>();
+        if (configure != null)
+            services.Configure(configure);
+
+        services.TryAddSingleton<WorkflowDefinitionFileLoader>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowDefinitionBootstrapHostedService>());
         return services;
     }
 }

@@ -1,47 +1,38 @@
 # Aevatar.Workflow.Core
 
-`Aevatar.Workflow.Core` 提供工作流编排能力，把多个 AI Agent 组织成可执行的认知流程。
+`Aevatar.Workflow.Core` 提供 Workflow 领域核心：`WorkflowGAgent`、工作流 DSL、执行模块与模块装配策略。
 
 ## 职责
 
-- 提供工作流根 Agent：`WorkflowGAgent`
-- 提供工作流 DSL 解析与校验（YAML -> WorkflowDefinition）
-- 提供可插拔认知模块工厂：`WorkflowModuleFactory`
-- 提供框架级 connector 调用原语：`connector_call`
-- 覆盖流程控制、并行协作、投票共识、工具/connector 调用、数据变换等原语
+- `WorkflowGAgent`：持有 YAML、构建角色树、发布执行事件。
+- `Primitives/*`：`WorkflowDefinition`、`StepDefinition`、Parser。
+- `Validation/*`：工作流结构与语义校验。
+- `Modules/*`：`workflow_loop`、`llm_call`、`parallel_fanout`、`connector_call` 等执行模块。
+- `Connectors/*`：命名 connector 注册与调用桥接。
 
-## 核心组件
+## 模块装配（OCP）
 
-- `WorkflowGAgent`：持有 workflow YAML、创建子 Agent 树、驱动执行
-- `Primitives/*`：工作流定义、步骤定义、变量、解析器
-- `Validation/WorkflowValidator`：编译前校验
-- `Modules/*`：`workflow_loop`、`parallel_fanout`、`vote_consensus`、`llm_call` 等
-- `Connectors/InMemoryConnectorRegistry`：框架默认命名 connector 注册表
-- `IWorkflowModuleDescriptor` / `WorkflowModuleDescriptor<T>`：模块描述器与别名注册
-- `ServiceCollectionExtensions.AddAevatarWorkflow()`：一键注册默认模块描述器 + `WorkflowModuleFactory + IConnectorRegistry`
-- `cognitive_messages.proto`：工作流执行事件协议
+`WorkflowGAgent` 不再内嵌模块推断/特化分支，而是通过组合策略扩展：
 
-## 模块工厂能力
+- `IWorkflowModuleDependencyExpander`
+  - 负责根据 workflow 推导所需模块集合。
+  - 默认实现：
+    - `WorkflowLoopModuleDependencyExpander`（始终引入 `workflow_loop`）
+    - `WorkflowStepTypeModuleDependencyExpander`（按 step/type 推导）
+    - `WorkflowImplicitModuleDependencyExpander`（补齐隐式依赖，如 `parallel -> llm_call`）
+- `IWorkflowModuleConfigurator`
+  - 负责模块实例级配置。
+  - 默认实现：`WorkflowLoopModuleConfigurator`（向 `WorkflowLoopModule` 注入编译后的 workflow）。
 
-`WorkflowModuleFactory` 通过 `IWorkflowModuleDescriptor` 注册表按名称创建模块（示例）：
+新增模块规则时，优先“新增策略 + DI 注册”，避免修改 `WorkflowGAgent`。
 
-- `workflow_loop` / `conditional` / `while` / `checkpoint`
-- `parallel_fanout` / `vote_consensus`
-- `llm_call` / `tool_call` / `connector_call`
-- `transform` / `retrieve_facts`
+## DI 入口
 
-扩展方式（开闭原则）：
-
-- 使用 `services.AddWorkflowModule<TModule>("name", "alias")` 注册新模块与别名
-- 无需修改 `WorkflowModuleFactory` 核心实现
-
-`connector_call` 约定：
-
-- `parameters.connector`: 命名 connector（必填）
-- `parameters.operation`: 可选操作名
-- `parameters.timeout_ms` / `parameters.retry`: 调用控制
-- `parameters.on_missing=skip` / `parameters.on_error=continue`: 容错策略
-- 输出统一写入 `StepCompletedEvent.Output`，观测字段写入 `StepCompletedEvent.Metadata`
+- `AddAevatarWorkflow()`
+  - 注册默认模块描述器、模块工厂、connector registry。
+  - 同时注册默认 expander/configurator 组合。
+- `AddWorkflowModule<TModule>("name", "alias")`
+  - 扩展新模块与别名。
 
 ## 依赖
 
@@ -49,5 +40,3 @@
 - `Google.Protobuf` / `Grpc.Tools`
 - `YamlDotNet`
 - `Microsoft.Extensions.*.Abstractions`
-
-说明：`WorkflowGAgent` 通过 `IRoleAgentTypeResolver` 解析具体角色 Agent 类型；该解析器应在宿主组合层显式注册（例如 `RoleGAgentTypeResolver`）。

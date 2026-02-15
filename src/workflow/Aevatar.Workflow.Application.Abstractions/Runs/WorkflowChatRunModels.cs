@@ -1,3 +1,5 @@
+using Aevatar.Workflow.Application.Abstractions.Queries;
+
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
 public sealed record WorkflowChatRunRequest(
@@ -33,7 +35,7 @@ public sealed record WorkflowChatRunStarted(
 public sealed record WorkflowChatRunFinalizeResult(
     WorkflowProjectionCompletionStatus ProjectionCompletionStatus,
     bool ProjectionCompleted,
-    object? Report);
+    WorkflowRunReport? Report);
 
 public sealed record WorkflowChatRunExecutionResult(
     WorkflowChatRunStartError Error,

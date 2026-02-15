@@ -1,19 +1,31 @@
 # Aevatar.Workflow.Presentation.AGUIAdapter
 
-`Aevatar.Workflow.Presentation.AGUIAdapter` 是 AGUI 与 WorkflowExecution 之间的适配层。
+`Aevatar.Workflow.Presentation.AGUIAdapter` 负责 Workflow 事件与 AGUI 协议之间的适配。
 
 ## 职责
 
-- 将 `EventEnvelope` 映射为 `AGUIEvent`（`EventEnvelopeToAGUIEventMapper`）
-- 将 `AGUIEvent` 映射为领域中立 `WorkflowRunEvent`（`AGUIEventToWorkflowRunEventMapper`）
-- 提供 WorkflowExecution 的 AGUI projector（`WorkflowExecutionAGUIEventProjector`）
+- `EventEnvelope -> AGUIEvent`
+  - 通过 `IEventEnvelopeToAGUIEventMapper` + `IAGUIEventEnvelopeMappingHandler` 组合映射。
+- `AGUIEvent -> WorkflowRunEvent`
+  - 由 `AGUIEventToWorkflowRunEventMapper` 统一转换为领域中立输出事件。
+- `WorkflowExecutionAGUIEventProjector`
+  - 作为 Projection 分支，把 AGUI 输出写入 run event sink。
+
+## OCP 扩展方式
+
+新增 AGUI 映射时：
+
+1. 新增一个 `IAGUIEventEnvelopeMappingHandler` 实现。
+2. 在 DI 中注册该 handler。
+
+无需修改核心 mapper/项目器。
+
+## DI 入口
+
+- `AddWorkflowExecutionAGUIAdapter()`
+  - 注册组合 mapper 与默认 handlers。
 
 ## 边界
 
-- 依赖 `Aevatar.Presentation.AGUI` 协议层
-- 依赖 `Aevatar.Workflow.Projection` 领域投影上下文
-- 不承载 Host endpoint 与流程编排逻辑
-
-## 目标
-
-把 AGUI 展示协议与 Workflow 领域耦合点收敛在适配层，避免 Host 与领域核心重复耦合实现。
+- 依赖 `Aevatar.Presentation.AGUI` 与 `Aevatar.Workflow.Projection`。
+- 不承载 Host endpoint 逻辑，不包含应用层编排。

@@ -34,23 +34,4 @@ public sealed class WorkflowDefinitionRegistry : IWorkflowDefinitionRegistry
         _workflows.GetValueOrDefault(name);
 
     public IReadOnlyList<string> GetNames() => _workflows.Keys.ToList();
-
-    public int LoadFromDirectory(string directoryPath)
-    {
-        if (!Directory.Exists(directoryPath))
-            return 0;
-
-        var count = 0;
-        foreach (var file in Directory.EnumerateFiles(directoryPath, "*.*")
-                     .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
-                                 f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)))
-        {
-            var name = Path.GetFileNameWithoutExtension(file);
-            var yaml = File.ReadAllText(file);
-            _workflows[name] = yaml;
-            count++;
-        }
-
-        return count;
-    }
 }

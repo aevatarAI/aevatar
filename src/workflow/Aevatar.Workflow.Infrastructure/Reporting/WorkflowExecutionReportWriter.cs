@@ -1,7 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 
 namespace Aevatar.Workflow.Infrastructure.Reporting;
 
@@ -24,7 +24,7 @@ public static class WorkflowExecutionReportWriter
             Path.Combine(outputDirectory, $"workflow-execution-{stamp}.html"));
     }
 
-    public static async Task WriteAsync(WorkflowExecutionReport report, string jsonPath, string htmlPath)
+    public static async Task WriteAsync(WorkflowRunReport report, string jsonPath, string htmlPath)
     {
         var dir = Path.GetDirectoryName(jsonPath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
@@ -36,7 +36,7 @@ public static class WorkflowExecutionReportWriter
         await File.WriteAllTextAsync(htmlPath, BuildHtml(report));
     }
 
-    private static string BuildHtml(WorkflowExecutionReport report)
+    private static string BuildHtml(WorkflowRunReport report)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<!doctype html>");

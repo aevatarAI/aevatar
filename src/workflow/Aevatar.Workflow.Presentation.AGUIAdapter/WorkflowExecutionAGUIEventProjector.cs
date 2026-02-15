@@ -13,6 +13,13 @@ namespace Aevatar.Workflow.Presentation.AGUIAdapter;
 public sealed class WorkflowExecutionAGUIEventProjector
     : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
 {
+    private readonly IEventEnvelopeToAGUIEventMapper _mapper;
+
+    public WorkflowExecutionAGUIEventProjector(IEventEnvelopeToAGUIEventMapper mapper)
+    {
+        _mapper = mapper;
+    }
+
     public int Order => 100;
 
     public ValueTask InitializeAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
@@ -29,7 +36,7 @@ public sealed class WorkflowExecutionAGUIEventProjector
         if (sink == null)
             return;
 
-        IReadOnlyList<AGUIEvent> aguiEvents = EventEnvelopeToAGUIEventMapper.Map(envelope);
+        IReadOnlyList<AGUIEvent> aguiEvents = _mapper.Map(envelope);
         foreach (var aguiEvent in aguiEvents)
         {
             try

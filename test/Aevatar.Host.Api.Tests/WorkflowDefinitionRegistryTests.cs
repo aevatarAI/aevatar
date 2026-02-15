@@ -1,7 +1,9 @@
 // ─── WorkflowDefinitionRegistry 测试 ───
 
 using Aevatar.Workflow.Application.Workflows;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Host.Api.Tests;
 
@@ -29,14 +31,20 @@ public class WorkflowDefinitionRegistryTests
     }
 
     [Fact]
-    public void LoadFromDirectory_NonExistent_ReturnsZero()
+    public void FileLoader_NonExistentDirectory_ReturnsZero()
     {
         var registry = new WorkflowDefinitionRegistry();
-        registry.LoadFromDirectory("/nonexistent/path/12345").Should().Be(0);
+        var loader = new WorkflowDefinitionFileLoader();
+        var loaded = loader.LoadInto(
+            registry,
+            ["/nonexistent/path/12345"],
+            NullLogger.Instance);
+
+        loaded.Should().Be(0);
     }
 
     [Fact]
-    public void LoadFromDirectory_LoadsYamlFiles()
+    public void FileLoader_LoadsYamlFiles()
     {
         // 创建临时目录
         var tmpDir = Path.Combine(Path.GetTempPath(), $"wf_test_{Guid.NewGuid():N}");
@@ -49,7 +57,8 @@ public class WorkflowDefinitionRegistryTests
             File.WriteAllText(Path.Combine(tmpDir, "readme.txt"), "not a workflow");
 
             var registry = new WorkflowDefinitionRegistry();
-            var count = registry.LoadFromDirectory(tmpDir);
+            var loader = new WorkflowDefinitionFileLoader();
+            var count = loader.LoadInto(registry, [tmpDir], NullLogger.Instance);
 
             count.Should().Be(2);
             registry.GetYaml("review").Should().Contain("review");

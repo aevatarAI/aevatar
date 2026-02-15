@@ -14,6 +14,7 @@ using Aevatar.Host.Api.Startup;
 using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
+using Aevatar.Workflow.Presentation.AGUIAdapter.DependencyInjection;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Bootstrap;
 using Aevatar.Configuration;
@@ -30,8 +31,10 @@ builder.Services.AddAevatarBootstrap(builder.Configuration, options =>
 });
 builder.Services.AddWorkflowExecutionProjectionCQRS(options =>
     builder.Configuration.GetSection("WorkflowExecutionProjection").Bind(options));
+builder.Services.AddWorkflowExecutionAGUIAdapter();
 builder.Services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
-builder.Services.AddWorkflowApplication(options =>
+builder.Services.AddWorkflowApplication();
+builder.Services.AddWorkflowDefinitionFileSource(options =>
 {
     options.WorkflowDirectories.Add(Path.Combine(AppContext.BaseDirectory, "workflows"));
     options.WorkflowDirectories.Add(AevatarPaths.RepoRootWorkflows);

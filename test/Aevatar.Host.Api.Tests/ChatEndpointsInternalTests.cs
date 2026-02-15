@@ -94,7 +94,12 @@ public class ChatEndpointsInternalTests
                     new WorkflowChatRunFinalizeResult(
                         WorkflowProjectionCompletionStatus.Completed,
                         true,
-                        new { runId = "run-1" }));
+                        new WorkflowRunReport
+                        {
+                            RunId = "run-1",
+                            WorkflowName = "direct",
+                            RootActorId = "actor-1",
+                        }));
             },
         };
 

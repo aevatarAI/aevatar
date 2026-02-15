@@ -2,7 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Projection;
-using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Application.Queries;
 
@@ -11,15 +10,18 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
     private readonly IActorRuntime _runtime;
     private readonly IWorkflowDefinitionRegistry _workflowRegistry;
     private readonly IWorkflowExecutionProjectionService _projectionService;
+    private readonly IWorkflowExecutionReportMapper _reportMapper;
 
     public WorkflowExecutionQueryApplicationService(
         IActorRuntime runtime,
         IWorkflowDefinitionRegistry workflowRegistry,
-        IWorkflowExecutionProjectionService projectionService)
+        IWorkflowExecutionProjectionService projectionService,
+        IWorkflowExecutionReportMapper reportMapper)
     {
         _runtime = runtime;
         _workflowRegistry = workflowRegistry;
         _projectionService = projectionService;
+        _reportMapper = reportMapper;
     }
 
     public bool RunQueryEnabled => _projectionService.EnableRunQueryEndpoints;
@@ -47,7 +49,7 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
             return [];
 
         var reports = await _projectionService.ListRunsAsync(take, ct);
-        return reports.Select(MapSummary).ToList();
+        return reports.Select(_reportMapper.ToSummary).ToList();
     }
 
     public async Task<WorkflowRunReport?> GetRunAsync(string runId, CancellationToken ct = default)
@@ -56,127 +58,6 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
             return null;
 
         var report = await _projectionService.GetRunAsync(runId, ct);
-        return report == null ? null : MapReport(report);
-    }
-
-    private static WorkflowRunSummary MapSummary(WorkflowExecutionReport report)
-    {
-        return new WorkflowRunSummary(
-            report.RunId,
-            report.WorkflowName,
-            report.RootActorId,
-            report.StartedAt,
-            report.EndedAt,
-            report.DurationMs,
-            report.Success,
-            report.Summary.TotalSteps,
-            MapProjectionScope(report.ProjectionScope),
-            MapCompletionStatus(report.CompletionStatus));
-    }
-
-    private static WorkflowRunReport MapReport(WorkflowExecutionReport source)
-    {
-        return new WorkflowRunReport
-        {
-            ReportVersion = source.ReportVersion,
-            ProjectionScope = MapProjectionScope(source.ProjectionScope),
-            TopologySource = MapTopologySource(source.TopologySource),
-            CompletionStatus = MapCompletionStatus(source.CompletionStatus),
-            WorkflowName = source.WorkflowName,
-            RootActorId = source.RootActorId,
-            RunId = source.RunId,
-            StartedAt = source.StartedAt,
-            EndedAt = source.EndedAt,
-            DurationMs = source.DurationMs,
-            Success = source.Success,
-            Input = source.Input,
-            FinalOutput = source.FinalOutput,
-            FinalError = source.FinalError,
-            Topology = source.Topology
-                .Select(x => new WorkflowRunTopologyEdge(x.Parent, x.Child))
-                .ToList(),
-            Steps = source.Steps
-                .Select(x => new WorkflowRunStepTrace
-                {
-                    StepId = x.StepId,
-                    StepType = x.StepType,
-                    RunId = x.RunId,
-                    TargetRole = x.TargetRole,
-                    RequestedAt = x.RequestedAt,
-                    CompletedAt = x.CompletedAt,
-                    Success = x.Success,
-                    WorkerId = x.WorkerId,
-                    OutputPreview = x.OutputPreview,
-                    Error = x.Error,
-                    RequestParameters = new Dictionary<string, string>(x.RequestParameters, StringComparer.Ordinal),
-                    CompletionMetadata = new Dictionary<string, string>(x.CompletionMetadata, StringComparer.Ordinal),
-                })
-                .ToList(),
-            RoleReplies = source.RoleReplies
-                .Select(x => new WorkflowRunRoleReply
-                {
-                    Timestamp = x.Timestamp,
-                    RoleId = x.RoleId,
-                    SessionId = x.SessionId,
-                    Content = x.Content,
-                    ContentLength = x.ContentLength,
-                })
-                .ToList(),
-            Timeline = source.Timeline
-                .Select(x => new WorkflowRunTimelineEvent
-                {
-                    Timestamp = x.Timestamp,
-                    Stage = x.Stage,
-                    Message = x.Message,
-                    AgentId = x.AgentId,
-                    StepId = x.StepId,
-                    StepType = x.StepType,
-                    EventType = x.EventType,
-                    Data = new Dictionary<string, string>(x.Data, StringComparer.Ordinal),
-                })
-                .ToList(),
-            Summary = new WorkflowRunStatistics
-            {
-                TotalSteps = source.Summary.TotalSteps,
-                RequestedSteps = source.Summary.RequestedSteps,
-                CompletedSteps = source.Summary.CompletedSteps,
-                RoleReplyCount = source.Summary.RoleReplyCount,
-                StepTypeCounts = new Dictionary<string, int>(source.Summary.StepTypeCounts, StringComparer.Ordinal),
-            },
-        };
-    }
-
-    private static WorkflowRunProjectionScope MapProjectionScope(WorkflowExecutionProjectionScope value)
-    {
-        return value switch
-        {
-            WorkflowExecutionProjectionScope.ActorShared => WorkflowRunProjectionScope.ActorShared,
-            WorkflowExecutionProjectionScope.RunIsolated => WorkflowRunProjectionScope.RunIsolated,
-            _ => WorkflowRunProjectionScope.Unknown,
-        };
-    }
-
-    private static WorkflowRunTopologySource MapTopologySource(WorkflowExecutionTopologySource value)
-    {
-        return value switch
-        {
-            WorkflowExecutionTopologySource.RuntimeSnapshot => WorkflowRunTopologySource.RuntimeSnapshot,
-            _ => WorkflowRunTopologySource.Unknown,
-        };
-    }
-
-    private static WorkflowRunCompletionStatus MapCompletionStatus(WorkflowExecutionCompletionStatus value)
-    {
-        return value switch
-        {
-            WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
-            WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
-            WorkflowExecutionCompletionStatus.TimedOut => WorkflowRunCompletionStatus.TimedOut,
-            WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
-            WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
-            WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
-            WorkflowExecutionCompletionStatus.Disabled => WorkflowRunCompletionStatus.Disabled,
-            _ => WorkflowRunCompletionStatus.Unknown,
-        };
+        return report == null ? null : _reportMapper.ToReport(report);
     }
 }

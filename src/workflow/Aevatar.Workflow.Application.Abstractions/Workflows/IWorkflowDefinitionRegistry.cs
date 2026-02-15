@@ -7,6 +7,4 @@ public interface IWorkflowDefinitionRegistry
     string? GetYaml(string name);
 
     IReadOnlyList<string> GetNames();
-
-    int LoadFromDirectory(string directoryPath);
 }

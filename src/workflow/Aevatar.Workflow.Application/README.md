@@ -1,34 +1,35 @@
 # Aevatar.Workflow.Application
 
-Workflow 应用层实现项目，承载 chat run 用例编排。
+`Aevatar.Workflow.Application` 承载 Workflow 用例编排（run/query），不做协议适配与基础设施细节。
 
-## 职责
+## 核心服务
 
 - `WorkflowChatRunApplicationService`
-  - `ExecuteAsync` 单入口编排：启动 run、触发执行、流式输出、finalize/rollback 收敛。
-- `WorkflowRunActorResolver`
-  - 负责 Actor 解析/创建（existing actor 与 workflow yaml 两条路径）。
-- `WorkflowRunRequestExecutor`
-  - 负责请求事件投递与失败补偿（写入 `RUN_ERROR`）。
-- `WorkflowRunOutputStreamer`
-  - 负责 run 事件读取与 `WorkflowOutputFrame` 映射，不混入执行编排逻辑。
-- `WorkflowExecutionQueryApplicationService`
-  - 提供 `agents/workflows/runs` 查询，屏蔽 Host 对 projection/runtime 的直接依赖。
+  - `ExecuteAsync` 单入口：start -> execute -> stream -> finalize/rollback。
 - `WorkflowExecutionRunOrchestrator`
-  - 统一 start/wait/complete/rollback 编排。
-- `ActorRuntimeWorkflowExecutionTopologyResolver`
-  - 基于 runtime 快照解析拓扑。
+  - 投影生命周期编排（start/wait/complete/rollback）。
+- `WorkflowRunActorResolver`
+  - 解析/创建 workflow actor。
+- `WorkflowRunRequestExecutor`
+  - 投递请求事件并处理异常补偿。
+- `WorkflowRunOutputStreamer`
+  - 读取 run 事件并映射 `WorkflowOutputFrame`。
+- `WorkflowExecutionQueryApplicationService`
+  - `agents/workflows/runs` 查询门面。
+- `WorkflowExecutionReportMapper`
+  - 将 Projection read model 映射到应用层 `WorkflowRunReport/Summary`。
 - `WorkflowDefinitionRegistry`
-  - 维护 workflow 名称到 YAML 的映射。
-- `IWorkflowChatRequestEnvelopeFactory`
-  - 统一构造 `ChatRequestEvent` 的 envelope 与 metadata，避免协议硬编码散落。
-- `IWorkflowExecutionReportArtifactSink`
-  - 报告工件端口抽象（应用层默认 `Noop`，由 Infrastructure 注入具体实现）。
+  - 维护 workflow 名称到 YAML 的内存注册表。
 
 ## 分层约束
 
-- 本项目不再依赖 `Aevatar.Presentation.AGUI` 与 `Aevatar.Workflow.Presentation.AGUIAdapter`。
-- 输出通道通过 `IWorkflowRunEventSink`（定义在 `Aevatar.Workflow.Projection`）解耦。
-- Host 只调用应用层契约，不直接参与 workflow/projection 细节。
+- 本层不依赖 Presentation 协议实现（AGUI/SSE/WS）。
+- 本层不包含 `Directory/File` 文件系统扫描逻辑。
+- 报告落盘通过 `IWorkflowExecutionReportArtifactSink` 端口交给 Infrastructure。
 
-`Aevatar.Host.Api` 只依赖本项目的抽象接口进行调用。
+## DI 入口
+
+- `AddWorkflowApplication()`
+  - 注册应用层用例与默认 `NoopWorkflowExecutionReportArtifactSink`。
+
+宿主应组合：`Application + Projection + Infrastructure`，而不是在 API 中实现业务编排。

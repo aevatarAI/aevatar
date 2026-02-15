@@ -1,171 +1,315 @@
-// ─────────────────────────────────────────────────────────────
-// EventEnvelopeToAGUIEventMapper — EventEnvelope → AGUIEvent 映射
-//
-// 从 Actor Stream 上的 EventEnvelope 解包 payload，
-// 映射为前端可消费的 AG-UI 事件。
-// 纯函数，无副作用，每个 envelope 产生 0~N 个 AGUIEvent。
-// ─────────────────────────────────────────────────────────────
-
 using Aevatar.Presentation.AGUI;
-using AIEvents = Aevatar.AI.Abstractions;
-using AGUI = Aevatar.Presentation.AGUI;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Core;
+using AIEvents = Aevatar.AI.Abstractions;
+using AGUI = Aevatar.Presentation.AGUI;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Presentation.AGUIAdapter;
 
-/// <summary>
-/// EventEnvelope payload → AG-UI 事件映射。
-/// </summary>
-public static class EventEnvelopeToAGUIEventMapper
+public interface IEventEnvelopeToAGUIEventMapper
 {
-    /// <summary>
-    /// 将一个 EventEnvelope 映射为 0~N 个 AG-UI 事件。
-    /// </summary>
-    public static IReadOnlyList<AGUIEvent> Map(EventEnvelope envelope)
+    IReadOnlyList<AGUIEvent> Map(EventEnvelope envelope);
+}
+
+public interface IAGUIEventEnvelopeMappingHandler
+{
+    int Order { get; }
+
+    bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events);
+}
+
+public sealed class EventEnvelopeToAGUIEventMapper : IEventEnvelopeToAGUIEventMapper
+{
+    private readonly IReadOnlyList<IAGUIEventEnvelopeMappingHandler> _handlers;
+
+    public EventEnvelopeToAGUIEventMapper(IEnumerable<IAGUIEventEnvelopeMappingHandler> handlers)
     {
-        if (envelope.Payload == null) return [];
+        _handlers = handlers.OrderBy(x => x.Order).ToList();
+    }
 
-        var ts = ToUnixMs(envelope.Timestamp);
-        var payload = envelope.Payload;
+    public IReadOnlyList<AGUIEvent> Map(EventEnvelope envelope)
+    {
+        if (envelope.Payload == null)
+            return [];
 
-        // ─── StartWorkflowEvent → RUN_STARTED ───
-        if (payload.Is(StartWorkflowEvent.Descriptor))
+        var output = new List<AGUIEvent>();
+        foreach (var handler in _handlers)
         {
-            var evt = payload.Unpack<StartWorkflowEvent>();
-            return [new RunStartedEvent
+            if (!handler.TryMap(envelope, out var mapped) || mapped.Count == 0)
+                continue;
+
+            output.AddRange(mapped);
+        }
+
+        return output;
+    }
+}
+
+public sealed class StartWorkflowAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+{
+    public int Order => 0;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    {
+        if (envelope.Payload?.Is(StartWorkflowEvent.Descriptor) != true)
+        {
+            events = [];
+            return false;
+        }
+
+        var evt = envelope.Payload.Unpack<StartWorkflowEvent>();
+        events =
+        [
+            new RunStartedEvent
+            {
+                Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                ThreadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName),
+                RunId = evt.RunId,
+            },
+        ];
+        return true;
+    }
+}
+
+public sealed class StepRequestAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+{
+    public int Order => 10;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    {
+        if (envelope.Payload?.Is(StepRequestEvent.Descriptor) != true)
+        {
+            events = [];
+            return false;
+        }
+
+        var evt = envelope.Payload.Unpack<StepRequestEvent>();
+        var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
+        events =
+        [
+            new StepStartedEvent { Timestamp = ts, StepName = evt.StepId },
+            new CustomEvent
             {
                 Timestamp = ts,
-                ThreadId = ResolveThreadId(envelope, evt.WorkflowName),
-                RunId = evt.RunId,
-            }];
-        }
+                Name = "aevatar.step.request",
+                Value = new { evt.StepId, evt.StepType, evt.TargetRole, evt.RunId },
+            },
+        ];
+        return true;
+    }
+}
 
-        // ─── StepRequestEvent → STEP_STARTED + CUSTOM ───
-        if (payload.Is(StepRequestEvent.Descriptor))
+public sealed class StepCompletedAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+{
+    public int Order => 20;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    {
+        if (envelope.Payload?.Is(StepCompletedEvent.Descriptor) != true)
         {
-            var evt = payload.Unpack<StepRequestEvent>();
-            return
-            [
-                new StepStartedEvent { Timestamp = ts, StepName = evt.StepId },
-                new CustomEvent
-                {
-                    Timestamp = ts,
-                    Name = "aevatar.step.request",
-                    Value = new { evt.StepId, evt.StepType, evt.TargetRole, evt.RunId },
-                },
-            ];
+            events = [];
+            return false;
         }
 
-        // ─── StepCompletedEvent → STEP_FINISHED ───
-        if (payload.Is(StepCompletedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<StepCompletedEvent>();
-            return [new StepFinishedEvent { Timestamp = ts, StepName = evt.StepId }];
-        }
+        var evt = envelope.Payload.Unpack<StepCompletedEvent>();
+        events =
+        [
+            new StepFinishedEvent
+            {
+                Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                StepName = evt.StepId,
+            },
+        ];
+        return true;
+    }
+}
 
-        // ─── AI TextMessageStartEvent → AGUI TEXT_MESSAGE_START ───
+public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+{
+    public int Order => 30;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    {
+        events = [];
+        if (envelope.Payload == null)
+            return false;
+
+        var payload = envelope.Payload;
+        var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
+
         if (payload.Is(AIEvents.TextMessageStartEvent.Descriptor))
         {
             var evt = payload.Unpack<AIEvents.TextMessageStartEvent>();
-            var msgId = ResolveMessageId(evt.SessionId, envelope.Id);
-            return [new AGUI.TextMessageStartEvent
-            {
-                Timestamp = ts, MessageId = msgId, Role = "assistant",
-            }];
-        }
-
-        // ─── AI TextMessageContentEvent → AGUI TEXT_MESSAGE_CONTENT ───
-        if (payload.Is(AIEvents.TextMessageContentEvent.Descriptor))
-        {
-            var evt = payload.Unpack<AIEvents.TextMessageContentEvent>();
-            var msgId = ResolveMessageId(evt.SessionId, envelope.Id);
-            return [new AGUI.TextMessageContentEvent
-            {
-                Timestamp = ts, MessageId = msgId, Delta = evt.Delta,
-            }];
-        }
-
-        // ─── AI TextMessageEndEvent → AGUI TEXT_MESSAGE_END ───
-        if (payload.Is(AIEvents.TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<AIEvents.TextMessageEndEvent>();
-            var msgId = ResolveMessageId(evt.SessionId, envelope.Id);
-            return [new AGUI.TextMessageEndEvent
-            {
-                Timestamp = ts, MessageId = msgId,
-            }];
-        }
-
-        // ─── ChatResponseEvent → AGUI 完整消息（非流式兼容） ───
-        if (payload.Is(AIEvents.ChatResponseEvent.Descriptor))
-        {
-            var evt = payload.Unpack<AIEvents.ChatResponseEvent>();
-            var msgId = ResolveMessageId(evt.SessionId, envelope.Id);
-            return
+            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
+            events =
             [
                 new AGUI.TextMessageStartEvent
                 {
-                    Timestamp = ts, MessageId = msgId, Role = "assistant",
+                    Timestamp = ts,
+                    MessageId = msgId,
+                    Role = "assistant",
+                },
+            ];
+            return true;
+        }
+
+        if (payload.Is(AIEvents.TextMessageContentEvent.Descriptor))
+        {
+            var evt = payload.Unpack<AIEvents.TextMessageContentEvent>();
+            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
+            events =
+            [
+                new AGUI.TextMessageContentEvent
+                {
+                    Timestamp = ts,
+                    MessageId = msgId,
+                    Delta = evt.Delta,
+                },
+            ];
+            return true;
+        }
+
+        if (payload.Is(AIEvents.TextMessageEndEvent.Descriptor))
+        {
+            var evt = payload.Unpack<AIEvents.TextMessageEndEvent>();
+            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
+            events =
+            [
+                new AGUI.TextMessageEndEvent
+                {
+                    Timestamp = ts,
+                    MessageId = msgId,
+                },
+            ];
+            return true;
+        }
+
+        if (payload.Is(AIEvents.ChatResponseEvent.Descriptor))
+        {
+            var evt = payload.Unpack<AIEvents.ChatResponseEvent>();
+            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
+            events =
+            [
+                new AGUI.TextMessageStartEvent
+                {
+                    Timestamp = ts,
+                    MessageId = msgId,
+                    Role = "assistant",
                 },
                 new AGUI.TextMessageContentEvent
                 {
-                    Timestamp = ts, MessageId = msgId, Delta = evt.Content,
+                    Timestamp = ts,
+                    MessageId = msgId,
+                    Delta = evt.Content,
                 },
                 new AGUI.TextMessageEndEvent
                 {
-                    Timestamp = ts, MessageId = msgId,
+                    Timestamp = ts,
+                    MessageId = msgId,
                 },
             ];
+            return true;
         }
 
-        // ─── WorkflowCompletedEvent → RUN_FINISHED / RUN_ERROR ───
-        if (payload.Is(WorkflowCompletedEvent.Descriptor))
+        return false;
+    }
+}
+
+public sealed class WorkflowCompletedAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+{
+    public int Order => 40;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    {
+        if (envelope.Payload?.Is(WorkflowCompletedEvent.Descriptor) != true)
         {
-            var evt = payload.Unpack<WorkflowCompletedEvent>();
-            if (evt.Success)
-                return [new RunFinishedEvent
+            events = [];
+            return false;
+        }
+
+        var evt = envelope.Payload.Unpack<WorkflowCompletedEvent>();
+        var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
+
+        if (evt.Success)
+        {
+            events =
+            [
+                new RunFinishedEvent
                 {
                     Timestamp = ts,
-                    ThreadId = ResolveThreadId(envelope, evt.WorkflowName),
+                    ThreadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName),
                     RunId = evt.RunId,
                     Result = new { output = evt.Output },
-                }];
+                },
+            ];
+            return true;
+        }
 
-            return [new RunErrorEvent
+        events =
+        [
+            new RunErrorEvent
             {
                 Timestamp = ts,
                 Message = evt.Error,
                 RunId = evt.RunId,
                 Code = "WORKFLOW_FAILED",
-            }];
-        }
+            },
+        ];
+        return true;
+    }
+}
 
-        // ─── ToolCallEvent → TOOL_CALL_START ───
+public sealed class ToolCallAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+{
+    public int Order => 50;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    {
+        events = [];
+        if (envelope.Payload == null)
+            return false;
+
+        var payload = envelope.Payload;
+        var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
+
         if (payload.Is(AIEvents.ToolCallEvent.Descriptor))
         {
             var evt = payload.Unpack<AIEvents.ToolCallEvent>();
-            return [new ToolCallStartEvent
-            {
-                Timestamp = ts, ToolCallId = evt.CallId, ToolName = evt.ToolName,
-            }];
+            events =
+            [
+                new ToolCallStartEvent
+                {
+                    Timestamp = ts,
+                    ToolCallId = evt.CallId,
+                    ToolName = evt.ToolName,
+                },
+            ];
+            return true;
         }
 
-        // ─── ToolResultEvent → TOOL_CALL_END ───
         if (payload.Is(AIEvents.ToolResultEvent.Descriptor))
         {
             var evt = payload.Unpack<AIEvents.ToolResultEvent>();
-            return [new ToolCallEndEvent
-            {
-                Timestamp = ts, ToolCallId = evt.CallId, Result = evt.ResultJson,
-            }];
+            events =
+            [
+                new ToolCallEndEvent
+                {
+                    Timestamp = ts,
+                    ToolCallId = evt.CallId,
+                    Result = evt.ResultJson,
+                },
+            ];
+            return true;
         }
 
-        return [];
+        return false;
     }
+}
 
-    private static long? ToUnixMs(Timestamp? ts)
+internal static class AGUIEventEnvelopeMappingHelpers
+{
+    public static long? ToUnixMs(Timestamp? ts)
     {
         if (ts == null) return null;
         var dt = ts.ToDateTime();
@@ -173,14 +317,14 @@ public static class EventEnvelopeToAGUIEventMapper
         return new DateTimeOffset(dt).ToUnixTimeMilliseconds();
     }
 
-    private static string ResolveThreadId(EventEnvelope envelope, string fallback)
+    public static string ResolveThreadId(EventEnvelope envelope, string fallback)
     {
         return string.IsNullOrWhiteSpace(envelope.PublisherId)
             ? fallback
             : envelope.PublisherId;
     }
 
-    private static string ResolveMessageId(string? sessionId, string? envelopeId)
+    public static string ResolveMessageId(string? sessionId, string? envelopeId)
     {
         if (!string.IsNullOrWhiteSpace(sessionId))
             return $"msg:{sessionId}";

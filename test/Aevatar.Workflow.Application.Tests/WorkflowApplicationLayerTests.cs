@@ -1,11 +1,11 @@
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Orchestration;
 using Aevatar.Workflow.Application.Queries;
-using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Projection;
@@ -33,6 +33,7 @@ public class WorkflowChatRunApplicationServiceTests
             new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance),
             new WorkflowRunOutputStreamer(),
             new NoopReportSink(),
+            new WorkflowExecutionReportMapper(),
             NullLogger<WorkflowChatRunApplicationService>.Instance);
 
         var result = await service.ExecuteAsync(
@@ -79,7 +80,8 @@ public class WorkflowExecutionQueryApplicationServiceTests
                 {
                     ["run-1"] = report,
                 },
-            });
+            },
+            new WorkflowExecutionReportMapper());
 
         var runs = await queryService.ListRunsAsync(50, CancellationToken.None);
         var run = runs.Should().ContainSingle().Subject;
@@ -187,7 +189,7 @@ internal sealed class FakeEnvelopeFactory : IWorkflowChatRequestEnvelopeFactory
 
 internal sealed class NoopReportSink : IWorkflowExecutionReportArtifactSink
 {
-    public Task PersistAsync(WorkflowExecutionReport report, CancellationToken ct = default) =>
+    public Task PersistAsync(WorkflowRunReport report, CancellationToken ct = default) =>
         Task.CompletedTask;
 }
 

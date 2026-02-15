@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Orchestration;
@@ -23,9 +24,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IWorkflowDefinitionRegistry>(_ =>
         {
             var registry = new WorkflowDefinitionRegistry();
-            foreach (var directory in options.WorkflowDirectories.Where(Directory.Exists))
-                registry.LoadFromDirectory(directory);
-
             if (options.RegisterBuiltInDirectWorkflow)
                 registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
 
@@ -34,6 +32,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
         services.AddSingleton<IWorkflowExecutionRunOrchestrator, WorkflowExecutionRunOrchestrator>();
+        services.AddSingleton<IWorkflowExecutionReportMapper, WorkflowExecutionReportMapper>();
         services.AddSingleton<IWorkflowRunActorResolver, WorkflowRunActorResolver>();
         services.AddSingleton<IWorkflowChatRequestEnvelopeFactory, WorkflowChatRequestEnvelopeFactory>();
         services.AddSingleton<IWorkflowRunRequestExecutor, WorkflowRunRequestExecutor>();

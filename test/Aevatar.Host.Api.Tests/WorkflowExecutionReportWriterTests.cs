@@ -1,4 +1,4 @@
-using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using FluentAssertions;
 using System.Text.Json;
@@ -93,13 +93,13 @@ public class WorkflowExecutionReportWriterTests
         }
     }
 
-    private static WorkflowExecutionReport BuildReport(
+    private static WorkflowRunReport BuildReport(
         string finalError,
         bool withTopology,
         bool withRoleReplies)
     {
         var started = DateTimeOffset.UtcNow;
-        return new WorkflowExecutionReport
+        return new WorkflowRunReport
         {
             WorkflowName = "wf<main>",
             RootActorId = "root&1",
@@ -112,11 +112,11 @@ public class WorkflowExecutionReportWriterTests
             FinalOutput = "ok <done>",
             FinalError = finalError,
             Topology = withTopology
-                ? [new WorkflowExecutionTopologyEdge("parent-1", "child-1")]
+                ? [new WorkflowRunTopologyEdge("parent-1", "child-1")]
                 : [],
             Steps =
             [
-                new WorkflowExecutionStepTrace
+                new WorkflowRunStepTrace
                 {
                     StepId = "step-1",
                     StepType = "llm_call",
@@ -135,7 +135,7 @@ public class WorkflowExecutionReportWriterTests
             RoleReplies = withRoleReplies
                 ?
                 [
-                    new WorkflowExecutionRoleReply
+                    new WorkflowRunRoleReply
                     {
                         Timestamp = started.AddMilliseconds(700),
                         RoleId = "role-a",
@@ -147,7 +147,7 @@ public class WorkflowExecutionReportWriterTests
                 : [],
             Timeline =
             [
-                new WorkflowExecutionTimelineEvent
+                new WorkflowRunTimelineEvent
                 {
                     Timestamp = started,
                     Stage = "workflow.completed",
@@ -159,7 +159,7 @@ public class WorkflowExecutionReportWriterTests
                     Data = new Dictionary<string, string> { ["ok"] = "true" },
                 },
             ],
-            Summary = new WorkflowExecutionSummary
+            Summary = new WorkflowRunStatistics
             {
                 TotalSteps = 1,
                 RequestedSteps = 1,

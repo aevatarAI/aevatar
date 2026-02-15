@@ -1,52 +1,41 @@
 # Aevatar.Host.Api
 
-`Aevatar.Host.Api` 是协议接入层（SSE/WebSocket/HTTP Query），不承载工作流编排与 CQRS 内核实现。
+`Aevatar.Host.Api` 是协议层宿主，只做 HTTP/SSE/WebSocket 适配与依赖组合。
 
-## 职责
+## 职责边界
 
-- 暴露 `POST /api/chat`（SSE）与 `GET /api/ws/chat`（WebSocket）
-- 调用 `IWorkflowChatRunApplicationService.ExecuteAsync` 执行 chat run
-- 调用 `IWorkflowExecutionQueryApplicationService` 提供 `GET /api/runs` / `GET /api/runs/{runId}` 查询（按配置开关）
+- 暴露端点：
+  - `POST /api/chat`（SSE）
+  - `GET /api/ws/chat`（WebSocket）
+  - `GET /api/agents`、`GET /api/workflows`、`GET /api/runs`、`GET /api/runs/{runId}`
+- 调用应用层：
+  - `IWorkflowChatRunApplicationService`
+  - `IWorkflowExecutionQueryApplicationService`
+- 不承载 workflow/cqrs 业务编排。
 
-## 运行语义契约
+## Endpoint 结构
 
-- 同一 `Actor` 的多个 `run` 不做事件隔离：订阅端可看到该 Actor 的全量事件流。
-- 单次请求仅以当前 `runId` 的终止事件（`RUN_FINISHED`/`RUN_ERROR`）作为收尾条件。
-- `RUN_STARTED` 统一由 `StartWorkflowEvent` 投影产出，`threadId` 统一使用发布事件的 `ActorId`。
-- 客户端不传 `runId/sessionId`；二者都由服务端内部生成与管理。
-- projection completion 采用显式状态：`Completed` / `TimedOut` / `Failed` / `Stopped` / `NotFound` / `Disabled`。
+- `ChatEndpoints.cs`：仅路由与入口调用。
+- `ChatSseResponseWriter.cs`：SSE 启动与帧写出。
+- `ChatWebSocketCommandParser.cs`：WS 命令解析与校验。
+- `ChatWebSocketRunCoordinator.cs`：WS 命令执行协调。
+- `ChatRunStartErrorMapper.cs`：run 启动错误到 HTTP/WS 错误码映射。
+- `ChatQueryEndpoints.cs`：Query 端点。
 
-## 依赖关系
+## 运行语义
 
-- `Aevatar.Workflow.Application.Abstractions`
-  - 应用层契约（run 用例、query DTO、工作流定义注册）
-- `Aevatar.Workflow.Application`
-  - 应用层实现（run 编排 + query 服务）
-- `Aevatar.Workflow.Projection`
-  - 由 Workflow 应用层间接依赖的读侧实现
-- `Aevatar.Workflow.Infrastructure`
-  - Workflow 基础设施实现（报告工件落盘等）
-- `Aevatar.Presentation.AGUI`
-  - AGUI 实时事件通道与映射
-- `Aevatar.Workflow.Presentation.AGUIAdapter`
-  - WorkflowExecution 到 AGUI 的适配器（mapper + projector）
+- 默认按 `Actor` 共享事件流（同 Actor 多 run 不隔离）。
+- 单次请求在当前 `runId` 的终止事件（`RUN_FINISHED`/`RUN_ERROR`）后收尾。
+- `runId/sessionId` 均由服务端内部生成，客户端无需传入。
 
-## 关键组件
+## 组合方式
 
-- `Endpoints/ChatEndpoints.cs`
-  - Chat/WS 路由与协议入口
-- `Endpoints/ChatQueryEndpoints.cs`
-  - `agents/workflows/runs` 查询端点映射
-- `Endpoints/ChatWebSocketProtocol.cs`
-  - WebSocket 收发协议封装
+`Program.cs` 默认注册：
 
-## 默认装配
+- `AddWorkflowExecutionProjectionCQRS(...)`
+- `AddWorkflowExecutionAGUIAdapter()`
+- `AddWorkflowApplication()`
+- `AddWorkflowDefinitionFileSource(...)`
+- `AddWorkflowInfrastructure(...)`
 
-```csharp
-builder.Services.AddWorkflowExecutionProjectionCQRS(...);
-builder.Services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
-builder.Services.AddWorkflowApplication(...);
-builder.Services.AddWorkflowInfrastructure(...);
-```
-
-即：API 只负责协议与组合；run 编排在 `Application`，报告写出在 `Infrastructure`。
+Host 只做“协议 + 组合”，核心用例在 `workflow/*` 子系统。

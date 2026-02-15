@@ -1,19 +1,33 @@
 # Aevatar.Workflow.Infrastructure
 
-`Aevatar.Workflow.Infrastructure` 承载 Workflow 用例的基础设施实现，不包含业务编排逻辑。
+`Aevatar.Workflow.Infrastructure` 提供 Workflow 应用层端口的基础设施实现（文件系统、工件落盘、启动装配）。
 
-## 当前内容
+## 当前实现
 
 - `Reporting/FileSystemWorkflowExecutionReportArtifactSink`
   - 实现 `IWorkflowExecutionReportArtifactSink`。
-  - 负责把 `WorkflowExecutionReport` 写入 JSON/HTML 工件。
+  - 将 `WorkflowRunReport` 输出为 JSON/HTML 工件。
 - `Reporting/WorkflowExecutionReportWriter`
-  - 报告序列化与 HTML 渲染工具。
-- `DependencyInjection/ServiceCollectionExtensions`
-  - `AddWorkflowInfrastructure(...)`：注册基础设施实现。
+  - 报告序列化与 HTML 渲染。
+- `Workflows/WorkflowDefinitionFileLoader`
+  - 从目录加载 `*.yaml/*.yml` 并注册到 `IWorkflowDefinitionRegistry`。
+- `Workflows/WorkflowDefinitionBootstrapHostedService`
+  - 宿主启动时自动加载 workflow 文件源。
+
+## DI 扩展
+
+- `AddWorkflowInfrastructure(...)`
+  - 注册报告工件 sink。
+- `AddWorkflowDefinitionFileSource(...)`
+  - 注册 workflow 文件源与启动加载 HostedService。
 
 ## 配置
 
-`WorkflowExecutionReportArtifacts:OutputDirectory`
+- `WorkflowExecutionReportArtifacts:OutputDirectory`
+  - 报告输出目录，默认 `artifacts/workflow-executions`。
+- `WorkflowDefinitionFileSource:WorkflowDirectories`
+  - workflow 定义扫描目录列表。
 
-- 未配置时默认输出到 `artifacts/workflow-executions`。
+## 分层说明
+
+本项目依赖 `Aevatar.Workflow.Application.Abstractions` 端口，不依赖 `Aevatar.Workflow.Application` 实现。

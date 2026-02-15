@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Core.Connectors;
+using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
@@ -21,6 +22,10 @@ public static class ServiceCollectionExtensions
     {
         RegisterDefaultWorkflowModules(services);
         services.TryAddSingleton<IEventModuleFactory, WorkflowModuleFactory>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModuleDependencyExpander, WorkflowLoopModuleDependencyExpander>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModuleDependencyExpander, WorkflowStepTypeModuleDependencyExpander>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModuleDependencyExpander, WorkflowImplicitModuleDependencyExpander>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModuleConfigurator, WorkflowLoopModuleConfigurator>());
         services.TryAddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
         return services;
     }

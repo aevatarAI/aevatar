@@ -1,6 +1,3 @@
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -17,12 +14,6 @@ public sealed record ChatInput
 
 public static class ChatEndpoints
 {
-    private static readonly JsonSerializerOptions OutputJsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
     public static IEndpointRouteBuilder MapChatEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api").WithTags("Chat");
@@ -44,36 +35,18 @@ public static class ChatEndpoints
         IWorkflowChatRunApplicationService chatRunService,
         CancellationToken ct = default)
     {
-        var responseStarted = false;
-
-        ValueTask StartSseAsync(CancellationToken token)
-        {
-            if (responseStarted)
-                return ValueTask.CompletedTask;
-
-            responseStarted = true;
-            http.Response.StatusCode = StatusCodes.Status200OK;
-            http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
-            http.Response.Headers.CacheControl = "no-store";
-            http.Response.Headers.Pragma = "no-cache";
-            http.Response.Headers["X-Accel-Buffering"] = "no";
-            return new ValueTask(http.Response.StartAsync(token));
-        }
+        var writer = new ChatSseResponseWriter(http.Response);
 
         try
         {
             var result = await chatRunService.ExecuteAsync(
                 new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId),
-                async (frame, token) =>
-                {
-                    await StartSseAsync(token);
-                    await WriteSseFrameAsync(http.Response, frame, token);
-                },
-                onStartedAsync: (_, token) => StartSseAsync(token),
+                (frame, token) => writer.WriteAsync(frame, token),
+                onStartedAsync: (_, token) => writer.StartAsync(token),
                 ct);
 
-            if (result.Error != WorkflowChatRunStartError.None && !responseStarted)
-                http.Response.StatusCode = ToHttpStatusCode(result.Error);
+            if (result.Error != WorkflowChatRunStartError.None && !writer.Started)
+                http.Response.StatusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
         }
         catch (OperationCanceledException)
         {
@@ -99,103 +72,19 @@ public static class ChatEndpoints
         try
         {
             var commandText = await ChatWebSocketProtocol.ReceiveTextAsync(socket, ct);
-            if (string.IsNullOrWhiteSpace(commandText))
+            if (!ChatWebSocketCommandParser.TryParse(commandText, out var command, out var parseError))
             {
                 await ChatWebSocketProtocol.SendAsync(socket, new
                 {
                     type = "command.error",
-                    code = "EMPTY_COMMAND",
-                    message = "Command payload is required.",
+                    requestId = parseError.RequestId,
+                    code = parseError.Code,
+                    message = parseError.Message,
                 }, ct);
                 return;
             }
 
-            ChatWsCommand? command;
-            try
-            {
-                command = JsonSerializer.Deserialize<ChatWsCommand>(commandText, ChatWebSocketProtocol.JsonOptions);
-            }
-            catch (JsonException)
-            {
-                command = null;
-            }
-
-            if (command?.Payload == null || !string.Equals(command.Type, "chat.command", StringComparison.Ordinal))
-            {
-                await ChatWebSocketProtocol.SendAsync(socket, new
-                {
-                    type = "command.error",
-                    code = "INVALID_COMMAND",
-                    message = "Expected { type: 'chat.command', payload: { prompt, workflow?, agentId? } }.",
-                }, ct);
-                return;
-            }
-
-            var requestId = string.IsNullOrWhiteSpace(command.RequestId)
-                ? Guid.NewGuid().ToString("N")
-                : command.RequestId;
-            var input = command.Payload;
-
-            if (string.IsNullOrWhiteSpace(input.Prompt))
-            {
-                await ChatWebSocketProtocol.SendAsync(socket, new
-                {
-                    type = "command.error",
-                    requestId,
-                    code = "INVALID_PROMPT",
-                    message = "Prompt is required.",
-                }, ct);
-                return;
-            }
-
-            var executionResult = await chatRunService.ExecuteAsync(
-                new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId),
-                (frame, token) => new ValueTask(ChatWebSocketProtocol.SendAsync(socket, new
-                {
-                    type = "agui.event",
-                    requestId,
-                    payload = frame,
-                }, token)),
-                onStartedAsync: (started, token) => new ValueTask(ChatWebSocketProtocol.SendAsync(socket, new
-                {
-                    type = "command.ack",
-                    requestId,
-                    payload = new
-                    {
-                        runId = started.RunId,
-                        threadId = started.ActorId,
-                        workflow = started.WorkflowName,
-                    },
-                }, token)),
-                ct);
-
-            if (executionResult.Error != WorkflowChatRunStartError.None)
-            {
-                var (code, message) = ToCommandError(executionResult.Error);
-                await ChatWebSocketProtocol.SendAsync(socket, new
-                {
-                    type = "command.error",
-                    requestId,
-                    code,
-                    message,
-                }, ct);
-                return;
-            }
-
-            var started = executionResult.Started!;
-            var finalize = executionResult.FinalizeResult;
-            await ChatWebSocketProtocol.SendAsync(socket, new
-            {
-                type = "query.result",
-                requestId,
-                payload = new
-                {
-                    runId = started.RunId,
-                    projectionCompletionStatus = finalize?.ProjectionCompletionStatus.ToString(),
-                    projectionCompleted = finalize?.ProjectionCompleted ?? false,
-                    report = finalize?.Report,
-                },
-            }, ct);
+            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, ct);
         }
         catch (OperationCanceledException)
         {
@@ -217,38 +106,6 @@ public static class ChatEndpoints
         {
             await ChatWebSocketProtocol.CloseAsync(socket, ct);
         }
-    }
-
-    private static async ValueTask WriteSseFrameAsync(HttpResponse response, WorkflowOutputFrame frame, CancellationToken ct)
-    {
-        var payload = JsonSerializer.Serialize(frame, OutputJsonOptions);
-        var bytes = Encoding.UTF8.GetBytes($"data: {payload}\\n\\n");
-        await response.Body.WriteAsync(bytes, ct);
-        await response.Body.FlushAsync(ct);
-    }
-
-    private static int ToHttpStatusCode(WorkflowChatRunStartError error)
-    {
-        return error switch
-        {
-            WorkflowChatRunStartError.AgentNotFound => StatusCodes.Status404NotFound,
-            WorkflowChatRunStartError.WorkflowNotFound => StatusCodes.Status404NotFound,
-            WorkflowChatRunStartError.AgentTypeNotSupported => StatusCodes.Status400BadRequest,
-            WorkflowChatRunStartError.ProjectionDisabled => StatusCodes.Status503ServiceUnavailable,
-            _ => StatusCodes.Status400BadRequest,
-        };
-    }
-
-    private static (string Code, string Message) ToCommandError(WorkflowChatRunStartError error)
-    {
-        return error switch
-        {
-            WorkflowChatRunStartError.AgentNotFound => ("AGENT_NOT_FOUND", "Agent not found."),
-            WorkflowChatRunStartError.WorkflowNotFound => ("WORKFLOW_NOT_FOUND", "Workflow not found."),
-            WorkflowChatRunStartError.AgentTypeNotSupported => ("AGENT_TYPE_NOT_SUPPORTED", "Agent is not WorkflowGAgent."),
-            WorkflowChatRunStartError.ProjectionDisabled => ("PROJECTION_DISABLED", "Projection pipeline is disabled."),
-            _ => ("RUN_START_FAILED", "Failed to resolve actor."),
-        };
     }
 }
 

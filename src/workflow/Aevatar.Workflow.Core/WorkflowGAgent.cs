@@ -20,6 +20,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
+using Aevatar.Workflow.Core.Composition;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.Logging;
 
@@ -38,16 +39,24 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     private readonly IActorRuntime _runtime;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IReadOnlyList<IEventModuleFactory> _eventModuleFactories;
+    private readonly IReadOnlyList<IWorkflowModuleDependencyExpander> _moduleDependencyExpanders;
+    private readonly IReadOnlyList<IWorkflowModuleConfigurator> _moduleConfigurators;
 
     public WorkflowGAgent(
         IActorRuntime runtime,
         IRoleAgentTypeResolver roleAgentTypeResolver,
-        IEnumerable<IEventModuleFactory> eventModuleFactories)
+        IEnumerable<IEventModuleFactory> eventModuleFactories,
+        IEnumerable<IWorkflowModuleDependencyExpander> moduleDependencyExpanders,
+        IEnumerable<IWorkflowModuleConfigurator> moduleConfigurators)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
         _eventModuleFactories = eventModuleFactories?.ToList()
             ?? throw new ArgumentNullException(nameof(eventModuleFactories));
+        _moduleDependencyExpanders = moduleDependencyExpanders?.OrderBy(x => x.Order).ToList()
+            ?? throw new ArgumentNullException(nameof(moduleDependencyExpanders));
+        _moduleConfigurators = moduleConfigurators?.OrderBy(x => x.Order).ToList()
+            ?? throw new ArgumentNullException(nameof(moduleConfigurators));
     }
 
     // ─── 生命周期 ───
@@ -175,24 +184,16 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     // ─── Cognitive Modules 装配 ───
 
     /// <summary>
-    /// Discovers required module types from workflow steps and installs them.
-    /// Always includes workflow_loop (the orchestrator); other modules are
-    /// derived from the step types declared in the compiled workflow YAML.
-    /// No hardcoded module list — the workflow definition is the source of truth.
+    /// Discovers required modules using dependency expanders and installs them.
+    /// Module-specific setup is delegated to registered configurators.
     /// </summary>
     private void InstallCognitiveModules()
     {
         if (_eventModuleFactories.Count == 0) return;
 
-        // workflow_loop is always required (drives step sequencing)
-        var needed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "workflow_loop" };
-
-        // Collect module names from workflow steps and dynamic sub-step parameters.
-        if (_compiledWorkflow != null)
-            CollectRequiredModuleTypes(_compiledWorkflow.Steps, needed);
-
-        // Expand implicit transitive dependencies between modules.
-        ExpandImplicitModuleDependencies(needed);
+        var needed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var expander in _moduleDependencyExpanders)
+            expander.Expand(_compiledWorkflow, needed);
 
         Logger.LogInformation("Installing cognitive modules: {Modules}", string.Join(", ", needed));
 
@@ -203,8 +204,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             {
                 if (factory.TryCreate(name, out var m) && m != null)
                 {
-                    if (m is WorkflowLoopModule loop && _compiledWorkflow != null)
-                        loop.SetWorkflow(_compiledWorkflow);
+                    ConfigureModule(m);
                     modules.Add(m);
                     break;
                 }
@@ -214,54 +214,13 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         if (modules.Count > 0) SetModules(modules);
     }
 
-    /// <summary>
-    /// Recursively collects required module types from workflow step definitions.
-    /// Includes top-level step types plus dynamic sub-step declarations.
-    /// </summary>
-    private static void CollectRequiredModuleTypes(List<StepDefinition> steps, HashSet<string> types)
+    private void ConfigureModule(IEventModule module)
     {
-        foreach (var step in steps)
-        {
-            types.Add(step.Type);
+        if (_compiledWorkflow == null)
+            return;
 
-            if (!string.IsNullOrWhiteSpace(step.TargetRole))
-                types.Add("llm_call");
-
-            // Include dynamic sub-step declarations (e.g. foreach -> sub_step_type: parallel).
-            foreach (var (key, value) in step.Parameters)
-            {
-                if (key.EndsWith("_step_type", StringComparison.OrdinalIgnoreCase) &&
-                    !string.IsNullOrWhiteSpace(value))
-                {
-                    types.Add(value);
-                }
-            }
-
-            // foreach defaults to parallel when sub_step_type is not specified.
-            if ((step.Type.Equals("foreach", StringComparison.OrdinalIgnoreCase) ||
-                 step.Type.Equals("for_each", StringComparison.OrdinalIgnoreCase)) &&
-                !step.Parameters.ContainsKey("sub_step_type"))
-            {
-                types.Add("parallel");
-            }
-
-            if (step.Children is { Count: > 0 })
-                CollectRequiredModuleTypes(step.Children, types);
-        }
-    }
-
-    /// <summary>
-    /// Expands inferred dependencies that are required for dynamic dispatch.
-    /// </summary>
-    private static void ExpandImplicitModuleDependencies(HashSet<string> types)
-    {
-        // parallel fanout emits llm_call sub-steps.
-        if (types.Contains("parallel") ||
-            types.Contains("parallel_fanout") ||
-            types.Contains("fan_out"))
-        {
-            types.Add("llm_call");
-        }
+        foreach (var configurator in _moduleConfigurators)
+            configurator.Configure(module, _compiledWorkflow);
     }
 
     private static string ResolveRunId(ChatRequestEvent request)

@@ -1,7 +1,7 @@
 using Aevatar.Configuration;
-using Aevatar.Workflow.Application.Reporting;
+using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Projection;
-using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -23,7 +23,7 @@ internal sealed class FileSystemWorkflowExecutionReportArtifactSink : IWorkflowE
         _logger = logger;
     }
 
-    public async Task PersistAsync(WorkflowExecutionReport report, CancellationToken ct = default)
+    public async Task PersistAsync(WorkflowRunReport report, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(report);
 
