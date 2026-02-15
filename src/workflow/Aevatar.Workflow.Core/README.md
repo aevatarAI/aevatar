@@ -44,4 +44,4 @@
 - `YamlDotNet`
 - `Microsoft.Extensions.*.Abstractions`
 
-说明：`WorkflowGAgent` 通过 `IRoleAgentTypeResolver` 解析具体角色 Agent 类型，默认实现会在宿主中反射加载 `Aevatar.AI.Core.RoleGAgent`。
+说明：`WorkflowGAgent` 通过 `IRoleAgentTypeResolver` 解析具体角色 Agent 类型；该解析器应在宿主组合层显式注册（例如 `RoleGAgentTypeResolver`）。

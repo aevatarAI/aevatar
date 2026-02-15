@@ -5,7 +5,6 @@
 
 using Aevatar.Bootstrap;
 using Aevatar.Configuration;
-using Aevatar.Host.Gateway;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,7 +20,6 @@ builder.Services.AddAevatarBootstrap(builder.Configuration, options =>
 var app = builder.Build();
 
 // ─── 端点 ───
-app.MapChatEndpoints();
 app.MapGet("/", () => Results.Ok(new { name = "Aevatar.Host.Gateway", status = "running" }));
 
 app.Run();

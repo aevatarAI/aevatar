@@ -14,6 +14,7 @@ using Aevatar.Host.Api.Orchestration;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Host.Api.Workflows;
 using Aevatar.Workflow.Core;
+using Aevatar.Presentation.AGUI;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -467,6 +468,25 @@ public class ChatEndpointsInternalTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         projectionService.GetRunCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public void IsTerminalEventForRun_ShouldOnlyTerminateCurrentRun()
+    {
+        InvokeSync<bool>(
+            "IsTerminalEventForRun",
+            new RunFinishedEvent { ThreadId = "actor-1", RunId = "run-other" },
+            "run-current").Should().BeFalse();
+
+        InvokeSync<bool>(
+            "IsTerminalEventForRun",
+            new RunErrorEvent { Message = "failed", RunId = "run-other" },
+            "run-current").Should().BeFalse();
+
+        InvokeSync<bool>(
+            "IsTerminalEventForRun",
+            new RunFinishedEvent { ThreadId = "actor-1", RunId = "run-current" },
+            "run-current").Should().BeTrue();
     }
 
     private static T InvokeSync<T>(string methodName, params object?[] args)

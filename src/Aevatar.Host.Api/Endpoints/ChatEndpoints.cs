@@ -90,34 +90,15 @@ public static class ChatEndpoints
     {
         // ─── 1. 创建或复用 Agent ───
 
-        var workflowNameForRun = string.IsNullOrWhiteSpace(input.Workflow) ? "direct" : input.Workflow;
-
-        IActor actor;
-        if (!string.IsNullOrWhiteSpace(input.AgentId))
+        var actorResolution = await ResolveOrCreateActorAsync(input, runtime, registry, ct);
+        if (actorResolution.Error != ChatRunStartError.None || actorResolution.Actor == null)
         {
-            var existing = await runtime.GetAsync(input.AgentId);
-            if (existing == null)
-            {
-                http.Response.StatusCode = StatusCodes.Status404NotFound;
-                return;
-            }
-            actor = existing;
+            http.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
         }
-        else
-        {
-            var yaml = registry.GetYaml(workflowNameForRun);
-            if (yaml == null)
-            {
-                http.Response.StatusCode = StatusCodes.Status404NotFound;
-                return;
-            }
 
-            actor = await runtime.CreateAsync<WorkflowGAgent>(ct: ct);
-
-            // 设置 workflow YAML 到 Agent State
-            if (actor.Agent is WorkflowGAgent wfAgent)
-                wfAgent.ConfigureWorkflow(yaml, workflowNameForRun);
-        }
+        var actor = actorResolution.Actor;
+        var workflowNameForRun = actorResolution.WorkflowNameForRun;
 
         // ─── 2. 准备 SSE 响应 ───
 
@@ -139,47 +120,19 @@ public static class ChatEndpoints
             ct);
         var runId = projectionRun.RunId;
 
-        // ─── 5. 发送 RUN_STARTED + ChatRequestEvent ───
-
-        var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-        await writer.WriteAsync(new RunStartedEvent
-        {
-            Timestamp = ts,
-            ThreadId = actor.Id,
-            RunId = runId,
-        }, ct);
+        // ─── 3. 发送 ChatRequestEvent（RUN_STARTED 由 StartWorkflowEvent 投影统一产出） ───
 
         // 构造 ChatRequestEvent → 发送到 Agent
         // run_id 是执行标识；session_id 仅用于消息流关联，不与 run_id 绑定。
         var requestEnvelope = CreateChatRequestEnvelope(input.Prompt, runId);
 
         // 非阻塞：启动事件处理；sink 由订阅持续推送，直到 WorkflowCompleted → RunFinishedEvent
-        var processingTask = ProcessEnvelopeAsync();
+        var processingTask = ProcessEnvelopeAsync(actor, requestEnvelope, sink, runId, logger, ct);
         var projectionsFinalized = false;
-        async Task ProcessEnvelopeAsync()
-        {
-            try
-            {
-                await actor.HandleEventAsync(requestEnvelope, ct);
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(ex, "Workflow execution failed for actor {ActorId}", actor.Id);
-                sink.Push(new RunErrorEvent
-                {
-                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    Message = "工作流执行异常",
-                    RunId = runId,
-                    Code = "INTERNAL_ERROR",
-                });
-                sink.Complete();
-            }
-        }
 
         try
         {
-            // ─── 6. 流式写出 AGUI 事件 ───
+            // ─── 4. 流式写出 AGUI 事件 ───
             try
             {
                 await foreach (var evt in sink.ReadAllAsync(ct))
@@ -192,25 +145,19 @@ public static class ChatEndpoints
             }
             catch (OperationCanceledException) { /* 客户端断开 */ }
 
-            // ─── 7. CQRS 投影收尾 + 写执行报告（artifacts/workflow-executions） ───
+            // ─── 5. CQRS 投影收尾 + 写执行报告（artifacts/workflow-executions） ───
             try
             {
-                var finalizeResult = await projectionOrchestrator.FinalizeAsync(
+                _ = await FinalizeProjectionAsync(
+                    projectionOrchestrator,
                     projectionRun,
+                    projectionService,
                     runtime,
                     actor.Id,
+                    logger,
+                    writeArtifacts: true,
                     CancellationToken.None);
                 projectionsFinalized = true;
-
-                var report = finalizeResult.WorkflowExecutionReport;
-
-                if (report != null && projectionService.EnableRunReportArtifacts)
-                {
-                    var outputDir = Path.Combine(AevatarPaths.RepoRoot, "artifacts", "workflow-executions");
-                    var (jsonPath, htmlPath) = WorkflowExecutionReportWriter.BuildDefaultPaths(outputDir);
-                    await WorkflowExecutionReportWriter.WriteAsync(report, jsonPath, htmlPath);
-                    logger?.LogInformation("Chat run report saved: json={JsonPath}, html={HtmlPath}", jsonPath, htmlPath);
-                }
             }
             catch (Exception ex)
             {
@@ -308,47 +255,29 @@ public static class ChatEndpoints
             return;
         }
 
-        var workflowNameForRun = string.IsNullOrWhiteSpace(input.Workflow) ? "direct" : input.Workflow;
-
-        IActor actor;
-        if (!string.IsNullOrWhiteSpace(input.AgentId))
+        var actorResolution = await ResolveOrCreateActorAsync(input, runtime, registry, ct);
+        if (actorResolution.Error != ChatRunStartError.None || actorResolution.Actor == null)
         {
-            var existing = await runtime.GetAsync(input.AgentId);
-            if (existing == null)
+            var (code, message) = actorResolution.Error switch
             {
-                await SendWebSocketMessageAsync(socket, new
-                {
-                    type = "command.error",
-                    requestId,
-                    code = "AGENT_NOT_FOUND",
-                    message = "Agent not found.",
-                }, CancellationToken.None);
-                await CloseSocketAsync(socket);
-                return;
-            }
+                ChatRunStartError.AgentNotFound => ("AGENT_NOT_FOUND", "Agent not found."),
+                ChatRunStartError.WorkflowNotFound => ("WORKFLOW_NOT_FOUND", "Workflow not found."),
+                _ => ("RUN_START_FAILED", "Failed to resolve actor."),
+            };
 
-            actor = existing;
-        }
-        else
-        {
-            var yaml = registry.GetYaml(workflowNameForRun);
-            if (yaml == null)
+            await SendWebSocketMessageAsync(socket, new
             {
-                await SendWebSocketMessageAsync(socket, new
-                {
-                    type = "command.error",
-                    requestId,
-                    code = "WORKFLOW_NOT_FOUND",
-                    message = "Workflow not found.",
-                }, CancellationToken.None);
-                await CloseSocketAsync(socket);
-                return;
-            }
-
-            actor = await runtime.CreateAsync<WorkflowGAgent>(ct: ct);
-            if (actor.Agent is WorkflowGAgent wfAgent)
-                wfAgent.ConfigureWorkflow(yaml, workflowNameForRun);
+                type = "command.error",
+                requestId,
+                code,
+                message,
+            }, CancellationToken.None);
+            await CloseSocketAsync(socket);
+            return;
         }
+
+        var actor = actorResolution.Actor;
+        var workflowNameForRun = actorResolution.WorkflowNameForRun;
 
         await using var sink = new AGUIEventChannel();
         var projectionRun = await projectionOrchestrator.StartAsync(
@@ -371,41 +300,10 @@ public static class ChatEndpoints
             },
         }, CancellationToken.None);
 
-        await SendWebSocketMessageAsync(socket, new
-        {
-            type = "agui.event",
-            requestId,
-            payload = new RunStartedEvent
-            {
-                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                ThreadId = actor.Id,
-                RunId = runId,
-            },
-        }, CancellationToken.None);
-
         var requestEnvelope = CreateChatRequestEnvelope(input.Prompt, runId);
 
-        var processingTask = ProcessEnvelopeAsync();
+        var processingTask = ProcessEnvelopeAsync(actor, requestEnvelope, sink, runId, logger, ct);
         var projectionsFinalized = false;
-        async Task ProcessEnvelopeAsync()
-        {
-            try
-            {
-                await actor.HandleEventAsync(requestEnvelope, ct);
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(ex, "Workflow execution failed for actor {ActorId}", actor.Id);
-                sink.Push(new RunErrorEvent
-                {
-                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    Message = "工作流执行异常",
-                    RunId = runId,
-                    Code = "INTERNAL_ERROR",
-                });
-                sink.Complete();
-            }
-        }
 
         try
         {
@@ -427,10 +325,14 @@ public static class ChatEndpoints
 
             try
             {
-                var finalizeResult = await projectionOrchestrator.FinalizeAsync(
+                var finalizeResult = await FinalizeProjectionAsync(
+                    projectionOrchestrator,
                     projectionRun,
+                    projectionService,
                     runtime,
                     actor.Id,
+                    logger,
+                    writeArtifacts: false,
                     CancellationToken.None);
                 projectionsFinalized = true;
 
@@ -575,6 +477,93 @@ public static class ChatEndpoints
             await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None);
     }
 
+    private static async Task<ActorResolutionResult> ResolveOrCreateActorAsync(
+        ChatInput input,
+        IActorRuntime runtime,
+        WorkflowRegistry registry,
+        CancellationToken ct)
+    {
+        var workflowNameForRun = string.IsNullOrWhiteSpace(input.Workflow) ? "direct" : input.Workflow;
+
+        if (!string.IsNullOrWhiteSpace(input.AgentId))
+        {
+            var existing = await runtime.GetAsync(input.AgentId);
+            return existing == null
+                ? new ActorResolutionResult(null, workflowNameForRun, ChatRunStartError.AgentNotFound)
+                : new ActorResolutionResult(existing, workflowNameForRun, ChatRunStartError.None);
+        }
+
+        var yaml = registry.GetYaml(workflowNameForRun);
+        if (yaml == null)
+            return new ActorResolutionResult(null, workflowNameForRun, ChatRunStartError.WorkflowNotFound);
+
+        var actor = await runtime.CreateAsync<WorkflowGAgent>(ct: ct);
+        if (actor.Agent is WorkflowGAgent wfAgent)
+            wfAgent.ConfigureWorkflow(yaml, workflowNameForRun);
+
+        return new ActorResolutionResult(actor, workflowNameForRun, ChatRunStartError.None);
+    }
+
+    private static Task ProcessEnvelopeAsync(
+        IActor actor,
+        EventEnvelope requestEnvelope,
+        IAGUIEventSink sink,
+        string runId,
+        ILogger? logger,
+        CancellationToken ct)
+    {
+        return ExecuteAsync();
+
+        async Task ExecuteAsync()
+        {
+            try
+            {
+                await actor.HandleEventAsync(requestEnvelope, ct);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Workflow execution failed for actor {ActorId}", actor.Id);
+                sink.Push(new RunErrorEvent
+                {
+                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Message = "工作流执行异常",
+                    RunId = runId,
+                    Code = "INTERNAL_ERROR",
+                });
+                sink.Complete();
+            }
+        }
+    }
+
+    private static async Task<WorkflowProjectionFinalizeResult> FinalizeProjectionAsync(
+        IWorkflowExecutionRunOrchestrator projectionOrchestrator,
+        WorkflowProjectionRun projectionRun,
+        IWorkflowExecutionProjectionService projectionService,
+        IActorRuntime runtime,
+        string actorId,
+        ILogger? logger,
+        bool writeArtifacts,
+        CancellationToken ct)
+    {
+        var finalizeResult = await projectionOrchestrator.FinalizeAsync(
+            projectionRun,
+            runtime,
+            actorId,
+            ct);
+
+        if (writeArtifacts &&
+            projectionService.EnableRunReportArtifacts &&
+            finalizeResult.WorkflowExecutionReport != null)
+        {
+            var outputDir = Path.Combine(AevatarPaths.RepoRoot, "artifacts", "workflow-executions");
+            var (jsonPath, htmlPath) = WorkflowExecutionReportWriter.BuildDefaultPaths(outputDir);
+            await WorkflowExecutionReportWriter.WriteAsync(finalizeResult.WorkflowExecutionReport, jsonPath, htmlPath);
+            logger?.LogInformation("Chat run report saved: json={JsonPath}, html={HtmlPath}", jsonPath, htmlPath);
+        }
+
+        return finalizeResult;
+    }
+
     private static EventEnvelope CreateChatRequestEnvelope(
         string prompt,
         string runId)
@@ -611,6 +600,18 @@ public static class ChatEndpoints
         };
     }
 }
+
+internal enum ChatRunStartError
+{
+    None = 0,
+    AgentNotFound = 1,
+    WorkflowNotFound = 2,
+}
+
+internal sealed record ActorResolutionResult(
+    IActor? Actor,
+    string WorkflowNameForRun,
+    ChatRunStartError Error);
 
 public sealed record ChatWsCommand
 {

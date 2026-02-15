@@ -9,6 +9,12 @@
 - 调用 `IWorkflowExecutionRunOrchestrator` 启动与收尾投影 run
 - 提供 `GET /api/runs` / `GET /api/runs/{runId}` 查询（按配置开关）
 
+## 运行语义契约
+
+- 同一 `Actor` 的多个 `run` 不做事件隔离：订阅端可看到该 Actor 的全量事件流。
+- 单次请求仅以当前 `runId` 的终止事件（`RUN_FINISHED`/`RUN_ERROR`）作为收尾条件。
+- `RUN_STARTED` 统一由 `StartWorkflowEvent` 投影产出，`threadId` 统一使用发布事件的 `ActorId`。
+
 ## 依赖关系
 
 - `Aevatar.Workflow.Projection`

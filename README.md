@@ -70,6 +70,12 @@ curl -X POST http://localhost:5000/api/chat \
 - **步骤**：由对应的「步骤模块」执行（LLM 调用、并行、投票、Connector 等），结果再交回工作流，进入下一步或结束。
 - **结果**：通过事件流推回 Api，再通过 SSE / WebSocket 推给你。
 
+### Run 语义（重要）
+
+- 同一 Actor 多次运行时，默认**不按 run 隔离事件流**，客户端可收到该 Actor 的全量事件。
+- 单次请求只在“当前 runId 的终止事件”到达时结束（`RUN_FINISHED` / `RUN_ERROR`）。
+- `RUN_STARTED` 由 `StartWorkflowEvent` 投影统一生成，`threadId` 为发布该事件的 ActorId。
+
 下面这张图概括了「宿主（API + 运行时 + LLM + Connector）」与「Agent 树 + 工作流步骤」的关系。
 
 ```mermaid
@@ -247,7 +253,7 @@ aevatar/
 ├── workflows/              # 示例工作流（simple_qa、summarize、brainstorm）
 ├── src/
 │   ├── Aevatar.Host.Api   # HTTP 服务入口（Chat 等），日常使用从这里启动
-│   ├── Aevatar.Workflow.Core   # 工作流引擎与内置步骤模块
+│   ├── workflow/Aevatar.Workflow.Core   # 工作流引擎与内置步骤模块
 │   ├── Aevatar.AI.Core     # 角色 Agent 与 LLM 集成
 │   ├── Aevatar.Foundation.Runtime  # 运行时（事件路由、存储、流）
 │   ├── Aevatar.Foundation.Core     # Agent 基类与事件管道
@@ -270,7 +276,7 @@ aevatar/
 ## 文档与进阶
 
 - **底层设计**： [docs/FOUNDATION.md](docs/FOUNDATION.md) — 事件模型与 Pipeline。
-- **CQRS 投影架构**： [src/Aevatar.CQRS.Projection.Core/README.md](src/Aevatar.CQRS.Projection.Core/README.md) / [src/Aevatar.Workflow.Projection/README.md](src/Aevatar.Workflow.Projection/README.md) — 统一 Projection Lifecycle、Coordinator 与 ReadModel。
+- **CQRS 投影架构**： [src/Aevatar.CQRS.Projection.Core/README.md](src/Aevatar.CQRS.Projection.Core/README.md) / [src/workflow/Aevatar.Workflow.Projection/README.md](src/workflow/Aevatar.Workflow.Projection/README.md) — 统一 Projection Lifecycle、Coordinator 与 ReadModel。
 - **Role 与 Connector**： [docs/ROLE.md](docs/ROLE.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
 - **Event Sourcing**： [docs/EVENT_SOURCING.md](docs/EVENT_SOURCING.md) — 如何开启事件溯源。
 - **Connector 配置详解**： [src/Aevatar.Configuration/README.md](src/Aevatar.Configuration/README.md#connector-作用与配置) — 配置格式与示例。

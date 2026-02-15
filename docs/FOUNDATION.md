@@ -125,7 +125,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `WorkflowExecutionReadModelProjector` 写入 read model store
   - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS）
 
-详细关系见 `src/Aevatar.CQRS.Projection.Core/README.md` 与 `src/Aevatar.Workflow.Projection/README.md`。
+详细关系见 `src/Aevatar.CQRS.Projection.Core/README.md` 与 `src/workflow/Aevatar.Workflow.Projection/README.md`。
 
 ## 测试项目
 

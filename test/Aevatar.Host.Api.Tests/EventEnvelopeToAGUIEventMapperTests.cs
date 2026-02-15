@@ -35,7 +35,7 @@ public class EventEnvelopeToAGUIEventMapperTests
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<RunStartedEvent>();
         var e = (RunStartedEvent)events[0];
-        e.ThreadId.Should().Be("review");
+        e.ThreadId.Should().Be("test");
         e.RunId.Should().Be("run-1");
     }
 
@@ -115,6 +115,7 @@ public class EventEnvelopeToAGUIEventMapperTests
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<RunFinishedEvent>();
+        ((RunFinishedEvent)events[0]).ThreadId.Should().Be("test");
     }
 
     [Fact]

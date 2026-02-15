@@ -1,4 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Agents;
+using Aevatar.AI.Core.Agents;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
@@ -7,6 +9,7 @@ using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Workflow.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Bootstrap;
 
@@ -36,6 +39,7 @@ public static class ServiceCollectionExtensions
         services.AddAevatarConfig();
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
+        services.TryAddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
         RegisterMeaiProviders(services, configuration, options);
 

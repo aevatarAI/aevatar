@@ -5,14 +5,14 @@
 ## 职责
 
 - 定义标准 AG-UI 事件模型（运行、步骤、文本流、工具调用、自定义事件）
-- 提供线程安全事件通道 `AGUIEventChannel`
+- 提供线程安全有界事件通道 `AGUIEventChannel`
 - 提供 SSE 序列化写出器 `AGUISseWriter`
 - 抽象事件接收接口 `IAGUIEventSink`
 
 ## 核心类型
 
 - `AGUIEvents.cs`：`RunStartedEvent`、`TextMessageContentEvent` 等事件定义
-- `AGUIEventChannel`：基于 `Channel<T>` 的事件聚合与异步读取
+- `AGUIEventChannel`：基于有界 `Channel<T>` 的事件聚合与异步读取（支持容量与满队列策略）
 - `AGUISseWriter`：将 `AGUIEvent` 序列化为 `data: {json}\n\n` 输出
 
 ## 使用场景

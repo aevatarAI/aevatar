@@ -1,6 +1,8 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.Agents;
+using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
@@ -170,6 +172,7 @@ public class ConnectorCallIntegrationTests
         services.AddSingleton(registry);
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
+        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
         var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();

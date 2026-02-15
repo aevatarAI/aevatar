@@ -37,7 +37,7 @@ public static class EventEnvelopeToAGUIEventMapper
             return [new RunStartedEvent
             {
                 Timestamp = ts,
-                ThreadId = evt.WorkflowName,
+                ThreadId = ResolveThreadId(envelope, evt.WorkflowName),
                 RunId = evt.RunId,
             }];
         }
@@ -127,7 +127,7 @@ public static class EventEnvelopeToAGUIEventMapper
                 return [new RunFinishedEvent
                 {
                     Timestamp = ts,
-                    ThreadId = evt.WorkflowName,
+                    ThreadId = ResolveThreadId(envelope, evt.WorkflowName),
                     RunId = evt.RunId,
                     Result = new { output = evt.Output },
                 }];
@@ -170,5 +170,12 @@ public static class EventEnvelopeToAGUIEventMapper
         var dt = ts.ToDateTime();
         if (dt.Kind != DateTimeKind.Utc) dt = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
         return new DateTimeOffset(dt).ToUnixTimeMilliseconds();
+    }
+
+    private static string ResolveThreadId(EventEnvelope envelope, string fallback)
+    {
+        return string.IsNullOrWhiteSpace(envelope.PublisherId)
+            ? fallback
+            : envelope.PublisherId;
     }
 }

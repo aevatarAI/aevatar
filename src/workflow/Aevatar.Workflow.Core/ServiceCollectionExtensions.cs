@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
@@ -21,7 +20,6 @@ public static class ServiceCollectionExtensions
     {
         services.TryAddSingleton<IEventModuleFactory, WorkflowModuleFactory>();
         services.TryAddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
-        services.TryAddSingleton<IRoleAgentTypeResolver, ReflectionRoleAgentTypeResolver>();
         return services;
     }
 }

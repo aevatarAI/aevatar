@@ -20,6 +20,8 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.Agents;
+using Aevatar.AI.Core.Agents;
 using Aevatar.Bootstrap;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.Workflow.Core;
@@ -116,6 +118,7 @@ services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Information));
 services.AddAevatarRuntime();
 services.AddAevatarConfig();
 services.AddAevatarWorkflow();
+services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 services.AddSingleton<IEventModuleFactory, MakerModuleFactory>();
 
 if (isDeepSeek)

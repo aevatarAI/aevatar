@@ -10,7 +10,7 @@ namespace Aevatar.Presentation.AGUI;
 /// </summary>
 public interface IAGUIEventSink : IAsyncDisposable
 {
-    /// <summary>推送一个事件（线程安全，不阻塞）。</summary>
+    /// <summary>推送一个事件（线程安全；通道满或已完成时抛出异常）。</summary>
     void Push(AGUIEvent evt);
 
     /// <summary>完成事件流（不再有新事件）。</summary>

@@ -5,27 +5,42 @@
 
 using System.Threading.Channels;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Foundation.Runtime.Streaming;
 
 /// <summary>In-memory event stream for actor-to-actor delivery and broadcast.</summary>
 public sealed class InMemoryStream : IStream
 {
-    private readonly Channel<EventEnvelope> _channel = Channel.CreateUnbounded<EventEnvelope>(
-        new UnboundedChannelOptions { SingleReader = true });
+    private readonly Channel<EventEnvelope> _channel;
     private volatile Func<EventEnvelope, Task>[] _subscribers = [];
     private readonly Lock _lock = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _readerLoop;
+    private readonly InMemoryStreamOptions _options;
+    private readonly ILogger<InMemoryStream> _logger;
 
     /// <summary>Stream ID, typically an actor ID.</summary>
     public string StreamId { get; }
 
     /// <summary>Creates an in-memory stream with the specified ID.</summary>
     /// <param name="streamId">Unique stream identifier.</param>
-    public InMemoryStream(string streamId)
+    public InMemoryStream(
+        string streamId,
+        InMemoryStreamOptions? options = null,
+        ILogger<InMemoryStream>? logger = null)
     {
+        _options = options ?? new InMemoryStreamOptions();
+        var capacity = _options.Capacity > 0 ? _options.Capacity : 4096;
+        _channel = Channel.CreateBounded<EventEnvelope>(new BoundedChannelOptions(capacity)
+        {
+            FullMode = _options.FullMode,
+            SingleReader = true,
+            SingleWriter = false,
+        });
         StreamId = streamId;
+        _logger = logger ?? NullLogger<InMemoryStream>.Instance;
         _readerLoop = Task.Run(ReaderLoopAsync);
     }
 
@@ -36,7 +51,7 @@ public sealed class InMemoryStream : IStream
     public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
     {
         if (message is EventEnvelope envelope)
-        { _channel.Writer.TryWrite(envelope); return Task.CompletedTask; }
+            return _channel.Writer.WriteAsync(envelope, ct).AsTask();
 
         var wrapped = new EventEnvelope
         {
@@ -45,8 +60,7 @@ public sealed class InMemoryStream : IStream
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(message),
             Direction = EventDirection.Down,
         };
-        _channel.Writer.TryWrite(wrapped);
-        return Task.CompletedTask;
+        return _channel.Writer.WriteAsync(wrapped, ct).AsTask();
     }
 
     /// <summary>Subscribes to stream and invokes handler for matching messages.</summary>
@@ -98,10 +112,26 @@ public sealed class InMemoryStream : IStream
             {
                 var subs = _subscribers;
                 foreach (var sub in subs)
-                    try { await sub(envelope); } catch { /* best-effort */ }
+                {
+                    try
+                    {
+                        await sub(envelope);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "In-memory stream subscriber failed. stream={StreamId}",
+                            StreamId);
+
+                        if (_options.ThrowOnSubscriberError)
+                            throw;
+                    }
+                }
             }
         }
         catch (OperationCanceledException) { }
+        catch (ChannelClosedException) { }
     }
 
     /// <summary>Shuts down stream, stops reader loop, and cancels subscriptions.</summary>

@@ -17,7 +17,7 @@ namespace Aevatar.Workflow.Core.Modules;
 public sealed class WorkflowLoopModule : IEventModule
 {
     private WorkflowDefinition? _workflow;
-    private string? _currentRunId;
+    private readonly HashSet<string> _activeRunIds = new(StringComparer.Ordinal);
 
     /// <summary>
     /// 模块名称。
@@ -63,15 +63,26 @@ public sealed class WorkflowLoopModule : IEventModule
         if (payload.Is(StartWorkflowEvent.Descriptor))
         {
             var evt = payload.Unpack<StartWorkflowEvent>();
-            _currentRunId = evt.RunId;
+            _activeRunIds.Add(evt.RunId);
             var entry = _workflow.Steps.FirstOrDefault();
-            if (entry == null) { await ctx.PublishAsync(new WorkflowCompletedEvent { WorkflowName = _workflow.Name, RunId = evt.RunId, Success = false, Error = "无步骤" }, EventDirection.Both, ct); return; }
+            if (entry == null)
+            {
+                _activeRunIds.Remove(evt.RunId);
+                await ctx.PublishAsync(new WorkflowCompletedEvent
+                {
+                    WorkflowName = _workflow.Name,
+                    RunId = evt.RunId,
+                    Success = false,
+                    Error = "无步骤",
+                }, EventDirection.Both, ct);
+                return;
+            }
             await DispatchStep(entry, evt.Input, evt.RunId, ctx, ct);
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
             var evt = payload.Unpack<StepCompletedEvent>();
-            if (evt.RunId != _currentRunId) return;
+            if (!_activeRunIds.Contains(evt.RunId)) return;
             var current = _workflow.GetStep(evt.StepId);
 
             // Ignore internal sub-step completions (e.g. analyze_item_0_sub_1 / *_vote).
@@ -86,9 +97,31 @@ public sealed class WorkflowLoopModule : IEventModule
             ctx.Logger.LogInformation("workflow_loop: step={StepId} completed success={Success} output=({Len} chars) {Preview}",
                 evt.StepId, evt.Success, (evt.Output ?? "").Length, outputPreview);
 
-            if (!evt.Success) { await ctx.PublishAsync(new WorkflowCompletedEvent { WorkflowName = _workflow.Name, RunId = evt.RunId, Success = false, Error = evt.Error }, EventDirection.Both, ct); return; }
+            if (!evt.Success)
+            {
+                _activeRunIds.Remove(evt.RunId);
+                await ctx.PublishAsync(new WorkflowCompletedEvent
+                {
+                    WorkflowName = _workflow.Name,
+                    RunId = evt.RunId,
+                    Success = false,
+                    Error = evt.Error,
+                }, EventDirection.Both, ct);
+                return;
+            }
             var next = _workflow.GetNextStep(current.Id);
-            if (next == null) { await ctx.PublishAsync(new WorkflowCompletedEvent { WorkflowName = _workflow.Name, RunId = evt.RunId, Success = true, Output = evt.Output }, EventDirection.Both, ct); return; }
+            if (next == null)
+            {
+                _activeRunIds.Remove(evt.RunId);
+                await ctx.PublishAsync(new WorkflowCompletedEvent
+                {
+                    WorkflowName = _workflow.Name,
+                    RunId = evt.RunId,
+                    Success = true,
+                    Output = evt.Output,
+                }, EventDirection.Both, ct);
+                return;
+            }
             await DispatchStep(next, evt.Output ?? string.Empty, evt.RunId, ctx, ct);
         }
     }

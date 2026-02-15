@@ -3,6 +3,7 @@
 
 using Aevatar.Presentation.AGUI;
 using FluentAssertions;
+using System.Threading.Channels;
 
 namespace Aevatar.Host.Api.Tests;
 
@@ -64,5 +65,20 @@ public class AGUIEventChannelTests
         };
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task Push_WhenChannelFull_ShouldThrow()
+    {
+        await using var channel = new AGUIEventChannel(new AGUIEventChannelOptions
+        {
+            Capacity = 1,
+            FullMode = BoundedChannelFullMode.Wait,
+        });
+
+        channel.Push(new RunStartedEvent { ThreadId = "t1", RunId = "r1" });
+        var act = () => channel.Push(new RunStartedEvent { ThreadId = "t2", RunId = "r2" });
+
+        act.Should().Throw<InvalidOperationException>();
     }
 }

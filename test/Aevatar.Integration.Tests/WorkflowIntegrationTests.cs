@@ -15,6 +15,8 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.Agents;
+using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
@@ -72,6 +74,7 @@ public class WorkflowIntegrationTests
 
         // 注册 Cognitive Module Factory
         services.AddSingleton<IEventModuleFactory, WorkflowModuleFactory>();
+        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
         var sp = services.BuildServiceProvider();
         var runtime = sp.GetRequiredService<IActorRuntime>();
