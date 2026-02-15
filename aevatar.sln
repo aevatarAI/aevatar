@@ -59,7 +59,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.CQRS.Projection.Cor
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.AI.Abstractions", "src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj", "{42CA4449-727F-2DBB-D373-ECB315D84F28}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Workflow.Projection", "src\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj", "{F9B61BD4-650C-4BF4-9814-22EE5E5A6DC7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Workflow.Projection", "src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj", "{F9B61BD4-650C-4BF4-9814-22EE5E5A6DC7}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjection.Abstractions", "demos\Aevatar.Demos.CaseProjection.Abstractions\Aevatar.Demos.CaseProjection.Abstractions.csproj", "{9AA68784-537C-4878-875C-5D29F3ECFBF3}"
 EndProject
@@ -69,7 +69,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjectio
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Demos.CaseProjection.Host", "demos\Aevatar.Demos.CaseProjection.Host\Aevatar.Demos.CaseProjection.Host.csproj", "{F25E14EA-78AC-40CF-A63E-FBAD44174CF4}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Workflow.Presentation.AGUIAdapter", "src\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj", "{405559DE-FD53-4DB1-B6A4-465625049594}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aevatar.Workflow.Presentation.AGUIAdapter", "src\workflow\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj", "{405559DE-FD53-4DB1-B6A4-465625049594}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

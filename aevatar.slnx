@@ -24,8 +24,8 @@
     <Project Path="src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <Project Path="src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
     <Project Path="src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
-    <Project Path="src\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
-    <Project Path="src/Aevatar.Workflow.Presentation.AGUIAdapter/Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />
+    <Project Path="src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
+    <Project Path="src\workflow\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />
     <Project Path="src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <Project Path="src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <Project Path="src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
