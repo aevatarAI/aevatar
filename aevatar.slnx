@@ -6,6 +6,7 @@
     <Project Path="demos\Aevatar.Demos.CaseProjection\Aevatar.Demos.CaseProjection.csproj" />
     <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />
     <Project Path="demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj" />
+    <Project Path="demos\Aevatar.Demos.ContextDatabase\Aevatar.Demos.ContextDatabase.csproj" />
     <File Path="demos\README.md" />
   </Folder>
   <Folder Name="/docs/">
@@ -15,6 +16,7 @@
     <File Path="docs\IDENTIFIER_RELATIONSHIPS.md" />
     <File Path="docs\ARCHITECTURE_REVIEW_SCORE_REPORT.md" />
     <File Path="docs\WORKFLOW.md" />
+    <File Path="docs\CONTEXT.md" />
   </Folder>
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
@@ -36,6 +38,11 @@
     <Project Path="src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     <Project Path="src\Aevatar.Host.Api\Aevatar.Host.Api.csproj" />
     <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
+    <Project Path="src\Aevatar.Context.Abstractions\Aevatar.Context.Abstractions.csproj" />
+    <Project Path="src\Aevatar.Context.Core\Aevatar.Context.Core.csproj" />
+    <Project Path="src\Aevatar.Context.Extraction\Aevatar.Context.Extraction.csproj" />
+    <Project Path="src\Aevatar.Context.Retrieval\Aevatar.Context.Retrieval.csproj" />
+    <Project Path="src\Aevatar.Context.Memory\Aevatar.Context.Memory.csproj" />
   </Folder>
   <Folder Name="/src/workflow/">
     <Project Path="src/workflow/Aevatar.Workflow.Application.Abstractions/Aevatar.Workflow.Application.Abstractions.csproj" />
@@ -53,6 +60,10 @@
     <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Application.Tests\Aevatar.Workflow.Application.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Core.Tests\Aevatar.Workflow.Core.Tests.csproj" />
+    <Project Path="test\Aevatar.Context.Core.Tests\Aevatar.Context.Core.Tests.csproj" />
+    <Project Path="test\Aevatar.Context.Extraction.Tests\Aevatar.Context.Extraction.Tests.csproj" />
+    <Project Path="test\Aevatar.Context.Retrieval.Tests\Aevatar.Context.Retrieval.Tests.csproj" />
+    <Project Path="test\Aevatar.Context.Memory.Tests\Aevatar.Context.Memory.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />

@@ -14,6 +14,10 @@
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.MCP\Aevatar.AI.ToolProviders.MCP.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
+    <ProjectReference Include="..\Aevatar.Context.Core\Aevatar.Context.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.Context.Extraction\Aevatar.Context.Extraction.csproj" />
+    <ProjectReference Include="..\Aevatar.Context.Retrieval\Aevatar.Context.Retrieval.csproj" />
+    <ProjectReference Include="..\Aevatar.Context.Memory\Aevatar.Context.Memory.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
   </ItemGroup>

@@ -1,11 +1,16 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Agents;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Core.Agents;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Configuration;
+using Aevatar.Context.Core;
+using Aevatar.Context.Extraction;
+using Aevatar.Context.Memory;
+using Aevatar.Context.Retrieval;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Workflow.Core;
 using Microsoft.Extensions.Configuration;
@@ -19,6 +24,7 @@ public sealed class AevatarBootstrapOptions
     public bool EnableMEAIProviders { get; set; } = true;
     public bool EnableMCPTools { get; set; }
     public bool EnableSkills { get; set; }
+    public bool EnableContextDatabase { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
     public string DefaultProvider { get; set; } = "deepseek";
@@ -50,6 +56,9 @@ public static class ServiceCollectionExtensions
 
         if (options.EnableSkills)
             RegisterSkills(services, options);
+
+        if (options.EnableContextDatabase)
+            RegisterContextDatabase(services);
 
         return services;
     }
@@ -143,6 +152,16 @@ public static class ServiceCollectionExtensions
             foreach (var directory in options.SkillDirectories)
                 skillOptions.ScanDirectory(directory);
         });
+    }
+
+    private static void RegisterContextDatabase(IServiceCollection services)
+    {
+        services.AddContextStore();
+        services.AddContextExtraction();
+        services.AddContextRetrieval();
+        services.AddContextMemory();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILLMCallMiddleware, ContextInjectionMiddleware>());
     }
 
     private static void RegisterConnectorBuilders(IServiceCollection services)

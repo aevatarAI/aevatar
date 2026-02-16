@@ -250,6 +250,78 @@ app.MapPost("/api/llm/probe/models", async (ProbeLLMRequest req, int? limit, Htt
     return Results.Json(await LLMProbe.FetchModelsAsync(provider, limit ?? 200, ct));
 });
 
+// ─── Context Database ───
+app.MapGet("/api/context/open", (HttpContext http) =>
+{
+    if (!IsLocal(http)) return Results.Forbid();
+    var root = AevatarPaths.Root;
+    if (!Directory.Exists(root)) Directory.CreateDirectory(root);
+    OpenFileManager(root);
+    return Results.Json(new { ok = true, path = root, opened = true });
+});
+app.MapGet("/api/context/open/{scope}", (string scope, HttpContext http) =>
+{
+    if (!IsLocal(http)) return Results.Forbid();
+    var path = scope.ToLowerInvariant() switch
+    {
+        "skills" => AevatarPaths.Skills,
+        "resources" => AevatarPaths.Resources,
+        "user" or "users" => AevatarPaths.Users,
+        "agent" or "agents" => AevatarPaths.AgentData,
+        "session" or "sessions" => AevatarPaths.Sessions,
+        _ => null,
+    };
+    if (path == null) return Results.BadRequest(new { ok = false, error = $"Unknown scope: {scope}. Valid: skills, resources, user, agent, session" });
+    if (!Directory.Exists(path)) Directory.CreateDirectory(path);
+    OpenFileManager(path);
+    return Results.Json(new { ok = true, scope, path, opened = true });
+});
+app.MapGet("/api/context/browse", (HttpContext http) =>
+{
+    if (!IsLocal(http)) return Results.Forbid();
+    var root = AevatarPaths.Root;
+    var scopes = new[] { "skills", "resources", "users", "agents", "sessions" };
+    var result = scopes.Select(s =>
+    {
+        var dir = Path.Combine(root, s);
+        var exists = Directory.Exists(dir);
+        var fileCount = exists ? Directory.GetFiles(dir, "*", SearchOption.AllDirectories).Length : 0;
+        var dirCount = exists ? Directory.GetDirectories(dir, "*", SearchOption.AllDirectories).Length : 0;
+        return new { scope = s, path = dir, exists, fileCount, dirCount };
+    }).ToList();
+    return Results.Json(new { ok = true, root, scopes = result });
+});
+app.MapGet("/api/context/browse/{scope}", (string scope, HttpContext http) =>
+{
+    if (!IsLocal(http)) return Results.Forbid();
+    var path = scope.ToLowerInvariant() switch
+    {
+        "skills" => AevatarPaths.Skills,
+        "resources" => AevatarPaths.Resources,
+        "user" or "users" => AevatarPaths.Users,
+        "agent" or "agents" => AevatarPaths.AgentData,
+        "session" or "sessions" => AevatarPaths.Sessions,
+        _ => null,
+    };
+    if (path == null) return Results.BadRequest(new { ok = false, error = $"Unknown scope: {scope}" });
+    if (!Directory.Exists(path)) return Results.Json(new { ok = true, scope, path, exists = false, entries = Array.Empty<object>() });
+    var entries = Directory.GetFileSystemEntries(path)
+        .Select(e => new FileInfo(e))
+        .OrderBy(f => f.Name)
+        .Select(f =>
+        {
+            var isDir = (f.Attributes & FileAttributes.Directory) != 0;
+            return new
+            {
+                name = f.Name,
+                isDirectory = isDir,
+                sizeBytes = isDir ? 0 : f.Length,
+                lastModified = f.LastWriteTimeUtc.ToString("o"),
+            };
+        }).ToList();
+    return Results.Json(new { ok = true, scope, path, exists = true, entries });
+});
+
 // ─── Secrets raw & set/remove ───
 app.MapGet("/api/secrets/raw", (ISecretsStore secrets, HttpContext http) =>
 {
@@ -375,6 +447,20 @@ static void NestedToFlatRecursive(JsonElement element, string prefix, Dictionary
             break;
     }
 }
+static void OpenFileManager(string path)
+{
+    try
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            Process.Start("explorer.exe", path);
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            Process.Start("open", path);
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            Process.Start("xdg-open", path);
+    }
+    catch { }
+}
+
 static void OpenBrowser(string url)
 {
     try
