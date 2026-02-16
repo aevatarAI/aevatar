@@ -17,8 +17,33 @@ public sealed class SkillToolAdapter : IAgentTool
 
     public SkillToolAdapter(SkillDefinition skill) => _skill = skill;
 
-    /// <summary>工具名称（skill_ 前缀 + 技能名）。</summary>
-    public string Name => $"skill_{_skill.Name.ToLowerInvariant().Replace(' ', '_')}";
+    /// <summary>工具名称（skill_ 前缀 + 技能名，已 sanitize 为 LLM 兼容格式）。</summary>
+    public string Name => SanitizeName(_skill.Name);
+
+    private static string SanitizeName(string skillName)
+    {
+        var raw = $"skill_{skillName.ToLowerInvariant()}";
+        var chars = new char[raw.Length];
+        var len = 0;
+        var lastWasUnderscore = false;
+
+        foreach (var c in raw)
+        {
+            if (char.IsLetterOrDigit(c) || c == '-')
+            {
+                chars[len++] = c;
+                lastWasUnderscore = false;
+            }
+            else if (!lastWasUnderscore)
+            {
+                chars[len++] = '_';
+                lastWasUnderscore = true;
+            }
+        }
+
+        while (len > 0 && chars[len - 1] == '_') len--;
+        return len > 0 ? new string(chars, 0, len) : "skill_unnamed";
+    }
 
     /// <summary>技能描述。</summary>
     public string Description => _skill.Description;

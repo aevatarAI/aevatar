@@ -17,7 +17,10 @@ public static class ServiceCollectionExtensions
         if (configureReports != null)
             services.Configure(configureReports);
 
-        services.TryAddSingleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>();
+        // Replace the Noop fallback from Application layer with the real FileSystem sink.
+        // Application registers NoopWorkflowExecutionReportArtifactSink via TryAddSingleton;
+        // Infrastructure must use Replace to override it.
+        services.Replace(ServiceDescriptor.Singleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>());
         return services;
     }
 

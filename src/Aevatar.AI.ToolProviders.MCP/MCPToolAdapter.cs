@@ -15,10 +15,11 @@ namespace Aevatar.AI.ToolProviders.MCP;
 public sealed class MCPToolAdapter : IAgentTool
 {
     private readonly McpClient _client;
+    private readonly string _mcpToolName;
     private readonly string _serverName;
     private readonly ILogger? _logger;
 
-    /// <summary>工具名称。</summary>
+    /// <summary>LLM 可见的工具名称（已 sanitize，仅含 [a-zA-Z0-9_-]）。</summary>
     public string Name { get; }
 
     /// <summary>工具描述。</summary>
@@ -31,7 +32,8 @@ public sealed class MCPToolAdapter : IAgentTool
         string name, string description, string parametersSchema,
         McpClient client, string serverName, ILogger? logger = null)
     {
-        Name = name;
+        _mcpToolName = name;
+        Name = SanitizeToolName(name);
         Description = description;
         ParametersSchema = parametersSchema;
         _client = client;
@@ -39,20 +41,19 @@ public sealed class MCPToolAdapter : IAgentTool
         _logger = logger;
     }
 
-    /// <summary>通过 MCP 协议执行工具。</summary>
+    /// <summary>通过 MCP 协议执行工具（使用原始 MCP tool name）。</summary>
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        _logger?.LogDebug("MCP Tool {Name} 执行: server={Server}", Name, _serverName);
+        _logger?.LogDebug("MCP Tool {Name} (mcp={McpName}) 执行: server={Server}",
+            Name, _mcpToolName, _serverName);
 
         try
         {
-            // 解析参数
             var args = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(argumentsJson)
                        ?? [];
 
-            var result = await _client.CallToolAsync(Name, args, cancellationToken: ct);
+            var result = await _client.CallToolAsync(_mcpToolName, args, cancellationToken: ct);
 
-            // 提取文本结果
             return result.Content?.ToString() ?? "";
         }
         catch (Exception ex)
@@ -60,5 +61,35 @@ public sealed class MCPToolAdapter : IAgentTool
             _logger?.LogError(ex, "MCP Tool {Name} 执行失败", Name);
             return System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message });
         }
+    }
+
+    /// <summary>
+    /// 将 tool name sanitize 为 OpenAI 兼容格式：仅保留 [a-zA-Z0-9_-]，
+    /// 其他字符替换为 '_'，连续 '_' 合并。
+    /// </summary>
+    internal static string SanitizeToolName(string name)
+    {
+        var chars = new char[name.Length];
+        var len = 0;
+        var lastWasUnderscore = false;
+
+        foreach (var c in name)
+        {
+            if (char.IsLetterOrDigit(c) || c == '-')
+            {
+                chars[len++] = c;
+                lastWasUnderscore = false;
+            }
+            else if (!lastWasUnderscore)
+            {
+                chars[len++] = '_';
+                lastWasUnderscore = true;
+            }
+        }
+
+        // 去掉末尾的 '_'
+        while (len > 0 && chars[len - 1] == '_') len--;
+
+        return len > 0 ? new string(chars, 0, len) : "unnamed_tool";
     }
 }
