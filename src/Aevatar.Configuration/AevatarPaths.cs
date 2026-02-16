@@ -86,6 +86,17 @@ public static class AevatarPaths
     /// <summary>MCP 服务器配置目录。</summary>
     public static string MCP => Path.Combine(Root, "mcp");
 
+    // ─── Context Database 目录 ───
+
+    /// <summary>外部知识资源目录（aevatar://resources/）。</summary>
+    public static string Resources => Path.Combine(Root, "resources");
+
+    /// <summary>用户数据目录（aevatar://user/{userId}/）。</summary>
+    public static string Users => Path.Combine(Root, "users");
+
+    /// <summary>Agent 运行时数据目录（记忆、指令等；aevatar://agent/{agentId}/）。</summary>
+    public static string AgentData => Path.Combine(Root, "agents");
+
     /// <summary>
     /// 仓库根目录下的 workflows 路径（用于从 repo 根加载 YAML，用户无需拷贝到 ~/.aevatar）。
     /// 解析方式：从当前目录或程序基目录向上查找含 aevatar.slnx、.git 或 Directory.Build.props 的目录，取其 workflows 子目录；未找到则用当前目录的 workflows。
@@ -138,6 +149,14 @@ public static class AevatarPaths
         Directory.CreateDirectory(Sessions);
         Directory.CreateDirectory(Logs);
         Directory.CreateDirectory(MCP);
+    }
+
+    /// <summary>确保 Context Database 相关目录已创建。</summary>
+    public static void EnsureContextDirectories()
+    {
+        EnsureDirectories();
+        Directory.CreateDirectory(Resources);
+        Directory.CreateDirectory(Users);
     }
 
     /// <summary>获取指定 Agent 的 YAML 配置文件路径。</summary>

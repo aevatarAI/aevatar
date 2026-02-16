@@ -21,6 +21,7 @@ public class WorkflowExecutionReadModelProjectorTests
         new StartWorkflowEventReducer(),
         new StepRequestEventReducer(),
         new StepCompletedEventReducer(),
+        new WorkflowSuspendedEventReducer(),
         new TextMessageEndEventReducer(),
         new WorkflowCompletedEventReducer(),
     ];
@@ -130,6 +131,58 @@ public class WorkflowExecutionReadModelProjectorTests
         report.Should().NotBeNull();
         report!.Timeline.Should().BeEmpty();
         report.Summary.TotalSteps.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Projector_ShouldProjectWorkflowSuspendedEvent_ToTimelineAndStepMetadata()
+    {
+        var store = new InMemoryWorkflowExecutionReadModelStore();
+        var projector = new WorkflowExecutionReadModelProjector(store, BuildReducers());
+        var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>([projector]);
+
+        var context = new WorkflowExecutionProjectionContext
+        {
+            RunId = "run-suspend",
+            RootActorId = "root",
+            WorkflowName = "direct",
+            StartedAt = DateTimeOffset.UtcNow,
+            Input = "hello",
+        };
+
+        await coordinator.InitializeAsync(context);
+        await coordinator.ProjectAsync(context, Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "direct",
+            RunId = "wf-run-suspend",
+            Input = "hello",
+        }));
+        await coordinator.ProjectAsync(context, Wrap(new StepRequestEvent
+        {
+            StepId = "get_context",
+            StepType = "human_input",
+            RunId = "wf-run-suspend",
+            TargetRole = "",
+            Input = "hello",
+        }));
+        await coordinator.ProjectAsync(context, Wrap(new WorkflowSuspendedEvent
+        {
+            RunId = "wf-run-suspend",
+            StepId = "get_context",
+            SuspensionType = "human_input",
+            Prompt = "请提供补充信息",
+            TimeoutSeconds = 1800,
+            Metadata = { { "variable", "user_context" } },
+        }));
+        await coordinator.CompleteAsync(context, []);
+
+        var report = await store.GetAsync("run-suspend");
+        report.Should().NotBeNull();
+        report!.Timeline.Should().ContainSingle(x => x.Stage == "workflow.suspended");
+
+        var step = report.Steps.Should().ContainSingle(x => x.StepId == "get_context").Subject;
+        step.CompletionMetadata.Should().ContainKey("suspension_type").WhoseValue.Should().Be("human_input");
+        step.CompletionMetadata.Should().ContainKey("suspension_prompt").WhoseValue.Should().Be("请提供补充信息");
+        step.CompletionMetadata.Should().ContainKey("suspension_timeout").WhoseValue.Should().Be("1800");
     }
 
     [Fact]

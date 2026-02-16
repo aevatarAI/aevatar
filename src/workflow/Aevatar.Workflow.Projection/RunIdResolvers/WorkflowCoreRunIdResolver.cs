@@ -31,6 +31,18 @@ public sealed class WorkflowCoreRunIdResolver : IWorkflowExecutionRunIdResolver
             return !string.IsNullOrWhiteSpace(runId);
         }
 
+        if (payload.Is(WorkflowSuspendedEvent.Descriptor))
+        {
+            runId = payload.Unpack<WorkflowSuspendedEvent>().RunId;
+            return !string.IsNullOrWhiteSpace(runId);
+        }
+
+        if (payload.Is(WorkflowResumedEvent.Descriptor))
+        {
+            runId = payload.Unpack<WorkflowResumedEvent>().RunId;
+            return !string.IsNullOrWhiteSpace(runId);
+        }
+
         if (payload.Is(WorkflowCompletedEvent.Descriptor))
         {
             runId = payload.Unpack<WorkflowCompletedEvent>().RunId;

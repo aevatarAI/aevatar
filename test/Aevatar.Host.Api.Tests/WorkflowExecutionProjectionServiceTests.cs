@@ -321,6 +321,7 @@ public class WorkflowExecutionProjectionServiceTests
         new StartWorkflowEventReducer(),
         new StepRequestEventReducer(),
         new StepCompletedEventReducer(),
+        new WorkflowSuspendedEventReducer(),
         new TextMessageEndEventReducer(),
         new WorkflowCompletedEventReducer(),
     ];
