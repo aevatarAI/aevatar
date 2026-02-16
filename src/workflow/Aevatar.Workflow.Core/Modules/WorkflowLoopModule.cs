@@ -5,6 +5,7 @@
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
+using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.Logging;
@@ -18,6 +19,8 @@ public sealed class WorkflowLoopModule : IEventModule
 {
     private WorkflowDefinition? _workflow;
     private readonly HashSet<string> _activeRunIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<string, string>> _variablesByRunId = new(StringComparer.Ordinal);
+    private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
 
     /// <summary>
     /// 模块名称。
@@ -64,10 +67,15 @@ public sealed class WorkflowLoopModule : IEventModule
         {
             var evt = payload.Unpack<StartWorkflowEvent>();
             _activeRunIds.Add(evt.RunId);
+            _variablesByRunId[evt.RunId] = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["input"] = evt.Input ?? string.Empty,
+            };
             var entry = _workflow.Steps.FirstOrDefault();
             if (entry == null)
             {
                 _activeRunIds.Remove(evt.RunId);
+                _variablesByRunId.Remove(evt.RunId);
                 await ctx.PublishAsync(new WorkflowCompletedEvent
                 {
                     WorkflowName = _workflow.Name,
@@ -77,7 +85,7 @@ public sealed class WorkflowLoopModule : IEventModule
                 }, EventDirection.Both, ct);
                 return;
             }
-            await DispatchStep(entry, evt.Input, evt.RunId, ctx, ct);
+            await DispatchStep(entry, evt.Input ?? string.Empty, evt.RunId, ctx, ct);
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
@@ -90,6 +98,11 @@ public sealed class WorkflowLoopModule : IEventModule
             if (current == null)
             {
                 ctx.Logger.LogDebug("workflow_loop: ignore internal completion step={StepId}", evt.StepId);
+                if (_variablesByRunId.TryGetValue(evt.RunId, out var internalVars) &&
+                    !string.IsNullOrWhiteSpace(evt.StepId))
+                {
+                    internalVars[evt.StepId] = evt.Output ?? string.Empty;
+                }
                 return;
             }
 
@@ -97,9 +110,17 @@ public sealed class WorkflowLoopModule : IEventModule
             ctx.Logger.LogInformation("workflow_loop: step={StepId} completed success={Success} output=({Len} chars) {Preview}",
                 evt.StepId, evt.Success, (evt.Output ?? "").Length, outputPreview);
 
+            if (_variablesByRunId.TryGetValue(evt.RunId, out var varsForRun))
+            {
+                if (!string.IsNullOrWhiteSpace(evt.StepId))
+                    varsForRun[evt.StepId] = evt.Output ?? string.Empty;
+                varsForRun["input"] = evt.Output ?? string.Empty;
+            }
+
             if (!evt.Success)
             {
                 _activeRunIds.Remove(evt.RunId);
+                _variablesByRunId.Remove(evt.RunId);
                 await ctx.PublishAsync(new WorkflowCompletedEvent
                 {
                     WorkflowName = _workflow.Name,
@@ -113,6 +134,7 @@ public sealed class WorkflowLoopModule : IEventModule
             if (next == null)
             {
                 _activeRunIds.Remove(evt.RunId);
+                _variablesByRunId.Remove(evt.RunId);
                 await ctx.PublishAsync(new WorkflowCompletedEvent
                 {
                     WorkflowName = _workflow.Name,
@@ -133,7 +155,11 @@ public sealed class WorkflowLoopModule : IEventModule
             step.Id, step.Type, step.TargetRole ?? "(none)", input.Length, inputPreview);
 
         var req = new StepRequestEvent { StepId = step.Id, StepType = step.Type, RunId = runId, Input = input, TargetRole = step.TargetRole ?? "" };
-        foreach (var (k, v) in step.Parameters) req.Parameters[k] = v;
+        var vars = ResolveVariables(runId);
+        vars["input"] = input;
+
+        foreach (var (k, v) in step.Parameters)
+            req.Parameters[k] = _expressionEvaluator.Evaluate(v, vars);
 
         // 当步骤指定了 TargetRole 且该角色配置了 connectors 允许列表时，注入 allowed_connectors 供 ConnectorCallModule 校验
         if (!string.IsNullOrWhiteSpace(step.TargetRole) && _workflow != null)
@@ -144,5 +170,15 @@ public sealed class WorkflowLoopModule : IEventModule
         }
 
         await ctx.PublishAsync(req, EventDirection.Self, ct);
+    }
+
+    private Dictionary<string, string> ResolveVariables(string runId)
+    {
+        if (_variablesByRunId.TryGetValue(runId, out var vars))
+            return vars;
+
+        vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _variablesByRunId[runId] = vars;
+        return vars;
     }
 }

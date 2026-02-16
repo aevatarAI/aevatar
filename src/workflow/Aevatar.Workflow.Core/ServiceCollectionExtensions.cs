@@ -61,5 +61,9 @@ public static class ServiceCollectionExtensions
 
         services.AddWorkflowModule<TransformModule>("transform");
         services.AddWorkflowModule<RetrieveFactsModule>("retrieve_facts");
+
+        // Human-in-the-loop
+        services.AddWorkflowModule<HumanApprovalModule>("human_approval");
+        services.AddWorkflowModule<HumanInputModule>("human_input");
     }
 }
