@@ -1,4 +1,4 @@
-// Adapter so config tool API (TryGet/Set/Remove/GetAll) can use Aevatar.Config.AevatarSecretsStore.
+// Adapter so config tool API (TryGet/Set/Remove/GetAll) can use Aevatar.Configuration.AevatarSecretsStore.
 
 namespace Aevatar.Tools.Config;
 
@@ -11,12 +11,12 @@ public interface ISecretsStore
     IReadOnlyDictionary<string, string> GetAll();
 }
 
-/// <summary>Wraps Aevatar.Config.AevatarSecretsStore for the config tool.</summary>
+/// <summary>Wraps Aevatar.Configuration.AevatarSecretsStore for the config tool.</summary>
 public sealed class SecretsStoreAdapter : ISecretsStore
 {
-    private readonly Aevatar.Config.AevatarSecretsStore _store;
+    private readonly Aevatar.Configuration.AevatarSecretsStore _store;
 
-    public SecretsStoreAdapter(Aevatar.Config.AevatarSecretsStore store) => _store = store;
+    public SecretsStoreAdapter(Aevatar.Configuration.AevatarSecretsStore store) => _store = store;
 
     public bool TryGet(string key, out string? value)
     {

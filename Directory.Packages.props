@@ -84,7 +84,6 @@
 
     <!-- EF Core / Data -->
     <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="$(MicrosoftExtensionsVersion)" />
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="$(MicrosoftExtensionsVersion)" />
 
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- Orleans                                                     -->

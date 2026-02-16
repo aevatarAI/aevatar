@@ -1,0 +1,34 @@
+using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Microsoft.Extensions.Logging;
+
+namespace Aevatar.Workflow.Infrastructure.Workflows;
+
+public sealed class WorkflowDefinitionFileLoader
+{
+    public int LoadInto(
+        IWorkflowDefinitionRegistry registry,
+        IEnumerable<string> directories,
+        ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(directories);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        var loaded = 0;
+        foreach (var directory in directories.Where(Directory.Exists))
+        {
+            foreach (var file in Directory.EnumerateFiles(directory, "*.*")
+                         .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
+                                  || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)))
+            {
+                var name = Path.GetFileNameWithoutExtension(file);
+                var yaml = File.ReadAllText(file);
+                registry.Register(name, yaml);
+                loaded++;
+            }
+        }
+
+        logger.LogInformation("Loaded {Count} workflow definition(s) from file sources.", loaded);
+        return loaded;
+    }
+}

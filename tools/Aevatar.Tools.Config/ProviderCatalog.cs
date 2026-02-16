@@ -29,7 +29,7 @@ static class ProviderCatalog
         var list = new List<ProviderInstanceItem>(names.Count);
         foreach (var name in names)
         {
-            var resolved = LlmProviderResolver.Resolve(secrets, name);
+            var resolved = LLMProviderResolver.Resolve(secrets, name);
             list.Add(new ProviderInstanceItem(
                 Name: name,
                 ProviderType: resolved.ProviderType,

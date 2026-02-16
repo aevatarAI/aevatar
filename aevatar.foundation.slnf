@@ -2,10 +2,10 @@
   "solution": {
     "path": "aevatar.slnx",
     "projects": [
-      "src\\Aevatar.Abstractions\\Aevatar.Abstractions.csproj",
-      "src\\Aevatar.Core\\Aevatar.Core.csproj",
-      "src\\Aevatar.Demo.Cli\\Aevatar.Demo.Cli.csproj",
-      "src\\Aevatar.Runtime\\Aevatar.Runtime.csproj",
+      "src\\Aevatar.Foundation.Abstractions\\Aevatar.Foundation.Abstractions.csproj",
+      "src\\Aevatar.Foundation.Core\\Aevatar.Foundation.Core.csproj",
+      "demos\\Aevatar.Demo.Cli\\Aevatar.Demos.Cli.csproj",
+      "src\\Aevatar.Foundation.Runtime\\Aevatar.Foundation.Runtime.csproj",
       "test\\Aevatar.Abstractions.Tests\\Aevatar.Abstractions.Tests.csproj",
       "test\\Aevatar.Core.Tests\\Aevatar.Core.Tests.csproj"
     ]

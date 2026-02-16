@@ -1,9 +1,0 @@
-syntax = "proto3";
-package aevatar.tests;
-option csharp_namespace = "Aevatar.Tests";
-
-message CounterState { int32 count = 1; string name = 2; }
-message IncrementEvent { int32 amount = 1; }
-message DecrementEvent { int32 amount = 1; }
-message PingEvent { string message = 1; }
-message PongEvent { string reply = 1; }

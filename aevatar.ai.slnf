@@ -2,11 +2,12 @@
   "solution": {
     "path": "aevatar.slnx",
     "projects": [
-      "src\\Aevatar.AI\\Aevatar.AI.csproj",
-      "src\\Aevatar.AI.MEAI\\Aevatar.AI.MEAI.csproj",
-      "src\\Aevatar.AI.LLMTornado\\Aevatar.AI.LLMTornado.csproj",
-      "src\\Aevatar.AI.MCP\\Aevatar.AI.MCP.csproj",
-      "src\\Aevatar.AI.Skills\\Aevatar.AI.Skills.csproj"
+      "src\\Aevatar.AI.Abstractions\\Aevatar.AI.Abstractions.csproj",
+      "src\\Aevatar.AI.Core\\Aevatar.AI.Core.csproj",
+      "src\\Aevatar.AI.LLMProviders.MEAI\\Aevatar.AI.LLMProviders.MEAI.csproj",
+      "src\\Aevatar.AI.LLMProviders.Tornado\\Aevatar.AI.LLMProviders.Tornado.csproj",
+      "src\\Aevatar.AI.ToolProviders.MCP\\Aevatar.AI.ToolProviders.MCP.csproj",
+      "src\\Aevatar.AI.ToolProviders.Skills\\Aevatar.AI.ToolProviders.Skills.csproj"
     ]
   }
 }

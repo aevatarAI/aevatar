@@ -12,14 +12,17 @@
 // 使用 MockLLMProvider 替代真实 LLM
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar;
-using Aevatar.AI;
-using Aevatar.AI.LLM;
-using Aevatar.Cognitive;
-using Aevatar.Cognitive.Primitives;
-using Aevatar.Cognitive.Validation;
-using Aevatar.DependencyInjection;
-using Aevatar.EventModules;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.AI.Core;
+using Aevatar.AI.Core.Agents;
+using Aevatar.AI.Abstractions.Agents;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Validation;
+using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -70,7 +73,8 @@ public class WorkflowIntegrationTests
         services.AddSingleton<ILLMProviderFactory>(mockLlm);
 
         // 注册 Cognitive Module Factory
-        services.AddSingleton<IEventModuleFactory, CognitiveModuleFactory>();
+        services.AddSingleton<IEventModuleFactory, WorkflowModuleFactory>();
+        services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
         var sp = services.BuildServiceProvider();
         var runtime = sp.GetRequiredService<IActorRuntime>();
@@ -245,7 +249,7 @@ public class WorkflowIntegrationTests
             """;
 
         // When
-        RoleGAgentFactory.ConfigureFromYaml(agent, yaml, sp);
+        await RoleGAgentFactory.ConfigureFromYaml(agent, yaml, sp);
 
         // Then
         agent.RoleName.Should().Be("Expert Analyst");
@@ -279,7 +283,7 @@ public class WorkflowIntegrationTests
         var stream = sp.GetRequiredService<IStreamProvider>().GetStream("llm-test-1");
         await stream.SubscribeAsync<EventEnvelope>(async envelope =>
         {
-            if (envelope.Payload?.TypeUrl?.Contains("ChatResponseEvent") == true)
+            if (envelope.Payload?.Is(ChatResponseEvent.Descriptor) == true)
             {
                 var resp = envelope.Payload.Unpack<ChatResponseEvent>();
                 responses.Add(resp.Content);
@@ -408,14 +412,17 @@ public class WorkflowIntegrationTests
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  Scenario 7: CognitiveModuleFactory 创建所有模块
+    //  Scenario 7: WorkflowModuleFactory 创建所有模块
     // ═══════════════════════════════════════════════════════════
 
-    [Fact(DisplayName = "CognitiveModuleFactory 应能创建所有 13 种核心原语模块")]
+    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有 13 种核心原语模块")]
     [Trait("Feature", "ModuleFactory")]
     public void Scenario7_AllCoreModules()
     {
-        var factory = new CognitiveModuleFactory();
+        var services = new ServiceCollection();
+        services.AddAevatarWorkflow();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<IEventModuleFactory>();
 
         // ─── 流程控制 ───
         factory.TryCreate("workflow_loop", out var m).Should().BeTrue(); m!.Name.Should().Be("workflow_loop");

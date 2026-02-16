@@ -3,7 +3,7 @@
 // 根据 system prompt 中的角色名返回预设内容
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.AI.LLM;
+using Aevatar.AI.Abstractions.LLMProviders;
 
 namespace Aevatar.Integration.Tests;
 

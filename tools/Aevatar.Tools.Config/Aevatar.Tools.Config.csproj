@@ -15,6 +15,6 @@
     <IsPackable>true</IsPackable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Aevatar.Config\Aevatar.Config.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
   </ItemGroup>
 </Project>
