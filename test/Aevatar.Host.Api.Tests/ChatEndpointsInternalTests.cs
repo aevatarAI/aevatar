@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.CQRS.Core.Abstractions.Queries;
 using Aevatar.Host.Api.Endpoints;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -20,9 +19,7 @@ public class ChatEndpointsInternalTests
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddSingleton<ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>(new FakeChatRunApplicationService());
         var queryService = new FakeQueryService { RunQueryEnabledValue = true };
-        builder.Services.AddSingleton<IAgentQueryService<WorkflowAgentSummary>>(queryService);
-        builder.Services.AddSingleton<IExecutionTemplateQueryService>(queryService);
-        builder.Services.AddSingleton<IExecutionQueryService<WorkflowRunSummary, WorkflowRunReport>>(queryService);
+        builder.Services.AddSingleton<IWorkflowExecutionQueryApplicationService>(queryService);
 
         var app = builder.Build();
         var endpoints = (IEndpointRouteBuilder)app;
@@ -221,9 +218,7 @@ public class ChatEndpointsInternalTests
     }
 
     private sealed class FakeQueryService :
-        IAgentQueryService<WorkflowAgentSummary>,
-        IExecutionTemplateQueryService,
-        IExecutionQueryService<WorkflowRunSummary, WorkflowRunReport>
+        IWorkflowExecutionQueryApplicationService
     {
         public bool RunQueryEnabledValue { get; set; }
         public IReadOnlyList<WorkflowAgentSummary> Agents { get; set; } = [];
@@ -231,18 +226,18 @@ public class ChatEndpointsInternalTests
         public IReadOnlyList<WorkflowRunSummary> Runs { get; set; } = [];
         public WorkflowRunReport? Report { get; set; }
 
-        public bool ExecutionQueryEnabled => RunQueryEnabledValue;
+        public bool RunQueryEnabled => RunQueryEnabledValue;
 
         public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
             Task.FromResult(Agents);
 
-        public IReadOnlyList<string> ListTemplates() => Workflows;
+        public IReadOnlyList<string> ListWorkflows() => Workflows;
 
-        public Task<IReadOnlyList<WorkflowRunSummary>> ListAsync(int take = 50, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<WorkflowRunSummary>> ListRunsAsync(int take = 50, CancellationToken ct = default) =>
             Task.FromResult(Runs);
 
-        public Task<WorkflowRunReport?> GetAsync(string executionId, CancellationToken ct = default) =>
-            Task.FromResult(Report is { RunId: var id } && string.Equals(id, executionId, StringComparison.Ordinal) ? Report : null);
+        public Task<WorkflowRunReport?> GetRunAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult(Report is { RunId: var id } && string.Equals(id, runId, StringComparison.Ordinal) ? Report : null);
     }
 
     private static CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> ToCoreResult(

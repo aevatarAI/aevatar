@@ -26,11 +26,8 @@ builder.Services.AddAevatarBootstrap(builder.Configuration, options =>
     options.EnableMCPTools = true;
     options.EnableSkills = true;
 });
-builder.Services.AddCqrsCore(options =>
-{
-    options.DefaultSubsystem = "workflow";
-});
-builder.Services.AddWorkflowSubsystemProfile(builder.Configuration);
+builder.Services.AddCqrsCore();
+builder.Services.AddWorkflowSubsystem(builder.Configuration);
 builder.Services.AddHostedService<ConnectorBootstrapHostedService>();
 
 // ─── CORS（开发默认放开；生产要求显式白名单） ───

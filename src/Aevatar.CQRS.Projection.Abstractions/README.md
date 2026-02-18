@@ -15,4 +15,4 @@
 
 1. 不放业务 read model、业务 context、业务 service。
 2. 不放 DI 装配、endpoint 或具体 store 实现。
-3. 任何领域（WorkflowExecution、CaseDemo 等）都应依赖这些泛型抽象，而不是再造别名接口层。
+3. 任何子系统都应依赖这些泛型抽象，而不是再造别名接口层。

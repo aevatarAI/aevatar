@@ -14,12 +14,12 @@ public sealed class DefaultCommandExecutor<TCommand>
     public async Task ExecuteAsync(
         IActor actor,
         TCommand command,
-        CommandCorrelation correlation,
+        CommandContext context,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(actor);
 
-        var envelope = _factory.CreateEnvelope(command, correlation);
+        var envelope = _factory.CreateEnvelope(command, context);
         await actor.HandleEventAsync(envelope, ct);
     }
 }

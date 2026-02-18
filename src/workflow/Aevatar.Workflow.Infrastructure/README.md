@@ -20,6 +20,8 @@
   - 注册报告工件 sink。
 - `AddWorkflowDefinitionFileSource(...)`
   - 注册 workflow 文件源与启动加载 HostedService。
+- `AddWorkflowSubsystem(...)`
+  - 子系统一键组合（Application + Projection + AGUIAdapter + Infrastructure + workflow 文件源）。
 
 ## 配置
 
@@ -30,4 +32,4 @@
 
 ## 分层说明
 
-本项目依赖 `Aevatar.Workflow.Application.Abstractions` 端口，不依赖 `Aevatar.Workflow.Application` 实现。
+本项目是 workflow 子系统的组合层，按宿主场景装配 `Application/Projection/Adapter/Infrastructure`。

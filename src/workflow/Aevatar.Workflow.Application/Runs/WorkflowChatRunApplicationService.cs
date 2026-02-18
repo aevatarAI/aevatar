@@ -16,7 +16,7 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
     private readonly IWorkflowRunActorResolver _actorResolver;
     private readonly IWorkflowExecutionRunOrchestrator _runOrchestrator;
     private readonly ICommandEnvelopeFactory<WorkflowChatRunRequest> _requestEnvelopeFactory;
-    private readonly ICommandCorrelationPolicy _correlationPolicy;
+    private readonly ICommandContextPolicy _commandContextPolicy;
     private readonly IWorkflowRunRequestExecutor _requestExecutor;
     private readonly IWorkflowRunOutputStreamer _outputStreamer;
     private readonly IWorkflowExecutionReportArtifactSink _reportArtifactSink;
@@ -27,7 +27,7 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         IWorkflowRunActorResolver actorResolver,
         IWorkflowExecutionRunOrchestrator runOrchestrator,
         ICommandEnvelopeFactory<WorkflowChatRunRequest> requestEnvelopeFactory,
-        ICommandCorrelationPolicy correlationPolicy,
+        ICommandContextPolicy commandContextPolicy,
         IWorkflowRunRequestExecutor requestExecutor,
         IWorkflowRunOutputStreamer outputStreamer,
         IWorkflowExecutionReportArtifactSink reportArtifactSink,
@@ -37,7 +37,7 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         _actorResolver = actorResolver;
         _runOrchestrator = runOrchestrator;
         _requestEnvelopeFactory = requestEnvelopeFactory;
-        _correlationPolicy = correlationPolicy;
+        _commandContextPolicy = commandContextPolicy;
         _requestExecutor = requestExecutor;
         _outputStreamer = outputStreamer;
         _reportArtifactSink = reportArtifactSink;
@@ -62,8 +62,14 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
 
         var runContext = runContextCreateResult.Context;
         var started = runContext.ToStarted();
-        var correlation = _correlationPolicy.CreateForExecution(runContext.ActorId, runContext.RunId);
-        var requestEnvelope = _requestEnvelopeFactory.CreateEnvelope(request, correlation);
+        var context = _commandContextPolicy.Create(
+            runContext.ActorId,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [WorkflowRunCommandMetadataKeys.RunId] = runContext.RunId,
+                [WorkflowRunCommandMetadataKeys.SessionId] = $"session-{runContext.RunId}",
+            });
+        var requestEnvelope = _requestEnvelopeFactory.CreateEnvelope(request, context);
         var processingTask = ProcessEnvelopeAsync(runContext, requestEnvelope, ct);
 
         var finalized = false;

@@ -1,10 +1,10 @@
 namespace Aevatar.CQRS.Core.Abstractions.Streaming;
 
-public interface IEventOutputStream<in TEvent, TFrame>
+public interface IEventOutputStream<TEvent, TFrame>
 {
     Task PumpAsync(
         IAsyncEnumerable<TEvent> events,
-        string executionId,
         Func<TFrame, CancellationToken, ValueTask> emitAsync,
+        Func<TEvent, bool>? shouldStop = null,
         CancellationToken ct = default);
 }

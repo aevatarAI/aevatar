@@ -10,9 +10,7 @@
   - `GET /api/agents`、`GET /api/workflows`、`GET /api/runs`、`GET /api/runs/{runId}`
 - 调用应用层：
   - `ICommandExecutionService<WorkflowChatRunRequest,...>`
-  - `IAgentQueryService<WorkflowAgentSummary>`
-  - `IExecutionTemplateQueryService`
-  - `IExecutionQueryService<WorkflowRunSummary, WorkflowRunReport>`
+  - `IWorkflowExecutionQueryApplicationService`
 - 不承载 workflow/cqrs 业务编排。
 
 ## Endpoint 结构
@@ -34,7 +32,7 @@
 
 `Program.cs` 默认注册：
 
-- `AddCqrsCore(...)`
-- `AddWorkflowSubsystemProfile(...)`
+- `AddCqrsCore()`
+- `AddWorkflowSubsystem(...)`
 
 Host 只做“协议 + 组合”，核心用例在 `workflow/*` 子系统。

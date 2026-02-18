@@ -8,17 +8,25 @@ namespace Aevatar.Workflow.Application.Runs;
 
 internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>
 {
-    public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandCorrelation correlation)
+    public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
     {
+        if (!context.Metadata.TryGetValue(WorkflowRunCommandMetadataKeys.RunId, out var runId) ||
+            string.IsNullOrWhiteSpace(runId))
+            throw new InvalidOperationException($"Missing metadata '{WorkflowRunCommandMetadataKeys.RunId}'.");
+
+        var sessionId = context.Metadata.TryGetValue(WorkflowRunCommandMetadataKeys.SessionId, out var metadataSessionId) &&
+                        !string.IsNullOrWhiteSpace(metadataSessionId)
+            ? metadataSessionId
+            : $"session-{Guid.NewGuid():N}";
+
         var chatRequest = new ChatRequestEvent
         {
             Prompt = command.Prompt,
-            SessionId = correlation.SessionId,
+            SessionId = sessionId,
         };
-        chatRequest.Metadata[ChatRequestMetadataKeys.RunId] = correlation.ExecutionId;
-        chatRequest.Metadata[CommandCorrelationMetadataKeys.SessionId] = correlation.SessionId;
-        chatRequest.Metadata[CommandCorrelationMetadataKeys.ActorId] = correlation.ActorId;
-        chatRequest.Metadata[CommandCorrelationMetadataKeys.CorrelationId] = correlation.CorrelationId;
+        chatRequest.Metadata[ChatRequestMetadataKeys.RunId] = runId;
+        foreach (var item in context.Metadata)
+            chatRequest.Metadata[item.Key] = item.Value;
 
         var envelope = new EventEnvelope
         {
@@ -27,13 +35,11 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Payload = Any.Pack(chatRequest),
             PublisherId = "api",
             Direction = EventDirection.Self,
-            CorrelationId = correlation.CorrelationId,
-            TargetActorId = correlation.ActorId,
+            CorrelationId = context.CorrelationId,
+            TargetActorId = context.TargetId,
         };
-        envelope.Metadata[CommandCorrelationMetadataKeys.ExecutionId] = correlation.ExecutionId;
-        envelope.Metadata[CommandCorrelationMetadataKeys.SessionId] = correlation.SessionId;
-        envelope.Metadata[CommandCorrelationMetadataKeys.ActorId] = correlation.ActorId;
-        envelope.Metadata[CommandCorrelationMetadataKeys.CorrelationId] = correlation.CorrelationId;
+        foreach (var item in context.Metadata)
+            envelope.Metadata[item.Key] = item.Value;
         return envelope;
     }
 }

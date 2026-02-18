@@ -7,7 +7,6 @@
     <RootNamespace>Aevatar.Maker.Infrastructure</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Maker.Application\Aevatar.Maker.Application.csproj" />
     <ProjectReference Include="..\Aevatar.Maker.Core\Aevatar.Maker.Core.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />

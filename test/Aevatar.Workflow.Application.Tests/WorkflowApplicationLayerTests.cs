@@ -28,7 +28,7 @@ public class WorkflowChatRunApplicationServiceTests
             actorResolver,
             orchestrator,
             new FakeEnvelopeFactory(),
-            new FakeCommandCorrelationPolicy(),
+            new FakeCommandContextPolicy(),
             new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance),
             new WorkflowRunOutputStreamer(),
             new NoopReportSink(),
@@ -187,7 +187,7 @@ internal sealed class SpyRunOrchestrator : IWorkflowExecutionRunOrchestrator
 
 internal sealed class FakeEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>
 {
-    public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandCorrelation correlation)
+    public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
     {
         return new EventEnvelope
         {
@@ -200,17 +200,22 @@ internal sealed class FakeEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChat
     }
 }
 
-internal sealed class FakeCommandCorrelationPolicy : ICommandCorrelationPolicy
+internal sealed class FakeCommandContextPolicy : ICommandContextPolicy
 {
-    public CommandCorrelation CreateNew(string actorId, string? sessionId = null) =>
-        new(Guid.NewGuid().ToString("N"), sessionId ?? $"session-{Guid.NewGuid():N}", actorId, Guid.NewGuid().ToString("N"));
+    public CommandContext Create(
+        string targetId,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        string? correlationId = null) =>
+        new(
+            targetId,
+            correlationId ?? Guid.NewGuid().ToString("N"),
+            metadata == null
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                : new Dictionary<string, string>(metadata, StringComparer.Ordinal));
 
-    public CommandCorrelation CreateForExecution(string actorId, string executionId, string? sessionId = null) =>
-        new(executionId, sessionId ?? $"session-{executionId}", actorId, Guid.NewGuid().ToString("N"));
-
-    public bool TryResolve(EventEnvelope envelope, out CommandCorrelation correlation)
+    public bool TryResolve(EventEnvelope envelope, out CommandContext context)
     {
-        correlation = default!;
+        context = default!;
         return false;
     }
 }

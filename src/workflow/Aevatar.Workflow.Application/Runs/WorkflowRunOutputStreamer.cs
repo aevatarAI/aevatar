@@ -14,31 +14,35 @@ public sealed class WorkflowRunOutputStreamer
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default)
     {
-        await PumpAsync(sink.ReadAllAsync(ct), runId, emitAsync, ct);
+        await PumpAsync(
+            sink.ReadAllAsync(ct),
+            emitAsync,
+            evt => IsTerminalForRun(evt, runId),
+            ct);
     }
 
     public async Task PumpAsync(
         IAsyncEnumerable<WorkflowRunEvent> events,
-        string executionId,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+        Func<WorkflowRunEvent, bool>? shouldStop = null,
         CancellationToken ct = default)
     {
         await foreach (var evt in events.WithCancellation(ct))
         {
             await emitAsync(Map(evt), ct);
-            if (IsTerminal(evt, executionId))
+            if (shouldStop?.Invoke(evt) == true)
                 break;
         }
     }
 
     public WorkflowOutputFrame Map(WorkflowRunEvent evt) => WorkflowOutputFrameMapper.Map(evt);
 
-    public bool IsTerminal(WorkflowRunEvent evt, string executionId)
+    private static bool IsTerminalForRun(WorkflowRunEvent evt, string runId)
     {
         return evt switch
         {
-            WorkflowRunFinishedEvent finished => string.Equals(finished.RunId, executionId, StringComparison.Ordinal),
-            WorkflowRunErrorEvent error => string.Equals(error.RunId, executionId, StringComparison.Ordinal),
+            WorkflowRunFinishedEvent finished => string.Equals(finished.RunId, runId, StringComparison.Ordinal),
+            WorkflowRunErrorEvent error => string.Equals(error.RunId, runId, StringComparison.Ordinal),
             _ => false,
         };
     }

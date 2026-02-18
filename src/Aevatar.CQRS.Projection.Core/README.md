@@ -14,8 +14,8 @@
     - `ActorStreamSubscriptionHub<TMessage>`
     - `ProjectionAssemblyRegistration`
     - `GuidProjectionRunIdGenerator` / `SystemProjectionClock`
-- `Aevatar.Workflow.Projection`
-  - WorkflowExecution 领域扩展（context/session/read model/reducer/projector/service/DI）。
+- 领域扩展项目
+  - 在子系统内承载具体 context/read model/reducer/projector/service/DI。
 
 ## 设计原则
 

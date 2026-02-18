@@ -1,5 +1,4 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.CQRS.Core.Abstractions.Queries;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
@@ -48,16 +47,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEventOutputStream<WorkflowRunEvent, WorkflowOutputFrame>>(sp => sp.GetRequiredService<WorkflowRunOutputStreamer>());
         services.TryAddSingleton<IEventFrameMapper<WorkflowRunEvent, WorkflowOutputFrame>>(sp => sp.GetRequiredService<WorkflowRunOutputStreamer>());
         services.TryAddSingleton<IWorkflowExecutionReportArtifactSink, NoopWorkflowExecutionReportArtifactSink>();
-        services.TryAddSingleton<ICommandCorrelationPolicy, Aevatar.CQRS.Core.Commands.DefaultCommandCorrelationPolicy>();
+        services.TryAddSingleton<ICommandContextPolicy, Aevatar.CQRS.Core.Commands.DefaultCommandContextPolicy>();
         services.AddSingleton<IWorkflowChatRunApplicationService, WorkflowChatRunApplicationService>();
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
         services.TryAddSingleton<WorkflowCommandExecutionServiceAdapter>();
         services.TryAddSingleton<ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>(sp =>
             sp.GetRequiredService<WorkflowCommandExecutionServiceAdapter>());
-        services.TryAddSingleton<WorkflowExecutionQueryServiceAdapter>();
-        services.TryAddSingleton<IAgentQueryService<WorkflowAgentSummary>>(sp => sp.GetRequiredService<WorkflowExecutionQueryServiceAdapter>());
-        services.TryAddSingleton<IExecutionTemplateQueryService>(sp => sp.GetRequiredService<WorkflowExecutionQueryServiceAdapter>());
-        services.TryAddSingleton<IExecutionQueryService<WorkflowRunSummary, WorkflowRunReport>>(sp => sp.GetRequiredService<WorkflowExecutionQueryServiceAdapter>());
         return services;
     }
 }

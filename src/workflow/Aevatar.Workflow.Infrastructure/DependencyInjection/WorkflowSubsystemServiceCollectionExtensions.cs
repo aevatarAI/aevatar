@@ -1,4 +1,3 @@
-using Aevatar.CQRS.Core.Abstractions.Profiles;
 using Aevatar.Configuration;
 using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
@@ -6,15 +5,14 @@ using Aevatar.Workflow.Presentation.AGUIAdapter.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Workflow.Infrastructure.DependencyInjection;
 
-public sealed class WorkflowSubsystemProfile : ISubsystemProfile
+public static class WorkflowSubsystemServiceCollectionExtensions
 {
-    public string Name => "workflow";
-
-    public IServiceCollection Register(IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddWorkflowSubsystem(
+        this IServiceCollection services,
+        IConfiguration configuration)
     {
         services.AddWorkflowExecutionProjectionCQRS(options =>
             configuration.GetSection("WorkflowExecutionProjection").Bind(options));
@@ -30,19 +28,6 @@ public sealed class WorkflowSubsystemProfile : ISubsystemProfile
         });
         services.AddWorkflowInfrastructure(options =>
             configuration.GetSection("WorkflowExecutionReportArtifacts").Bind(options));
-        return services;
-    }
-}
-
-public static class WorkflowSubsystemProfileServiceCollectionExtensions
-{
-    public static IServiceCollection AddWorkflowSubsystemProfile(
-        this IServiceCollection services,
-        IConfiguration configuration)
-    {
-        var profile = new WorkflowSubsystemProfile();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<ISubsystemProfile>(profile));
-        profile.Register(services, configuration);
         return services;
     }
 }

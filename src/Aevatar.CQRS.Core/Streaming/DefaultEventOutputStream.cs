@@ -13,8 +13,8 @@ public sealed class DefaultEventOutputStream<TEvent, TFrame> : IEventOutputStrea
 
     public async Task PumpAsync(
         IAsyncEnumerable<TEvent> events,
-        string executionId,
         Func<TFrame, CancellationToken, ValueTask> emitAsync,
+        Func<TEvent, bool>? shouldStop = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(events);
@@ -25,7 +25,7 @@ public sealed class DefaultEventOutputStream<TEvent, TFrame> : IEventOutputStrea
             var frame = _mapper.Map(evt);
             await emitAsync(frame, ct);
 
-            if (_mapper.IsTerminal(evt, executionId))
+            if (shouldStop?.Invoke(evt) == true)
                 break;
         }
     }
