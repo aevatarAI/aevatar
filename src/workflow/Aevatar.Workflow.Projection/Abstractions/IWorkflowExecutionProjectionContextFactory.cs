@@ -6,7 +6,8 @@ namespace Aevatar.Workflow.Projection;
 public interface IWorkflowExecutionProjectionContextFactory
 {
     WorkflowExecutionProjectionContext Create(
-        string runId,
+        string projectionId,
+        string commandId,
         string rootActorId,
         string workflowName,
         string input,

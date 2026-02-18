@@ -5,7 +5,7 @@ namespace Aevatar.Workflow.Application.Orchestration;
 
 public sealed class ActorRuntimeWorkflowExecutionTopologyResolver : IWorkflowExecutionTopologyResolver
 {
-    public async Task<IReadOnlyList<WorkflowRunTopologyEdge>> ResolveAsync(
+    public async Task<IReadOnlyList<WorkflowTopologyEdge>> ResolveAsync(
         IActorRuntime runtime,
         string rootActorId,
         CancellationToken ct = default)
@@ -29,7 +29,7 @@ public sealed class ActorRuntimeWorkflowExecutionTopologyResolver : IWorkflowExe
             children.Add(actor.Id);
         }
 
-        var topology = new List<WorkflowRunTopologyEdge>();
+        var topology = new List<WorkflowTopologyEdge>();
         if (string.IsNullOrWhiteSpace(rootActorId))
             return topology;
 
@@ -46,7 +46,7 @@ public sealed class ActorRuntimeWorkflowExecutionTopologyResolver : IWorkflowExe
 
             foreach (var child in children)
             {
-                topology.Add(new WorkflowRunTopologyEdge(parent, child));
+                topology.Add(new WorkflowTopologyEdge(parent, child));
                 if (visited.Add(child))
                     queue.Enqueue(child);
             }

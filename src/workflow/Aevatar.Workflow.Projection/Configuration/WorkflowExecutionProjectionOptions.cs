@@ -12,9 +12,15 @@ public sealed class WorkflowExecutionProjectionOptions
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// Exposes read-side run query endpoints.
+    /// Exposes read-side actor query endpoints.
     /// </summary>
-    public bool EnableRunQueryEndpoints { get; set; } = true;
+    public bool EnableActorQueryEndpoints { get; set; } = true;
+
+    public bool EnableRunQueryEndpoints
+    {
+        get => EnableActorQueryEndpoints;
+        set => EnableActorQueryEndpoints = value;
+    }
 
     /// <summary>
     /// Writes run report artifacts (json/html).
@@ -32,8 +38,4 @@ public sealed class WorkflowExecutionProjectionOptions
     public int RunProjectionFinalizeGraceTimeoutMs { get; set; } = 1500;
 
     /// <summary>
-    /// When true, projectors should ignore envelopes whose run id doesn't match the current run.
-    /// Default false keeps actor-scoped shared stream semantics.
-    /// </summary>
-    public bool EnableRunEventIsolation { get; set; } = false;
 }

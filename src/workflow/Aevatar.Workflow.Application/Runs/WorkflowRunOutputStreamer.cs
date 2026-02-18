@@ -10,14 +10,13 @@ public sealed class WorkflowRunOutputStreamer
 {
     public async Task StreamAsync(
         IWorkflowRunEventSink sink,
-        string runId,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default)
     {
         await PumpAsync(
             sink.ReadAllAsync(ct),
             emitAsync,
-            evt => IsTerminalForRun(evt, runId),
+            IsTerminal,
             ct);
     }
 
@@ -37,12 +36,12 @@ public sealed class WorkflowRunOutputStreamer
 
     public WorkflowOutputFrame Map(WorkflowRunEvent evt) => WorkflowOutputFrameMapper.Map(evt);
 
-    private static bool IsTerminalForRun(WorkflowRunEvent evt, string runId)
+    private static bool IsTerminal(WorkflowRunEvent evt)
     {
         return evt switch
         {
-            WorkflowRunFinishedEvent finished => string.Equals(finished.RunId, runId, StringComparison.Ordinal),
-            WorkflowRunErrorEvent error => string.Equals(error.RunId, runId, StringComparison.Ordinal),
+            WorkflowRunFinishedEvent => true,
+            WorkflowRunErrorEvent => true,
             _ => false,
         };
     }

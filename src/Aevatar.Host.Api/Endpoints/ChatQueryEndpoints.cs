@@ -14,12 +14,12 @@ public static class ChatQueryEndpoints
         group.MapGet("/workflows", ListWorkflows)
             .Produces(StatusCodes.Status200OK);
 
-        group.MapGet("/runs", ListRuns)
-            .Produces(StatusCodes.Status200OK);
-
-        group.MapGet("/runs/{runId}", GetRun)
+        group.MapGet("/actors/{actorId}", GetActorSnapshot)
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
+
+        group.MapGet("/actors/{actorId}/timeline", ListActorTimeline)
+            .Produces(StatusCodes.Status200OK);
     }
 
     internal static async Task<IResult> ListAgents(
@@ -33,21 +33,22 @@ public static class ChatQueryEndpoints
     internal static IResult ListWorkflows(IWorkflowExecutionQueryApplicationService queryService) =>
         Results.Ok(queryService.ListWorkflows());
 
-    internal static async Task<IResult> ListRuns(
+    internal static async Task<IResult> GetActorSnapshot(
+        string actorId,
         IWorkflowExecutionQueryApplicationService queryService,
-        int take = 50,
         CancellationToken ct = default)
     {
-        var runs = await queryService.ListRunsAsync(take, ct);
-        return Results.Ok(runs);
+        var snapshot = await queryService.GetActorSnapshotAsync(actorId, ct);
+        return snapshot == null ? Results.NotFound() : Results.Ok(snapshot);
     }
 
-    internal static async Task<IResult> GetRun(
-        string runId,
+    internal static async Task<IResult> ListActorTimeline(
+        string actorId,
         IWorkflowExecutionQueryApplicationService queryService,
+        int take = 200,
         CancellationToken ct = default)
     {
-        var report = await queryService.GetRunAsync(runId, ct);
-        return report == null ? Results.NotFound() : Results.Ok(report);
+        var timeline = await queryService.ListActorTimelineAsync(actorId, take, ct);
+        return Results.Ok(timeline);
     }
 }

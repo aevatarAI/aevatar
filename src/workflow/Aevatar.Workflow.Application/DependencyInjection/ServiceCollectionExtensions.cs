@@ -5,7 +5,6 @@ using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Adapters;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
-using Aevatar.Workflow.Application.Orchestration;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Runs;
@@ -19,13 +18,10 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddWorkflowApplication(
         this IServiceCollection services,
-        Action<WorkflowDefinitionRegistryOptions>? configureRegistry = null,
-        Action<WorkflowRunOrchestrationOptions>? configureOrchestration = null)
+        Action<WorkflowDefinitionRegistryOptions>? configureRegistry = null)
     {
         var options = new WorkflowDefinitionRegistryOptions();
         configureRegistry?.Invoke(options);
-        var orchestrationOptions = new WorkflowRunOrchestrationOptions();
-        configureOrchestration?.Invoke(orchestrationOptions);
 
         services.AddSingleton<IWorkflowDefinitionRegistry>(_ =>
         {
@@ -36,9 +32,6 @@ public static class ServiceCollectionExtensions
             return registry;
         });
 
-        services.AddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
-        services.AddSingleton(orchestrationOptions);
-        services.AddSingleton<IWorkflowExecutionRunOrchestrator, WorkflowExecutionRunOrchestrator>();
         services.AddSingleton<IWorkflowRunActorResolver, WorkflowRunActorResolver>();
         services.AddSingleton<ICommandEnvelopeFactory<WorkflowChatRunRequest>, WorkflowChatRequestEnvelopeFactory>();
         services.AddSingleton<IWorkflowRunRequestExecutor, WorkflowRunRequestExecutor>();
@@ -47,8 +40,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEventOutputStream<WorkflowRunEvent, WorkflowOutputFrame>>(sp => sp.GetRequiredService<WorkflowRunOutputStreamer>());
         services.TryAddSingleton<IEventFrameMapper<WorkflowRunEvent, WorkflowOutputFrame>>(sp => sp.GetRequiredService<WorkflowRunOutputStreamer>());
         services.TryAddSingleton<IWorkflowExecutionReportArtifactSink, NoopWorkflowExecutionReportArtifactSink>();
-        services.TryAddSingleton<ICommandContextPolicy, Aevatar.CQRS.Core.Commands.DefaultCommandContextPolicy>();
-        services.AddSingleton<IWorkflowChatRunApplicationService, WorkflowChatRunApplicationService>();
+        services.AddSingleton<IWorkflowRunCommandService, WorkflowChatRunApplicationService>();
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
         services.TryAddSingleton<WorkflowCommandExecutionServiceAdapter>();
         services.TryAddSingleton<ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>(sp =>

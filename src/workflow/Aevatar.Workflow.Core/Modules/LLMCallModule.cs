@@ -56,7 +56,7 @@ public sealed class LLMCallModule : IEventModule
             }
 
             // Use per-step session id to avoid collisions across concurrent llm_call steps.
-            var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(request.RunId, request.StepId);
+            var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, request.StepId);
             _pending[chatSessionId] = request;
 
             var targetRole = request.TargetRole;
@@ -103,7 +103,7 @@ public sealed class LLMCallModule : IEventModule
 
             await ctx.PublishAsync(new StepCompletedEvent
             {
-                StepId = pending.StepId, RunId = pending.RunId,
+                StepId = pending.StepId,
                 Success = true, Output = evt.Content ?? "",
                 WorkerId = envelope.PublisherId,
             }, EventDirection.Self, ct);
@@ -126,7 +126,7 @@ public sealed class LLMCallModule : IEventModule
 
             await ctx.PublishAsync(new StepCompletedEvent
             {
-                StepId = pending.StepId, RunId = pending.RunId,
+                StepId = pending.StepId,
                 Success = true, Output = evt.Content ?? "",
                 WorkerId = ctx.AgentId,
             }, EventDirection.Self, ct);

@@ -31,7 +31,7 @@ public sealed class VoteConsensusModule : IEventModule
         {
             await ctx.PublishAsync(new StepCompletedEvent
             {
-                StepId = evt.StepId, RunId = evt.RunId, Success = false,
+                StepId = evt.StepId, Success = false,
                 Error = "投票步骤没有候选结果",
             }, EventDirection.Self, ct);
             return;
@@ -43,7 +43,7 @@ public sealed class VoteConsensusModule : IEventModule
 
         await ctx.PublishAsync(new StepCompletedEvent
         {
-            StepId = evt.StepId, RunId = evt.RunId, Success = true, Output = winner,
+            StepId = evt.StepId, Success = true, Output = winner,
         }, EventDirection.Self, ct);
     }
 }

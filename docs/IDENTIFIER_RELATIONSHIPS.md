@@ -1,66 +1,38 @@
-# 标识符关系（EventEnvelope.Id / RunId / SessionId / ActorId）
+# 标识符关系（EventEnvelope.Id / CommandId / SessionId / ActorId / ProjectionId）
 
-本文说明当前实现中几个常见标识符的职责边界与流转关系。
+本文描述当前实现的标识符边界。已移除 Workflow 业务 `RunId` 语义。
 
 ## 一句话结论
 
 | 标识符 | 作用域 | 谁生成 | 主要用途 |
 |---|---|---|---|
-| `EventEnvelope.Id` | 单条事件 | 事件发布方 | 去重、追踪单条消息 |
-| `RunId` | 一次 workflow 执行 | `WorkflowExecutionProjectionService` | 关联同一次运行的多条事件与读模型 |
-| `SessionId` | 一次 LLM 会话（或步骤会话） | 服务端内部 | 给 AI 消息链路分段，不等于 run |
-| `ActorId` | 一个 Actor 实例 | Runtime | 订阅粒度、线程/会话归属（`threadId`） |
+| `EventEnvelope.Id` | 单条事件 | 事件发布方 | 事件级去重与追踪 |
+| `CommandId` | 一次命令受理 | `ICommandContextPolicy` | 写侧请求追踪与读侧快照关联 |
+| `SessionId` | 一段 AI 对话上下文 | AI/应用层 | 维护消息上下文连续性 |
+| `ActorId` | 一个 Actor 实例 | Runtime | 事件订阅粒度、并发边界、查询入口 |
+| `ProjectionId` | 一个投影上下文实例 | 投影层 | 读模型投影上下文标识（当前默认等于 `ActorId`） |
 
 ## 生成点（代码）
 
-- `RunId`：`src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs`
-  - `StartAsync(...)` 中调用 `IProjectionRunIdGenerator.NextRunId()`
-- `RunId` 注入请求：
-  - `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRequestEnvelopeFactory.cs`
-  - 写入 `ChatRequestEvent.Metadata["run_id"]`
-- `WorkflowGAgent` 取 `RunId`：
-  - `src/workflow/Aevatar.Workflow.Core/WorkflowGAgent.cs` 的 `ResolveRunId(...)`
-- `SessionId`：
-  - 请求入口会生成内部会话：`chat-{guid}`
-  - 步骤级会话常用 `runId:stepId`（见 `src/Aevatar.AI.Abstractions/ChatSessionKeys.cs`）
+- `CommandId`
+  - `src/Aevatar.CQRS.Core/Commands/DefaultCommandContextPolicy.cs`
+  - 写入 metadata：`command.id`
+- `ActorId`
+  - 由 Runtime 维护并用于 stream 订阅键。
+- `ProjectionId`
+  - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs`
+  - 当前采用 actor 共享投影语义：`ProjectionId = ActorId`。
+- `SessionId`
+  - 用于 AI 消息链路（不是 workflow 执行隔离标识）。
 
-## 流程图（执行链路）
+## 查询契约
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Api as HostApi
-    participant App as WorkflowApp
-    participant Projection as WorkflowExecutionProjectionService
-    participant Agent as WorkflowGAgent
+- `GET /api/chat/workflows`
+- `GET /api/chat/actors/{actorId}`
+- `GET /api/chat/actors/{actorId}/timeline`
 
-    Client->>Api: POST /api/chat
-    Api->>App: ExecuteAsync(prompt, workflow, agentId)
-    App->>Projection: StartAsync(actorId, workflowName, input)
-    Projection-->>App: RunId
-    App->>Agent: ChatRequestEvent(metadata.run_id = RunId)
-    Agent->>Agent: 发布 StartWorkflowEvent(runId)
-```
+## 设计说明
 
-## 流程图（投影识别 run）
-
-```mermaid
-flowchart LR
-    A["Actor Stream(EventEnvelope)"] --> B["ProjectionSubscriptionRegistry 按 ActorId 分发"]
-    B --> C["WorkflowExecutionReadModelProjector"]
-    C --> D["RunIdResolver[] 解析 runId"]
-    D --> E["EnableRunEventIsolation=false: actor_shared"]
-    D --> F["EnableRunEventIsolation=true: 仅当前 run"]
-```
-
-## 为什么 `RunId` 不能等于 `EventEnvelope.Id`
-
-- 一次 run 会产生多条 `EventEnvelope`（开始、步骤请求、步骤完成、流式消息、结束）。
-- `EventEnvelope.Id` 必须保持“单事件唯一”；如果复用为 run，会丢失事件级去重与追踪能力。
-- 因此：`RunId` 是“会话/执行级”，`EventEnvelope.Id` 是“消息级”。
-
-## 客户端契约（当前）
-
-- 客户端只传：`prompt`、`workflow`、`agentId?`。
-- `RunId` 与内部 `SessionId` 都由服务端生成和管理。
-- 查询读模型用 `runId`（`GET /api/runs/{runId}`）；实时流输出携带 `threadId=ActorId` 与 `runId`。
+- CQRS.Core 不承载 workflow 业务标识语义。
+- 同一 Actor 的多次调用聚合到同一读模型，按事件时间线持续更新。
+- AGUI 的 `RunId` 字段仅用于协议对齐，当前映射为 `threadId/actorId`，不作为 workflow 业务主键。

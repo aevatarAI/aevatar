@@ -10,21 +10,21 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
 {
     public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
     {
-        if (!context.Metadata.TryGetValue(WorkflowRunCommandMetadataKeys.RunId, out var runId) ||
-            string.IsNullOrWhiteSpace(runId))
-            throw new InvalidOperationException($"Missing metadata '{WorkflowRunCommandMetadataKeys.RunId}'.");
+        if (!context.Metadata.TryGetValue(WorkflowRunCommandMetadataKeys.CommandId, out var commandId) ||
+            string.IsNullOrWhiteSpace(commandId))
+            throw new InvalidOperationException($"Missing metadata '{WorkflowRunCommandMetadataKeys.CommandId}'.");
 
         var sessionId = context.Metadata.TryGetValue(WorkflowRunCommandMetadataKeys.SessionId, out var metadataSessionId) &&
                         !string.IsNullOrWhiteSpace(metadataSessionId)
             ? metadataSessionId
-            : $"session-{Guid.NewGuid():N}";
+            : context.CommandId;
 
         var chatRequest = new ChatRequestEvent
         {
             Prompt = command.Prompt,
             SessionId = sessionId,
         };
-        chatRequest.Metadata[ChatRequestMetadataKeys.RunId] = runId;
+        chatRequest.Metadata[ChatRequestMetadataKeys.CommandId] = commandId;
         foreach (var item in context.Metadata)
             chatRequest.Metadata[item.Key] = item.Value;
 
@@ -35,7 +35,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Payload = Any.Pack(chatRequest),
             PublisherId = "api",
             Direction = EventDirection.Self,
-            CorrelationId = context.CorrelationId,
+            CorrelationId = context.CommandId,
             TargetActorId = context.TargetId,
         };
         foreach (var item in context.Metadata)

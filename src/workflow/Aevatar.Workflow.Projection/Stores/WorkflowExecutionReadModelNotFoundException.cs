@@ -2,11 +2,11 @@ namespace Aevatar.Workflow.Projection.Stores;
 
 public sealed class WorkflowExecutionReadModelNotFoundException : KeyNotFoundException
 {
-    public string RunId { get; }
+    public string ActorId { get; }
 
-    public WorkflowExecutionReadModelNotFoundException(string runId)
-        : base($"Chat run read model not found: '{runId}'.")
+    public WorkflowExecutionReadModelNotFoundException(string actorId)
+        : base($"Workflow actor read model not found: '{actorId}'.")
     {
-        RunId = runId;
+        ActorId = actorId;
     }
 }

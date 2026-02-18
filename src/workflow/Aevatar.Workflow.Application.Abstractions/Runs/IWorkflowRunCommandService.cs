@@ -1,6 +1,6 @@
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
-public interface IWorkflowChatRunApplicationService
+public interface IWorkflowRunCommandService
 {
     Task<WorkflowChatRunExecutionResult> ExecuteAsync(
         WorkflowChatRunRequest request,

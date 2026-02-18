@@ -6,7 +6,7 @@ namespace Aevatar.AI.Abstractions;
 public static class ChatRequestMetadataKeys
 {
     /// <summary>
-    /// Workflow execution run identifier.
+    /// Command identifier from CQRS command ingestion.
     /// </summary>
-    public const string RunId = "run_id";
+    public const string CommandId = "command_id";
 }

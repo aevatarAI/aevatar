@@ -122,7 +122,6 @@ public sealed class MakerRunApplicationService : IMakerRunApplicationService
 
         return new MakerRunExecutionResult(
             started,
-            report.RunId,
             Output: completed?.Output ?? string.Empty,
             Success: completed?.Success == true,
             TimedOut: timedOut,

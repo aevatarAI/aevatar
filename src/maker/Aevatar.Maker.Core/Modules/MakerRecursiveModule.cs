@@ -168,7 +168,6 @@ public sealed class MakerRecursiveModule : IEventModule
             {
                 StepId = childStepId,
                 StepType = "maker_recursive",
-                RunId = node.RunId,
                 Input = subtasks[i],
             };
             foreach (var (key, value) in node.OriginalParameters)
@@ -221,7 +220,6 @@ public sealed class MakerRecursiveModule : IEventModule
         var completed = new StepCompletedEvent
         {
             StepId = node.StepId,
-            RunId = node.RunId,
             Success = stageResult.Success,
             Output = stageResult.Output,
             Error = stageResult.Error,
@@ -246,7 +244,6 @@ public sealed class MakerRecursiveModule : IEventModule
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = node.StepId,
-            RunId = node.RunId,
             Success = false,
             Error = error,
         }, EventDirection.Self, ct);
@@ -294,7 +291,6 @@ public sealed class MakerRecursiveModule : IEventModule
         {
             StepId = internalStepId,
             StepType = node.ParallelStepType,
-            RunId = node.RunId,
             Input = input,
         };
         req.Parameters["workers"] = string.Join(",", workerList);
@@ -401,7 +397,6 @@ public sealed class MakerRecursiveModule : IEventModule
     private sealed class NodeState
     {
         public required string StepId { get; init; }
-        public required string RunId { get; init; }
         public required string OriginalTask { get; init; }
         public required Dictionary<string, string> OriginalParameters { get; init; }
         public required int Depth { get; init; }
@@ -431,7 +426,6 @@ public sealed class MakerRecursiveModule : IEventModule
             return new NodeState
             {
                 StepId = request.StepId,
-                RunId = request.RunId,
                 OriginalTask = request.Input,
                 OriginalParameters = parameters,
                 Depth = ParseInt(parameters, "depth", 0, 0, 32),

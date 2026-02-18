@@ -27,7 +27,7 @@ public class EventEnvelopeToAGUIEventMapperTests
     {
         var envelope = Wrap(new StartWorkflowEvent
         {
-            WorkflowName = "review", RunId = "run-1", Input = "hello",
+            WorkflowName = "review", Input = "hello",
         });
 
         var events = CreateMapper().Map(envelope);
@@ -36,7 +36,7 @@ public class EventEnvelopeToAGUIEventMapperTests
         events[0].Should().BeOfType<RunStartedEvent>();
         var e = (RunStartedEvent)events[0];
         e.ThreadId.Should().Be("test");
-        e.RunId.Should().Be("run-1");
+        e.RunId.Should().Be("test");
     }
 
     [Fact]
@@ -44,7 +44,7 @@ public class EventEnvelopeToAGUIEventMapperTests
     {
         var envelope = Wrap(new StepRequestEvent
         {
-            StepId = "analyze", StepType = "llm_call", RunId = "run-1",
+            StepId = "analyze", StepType = "llm_call",
         });
 
         var events = CreateMapper().Map(envelope);
@@ -60,7 +60,7 @@ public class EventEnvelopeToAGUIEventMapperTests
     {
         var envelope = Wrap(new StepCompletedEvent
         {
-            StepId = "analyze", RunId = "run-1", Success = true, Output = "done",
+            StepId = "analyze", Success = true, Output = "done",
         });
 
         var events = CreateMapper().Map(envelope);
@@ -108,7 +108,7 @@ public class EventEnvelopeToAGUIEventMapperTests
     {
         var envelope = Wrap(new WorkflowCompletedEvent
         {
-            WorkflowName = "review", RunId = "run-1", Success = true, Output = "完成",
+            WorkflowName = "review", Success = true, Output = "完成",
         });
 
         var events = CreateMapper().Map(envelope);
@@ -123,7 +123,7 @@ public class EventEnvelopeToAGUIEventMapperTests
     {
         var envelope = Wrap(new WorkflowCompletedEvent
         {
-            WorkflowName = "review", RunId = "run-1", Success = false, Error = "超时",
+            WorkflowName = "review", Success = false, Error = "超时",
         });
 
         var events = CreateMapper().Map(envelope);

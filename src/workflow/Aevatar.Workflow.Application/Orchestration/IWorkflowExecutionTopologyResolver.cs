@@ -5,7 +5,7 @@ namespace Aevatar.Workflow.Application.Orchestration;
 
 public interface IWorkflowExecutionTopologyResolver
 {
-    Task<IReadOnlyList<WorkflowRunTopologyEdge>> ResolveAsync(
+    Task<IReadOnlyList<WorkflowTopologyEdge>> ResolveAsync(
         IActorRuntime runtime,
         string rootActorId,
         CancellationToken ct = default);

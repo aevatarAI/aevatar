@@ -15,9 +15,6 @@ public sealed class StepCompletedEventReducer : WorkflowExecutionEventReducerBas
         DateTimeOffset now)
     {
         var step = WorkflowExecutionProjectionMutations.GetOrCreateStep(report, evt.StepId);
-        if (string.IsNullOrWhiteSpace(step.RunId))
-            step.RunId = evt.RunId;
-
         step.CompletedAt = now;
         step.Success = evt.Success;
         step.Error = evt.Error ?? "";

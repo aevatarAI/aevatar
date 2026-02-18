@@ -31,7 +31,7 @@ public sealed class WorkflowCompletedEventReducer : WorkflowExecutionEventReduce
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["workflow_name"] = evt.WorkflowName,
-                ["run_id"] = evt.RunId,
+                ["command_id"] = report.CommandId,
             });
     }
 }

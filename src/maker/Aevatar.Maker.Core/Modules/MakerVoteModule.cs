@@ -90,7 +90,6 @@ public sealed class MakerVoteModule : IEventModule
         var completed = new StepCompletedEvent
         {
             StepId = request.StepId,
-            RunId = request.RunId,
             Success = true,
             Output = winner,
         };
@@ -116,7 +115,6 @@ public sealed class MakerVoteModule : IEventModule
         var completed = new StepCompletedEvent
         {
             StepId = request.StepId,
-            RunId = request.RunId,
             Success = false,
             Error = error,
         };

@@ -59,13 +59,14 @@ public sealed class StartWorkflowAGUIEventEnvelopeMappingHandler : IAGUIEventEnv
         }
 
         var evt = envelope.Payload.Unpack<StartWorkflowEvent>();
+        var threadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
         events =
         [
             new RunStartedEvent
             {
                 Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
-                ThreadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName),
-                RunId = evt.RunId,
+                ThreadId = threadId,
+                RunId = threadId,
             },
         ];
         return true;
@@ -93,7 +94,7 @@ public sealed class StepRequestAGUIEventEnvelopeMappingHandler : IAGUIEventEnvel
             {
                 Timestamp = ts,
                 Name = "aevatar.step.request",
-                Value = new { evt.StepId, evt.StepType, evt.TargetRole, evt.RunId },
+                Value = new { evt.StepId, evt.StepType, evt.TargetRole },
             },
         ];
         return true;
@@ -233,13 +234,14 @@ public sealed class WorkflowCompletedAGUIEventEnvelopeMappingHandler : IAGUIEven
 
         if (evt.Success)
         {
+            var threadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
             events =
             [
                 new RunFinishedEvent
                 {
                     Timestamp = ts,
-                    ThreadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName),
-                    RunId = evt.RunId,
+                    ThreadId = threadId,
+                    RunId = threadId,
                     Result = new { output = evt.Output },
                 },
             ];
@@ -252,7 +254,7 @@ public sealed class WorkflowCompletedAGUIEventEnvelopeMappingHandler : IAGUIEven
             {
                 Timestamp = ts,
                 Message = evt.Error,
-                RunId = evt.RunId,
+                RunId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName),
                 Code = "WORKFLOW_FAILED",
             },
         ];

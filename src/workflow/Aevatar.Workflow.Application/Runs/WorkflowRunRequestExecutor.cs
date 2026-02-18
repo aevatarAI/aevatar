@@ -16,7 +16,6 @@ public sealed class WorkflowRunRequestExecutor : IWorkflowRunRequestExecutor
     public async Task ExecuteAsync(
         IActor actor,
         string actorId,
-        string runId,
         EventEnvelope requestEnvelope,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default)
@@ -34,7 +33,6 @@ public sealed class WorkflowRunRequestExecutor : IWorkflowRunRequestExecutor
                 {
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     Message = "工作流执行异常",
-                    RunId = runId,
                     Code = "INTERNAL_ERROR",
                 }, ct);
             }

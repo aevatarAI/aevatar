@@ -17,7 +17,6 @@ public class WorkflowRunEventChannelTests
         var terminalPush = channel.PushAsync(new WorkflowRunFinishedEvent
         {
             ThreadId = "actor-1",
-            RunId = "run-1",
         }, cts.Token).AsTask();
 
         await Task.Delay(50, cts.Token);
@@ -43,7 +42,6 @@ public class WorkflowRunEventChannelTests
         var act = async () => await channel.PushAsync(new WorkflowRunErrorEvent
         {
             Message = "boom",
-            RunId = "run-1",
             Code = "E",
         });
 

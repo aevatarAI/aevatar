@@ -1,5 +1,6 @@
 using Aevatar.Demos.CaseProjection.Configuration;
 using Aevatar.CQRS.Projection.Abstractions;
+using System.Collections.Concurrent;
 
 namespace Aevatar.Demos.CaseProjection.Orchestration;
 
@@ -11,22 +12,20 @@ public sealed class CaseProjectionService : ICaseProjectionService
     private readonly CaseProjectionOptions _options;
     private readonly IProjectionLifecycleService<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>> _lifecycle;
     private readonly IProjectionReadModelStore<CaseProjectionReadModel, string> _store;
-    private readonly IProjectionRunIdGenerator _runIdGenerator;
     private readonly IProjectionClock _clock;
     private readonly ICaseProjectionContextFactory _contextFactory;
+    private readonly ConcurrentDictionary<string, CaseProjectionContext> _contexts = new(StringComparer.Ordinal);
 
     public CaseProjectionService(
         CaseProjectionOptions options,
         IProjectionLifecycleService<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>> lifecycle,
         IProjectionReadModelStore<CaseProjectionReadModel, string> store,
-        IProjectionRunIdGenerator runIdGenerator,
         IProjectionClock clock,
         ICaseProjectionContextFactory contextFactory)
     {
         _options = options;
         _lifecycle = lifecycle;
         _store = store;
-        _runIdGenerator = runIdGenerator;
         _clock = clock;
         _contextFactory = contextFactory;
     }
@@ -44,7 +43,7 @@ public sealed class CaseProjectionService : ICaseProjectionService
         string input,
         CancellationToken ct = default)
     {
-        var runId = _runIdGenerator.NextRunId();
+        var runId = Guid.NewGuid().ToString("N");
         var startedAt = _clock.UtcNow;
 
         if (!ProjectionEnabled)
@@ -59,6 +58,7 @@ public sealed class CaseProjectionService : ICaseProjectionService
 
         var context = _contextFactory.Create(runId, rootActorId, caseId, caseType, input, startedAt);
         await _lifecycle.StartAsync(context, ct);
+        _contexts[runId] = context;
 
         return new CaseProjectionSession
         {
@@ -79,21 +79,6 @@ public sealed class CaseProjectionService : ICaseProjectionService
         return _lifecycle.ProjectAsync(session.Context, envelope, ct);
     }
 
-    public Task<bool> WaitForRunProjectionCompletedAsync(string runId, CancellationToken ct = default)
-    {
-        if (!ProjectionEnabled)
-            return Task.FromResult(false);
-
-        var waitMs = Math.Max(1, _options.RunProjectionCompletionWaitTimeoutMs);
-        return WaitAsync(runId, waitMs, ct);
-
-        async Task<bool> WaitAsync(string id, int timeoutMs, CancellationToken token)
-        {
-            var status = await _lifecycle.WaitForCompletionAsync(id, TimeSpan.FromMilliseconds(timeoutMs), token);
-            return status == ProjectionRunCompletionStatus.Completed;
-        }
-    }
-
     public async Task<CaseProjectionReadModel?> CompleteAsync(
         CaseProjectionSession session,
         IReadOnlyList<CaseTopologyEdge> topology,
@@ -102,6 +87,7 @@ public sealed class CaseProjectionService : ICaseProjectionService
         if (!ProjectionEnabled || session.Context == null)
             return null;
 
+        _contexts.TryRemove(session.RunId, out _);
         await _lifecycle.CompleteAsync(session.Context, topology, ct);
         return await _store.GetAsync(session.RunId, ct);
     }

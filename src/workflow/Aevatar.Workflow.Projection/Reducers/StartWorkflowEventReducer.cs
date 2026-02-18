@@ -15,12 +15,14 @@ public sealed class StartWorkflowEventReducer : WorkflowExecutionEventReducerBas
         DateTimeOffset now)
     {
         report.WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName) ? report.WorkflowName : evt.WorkflowName;
+        if (!string.IsNullOrWhiteSpace(evt.CommandId))
+            report.CommandId = evt.CommandId;
 
         WorkflowExecutionProjectionMutations.AddTimeline(
             report,
             now,
             "workflow.start",
-            $"run={evt.RunId}",
+            $"command={report.CommandId}",
             envelope.PublisherId,
             null,
             null,

@@ -7,9 +7,9 @@
 - 生命周期与编排：`IProjectionLifecycleService<,>`、`IProjectionCoordinator<,>`、`IProjectionSubscriptionRegistry<>`
 - 扩展抽象：`IProjectionProjector<,>`、`IProjectionEventReducer<,>`
 - 读模型存储：`IProjectionReadModelStore<,>`
-- 运行时策略：`IProjectionRuntimeOptions`、`IProjectionRunIdGenerator`、`IProjectionClock`
+- 运行时策略：`IProjectionRuntimeOptions`、`IProjectionClock`
 - 流订阅复用：`IActorStreamSubscriptionHub<TMessage>`
-- run 上下文：`IProjectionRunContext`、`IProjectionCompletionDetector<>`
+- 投影上下文：`IProjectionContext`
 
 ## 约束
 

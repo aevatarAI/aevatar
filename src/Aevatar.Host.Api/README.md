@@ -5,9 +5,10 @@
 ## 职责边界
 
 - 暴露端点：
+  - `POST /api/commands`（Accepted + commandId）
   - `POST /api/chat`（SSE）
   - `GET /api/ws/chat`（WebSocket）
-  - `GET /api/agents`、`GET /api/workflows`、`GET /api/runs`、`GET /api/runs/{runId}`
+  - `GET /api/agents`、`GET /api/workflows`、`GET /api/actors/{actorId}`、`GET /api/actors/{actorId}/timeline`
 - 调用应用层：
   - `ICommandExecutionService<WorkflowChatRunRequest,...>`
   - `IWorkflowExecutionQueryApplicationService`

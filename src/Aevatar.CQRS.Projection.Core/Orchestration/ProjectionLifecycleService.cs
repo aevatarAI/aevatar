@@ -5,7 +5,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// </summary>
 public sealed class ProjectionLifecycleService<TContext, TCompletion>
     : IProjectionLifecycleService<TContext, TCompletion>
-    where TContext : IProjectionRunContext
+    where TContext : IProjectionContext
 {
     private readonly IProjectionCoordinator<TContext, TCompletion> _coordinator;
     private readonly IProjectionSubscriptionRegistry<TContext> _subscriptionRegistry;
@@ -27,12 +27,9 @@ public sealed class ProjectionLifecycleService<TContext, TCompletion>
     public Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default) =>
         _coordinator.ProjectAsync(context, envelope, ct);
 
-    public Task<ProjectionRunCompletionStatus> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default) =>
-        _subscriptionRegistry.WaitForCompletionAsync(runId, timeout, ct);
-
     public async Task CompleteAsync(TContext context, TCompletion completion, CancellationToken ct = default)
     {
-        await _subscriptionRegistry.UnregisterAsync(context.RootActorId, context.RunId, ct);
+        await _subscriptionRegistry.UnregisterAsync(context.RootActorId, ct);
         await _coordinator.CompleteAsync(context, completion, ct);
     }
 }

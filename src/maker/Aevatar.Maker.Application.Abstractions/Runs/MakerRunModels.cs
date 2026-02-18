@@ -15,7 +15,6 @@ public sealed record MakerRunStarted(
 
 public sealed record MakerRunExecutionResult(
     MakerRunStarted Started,
-    string RunId,
     string Output,
     bool Success,
     bool TimedOut,

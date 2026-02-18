@@ -13,6 +13,7 @@
 ## 关系图
 
 ```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
     A["Aevatar.Maker.Infrastructure"] --> B["Aevatar.Maker.Application"]
     A --> C["Aevatar.Maker.Core"]

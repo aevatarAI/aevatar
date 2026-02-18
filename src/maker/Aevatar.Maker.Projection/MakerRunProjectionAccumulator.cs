@@ -15,7 +15,6 @@ public sealed class MakerRunProjectionAccumulator
     private readonly Dictionary<string, MakerStepTrace> _steps = new(StringComparer.Ordinal);
     private readonly List<MakerRoleReply> _roleReplies = [];
     private readonly List<MakerTimelineEvent> _timeline = [];
-    private string _runId = string.Empty;
     private bool? _success;
     private string _finalOutput = string.Empty;
     private string _finalError = string.Empty;
@@ -37,19 +36,16 @@ public sealed class MakerRunProjectionAccumulator
             if (payload.Is(StartWorkflowEvent.Descriptor))
             {
                 var evt = payload.Unpack<StartWorkflowEvent>();
-                _runId = string.IsNullOrWhiteSpace(_runId) ? evt.RunId : _runId;
-                AddTimeline(now, "workflow.start", $"run={evt.RunId}", envelope.PublisherId, null, null, typeUrl);
+                AddTimeline(now, "workflow.start", "workflow started", envelope.PublisherId, null, null, typeUrl);
                 return;
             }
 
             if (payload.Is(StepRequestEvent.Descriptor))
             {
                 var evt = payload.Unpack<StepRequestEvent>();
-                _runId = string.IsNullOrWhiteSpace(_runId) ? evt.RunId : _runId;
 
                 var step = GetOrCreateStep(evt.StepId);
                 step.StepType = evt.StepType;
-                step.RunId = evt.RunId;
                 step.TargetRole = evt.TargetRole;
                 step.RequestedAt = now;
                 step.RequestParameters = evt.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value);
@@ -69,10 +65,8 @@ public sealed class MakerRunProjectionAccumulator
             if (payload.Is(StepCompletedEvent.Descriptor))
             {
                 var evt = payload.Unpack<StepCompletedEvent>();
-                _runId = string.IsNullOrWhiteSpace(_runId) ? evt.RunId : _runId;
 
                 var step = GetOrCreateStep(evt.StepId);
-                if (string.IsNullOrWhiteSpace(step.RunId)) step.RunId = evt.RunId;
                 step.CompletedAt = now;
                 step.Success = evt.Success;
                 step.Error = evt.Error ?? "";
@@ -213,7 +207,6 @@ public sealed class MakerRunProjectionAccumulator
             if (payload.Is(WorkflowCompletedEvent.Descriptor))
             {
                 var evt = payload.Unpack<WorkflowCompletedEvent>();
-                _runId = string.IsNullOrWhiteSpace(_runId) ? evt.RunId : _runId;
                 _success = evt.Success;
                 _finalOutput = evt.Output ?? "";
                 _finalError = evt.Error ?? "";
@@ -226,7 +219,7 @@ public sealed class MakerRunProjectionAccumulator
                     null,
                     null,
                     typeUrl,
-                    new Dictionary<string, string> { ["workflow_name"] = evt.WorkflowName, ["run_id"] = evt.RunId });
+                    new Dictionary<string, string> { ["workflow_name"] = evt.WorkflowName });
             }
         }
     }
@@ -273,7 +266,6 @@ public sealed class MakerRunProjectionAccumulator
                 WorkflowName = workflowName,
                 WorkflowPath = workflowPath,
                 RootActorId = _rootActorId,
-                RunId = _runId,
                 Provider = providerName,
                 Model = modelName,
                 StartedAt = startedAt,
@@ -401,7 +393,6 @@ public static class MakerRunReportWriter
         sb.AppendLine("<h2>Overview</h2>");
         sb.AppendLine("<table><tbody>");
         AppendRow(sb, "Workflow", report.WorkflowName);
-        AppendRow(sb, "RunId", report.RunId);
         AppendRow(sb, "RootActor", report.RootActorId);
         AppendRow(sb, "Provider/Model", $"{report.Provider} / {report.Model}");
         AppendRow(sb, "Success", report.Success?.ToString() ?? "(unknown)");
@@ -529,7 +520,6 @@ public sealed class MakerRunReport
     public string WorkflowName { get; set; } = "";
     public string WorkflowPath { get; set; } = "";
     public string RootActorId { get; set; } = "";
-    public string RunId { get; set; } = "";
     public string Provider { get; set; } = "";
     public string Model { get; set; } = "";
     public DateTimeOffset StartedAt { get; set; }
@@ -564,7 +554,6 @@ public sealed class MakerStepTrace
 {
     public string StepId { get; set; } = "";
     public string StepType { get; set; } = "";
-    public string RunId { get; set; } = "";
     public string TargetRole { get; set; } = "";
     public DateTimeOffset? RequestedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }

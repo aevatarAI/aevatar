@@ -50,7 +50,7 @@ public class WorkflowExecutionReportWriterTests
             using (var doc = JsonDocument.Parse(json))
             {
                 doc.RootElement.GetProperty("workflowName").GetString().Should().Be("wf<main>");
-                doc.RootElement.GetProperty("runId").GetString().Should().Be("run-1");
+                doc.RootElement.GetProperty("commandId").GetString().Should().Be("cmd-1");
                 doc.RootElement.GetProperty("finalError").GetString().Should().Be("bad <error>");
             }
 
@@ -103,7 +103,7 @@ public class WorkflowExecutionReportWriterTests
         {
             WorkflowName = "wf<main>",
             RootActorId = "root&1",
-            RunId = "run-1",
+            CommandId = "cmd-1",
             StartedAt = started,
             EndedAt = started.AddSeconds(2),
             DurationMs = 2000,
@@ -120,7 +120,6 @@ public class WorkflowExecutionReportWriterTests
                 {
                     StepId = "step-1",
                     StepType = "llm_call",
-                    RunId = "run-1",
                     TargetRole = "researcher",
                     RequestedAt = started,
                     CompletedAt = started.AddMilliseconds(500),

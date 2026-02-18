@@ -47,7 +47,8 @@ public class WorkflowExecutionReadModelProjectorTests
 
         var context = new WorkflowExecutionProjectionContext
         {
-            RunId = "run-1",
+            ProjectionId = "projection-1",
+            CommandId = "cmd-1",
             RootActorId = "root",
             WorkflowName = "direct",
             StartedAt = DateTimeOffset.UtcNow,
@@ -58,20 +59,17 @@ public class WorkflowExecutionReadModelProjectorTests
         await coordinator.ProjectAsync(context, Wrap(new StartWorkflowEvent
         {
             WorkflowName = "direct",
-            RunId = "wf-run-1",
             Input = "hello",
         }));
         await coordinator.ProjectAsync(context, Wrap(new StepRequestEvent
         {
             StepId = "s1",
             StepType = "llm_call",
-            RunId = "wf-run-1",
             TargetRole = "assistant",
         }));
         await coordinator.ProjectAsync(context, Wrap(new StepCompletedEvent
         {
             StepId = "s1",
-            RunId = "wf-run-1",
             Success = true,
             Output = "done",
             WorkerId = "assistant",
@@ -84,13 +82,12 @@ public class WorkflowExecutionReadModelProjectorTests
         await coordinator.ProjectAsync(context, Wrap(new WorkflowCompletedEvent
         {
             WorkflowName = "direct",
-            RunId = "wf-run-1",
             Success = true,
             Output = "final answer",
         }));
         await coordinator.CompleteAsync(context, [new WorkflowExecutionTopologyEdge("root", "assistant")]);
 
-        var report = await store.GetAsync("run-1");
+        var report = await store.GetAsync("root");
         report.Should().NotBeNull();
         report!.WorkflowName.Should().Be("direct");
         report.Success.Should().BeTrue();
@@ -112,7 +109,8 @@ public class WorkflowExecutionReadModelProjectorTests
 
         var context = new WorkflowExecutionProjectionContext
         {
-            RunId = "run-unknown",
+            ProjectionId = "projection-unknown",
+            CommandId = "cmd-unknown",
             RootActorId = "root",
             WorkflowName = "direct",
             StartedAt = DateTimeOffset.UtcNow,
@@ -126,7 +124,7 @@ public class WorkflowExecutionReadModelProjectorTests
         }));
         await coordinator.CompleteAsync(context, []);
 
-        var report = await store.GetAsync("run-unknown");
+        var report = await store.GetAsync("root");
         report.Should().NotBeNull();
         report!.Timeline.Should().BeEmpty();
         report.Summary.TotalSteps.Should().Be(0);
@@ -141,7 +139,8 @@ public class WorkflowExecutionReadModelProjectorTests
 
         var context = new WorkflowExecutionProjectionContext
         {
-            RunId = "run-dedup",
+            ProjectionId = "projection-dedup",
+            CommandId = "cmd-dedup",
             RootActorId = "root",
             WorkflowName = "direct",
             StartedAt = DateTimeOffset.UtcNow,
@@ -153,7 +152,6 @@ public class WorkflowExecutionReadModelProjectorTests
         {
             StepId = "s1",
             StepType = "llm_call",
-            RunId = "wf-run-1",
             TargetRole = "assistant",
         }, id: "evt-dup-1");
 
@@ -161,7 +159,7 @@ public class WorkflowExecutionReadModelProjectorTests
         await coordinator.ProjectAsync(context, evt);
         await coordinator.CompleteAsync(context, []);
 
-        var report = await store.GetAsync("run-dedup");
+        var report = await store.GetAsync("root");
         report.Should().NotBeNull();
         report!.Timeline.Count(x => x.Stage == "step.request").Should().Be(1);
     }
@@ -175,7 +173,8 @@ public class WorkflowExecutionReadModelProjectorTests
 
         var context = new WorkflowExecutionProjectionContext
         {
-            RunId = "run-ts",
+            ProjectionId = "projection-ts",
+            CommandId = "cmd-ts",
             RootActorId = "root",
             WorkflowName = "direct",
             StartedAt = DateTimeOffset.UtcNow,
@@ -188,12 +187,11 @@ public class WorkflowExecutionReadModelProjectorTests
         await coordinator.ProjectAsync(context, Wrap(new StartWorkflowEvent
         {
             WorkflowName = "direct",
-            RunId = "wf-run-1",
             Input = "hello",
         }, utcTimestamp: t));
         await coordinator.CompleteAsync(context, []);
 
-        var report = await store.GetAsync("run-ts");
+        var report = await store.GetAsync("root");
         report.Should().NotBeNull();
         report!.Timeline.Should().ContainSingle(x => x.Stage == "workflow.start");
         report.Timeline.Single(x => x.Stage == "workflow.start").Timestamp.UtcDateTime.Should().Be(t);
@@ -205,18 +203,16 @@ public class WorkflowExecutionReadModelProjectorTests
         var store = new InMemoryWorkflowExecutionReadModelStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
-            RunId = "older",
             WorkflowName = "w",
-            RootActorId = "a",
+            RootActorId = "a-older",
             StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
             EndedAt = DateTimeOffset.UtcNow.AddMinutes(-4),
             Summary = new WorkflowExecutionSummary(),
         });
         await store.UpsertAsync(new WorkflowExecutionReport
         {
-            RunId = "newer",
             WorkflowName = "w",
-            RootActorId = "a",
+            RootActorId = "a-newer",
             StartedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
             EndedAt = DateTimeOffset.UtcNow,
             Summary = new WorkflowExecutionSummary(),
@@ -224,8 +220,8 @@ public class WorkflowExecutionReadModelProjectorTests
 
         var runs = await store.ListAsync(10);
         runs.Should().HaveCount(2);
-        runs[0].RunId.Should().Be("newer");
-        runs[1].RunId.Should().Be("older");
+        runs[0].RootActorId.Should().Be("a-newer");
+        runs[1].RootActorId.Should().Be("a-older");
     }
 
     [Fact]

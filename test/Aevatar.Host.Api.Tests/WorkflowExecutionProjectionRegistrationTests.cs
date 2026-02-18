@@ -26,7 +26,8 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         var context = new WorkflowExecutionProjectionContext
         {
-            RunId = "ext-1",
+            ProjectionId = "ext-1",
+            CommandId = "cmd-ext-1",
             RootActorId = "root",
             WorkflowName = "direct",
             StartedAt = DateTimeOffset.UtcNow,
@@ -37,7 +38,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         await coordinator.ProjectAsync(context, Wrap(new ChatRequestEvent { Prompt = "hello" }));
         await coordinator.CompleteAsync(context, []);
 
-        var report = await store.GetAsync(context.RunId);
+        var report = await store.GetAsync(context.RootActorId);
         report.Should().NotBeNull();
         report!.Timeline.Should().ContainSingle(x => x.Stage == "custom.chat.request");
     }
@@ -55,7 +56,8 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         var context = new WorkflowExecutionProjectionContext
         {
-            RunId = "ext-2",
+            ProjectionId = "ext-2",
+            CommandId = "cmd-ext-2",
             RootActorId = "root",
             WorkflowName = "direct",
             StartedAt = DateTimeOffset.UtcNow,
@@ -66,7 +68,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         await coordinator.ProjectAsync(context, Wrap(new ChatRequestEvent { Prompt = "hello" }));
         await coordinator.CompleteAsync(context, []);
 
-        var report = await store.GetAsync(context.RunId);
+        var report = await store.GetAsync(context.RootActorId);
         report.Should().NotBeNull();
         report!.Timeline.Should().ContainSingle(x => x.Stage == "custom.chat.request");
     }

@@ -13,11 +13,13 @@ namespace Aevatar.Foundation.Runtime.Streaming;
 /// <summary>In-memory event stream for actor-to-actor delivery and broadcast.</summary>
 public sealed class InMemoryStream : IStream
 {
-    private readonly Channel<EventEnvelope> _channel;
+    private readonly Channel<EventEnvelope> _ingressChannel;
+    private readonly Channel<EventEnvelope> _dispatchChannel;
     private volatile Func<EventEnvelope, Task>[] _subscribers = [];
     private readonly Lock _lock = new();
     private readonly CancellationTokenSource _cts = new();
-    private readonly Task _readerLoop;
+    private readonly Task _pumpLoop;
+    private readonly Task _dispatchLoop;
     private readonly InMemoryStreamOptions _options;
     private readonly ILogger<InMemoryStream> _logger;
 
@@ -33,15 +35,21 @@ public sealed class InMemoryStream : IStream
     {
         _options = options ?? new InMemoryStreamOptions();
         var capacity = _options.Capacity > 0 ? _options.Capacity : 4096;
-        _channel = Channel.CreateBounded<EventEnvelope>(new BoundedChannelOptions(capacity)
+        _ingressChannel = Channel.CreateBounded<EventEnvelope>(new BoundedChannelOptions(capacity)
         {
             FullMode = _options.FullMode,
             SingleReader = true,
             SingleWriter = false,
         });
+        _dispatchChannel = Channel.CreateUnbounded<EventEnvelope>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = true,
+        });
         StreamId = streamId;
         _logger = logger ?? NullLogger<InMemoryStream>.Instance;
-        _readerLoop = Task.Run(ReaderLoopAsync);
+        _pumpLoop = Task.Run(PumpLoopAsync);
+        _dispatchLoop = Task.Run(DispatchLoopAsync);
     }
 
     /// <summary>Writes message into stream; non-EventEnvelope messages are auto-wrapped.</summary>
@@ -51,7 +59,7 @@ public sealed class InMemoryStream : IStream
     public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
     {
         if (message is EventEnvelope envelope)
-            return _channel.Writer.WriteAsync(envelope, ct).AsTask();
+            return _ingressChannel.Writer.WriteAsync(envelope, ct).AsTask();
 
         var wrapped = new EventEnvelope
         {
@@ -60,7 +68,7 @@ public sealed class InMemoryStream : IStream
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(message),
             Direction = EventDirection.Down,
         };
-        return _channel.Writer.WriteAsync(wrapped, ct).AsTask();
+        return _ingressChannel.Writer.WriteAsync(wrapped, ct).AsTask();
     }
 
     /// <summary>Subscribes to stream and invokes handler for matching messages.</summary>
@@ -104,11 +112,28 @@ public sealed class InMemoryStream : IStream
         return Task.FromResult<IAsyncDisposable>(sub);
     }
 
-    private async Task ReaderLoopAsync()
+    private async Task PumpLoopAsync()
     {
         try
         {
-            await foreach (var envelope in _channel.Reader.ReadAllAsync(_cts.Token))
+            await foreach (var envelope in _ingressChannel.Reader.ReadAllAsync(_cts.Token))
+            {
+                await _dispatchChannel.Writer.WriteAsync(envelope, _cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (ChannelClosedException) { }
+        finally
+        {
+            _dispatchChannel.Writer.TryComplete();
+        }
+    }
+
+    private async Task DispatchLoopAsync()
+    {
+        try
+        {
+            await foreach (var envelope in _dispatchChannel.Reader.ReadAllAsync(_cts.Token))
             {
                 var subs = _subscribers;
                 if (_options.DispatchSubscribersConcurrently)
@@ -135,7 +160,10 @@ public sealed class InMemoryStream : IStream
                             StreamId);
 
                         if (_options.ThrowOnSubscriberError)
-                            throw;
+                        {
+                            StopWithError(ex);
+                            return;
+                        }
                     }
                 }
             }
@@ -159,12 +187,23 @@ public sealed class InMemoryStream : IStream
 
             if (_options.ThrowOnSubscriberError)
             {
-                _channel.Writer.TryComplete(ex);
-                _cts.Cancel();
+                StopWithError(ex);
             }
         }
     }
 
+    private void StopWithError(Exception ex)
+    {
+        _ingressChannel.Writer.TryComplete(ex);
+        _dispatchChannel.Writer.TryComplete(ex);
+        _cts.Cancel();
+    }
+
     /// <summary>Shuts down stream, stops reader loop, and cancels subscriptions.</summary>
-    public void Shutdown() { _channel.Writer.TryComplete(); _cts.Cancel(); }
+    public void Shutdown()
+    {
+        _ingressChannel.Writer.TryComplete();
+        _dispatchChannel.Writer.TryComplete();
+        _cts.Cancel();
+    }
 }

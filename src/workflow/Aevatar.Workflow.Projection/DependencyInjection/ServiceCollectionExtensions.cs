@@ -1,6 +1,5 @@
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
-using Aevatar.Workflow.Projection.RunIdResolvers;
 using Aevatar.Workflow.Projection.Stores;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Projections;
@@ -34,15 +33,11 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
 
         services.TryAddSingleton<IProjectionReadModelStore<WorkflowExecutionReport, string>, InMemoryWorkflowExecutionReadModelStore>();
-        services.TryAddSingleton<IProjectionRunIdGenerator, GuidProjectionRunIdGenerator>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowExecutionRunIdResolver, WorkflowCoreRunIdResolver>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowExecutionRunIdResolver, AIChatSessionRunIdResolver>());
         RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
         services.TryAddSingleton<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        services.TryAddSingleton<IProjectionCompletionDetector<WorkflowExecutionProjectionContext>, WorkflowCompletedEventProjectionCompletionDetector<WorkflowExecutionProjectionContext>>();
         services.TryAddSingleton<IProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>, ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
         services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
         services.TryAddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();

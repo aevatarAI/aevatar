@@ -119,13 +119,12 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         }
 
         await EnsureAgentTreeAsync();
-        var runId = ResolveRunId(request);
 
         await PublishAsync(new StartWorkflowEvent
         {
             WorkflowName = _compiledWorkflow.Name,
-            RunId = runId,
             Input = request.Prompt,
+            CommandId = ResolveCommandId(request),
         }, EventDirection.Self);
     }
 
@@ -223,13 +222,13 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             configurator.Configure(module, _compiledWorkflow);
     }
 
-    private static string ResolveRunId(ChatRequestEvent request)
+    private static string ResolveCommandId(ChatRequestEvent request)
     {
-        if (request.Metadata.TryGetValue(ChatRequestMetadataKeys.RunId, out var runIdFromMetadata) &&
-            !string.IsNullOrWhiteSpace(runIdFromMetadata))
-            return runIdFromMetadata;
+        if (request.Metadata.TryGetValue(ChatRequestMetadataKeys.CommandId, out var commandId) &&
+            !string.IsNullOrWhiteSpace(commandId))
+            return commandId;
 
-        return Guid.NewGuid().ToString("N");
+        return string.Empty;
     }
 
     // ─── 编译 + 验证 ───

@@ -21,7 +21,7 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         _projectionPort = projectionPort;
     }
 
-    public bool RunQueryEnabled => _projectionPort.EnableRunQueryEndpoints;
+    public bool ActorQueryEnabled => _projectionPort.EnableActorQueryEndpoints;
 
     public async Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default)
     {
@@ -40,19 +40,22 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
 
     public IReadOnlyList<string> ListWorkflows() => _workflowRegistry.GetNames();
 
-    public async Task<IReadOnlyList<WorkflowRunSummary>> ListRunsAsync(int take = 50, CancellationToken ct = default)
+    public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
     {
-        if (!RunQueryEnabled)
-            return [];
-
-        return await _projectionPort.ListRunsAsync(take, ct);
-    }
-
-    public async Task<WorkflowRunReport?> GetRunAsync(string runId, CancellationToken ct = default)
-    {
-        if (!RunQueryEnabled)
+        if (!ActorQueryEnabled)
             return null;
 
-        return await _projectionPort.GetRunAsync(runId, ct);
+        return await _projectionPort.GetActorSnapshotAsync(actorId, ct);
+    }
+
+    public async Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
+        string actorId,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        if (!ActorQueryEnabled)
+            return [];
+
+        return await _projectionPort.ListActorTimelineAsync(actorId, take, ct);
     }
 }

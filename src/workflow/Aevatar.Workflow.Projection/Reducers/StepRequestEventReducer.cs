@@ -16,7 +16,6 @@ public sealed class StepRequestEventReducer : WorkflowExecutionEventReducerBase<
     {
         var step = WorkflowExecutionProjectionMutations.GetOrCreateStep(report, evt.StepId);
         step.StepType = evt.StepType;
-        step.RunId = evt.RunId;
         step.TargetRole = evt.TargetRole;
         step.RequestedAt = now;
         step.RequestParameters = evt.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value);

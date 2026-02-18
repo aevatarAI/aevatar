@@ -88,7 +88,7 @@ public sealed class ConnectorCallModule : IEventModule
             {
                 var connectorRequest = new ConnectorRequest
                 {
-                    RunId = request.RunId,
+                    RunId = envelope.CorrelationId,
                     StepId = request.StepId,
                     Connector = connectorName,
                     Operation = operation,
@@ -126,7 +126,6 @@ public sealed class ConnectorCallModule : IEventModule
             var ok = new StepCompletedEvent
             {
                 StepId = request.StepId,
-                RunId = request.RunId,
                 Success = true,
                 Output = response.Output ?? "",
             };
@@ -150,7 +149,6 @@ public sealed class ConnectorCallModule : IEventModule
             var continued = new StepCompletedEvent
             {
                 StepId = request.StepId,
-                RunId = request.RunId,
                 Success = true,
                 Output = request.Input,
             };
@@ -164,7 +162,6 @@ public sealed class ConnectorCallModule : IEventModule
         var failed = new StepCompletedEvent
         {
             StepId = request.StepId,
-            RunId = request.RunId,
             Success = false,
             Error = errorText ?? "connector call failed",
         };
@@ -181,7 +178,6 @@ public sealed class ConnectorCallModule : IEventModule
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = request.StepId,
-            RunId = request.RunId,
             Success = false,
             Error = error,
         }, EventDirection.Self, ct);
@@ -199,7 +195,6 @@ public sealed class ConnectorCallModule : IEventModule
         var skipped = new StepCompletedEvent
         {
             StepId = request.StepId,
-            RunId = request.RunId,
             Success = true,
             Output = request.Input,
         };

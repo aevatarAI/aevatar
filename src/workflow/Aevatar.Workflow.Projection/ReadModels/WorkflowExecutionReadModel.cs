@@ -3,7 +3,6 @@ namespace Aevatar.Workflow.Projection.ReadModels;
 public enum WorkflowExecutionProjectionScope
 {
     ActorShared = 0,
-    RunIsolated = 1,
 }
 
 public enum WorkflowExecutionTopologySource
@@ -34,7 +33,7 @@ public sealed class WorkflowExecutionReport
     public WorkflowExecutionCompletionStatus CompletionStatus { get; set; } = WorkflowExecutionCompletionStatus.Unknown;
     public string WorkflowName { get; set; } = "";
     public string RootActorId { get; set; } = "";
-    public string RunId { get; set; } = "";
+    public string CommandId { get; set; } = "";
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset EndedAt { get; set; }
     public double DurationMs { get; set; }
@@ -62,7 +61,6 @@ public sealed class WorkflowExecutionStepTrace
 {
     public string StepId { get; set; } = "";
     public string StepType { get; set; } = "";
-    public string RunId { get; set; } = "";
     public string TargetRole { get; set; } = "";
     public DateTimeOffset? RequestedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }

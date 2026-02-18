@@ -81,25 +81,26 @@ curl -X POST http://localhost:5000/api/chat \
 下面这张图概括了「宿主（API + 运行时 + LLM + Connector）」与「Agent 树 + 工作流步骤」的关系。
 
 ```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
-    subgraph host [宿主]
-        Runtime[运行时\n事件路由 / 存储 / 流]
-        Factory[步骤工厂\n步骤类型 → 执行模块]
-        LLM[LLM]
-        Connectors[Connector\nHTTP·CLI·MCP]
+    subgraph host["宿主"]
+        Runtime["运行时\n事件路由 / 存储 / 流"]
+        Factory["步骤工厂\n步骤类型 → 执行模块"]
+        LLM["LLM"]
+        Connectors["Connector\nHTTP·CLI·MCP"]
     end
 
-    subgraph agents [Agent 树]
-        Workflow[工作流 Agent]
-        RoleA[角色 A]
-        RoleB[角色 B]
+    subgraph agents["Agent 树"]
+        Workflow["工作流 Agent"]
+        RoleA["角色 A"]
+        RoleB["角色 B"]
     end
 
-    subgraph steps [工作流步骤]
-        M1[workflow_loop]
-        M2[llm_call]
-        M3[connector_call]
-        M4[parallel / vote]
+    subgraph steps["工作流步骤"]
+        M1["workflow_loop"]
+        M2["llm_call"]
+        M3["connector_call"]
+        M4["parallel / vote"]
     end
 
     host --> agents
@@ -120,6 +121,7 @@ flowchart TB
 下面这张图从 `POST /api/chat` 开始，展示通用工作流执行路径：Cognitive 加载 YAML、创建 roles、步骤执行、role 通过 connector 调外部服务、最后 SSE 返回结果。
 
 ```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
     participant User
     participant API as ChatAPI
@@ -177,6 +179,7 @@ sequenceDiagram
 下面这张图是 maker sample 的同类流程：在通用 pipeline 上叠加 `maker_recursive` / `maker_vote`，并可在末尾通过 connector 做外部后处理。
 
 ```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
     participant User
     participant API as ChatAPI

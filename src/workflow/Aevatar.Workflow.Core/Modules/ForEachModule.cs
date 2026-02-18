@@ -57,7 +57,7 @@ public sealed class ForEachModule : IEventModule
             {
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
-                    StepId = evt.StepId, RunId = evt.RunId,
+                    StepId = evt.StepId,
                     Success = true, Output = "",
                 }, EventDirection.Self, ct);
                 return;
@@ -77,7 +77,6 @@ public sealed class ForEachModule : IEventModule
                 {
                     StepId = $"{evt.StepId}_item_{i}",
                     StepType = subStepType,
-                    RunId = evt.RunId,
                     Input = items[i].Trim(),
                     TargetRole = subTargetRole ?? "",
                 };
@@ -116,7 +115,7 @@ public sealed class ForEachModule : IEventModule
 
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
-                    StepId = parent, RunId = evt.RunId,
+                    StepId = parent,
                     Success = allSuccess, Output = merged,
                 }, EventDirection.Self, ct);
 

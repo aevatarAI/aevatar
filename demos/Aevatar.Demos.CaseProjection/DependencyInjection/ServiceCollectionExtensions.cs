@@ -25,14 +25,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<InMemoryCaseReadModelStore>();
         services.TryAddSingleton<IProjectionReadModelStore<CaseProjectionReadModel, string>>(sp =>
             sp.GetRequiredService<InMemoryCaseReadModelStore>());
-        services.TryAddSingleton<IProjectionRunIdGenerator, GuidProjectionRunIdGenerator>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<ICaseProjectionContextFactory, DefaultCaseProjectionContextFactory>();
 
         RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
 
         services.TryAddSingleton<IProjectionCoordinator<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>, ProjectionCoordinator<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>>();
-        services.TryAddSingleton<IProjectionCompletionDetector<CaseProjectionContext>, CaseResolvedProjectionCompletionDetector>();
         services.TryAddSingleton<IProjectionSubscriptionRegistry<CaseProjectionContext>, ProjectionSubscriptionRegistry<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>>();
         services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
         services.TryAddSingleton<IProjectionLifecycleService<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>, ProjectionLifecycleService<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>>();

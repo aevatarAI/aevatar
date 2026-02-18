@@ -33,33 +33,32 @@ public sealed class WorkflowExecutionAGUIEventProjector
     {
         ct.ThrowIfCancellationRequested();
 
-        var sink = context.GetRunEventSink();
-        if (sink == null)
+        var sinks = context.GetLiveSinksSnapshot();
+        if (sinks.Count == 0)
             return;
 
         IReadOnlyList<AGUIEvent> aguiEvents = _mapper.Map(envelope);
         foreach (var aguiEvent in aguiEvents)
         {
-            try
+            var runEvent = AGUIEventToWorkflowRunEventMapper.Map(aguiEvent);
+            foreach (var sink in sinks)
             {
-                var runEvent = AGUIEventToWorkflowRunEventMapper.Map(aguiEvent);
-                await sink.PushAsync(runEvent, ct);
-            }
-            catch (WorkflowRunEventSinkBackpressureException)
-            {
-                // Non-terminal backpressure overflow in non-wait mode: drop current event but keep sink attached.
-                continue;
-            }
-            catch (WorkflowRunEventSinkCompletedException)
-            {
-                context.DetachRunEventSink();
-                break;
-            }
-            catch (InvalidOperationException)
-            {
-                // Sink is completed/full in non-wait mode; do not fail the whole projection pipeline.
-                context.DetachRunEventSink();
-                break;
+                try
+                {
+                    await sink.PushAsync(runEvent, ct);
+                }
+                catch (WorkflowRunEventSinkBackpressureException)
+                {
+                    continue;
+                }
+                catch (WorkflowRunEventSinkCompletedException)
+                {
+                    context.DetachLiveSink(sink);
+                }
+                catch (InvalidOperationException)
+                {
+                    context.DetachLiveSink(sink);
+                }
             }
         }
     }

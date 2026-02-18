@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Host.Api.Endpoints;
@@ -10,6 +11,7 @@ internal static class ChatWebSocketRunCoordinator
         WebSocket socket,
         ChatWebSocketCommandEnvelope command,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        IWorkflowExecutionQueryApplicationService queryService,
         CancellationToken ct = default)
     {
         var request = new WorkflowChatRunRequest(
@@ -31,8 +33,8 @@ internal static class ChatWebSocketRunCoordinator
                 requestId = command.RequestId,
                 payload = new
                 {
-                    runId = started.RunId,
-                    threadId = started.ActorId,
+                    commandId = started.CommandId,
+                    actorId = started.ActorId,
                     workflow = started.WorkflowName,
                 },
             }, token)),
@@ -53,16 +55,18 @@ internal static class ChatWebSocketRunCoordinator
 
         var started = executionResult.Started!;
         var finalize = executionResult.FinalizeResult;
+        var snapshot = await queryService.GetActorSnapshotAsync(started.ActorId, ct);
         await ChatWebSocketProtocol.SendAsync(socket, new
         {
             type = "query.result",
             requestId = command.RequestId,
             payload = new
             {
-                runId = started.RunId,
+                commandId = started.CommandId,
+                actorId = started.ActorId,
                 projectionCompletionStatus = finalize?.ProjectionCompletionStatus.ToString(),
                 projectionCompleted = finalize?.ProjectionCompleted ?? false,
-                report = finalize?.Report,
+                snapshot,
             },
         }, ct);
     }

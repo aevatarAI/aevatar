@@ -13,7 +13,7 @@
     - `ProjectionLifecycleService<TContext, TCompletion>`
     - `ActorStreamSubscriptionHub<TMessage>`
     - `ProjectionAssemblyRegistration`
-    - `GuidProjectionRunIdGenerator` / `SystemProjectionClock`
+    - `SystemProjectionClock`
 - 领域扩展项目
   - 在子系统内承载具体 context/read model/reducer/projector/service/DI。
 
@@ -21,7 +21,7 @@
 
 1. 内核只处理通用编排，不绑定任何业务模型。
 2. 业务投影通过 `IProjectionEventReducer<,>` 与 `IProjectionProjector<,>` 扩展。
-3. 订阅按 `actorId` 复用底层 stream，再分发到 run 级 context。
+3. 订阅按 `actorId` 复用底层 stream，再分发到投影上下文。
 
 ## 运行链路（通用）
 

@@ -4,28 +4,25 @@ using System.Collections.Concurrent;
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 /// <summary>
-/// Generic run-level projection registry built on top of shared actor stream subscriptions.
+/// Actor-level projection registry built on top of shared actor stream subscriptions.
 /// </summary>
-public class ProjectionSubscriptionRegistry<TContext, TCompletion>
+public sealed class ProjectionSubscriptionRegistry<TContext, TCompletion>
     : IProjectionSubscriptionRegistry<TContext>, IAsyncDisposable
-    where TContext : IProjectionRunContext
+    where TContext : IProjectionContext
 {
     private readonly IProjectionCoordinator<TContext, TCompletion> _coordinator;
     private readonly IActorStreamSubscriptionHub<EventEnvelope> _subscriptionHub;
-    private readonly IProjectionCompletionDetector<TContext> _completionDetector;
     private readonly ILogger<ProjectionSubscriptionRegistry<TContext, TCompletion>>? _logger;
-    private readonly ConcurrentDictionary<string, ActiveRunState> _activeRunsByRunId = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ActiveProjectionState> _activeStatesByActorId = new(StringComparer.Ordinal);
     private int _disposed;
 
     public ProjectionSubscriptionRegistry(
         IProjectionCoordinator<TContext, TCompletion> coordinator,
         IActorStreamSubscriptionHub<EventEnvelope> subscriptionHub,
-        IProjectionCompletionDetector<TContext> completionDetector,
         ILogger<ProjectionSubscriptionRegistry<TContext, TCompletion>>? logger = null)
     {
         _coordinator = coordinator;
         _subscriptionHub = subscriptionHub;
-        _completionDetector = completionDetector;
         _logger = logger;
     }
 
@@ -33,80 +30,56 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(context);
-        var actorId = context.RootActorId;
-        var runId = context.RunId;
 
+        var actorId = context.RootActorId;
         var envelopeSubscription = await _subscriptionHub.RegisterAsync(
             actorId,
-            envelope => DispatchAsync(actorId, context, envelope),
+            envelope => DispatchAsync(actorId, envelope),
             ct);
 
-        var runState = new ActiveRunState(context, envelopeSubscription);
-        if (!_activeRunsByRunId.TryAdd(runId, runState))
+        var state = new ActiveProjectionState(context, envelopeSubscription);
+        if (!_activeStatesByActorId.TryAdd(actorId, state))
         {
             await envelopeSubscription.DisposeAsync();
-            throw new InvalidOperationException($"Projection run already registered: '{runId}'.");
+            throw new InvalidOperationException($"Projection already registered for actor '{actorId}'.");
         }
 
         _logger?.LogDebug(
-            "Registered projection run {RunId} for actor {ActorId}.",
-            runId,
+            "Registered projection {ProjectionId} for actor {ActorId}.",
+            context.ProjectionId,
             actorId);
     }
 
-    public async Task UnregisterAsync(string actorId, string runId, CancellationToken ct = default)
+    public async Task UnregisterAsync(string actorId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        if (!_activeRunsByRunId.TryRemove(runId, out var runState))
+        if (!_activeStatesByActorId.TryRemove(actorId, out var state))
             return;
 
-        runState.MarkProjectionStopped();
-        runState.CancelDispatch();
-        await runState.Subscription.DisposeAsync();
-        runState.Dispose();
+        state.CancelDispatch();
+        await state.Subscription.DisposeAsync();
+        state.Dispose();
     }
 
-    public async Task<ProjectionRunCompletionStatus> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default)
+    private async ValueTask DispatchAsync(string actorId, EventEnvelope envelope)
     {
-        if (!_activeRunsByRunId.TryGetValue(runId, out var runState))
-            return ProjectionRunCompletionStatus.NotFound;
-
-        if (runState.ProjectionCompletedTask.IsCompleted)
-            return runState.Status;
-
-        var timeoutTask = Task.Delay(timeout, ct);
-        var completedTask = await Task.WhenAny(runState.ProjectionCompletedTask, timeoutTask);
-        if (completedTask == timeoutTask)
-        {
-            ct.ThrowIfCancellationRequested();
-            return ProjectionRunCompletionStatus.TimedOut;
-        }
-
-        _ = await runState.ProjectionCompletedTask;
-        return runState.Status;
-    }
-
-    private async ValueTask DispatchAsync(string actorId, TContext context, EventEnvelope envelope)
-    {
-        if (!_activeRunsByRunId.TryGetValue(context.RunId, out var runState))
-            return;
-        if (!runState.IsProjectionActive)
+        if (!_activeStatesByActorId.TryGetValue(actorId, out var state))
             return;
 
-        var isTerminal = _completionDetector.IsProjectionCompleted(context, envelope);
         try
         {
-            await _coordinator.ProjectAsync(context, envelope, runState.DispatchToken);
-            if (isTerminal)
-                runState.MarkProjectionCompleted();
+            await _coordinator.ProjectAsync(state.Context, envelope, state.DispatchToken);
+        }
+        catch (OperationCanceledException) when (state.DispatchToken.IsCancellationRequested)
+        {
+            // Ignore cancellation during unregistration/disposal.
         }
         catch (Exception ex)
         {
-            runState.MarkProjectionFailed();
             _logger?.LogWarning(
                 ex,
-                "Projection dispatch failed for run {RunId} on actor {ActorId}.",
-                context.RunId,
+                "Projection dispatch failed for projection {ProjectionId} on actor {ActorId}.",
+                state.Context.ProjectionId,
                 actorId);
         }
     }
@@ -116,24 +89,23 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
             return;
 
-        var runs = _activeRunsByRunId.Values.ToList();
-        _activeRunsByRunId.Clear();
+        var states = _activeStatesByActorId.Values.ToList();
+        _activeStatesByActorId.Clear();
 
-        foreach (var runState in runs)
+        foreach (var state in states)
         {
-            runState.MarkProjectionStopped();
-            runState.CancelDispatch();
+            state.CancelDispatch();
             try
             {
-                await runState.Subscription.DisposeAsync();
+                await state.Subscription.DisposeAsync();
             }
             catch (Exception ex)
             {
-                _logger?.LogDebug(ex, "Failed to dispose projection run subscription.");
+                _logger?.LogDebug(ex, "Failed to dispose projection subscription.");
             }
             finally
             {
-                runState.Dispose();
+                state.Dispose();
             }
         }
     }
@@ -144,14 +116,11 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
             throw new ObjectDisposedException(GetType().Name);
     }
 
-    private sealed class ActiveRunState
+    private sealed class ActiveProjectionState
     {
         private readonly CancellationTokenSource _dispatchCancellation = new();
-        private readonly TaskCompletionSource<ProjectionRunCompletionStatus> _projectionCompleted =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _status;
 
-        public ActiveRunState(
+        public ActiveProjectionState(
             TContext context,
             IAsyncDisposable subscription)
         {
@@ -162,41 +131,6 @@ public class ProjectionSubscriptionRegistry<TContext, TCompletion>
         public TContext Context { get; }
         public IAsyncDisposable Subscription { get; }
         public CancellationToken DispatchToken => _dispatchCancellation.Token;
-
-        public Task<ProjectionRunCompletionStatus> ProjectionCompletedTask => _projectionCompleted.Task;
-        public bool IsProjectionActive => Volatile.Read(ref _status) == 0;
-        public ProjectionRunCompletionStatus Status =>
-            Volatile.Read(ref _status) switch
-            {
-                1 => ProjectionRunCompletionStatus.Completed,
-                2 => ProjectionRunCompletionStatus.Failed,
-                3 => ProjectionRunCompletionStatus.Stopped,
-                _ => ProjectionRunCompletionStatus.TimedOut,
-            };
-
-        public void MarkProjectionCompleted()
-        {
-            if (Interlocked.CompareExchange(ref _status, 1, 0) != 0)
-                return;
-
-            _projectionCompleted.TrySetResult(ProjectionRunCompletionStatus.Completed);
-        }
-
-        public void MarkProjectionFailed()
-        {
-            if (Interlocked.CompareExchange(ref _status, 2, 0) != 0)
-                return;
-
-            _projectionCompleted.TrySetResult(ProjectionRunCompletionStatus.Failed);
-        }
-
-        public void MarkProjectionStopped()
-        {
-            if (Interlocked.CompareExchange(ref _status, 3, 0) != 0)
-                return;
-
-            _projectionCompleted.TrySetResult(ProjectionRunCompletionStatus.Stopped);
-        }
 
         public void CancelDispatch()
         {

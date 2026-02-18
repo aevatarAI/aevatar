@@ -1,6 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Orchestration;
 
 namespace Aevatar.Workflow.Application.Runs;
 
@@ -10,15 +10,15 @@ internal sealed class WorkflowRunContext
 
     public required string WorkflowName { get; init; }
 
-    public required WorkflowProjectionRun ProjectionRun { get; init; }
-
     public required IWorkflowRunEventSink Sink { get; init; }
+
+    public required string CommandId { get; init; }
+
+    public required CommandContext CommandContext { get; init; }
 
     public string ActorId => Actor.Id;
 
-    public string RunId => ProjectionRun.RunId;
-
-    public WorkflowChatRunStarted ToStarted() => new(ActorId, WorkflowName, RunId);
+    public WorkflowChatRunStarted ToStarted() => new(ActorId, WorkflowName, CommandId);
 }
 
 internal sealed record WorkflowRunContextCreateResult(

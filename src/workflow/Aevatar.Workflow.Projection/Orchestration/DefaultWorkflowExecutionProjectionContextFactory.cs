@@ -7,14 +7,16 @@ public sealed class DefaultWorkflowExecutionProjectionContextFactory
     : IWorkflowExecutionProjectionContextFactory
 {
     public WorkflowExecutionProjectionContext Create(
-        string runId,
+        string projectionId,
+        string commandId,
         string rootActorId,
         string workflowName,
         string input,
         DateTimeOffset startedAt) =>
         new()
         {
-            RunId = runId,
+            ProjectionId = projectionId,
+            CommandId = commandId,
             RootActorId = rootActorId,
             WorkflowName = workflowName,
             StartedAt = startedAt,

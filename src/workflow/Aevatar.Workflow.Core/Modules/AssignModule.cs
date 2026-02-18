@@ -38,7 +38,6 @@ public sealed class AssignModule : IEventModule
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = request.StepId,
-            RunId = request.RunId,
             Success = true,
             Output = resolvedValue,
         }, EventDirection.Self, ct);

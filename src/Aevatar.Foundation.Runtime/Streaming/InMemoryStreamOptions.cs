@@ -20,7 +20,7 @@ public sealed class InMemoryStreamOptions
 
     /// <summary>
     /// Dispatch subscriber callbacks on background tasks instead of awaiting inline on reader loop.
-    /// Keeps the reader draining under re-entrant publish patterns.
+    /// When false, one stream preserves subscriber callback order by awaiting handlers sequentially.
     /// </summary>
-    public bool DispatchSubscribersConcurrently { get; set; } = true;
+    public bool DispatchSubscribersConcurrently { get; set; }
 }

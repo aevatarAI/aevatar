@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Host.Api.Tests;
 
@@ -18,7 +19,7 @@ public class ChatEndpointsInternalTests
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddSingleton<ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>(new FakeChatRunApplicationService());
-        var queryService = new FakeQueryService { RunQueryEnabledValue = true };
+        var queryService = new FakeQueryService { ActorQueryEnabledValue = true };
         builder.Services.AddSingleton<IWorkflowExecutionQueryApplicationService>(queryService);
 
         var app = builder.Build();
@@ -33,11 +34,12 @@ public class ChatEndpointsInternalTests
 
         returned.Should().BeSameAs(app);
         routePatterns.Should().Contain("/api/chat");
+        routePatterns.Should().Contain("/api/commands");
         routePatterns.Should().Contain("/api/agents");
         routePatterns.Should().Contain("/api/workflows");
         routePatterns.Should().Contain("/api/ws/chat");
-        routePatterns.Should().Contain("/api/runs");
-        routePatterns.Should().Contain("/api/runs/{runId}");
+        routePatterns.Should().Contain("/api/actors/{actorId}");
+        routePatterns.Should().Contain("/api/actors/{actorId}/timeline");
     }
 
     [Fact]
@@ -70,37 +72,29 @@ public class ChatEndpointsInternalTests
         {
             ExecuteHandler = async (_, emitAsync, onStartedAsync, ct) =>
             {
-                var started = new WorkflowChatRunStarted("actor-1", "direct", "run-1");
+                var started = new WorkflowChatRunStarted("actor-1", "direct", "cmd-1");
                 if (onStartedAsync != null)
                     await onStartedAsync(started, ct);
 
                 await emitAsync(new WorkflowOutputFrame
                 {
                     Type = "RUN_STARTED",
-                    RunId = "run-1",
                     ThreadId = "actor-1",
                 }, ct);
 
                 await emitAsync(new WorkflowOutputFrame
                 {
                     Type = "RUN_FINISHED",
-                    RunId = "run-1",
                     ThreadId = "actor-1",
                 }, ct);
 
                 return ToCoreResult(
-                    new WorkflowChatRunExecutionResult(
-                        WorkflowChatRunStartError.None,
-                        started,
-                        new WorkflowChatRunFinalizeResult(
-                            WorkflowProjectionCompletionStatus.Completed,
-                            true,
-                            new WorkflowRunReport
-                            {
-                                RunId = "run-1",
-                                WorkflowName = "direct",
-                                RootActorId = "actor-1",
-                            })));
+                        new WorkflowChatRunExecutionResult(
+                            WorkflowChatRunStartError.None,
+                            started,
+                            new WorkflowChatRunFinalizeResult(
+                                WorkflowProjectionCompletionStatus.Completed,
+                                true)));
             },
         };
 
@@ -118,47 +112,105 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task ListRuns_ShouldReturnRunSummaries()
+    public async Task HandleCommand_WhenStarted_ShouldReturnAcceptedCommandId()
+    {
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = async (_, _, onStartedAsync, ct) =>
+            {
+                var started = new WorkflowChatRunStarted("actor-1", "direct", "cmd-1");
+                if (onStartedAsync != null)
+                    await onStartedAsync(started, ct);
+
+                return ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.None,
+                        started,
+                        new WorkflowChatRunFinalizeResult(
+                            WorkflowProjectionCompletionStatus.Completed,
+                            true)));
+            },
+        };
+
+        var result = await ChatEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
+        statusCode.Should().Be(StatusCodes.Status202Accepted);
+        doc.RootElement.GetProperty("commandId").GetString().Should().Be("cmd-1");
+    }
+
+    [Fact]
+    public async Task GetActorSnapshot_ShouldReturnSnapshot()
     {
         var queryService = new FakeQueryService
         {
-            RunQueryEnabledValue = true,
-            Runs =
-            [
-                new WorkflowRunSummary(
-                    "run-1",
-                    "direct",
-                    "actor-1",
-                    DateTimeOffset.UtcNow.AddSeconds(-1),
-                    DateTimeOffset.UtcNow,
-                    200,
-                    true,
-                    3,
-                    WorkflowRunProjectionScope.ActorShared,
-                    WorkflowRunCompletionStatus.Completed),
-            ],
+            ActorQueryEnabledValue = true,
+            SnapshotByActorId = new Dictionary<string, WorkflowActorSnapshot>(StringComparer.Ordinal)
+            {
+                ["actor-1"] = new WorkflowActorSnapshot
+                {
+                    ActorId = "actor-1",
+                    WorkflowName = "direct",
+                    LastCommandId = "cmd-1",
+                    TotalSteps = 3,
+                },
+            },
         };
 
-        var result = await ChatQueryEndpoints.ListRuns(queryService, 50, CancellationToken.None);
+        var result = await ChatQueryEndpoints.GetActorSnapshot("actor-1", queryService, CancellationToken.None);
         var (statusCode, body) = await ExecuteResultAsync(result);
         using var doc = JsonDocument.Parse(body);
 
         statusCode.Should().Be(StatusCodes.Status200OK);
-        doc.RootElement.ValueKind.Should().Be(JsonValueKind.Array);
-        doc.RootElement.GetArrayLength().Should().Be(1);
-        doc.RootElement[0].GetProperty("runId").GetString().Should().Be("run-1");
-        doc.RootElement[0].GetProperty("totalSteps").GetInt32().Should().Be(3);
+        doc.RootElement.GetProperty("actorId").GetString().Should().Be("actor-1");
+        doc.RootElement.GetProperty("totalSteps").GetInt32().Should().Be(3);
     }
 
     [Fact]
-    public async Task GetRun_WhenMissing_ShouldReturnNotFound()
+    public async Task GetActorSnapshot_WhenMissing_ShouldReturnNotFound()
     {
-        var queryService = new FakeQueryService { RunQueryEnabledValue = true };
+        var queryService = new FakeQueryService { ActorQueryEnabledValue = true };
 
-        var result = await ChatQueryEndpoints.GetRun("missing", queryService, CancellationToken.None);
+        var result = await ChatQueryEndpoints.GetActorSnapshot("missing", queryService, CancellationToken.None);
         var (statusCode, _) = await ExecuteResultAsync(result);
 
         statusCode.Should().Be(StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
+    public async Task ListActorTimeline_ShouldReturnTimelineItems()
+    {
+        var queryService = new FakeQueryService
+        {
+            ActorQueryEnabledValue = true,
+            TimelineByActorId = new Dictionary<string, IReadOnlyList<WorkflowActorTimelineItem>>(StringComparer.Ordinal)
+            {
+                ["actor-1"] =
+                [
+                    new WorkflowActorTimelineItem
+                    {
+                        Timestamp = DateTimeOffset.UtcNow,
+                        Stage = "workflow.start",
+                        Message = "started",
+                    },
+                ],
+            },
+        };
+
+        var result = await ChatQueryEndpoints.ListActorTimeline("actor-1", queryService, 50, CancellationToken.None);
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        doc.RootElement.GetArrayLength().Should().Be(1);
+        doc.RootElement[0].GetProperty("stage").GetString().Should().Be("workflow.start");
     }
 
     private static DefaultHttpContext CreateHttpContext()
@@ -220,24 +272,32 @@ public class ChatEndpointsInternalTests
     private sealed class FakeQueryService :
         IWorkflowExecutionQueryApplicationService
     {
-        public bool RunQueryEnabledValue { get; set; }
+        public bool ActorQueryEnabledValue { get; set; }
         public IReadOnlyList<WorkflowAgentSummary> Agents { get; set; } = [];
         public IReadOnlyList<string> Workflows { get; set; } = [];
-        public IReadOnlyList<WorkflowRunSummary> Runs { get; set; } = [];
-        public WorkflowRunReport? Report { get; set; }
+        public Dictionary<string, WorkflowActorSnapshot> SnapshotByActorId { get; set; } = new(StringComparer.Ordinal);
+        public Dictionary<string, IReadOnlyList<WorkflowActorTimelineItem>> TimelineByActorId { get; set; } = new(StringComparer.Ordinal);
 
-        public bool RunQueryEnabled => RunQueryEnabledValue;
+        public bool ActorQueryEnabled => ActorQueryEnabledValue;
 
         public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
             Task.FromResult(Agents);
 
         public IReadOnlyList<string> ListWorkflows() => Workflows;
 
-        public Task<IReadOnlyList<WorkflowRunSummary>> ListRunsAsync(int take = 50, CancellationToken ct = default) =>
-            Task.FromResult(Runs);
+        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        {
+            SnapshotByActorId.TryGetValue(actorId, out var snapshot);
+            return Task.FromResult(snapshot);
+        }
 
-        public Task<WorkflowRunReport?> GetRunAsync(string runId, CancellationToken ct = default) =>
-            Task.FromResult(Report is { RunId: var id } && string.Equals(id, runId, StringComparison.Ordinal) ? Report : null);
+        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default)
+        {
+            if (!TimelineByActorId.TryGetValue(actorId, out var items))
+                items = [];
+
+            return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>(items.Take(Math.Max(1, take)).ToList());
+        }
     }
 
     private static CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> ToCoreResult(

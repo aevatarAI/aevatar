@@ -6,9 +6,9 @@ namespace Aevatar.Workflow.Application.Adapters;
 public sealed class WorkflowCommandExecutionServiceAdapter
     : ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>
 {
-    private readonly IWorkflowChatRunApplicationService _inner;
+    private readonly IWorkflowRunCommandService _inner;
 
-    public WorkflowCommandExecutionServiceAdapter(IWorkflowChatRunApplicationService inner)
+    public WorkflowCommandExecutionServiceAdapter(IWorkflowRunCommandService inner)
     {
         _inner = inner;
     }

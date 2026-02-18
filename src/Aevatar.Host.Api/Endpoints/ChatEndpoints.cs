@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -21,6 +22,11 @@ public static class ChatEndpoints
 
         group.MapPost("/chat", HandleChat)
             .Produces(StatusCodes.Status200OK, contentType: "text/event-stream")
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/commands", HandleCommand)
+            .Produces(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
 
@@ -54,9 +60,83 @@ public static class ChatEndpoints
         }
     }
 
+    internal static async Task<IResult> HandleCommand(
+        ChatInput input,
+        ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct = default)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.Host.Api.Command");
+        var startSignal = new TaskCompletionSource<WorkflowChatRunStarted>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var executionTask = Task.Run(
+            () => chatRunService.ExecuteAsync(
+                new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId),
+                static (_, _) => ValueTask.CompletedTask,
+                onStartedAsync: (started, _) =>
+                {
+                    startSignal.TrySetResult(started);
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None),
+            CancellationToken.None);
+
+        var completed = await Task.WhenAny(startSignal.Task, executionTask);
+
+        if (completed == startSignal.Task)
+        {
+            var started = await startSignal.Task;
+            _ = executionTask.ContinueWith(
+                t =>
+                {
+                    if (t.IsFaulted && t.Exception != null)
+                    {
+                        logger.LogWarning(t.Exception, "Background workflow command failed. commandId={CommandId}", started.CommandId);
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            return Results.Accepted(
+                $"/api/actors/{started.ActorId}",
+                new
+                {
+                    commandId = started.CommandId,
+                    actorId = started.ActorId,
+                });
+        }
+
+        var result = await executionTask;
+        if (result.Error != WorkflowChatRunStartError.None)
+        {
+            return Results.Json(
+                new
+                {
+                    code = ChatRunStartErrorMapper.ToCommandError(result.Error).Code,
+                    message = ChatRunStartErrorMapper.ToCommandError(result.Error).Message,
+                },
+                statusCode: ChatRunStartErrorMapper.ToHttpStatusCode(result.Error));
+        }
+
+        if (result.Started != null)
+        {
+            return Results.Accepted(
+                $"/api/actors/{result.Started.ActorId}",
+                new
+                {
+                    commandId = result.Started.CommandId,
+                    actorId = result.Started.ActorId,
+                });
+        }
+
+        return Results.StatusCode(StatusCodes.Status500InternalServerError);
+    }
+
     internal static async Task HandleChatWebSocket(
         HttpContext http,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        IWorkflowExecutionQueryApplicationService queryService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
@@ -85,7 +165,7 @@ public static class ChatEndpoints
                 return;
             }
 
-            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, ct);
+            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, queryService, ct);
         }
         catch (OperationCanceledException)
         {
