@@ -123,7 +123,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `IWorkflowExecutionRunOrchestrator` 负责 start/wait/complete/rollback
   - `WorkflowChatRunApplicationService` 统一执行入口与异常回滚
   - `WorkflowExecutionQueryApplicationService` 统一查询与 DTO 映射
-- **宿主职责** 在 `Aevatar.Host.Api`：
+- **宿主职责** 在 `Aevatar.Workflow.Host.Api`：
   - 仅做协议适配（HTTP/SSE/WebSocket）
   - 仅依赖 `Aevatar.Workflow.Application.Abstractions`
   - 暴露 `/api/agents`、`/api/workflows`、`/api/runs*`（运行查询可开关）
