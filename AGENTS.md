@@ -19,8 +19,8 @@
 - `dotnet restore aevatar.slnx --nologo`：还原依赖。
 - `dotnet build aevatar.slnx --nologo`：编译全部项目。
 - `dotnet test aevatar.slnx --nologo`：运行全量测试。
-- `dotnet test test/Aevatar.Host.Api.Tests/Aevatar.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
-- `dotnet run --project src/Aevatar.Host.Api`：启动 API（`/api/chat`、`/api/ws/chat`）。
+- `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
+- `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
 
 ## 编码风格与命名规范
 - 遵循 `.editorconfig`：UTF-8、LF、4 空格缩进、去除行尾空白。

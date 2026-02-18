@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Host.Api.Endpoints;
+using Aevatar.Workflow.Host.Api.Endpoints;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Host.Api.Tests;
+namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class ChatEndpointsInternalTests
 {

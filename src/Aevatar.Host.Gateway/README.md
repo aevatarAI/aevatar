@@ -16,7 +16,7 @@
 
 ## 与 Host.Api 的关系
 
-- `Aevatar.Host.Api` 是统一的 Chat 协议入口（SSE/WS/CQRS 查询）。
+- `Aevatar.Workflow.Host.Api` 是工作流 Chat 协议入口（SSE/WS/CQRS 查询）。
 - `Aevatar.Host.Gateway` 不再暴露并行的 Chat 协议端点，避免协议语义漂移。
 
 ## 依赖

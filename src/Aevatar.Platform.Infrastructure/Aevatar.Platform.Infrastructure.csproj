@@ -10,11 +10,8 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\\Aevatar.CQRS.Core\\Aevatar.CQRS.Core.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Runtime.Abstractions\Aevatar.CQRS.Runtime.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Runtime.FileSystem\Aevatar.CQRS.Runtime.FileSystem.csproj" />
-    <ProjectReference Include="..\Aevatar.CQRS.Runtime.Implementations.MassTransit\Aevatar.CQRS.Runtime.Implementations.MassTransit.csproj" />
-    <ProjectReference Include="..\Aevatar.CQRS.Runtime.Implementations.Wolverine\Aevatar.CQRS.Runtime.Implementations.Wolverine.csproj" />
     <ProjectReference Include="..\Aevatar.Platform.Abstractions\Aevatar.Platform.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Platform.Application.Abstractions\Aevatar.Platform.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Platform.Application\Aevatar.Platform.Application.csproj" />

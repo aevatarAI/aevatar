@@ -43,4 +43,4 @@ AGUI 分支实现位于 `Aevatar.Workflow.Presentation.AGUIAdapter`。
 
 ## 与 API 的关系
 
-`Aevatar.Host.Api` 通过 `Aevatar.Workflow.Application` 调用本项目，不直接编排投影内核细节。API 仅负责协议适配（SSE/WebSocket/HTTP Query）。
+`Aevatar.Workflow.Host.Api` 通过 `Aevatar.Workflow.Application` 调用本项目，不直接编排投影内核细节。API 仅负责协议适配（SSE/WebSocket/HTTP Query）。

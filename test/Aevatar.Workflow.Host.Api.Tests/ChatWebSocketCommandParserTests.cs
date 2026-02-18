@@ -1,7 +1,7 @@
-using Aevatar.Host.Api.Endpoints;
+using Aevatar.Workflow.Host.Api.Endpoints;
 using FluentAssertions;
 
-namespace Aevatar.Host.Api.Tests;
+namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class ChatWebSocketCommandParserTests
 {

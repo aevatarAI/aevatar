@@ -24,5 +24,5 @@ CQRS 端点：
 dotnet run --project src/Aevatar.Platform.Host.Api
 ```
 
-默认使用 `Wolverine` 本地实现（文件系统状态目录：`artifacts/cqrs`），
-可通过配置 `Cqrs:Runtime=MassTransit` 切换到 MassTransit 分布式高性能实现（当前默认使用 in-memory transport）。
+CQRS Runtime 通过 `Aevatar.CQRS.Runtime.Hosting` 统一装配，
+配置 `Cqrs:Runtime=Wolverine|MassTransit` 即可在两种并行实现间切换。

@@ -2,11 +2,11 @@ using Aevatar.CQRS.Runtime.Implementations.Wolverine.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 
-namespace Aevatar.Platform.Infrastructure.DependencyInjection;
+namespace Aevatar.CQRS.Runtime.Hosting.Hosting;
 
 public static class HostBuilderExtensions
 {
-    public static IHostBuilder UsePlatformCqrsRuntime(
+    public static IHostBuilder UseAevatarCqrsRuntime(
         this IHostBuilder hostBuilder,
         IConfiguration configuration)
     {

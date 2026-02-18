@@ -9,7 +9,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Host.Api.Tests;
+namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class EventEnvelopeToAGUIEventMapperTests
 {

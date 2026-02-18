@@ -1,8 +1,4 @@
-using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.CQRS.Runtime.Abstractions.Dispatch;
-using Aevatar.CQRS.Runtime.FileSystem.DependencyInjection;
-using Aevatar.CQRS.Runtime.Implementations.MassTransit.DependencyInjection;
-using Aevatar.CQRS.Runtime.Implementations.Wolverine.DependencyInjection;
 using Aevatar.Platform.Abstractions.Catalog;
 using Aevatar.Platform.Application.Abstractions.Commands;
 using Aevatar.Platform.Application.Abstractions.Ports;
@@ -21,14 +17,6 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        services.AddCqrsCore();
-        services.AddCqrsRuntimeFileSystemCore(configuration);
-        var runtime = configuration["Cqrs:Runtime"] ?? "Wolverine";
-        if (string.Equals(runtime, "MassTransit", StringComparison.OrdinalIgnoreCase))
-            services.AddCqrsRuntimeMassTransit();
-        else
-            services.AddCqrsRuntimeWolverine();
-
         services.AddHttpClient();
         services.AddOptions<SubsystemEndpointOptions>()
             .Bind(configuration.GetSection("SubsystemEndpoints"));

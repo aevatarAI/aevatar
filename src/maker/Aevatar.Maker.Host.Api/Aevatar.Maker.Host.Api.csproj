@@ -8,7 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
-    <ProjectReference Include="..\..\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
+    <ProjectReference Include="..\..\Aevatar.CQRS.Runtime.Hosting\Aevatar.CQRS.Runtime.Hosting.csproj" />
     <ProjectReference Include="..\..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\Aevatar.Maker.Application.Abstractions\Aevatar.Maker.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Maker.Infrastructure\Aevatar.Maker.Infrastructure.csproj" />

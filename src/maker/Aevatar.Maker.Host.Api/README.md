@@ -8,6 +8,10 @@
 - 调用 `IMakerRunApplicationService` 执行用例。
 - 不承载 Maker 领域规则与编排逻辑。
 
+运行时装配：
+
+- 通过 `UseAevatarCqrsRuntime(...)` 与 `AddAevatarCqrsRuntime(...)` 统一接入 CQRS Runtime。
+
 运行：
 
 ```bash

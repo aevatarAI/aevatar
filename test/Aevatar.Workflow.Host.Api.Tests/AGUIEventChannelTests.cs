@@ -5,7 +5,7 @@ using Aevatar.Presentation.AGUI;
 using FluentAssertions;
 using System.Threading.Channels;
 
-namespace Aevatar.Host.Api.Tests;
+namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class AGUIEventChannelTests
 {

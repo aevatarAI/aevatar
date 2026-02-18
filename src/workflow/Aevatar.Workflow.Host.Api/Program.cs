@@ -11,7 +11,8 @@
 
 using Aevatar.Workflow.Host.Api.Endpoints;
 using Aevatar.Workflow.Host.Api.Startup;
-using Aevatar.CQRS.Core.DependencyInjection;
+using Aevatar.CQRS.Runtime.Hosting.DependencyInjection;
+using Aevatar.CQRS.Runtime.Hosting.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Bootstrap;
 using Aevatar.Configuration;
@@ -26,7 +27,8 @@ builder.Services.AddAevatarBootstrap(builder.Configuration, options =>
     options.EnableMCPTools = true;
     options.EnableSkills = true;
 });
-builder.Services.AddCqrsCore();
+builder.Host.UseAevatarCqrsRuntime(builder.Configuration);
+builder.Services.AddAevatarCqrsRuntime(builder.Configuration);
 builder.Services.AddWorkflowSubsystem(builder.Configuration);
 builder.Services.AddHostedService<ConnectorBootstrapHostedService>();
 

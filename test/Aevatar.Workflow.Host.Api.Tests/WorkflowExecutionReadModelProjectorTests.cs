@@ -12,7 +12,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using AIEvents = Aevatar.AI.Abstractions;
 
-namespace Aevatar.Host.Api.Tests;
+namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowExecutionReadModelProjectorTests
 {

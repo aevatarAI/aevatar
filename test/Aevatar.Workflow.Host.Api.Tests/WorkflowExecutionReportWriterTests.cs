@@ -3,7 +3,7 @@ using Aevatar.Workflow.Infrastructure.Reporting;
 using FluentAssertions;
 using System.Text.Json;
 
-namespace Aevatar.Host.Api.Tests;
+namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowExecutionReportWriterTests
 {

@@ -33,7 +33,8 @@
 
 `Program.cs` 默认注册：
 
-- `AddCqrsCore()`
+- `UseAevatarCqrsRuntime(...)`
+- `AddAevatarCqrsRuntime(...)`
 - `AddWorkflowSubsystem(...)`
 
 Host 只做“协议 + 组合”，核心用例在 `workflow/*` 子系统。

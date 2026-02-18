@@ -5,7 +5,7 @@ using Aevatar.Workflow.Infrastructure.Workflows;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Aevatar.Host.Api.Tests;
+namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowDefinitionRegistryTests
 {
