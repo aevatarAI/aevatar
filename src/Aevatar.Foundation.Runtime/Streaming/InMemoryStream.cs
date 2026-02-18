@@ -111,6 +111,16 @@ public sealed class InMemoryStream : IStream
             await foreach (var envelope in _channel.Reader.ReadAllAsync(_cts.Token))
             {
                 var subs = _subscribers;
+                if (_options.DispatchSubscribersConcurrently)
+                {
+                    foreach (var sub in subs)
+                    {
+                        _ = Task.Run(() => InvokeSubscriberAsync(sub, envelope), CancellationToken.None);
+                    }
+
+                    continue;
+                }
+
                 foreach (var sub in subs)
                 {
                     try
@@ -132,6 +142,27 @@ public sealed class InMemoryStream : IStream
         }
         catch (OperationCanceledException) { }
         catch (ChannelClosedException) { }
+    }
+
+    private async Task InvokeSubscriberAsync(Func<EventEnvelope, Task> sub, EventEnvelope envelope)
+    {
+        try
+        {
+            await sub(envelope);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "In-memory stream subscriber failed. stream={StreamId}",
+                StreamId);
+
+            if (_options.ThrowOnSubscriberError)
+            {
+                _channel.Writer.TryComplete(ex);
+                _cts.Cancel();
+            }
+        }
     }
 
     /// <summary>Shuts down stream, stops reader loop, and cancels subscriptions.</summary>

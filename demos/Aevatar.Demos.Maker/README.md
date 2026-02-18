@@ -59,6 +59,12 @@ demos/Aevatar.Demos.Maker/
 │   ├── coordinator.yaml          # 协调者角色配置
 │   └── worker.yaml               # 分析 Worker 角色配置
 └── README.md                     # 本文件
+
+src/maker/
+├── Aevatar.Maker.Core            # maker_vote / maker_recursive 模块与模块工厂
+├── Aevatar.Maker.Projection      # 运行报告投影与报告写出
+├── Aevatar.Maker.Application*    # 应用层抽象与实现
+└── Aevatar.Maker.Infrastructure  # 子系统组合入口
 ```
 
 ## 运行方式
@@ -104,7 +110,7 @@ dotnet run
 - 容错：支持 `on_missing=skip` / `on_error=continue`
 - 观测：统一输出到 `StepCompletedEvent.Metadata`
 
-### MakerVoteModule (`maker_vote`, demo-scoped)
+### MakerVoteModule (`maker_vote`, Maker.Core)
 
 实现论文 Algorithm 2 的投票逻辑：
 
@@ -134,7 +140,7 @@ dotnet run
 
 > 当前递归流程已改为 `maker_recursive`，`foreach` 仍是通用框架能力，不再是 MAKER 主流程必需路径。
 
-### MakerRecursiveModule (`maker_recursive`, demo-scoped)
+### MakerRecursiveModule (`maker_recursive`, Maker.Core)
 
 实现递归 MAKER 主流程：
 

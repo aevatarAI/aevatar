@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -32,7 +33,7 @@ public static class ChatEndpoints
     internal static async Task HandleChat(
         HttpContext http,
         ChatInput input,
-        IWorkflowChatRunApplicationService chatRunService,
+        ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
         CancellationToken ct = default)
     {
         var writer = new ChatSseResponseWriter(http.Response);
@@ -55,7 +56,7 @@ public static class ChatEndpoints
 
     internal static async Task HandleChatWebSocket(
         HttpContext http,
-        IWorkflowChatRunApplicationService chatRunService,
+        ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {

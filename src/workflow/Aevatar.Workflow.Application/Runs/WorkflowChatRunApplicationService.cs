@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -14,7 +15,8 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
     private readonly IActorRuntime _runtime;
     private readonly IWorkflowRunActorResolver _actorResolver;
     private readonly IWorkflowExecutionRunOrchestrator _runOrchestrator;
-    private readonly IWorkflowChatRequestEnvelopeFactory _requestEnvelopeFactory;
+    private readonly ICommandEnvelopeFactory<WorkflowChatRunRequest> _requestEnvelopeFactory;
+    private readonly ICommandCorrelationPolicy _correlationPolicy;
     private readonly IWorkflowRunRequestExecutor _requestExecutor;
     private readonly IWorkflowRunOutputStreamer _outputStreamer;
     private readonly IWorkflowExecutionReportArtifactSink _reportArtifactSink;
@@ -24,7 +26,8 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         IActorRuntime runtime,
         IWorkflowRunActorResolver actorResolver,
         IWorkflowExecutionRunOrchestrator runOrchestrator,
-        IWorkflowChatRequestEnvelopeFactory requestEnvelopeFactory,
+        ICommandEnvelopeFactory<WorkflowChatRunRequest> requestEnvelopeFactory,
+        ICommandCorrelationPolicy correlationPolicy,
         IWorkflowRunRequestExecutor requestExecutor,
         IWorkflowRunOutputStreamer outputStreamer,
         IWorkflowExecutionReportArtifactSink reportArtifactSink,
@@ -34,6 +37,7 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         _actorResolver = actorResolver;
         _runOrchestrator = runOrchestrator;
         _requestEnvelopeFactory = requestEnvelopeFactory;
+        _correlationPolicy = correlationPolicy;
         _requestExecutor = requestExecutor;
         _outputStreamer = outputStreamer;
         _reportArtifactSink = reportArtifactSink;
@@ -58,7 +62,8 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
 
         var runContext = runContextCreateResult.Context;
         var started = runContext.ToStarted();
-        var requestEnvelope = _requestEnvelopeFactory.Create(request.Prompt, runContext.RunId);
+        var correlation = _correlationPolicy.CreateForExecution(runContext.ActorId, runContext.RunId);
+        var requestEnvelope = _requestEnvelopeFactory.CreateEnvelope(request, correlation);
         var processingTask = ProcessEnvelopeAsync(runContext, requestEnvelope, ct);
 
         var finalized = false;

@@ -7,7 +7,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Core;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Demos.Maker;
+using Aevatar.Maker.Core;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;

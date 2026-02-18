@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -27,6 +28,7 @@ public class WorkflowChatRunApplicationServiceTests
             actorResolver,
             orchestrator,
             new FakeEnvelopeFactory(),
+            new FakeCommandCorrelationPolicy(),
             new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance),
             new WorkflowRunOutputStreamer(),
             new NoopReportSink(),
@@ -183,9 +185,9 @@ internal sealed class SpyRunOrchestrator : IWorkflowExecutionRunOrchestrator
         Task.CompletedTask;
 }
 
-internal sealed class FakeEnvelopeFactory : IWorkflowChatRequestEnvelopeFactory
+internal sealed class FakeEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>
 {
-    public EventEnvelope Create(string prompt, string runId)
+    public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandCorrelation correlation)
     {
         return new EventEnvelope
         {
@@ -195,6 +197,21 @@ internal sealed class FakeEnvelopeFactory : IWorkflowChatRequestEnvelopeFactory
             PublisherId = "test",
             Direction = EventDirection.Self,
         };
+    }
+}
+
+internal sealed class FakeCommandCorrelationPolicy : ICommandCorrelationPolicy
+{
+    public CommandCorrelation CreateNew(string actorId, string? sessionId = null) =>
+        new(Guid.NewGuid().ToString("N"), sessionId ?? $"session-{Guid.NewGuid():N}", actorId, Guid.NewGuid().ToString("N"));
+
+    public CommandCorrelation CreateForExecution(string actorId, string executionId, string? sessionId = null) =>
+        new(executionId, sessionId ?? $"session-{executionId}", actorId, Guid.NewGuid().ToString("N"));
+
+    public bool TryResolve(EventEnvelope envelope, out CommandCorrelation correlation)
+    {
+        correlation = default!;
+        return false;
     }
 }
 

@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -23,31 +24,31 @@ public static class ChatQueryEndpoints
     }
 
     internal static async Task<IResult> ListAgents(
-        IWorkflowExecutionQueryApplicationService queryService,
+        IAgentQueryService<WorkflowAgentSummary> queryService,
         CancellationToken ct = default)
     {
         var agents = await queryService.ListAgentsAsync(ct);
         return Results.Ok(agents);
     }
 
-    internal static IResult ListWorkflows(IWorkflowExecutionQueryApplicationService queryService) =>
-        Results.Ok(queryService.ListWorkflows());
+    internal static IResult ListWorkflows(IExecutionTemplateQueryService queryService) =>
+        Results.Ok(queryService.ListTemplates());
 
     internal static async Task<IResult> ListRuns(
-        IWorkflowExecutionQueryApplicationService queryService,
+        IExecutionQueryService<WorkflowRunSummary, WorkflowRunReport> queryService,
         int take = 50,
         CancellationToken ct = default)
     {
-        var runs = await queryService.ListRunsAsync(take, ct);
+        var runs = await queryService.ListAsync(take, ct);
         return Results.Ok(runs);
     }
 
     internal static async Task<IResult> GetRun(
         string runId,
-        IWorkflowExecutionQueryApplicationService queryService,
+        IExecutionQueryService<WorkflowRunSummary, WorkflowRunReport> queryService,
         CancellationToken ct = default)
     {
-        var report = await queryService.GetRunAsync(runId, ct);
+        var report = await queryService.GetAsync(runId, ct);
         return report == null ? Results.NotFound() : Results.Ok(report);
     }
 }

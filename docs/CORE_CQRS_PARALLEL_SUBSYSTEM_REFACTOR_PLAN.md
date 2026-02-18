@@ -60,44 +60,46 @@ flowchart TB
 
 ## 4.2 抽象接口（第一批必须落地）
 
-1. `IRunCommandService<TCommand, TStarted, TResult>`
+1. `ICommandExecutionService<TCommand, TStarted, TFrame, TFinalize, TError>`
 2. `ICommandEnvelopeFactory<TCommand>`
-3. `IRunCorrelationPolicy`
-4. `IRunOutputStream<TFrame>`
-5. `IRunQueryService<TRunSummary, TRunDetail>`
+3. `ICommandCorrelationPolicy`
+4. `IEventOutputStream<TEvent, TFrame>`
+5. `IExecutionQueryService<TRunSummary, TRunDetail>`
 6. `ISubsystemProfile`（统一子系统注册入口）
 
 建议接口签名（草案）：
 
 ```csharp
-public interface IRunCommandService<TCommand, TStarted, TResult>
+public interface ICommandExecutionService<TCommand, TStarted, TFrame, TFinalize, TError>
 {
-    Task<(TStarted? Started, TResult Result)> ExecuteAsync(
+    Task<CommandExecutionResult<TStarted, TFinalize, TError>> ExecuteAsync(
         TCommand command,
-        Func<object, CancellationToken, ValueTask> emitAsync,
+        Func<TFrame, CancellationToken, ValueTask> emitAsync,
+        Func<TStarted, CancellationToken, ValueTask>? onStartedAsync = null,
         CancellationToken ct = default);
 }
 
 public interface ICommandEnvelopeFactory<TCommand>
 {
-    EventEnvelope CreateEnvelope(TCommand command, RunCorrelation correlation);
+    EventEnvelope CreateEnvelope(TCommand command, CommandCorrelation correlation);
 }
 
-public interface IRunCorrelationPolicy
+public interface ICommandCorrelationPolicy
 {
-    RunCorrelation CreateNew(string actorId, string? sessionId = null);
-    bool TryResolve(EventEnvelope envelope, out RunCorrelation correlation);
+    CommandCorrelation CreateNew(string actorId, string? sessionId = null);
+    bool TryResolve(EventEnvelope envelope, out CommandCorrelation correlation);
 }
 
-public interface IRunOutputStream<TFrame>
+public interface IEventOutputStream<TEvent, TFrame>
 {
-    Task PumpAsync(IAsyncEnumerable<object> events, Func<TFrame, CancellationToken, ValueTask> emitAsync, CancellationToken ct = default);
+    Task PumpAsync(IAsyncEnumerable<TEvent> events, string executionId, Func<TFrame, CancellationToken, ValueTask> emitAsync, CancellationToken ct = default);
 }
 
-public interface IRunQueryService<TRunSummary, TRunDetail>
+public interface IExecutionQueryService<TExecutionSummary, TExecutionDetail>
 {
-    Task<IReadOnlyList<TRunSummary>> ListAsync(int take = 50, CancellationToken ct = default);
-    Task<TRunDetail?> GetAsync(string runId, CancellationToken ct = default);
+    bool ExecutionQueryEnabled { get; }
+    Task<IReadOnlyList<TExecutionSummary>> ListAsync(int take = 50, CancellationToken ct = default);
+    Task<TExecutionDetail?> GetAsync(string executionId, CancellationToken ct = default);
 }
 
 public interface ISubsystemProfile
@@ -111,13 +113,13 @@ public interface ISubsystemProfile
 
 1. 抽象层不包含 `Workflow` / `Maker` 业务名词。
 2. 抽象层不依赖 Host、Presentation、具体子系统 Core。
-3. RunId/SessionId/CorrelationId 规则只允许由 `IRunCorrelationPolicy` 统一管理。
+3. RunId/SessionId/CorrelationId 规则只允许由 `ICommandCorrelationPolicy` 统一管理。
 
 ## 4.4 默认实现（`Aevatar.CQRS.Core`）
 
-1. `DefaultRunCorrelationPolicy`
-2. `DefaultRunCommandExecutor`（调用 `IActorRuntime` + `ICommandEnvelopeFactory`）
-3. `DefaultRunOutputPump`（统一输出泵，替代子系统内重复流式实现）
+1. `DefaultCommandCorrelationPolicy`
+2. `DefaultCommandExecutor`（调用 `IActorRuntime` + `ICommandEnvelopeFactory`）
+3. `DefaultEventOutputStream`（统一输出泵，替代子系统内重复流式实现）
 4. `DefaultSubsystemProfileRegistry`
 
 ## 5. 项目组织重构（目标目录）
@@ -150,10 +152,10 @@ demos/
 
 | 现有实现 | 目标归属 | 处理策略 |
 |---|---|---|
-| `IWorkflowChatRunApplicationService` | `IRunCommandService<...>` 适配层 | 先 adapter，后收敛命名 |
-| `WorkflowRunOutputStreamer` | `IRunOutputStream<TFrame>` 默认实现 | 抽出公共实现 |
+| `IWorkflowChatRunApplicationService` | `ICommandExecutionService<...>` 适配层 | 先 adapter，后收敛命名 |
+| `WorkflowRunOutputStreamer` | `IEventOutputStream<TFrame>` 默认实现 | 抽出公共实现 |
 | `WorkflowChatRequestEnvelopeFactory` | `ICommandEnvelopeFactory<TCommand>` | 迁移为子系统实现 |
-| `ChatSessionKeys` + `metadata["run_id"]` | `IRunCorrelationPolicy` | 统一策略入口 |
+| `ChatSessionKeys` + `metadata["run_id"]` | `ICommandCorrelationPolicy` | 统一策略入口 |
 | `MakerRunRecorder` | `Aevatar.Maker.Projection` | 改为 reducer/projector/readmodel |
 | `MakerModuleFactory/Modules` | `Aevatar.Maker.Core` | 从 demo 抽取到正式子系统 |
 
@@ -172,20 +174,20 @@ demos/
 1. 新建 `Aevatar.CQRS.Core.Abstractions` 与 `Aevatar.CQRS.Core`。
 2. 实现 4.2 列出的接口与默认实现。
 3. 在不改业务行为前提下，为 Workflow 提供适配器：
-   - `WorkflowRunCommandServiceAdapter`
+   - `WorkflowCommandExecutionServiceAdapter`
    - `WorkflowCommandEnvelopeFactoryAdapter`
-   - `WorkflowRunQueryServiceAdapter`
+   - `WorkflowExecutionQueryServiceAdapter`
 
 建议落地文件：
 
-1. `src/Aevatar.CQRS.Core.Abstractions/Runs/IRunCommandService.cs`
-2. `src/Aevatar.CQRS.Core.Abstractions/Runs/IRunCorrelationPolicy.cs`
-3. `src/Aevatar.CQRS.Core.Abstractions/Runs/RunCorrelation.cs`
+1. `src/Aevatar.CQRS.Core.Abstractions/Commands/ICommandExecutionService.cs`
+2. `src/Aevatar.CQRS.Core.Abstractions/Commands/ICommandCorrelationPolicy.cs`
+3. `src/Aevatar.CQRS.Core.Abstractions/Commands/CommandCorrelation.cs`
 4. `src/Aevatar.CQRS.Core.Abstractions/Profiles/ISubsystemProfile.cs`
-5. `src/Aevatar.CQRS.Core/Runs/DefaultRunCorrelationPolicy.cs`
-6. `src/Aevatar.CQRS.Core/Runs/DefaultRunCommandExecutor.cs`
-7. `src/workflow/Aevatar.Workflow.Application/Adapters/WorkflowRunCommandServiceAdapter.cs`
-8. `src/workflow/Aevatar.Workflow.Application/Adapters/WorkflowRunQueryServiceAdapter.cs`
+5. `src/Aevatar.CQRS.Core/Commands/DefaultCommandCorrelationPolicy.cs`
+6. `src/Aevatar.CQRS.Core/Commands/DefaultCommandExecutor.cs`
+7. `src/workflow/Aevatar.Workflow.Application/Adapters/WorkflowCommandExecutionServiceAdapter.cs`
+8. `src/workflow/Aevatar.Workflow.Application/Adapters/WorkflowExecutionQueryServiceAdapter.cs`
 
 验收：
 
@@ -260,7 +262,7 @@ demos/
 2. `Application` 只依赖本域 Abstractions + CQRS Abstractions + Foundation Abstractions。
 3. `Core` 不得依赖 Host/Infrastructure/Presentation。
 4. `Projection` 仅通过 `IProjection*` 扩展，不复制内核。
-5. 所有 run 关联逻辑必须统一走 `IRunCorrelationPolicy`。
+5. 所有 run 关联逻辑必须统一走 `ICommandCorrelationPolicy`。
 
 ## 9. 验收清单（每阶段必跑）
 
@@ -296,7 +298,7 @@ dotnet test aevatar.slnx --nologo
 
 1. `A-01` 新建 `Aevatar.CQRS.Core.Abstractions` 工程与基础 contracts。
 2. `A-02` 新建 `Aevatar.CQRS.Core` 默认实现。
-3. `A-03` 增加 `RunCorrelation` 统一模型，替代散落 run/session 规则。
+3. `A-03` 增加 `CommandCorrelation` 统一模型，替代散落 run/session 规则。
 4. `A-04` 增加 `ISubsystemProfile` 与 profile registry。
 5. `A-05` 增加抽象层单元测试（契约行为测试）。
 
@@ -318,3 +320,19 @@ dotnet test aevatar.slnx --nologo
 1. `G-01` 增加依赖方向架构测试。
 2. `G-02` 增加字符串硬编码门禁（run_id/session 相关）。
 3. `G-03` 文档同步与示例更新（README/docs/demos）。
+
+## 13. 当前实施状态（2026-02-18）
+
+已完成：
+
+1. 新增 `Aevatar.CQRS.Core.Abstractions` 与 `Aevatar.CQRS.Core`，落地 Run 抽象、关联策略、Profile 注册表与默认输出泵。
+2. Workflow Application 接入 Core 抽象：
+   - `WorkflowCommandExecutionServiceAdapter`
+   - `WorkflowRunQueryServiceAdapter`
+   - `WorkflowChatRequestEnvelopeFactory` 改为 `ICommandEnvelopeFactory<WorkflowChatRunRequest>`。
+3. Host API 改为依赖中立抽象接口并通过 `AddWorkflowSubsystemProfile(...)` 组合。
+4. Maker 从 demo 抽取到 `src/maker/*` 五层结构，demo 仅保留宿主入口与资源文件。
+5. 修复关键工程问题：
+   - SSE 帧换行分隔符修复为真实 `\n\n`。
+   - `aevatar.foundation.slnf` 错误项目路径修复。
+   - `InMemoryStream` 增加并发订阅分发模式，规避回调重入写入导致的阻塞风险。

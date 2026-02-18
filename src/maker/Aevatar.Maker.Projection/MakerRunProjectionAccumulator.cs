@@ -6,7 +6,9 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core;
 
-internal sealed class MakerRunRecorder
+namespace Aevatar.Maker.Projection;
+
+public sealed class MakerRunProjectionAccumulator
 {
     private readonly object _lock = new();
     private readonly string _rootActorId;
@@ -18,7 +20,7 @@ internal sealed class MakerRunRecorder
     private string _finalOutput = string.Empty;
     private string _finalError = string.Empty;
 
-    public MakerRunRecorder(string rootActorId)
+    public MakerRunProjectionAccumulator(string rootActorId)
     {
         _rootActorId = rootActorId;
     }
@@ -347,7 +349,7 @@ internal sealed class MakerRunRecorder
         int.TryParse(value, out var n) ? n : 0;
 }
 
-internal static class MakerRunReportWriter
+public static class MakerRunReportWriter
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -521,7 +523,7 @@ internal static class MakerRunReportWriter
     }
 }
 
-internal sealed class MakerRunReport
+public sealed class MakerRunReport
 {
     public string ReportVersion { get; set; } = "1.0";
     public string WorkflowName { get; set; } = "";
@@ -545,7 +547,7 @@ internal sealed class MakerRunReport
     public MakerRunSummary Summary { get; set; } = new();
 }
 
-internal sealed class MakerRunSummary
+public sealed class MakerRunSummary
 {
     public int TotalSteps { get; set; }
     public int RequestedSteps { get; set; }
@@ -558,7 +560,7 @@ internal sealed class MakerRunSummary
     public Dictionary<string, int> ConnectorTypeCounts { get; set; } = [];
 }
 
-internal sealed class MakerStepTrace
+public sealed class MakerStepTrace
 {
     public string StepId { get; set; } = "";
     public string StepType { get; set; } = "";
@@ -579,7 +581,7 @@ internal sealed class MakerStepTrace
             : null;
 }
 
-internal sealed class MakerRoleReply
+public sealed class MakerRoleReply
 {
     public DateTimeOffset Timestamp { get; set; }
     public string RoleId { get; set; } = "";
@@ -588,7 +590,7 @@ internal sealed class MakerRoleReply
     public int ContentLength { get; set; }
 }
 
-internal sealed class MakerTimelineEvent
+public sealed class MakerTimelineEvent
 {
     public DateTimeOffset Timestamp { get; set; }
     public string Stage { get; set; } = "";
@@ -600,4 +602,4 @@ internal sealed class MakerTimelineEvent
     public Dictionary<string, string> Data { get; set; } = [];
 }
 
-internal sealed record MakerTopologyEdge(string Parent, string Child);
+public sealed record MakerTopologyEdge(string Parent, string Child);

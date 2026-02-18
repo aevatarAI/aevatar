@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Queries;
 using Aevatar.Host.Api.Endpoints;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -16,11 +18,11 @@ public class ChatEndpointsInternalTests
     public void MapChatEndpoints_ShouldRegisterCoreRoutes()
     {
         var builder = WebApplication.CreateBuilder();
-        builder.Services.AddSingleton<IWorkflowChatRunApplicationService>(new FakeChatRunApplicationService());
-        builder.Services.AddSingleton<IWorkflowExecutionQueryApplicationService>(new FakeQueryService
-        {
-            RunQueryEnabledValue = true,
-        });
+        builder.Services.AddSingleton<ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>(new FakeChatRunApplicationService());
+        var queryService = new FakeQueryService { RunQueryEnabledValue = true };
+        builder.Services.AddSingleton<IAgentQueryService<WorkflowAgentSummary>>(queryService);
+        builder.Services.AddSingleton<IExecutionTemplateQueryService>(queryService);
+        builder.Services.AddSingleton<IExecutionQueryService<WorkflowRunSummary, WorkflowRunReport>>(queryService);
 
         var app = builder.Build();
         var endpoints = (IEndpointRouteBuilder)app;
@@ -47,10 +49,11 @@ public class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         var service = new FakeChatRunApplicationService
         {
-            ExecuteHandler = (_, _, _, _) => Task.FromResult(new WorkflowChatRunExecutionResult(
-                WorkflowChatRunStartError.WorkflowNotFound,
-                null,
-                null)),
+            ExecuteHandler = (_, _, _, _) => Task.FromResult(ToCoreResult(
+                new WorkflowChatRunExecutionResult(
+                    WorkflowChatRunStartError.WorkflowNotFound,
+                    null,
+                    null))),
         };
 
         await ChatEndpoints.HandleChat(
@@ -88,18 +91,19 @@ public class ChatEndpointsInternalTests
                     ThreadId = "actor-1",
                 }, ct);
 
-                return new WorkflowChatRunExecutionResult(
-                    WorkflowChatRunStartError.None,
-                    started,
-                    new WorkflowChatRunFinalizeResult(
-                        WorkflowProjectionCompletionStatus.Completed,
-                        true,
-                        new WorkflowRunReport
-                        {
-                            RunId = "run-1",
-                            WorkflowName = "direct",
-                            RootActorId = "actor-1",
-                        }));
+                return ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.None,
+                        started,
+                        new WorkflowChatRunFinalizeResult(
+                            WorkflowProjectionCompletionStatus.Completed,
+                            true,
+                            new WorkflowRunReport
+                            {
+                                RunId = "run-1",
+                                WorkflowName = "direct",
+                                RootActorId = "actor-1",
+                            })));
             },
         };
 
@@ -197,23 +201,29 @@ public class ChatEndpointsInternalTests
         return (http.Response.StatusCode, body);
     }
 
-    private sealed class FakeChatRunApplicationService : IWorkflowChatRunApplicationService
+    private sealed class FakeChatRunApplicationService : ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>
     {
-        public Func<WorkflowChatRunRequest, Func<WorkflowOutputFrame, CancellationToken, ValueTask>, Func<WorkflowChatRunStarted, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunExecutionResult>>
-            ExecuteHandler { get; set; } = (_, _, _, _) => Task.FromResult(
-                new WorkflowChatRunExecutionResult(WorkflowChatRunStartError.None, null, null));
+        public Func<WorkflowChatRunRequest, Func<WorkflowOutputFrame, CancellationToken, ValueTask>, Func<WorkflowChatRunStarted, CancellationToken, ValueTask>?, CancellationToken, Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>>
+            ExecuteHandler { get; set; } = (_, _, _, _) => Task.FromResult(ToCoreResult(
+                new WorkflowChatRunExecutionResult(
+                    WorkflowChatRunStartError.None,
+                    null,
+                    null)));
 
-        public Task<WorkflowChatRunExecutionResult> ExecuteAsync(
-            WorkflowChatRunRequest request,
+        public Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>> ExecuteAsync(
+            WorkflowChatRunRequest command,
             Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatRunStarted, CancellationToken, ValueTask>? onStartedAsync = null,
             CancellationToken ct = default)
         {
-            return ExecuteHandler(request, emitAsync, onStartedAsync, ct);
+            return ExecuteHandler(command, emitAsync, onStartedAsync, ct);
         }
     }
 
-    private sealed class FakeQueryService : IWorkflowExecutionQueryApplicationService
+    private sealed class FakeQueryService :
+        IAgentQueryService<WorkflowAgentSummary>,
+        IExecutionTemplateQueryService,
+        IExecutionQueryService<WorkflowRunSummary, WorkflowRunReport>
     {
         public bool RunQueryEnabledValue { get; set; }
         public IReadOnlyList<WorkflowAgentSummary> Agents { get; set; } = [];
@@ -221,17 +231,21 @@ public class ChatEndpointsInternalTests
         public IReadOnlyList<WorkflowRunSummary> Runs { get; set; } = [];
         public WorkflowRunReport? Report { get; set; }
 
-        public bool RunQueryEnabled => RunQueryEnabledValue;
+        public bool ExecutionQueryEnabled => RunQueryEnabledValue;
 
         public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
             Task.FromResult(Agents);
 
-        public IReadOnlyList<string> ListWorkflows() => Workflows;
+        public IReadOnlyList<string> ListTemplates() => Workflows;
 
-        public Task<IReadOnlyList<WorkflowRunSummary>> ListRunsAsync(int take = 50, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<WorkflowRunSummary>> ListAsync(int take = 50, CancellationToken ct = default) =>
             Task.FromResult(Runs);
 
-        public Task<WorkflowRunReport?> GetRunAsync(string runId, CancellationToken ct = default) =>
-            Task.FromResult(Report is { RunId: var id } && string.Equals(id, runId, StringComparison.Ordinal) ? Report : null);
+        public Task<WorkflowRunReport?> GetAsync(string executionId, CancellationToken ct = default) =>
+            Task.FromResult(Report is { RunId: var id } && string.Equals(id, executionId, StringComparison.Ordinal) ? Report : null);
     }
+
+    private static CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> ToCoreResult(
+        WorkflowChatRunExecutionResult source) =>
+        new(source.Error, source.Started, source.FinalizeResult);
 }

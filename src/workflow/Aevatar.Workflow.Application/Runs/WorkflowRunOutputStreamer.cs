@@ -1,8 +1,12 @@
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
 
-public sealed class WorkflowRunOutputStreamer : IWorkflowRunOutputStreamer
+public sealed class WorkflowRunOutputStreamer
+    : IWorkflowRunOutputStreamer,
+      IEventOutputStream<WorkflowRunEvent, WorkflowOutputFrame>,
+      IEventFrameMapper<WorkflowRunEvent, WorkflowOutputFrame>
 {
     public async Task StreamAsync(
         IWorkflowRunEventSink sink,
@@ -10,21 +14,31 @@ public sealed class WorkflowRunOutputStreamer : IWorkflowRunOutputStreamer
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default)
     {
-        await foreach (var evt in sink.ReadAllAsync(ct))
+        await PumpAsync(sink.ReadAllAsync(ct), runId, emitAsync, ct);
+    }
+
+    public async Task PumpAsync(
+        IAsyncEnumerable<WorkflowRunEvent> events,
+        string executionId,
+        Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+        CancellationToken ct = default)
+    {
+        await foreach (var evt in events.WithCancellation(ct))
         {
-            var frame = WorkflowOutputFrameMapper.Map(evt);
-            await emitAsync(frame, ct);
-            if (IsTerminalEventForRun(evt, runId))
+            await emitAsync(Map(evt), ct);
+            if (IsTerminal(evt, executionId))
                 break;
         }
     }
 
-    private static bool IsTerminalEventForRun(WorkflowRunEvent evt, string runId)
+    public WorkflowOutputFrame Map(WorkflowRunEvent evt) => WorkflowOutputFrameMapper.Map(evt);
+
+    public bool IsTerminal(WorkflowRunEvent evt, string executionId)
     {
         return evt switch
         {
-            WorkflowRunFinishedEvent finished => string.Equals(finished.RunId, runId, StringComparison.Ordinal),
-            WorkflowRunErrorEvent error => string.Equals(error.RunId, runId, StringComparison.Ordinal),
+            WorkflowRunFinishedEvent finished => string.Equals(finished.RunId, executionId, StringComparison.Ordinal),
+            WorkflowRunErrorEvent error => string.Equals(error.RunId, executionId, StringComparison.Ordinal),
             _ => false,
         };
     }

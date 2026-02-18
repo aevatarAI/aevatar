@@ -27,6 +27,8 @@
     <Project Path="src\Aevatar.AI.ToolProviders.MCP\Aevatar.AI.ToolProviders.MCP.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
     <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
+    <Project Path="src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
+    <Project Path="src\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
     <Project Path="src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <Project Path="src\Aevatar.CQRS.Projection.Abstractions\Aevatar.CQRS.Projection.Abstractions.csproj" />
     <Project Path="src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
@@ -44,6 +46,13 @@
     <Project Path="src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
+  </Folder>
+  <Folder Name="/src/maker/">
+    <Project Path="src\maker\Aevatar.Maker.Application.Abstractions\Aevatar.Maker.Application.Abstractions.csproj" />
+    <Project Path="src\maker\Aevatar.Maker.Application\Aevatar.Maker.Application.csproj" />
+    <Project Path="src\maker\Aevatar.Maker.Core\Aevatar.Maker.Core.csproj" />
+    <Project Path="src\maker\Aevatar.Maker.Infrastructure\Aevatar.Maker.Infrastructure.csproj" />
+    <Project Path="src\maker\Aevatar.Maker.Projection\Aevatar.Maker.Projection.csproj" />
   </Folder>
   <Folder Name="/test/">
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />

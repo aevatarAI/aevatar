@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Host.Api.Endpoints;
@@ -8,7 +9,7 @@ internal static class ChatWebSocketRunCoordinator
     public static async Task ExecuteAsync(
         WebSocket socket,
         ChatWebSocketCommandEnvelope command,
-        IWorkflowChatRunApplicationService chatRunService,
+        ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
         CancellationToken ct = default)
     {
         var request = new WorkflowChatRunRequest(

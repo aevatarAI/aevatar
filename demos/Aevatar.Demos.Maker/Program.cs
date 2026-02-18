@@ -29,8 +29,8 @@ using Aevatar.Workflow.Core;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Runtime.DependencyInjection;
-using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Demos.Maker;
+using Aevatar.Maker.Core;
+using Aevatar.Maker.Projection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -119,8 +119,8 @@ services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Information));
 services.AddAevatarRuntime();
 services.AddAevatarConfig();
 services.AddAevatarWorkflow();
+services.AddAevatarMakerCore();
 services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
-services.AddSingleton<IEventModuleFactory, MakerModuleFactory>();
 
 if (isDeepSeek)
 {
@@ -194,7 +194,7 @@ logger.LogInformation("WorkflowGAgent created: {Id}", actor.Id);
 
 // ─── Subscribe to stream ───
 
-var recorder = new MakerRunRecorder(actor.Id);
+var recorder = new MakerRunProjectionAccumulator(actor.Id);
 var stream = streams.GetStream(actor.Id);
 var tcs = new TaskCompletionSource<string>();
 var timeoutMinutes = 10;

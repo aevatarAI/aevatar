@@ -70,7 +70,14 @@ public sealed class ToolCallLoop
                 };
                 if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct);
 
-                var result = await _tools.ExecuteToolCallAsync(call, ct);
+                var toolCall = new ToolCall
+                {
+                    Id = call.Id,
+                    Name = string.IsNullOrWhiteSpace(toolCtx.ToolName) ? call.Name : toolCtx.ToolName,
+                    ArgumentsJson = toolCtx.ToolArguments ?? call.ArgumentsJson,
+                };
+
+                var result = await _tools.ExecuteToolCallAsync(toolCall, ct);
                 messages.Add(result);
 
                 // ─── Hook: Tool Execute End ───

@@ -11,11 +11,8 @@
 
 using Aevatar.Host.Api.Endpoints;
 using Aevatar.Host.Api.Startup;
-using Aevatar.Workflow.Application.DependencyInjection;
+using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
-using Aevatar.Workflow.Projection.DependencyInjection;
-using Aevatar.Workflow.Presentation.AGUIAdapter.DependencyInjection;
-using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Bootstrap;
 using Aevatar.Configuration;
 
@@ -29,20 +26,11 @@ builder.Services.AddAevatarBootstrap(builder.Configuration, options =>
     options.EnableMCPTools = true;
     options.EnableSkills = true;
 });
-builder.Services.AddWorkflowExecutionProjectionCQRS(options =>
-    builder.Configuration.GetSection("WorkflowExecutionProjection").Bind(options));
-builder.Services.AddWorkflowExecutionAGUIAdapter();
-builder.Services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
-builder.Services.AddWorkflowApplication();
-builder.Services.AddWorkflowDefinitionFileSource(options =>
+builder.Services.AddCqrsCore(options =>
 {
-    options.WorkflowDirectories.Add(Path.Combine(AppContext.BaseDirectory, "workflows"));
-    options.WorkflowDirectories.Add(AevatarPaths.RepoRootWorkflows);
-    options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "workflows"));
-    options.WorkflowDirectories.Add(AevatarPaths.Workflows);
+    options.DefaultSubsystem = "workflow";
 });
-builder.Services.AddWorkflowInfrastructure(options =>
-    builder.Configuration.GetSection("WorkflowExecutionReportArtifacts").Bind(options));
+builder.Services.AddWorkflowSubsystemProfile(builder.Configuration);
 builder.Services.AddHostedService<ConnectorBootstrapHostedService>();
 
 // ─── CORS（开发默认放开；生产要求显式白名单） ───

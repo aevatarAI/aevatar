@@ -42,7 +42,7 @@ internal sealed class ChatSseResponseWriter
     {
         await StartAsync(ct);
         var payload = JsonSerializer.Serialize(frame, OutputJsonOptions);
-        var bytes = Encoding.UTF8.GetBytes($"data: {payload}\\n\\n");
+        var bytes = Encoding.UTF8.GetBytes($"data: {payload}\n\n");
         await _response.Body.WriteAsync(bytes, ct);
         await _response.Body.FlushAsync(ct);
     }

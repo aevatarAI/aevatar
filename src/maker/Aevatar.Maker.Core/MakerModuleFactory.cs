@@ -1,7 +1,7 @@
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Demos.Maker.Modules;
+using Aevatar.Maker.Core.Modules;
 
-namespace Aevatar.Demos.Maker;
+namespace Aevatar.Maker.Core;
 
 /// <summary>
 /// Demo-scoped module factory for MAKER-specific primitives.
