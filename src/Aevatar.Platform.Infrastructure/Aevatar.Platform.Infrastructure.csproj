@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.Platform.Infrastructure</AssemblyName>
+    <RootNamespace>Aevatar.Platform.Infrastructure</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\\Aevatar.CQRS.Core\\Aevatar.CQRS.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.Platform.Abstractions\Aevatar.Platform.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Platform.Application.Abstractions\Aevatar.Platform.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Platform.Application\Aevatar.Platform.Application.csproj" />
+  </ItemGroup>
+</Project>

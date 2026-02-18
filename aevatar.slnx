@@ -13,6 +13,7 @@
     <File Path="docs\EVENT_SOURCING.md" />
     <File Path="docs\ROLE.md" />
     <File Path="docs\IDENTIFIER_RELATIONSHIPS.md" />
+    <File Path="docs\SOLUTION_REFACTOR_MASTER_PLAN.md" />
     <File Path="docs\ARCHITECTURE_REVIEW_SCORE_REPORT.md" />
   </Folder>
   <Folder Name="/resources/">
@@ -37,12 +38,18 @@
     <Project Path="src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     <Project Path="src\Aevatar.Host.Api\Aevatar.Host.Api.csproj" />
     <Project Path="src\Aevatar.Host.Gateway\Aevatar.Host.Gateway.csproj" />
+    <Project Path="src\Aevatar.Platform.Abstractions\Aevatar.Platform.Abstractions.csproj" />
+    <Project Path="src\Aevatar.Platform.Application.Abstractions\Aevatar.Platform.Application.Abstractions.csproj" />
+    <Project Path="src\Aevatar.Platform.Application\Aevatar.Platform.Application.csproj" />
+    <Project Path="src\Aevatar.Platform.Host.Api\Aevatar.Platform.Host.Api.csproj" />
+    <Project Path="src\Aevatar.Platform.Infrastructure\Aevatar.Platform.Infrastructure.csproj" />
     <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
   </Folder>
   <Folder Name="/src/workflow/">
     <Project Path="src/workflow/Aevatar.Workflow.Application.Abstractions/Aevatar.Workflow.Application.Abstractions.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" />
+    <Project Path="src/workflow/Aevatar.Workflow.Host.Api/Aevatar.Workflow.Host.Api.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
@@ -51,6 +58,7 @@
     <Project Path="src\maker\Aevatar.Maker.Application.Abstractions\Aevatar.Maker.Application.Abstractions.csproj" />
     <Project Path="src\maker\Aevatar.Maker.Application\Aevatar.Maker.Application.csproj" />
     <Project Path="src\maker\Aevatar.Maker.Core\Aevatar.Maker.Core.csproj" />
+    <Project Path="src\maker\Aevatar.Maker.Host.Api\Aevatar.Maker.Host.Api.csproj" />
     <Project Path="src\maker\Aevatar.Maker.Infrastructure\Aevatar.Maker.Infrastructure.csproj" />
     <Project Path="src\maker\Aevatar.Maker.Projection\Aevatar.Maker.Projection.csproj" />
   </Folder>

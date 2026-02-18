@@ -5,6 +5,7 @@
       "src\\workflow\\Aevatar.Workflow.Application\\Aevatar.Workflow.Application.csproj",
       "src\\workflow\\Aevatar.Workflow.Application.Abstractions\\Aevatar.Workflow.Application.Abstractions.csproj",
       "src\\workflow\\Aevatar.Workflow.Core\\Aevatar.Workflow.Core.csproj",
+      "src\\workflow\\Aevatar.Workflow.Host.Api\\Aevatar.Workflow.Host.Api.csproj",
       "src\\workflow\\Aevatar.Workflow.Infrastructure\\Aevatar.Workflow.Infrastructure.csproj",
       "src\\workflow\\Aevatar.Workflow.Presentation.AGUIAdapter\\Aevatar.Workflow.Presentation.AGUIAdapter.csproj",
       "src\\workflow\\Aevatar.Workflow.Projection\\Aevatar.Workflow.Projection.csproj"
