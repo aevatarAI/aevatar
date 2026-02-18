@@ -314,7 +314,11 @@ internal sealed class TracingPublisher(
     DemoTraceStore traceStore,
     Func<EventDirection, Task<IReadOnlyList<string>>> resolveTargets) : IEventPublisher
 {
-    public async Task PublishAsync<TEvent>(TEvent evt, EventDirection direction, CancellationToken ct) where TEvent : IMessage
+    public async Task PublishAsync<TEvent>(
+        TEvent evt,
+        EventDirection direction = EventDirection.Down,
+        CancellationToken ct = default,
+        string? correlationId = null) where TEvent : IMessage
     {
         var targets = await resolveTargets(direction);
         traceStore.Add(
@@ -324,10 +328,14 @@ internal sealed class TracingPublisher(
             evt.Descriptor.Name,
             direction.ToString(),
             targets);
-        await inner.PublishAsync(evt, direction, ct);
+        await inner.PublishAsync(evt, direction, ct, correlationId);
     }
 
-    public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct) where TEvent : IMessage
+    public Task SendToAsync<TEvent>(
+        string targetActorId,
+        TEvent evt,
+        CancellationToken ct = default,
+        string? correlationId = null) where TEvent : IMessage
     {
         traceStore.Add(
             "send",
@@ -336,7 +344,7 @@ internal sealed class TracingPublisher(
             evt.Descriptor.Name,
             "Direct",
             [targetActorId]);
-        return inner.SendToAsync(targetActorId, evt, ct);
+        return inner.SendToAsync(targetActorId, evt, ct, correlationId);
     }
 }
 

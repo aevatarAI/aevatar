@@ -24,7 +24,11 @@ public sealed class LocalActorPublisher : IEventPublisher
         _selfStream = streams.GetStream(actorId);
     }
 
-    public async Task PublishAsync<TEvent>(TEvent evt, EventDirection direction, CancellationToken ct)
+    public async Task PublishAsync<TEvent>(
+        TEvent evt,
+        EventDirection direction = EventDirection.Down,
+        CancellationToken ct = default,
+        string? correlationId = null)
         where TEvent : IMessage
     {
         var routeTargetCount = GetRouteTargetCount(direction);
@@ -36,6 +40,8 @@ public sealed class LocalActorPublisher : IEventPublisher
             PublisherId = _actorId,
             Direction = direction,
         };
+        if (!string.IsNullOrWhiteSpace(correlationId))
+            envelope.CorrelationId = correlationId;
 
         envelope.Metadata["__route_target_count"] = routeTargetCount.ToString();
         envelope.Metadata["__source_actor_id"] = _actorId;
@@ -66,7 +72,11 @@ public sealed class LocalActorPublisher : IEventPublisher
         }
     }
 
-    public async Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct)
+    public async Task SendToAsync<TEvent>(
+        string targetActorId,
+        TEvent evt,
+        CancellationToken ct = default,
+        string? correlationId = null)
         where TEvent : IMessage
     {
         var envelope = new EventEnvelope
@@ -78,6 +88,8 @@ public sealed class LocalActorPublisher : IEventPublisher
             Direction = EventDirection.Self, // Point-to-point: target handles it as Self
             TargetActorId = targetActorId,
         };
+        if (!string.IsNullOrWhiteSpace(correlationId))
+            envelope.CorrelationId = correlationId;
         await _streams.GetStream(targetActorId).ProduceAsync(envelope, ct);
         AgentMetrics.RouteTargets.Add(1,
         [

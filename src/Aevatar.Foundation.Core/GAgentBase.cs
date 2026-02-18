@@ -29,6 +29,7 @@ public abstract class GAgentBase : IAgent
     private EventHandlerMetadata[]? _staticHandlers;
     private volatile IEventModule[] _modules = [];
     private volatile IGAgentExecutionHook[] _hooks = [];
+    private string? _activeCorrelationId;
 
     // Identity
 
@@ -89,49 +90,58 @@ public abstract class GAgentBase : IAgent
     public async Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
         using var guard = StateGuard.BeginWriteScope();
-        var ctx = CreateHandlerContext();
-        var pipeline = EventPipelineBuilder.Build(GetStaticHandlers(), _modules, this);
-
-        foreach (var handler in pipeline)
+        var previousCorrelationId = _activeCorrelationId;
+        _activeCorrelationId = string.IsNullOrWhiteSpace(envelope.CorrelationId) ? null : envelope.CorrelationId;
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            if (!handler.CanHandle(envelope)) continue;
+            var ctx = CreateHandlerContext(_activeCorrelationId);
+            var pipeline = EventPipelineBuilder.Build(GetStaticHandlers(), _modules, this);
 
-            var hookCtx = new GAgentExecutionHookContext
+            foreach (var handler in pipeline)
             {
-                AgentId = Id,
-                AgentType = GetType().Name,
-                EventId = envelope.Id,
-                EventType = envelope.Payload?.TypeUrl,
-                HandlerName = handler.Name,
-            };
+                ct.ThrowIfCancellationRequested();
+                if (!handler.CanHandle(envelope)) continue;
 
-            var sw = Stopwatch.StartNew();
-            Exception? error = null;
-            try
-            {
-                // Dual hook channels: Start
-                await OnEventHandlerStartAsync(envelope, handler.Name, null, ct);
-                await RunHooksAsync(h => h.OnEventHandlerStartAsync(hookCtx, ct), "OnEventHandlerStart");
+                var hookCtx = new GAgentExecutionHookContext
+                {
+                    AgentId = Id,
+                    AgentType = GetType().Name,
+                    EventId = envelope.Id,
+                    EventType = envelope.Payload?.TypeUrl,
+                    HandlerName = handler.Name,
+                };
 
-                await handler.HandleAsync(envelope, ctx, ct);
+                var sw = Stopwatch.StartNew();
+                Exception? error = null;
+                try
+                {
+                    // Dual hook channels: Start
+                    await OnEventHandlerStartAsync(envelope, handler.Name, null, ct);
+                    await RunHooksAsync(h => h.OnEventHandlerStartAsync(hookCtx, ct), "OnEventHandlerStart");
+
+                    await handler.HandleAsync(envelope, ctx, ct);
+                }
+                catch (Exception ex)
+                {
+                    error = ex;
+                    hookCtx.Exception = ex;
+                    Logger.LogError(ex, "Handler {Name} failed", handler.Name);
+                    await RunHooksAsync(h => h.OnErrorAsync(hookCtx, ex, ct), "OnError");
+                }
+                finally
+                {
+                    sw.Stop();
+                    hookCtx.Duration = sw.Elapsed;
+
+                    // Dual hook channels: End
+                    await RunHooksAsync(h => h.OnEventHandlerEndAsync(hookCtx, ct), "OnEventHandlerEnd");
+                    await OnEventHandlerEndAsync(envelope, handler.Name, null, sw.Elapsed, error, ct);
+                }
             }
-            catch (Exception ex)
-            {
-                error = ex;
-                hookCtx.Exception = ex;
-                Logger.LogError(ex, "Handler {Name} failed", handler.Name);
-                await RunHooksAsync(h => h.OnErrorAsync(hookCtx, ex, ct), "OnError");
-            }
-            finally
-            {
-                sw.Stop();
-                hookCtx.Duration = sw.Elapsed;
-
-                // Dual hook channels: End
-                await RunHooksAsync(h => h.OnEventHandlerEndAsync(hookCtx, ct), "OnEventHandlerEnd");
-                await OnEventHandlerEndAsync(envelope, handler.Name, null, sw.Elapsed, error, ct);
-            }
+        }
+        finally
+        {
+            _activeCorrelationId = previousCorrelationId;
         }
     }
 
@@ -193,12 +203,12 @@ public abstract class GAgentBase : IAgent
     protected Task PublishAsync<TEvent>(TEvent evt,
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default) where TEvent : Google.Protobuf.IMessage =>
-        EventPublisher.PublishAsync(evt, direction, ct);
+        EventPublisher.PublishAsync(evt, direction, ct, _activeCorrelationId);
 
     /// <summary>Sends an event to a target actor.</summary>
     protected Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
         CancellationToken ct = default) where TEvent : Google.Protobuf.IMessage =>
-        EventPublisher.SendToAsync(targetActorId, evt, ct);
+        EventPublisher.SendToAsync(targetActorId, evt, ct, _activeCorrelationId);
 
     // Internal methods
 
@@ -277,16 +287,16 @@ public abstract class GAgentBase : IAgent
     private EventHandlerMetadata[] GetStaticHandlers() =>
         _staticHandlers ??= EventHandlerDiscoverer.Discover(GetType());
 
-    private EventHandlerContext CreateHandlerContext() =>
-        new(this, EventPublisher, Services, Logger);
+    private EventHandlerContext CreateHandlerContext(string? correlationId) =>
+        new(this, EventPublisher, Services, Logger, correlationId);
 
     // Null implementations
 
     private sealed class NullEventPublisher : IEventPublisher
     {
         public static readonly NullEventPublisher Instance = new();
-        public Task PublishAsync<T>(T e, EventDirection d, CancellationToken c) where T : Google.Protobuf.IMessage => Task.CompletedTask;
-        public Task SendToAsync<T>(string t, T e, CancellationToken c) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task PublishAsync<T>(T e, EventDirection d, CancellationToken c, string? correlationId) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task SendToAsync<T>(string t, T e, CancellationToken c, string? correlationId) where T : Google.Protobuf.IMessage => Task.CompletedTask;
     }
 
     private sealed class EmptyServiceProvider : IServiceProvider

@@ -129,14 +129,22 @@ public class CollectingPublisher : IEventPublisher
     private readonly List<IMessage> _published;
     public CollectingPublisher(List<IMessage> published) => _published = published;
 
-    public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction, CancellationToken ct)
+    public Task PublishAsync<TEvent>(
+        TEvent evt,
+        EventDirection direction = EventDirection.Down,
+        CancellationToken ct = default,
+        string? correlationId = null)
         where TEvent : IMessage
     {
         _published.Add(evt);
         return Task.CompletedTask;
     }
 
-    public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct)
+    public Task SendToAsync<TEvent>(
+        string targetActorId,
+        TEvent evt,
+        CancellationToken ct = default,
+        string? correlationId = null)
         where TEvent : IMessage
     {
         _published.Add(evt);
