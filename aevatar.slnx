@@ -13,6 +13,7 @@
     <File Path="docs\EVENT_SOURCING.md" />
     <File Path="docs\ROLE.md" />
     <File Path="docs\LONG_TERM_ARCHITECTURE_MAINTENANCE.md" />
+    <File Path="docs\PROJECT_ARCHITECTURE.md" />
   </Folder>
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
