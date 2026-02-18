@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Runtime.Abstractions.Commands;
 using Aevatar.Platform.Abstractions.Catalog;
 using Aevatar.Platform.Application.Abstractions.Commands;
 using Aevatar.Platform.Application.Abstractions.Ports;
@@ -10,21 +11,21 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
 {
     private readonly IAgentCommandRouter _commandRouter;
     private readonly ICommandContextPolicy _commandContextPolicy;
+    private readonly ICommandBus _commandBus;
     private readonly IPlatformCommandStateStore _stateStore;
-    private readonly IPlatformCommandDispatchGateway _dispatchGateway;
     private readonly ILogger<PlatformCommandApplicationService> _logger;
 
     public PlatformCommandApplicationService(
         IAgentCommandRouter commandRouter,
         ICommandContextPolicy commandContextPolicy,
+        ICommandBus commandBus,
         IPlatformCommandStateStore stateStore,
-        IPlatformCommandDispatchGateway dispatchGateway,
         ILogger<PlatformCommandApplicationService> logger)
     {
         _commandRouter = commandRouter;
         _commandContextPolicy = commandContextPolicy;
+        _commandBus = commandBus;
         _stateStore = stateStore;
-        _dispatchGateway = dispatchGateway;
         _logger = logger;
     }
 
@@ -53,7 +54,7 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
             target.ToString(),
             acceptedAt);
 
-        var initialStatus = new PlatformCommandStatus
+        await _stateStore.UpsertAsync(new PlatformCommandStatus
         {
             CommandId = started.CommandId,
             Subsystem = started.Subsystem,
@@ -64,33 +65,28 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
             Succeeded = false,
             AcceptedAt = acceptedAt,
             UpdatedAt = acceptedAt,
-        };
+        }, ct);
 
-        await _stateStore.UpsertAsync(initialStatus, ct);
-
-        _ = Task.Run(
-            async () => await DispatchAndUpdateStateAsync(started, request, CancellationToken.None),
-            CancellationToken.None);
-
-        return new PlatformCommandEnqueueResult(PlatformCommandStartError.None, started);
-    }
-
-    private async Task DispatchAndUpdateStateAsync(
-        PlatformCommandStarted started,
-        PlatformCommandRequest request,
-        CancellationToken ct)
-    {
         try
         {
-            var dispatchResult = await _dispatchGateway.DispatchAsync(
-                new PlatformCommandDispatchRequest(
-                    started.Method,
-                    new Uri(started.TargetEndpoint),
-                    request.PayloadJson ?? string.Empty,
-                    request.ContentType ?? "application/json"),
-                ct);
+            var envelope = CommandEnvelope.Create(
+                commandId: started.CommandId,
+                correlationId: commandContext.CorrelationId,
+                target: started.Subsystem,
+                metadata: commandContext.Metadata);
 
-            var state = dispatchResult.Succeeded ? "Completed" : "Failed";
+            var command = new PlatformDispatchCommand(
+                CommandId: started.CommandId,
+                Subsystem: started.Subsystem,
+                Command: started.Command,
+                Method: started.Method,
+                TargetEndpoint: started.TargetEndpoint,
+                PayloadJson: request.PayloadJson ?? string.Empty,
+                ContentType: request.ContentType ?? "application/json",
+                AcceptedAt: started.AcceptedAt);
+
+            await _commandBus.EnqueueAsync(envelope, command, ct);
+
             await _stateStore.UpsertAsync(new PlatformCommandStatus
             {
                 CommandId = started.CommandId,
@@ -98,20 +94,19 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
                 Command = started.Command,
                 Method = started.Method,
                 TargetEndpoint = started.TargetEndpoint,
-                State = state,
-                Succeeded = dispatchResult.Succeeded,
-                ResponseStatusCode = dispatchResult.ResponseStatusCode,
-                ResponseContentType = dispatchResult.ResponseContentType,
-                ResponseBody = dispatchResult.ResponseBody,
-                Error = dispatchResult.Error,
+                State = "Queued",
+                Succeeded = false,
                 AcceptedAt = started.AcceptedAt,
                 UpdatedAt = DateTimeOffset.UtcNow,
             }, ct);
+
+            return new PlatformCommandEnqueueResult(PlatformCommandStartError.None, started);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex,
-                "Platform command dispatch failed. commandId={CommandId}, subsystem={Subsystem}, command={Command}",
+            _logger.LogWarning(
+                ex,
+                "Platform command enqueue failed. commandId={CommandId}, subsystem={Subsystem}, command={Command}",
                 started.CommandId,
                 started.Subsystem,
                 started.Command);
@@ -128,7 +123,9 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
                 Error = ex.Message,
                 AcceptedAt = started.AcceptedAt,
                 UpdatedAt = DateTimeOffset.UtcNow,
-            }, CancellationToken.None);
+            }, ct);
+
+            return new PlatformCommandEnqueueResult(PlatformCommandStartError.EnqueueFailed, null);
         }
     }
 }

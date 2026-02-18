@@ -79,6 +79,11 @@ public static class PlatformCommandEndpoints
             });
         }
 
+        if (result.Error == PlatformCommandStartError.EnqueueFailed)
+        {
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
+
         if (result.Started == null)
             return Results.StatusCode(StatusCodes.Status500InternalServerError);
 

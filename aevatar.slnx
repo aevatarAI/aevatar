@@ -12,9 +12,7 @@
     <File Path="docs\COGNITIVE.md" />
     <File Path="docs\EVENT_SOURCING.md" />
     <File Path="docs\ROLE.md" />
-    <File Path="docs\IDENTIFIER_RELATIONSHIPS.md" />
     <File Path="docs\SOLUTION_REFACTOR_MASTER_PLAN.md" />
-    <File Path="docs\ARCHITECTURE_REVIEW_SCORE_REPORT.md" />
   </Folder>
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
@@ -30,6 +28,10 @@
     <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <Project Path="src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <Project Path="src\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
+    <Project Path="src\Aevatar.CQRS.Runtime.Abstractions\Aevatar.CQRS.Runtime.Abstractions.csproj" />
+    <Project Path="src\Aevatar.CQRS.Runtime.FileSystem\Aevatar.CQRS.Runtime.FileSystem.csproj" />
+    <Project Path="src\Aevatar.CQRS.Runtime.Implementations.Wolverine\Aevatar.CQRS.Runtime.Implementations.Wolverine.csproj" />
+    <Project Path="src\Aevatar.CQRS.Runtime.Implementations.MassTransit\Aevatar.CQRS.Runtime.Implementations.MassTransit.csproj" />
     <Project Path="src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <Project Path="src\Aevatar.CQRS.Projection.Abstractions\Aevatar.CQRS.Projection.Abstractions.csproj" />
     <Project Path="src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />

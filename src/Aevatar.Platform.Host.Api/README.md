@@ -6,7 +6,7 @@
 
 - 暴露内置 GAgent 能力目录与路由解析（Query 侧）。
 - 暴露平台统一命令入口（Command 侧）。
-- 命令受理后异步分发到子系统，并可通过查询端点查看状态。
+- 命令受理后通过 CQRS Runtime 异步执行，并可通过查询端点查看状态。
 - 不承载 Workflow/Maker 领域编排逻辑。
 
 CQRS 端点：
@@ -23,3 +23,6 @@ CQRS 端点：
 ```bash
 dotnet run --project src/Aevatar.Platform.Host.Api
 ```
+
+默认使用 `Wolverine` 本地实现（文件系统状态目录：`artifacts/cqrs`），
+可通过配置 `Cqrs:Runtime=MassTransit` 切换到 MassTransit 分布式高性能实现（当前默认使用 in-memory transport）。

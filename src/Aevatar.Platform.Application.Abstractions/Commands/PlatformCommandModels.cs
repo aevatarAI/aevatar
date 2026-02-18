@@ -12,6 +12,7 @@ public enum PlatformCommandStartError
     None = 0,
     InvalidRequest = 1,
     SubsystemNotFound = 2,
+    EnqueueFailed = 3,
 }
 
 public sealed record PlatformCommandStarted(
@@ -28,6 +29,16 @@ public sealed record PlatformCommandEnqueueResult(
 {
     public bool Succeeded => Error == PlatformCommandStartError.None;
 }
+
+public sealed record PlatformDispatchCommand(
+    string CommandId,
+    string Subsystem,
+    string Command,
+    string Method,
+    string TargetEndpoint,
+    string PayloadJson,
+    string ContentType,
+    DateTimeOffset AcceptedAt);
 
 public sealed class PlatformCommandStatus
 {
