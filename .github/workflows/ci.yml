@@ -30,6 +30,16 @@ jobs:
 
       - name: Architecture Guards
         run: |
+          if [ -d "src/Aevatar.Host.Api" ] || [ -d "src/Aevatar.Host.Gateway" ]; then
+            echo "Legacy host projects are forbidden. Use subsystem hosts only."
+            exit 1
+          fi
+
+          if rg -n "Aevatar\.Host\.Api|Aevatar\.Host\.Gateway" aevatar.slnx; then
+            echo "Solution must not include legacy host projects."
+            exit 1
+          fi
+
           if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
             echo "Found sync-over-async usage."
             exit 1
@@ -42,5 +52,46 @@ jobs:
 
           if rg -n "Aevatar\.AI\.Core\.csproj" src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj; then
             echo "Workflows.Core must not reference AI.Core."
+            exit 1
+          fi
+
+          for host_program in \
+            src/Aevatar.Platform.Host.Api/Program.cs \
+            src/workflow/Aevatar.Workflow.Host.Api/Program.cs \
+            src/maker/Aevatar.Maker.Host.Api/Program.cs
+          do
+            if ! rg -n "UseAevatarCqrsRuntime\(builder\.Configuration\)" "$host_program" >/dev/null; then
+              echo "Missing UseAevatarCqrsRuntime in $host_program"
+              exit 1
+            fi
+            if ! rg -n "AddAevatarCqrsRuntime\(builder\.Configuration\)" "$host_program" >/dev/null; then
+              echo "Missing AddAevatarCqrsRuntime in $host_program"
+              exit 1
+            fi
+          done
+
+          if rg -n "AddCqrsCore\(" \
+            src/Aevatar.Platform.Host.Api \
+            src/workflow/Aevatar.Workflow.Host.Api \
+            src/maker/Aevatar.Maker.Host.Api \
+            src/Aevatar.Platform.Infrastructure \
+            src/workflow/Aevatar.Workflow.Infrastructure \
+            src/maker/Aevatar.Maker.Infrastructure
+          then
+            echo "Direct AddCqrsCore wiring in hosts/infrastructure is forbidden. Use Aevatar.CQRS.Runtime.Hosting."
+            exit 1
+          fi
+
+          implementation_ref_violations="$(
+            rg -n "Aevatar\.CQRS\.Runtime\.Implementations\.(Wolverine|MassTransit)" src -g '*.csproj' \
+            | rg -v "^src/Aevatar.CQRS.Runtime.Hosting/" \
+            | rg -v "^src/Aevatar.CQRS.Runtime.Implementations.Wolverine/" \
+            | rg -v "^src/Aevatar.CQRS.Runtime.Implementations.MassTransit/" \
+            || true
+          )"
+
+          if [ -n "$implementation_ref_violations" ]; then
+            echo "$implementation_ref_violations"
+            echo "Only Runtime.Hosting may reference Runtime.Implementations.* directly."
             exit 1
           fi

@@ -12,8 +12,7 @@
     <File Path="docs\COGNITIVE.md" />
     <File Path="docs\EVENT_SOURCING.md" />
     <File Path="docs\ROLE.md" />
-    <File Path="docs\SOLUTION_REFACTOR_MASTER_PLAN.md" />
-    <File Path="docs\CQRS_SUBSYSTEM_SYNC_REFACTOR_PLAN.md" />
+    <File Path="docs\LONG_TERM_ARCHITECTURE_MAINTENANCE.md" />
   </Folder>
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
