@@ -6,22 +6,22 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Actor-level projection registry built on top of shared actor stream subscriptions.
 /// </summary>
-public sealed class ProjectionSubscriptionRegistry<TContext, TCompletion>
+public sealed class ProjectionSubscriptionRegistry<TContext>
     : IProjectionSubscriptionRegistry<TContext>, IAsyncDisposable
     where TContext : IProjectionContext
 {
-    private readonly IProjectionCoordinator<TContext, TCompletion> _coordinator;
+    private readonly IProjectionDispatcher<TContext> _dispatcher;
     private readonly IActorStreamSubscriptionHub<EventEnvelope> _subscriptionHub;
-    private readonly ILogger<ProjectionSubscriptionRegistry<TContext, TCompletion>>? _logger;
+    private readonly ILogger<ProjectionSubscriptionRegistry<TContext>>? _logger;
     private readonly ConcurrentDictionary<string, ActiveProjectionState> _activeStatesByActorId = new(StringComparer.Ordinal);
     private int _disposed;
 
     public ProjectionSubscriptionRegistry(
-        IProjectionCoordinator<TContext, TCompletion> coordinator,
+        IProjectionDispatcher<TContext> dispatcher,
         IActorStreamSubscriptionHub<EventEnvelope> subscriptionHub,
-        ILogger<ProjectionSubscriptionRegistry<TContext, TCompletion>>? logger = null)
+        ILogger<ProjectionSubscriptionRegistry<TContext>>? logger = null)
     {
-        _coordinator = coordinator;
+        _dispatcher = dispatcher;
         _subscriptionHub = subscriptionHub;
         _logger = logger;
     }
@@ -68,7 +68,7 @@ public sealed class ProjectionSubscriptionRegistry<TContext, TCompletion>
 
         try
         {
-            await _coordinator.ProjectAsync(state.Context, envelope, state.DispatchToken);
+            await _dispatcher.DispatchAsync(state.Context, envelope, state.DispatchToken);
         }
         catch (OperationCanceledException) when (state.DispatchToken.IsCancellationRequested)
         {

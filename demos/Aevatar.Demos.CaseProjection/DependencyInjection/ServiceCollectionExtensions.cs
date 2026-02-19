@@ -31,7 +31,8 @@ public static class ServiceCollectionExtensions
         RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
 
         services.TryAddSingleton<IProjectionCoordinator<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>, ProjectionCoordinator<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>>();
-        services.TryAddSingleton<IProjectionSubscriptionRegistry<CaseProjectionContext>, ProjectionSubscriptionRegistry<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>>();
+        services.TryAddSingleton<IProjectionDispatcher<CaseProjectionContext>, ProjectionDispatcher<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>>();
+        services.TryAddSingleton<IProjectionSubscriptionRegistry<CaseProjectionContext>, ProjectionSubscriptionRegistry<CaseProjectionContext>>();
         services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
         services.TryAddSingleton<IProjectionLifecycleService<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>, ProjectionLifecycleService<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>>();
         services.TryAddSingleton<ICaseProjectionService, CaseProjectionService>();

@@ -34,7 +34,6 @@ public class WorkflowExecutionProjectionServiceTests
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
         {
             WorkflowName = "direct",
-            CommandId = "cmd-1",
             Input = "hello",
         }));
         await streams.GetStream("root").ProduceAsync(Wrap(new WorkflowCompletedEvent
@@ -90,10 +89,14 @@ public class WorkflowExecutionProjectionServiceTests
         var store = new InMemoryWorkflowExecutionReadModelStore();
         var projector = new WorkflowExecutionReadModelProjector(store, BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>([projector]);
-        var runRegistry = new ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
-            coordinator,
+        var dispatcher = new ProjectionDispatcher<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator);
+        var runRegistry = new ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>(
+            dispatcher,
             subscriptionHub);
-        var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator, runRegistry);
+        var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
+            coordinator,
+            dispatcher,
+            runRegistry);
         return new WorkflowExecutionProjectionService(
             options,
             lifecycle,

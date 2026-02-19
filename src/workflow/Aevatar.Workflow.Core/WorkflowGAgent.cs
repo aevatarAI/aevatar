@@ -124,7 +124,6 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         {
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Prompt,
-            CommandId = ResolveCommandId(request),
         }, EventDirection.Self);
     }
 
@@ -220,15 +219,6 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
 
         foreach (var configurator in _moduleConfigurators)
             configurator.Configure(module, _compiledWorkflow);
-    }
-
-    private static string ResolveCommandId(ChatRequestEvent request)
-    {
-        if (request.Metadata.TryGetValue(ChatRequestMetadataKeys.CommandId, out var commandId) &&
-            !string.IsNullOrWhiteSpace(commandId))
-            return commandId;
-
-        return string.Empty;
     }
 
     // ─── 编译 + 验证 ───

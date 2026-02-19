@@ -318,7 +318,7 @@ internal sealed class TracingPublisher(
         TEvent evt,
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default,
-        string? correlationId = null) where TEvent : IMessage
+        EventEnvelope? sourceEnvelope = null) where TEvent : IMessage
     {
         var targets = await resolveTargets(direction);
         traceStore.Add(
@@ -328,14 +328,14 @@ internal sealed class TracingPublisher(
             evt.Descriptor.Name,
             direction.ToString(),
             targets);
-        await inner.PublishAsync(evt, direction, ct, correlationId);
+        await inner.PublishAsync(evt, direction, ct, sourceEnvelope);
     }
 
     public Task SendToAsync<TEvent>(
         string targetActorId,
         TEvent evt,
         CancellationToken ct = default,
-        string? correlationId = null) where TEvent : IMessage
+        EventEnvelope? sourceEnvelope = null) where TEvent : IMessage
     {
         traceStore.Add(
             "send",
@@ -344,7 +344,7 @@ internal sealed class TracingPublisher(
             evt.Descriptor.Name,
             "Direct",
             [targetActorId]);
-        return inner.SendToAsync(targetActorId, evt, ct, correlationId);
+        return inner.SendToAsync(targetActorId, evt, ct, sourceEnvelope);
     }
 }
 

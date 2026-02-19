@@ -4,7 +4,7 @@
 
 ## 包含内容
 
-- 生命周期与编排：`IProjectionLifecycleService<,>`、`IProjectionCoordinator<,>`、`IProjectionSubscriptionRegistry<>`
+- 生命周期与编排：`IProjectionLifecycleService<,>`、`IProjectionCoordinator<,>`、`IProjectionDispatcher<>`、`IProjectionSubscriptionRegistry<>`
 - 扩展抽象：`IProjectionProjector<,>`、`IProjectionEventReducer<,>`
 - 读模型存储：`IProjectionReadModelStore<,>`
 - 运行时策略：`IProjectionRuntimeOptions`、`IProjectionClock`

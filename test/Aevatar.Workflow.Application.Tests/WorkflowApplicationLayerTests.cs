@@ -182,12 +182,6 @@ internal sealed class FakeCommandContextPolicy : ICommandContextPolicy
             metadata == null
                 ? new Dictionary<string, string>(StringComparer.Ordinal)
                 : new Dictionary<string, string>(metadata, StringComparer.Ordinal));
-
-    public bool TryResolve(EventEnvelope envelope, out CommandContext context)
-    {
-        context = default!;
-        return false;
-    }
 }
 
 internal sealed class FakeActorRuntime : IActorRuntime

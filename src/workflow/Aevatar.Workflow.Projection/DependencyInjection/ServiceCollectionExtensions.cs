@@ -38,7 +38,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
         RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
         services.TryAddSingleton<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        services.TryAddSingleton<IProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>, ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
+        services.TryAddSingleton<IProjectionDispatcher<WorkflowExecutionProjectionContext>, ProjectionDispatcher<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
+        services.TryAddSingleton<IProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>, ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>>();
         services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
         services.TryAddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
         services.TryAddSingleton<IWorkflowExecutionProjectionPort, WorkflowExecutionProjectionService>();

@@ -8,13 +8,16 @@ public sealed class ProjectionLifecycleService<TContext, TCompletion>
     where TContext : IProjectionContext
 {
     private readonly IProjectionCoordinator<TContext, TCompletion> _coordinator;
+    private readonly IProjectionDispatcher<TContext> _dispatcher;
     private readonly IProjectionSubscriptionRegistry<TContext> _subscriptionRegistry;
 
     public ProjectionLifecycleService(
         IProjectionCoordinator<TContext, TCompletion> coordinator,
+        IProjectionDispatcher<TContext> dispatcher,
         IProjectionSubscriptionRegistry<TContext> subscriptionRegistry)
     {
         _coordinator = coordinator;
+        _dispatcher = dispatcher;
         _subscriptionRegistry = subscriptionRegistry;
     }
 
@@ -25,7 +28,7 @@ public sealed class ProjectionLifecycleService<TContext, TCompletion>
     }
 
     public Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default) =>
-        _coordinator.ProjectAsync(context, envelope, ct);
+        _dispatcher.DispatchAsync(context, envelope, ct);
 
     public async Task CompleteAsync(TContext context, TCompletion completion, CancellationToken ct = default)
     {

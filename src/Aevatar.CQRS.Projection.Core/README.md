@@ -9,7 +9,8 @@
 - `Aevatar.CQRS.Projection.Core`
   - 通用运行时实现：
     - `ProjectionCoordinator<TContext, TTopology>`
-    - `ProjectionSubscriptionRegistry<TContext, TCompletion>`
+    - `ProjectionDispatcher<TContext, TTopology>`
+    - `ProjectionSubscriptionRegistry<TContext>`
     - `ProjectionLifecycleService<TContext, TCompletion>`
     - `ActorStreamSubscriptionHub<TMessage>`
     - `ProjectionAssemblyRegistration`
@@ -26,9 +27,10 @@
 ## 运行链路（通用）
 
 1. `ProjectionLifecycleService.StartAsync` -> `Coordinator.InitializeAsync` + `SubscriptionRegistry.RegisterAsync`
-2. actor stream 到达 `EventEnvelope` 后，`SubscriptionRegistry` 分发给 `Coordinator.ProjectAsync`
-3. `Coordinator` 按顺序调用多个 projector
-4. `ProjectionLifecycleService.CompleteAsync` -> `SubscriptionRegistry.UnregisterAsync` + `Coordinator.CompleteAsync`
+2. actor stream 到达 `EventEnvelope` 后，`SubscriptionRegistry` 分发给 `ProjectionDispatcher.DispatchAsync`
+3. `ProjectionDispatcher` 调用 `Coordinator.ProjectAsync`
+4. `Coordinator` 按顺序调用多个 projector
+5. `ProjectionLifecycleService.CompleteAsync` -> `SubscriptionRegistry.UnregisterAsync` + `Coordinator.CompleteAsync`
 
 ## 扩展点
 

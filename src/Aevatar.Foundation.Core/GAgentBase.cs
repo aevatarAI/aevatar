@@ -29,7 +29,7 @@ public abstract class GAgentBase : IAgent
     private EventHandlerMetadata[]? _staticHandlers;
     private volatile IEventModule[] _modules = [];
     private volatile IGAgentExecutionHook[] _hooks = [];
-    private string? _activeCorrelationId;
+    private EventEnvelope? _activeInboundEnvelope;
 
     // Identity
 
@@ -90,11 +90,11 @@ public abstract class GAgentBase : IAgent
     public async Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
         using var guard = StateGuard.BeginWriteScope();
-        var previousCorrelationId = _activeCorrelationId;
-        _activeCorrelationId = string.IsNullOrWhiteSpace(envelope.CorrelationId) ? null : envelope.CorrelationId;
+        var previousEnvelope = _activeInboundEnvelope;
+        _activeInboundEnvelope = envelope;
         try
         {
-            var ctx = CreateHandlerContext(_activeCorrelationId);
+            var ctx = CreateHandlerContext(envelope);
             var pipeline = EventPipelineBuilder.Build(GetStaticHandlers(), _modules, this);
 
             foreach (var handler in pipeline)
@@ -141,7 +141,7 @@ public abstract class GAgentBase : IAgent
         }
         finally
         {
-            _activeCorrelationId = previousCorrelationId;
+            _activeInboundEnvelope = previousEnvelope;
         }
     }
 
@@ -203,12 +203,12 @@ public abstract class GAgentBase : IAgent
     protected Task PublishAsync<TEvent>(TEvent evt,
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default) where TEvent : Google.Protobuf.IMessage =>
-        EventPublisher.PublishAsync(evt, direction, ct, _activeCorrelationId);
+        EventPublisher.PublishAsync(evt, direction, ct, _activeInboundEnvelope);
 
     /// <summary>Sends an event to a target actor.</summary>
     protected Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
         CancellationToken ct = default) where TEvent : Google.Protobuf.IMessage =>
-        EventPublisher.SendToAsync(targetActorId, evt, ct, _activeCorrelationId);
+        EventPublisher.SendToAsync(targetActorId, evt, ct, _activeInboundEnvelope);
 
     // Internal methods
 
@@ -287,16 +287,16 @@ public abstract class GAgentBase : IAgent
     private EventHandlerMetadata[] GetStaticHandlers() =>
         _staticHandlers ??= EventHandlerDiscoverer.Discover(GetType());
 
-    private EventHandlerContext CreateHandlerContext(string? correlationId) =>
-        new(this, EventPublisher, Services, Logger, correlationId);
+    private EventHandlerContext CreateHandlerContext(EventEnvelope envelope) =>
+        new(this, EventPublisher, Services, Logger, envelope);
 
     // Null implementations
 
     private sealed class NullEventPublisher : IEventPublisher
     {
         public static readonly NullEventPublisher Instance = new();
-        public Task PublishAsync<T>(T e, EventDirection d, CancellationToken c, string? correlationId) where T : Google.Protobuf.IMessage => Task.CompletedTask;
-        public Task SendToAsync<T>(string t, T e, CancellationToken c, string? correlationId) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task PublishAsync<T>(T e, EventDirection d, CancellationToken c, EventEnvelope? sourceEnvelope) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task SendToAsync<T>(string t, T e, CancellationToken c, EventEnvelope? sourceEnvelope) where T : Google.Protobuf.IMessage => Task.CompletedTask;
     }
 
     private sealed class EmptyServiceProvider : IServiceProvider

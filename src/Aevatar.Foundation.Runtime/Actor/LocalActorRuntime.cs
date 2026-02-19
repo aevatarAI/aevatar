@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Streaming;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,7 +42,8 @@ public sealed class LocalActorRuntime : IActorRuntime
         var agent = CreateAgentInstance(agentType);
         var router = new EventRouter(actorId);
         var logger = _services.GetService<ILoggerFactory>()?.CreateLogger(agentType.Name) ?? NullLogger.Instance;
-        var publisher = new LocalActorPublisher(actorId, router, _streams);
+        var propagationPolicy = _services.GetService<IEnvelopePropagationPolicy>();
+        var publisher = new LocalActorPublisher(actorId, router, _streams, propagationPolicy);
         var actor = new LocalActor(agent, actorId, router, _streams, logger);
 
         InjectDependencies(agent, publisher, actorId, logger);

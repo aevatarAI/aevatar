@@ -18,14 +18,16 @@
 - `EventPipelineBuilder`：合并并排序静态/动态处理器
 - `RunManager`：latest-wins 的运行上下文管理
 - `AsyncLocalAgentContext`：上下文注入与提取
+- `DefaultEnvelopePropagationPolicy` / `DefaultCorrelationLinkPolicy`：事件关联字段自动透传策略
 
 ## 典型流程
 
 1. Runtime 创建 Agent 并注入依赖
 2. Agent 激活时恢复模块、状态和配置
-3. 事件到达后构建统一 Pipeline
+3. 事件到达后以 Raw `EventEnvelope` 构建统一 Pipeline
 4. 按优先级依次执行处理器，并触发 Hook
-5. Agent 停用时保存状态
+5. 出站事件按传播策略自动继承 `correlation_id` 并写入 `metadata["trace.causation_id"]`
+6. Agent 停用时保存状态
 
 ## 依赖
 

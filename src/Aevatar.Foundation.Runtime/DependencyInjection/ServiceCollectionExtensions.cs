@@ -7,6 +7,8 @@ using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Context;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Propagation;
+using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -53,6 +55,8 @@ public static class ServiceCollectionExtensions
         // Context
         services.TryAddSingleton<IRunManager, RunManager>();
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
+        services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();
+        services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
 
         return services;
     }

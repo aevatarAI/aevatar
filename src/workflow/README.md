@@ -1,6 +1,6 @@
 # Workflow 子系统架构（`src/workflow`）
 
-本文档描述 `src/workflow` 的完整实现关系。当前语义是：一次 `Run` 本质上就是向 `WorkflowGAgent` 触发一次命令事件（`ChatRequestEvent`），后续全部通过事件流驱动执行与投影。
+本文档描述 `src/workflow` 的完整实现关系。当前语义是：一次 `Run` 本质上就是向 `WorkflowGAgent` 触发一次 `ChatRequestEvent`，后续全部通过事件流驱动执行与投影。`commandId` 保留在 CQRS/Application 侧，不注入 Actor 事件 payload 或 Envelope metadata。
 
 ## 1. 分层与项目依赖图
 
@@ -92,6 +92,7 @@ flowchart LR
   LIFE["ProjectionLifecycleService"]
   REG["ProjectionSubscriptionRegistry"]
   HUB["ActorStreamSubscriptionHub(EventEnvelope)"]
+  DIS["ProjectionDispatcher"]
   COOR["ProjectionCoordinator"]
 
   RM["WorkflowExecutionReadModelProjector"]
@@ -110,7 +111,8 @@ flowchart LR
   LIFE --> REG
   REG --> HUB
   HUB --> ES
-  ES --> COOR
+  ES --> DIS
+  DIS --> COOR
 
   COOR --> RM
   RM --> RED
@@ -157,5 +159,6 @@ flowchart TD
 ## 5. 关键实现约束
 
 - Host 仅做协议适配与 DI 组合，不承载业务编排。
+- Actor 事件域不承载 CQRS 命令语义：不在 `EventEnvelope` metadata 与 `StartWorkflowEvent` 中传递 `commandId`。
 - `WorkflowExecutionProjectionService` 以 `ActorId` 为共享投影上下文键，同一 Actor 多次触发共享读模型与事件流。
 - CQRS 与 AGUI 复用同一输入事件流（统一 `ProjectionCoordinator`），通过不同 Projector 分支输出。

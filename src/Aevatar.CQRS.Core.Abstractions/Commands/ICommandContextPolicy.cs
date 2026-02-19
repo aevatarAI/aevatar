@@ -7,6 +7,4 @@ public interface ICommandContextPolicy
         IReadOnlyDictionary<string, string>? metadata = null,
         string? commandId = null,
         string? correlationId = null);
-
-    bool TryResolve(EventEnvelope envelope, out CommandContext context);
 }

@@ -13,6 +13,9 @@ namespace Aevatar.Foundation.Abstractions.EventModules;
 /// </summary>
 public interface IEventHandlerContext
 {
+    /// <summary>Raw inbound envelope being handled.</summary>
+    EventEnvelope InboundEnvelope { get; }
+
     /// <summary>Current agent ID.</summary>
     string AgentId { get; }
 

@@ -91,8 +91,7 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowRunCommandServi
         var baseContext = _commandContextPolicy.Create(actor.Id);
         var metadata = new Dictionary<string, string>(baseContext.Metadata, StringComparer.Ordinal)
         {
-            [WorkflowRunCommandMetadataKeys.CommandId] = baseContext.CommandId,
-            [WorkflowRunCommandMetadataKeys.SessionId] = baseContext.CommandId,
+            [WorkflowRunCommandMetadataKeys.SessionId] = baseContext.CorrelationId,
         };
         var commandContext = new CommandContext(
             baseContext.TargetId,
