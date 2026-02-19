@@ -11,7 +11,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : IWorkflowChatRequestE
         var chatRequest = new ChatRequestEvent
         {
             Prompt = prompt,
-            SessionId = CreateInternalChatSessionId(),
+            MessageId = CreateInternalChatMessageId(),
         };
         chatRequest.Metadata[ChatRequestMetadataKeys.RunId] = runId;
 
@@ -25,5 +25,5 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : IWorkflowChatRequestE
         };
     }
 
-    private static string CreateInternalChatSessionId() => $"chat-{Guid.NewGuid():N}";
+    private static string CreateInternalChatMessageId() => $"chat-{Guid.NewGuid():N}";
 }

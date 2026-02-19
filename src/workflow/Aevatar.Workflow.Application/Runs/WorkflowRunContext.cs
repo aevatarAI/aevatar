@@ -6,7 +6,9 @@ namespace Aevatar.Workflow.Application.Runs;
 
 internal sealed class WorkflowRunContext
 {
-    public required IActor Actor { get; init; }
+    public required IActor WorkflowActor { get; init; }
+
+    public required IActor ExecutionActor { get; init; }
 
     public required string WorkflowName { get; init; }
 
@@ -14,11 +16,13 @@ internal sealed class WorkflowRunContext
 
     public required IWorkflowRunEventSink Sink { get; init; }
 
-    public string ActorId => Actor.Id;
+    public string WorkflowActorId => WorkflowActor.Id;
+
+    public string ExecutionActorId => ExecutionActor.Id;
 
     public string RunId => ProjectionRun.RunId;
 
-    public WorkflowChatRunStarted ToStarted() => new(ActorId, WorkflowName, RunId);
+    public WorkflowChatRunStarted ToStarted() => new(ExecutionActorId, WorkflowName, RunId);
 }
 
 internal sealed record WorkflowRunContextCreateResult(

@@ -39,7 +39,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowExecutionRunIdResolver, WorkflowCoreRunIdResolver>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowExecutionRunIdResolver, AIChatSessionRunIdResolver>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowExecutionRunIdResolver, AIChatMessageRunIdResolver>());
         RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
         services.TryAddSingleton<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
         services.TryAddSingleton<IProjectionCompletionDetector<WorkflowExecutionProjectionContext>, WorkflowCompletedEventProjectionCompletionDetector<WorkflowExecutionProjectionContext>>();

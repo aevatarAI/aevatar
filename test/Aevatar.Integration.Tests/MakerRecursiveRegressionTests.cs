@@ -119,7 +119,7 @@ public class MakerRecursiveRegressionTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "maker-regression" }),
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = input, MessageId = "maker-regression" }),
             PublisherId = "test",
             Direction = EventDirection.Self,
         });

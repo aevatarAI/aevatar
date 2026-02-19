@@ -139,7 +139,7 @@ public class WorkflowExecutionReportWriterTests
                     {
                         Timestamp = started.AddMilliseconds(700),
                         RoleId = "role-a",
-                        SessionId = "s-1",
+                        MessageId = "s-1",
                         Content = "reply",
                         ContentLength = 5,
                     },

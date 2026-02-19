@@ -3,6 +3,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Orchestration;
+using Aevatar.Workflow.Core;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Application.Runs;
@@ -72,7 +73,7 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
             var finalizeResult = await _runOrchestrator.FinalizeAsync(
                 runContext.ProjectionRun,
                 _runtime,
-                runContext.ActorId,
+                runContext.ExecutionActorId,
                 ct);
             finalized = true;
 
@@ -93,20 +94,27 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         }
         finally
         {
-            if (finalized)
+            try
             {
-                await DisposeSinkSafeAsync(runContext.Sink);
+                if (finalized)
+                {
+                    await DisposeSinkSafeAsync(runContext.Sink);
+                }
+                else
+                {
+                    try
+                    {
+                        await AbortCoreAsync(runContext, processingTask);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Abort workflow projection run failed during cleanup.");
+                    }
+                }
             }
-            else
+            finally
             {
-                try
-                {
-                    await AbortCoreAsync(runContext, processingTask);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Abort workflow projection run failed during cleanup.");
-                }
+                await DestroyExecutionActorSafeAsync(runContext.ExecutionActorId, CancellationToken.None);
             }
         }
     }
@@ -116,31 +124,46 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         CancellationToken ct)
     {
         var actorResolution = await _actorResolver.ResolveOrCreateAsync(request, ct);
-        if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Actor == null)
+        if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.WorkflowActor == null)
             return new WorkflowRunContextCreateResult(actorResolution.Error, null);
 
-        var actor = actorResolution.Actor;
+        var workflowActor = actorResolution.WorkflowActor;
         var workflowNameForRun = actorResolution.WorkflowNameForRun;
+        var workflowYamlForRun = actorResolution.WorkflowYamlForRun;
         var sink = new WorkflowRunEventChannel();
+        var runId = GenerateRunId();
+        IActor? executionActor = null;
 
         WorkflowProjectionRun projectionRun;
         try
         {
+            executionActor = await _runtime.CreateAsync<WorkflowExecutionGAgent>(runId, ct);
+            if (executionActor.Agent is not WorkflowExecutionGAgent executionAgent)
+                throw new InvalidOperationException("Created execution actor is not WorkflowExecutionGAgent.");
+
+            executionAgent.BindWorkflowAgentId(workflowActor.Id);
+            executionAgent.ConfigureWorkflow(workflowYamlForRun, workflowNameForRun);
+            await _runtime.LinkAsync(workflowActor.Id, executionActor.Id, ct);
+
             projectionRun = await _runOrchestrator.StartAsync(
-                actor.Id,
+                executionActor.Id,
                 workflowNameForRun,
                 request.Prompt,
                 sink,
+                runId,
                 ct);
         }
         catch
         {
+            if (executionActor != null)
+                await DestroyExecutionActorSafeAsync(executionActor.Id, CancellationToken.None);
             await sink.DisposeAsync();
             throw;
         }
 
         if (!projectionRun.Session.Enabled)
         {
+            await DestroyExecutionActorSafeAsync(runId, CancellationToken.None);
             await sink.DisposeAsync();
             return new WorkflowRunContextCreateResult(
                 WorkflowChatRunStartError.ProjectionDisabled,
@@ -151,7 +174,8 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
             WorkflowChatRunStartError.None,
             new WorkflowRunContext
             {
-                Actor = actor,
+                WorkflowActor = workflowActor,
+                ExecutionActor = executionActor!,
                 WorkflowName = workflowNameForRun,
                 ProjectionRun = projectionRun,
                 Sink = sink,
@@ -163,8 +187,8 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
         EventEnvelope requestEnvelope,
         CancellationToken ct) =>
         _requestExecutor.ExecuteAsync(
-            runContext.Actor,
-            runContext.ActorId,
+            runContext.ExecutionActor,
+            runContext.ExecutionActorId,
             runContext.RunId,
             requestEnvelope,
             runContext.Sink,
@@ -218,5 +242,22 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowChatRunApplicat
     {
         sink.Complete();
         await sink.DisposeAsync();
+    }
+
+    private static string GenerateRunId() => Guid.NewGuid().ToString("N");
+
+    private async Task DestroyExecutionActorSafeAsync(string executionActorId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(executionActorId))
+            return;
+
+        try
+        {
+            await _runtime.DestroyAsync(executionActorId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Destroy execution actor failed: {ExecutionActorId}", executionActorId);
+        }
     }
 }

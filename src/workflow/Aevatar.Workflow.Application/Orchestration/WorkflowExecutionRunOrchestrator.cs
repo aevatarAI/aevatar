@@ -30,9 +30,10 @@ public sealed class WorkflowExecutionRunOrchestrator : IWorkflowExecutionRunOrch
         string workflowName,
         string prompt,
         IWorkflowRunEventSink sink,
+        string? runId = null,
         CancellationToken ct = default)
     {
-        var session = await _projectionPort.StartAsync(actorId, workflowName, prompt, sink, ct);
+        var session = await _projectionPort.StartAsync(actorId, workflowName, prompt, sink, runId, ct);
         return new WorkflowProjectionRun(session);
     }
 

@@ -127,7 +127,7 @@ public static class WorkflowExecutionReportWriter
             foreach (var reply in report.RoleReplies)
             {
                 sb.AppendLine("<details>");
-                sb.AppendLine($"<summary><code>{E(reply.RoleId)}</code> session={E(reply.SessionId)} chars={reply.ContentLength} time={E(reply.Timestamp.ToString("HH:mm:ss.fff"))}</summary>");
+                sb.AppendLine($"<summary><code>{E(reply.RoleId)}</code> message={E(reply.MessageId)} chars={reply.ContentLength} time={E(reply.Timestamp.ToString("HH:mm:ss.fff"))}</summary>");
                 sb.AppendLine($"<pre>{E(reply.Content)}</pre>");
                 sb.AppendLine("</details>");
             }

@@ -103,7 +103,7 @@ public sealed class InMemoryWorkflowExecutionReadModelStore
     {
         Timestamp = source.Timestamp,
         RoleId = source.RoleId,
-        SessionId = source.SessionId,
+        MessageId = source.MessageId,
         Content = source.Content,
         ContentLength = source.ContentLength,
     };

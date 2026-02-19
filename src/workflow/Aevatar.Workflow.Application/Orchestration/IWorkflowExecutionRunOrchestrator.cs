@@ -12,6 +12,7 @@ public interface IWorkflowExecutionRunOrchestrator
         string workflowName,
         string prompt,
         IWorkflowRunEventSink sink,
+        string? runId = null,
         CancellationToken ct = default);
 
     Task<WorkflowProjectionFinalizeResult> FinalizeAsync(

@@ -36,6 +36,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
+    private readonly Dictionary<string, string> _roleActorIdsByRoleId = new(StringComparer.OrdinalIgnoreCase);
     private readonly IActorRuntime _runtime;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IReadOnlyList<IEventModuleFactory> _eventModuleFactories;
@@ -81,6 +82,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             State.WorkflowName = workflowName;
 
         _childAgentIds.Clear();
+        _roleActorIdsByRoleId.Clear();
 
         if (string.IsNullOrWhiteSpace(State.WorkflowYaml))
         {
@@ -109,13 +111,30 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
     {
+        if (!ValidateBeforeRun(request, out var validationError))
+        {
+            await PublishAsync(new ChatResponseEvent
+            {
+                Content = validationError ?? "工作流执行校验失败",
+                MessageId = request.MessageId,
+            }, EventDirection.Up);
+            return;
+        }
+
         if (_compiledWorkflow == null)
         {
             await PublishAsync(new ChatResponseEvent
             {
-                Content = "工作流未编译或未配置", SessionId = request.SessionId,
+                Content = "工作流未编译或未配置", MessageId = request.MessageId,
             }, EventDirection.Up);
             return;
+        }
+
+        if (GetType() == typeof(WorkflowGAgent))
+        {
+            Logger.LogWarning(
+                "WorkflowGAgent {ActorId} is handling ChatRequestEvent directly. This path is kept for compatibility and will be deprecated; prefer per-run WorkflowExecutionGAgent.",
+                Id);
         }
 
         await EnsureAgentTreeAsync();
@@ -133,7 +152,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
 
     /// <summary>处理工作流完成事件：汇总结果，更新统计。</summary>
     [EventHandler]
-    public async Task HandleWorkflowCompleted(WorkflowCompletedEvent evt)
+    public virtual async Task HandleWorkflowCompleted(WorkflowCompletedEvent evt)
     {
         Logger.LogInformation("工作流 {Name} 完成: {Success}", evt.WorkflowName, evt.Success);
         State.TotalExecutions++;
@@ -144,6 +163,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         await PublishAsync(new TextMessageEndEvent
         {
             Content = evt.Success ? evt.Output : $"工作流执行失败: {evt.Error}",
+            MessageId = evt.RunId,
         }, EventDirection.Up);
     }
 
@@ -158,7 +178,8 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
 
         foreach (var role in _compiledWorkflow.Roles)
         {
-            var actor = await _runtime.CreateAsync(roleAgentType, role.Id);
+            var roleActorId = ResolveRoleActorId(role.Id);
+            var actor = await _runtime.CreateAsync(roleAgentType, roleActorId);
             if (actor.Agent is IRoleAgent roleAgent)
             {
                 roleAgent.SetRoleName(role.Name);
@@ -177,6 +198,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
 
             await _runtime.LinkAsync(Id, actor.Id);
             _childAgentIds.Add(actor.Id);
+            _roleActorIdsByRoleId[role.Id] = actor.Id;
         }
         Logger.LogInformation("Agent 树创建完成: {Count} 个 role agents", _childAgentIds.Count);
     }
@@ -223,7 +245,42 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             configurator.Configure(module, _compiledWorkflow);
     }
 
-    private static string ResolveRunId(ChatRequestEvent request)
+    /// <summary>
+    /// Allows subclasses to inject pre-run validation.
+    /// </summary>
+    protected virtual bool ValidateBeforeRun(ChatRequestEvent request, out string? validationError)
+    {
+        validationError = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Resolves the physical actor ID for a logical workflow role ID.
+    /// </summary>
+    /// <param name="roleId">Logical role ID in workflow definition.</param>
+    /// <returns>Physical actor ID used by runtime routing.</returns>
+    public string ResolveTargetRoleActorId(string roleId)
+    {
+        if (string.IsNullOrWhiteSpace(roleId))
+            return roleId;
+
+        return _roleActorIdsByRoleId.TryGetValue(roleId, out var actorId)
+            ? actorId
+            : roleId;
+    }
+
+    /// <summary>
+    /// Returns current workflow definition snapshot for execution-agent bootstrap.
+    /// </summary>
+    public WorkflowDefinitionSnapshot GetWorkflowDefinitionSnapshot() =>
+        new(State.WorkflowYaml, State.WorkflowName);
+
+    /// <summary>
+    /// Allows subclasses to customize physical actor IDs for role agents.
+    /// </summary>
+    protected virtual string ResolveRoleActorId(string roleId) => roleId;
+
+    protected virtual string ResolveRunId(ChatRequestEvent request)
     {
         if (request.Metadata.TryGetValue(ChatRequestMetadataKeys.RunId, out var runIdFromMetadata) &&
             !string.IsNullOrWhiteSpace(runIdFromMetadata))

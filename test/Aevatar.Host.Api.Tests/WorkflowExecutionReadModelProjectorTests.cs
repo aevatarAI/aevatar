@@ -78,7 +78,7 @@ public class WorkflowExecutionReadModelProjectorTests
         }));
         await coordinator.ProjectAsync(context, Wrap(new AIEvents.TextMessageEndEvent
         {
-            SessionId = "wf-run-1:s1",
+            MessageId = "wf-run-1:s1",
             Content = "analysis result",
         }, "assistant"));
         await coordinator.ProjectAsync(context, Wrap(new WorkflowCompletedEvent

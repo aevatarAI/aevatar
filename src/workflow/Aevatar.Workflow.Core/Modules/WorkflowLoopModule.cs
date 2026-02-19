@@ -132,7 +132,18 @@ public sealed class WorkflowLoopModule : IEventModule
         ctx.Logger.LogInformation("workflow_loop: dispatch step={StepId} type={Type} role={Role} input=({Len} chars) {Preview}",
             step.Id, step.Type, step.TargetRole ?? "(none)", input.Length, inputPreview);
 
-        var req = new StepRequestEvent { StepId = step.Id, StepType = step.Type, RunId = runId, Input = input, TargetRole = step.TargetRole ?? "" };
+        var resolvedTargetRole = step.TargetRole ?? "";
+        if (!string.IsNullOrWhiteSpace(resolvedTargetRole) && ctx.Agent is WorkflowGAgent workflowAgent)
+            resolvedTargetRole = workflowAgent.ResolveTargetRoleActorId(resolvedTargetRole);
+
+        var req = new StepRequestEvent
+        {
+            StepId = step.Id,
+            StepType = step.Type,
+            RunId = runId,
+            Input = input,
+            TargetRole = resolvedTargetRole,
+        };
         foreach (var (k, v) in step.Parameters) req.Parameters[k] = v;
 
         // 当步骤指定了 TargetRole 且该角色配置了 connectors 允许列表时，注入 allowed_connectors 供 ConnectorCallModule 校验

@@ -75,7 +75,7 @@ public class EventEnvelopeToAGUIEventMapperTests
     {
         var envelope = Wrap(new ChatResponseEvent
         {
-            Content = "分析结果如下...", SessionId = "s1",
+            Content = "分析结果如下...", MessageId = "s1",
         });
 
         var events = CreateMapper().Map(envelope);
@@ -94,13 +94,44 @@ public class EventEnvelopeToAGUIEventMapperTests
     {
         var envelope = Wrap(new Aevatar.AI.Abstractions.TextMessageContentEvent
         {
-            Delta = "部分", SessionId = "s1",
+            Delta = "部分", MessageId = "s1",
         });
 
         var events = CreateMapper().Map(envelope);
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageContentEvent>();
+    }
+
+    [Fact]
+    public void TextMessageStreamEvents_ShouldKeepSameMessageId()
+    {
+        const string messageId = "run-1:s1";
+        var mapper = CreateMapper();
+
+        var start = mapper.Map(Wrap(new Aevatar.AI.Abstractions.TextMessageStartEvent
+        {
+            MessageId = messageId,
+            AgentId = "assistant",
+        }));
+        var content = mapper.Map(Wrap(new Aevatar.AI.Abstractions.TextMessageContentEvent
+        {
+            MessageId = messageId,
+            Delta = "abc",
+        }));
+        var end = mapper.Map(Wrap(new Aevatar.AI.Abstractions.TextMessageEndEvent
+        {
+            MessageId = messageId,
+            Content = "abc",
+        }));
+
+        var startEvent = start.Should().ContainSingle().Subject.Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageStartEvent>().Subject;
+        var contentEvent = content.Should().ContainSingle().Subject.Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageContentEvent>().Subject;
+        var endEvent = end.Should().ContainSingle().Subject.Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageEndEvent>().Subject;
+
+        startEvent.MessageId.Should().Be("msg:run-1:s1");
+        contentEvent.MessageId.Should().Be(startEvent.MessageId);
+        endEvent.MessageId.Should().Be(startEvent.MessageId);
     }
 
     [Fact]

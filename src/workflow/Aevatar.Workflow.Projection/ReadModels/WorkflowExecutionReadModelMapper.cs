@@ -62,7 +62,7 @@ public sealed class WorkflowExecutionReadModelMapper
                 {
                     Timestamp = x.Timestamp,
                     RoleId = x.RoleId,
-                    SessionId = x.SessionId,
+                    MessageId = x.MessageId,
                     Content = x.Content,
                     ContentLength = x.ContentLength,
                 })

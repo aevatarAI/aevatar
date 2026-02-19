@@ -11,6 +11,7 @@ public interface IWorkflowRunActorResolver
 }
 
 public sealed record WorkflowActorResolutionResult(
-    IActor? Actor,
+    IActor? WorkflowActor,
     string WorkflowNameForRun,
+    string WorkflowYamlForRun,
     WorkflowChatRunStartError Error);

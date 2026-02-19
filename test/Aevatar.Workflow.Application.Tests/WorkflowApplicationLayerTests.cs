@@ -1,4 +1,6 @@
+using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
@@ -8,6 +10,8 @@ using Aevatar.Workflow.Application.Orchestration;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Workflows;
+using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Composition;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -40,6 +44,33 @@ public class WorkflowChatRunApplicationServiceTests
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
         result.Started.Should().BeNull();
         orchestrator.StartCalled.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenExistingWorkflowActorHasNoYaml_ShouldFailFast()
+    {
+        var resolverRuntime = new FakeActorRuntime(
+        [
+            new FakeActor(
+                "workflow-a",
+                null,
+                new WorkflowGAgent(
+                    new FakeActorRuntime([]),
+                    new FakeRoleAgentTypeResolver(),
+                    Array.Empty<IEventModuleFactory>(),
+                    Array.Empty<IWorkflowModuleDependencyExpander>(),
+                    Array.Empty<IWorkflowModuleConfigurator>())),
+        ]);
+        var registry = new WorkflowDefinitionRegistry();
+        var resolver = new WorkflowRunActorResolver(resolverRuntime, registry);
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", null, "workflow-a"),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
+        result.WorkflowActor.Should().BeNull();
+        result.WorkflowYamlForRun.Should().BeEmpty();
     }
 }
 
@@ -136,10 +167,11 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
         string workflowName,
         string input,
         IWorkflowRunEventSink sink,
+        string? runId = null,
         CancellationToken ct = default) =>
         Task.FromResult(new WorkflowProjectionSession
         {
-            RunId = Guid.NewGuid().ToString("N"),
+            RunId = runId ?? Guid.NewGuid().ToString("N"),
             StartedAt = DateTimeOffset.UtcNow,
             Enabled = ProjectionEnabled,
         });
@@ -170,7 +202,7 @@ internal sealed class SpyRunOrchestrator : IWorkflowExecutionRunOrchestrator
 {
     public bool StartCalled { get; private set; }
 
-    public Task<WorkflowProjectionRun> StartAsync(string actorId, string workflowName, string prompt, IWorkflowRunEventSink sink, CancellationToken ct = default)
+    public Task<WorkflowProjectionRun> StartAsync(string actorId, string workflowName, string prompt, IWorkflowRunEventSink sink, string? runId = null, CancellationToken ct = default)
     {
         StartCalled = true;
         throw new InvalidOperationException("StartAsync should not be called in this test.");
@@ -202,6 +234,11 @@ internal sealed class NoopReportSink : IWorkflowExecutionReportArtifactSink
 {
     public Task PersistAsync(WorkflowRunReport report, CancellationToken ct = default) =>
         Task.CompletedTask;
+}
+
+internal sealed class FakeRoleAgentTypeResolver : IRoleAgentTypeResolver
+{
+    public Type ResolveRoleAgentType() => typeof(FakeAgent);
 }
 
 internal sealed class FakeActorRuntime : IActorRuntime

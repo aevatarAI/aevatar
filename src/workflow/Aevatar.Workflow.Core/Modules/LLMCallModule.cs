@@ -55,9 +55,9 @@ public sealed class LLMCallModule : IEventModule
                 prompt = prefix.TrimEnd() + "\n\n" + prompt;
             }
 
-            // Use per-step session id to avoid collisions across concurrent llm_call steps.
-            var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(request.RunId, request.StepId);
-            _pending[chatSessionId] = request;
+            // Use per-step message id to avoid collisions across concurrent llm_call steps.
+            var chatMessageId = ChatMessageKeys.CreateWorkflowStepMessageId(request.RunId, request.StepId);
+            _pending[chatMessageId] = request;
 
             var targetRole = request.TargetRole;
             var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
@@ -69,7 +69,7 @@ public sealed class LLMCallModule : IEventModule
                     "LLMCallModule: step={StepId} → SendTo role={Role} prompt=({Len} chars) {Preview}",
                     request.StepId, targetRole, prompt.Length, promptPreview);
 
-                var chatEvt = new ChatRequestEvent { Prompt = prompt, SessionId = chatSessionId };
+                var chatEvt = new ChatRequestEvent { Prompt = prompt, MessageId = chatMessageId };
                 await gab.EventPublisher.SendToAsync(targetRole, chatEvt, ct);
             }
             else
@@ -81,7 +81,7 @@ public sealed class LLMCallModule : IEventModule
 
                 await ctx.PublishAsync(new ChatRequestEvent
                 {
-                    Prompt = prompt, SessionId = chatSessionId,
+                    Prompt = prompt, MessageId = chatMessageId,
                 }, EventDirection.Self, ct);
             }
             return;
@@ -91,10 +91,10 @@ public sealed class LLMCallModule : IEventModule
         if (payload.Is(TextMessageEndEvent.Descriptor))
         {
             var evt = payload.Unpack<TextMessageEndEvent>();
-            var sessionId = evt.SessionId;
-            if (string.IsNullOrEmpty(sessionId)) return;
-            if (!_pending.TryGetValue(sessionId, out var pending)) return;
-            _pending.Remove(sessionId);
+            var messageId = evt.MessageId;
+            if (string.IsNullOrEmpty(messageId)) return;
+            if (!_pending.TryGetValue(messageId, out var pending)) return;
+            _pending.Remove(messageId);
 
             var outputPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";
             ctx.Logger.LogInformation(
@@ -114,10 +114,10 @@ public sealed class LLMCallModule : IEventModule
         if (payload.Is(ChatResponseEvent.Descriptor))
         {
             var evt = payload.Unpack<ChatResponseEvent>();
-            var sessionId = evt.SessionId;
-            if (string.IsNullOrEmpty(sessionId)) return;
-            if (!_pending.TryGetValue(sessionId, out var pending)) return;
-            _pending.Remove(sessionId);
+            var messageId = evt.MessageId;
+            if (string.IsNullOrEmpty(messageId)) return;
+            if (!_pending.TryGetValue(messageId, out var pending)) return;
+            _pending.Remove(messageId);
 
             var nsPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";
             ctx.Logger.LogInformation(

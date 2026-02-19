@@ -167,7 +167,7 @@ public class WorkflowIntegrationTests
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new ChatRequestEvent
             {
                 Prompt = "分析量子纠缠的最新进展",
-                SessionId = "test-session",
+                MessageId = "test-session",
             }),
             PublisherId = "test",
             Direction = EventDirection.Self,
@@ -299,7 +299,7 @@ public class WorkflowIntegrationTests
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new ChatRequestEvent
             {
                 Prompt = "分析量子纠缠",
-                SessionId = "test",
+                MessageId = "test",
             }),
             PublisherId = "test",
             Direction = EventDirection.Down,

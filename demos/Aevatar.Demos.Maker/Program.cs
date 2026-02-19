@@ -212,9 +212,9 @@ await using var sub = await stream.SubscribeAsync<EventEnvelope>(envelope =>
     if (payload.Is(TextMessageStartEvent.Descriptor))
     {
         var evt = payload.Unpack<TextMessageStartEvent>();
-        logger.LogInformation("Role stream started: agent={AgentId}, session={SessionId}",
+        logger.LogInformation("Role stream started: agent={AgentId}, message={MessageId}",
             string.IsNullOrWhiteSpace(evt.AgentId) ? envelope.PublisherId : evt.AgentId,
-            evt.SessionId);
+            evt.MessageId);
     }
 
     if (payload.Is(TextMessageEndEvent.Descriptor))
@@ -281,7 +281,7 @@ logger.LogInformation("Input: {Len} chars", inputText.Length);
 // ─── Send request ───
 
 var runStartedAt = DateTimeOffset.UtcNow;
-var chatEvt = new ChatRequestEvent { Prompt = inputText, SessionId = "maker-demo" };
+var chatEvt = new ChatRequestEvent { Prompt = inputText, MessageId = "maker-demo" };
 var envelope = new EventEnvelope
 {
     Id = Guid.NewGuid().ToString("N"),

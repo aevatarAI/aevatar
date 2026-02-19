@@ -14,6 +14,7 @@ public interface IWorkflowExecutionProjectionPort
         string workflowName,
         string input,
         IWorkflowRunEventSink sink,
+        string? runId = null,
         CancellationToken ct = default);
 
     Task<WorkflowProjectionCompletionStatus> WaitForRunProjectionCompletionStatusAsync(

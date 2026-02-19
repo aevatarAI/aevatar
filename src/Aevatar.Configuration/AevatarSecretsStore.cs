@@ -30,11 +30,13 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
     private const string KeychainAccount = "aevatar-masterkey";
 
     private readonly string _filePath;
+    private readonly bool _enableEncryption;
     private Dictionary<string, string> _secrets = new(StringComparer.OrdinalIgnoreCase);
 
-    public AevatarSecretsStore(string? filePath = null)
+    public AevatarSecretsStore(string? filePath = null, bool enableEncryption = true)
     {
         _filePath = filePath ?? AevatarPaths.SecretsJson;
+        _enableEncryption = enableEncryption;
         Load();
     }
 
@@ -103,8 +105,8 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
 
         if (string.IsNullOrWhiteSpace(json)) return;
 
-        // Try encrypted format first
-        if (TryLoadEncrypted(json))
+        // Try encrypted format first (unless encryption is explicitly disabled).
+        if (_enableEncryption && TryLoadEncrypted(json))
             return;
 
         // Fallback: plaintext JSON
@@ -152,6 +154,12 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
 
     private void Save()
     {
+        if (!_enableEncryption)
+        {
+            SavePlaintext();
+            return;
+        }
+
         var masterKey = TryGetMasterKey();
         if (masterKey != null && TrySaveEncrypted(masterKey))
             return;

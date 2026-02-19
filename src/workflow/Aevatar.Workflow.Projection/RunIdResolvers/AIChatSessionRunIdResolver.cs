@@ -3,7 +3,7 @@ using AIEvents = Aevatar.AI.Abstractions;
 
 namespace Aevatar.Workflow.Projection.RunIdResolvers;
 
-public sealed class AIChatSessionRunIdResolver : IWorkflowExecutionRunIdResolver
+public sealed class AIChatMessageRunIdResolver : IWorkflowExecutionRunIdResolver
 {
     public int Order => 100;
 
@@ -15,16 +15,16 @@ public sealed class AIChatSessionRunIdResolver : IWorkflowExecutionRunIdResolver
             return false;
 
         if (payload.Is(AIEvents.TextMessageStartEvent.Descriptor))
-            return ChatSessionKeys.TryParseWorkflowRunId(payload.Unpack<AIEvents.TextMessageStartEvent>().SessionId, out runId);
+            return ChatMessageKeys.TryParseWorkflowRunId(payload.Unpack<AIEvents.TextMessageStartEvent>().MessageId, out runId);
 
         if (payload.Is(AIEvents.TextMessageContentEvent.Descriptor))
-            return ChatSessionKeys.TryParseWorkflowRunId(payload.Unpack<AIEvents.TextMessageContentEvent>().SessionId, out runId);
+            return ChatMessageKeys.TryParseWorkflowRunId(payload.Unpack<AIEvents.TextMessageContentEvent>().MessageId, out runId);
 
         if (payload.Is(AIEvents.TextMessageEndEvent.Descriptor))
-            return ChatSessionKeys.TryParseWorkflowRunId(payload.Unpack<AIEvents.TextMessageEndEvent>().SessionId, out runId);
+            return ChatMessageKeys.TryParseWorkflowRunId(payload.Unpack<AIEvents.TextMessageEndEvent>().MessageId, out runId);
 
         if (payload.Is(AIEvents.ChatResponseEvent.Descriptor))
-            return ChatSessionKeys.TryParseWorkflowRunId(payload.Unpack<AIEvents.ChatResponseEvent>().SessionId, out runId);
+            return ChatMessageKeys.TryParseWorkflowRunId(payload.Unpack<AIEvents.ChatResponseEvent>().MessageId, out runId);
 
         return false;
     }

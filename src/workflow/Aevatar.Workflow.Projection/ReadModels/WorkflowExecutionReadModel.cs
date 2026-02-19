@@ -81,7 +81,7 @@ public sealed class WorkflowExecutionRoleReply
 {
     public DateTimeOffset Timestamp { get; set; }
     public string RoleId { get; set; } = "";
-    public string SessionId { get; set; } = "";
+    public string MessageId { get; set; } = "";
     public string Content { get; set; } = "";
     public int ContentLength { get; set; }
 }

@@ -214,7 +214,7 @@ public class ConnectorCallIntegrationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "test-session" }),
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = input, MessageId = "test-session" }),
             PublisherId = "test",
             Direction = EventDirection.Self,
         });

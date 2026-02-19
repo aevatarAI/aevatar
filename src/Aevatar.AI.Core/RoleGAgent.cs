@@ -59,7 +59,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         // ─── AG-UI: TEXT_MESSAGE_START ───
         await PublishAsync(new TextMessageStartEvent
         {
-            SessionId = request.SessionId,
+            MessageId = request.MessageId,
             AgentId = Id,
         }, EventDirection.Up);
 
@@ -71,7 +71,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             await PublishAsync(new TextMessageContentEvent
             {
                 Delta = chunk,
-                SessionId = request.SessionId,
+                MessageId = request.MessageId,
             }, EventDirection.Up);
         }
 
@@ -86,7 +86,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         await PublishAsync(new TextMessageEndEvent
         {
             Content = response,
-            SessionId = request.SessionId,
+            MessageId = request.MessageId,
         }, EventDirection.Up);
     }
 }

@@ -21,7 +21,7 @@ public sealed class TextMessageEndEventReducer : WorkflowExecutionEventReducerBa
             {
                 Timestamp = now,
                 RoleId = publisher,
-                SessionId = evt.SessionId ?? "",
+                MessageId = evt.MessageId ?? "",
                 Content = evt.Content ?? "",
                 ContentLength = (evt.Content ?? "").Length,
             });
@@ -38,7 +38,7 @@ public sealed class TextMessageEndEventReducer : WorkflowExecutionEventReducerBa
             envelope.Payload?.TypeUrl ?? "",
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["session_id"] = evt.SessionId ?? "",
+                ["message_id"] = evt.MessageId ?? "",
             });
     }
 }

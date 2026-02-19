@@ -49,29 +49,30 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         string workflowName,
         string input,
         IWorkflowRunEventSink sink,
+        string? runId = null,
         CancellationToken ct = default)
     {
-        var runId = _runIdGenerator.NextRunId();
+        var resolvedRunId = string.IsNullOrWhiteSpace(runId) ? _runIdGenerator.NextRunId() : runId;
         var startedAt = _clock.UtcNow;
 
         if (!ProjectionEnabled)
         {
             return new WorkflowProjectionSession
             {
-                RunId = runId,
+                RunId = resolvedRunId,
                 StartedAt = startedAt,
                 Enabled = false,
             };
         }
 
-        var context = _contextFactory.Create(runId, rootActorId, workflowName, input, startedAt);
+        var context = _contextFactory.Create(resolvedRunId, rootActorId, workflowName, input, startedAt);
         context.SetRunEventSink(sink);
         await _lifecycle.StartAsync(context, ct);
-        _contexts[runId] = context;
+        _contexts[resolvedRunId] = context;
 
         return new WorkflowProjectionSession
         {
-            RunId = runId,
+            RunId = resolvedRunId,
             StartedAt = startedAt,
             Enabled = true,
         };

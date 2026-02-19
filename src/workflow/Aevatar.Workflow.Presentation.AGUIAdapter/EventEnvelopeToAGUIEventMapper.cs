@@ -141,7 +141,7 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
         if (payload.Is(AIEvents.TextMessageStartEvent.Descriptor))
         {
             var evt = payload.Unpack<AIEvents.TextMessageStartEvent>();
-            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
+            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.MessageId, envelope.Id);
             events =
             [
                 new AGUI.TextMessageStartEvent
@@ -157,7 +157,7 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
         if (payload.Is(AIEvents.TextMessageContentEvent.Descriptor))
         {
             var evt = payload.Unpack<AIEvents.TextMessageContentEvent>();
-            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
+            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.MessageId, envelope.Id);
             events =
             [
                 new AGUI.TextMessageContentEvent
@@ -173,7 +173,7 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
         if (payload.Is(AIEvents.TextMessageEndEvent.Descriptor))
         {
             var evt = payload.Unpack<AIEvents.TextMessageEndEvent>();
-            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
+            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.MessageId, envelope.Id);
             events =
             [
                 new AGUI.TextMessageEndEvent
@@ -188,7 +188,7 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
         if (payload.Is(AIEvents.ChatResponseEvent.Descriptor))
         {
             var evt = payload.Unpack<AIEvents.ChatResponseEvent>();
-            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
+            var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.MessageId, envelope.Id);
             events =
             [
                 new AGUI.TextMessageStartEvent
@@ -324,10 +324,10 @@ internal static class AGUIEventEnvelopeMappingHelpers
             : envelope.PublisherId;
     }
 
-    public static string ResolveMessageId(string? sessionId, string? envelopeId)
+    public static string ResolveMessageId(string? messageId, string? envelopeId)
     {
-        if (!string.IsNullOrWhiteSpace(sessionId))
-            return $"msg:{sessionId}";
+        if (!string.IsNullOrWhiteSpace(messageId))
+            return $"msg:{messageId}";
 
         return $"msg:{envelopeId}";
     }

@@ -1,4 +1,4 @@
-# 标识符关系（EventEnvelope.Id / RunId / SessionId / ActorId）
+# 标识符关系（EventEnvelope.Id / RunId / MessageId / ActorId）
 
 本文说明当前实现中几个常见标识符的职责边界与流转关系。
 
@@ -7,22 +7,26 @@
 | 标识符 | 作用域 | 谁生成 | 主要用途 |
 |---|---|---|---|
 | `EventEnvelope.Id` | 单条事件 | 事件发布方 | 去重、追踪单条消息 |
-| `RunId` | 一次 workflow 执行 | `WorkflowExecutionProjectionService` | 关联同一次运行的多条事件与读模型 |
-| `SessionId` | 一次 LLM 会话（或步骤会话） | 服务端内部 | 给 AI 消息链路分段，不等于 run |
+| `RunId` | 一次 workflow 执行 | `WorkflowChatRunApplicationService` | 关联同一次运行的多条事件与读模型 |
+| `MessageId` | 一次 AI 消息链路（或步骤消息链路） | 服务端内部 | 给 AI 消息链路分段，不等于 run |
 | `ActorId` | 一个 Actor 实例 | Runtime | 订阅粒度、线程/会话归属（`threadId`） |
 
 ## 生成点（代码）
 
-- `RunId`：`src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs`
-  - `StartAsync(...)` 中调用 `IProjectionRunIdGenerator.NextRunId()`
+- `RunId` 生成：`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRunApplicationService.cs`
+  - `GenerateRunId()` 生成 runId，并用于创建 `WorkflowExecutionGAgent`（`executionActorId = runId`）
+- `RunId` 注入投影会话：`src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs`
+  - `StartAsync(..., runId)` 接收应用层传入的 runId
 - `RunId` 注入请求：
   - `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRequestEnvelopeFactory.cs`
   - 写入 `ChatRequestEvent.Metadata["run_id"]`
-- `WorkflowGAgent` 取 `RunId`：
-  - `src/workflow/Aevatar.Workflow.Core/WorkflowGAgent.cs` 的 `ResolveRunId(...)`
-- `SessionId`：
+- `WorkflowExecutionGAgent`：
+  - `src/workflow/Aevatar.Workflow.Core/WorkflowExecutionGAgent.cs`
+  - `BindWorkflowAgentId(...)` 显式绑定长期 `WorkflowGAgent`
+  - `ConfigureWorkflow(...)` 注入运行期 workflow 快照
+- `MessageId`：
   - 请求入口会生成内部会话：`chat-{guid}`
-  - 步骤级会话常用 `runId:stepId`（见 `src/Aevatar.AI.Abstractions/ChatSessionKeys.cs`）
+  - 步骤级会话常用 `runId:stepId`（`:attempt` 预留，见 `src/Aevatar.AI.Abstractions/ChatMessageKeys.cs`）
 
 ## 流程图（执行链路）
 
@@ -31,15 +35,21 @@ sequenceDiagram
     participant Client
     participant Api as HostApi
     participant App as WorkflowApp
+    participant Workflow as WorkflowGAgent
+    participant Execution as WorkflowExecutionGAgent
     participant Projection as WorkflowExecutionProjectionService
-    participant Agent as WorkflowGAgent
 
     Client->>Api: POST /api/chat
     Api->>App: ExecuteAsync(prompt, workflow, agentId)
-    App->>Projection: StartAsync(actorId, workflowName, input)
-    Projection-->>App: RunId
-    App->>Agent: ChatRequestEvent(metadata.run_id = RunId)
-    Agent->>Agent: 发布 StartWorkflowEvent(runId)
+    App->>Workflow: ResolveOrCreate(workflow agent)
+    App->>App: Generate RunId
+    App->>Execution: Create(actorId = RunId)
+    App->>Execution: BindWorkflowAgentId(workflowAgentId)
+    App->>Execution: ConfigureWorkflow(workflowYaml, workflowName)
+    App->>Workflow: LinkAsync(workflowAgentId, executionActorId)
+    App->>Projection: StartAsync(rootActorId = RunId, runId = RunId)
+    App->>Execution: ChatRequestEvent(metadata.run_id = RunId)
+    Execution->>Execution: 发布 StartWorkflowEvent(runId)
 ```
 
 ## 流程图（投影识别 run）
@@ -62,5 +72,5 @@ flowchart LR
 ## 客户端契约（当前）
 
 - 客户端只传：`prompt`、`workflow`、`agentId?`。
-- `RunId` 与内部 `SessionId` 都由服务端生成和管理。
-- 查询读模型用 `runId`（`GET /api/runs/{runId}`）；实时流输出携带 `threadId=ActorId` 与 `runId`。
+- `RunId` 与内部 `MessageId` 都由服务端生成和管理。
+- 查询读模型用 `runId`（`GET /api/runs/{runId}`）；实时流输出统一 `threadId=executionActorId=runId`。

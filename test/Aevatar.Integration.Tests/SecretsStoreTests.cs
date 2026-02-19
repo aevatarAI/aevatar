@@ -43,12 +43,12 @@ public class SecretsStoreTests
 
         try
         {
-            var store = new AevatarSecretsStore(path);
+            var store = new AevatarSecretsStore(path, enableEncryption: false);
             store.Set("K1", "V1");
             store.Set("K2", "V2");
             store.Remove("K1");
 
-            var reloaded = new AevatarSecretsStore(path);
+            var reloaded = new AevatarSecretsStore(path, enableEncryption: false);
             reloaded.Get("K1").Should().BeNull();
             reloaded.Get("K2").Should().Be("V2");
 

@@ -170,12 +170,12 @@ internal sealed class MakerRunRecorder
                 AddTimeline(
                     now,
                     "llm.start",
-                    $"agent={evt.AgentId}, session={evt.SessionId}",
+                    $"agent={evt.AgentId}, message={evt.MessageId}",
                     envelope.PublisherId,
                     null,
                     null,
                     typeUrl,
-                    new Dictionary<string, string> { ["session_id"] = evt.SessionId, ["agent_id"] = evt.AgentId });
+                    new Dictionary<string, string> { ["message_id"] = evt.MessageId, ["agent_id"] = evt.AgentId });
                 return;
             }
 
@@ -190,7 +190,7 @@ internal sealed class MakerRunRecorder
                     {
                         Timestamp = now,
                         RoleId = publisher,
-                        SessionId = evt.SessionId ?? "",
+                        MessageId = evt.MessageId ?? "",
                         Content = evt.Content ?? "",
                         ContentLength = (evt.Content ?? "").Length,
                     });
@@ -204,7 +204,7 @@ internal sealed class MakerRunRecorder
                     null,
                     null,
                     typeUrl,
-                    new Dictionary<string, string> { ["session_id"] = evt.SessionId ?? "" });
+                    new Dictionary<string, string> { ["message_id"] = evt.MessageId ?? "" });
                 return;
             }
 
@@ -480,7 +480,7 @@ internal static class MakerRunReportWriter
             foreach (var reply in report.RoleReplies)
             {
                 sb.AppendLine("<details>");
-                sb.AppendLine($"<summary><code>{E(reply.RoleId)}</code> session={E(reply.SessionId)} chars={reply.ContentLength} time={E(reply.Timestamp.ToString("HH:mm:ss.fff"))}</summary>");
+                sb.AppendLine($"<summary><code>{E(reply.RoleId)}</code> message={E(reply.MessageId)} chars={reply.ContentLength} time={E(reply.Timestamp.ToString("HH:mm:ss.fff"))}</summary>");
                 sb.AppendLine($"<pre>{E(reply.Content)}</pre>");
                 sb.AppendLine("</details>");
             }
@@ -583,7 +583,7 @@ internal sealed class MakerRoleReply
 {
     public DateTimeOffset Timestamp { get; set; }
     public string RoleId { get; set; } = "";
-    public string SessionId { get; set; } = "";
+    public string MessageId { get; set; } = "";
     public string Content { get; set; } = "";
     public int ContentLength { get; set; }
 }
