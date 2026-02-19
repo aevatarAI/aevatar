@@ -8,7 +8,7 @@
 2. 框架层项目职责与依赖关系。
 3. 命令执行链路、投影链路、状态持久化链路。
 4. Wolverine / MassTransit 并行实现策略。
-5. Saga 与 CQRS 的关系（可选编排层，不替代读模型）。
+5. CQRS 与编排边界关系（编排不承担读模型职责）。
 6. 按能力打包的系统接入规范（Mainnet 默认内置 Workflow，Maker 为独立能力提供系统）。
 
 ## 2. 顶层原则
@@ -17,7 +17,7 @@
 2. Host 只做协议适配与依赖组合，不做业务编排。
 3. 抽象层不携带具体能力语义（不依赖 workflow/maker 等实现项目）。
 4. `CorrelationId` 用于链路关联；`metadata` 仅用于透传与诊断。
-5. Projection 负责状态追踪；Saga 仅负责跨边界编排（可选）。
+5. Projection 负责状态追踪与对外查询，不引入额外状态机编排层。
 
 ## 3. 项目分层与职责
 
@@ -27,11 +27,10 @@
 | Core | `Aevatar.CQRS.Core` | `ICommandContextPolicy` 默认实现、事件输出流默认实现 |
 | Runtime Abstractions | `Aevatar.CQRS.Runtime.Abstractions` | 命令总线/调度/处理器、执行器、状态与持久化契约 |
 | Runtime Base | `Aevatar.CQRS.Runtime.FileSystem` | 本地状态存储、执行器、出站分发、检查点 |
-| Runtime Hosting | `Aevatar.CQRS.Runtime.Hosting` | 统一装配入口（Core + Runtime + Sagas + 实现选择） |
+| Runtime Hosting | `Aevatar.CQRS.Runtime.Hosting` | 统一装配入口（Core + Runtime + 实现选择） |
 | Runtime Impl | `Aevatar.CQRS.Runtime.Implementations.Wolverine` / `MassTransit` | 命令总线具体实现 |
 | Projection Abstractions | `Aevatar.CQRS.Projection.Abstractions` | 投影生命周期、分发、订阅、读模型契约 |
 | Projection Core | `Aevatar.CQRS.Projection.Core` | 通用投影协调与订阅复用实现 |
-| Saga (Optional) | `Aevatar.CQRS.Sagas.*` | 长事务编排能力（当前业务侧未启用追踪型 Saga） |
 
 ## 4. 总体架构图
 
@@ -46,9 +45,6 @@ flowchart LR
   RH --> RM["Aevatar.CQRS.Runtime.Implementations.MassTransit"]
   RH --> PA["Aevatar.CQRS.Projection.Abstractions"]
   RH --> PC["Aevatar.CQRS.Projection.Core"]
-  RH --> SA["Aevatar.CQRS.Sagas.Abstractions"]
-  RH --> SC["Aevatar.CQRS.Sagas.Core"]
-  RH --> SF["Aevatar.CQRS.Sagas.Runtime.FileSystem"]
 ```
 
 ## 5. 命令模型（写侧）
@@ -180,15 +176,13 @@ flowchart LR
 通过配置切换：`Cqrs:Runtime = Wolverine | MassTransit`。  
 上层 Host/业务代码不应直接依赖实现项目。
 
-## 10. Saga 与 CQRS 的关系
+## 10. 编排与 CQRS 的关系
 
 当前原则：
 
-1. CQRS 主链路不依赖业务 Saga 也可完整运行。
-2. Saga 是可选编排层，仅用于跨边界长事务。
-3. 业务状态查询应由 Projection/ReadModel 提供，不由 SagaState 提供。
-
-更多见：`docs/SAGA_ARCHITECTURE.md`。
+1. CQRS 主链路独立于额外编排层，可完整运行。
+2. 跨 Actor 协作优先使用 EventEnvelope 事件链路，不引入独立状态机层。
+3. 业务状态查询统一由 Projection/ReadModel 提供。
 
 ## 11. 系统接入规范（按能力打包）
 
@@ -219,7 +213,6 @@ flowchart LR
 5. `Cqrs:QueueCapacity`
 6. `Cqrs:OutboxDispatchIntervalMs`
 7. `Cqrs:OutboxDispatchBatchSize`
-8. `Cqrs:Sagas:*`（仅启用 Saga 时）
 
 ## 13. 扩展点与反模式
 
@@ -235,7 +228,6 @@ flowchart LR
 1. Host/API 直接调用 Runtime 实现细节。
 2. 命令路径读取 ReadModel 决策业务写入。
 3. 业务字段滥用 `metadata`。
-4. 以 SagaState 作为普通查询看板。
 
 ## 14. 验证与门禁
 
@@ -255,7 +247,7 @@ CI 架构门禁（摘要）：
 
 Aevatar 当前 CQRS 架构已形成：
 
-1. 抽象稳定（Core / Runtime / Projection / Saga 分层清晰）。
+1. 抽象稳定（Core / Runtime / Projection 分层清晰）。
 2. 实现可切换（Wolverine 与 MassTransit 并行）。
 3. 读写职责清晰（写侧命令执行、读侧投影查询）。
-4. 编排能力可选（Saga 独立，不污染业务读模型路径）。
+4. 编排通过事件链路完成，不新增额外运行时负担。

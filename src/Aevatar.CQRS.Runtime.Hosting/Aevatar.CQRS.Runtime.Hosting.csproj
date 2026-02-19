@@ -8,8 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
-    <ProjectReference Include="..\Aevatar.CQRS.Sagas.Core\Aevatar.CQRS.Sagas.Core.csproj" />
-    <ProjectReference Include="..\Aevatar.CQRS.Sagas.Runtime.FileSystem\Aevatar.CQRS.Sagas.Runtime.FileSystem.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Runtime.FileSystem\Aevatar.CQRS.Runtime.FileSystem.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Runtime.Implementations.Wolverine\Aevatar.CQRS.Runtime.Implementations.Wolverine.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Runtime.Implementations.MassTransit\Aevatar.CQRS.Runtime.Implementations.MassTransit.csproj" />

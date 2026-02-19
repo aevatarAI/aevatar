@@ -100,28 +100,6 @@ jobs:
             exit 1
           fi
 
-          saga_projection_ref_violations="$(
-            rg -n "<ProjectReference Include=\".*Projection.*\\.csproj\"" src -g '*Sagas*.csproj' || true
-          )"
-
-          if [ -n "$saga_projection_ref_violations" ]; then
-            echo "$saga_projection_ref_violations"
-            echo "Saga projects must not reference Projection projects."
-            exit 1
-          fi
-
-          saga_state_readmodel_violations="$(
-            rg -n "ReadModel|WorkflowExecutionReport|CaseProjectionReadModel|MakerRunReport|ActorSnapshot|TimelineItem" src -g '*SagaState*.cs' \
-            | rg -v "ISagaState|SagaStateBase" \
-            || true
-          )"
-
-          if [ -n "$saga_state_readmodel_violations" ]; then
-            echo "$saga_state_readmodel_violations"
-            echo "SagaState must not carry read-model/view fields."
-            exit 1
-          fi
-
           command_side_readmodel_violations="$(
             rg -n "IProjectionReadModelStore<|ReadModelStore" \
               src/workflow/Aevatar.Workflow.Application \

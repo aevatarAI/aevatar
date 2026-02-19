@@ -13,7 +13,6 @@
     <File Path="docs\EVENT_SOURCING.md" />
     <File Path="docs\ROLE.md" />
     <File Path="docs\PROJECT_ARCHITECTURE.md" />
-    <File Path="docs\SAGA_INTRODUCTION_ANALYSIS.md" />
   </Folder>
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
@@ -30,9 +29,6 @@
     <Project Path="src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <Project Path="src\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.Abstractions\Aevatar.CQRS.Runtime.Abstractions.csproj" />
-    <Project Path="src\Aevatar.CQRS.Sagas.Abstractions\Aevatar.CQRS.Sagas.Abstractions.csproj" />
-    <Project Path="src\Aevatar.CQRS.Sagas.Core\Aevatar.CQRS.Sagas.Core.csproj" />
-    <Project Path="src\Aevatar.CQRS.Sagas.Runtime.FileSystem\Aevatar.CQRS.Sagas.Runtime.FileSystem.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.FileSystem\Aevatar.CQRS.Runtime.FileSystem.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.Hosting\Aevatar.CQRS.Runtime.Hosting.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.Implementations.Wolverine\Aevatar.CQRS.Runtime.Implementations.Wolverine.csproj" />
@@ -67,7 +63,6 @@
   <Folder Name="/test/">
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" />
-    <Project Path="test\Aevatar.CQRS.Sagas.Core.Tests\Aevatar.CQRS.Sagas.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
     <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Application.Tests\Aevatar.Workflow.Application.Tests.csproj" />
