@@ -147,6 +147,62 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChat_WithEmptyPrompt_ShouldReturn400()
+    {
+        var http = CreateHttpContext();
+        var service = new FakeChatRunApplicationService();
+
+        await ChatEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "  " },
+            service,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
+    public async Task HandleCommand_WithEmptyPrompt_ShouldReturn400WithCode()
+    {
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService();
+
+        var result = await ChatEndpoints.HandleCommand(
+            new ChatInput { Prompt = "" },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("INVALID_PROMPT");
+    }
+
+    [Fact]
+    public async Task HandleCommand_WhenExecutionThrows_ShouldReturn500WithStructuredBody()
+    {
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) => throw new InvalidOperationException("projection init failed"),
+        };
+
+        var result = await ChatEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
+        statusCode.Should().Be(StatusCodes.Status500InternalServerError);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("EXECUTION_FAILED");
+    }
+
+    [Fact]
     public async Task GetActorSnapshot_ShouldReturnSnapshot()
     {
         var queryService = new FakeQueryService

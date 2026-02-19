@@ -76,8 +76,14 @@ internal sealed class FileSystemInboxStore : IInboxStore
         }
     }
 
-    private string BuildPath(string commandId) =>
-        Path.Combine(_paths.Inbox, $"{commandId}.json");
+    private string BuildPath(string commandId)
+    {
+        var fullPath = Path.GetFullPath(Path.Combine(_paths.Inbox, $"{commandId}.json"));
+        var normalizedBase = Path.GetFullPath(_paths.Inbox + Path.DirectorySeparatorChar);
+        if (!fullPath.StartsWith(normalizedBase, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Identifier contains invalid path characters.", nameof(commandId));
+        return fullPath;
+    }
 
     private sealed class InboxState
     {

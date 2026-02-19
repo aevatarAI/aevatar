@@ -60,6 +60,12 @@ internal sealed class FileSystemCommandStateStore : ICommandStateStore
         return items;
     }
 
-    private string BuildPath(string commandId) =>
-        Path.Combine(_paths.Commands, $"{commandId}.json");
+    private string BuildPath(string commandId)
+    {
+        var fullPath = Path.GetFullPath(Path.Combine(_paths.Commands, $"{commandId}.json"));
+        var normalizedBase = Path.GetFullPath(_paths.Commands + Path.DirectorySeparatorChar);
+        if (!fullPath.StartsWith(normalizedBase, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Identifier contains invalid path characters.", nameof(commandId));
+        return fullPath;
+    }
 }

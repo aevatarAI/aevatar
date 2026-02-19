@@ -32,7 +32,8 @@ internal sealed class FileSystemPlatformCommandStateStore : IPlatformCommandStat
         ArgumentNullException.ThrowIfNull(status);
         ct.ThrowIfCancellationRequested();
 
-        var path = BuildPath(status.CommandId);
+        var path = SafeBuildPath(status.CommandId)
+                   ?? throw new ArgumentException("CommandId contains invalid path characters.");
         await _gate.WaitAsync(ct);
         try
         {
@@ -57,8 +58,8 @@ internal sealed class FileSystemPlatformCommandStateStore : IPlatformCommandStat
         if (string.IsNullOrWhiteSpace(commandId))
             return null;
 
-        var path = BuildPath(commandId);
-        if (!File.Exists(path))
+        var path = SafeBuildPath(commandId);
+        if (path == null || !File.Exists(path))
             return null;
 
         await using var stream = new FileStream(
@@ -99,5 +100,10 @@ internal sealed class FileSystemPlatformCommandStateStore : IPlatformCommandStat
         return items;
     }
 
-    private string BuildPath(string commandId) => Path.Combine(_statesPath, $"{commandId}.json");
+    private string? SafeBuildPath(string id)
+    {
+        var fullPath = Path.GetFullPath(Path.Combine(_statesPath, $"{id}.json"));
+        var normalizedBase = Path.GetFullPath(_statesPath + Path.DirectorySeparatorChar);
+        return fullPath.StartsWith(normalizedBase, StringComparison.OrdinalIgnoreCase) ? fullPath : null;
+    }
 }

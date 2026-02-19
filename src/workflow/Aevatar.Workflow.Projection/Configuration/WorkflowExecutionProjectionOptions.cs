@@ -37,5 +37,4 @@ public sealed class WorkflowExecutionProjectionOptions
     /// </summary>
     public int RunProjectionFinalizeGraceTimeoutMs { get; set; } = 1500;
 
-    /// <summary>
 }

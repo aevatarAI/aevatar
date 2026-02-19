@@ -80,6 +80,12 @@ internal sealed class FileSystemOutboxStore : IOutboxStore
         }
     }
 
-    private string BuildPath(string messageId) =>
-        Path.Combine(_paths.Outbox, $"{messageId}.json");
+    private string BuildPath(string messageId)
+    {
+        var fullPath = Path.GetFullPath(Path.Combine(_paths.Outbox, $"{messageId}.json"));
+        var normalizedBase = Path.GetFullPath(_paths.Outbox + Path.DirectorySeparatorChar);
+        if (!fullPath.StartsWith(normalizedBase, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Identifier contains invalid path characters.", nameof(messageId));
+        return fullPath;
+    }
 }

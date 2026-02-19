@@ -42,6 +42,12 @@ public static class ChatEndpoints
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
         CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(input.Prompt))
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            return;
+        }
+
         var writer = new ChatSseResponseWriter(http.Response);
 
         try
@@ -66,6 +72,15 @@ public static class ChatEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(input.Prompt))
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_PROMPT",
+                message = "Prompt is required.",
+            });
+        }
+
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
         var startSignal = new TaskCompletionSource<WorkflowChatRunStarted>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -107,7 +122,19 @@ public static class ChatEndpoints
                 });
         }
 
-        var result = await executionTask;
+        CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> result;
+        try
+        {
+            result = await executionTask;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Workflow command execution failed before start signal");
+            return Results.Json(
+                new { code = "EXECUTION_FAILED", message = "Command execution failed." },
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
+
         if (result.Error != WorkflowChatRunStartError.None)
         {
             return Results.Json(

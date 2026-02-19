@@ -55,6 +55,12 @@ internal sealed class FileSystemDeadLetterStore : IDeadLetterStore
         return items;
     }
 
-    private string BuildPath(string deadLetterId) =>
-        Path.Combine(_paths.DeadLetters, $"{deadLetterId}.json");
+    private string BuildPath(string deadLetterId)
+    {
+        var fullPath = Path.GetFullPath(Path.Combine(_paths.DeadLetters, $"{deadLetterId}.json"));
+        var normalizedBase = Path.GetFullPath(_paths.DeadLetters + Path.DirectorySeparatorChar);
+        if (!fullPath.StartsWith(normalizedBase, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Identifier contains invalid path characters.", nameof(deadLetterId));
+        return fullPath;
+    }
 }
