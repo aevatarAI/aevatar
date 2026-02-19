@@ -91,6 +91,11 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 - `MemoryCacheDeduplicator`：事件去重
 - `AddAevatarRuntime()`：一键注册本地运行时依赖
 
+口径说明：
+
+- `InMemory*` 组件仅用于开发/测试环境，不作为生产容量治理对象。
+- 生产环境应替换为 Redis/持久化实现，并在生产实现上评估内存增长与容量风险。
+
 ### Routing 细节
 
 `Routing` 现在由两部分组成：

@@ -170,6 +170,7 @@ flowchart LR
 1. `MassTransitCommandBus` 实现 `ICommandBus/ICommandScheduler`。
 2. `QueuedCommandConsumer` 消费 `QueuedCommandMessage`。
 3. 默认 `UsingInMemory`，可平移到外部 Broker（不改上层业务）。
+4. 口径说明：`InMemory` 传输/存储配置仅用于开发与测试，不作为生产容量与内存增长治理对象。
 
 ### 9.3 选择方式
 

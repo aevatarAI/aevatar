@@ -98,6 +98,7 @@ flowchart TB
 2. Actor Runtime 提供者通过配置键 `ActorRuntime:Provider` 选择，当前默认 `InMemory`。
 3. Mainnet/Subsystem Host 可通过 `EnableActorRestoreOnStartup` 控制启动恢复行为。
 4. `ActorRuntime:RestoreOnStartup` 可通过配置直接控制默认恢复开关。
+5. 口径说明：`InMemory*` 实现仅用于开发/测试；其内存增长问题不纳入生产整改范围，生产环境应使用 Redis/持久化实现并在该实现上评估容量风险。
 
 ## 5. 命令与查询主链路
 
