@@ -30,7 +30,6 @@ flowchart TB
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
     MH["Aevatar.Mainnet.Host.Api"] --> HADD["AddAevatarDefaultHost()"]
-    MH --> MADD["AddMainnetCore()"]
     MH --> WADD["AddWorkflowCapability()"]
 
     KH["Aevatar.Maker.Host.Api"] --> KHADD["AddAevatarDefaultHost()"]
@@ -46,7 +45,8 @@ flowchart LR
 2. `Maker` 作为独立系统，通过项目引用 `Maker` 并调用 `AddMakerCapability()`。
 3. 能力接入不引入运行时发现/注册中心/动态路由框架。
 4. 能力开关优先使用配置 + DI 注册控制。
-5. 删除 `Aevatar.Platform.*`，不保留兼容壳层。
+5. `Aevatar.Bootstrap` 仅保留通用装配，不承载 `Workflow` 具体能力注册。
+6. 删除 `Aevatar.Platform.*`，不保留兼容壳层。
 
 ### 3.2 最小能力契约
 

@@ -48,7 +48,6 @@ flowchart LR
 
 ```csharp
 builder.AddAevatarDefaultHost(...);
-builder.Services.AddMainnetCore(builder.Configuration);
 builder.AddWorkflowCapability();
 
 var app = builder.Build();
@@ -70,9 +69,8 @@ app.UseAevatarDefaultHost();
 ### 5.1 新增
 
 1. `src/Aevatar.Mainnet.Host.Api`（主入口）。
-2. `src/Aevatar.Mainnet.Application`（主网应用层）。
-3. Workflow 能力注册扩展（如 `AddWorkflowCapability`）。
-4. Maker 能力注册扩展（如 `AddMakerCapability`）。
+2. Workflow 能力注册扩展（如 `AddWorkflowCapability`）。
+3. Maker 能力注册扩展（如 `AddMakerCapability`）。
 
 ### 5.2 改造
 

@@ -28,7 +28,8 @@ public class WorkflowExecutionProjectionServiceTests
                 Enabled = true,
                 EnableActorQueryEndpoints = true,
             },
-            out var streams);
+            out var streams,
+            out _);
 
         await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
@@ -67,6 +68,7 @@ public class WorkflowExecutionProjectionServiceTests
                 Enabled = false,
                 EnableActorQueryEndpoints = false,
             },
+            out _,
             out _);
 
         var sink = new WorkflowRunEventChannel();
@@ -89,6 +91,7 @@ public class WorkflowExecutionProjectionServiceTests
                 Enabled = true,
                 EnableActorQueryEndpoints = true,
             },
+            out _,
             out _);
 
         await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
@@ -99,13 +102,53 @@ public class WorkflowExecutionProjectionServiceTests
         refreshed!.LastCommandId.Should().Be("cmd-2");
     }
 
+    [Fact]
+    public async Task AttachLiveSinkAsync_ShouldNotOverwriteRunMetadata()
+    {
+        var initialStartedAt = new DateTimeOffset(2026, 2, 19, 0, 0, 0, TimeSpan.Zero);
+        var clock = new MutableProjectionClock(initialStartedAt);
+        var service = CreateService(
+            new WorkflowExecutionProjectionOptions
+            {
+                Enabled = true,
+                EnableActorQueryEndpoints = true,
+            },
+            out _,
+            out var store,
+            clock);
+
+        await service.EnsureActorProjectionAsync("root", "wf", "original-input", "cmd-1");
+
+        var beforeAttach = await store.GetAsync("root");
+        beforeAttach.Should().NotBeNull();
+        beforeAttach!.CommandId.Should().Be("cmd-1");
+        beforeAttach.WorkflowName.Should().Be("wf");
+        beforeAttach.Input.Should().Be("original-input");
+        beforeAttach.StartedAt.Should().Be(initialStartedAt);
+
+        clock.UtcNow = initialStartedAt.AddMinutes(10);
+        var sink = new WorkflowRunEventChannel();
+        await service.AttachLiveSinkAsync("root", "cmd-2", sink);
+
+        var afterAttach = await store.GetAsync("root");
+        afterAttach.Should().NotBeNull();
+        afterAttach!.CommandId.Should().Be("cmd-1");
+        afterAttach.WorkflowName.Should().Be("wf");
+        afterAttach.Input.Should().Be("original-input");
+        afterAttach.StartedAt.Should().Be(initialStartedAt);
+        await service.DetachLiveSinkAsync("root", sink);
+        await sink.DisposeAsync();
+    }
+
     private static WorkflowExecutionProjectionService CreateService(
         WorkflowExecutionProjectionOptions options,
-        out InMemoryStreamProvider streams)
+        out InMemoryStreamProvider streams,
+        out InMemoryWorkflowExecutionReadModelStore store,
+        IProjectionClock? clock = null)
     {
         streams = new InMemoryStreamProvider();
         var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
-        var store = new InMemoryWorkflowExecutionReadModelStore();
+        store = new InMemoryWorkflowExecutionReadModelStore();
         var projector = new WorkflowExecutionReadModelProjector(store, BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>([projector]);
         var dispatcher = new ProjectionDispatcher<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator);
@@ -120,7 +163,7 @@ public class WorkflowExecutionProjectionServiceTests
             options,
             lifecycle,
             store,
-            new SystemProjectionClock(),
+            clock ?? new SystemProjectionClock(),
             new DefaultWorkflowExecutionProjectionContextFactory(),
             new WorkflowExecutionReadModelMapper());
     }
@@ -158,5 +201,15 @@ public class WorkflowExecutionProjectionServiceTests
         }
 
         throw new TimeoutException("Condition not met before timeout.");
+    }
+
+    private sealed class MutableProjectionClock : IProjectionClock
+    {
+        public MutableProjectionClock(DateTimeOffset utcNow)
+        {
+            UtcNow = utcNow;
+        }
+
+        public DateTimeOffset UtcNow { get; set; }
     }
 }

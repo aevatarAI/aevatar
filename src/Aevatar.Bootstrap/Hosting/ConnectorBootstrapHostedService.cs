@@ -1,5 +1,6 @@
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -7,17 +8,14 @@ namespace Aevatar.Bootstrap.Hosting;
 
 public sealed class ConnectorBootstrapHostedService : IHostedService
 {
-    private readonly IConnectorRegistry _registry;
-    private readonly IEnumerable<IConnectorBuilder> _connectorBuilders;
+    private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<ConnectorBootstrapHostedService> _logger;
 
     public ConnectorBootstrapHostedService(
-        IConnectorRegistry registry,
-        IEnumerable<IConnectorBuilder> connectorBuilders,
+        IServiceProvider serviceProvider,
         ILogger<ConnectorBootstrapHostedService> logger)
     {
-        _registry = registry;
-        _connectorBuilders = connectorBuilders;
+        _serviceProvider = serviceProvider;
         _logger = logger;
     }
 
@@ -25,9 +23,18 @@ public sealed class ConnectorBootstrapHostedService : IHostedService
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        ConnectorRegistration.RegisterConnectors(_registry, _connectorBuilders, _logger);
+        using var scope = _serviceProvider.CreateScope();
+        var registry = scope.ServiceProvider.GetService<IConnectorRegistry>();
+        if (registry == null)
+        {
+            _logger.LogDebug("Skip connector bootstrap because IConnectorRegistry is not registered.");
+            return Task.CompletedTask;
+        }
 
-        var names = _registry.ListNames();
+        var connectorBuilders = scope.ServiceProvider.GetServices<IConnectorBuilder>();
+        ConnectorRegistration.RegisterConnectors(registry, connectorBuilders, _logger);
+
+        var names = registry.ListNames();
         if (names.Count > 0)
             _logger.LogInformation("Connectors loaded: {Count} [{Names}]", names.Count, string.Join(", ", names));
 

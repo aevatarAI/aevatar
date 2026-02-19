@@ -8,7 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
-    <ProjectReference Include="..\Aevatar.Mainnet.Application\Aevatar.Mainnet.Application.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

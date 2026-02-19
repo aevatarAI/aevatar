@@ -1,5 +1,6 @@
 using Aevatar.Configuration;
 using Aevatar.Workflow.Application.DependencyInjection;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Presentation.AGUIAdapter.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
@@ -14,6 +15,7 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        services.AddAevatarWorkflow();
         services.AddWorkflowExecutionProjectionCQRS(options =>
             configuration.GetSection("WorkflowExecutionProjection").Bind(options));
         services.AddWorkflowExecutionAGUIAdapter();

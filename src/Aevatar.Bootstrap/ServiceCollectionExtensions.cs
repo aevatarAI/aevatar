@@ -7,7 +7,6 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Runtime.DependencyInjection;
-using Aevatar.Workflow.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -39,7 +38,6 @@ public static class ServiceCollectionExtensions
 
         services.AddAevatarConfig();
         services.AddAevatarRuntime();
-        services.AddAevatarWorkflow();
         RegisterConnectorBuilders(services);
         services.TryAddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 

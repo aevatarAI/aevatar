@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Aevatar.Foundation.Abstractions.Connectors;
 
-namespace Aevatar.Workflow.Core.Connectors;
+namespace Aevatar.Bootstrap.Connectors;
 
 /// <summary>
 /// CLI connector for preinstalled allowlisted commands.

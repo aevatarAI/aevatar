@@ -49,50 +49,13 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         string commandId,
         CancellationToken ct = default)
     {
-        if (!ProjectionEnabled || string.IsNullOrWhiteSpace(rootActorId))
-            return;
-
-        if (_contextsByActorId.TryGetValue(rootActorId, out var existingContext))
-        {
-            existingContext.UpdateRunMetadata(
-                commandId,
-                workflowName,
-                input,
-                _clock.UtcNow);
-            await RefreshReportMetadataAsync(rootActorId, existingContext, ct);
-            return;
-        }
-
-        await _contextGate.WaitAsync(ct);
-        try
-        {
-            if (_contextsByActorId.TryGetValue(rootActorId, out existingContext))
-            {
-                existingContext.UpdateRunMetadata(
-                    commandId,
-                    workflowName,
-                    input,
-                    _clock.UtcNow);
-                await RefreshReportMetadataAsync(rootActorId, existingContext, ct);
-                return;
-            }
-
-            var startedAt = _clock.UtcNow;
-            var projectionId = rootActorId;
-            var context = _contextFactory.Create(
-                projectionId,
-                commandId,
-                rootActorId,
-                workflowName,
-                input,
-                startedAt);
-            await _lifecycle.StartAsync(context, ct);
-            _contextsByActorId[rootActorId] = context;
-        }
-        finally
-        {
-            _contextGate.Release();
-        }
+        _ = await EnsureActorContextAsync(
+            rootActorId,
+            workflowName,
+            input,
+            commandId,
+            updateMetadata: true,
+            ct);
     }
 
     private Task RefreshReportMetadataAsync(
@@ -124,8 +87,14 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         if (!ProjectionEnabled || string.IsNullOrWhiteSpace(actorId))
             return;
 
-        await EnsureActorProjectionAsync(actorId, string.Empty, string.Empty, commandId, ct);
-        if (_contextsByActorId.TryGetValue(actorId, out var context))
+        var context = await EnsureActorContextAsync(
+            actorId,
+            string.Empty,
+            string.Empty,
+            commandId,
+            updateMetadata: false,
+            ct);
+        if (context != null)
             context.AttachLiveSink(commandId, sink);
     }
 
@@ -178,5 +147,67 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
             .Select(_mapper.ToActorTimelineItem)
             .ToList();
         return timeline;
+    }
+
+    private async Task<WorkflowExecutionProjectionContext?> EnsureActorContextAsync(
+        string rootActorId,
+        string workflowName,
+        string input,
+        string commandId,
+        bool updateMetadata,
+        CancellationToken ct)
+    {
+        if (!ProjectionEnabled || string.IsNullOrWhiteSpace(rootActorId))
+            return null;
+
+        if (_contextsByActorId.TryGetValue(rootActorId, out var existingContext))
+        {
+            if (updateMetadata)
+            {
+                existingContext.UpdateRunMetadata(
+                    commandId,
+                    workflowName,
+                    input,
+                    _clock.UtcNow);
+                await RefreshReportMetadataAsync(rootActorId, existingContext, ct);
+            }
+
+            return existingContext;
+        }
+
+        await _contextGate.WaitAsync(ct);
+        try
+        {
+            if (_contextsByActorId.TryGetValue(rootActorId, out existingContext))
+            {
+                if (updateMetadata)
+                {
+                    existingContext.UpdateRunMetadata(
+                        commandId,
+                        workflowName,
+                        input,
+                        _clock.UtcNow);
+                    await RefreshReportMetadataAsync(rootActorId, existingContext, ct);
+                }
+
+                return existingContext;
+            }
+
+            var startedAt = _clock.UtcNow;
+            var context = _contextFactory.Create(
+                rootActorId,
+                commandId,
+                rootActorId,
+                workflowName,
+                input,
+                startedAt);
+            await _lifecycle.StartAsync(context, ct);
+            _contextsByActorId[rootActorId] = context;
+            return context;
+        }
+        finally
+        {
+            _contextGate.Release();
+        }
     }
 }

@@ -5,7 +5,6 @@
 ## 默认能力装配
 
 - `builder.AddAevatarDefaultHost(...)`
-- `builder.Services.AddMainnetCore(...)`
 - `builder.AddWorkflowCapability()`
 - `app.UseAevatarDefaultHost()`（自动挂载能力端点）
 
