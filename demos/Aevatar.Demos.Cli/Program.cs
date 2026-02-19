@@ -389,11 +389,15 @@ internal static class DemoScenarioRunner
         }
         finally
         {
-            var all = await runtime.GetAllAsync();
-            foreach (var actor in all)
-            {
-                await runtime.DestroyAsync(actor.Id);
-            }
+            foreach (var actorId in new[]
+                     {
+                         "parent", "child",
+                         "coord", "w1", "w2", "w3",
+                         "transformer", "sink",
+                         "faulty",
+                         "stateful",
+                     })
+                await runtime.DestroyAsync(actorId);
 
             sp.Dispose();
         }
@@ -411,7 +415,7 @@ internal static class DemoScenarioRunner
         await WaitForAsync(() => ((DemoCollectorAgent)child.Agent).Received.Count > 0);
 
         traceStore.SetSummary("childReceived", string.Join(",", ((DemoCollectorAgent)child.Agent).Received));
-        return await BuildResultAsync(runtime, "hierarchy", "Parent publishes Down event to child.", traceStore);
+        return await BuildResultAsync(runtime, "hierarchy", "Parent publishes Down event to child.", traceStore, parent.Id);
     }
 
     private static async Task<DemoRunResult> RunFanoutAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
@@ -439,7 +443,7 @@ internal static class DemoScenarioRunner
         traceStore.SetSummary("w1", string.Join(",", ((DemoCollectorAgent)w1.Agent).Received));
         traceStore.SetSummary("w2", string.Join(",", ((DemoCollectorAgent)w2.Agent).Received));
         traceStore.SetSummary("w3", string.Join(",", ((DemoCollectorAgent)w3.Agent).Received));
-        return await BuildResultAsync(runtime, "fanout", "Coordinator broadcasts task to three workers.", traceStore);
+        return await BuildResultAsync(runtime, "fanout", "Coordinator broadcasts task to three workers.", traceStore, coord.Id);
     }
 
     private static async Task<DemoRunResult> RunPipelineAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
@@ -462,7 +466,7 @@ internal static class DemoScenarioRunner
         await WaitForAsync(() => ((DemoCollectorAgent)collector.Agent).Received.Count > 1);
 
         traceStore.SetSummary("pipelineReplies", string.Join(",", ((DemoCollectorAgent)collector.Agent).Received));
-        return await BuildResultAsync(runtime, "pipeline", "Swap module to change pipeline behavior.", traceStore);
+        return await BuildResultAsync(runtime, "pipeline", "Swap module to change pipeline behavior.", traceStore, transformer.Id);
     }
 
     private static async Task<DemoRunResult> RunHooksAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
@@ -473,7 +477,7 @@ internal static class DemoScenarioRunner
         await faulty.HandleEventAsync(CreateEnvelope(new PingEvent { Message = "boom" }));
         await Task.Delay(80);
         traceStore.SetSummary("expected", "hook:start + hook:error + hook:end");
-        return await BuildResultAsync(runtime, "hooks", "Hook lifecycle around failing handler.", traceStore);
+        return await BuildResultAsync(runtime, "hooks", "Hook lifecycle around failing handler.", traceStore, faulty.Id);
     }
 
     private static async Task<DemoRunResult> RunLifecycleAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
@@ -488,7 +492,7 @@ internal static class DemoScenarioRunner
         var restored = await runtime.CreateAsync<DemoCounterAgent>("stateful");
         var state = ((DemoCounterAgent)restored.Agent).State.Count;
         traceStore.SetSummary("restoredCount", state);
-        return await BuildResultAsync(runtime, "lifecycle", "Deactivate/save and reactivate/load state.", traceStore);
+        return await BuildResultAsync(runtime, "lifecycle", "Deactivate/save and reactivate/load state.", traceStore, restored.Id);
     }
 
     private static async Task AttachTracingPublisherAsync(LocalActorRuntime runtime, IActor actor, DemoTraceStore traceStore)
@@ -521,9 +525,10 @@ internal static class DemoScenarioRunner
         LocalActorRuntime runtime,
         string scenario,
         string description,
-        DemoTraceStore traceStore)
+        DemoTraceStore traceStore,
+        params string[] rootActorIds)
     {
-        var topology = await BuildTopologyAsync(runtime);
+        var topology = await BuildTopologyAsync(runtime, rootActorIds);
         return new DemoRunResult(
             scenario,
             description,
@@ -532,16 +537,27 @@ internal static class DemoScenarioRunner
             traceStore.SnapshotSummary());
     }
 
-    private static async Task<DemoTopology> BuildTopologyAsync(IActorRuntime runtime)
+    private static async Task<DemoTopology> BuildTopologyAsync(IActorRuntime runtime, params string[] rootActorIds)
     {
         var edges = new List<DemoTopologyEdge>();
-        var all = await runtime.GetAllAsync();
-        foreach (var actor in all)
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var queue = new Queue<string>(rootActorIds.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+        while (queue.Count > 0)
         {
-            var parent = await actor.GetParentIdAsync();
-            if (!string.IsNullOrWhiteSpace(parent))
+            var parentId = queue.Dequeue();
+            if (!visited.Add(parentId))
+                continue;
+
+            var parent = await runtime.GetAsync(parentId);
+            if (parent == null)
+                continue;
+
+            var children = await parent.GetChildrenIdsAsync();
+            foreach (var childId in children)
             {
-                edges.Add(new DemoTopologyEdge(parent, actor.Id));
+                edges.Add(new DemoTopologyEdge(parentId, childId));
+                queue.Enqueue(childId);
             }
         }
 

@@ -106,9 +106,8 @@ public class LocalActorRuntimeTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        var all = await _runtime.GetAllAsync();
-        foreach (var actor in all)
-            await _runtime.DestroyAsync(actor.Id);
+        foreach (var id in new[] { "parent-1", "child-1", "restored-1" })
+            await _runtime.DestroyAsync(id);
 
         _serviceProvider.Dispose();
     }

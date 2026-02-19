@@ -187,22 +187,21 @@ public class WorkflowExecutionQueryApplicationServiceTests
     [Fact]
     public async Task ListAgentsAsync_ShouldOnlyReturnWorkflowActors()
     {
-        var workflowActor = new FakeActor(
-            "wf-1",
-            null,
-            new WorkflowGAgent(
-                new FakeActorRuntime([]),
-                new StubRoleAgentTypeResolver(),
-                [],
-                [],
-                []));
-        var nonWorkflowActor = new FakeActor("role-1", "wf-1", new FakeAgent("role-agent-1", "role"));
-        var runtime = new FakeActorRuntime([workflowActor, nonWorkflowActor]);
+        var projection = new FakeProjectionService
+        {
+            EnableActorQueryEndpointsValue = true,
+            SnapshotList = [
+                new WorkflowActorSnapshot
+                {
+                    ActorId = "wf-1",
+                    WorkflowName = "direct",
+                },
+            ],
+        };
         var registry = new WorkflowDefinitionRegistry();
         var queryService = new WorkflowExecutionQueryApplicationService(
-            runtime,
             registry,
-            new FakeProjectionService());
+            projection);
 
         var agents = await queryService.ListAgentsAsync(CancellationToken.None);
 
@@ -224,11 +223,9 @@ public class WorkflowExecutionQueryApplicationServiceTests
             TotalSteps = 3,
         };
 
-        var runtime = new FakeActorRuntime([]);
         var registry = new WorkflowDefinitionRegistry();
         registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
         var queryService = new WorkflowExecutionQueryApplicationService(
-            runtime,
             registry,
             new FakeProjectionService
             {
@@ -277,6 +274,7 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
     public bool EnsureActorProjectionCalled { get; private set; }
     public Dictionary<string, WorkflowActorSnapshot> SnapshotByActorId { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, IReadOnlyList<WorkflowActorTimelineItem>> TimelineByActorId { get; set; } = new(StringComparer.Ordinal);
+    public IReadOnlyList<WorkflowActorSnapshot> SnapshotList { get; set; } = [];
 
     public bool EnableActorQueryEndpoints => EnableActorQueryEndpointsValue;
 
@@ -308,6 +306,14 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
     {
         SnapshotByActorId.TryGetValue(actorId, out var snapshot);
         return Task.FromResult(snapshot);
+    }
+
+    public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        _ = ct;
+        return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>(SnapshotList.Take(Math.Max(1, take)).ToList());
     }
 
     public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
@@ -357,7 +363,21 @@ internal sealed class FakeActorRuntime : IActorRuntime
 {
     private readonly IReadOnlyList<IActor> _actors;
 
-    public FakeActorRuntime(IReadOnlyList<IActor> actors) => _actors = actors;
+    public FakeActorRuntime(IReadOnlyList<IActor> actors)
+    {
+        _actors = actors;
+
+        foreach (var child in _actors.OfType<FakeActor>())
+        {
+            if (string.IsNullOrWhiteSpace(child.ParentId))
+                continue;
+
+            var parent = _actors
+                .OfType<FakeActor>()
+                .FirstOrDefault(x => string.Equals(x.Id, child.ParentId, StringComparison.Ordinal));
+            parent?.AddChild(child.Id);
+        }
+    }
 
     public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
         throw new InvalidOperationException("Not expected.");
@@ -370,14 +390,42 @@ internal sealed class FakeActorRuntime : IActorRuntime
     public Task<IActor?> GetAsync(string id) =>
         Task.FromResult(_actors.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal)));
 
-    public Task<IReadOnlyList<IActor>> GetAllAsync() => Task.FromResult(_actors);
-
     public Task<bool> ExistsAsync(string id) =>
         Task.FromResult(_actors.Any(x => string.Equals(x.Id, id, StringComparison.Ordinal)));
 
-    public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+    public Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
+    {
+        var parent = _actors.OfType<FakeActor>()
+            .FirstOrDefault(x => string.Equals(x.Id, parentId, StringComparison.Ordinal));
+        var child = _actors.OfType<FakeActor>()
+            .FirstOrDefault(x => string.Equals(x.Id, childId, StringComparison.Ordinal));
+        if (parent != null && child != null)
+        {
+            parent.AddChild(childId);
+            child.SetParent(parentId);
+        }
 
-    public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+        return Task.CompletedTask;
+    }
+
+    public Task UnlinkAsync(string childId, CancellationToken ct = default)
+    {
+        var child = _actors.OfType<FakeActor>()
+            .FirstOrDefault(x => string.Equals(x.Id, childId, StringComparison.Ordinal));
+        if (child == null)
+            return Task.CompletedTask;
+
+        var parentId = child.ParentId;
+        if (!string.IsNullOrWhiteSpace(parentId))
+        {
+            var parent = _actors.OfType<FakeActor>()
+                .FirstOrDefault(x => string.Equals(x.Id, parentId, StringComparison.Ordinal));
+            parent?.RemoveChild(childId);
+        }
+
+        child.SetParent(null);
+        return Task.CompletedTask;
+    }
 
     public Task RestoreAllAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
@@ -446,7 +494,8 @@ internal sealed class StubRoleAgentTypeResolver : IRoleAgentTypeResolver
 
 internal sealed class FakeActor : IActor
 {
-    private readonly string? _parentId;
+    private string? _parentId;
+    private readonly List<string> _children = [];
 
     public FakeActor(string id, string? parentId, IAgent agent)
     {
@@ -457,6 +506,7 @@ internal sealed class FakeActor : IActor
 
     public string Id { get; }
     public IAgent Agent { get; }
+    internal string? ParentId => _parentId;
 
     public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
@@ -466,7 +516,24 @@ internal sealed class FakeActor : IActor
 
     public Task<string?> GetParentIdAsync() => Task.FromResult(_parentId);
 
-    public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
+        Task.FromResult<IReadOnlyList<string>>(_children.ToList());
+
+    internal void AddChild(string childId)
+    {
+        if (!_children.Contains(childId, StringComparer.Ordinal))
+            _children.Add(childId);
+    }
+
+    internal void RemoveChild(string childId)
+    {
+        _children.RemoveAll(x => string.Equals(x, childId, StringComparison.Ordinal));
+    }
+
+    internal void SetParent(string? parentId)
+    {
+        _parentId = parentId;
+    }
 }
 
 internal sealed class FakeAgent : IAgent

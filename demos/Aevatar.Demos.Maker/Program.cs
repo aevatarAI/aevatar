@@ -316,12 +316,25 @@ catch (OperationCanceledException)
 
 var runEndedAt = DateTimeOffset.UtcNow;
 var topology = new List<MakerTopologyEdge>();
-var allActors = await runtime.GetAllAsync();
-foreach (var a in allActors)
+var visited = new HashSet<string>(StringComparer.Ordinal);
+var queue = new Queue<string>();
+queue.Enqueue(actor.Id);
+while (queue.Count > 0)
 {
-    var parent = await a.GetParentIdAsync();
-    if (!string.IsNullOrWhiteSpace(parent))
-        topology.Add(new MakerTopologyEdge(parent, a.Id));
+    var parentId = queue.Dequeue();
+    if (!visited.Add(parentId))
+        continue;
+
+    var parentActor = await runtime.GetAsync(parentId);
+    if (parentActor == null)
+        continue;
+
+    var children = await parentActor.GetChildrenIdsAsync();
+    foreach (var childId in children)
+    {
+        topology.Add(new MakerTopologyEdge(parentId, childId));
+        queue.Enqueue(childId);
+    }
 }
 
 var report = recorder.BuildReport(

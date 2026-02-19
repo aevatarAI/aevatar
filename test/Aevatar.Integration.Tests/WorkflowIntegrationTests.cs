@@ -253,8 +253,10 @@ public class WorkflowIntegrationTests
         // Then
         childIds.Should().HaveCount(3);
 
-        var allActors = await runtime.GetAllAsync();
-        allActors.Should().HaveCount(4); // 1 WorkflowGAgent + 3 RoleGAgent
+        (await runtime.ExistsAsync("wf-1")).Should().BeTrue();
+        (await runtime.ExistsAsync("researcher")).Should().BeTrue();
+        (await runtime.ExistsAsync("reviewer")).Should().BeTrue();
+        (await runtime.ExistsAsync("writer")).Should().BeTrue();
 
         // 验证层级
         var children = await actor.GetChildrenIdsAsync();

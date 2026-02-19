@@ -1,23 +1,18 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
-using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Application.Queries;
 
 public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
 {
-    private readonly IActorRuntime _runtime;
     private readonly IWorkflowDefinitionRegistry _workflowRegistry;
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
 
     public WorkflowExecutionQueryApplicationService(
-        IActorRuntime runtime,
         IWorkflowDefinitionRegistry workflowRegistry,
         IWorkflowExecutionProjectionPort projectionPort)
     {
-        _runtime = runtime;
         _workflowRegistry = workflowRegistry;
         _projectionPort = projectionPort;
     }
@@ -27,19 +22,16 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
     public async Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        var actors = await _runtime.GetAllAsync();
-        var result = new List<WorkflowAgentSummary>(actors.Count);
+        if (!ActorQueryEnabled)
+            return [];
 
-        foreach (var actor in actors)
-        {
-            if (actor.Agent is not WorkflowGAgent)
-                continue;
-
-            var description = await actor.Agent.GetDescriptionAsync();
-            result.Add(new WorkflowAgentSummary(actor.Id, actor.Agent.GetType().Name, description));
-        }
-
-        return result;
+        var snapshots = await _projectionPort.ListActorSnapshotsAsync(ct: ct);
+        return snapshots
+            .Select(snapshot => new WorkflowAgentSummary(
+                snapshot.ActorId,
+                "WorkflowGAgent",
+                $"WorkflowGAgent[{snapshot.WorkflowName}]"))
+            .ToList();
     }
 
     public IReadOnlyList<string> ListWorkflows() => _workflowRegistry.GetNames();

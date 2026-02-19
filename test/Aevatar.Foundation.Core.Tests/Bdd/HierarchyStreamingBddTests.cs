@@ -27,8 +27,8 @@ public class HierarchyStreamingBddTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        var all = await _runtime.GetAllAsync();
-        foreach (var a in all) await _runtime.DestroyAsync(a.Id);
+        foreach (var id in new[] { "p1", "c1", "coord", "w1", "w2", "w3", "p4", "m4", "c4" })
+            await _runtime.DestroyAsync(id);
         _sp.Dispose();
     }
 

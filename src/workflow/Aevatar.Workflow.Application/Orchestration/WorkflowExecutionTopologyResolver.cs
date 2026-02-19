@@ -11,26 +11,12 @@ public sealed class ActorRuntimeWorkflowExecutionTopologyResolver : IWorkflowExe
         CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        var allActors = await runtime.GetAllAsync();
-        var childrenByParent = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-
-        foreach (var actor in allActors)
-        {
-            var parent = await actor.GetParentIdAsync();
-            if (string.IsNullOrWhiteSpace(parent))
-                continue;
-
-            if (!childrenByParent.TryGetValue(parent, out var children))
-            {
-                children = [];
-                childrenByParent[parent] = children;
-            }
-
-            children.Add(actor.Id);
-        }
-
         var topology = new List<WorkflowTopologyEdge>();
         if (string.IsNullOrWhiteSpace(rootActorId))
+            return topology;
+
+        var root = await runtime.GetAsync(rootActorId);
+        if (root == null)
             return topology;
 
         var visited = new HashSet<string>(StringComparer.Ordinal) { rootActorId };
@@ -41,7 +27,13 @@ public sealed class ActorRuntimeWorkflowExecutionTopologyResolver : IWorkflowExe
         {
             ct.ThrowIfCancellationRequested();
             var parent = queue.Dequeue();
-            if (!childrenByParent.TryGetValue(parent, out var children))
+
+            var parentActor = await runtime.GetAsync(parent);
+            if (parentActor == null)
+                continue;
+
+            var children = await parentActor.GetChildrenIdsAsync();
+            if (children.Count == 0)
                 continue;
 
             foreach (var child in children)

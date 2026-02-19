@@ -81,9 +81,6 @@ public sealed class LocalActorRuntime : IActorRuntime
     /// <summary>Gets actor by ID.</summary>
     public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(_actors.GetValueOrDefault(id));
 
-    /// <summary>Gets all actors.</summary>
-    public Task<IReadOnlyList<IActor>> GetAllAsync() => Task.FromResult<IReadOnlyList<IActor>>(_actors.Values.ToList());
-
     /// <summary>Checks whether actor with specified ID exists.</summary>
     public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
 

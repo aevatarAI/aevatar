@@ -128,6 +128,20 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         return _mapper.ToActorSnapshot(report);
     }
 
+    public async Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        if (!EnableActorQueryEndpoints)
+            return [];
+
+        var boundedTake = Math.Clamp(take, 1, 1000);
+        var reports = await _store.ListAsync(boundedTake, ct);
+        return reports
+            .Select(_mapper.ToActorSnapshot)
+            .ToList();
+    }
+
     public async Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
         string actorId,
         int take = 200,

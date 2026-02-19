@@ -31,6 +31,10 @@ public interface IWorkflowExecutionProjectionPort
         string actorId,
         CancellationToken ct = default);
 
+    Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
+        int take = 200,
+        CancellationToken ct = default);
+
     Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
         string actorId,
         int take = 200,
