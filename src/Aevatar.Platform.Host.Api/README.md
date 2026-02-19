@@ -14,8 +14,6 @@ CQRS 端点：
 - `POST /api/commands`
 - `GET /api/commands/{commandId}`
 - `GET /api/commands`
-- `GET /api/sagas/platform/{commandId}`
-- `GET /api/sagas/platform`
 - `GET /api/agents`
 - `GET /api/routes/{subsystem}/commands/{*command}`
 - `GET /api/routes/{subsystem}/queries/{*query}`

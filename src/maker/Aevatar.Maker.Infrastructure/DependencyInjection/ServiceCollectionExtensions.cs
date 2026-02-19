@@ -2,7 +2,6 @@ using Aevatar.Maker.Application.DependencyInjection;
 using Aevatar.Maker.Application.Abstractions.Runs;
 using Aevatar.Maker.Core;
 using Aevatar.Maker.Infrastructure.Runs;
-using Aevatar.Maker.Sagas.DependencyInjection;
 using Aevatar.Workflow.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,7 +14,6 @@ public static class ServiceCollectionExtensions
     {
         services.AddAevatarWorkflow();
         services.AddAevatarMakerCore();
-        services.AddMakerExecutionSagas();
         services.AddSingleton<IMakerRunActorAdapter, WorkflowMakerRunActorAdapter>();
         services.AddMakerApplication();
         return services;

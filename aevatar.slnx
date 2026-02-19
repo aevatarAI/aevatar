@@ -48,13 +48,11 @@
     <Project Path="src\Aevatar.Platform.Application\Aevatar.Platform.Application.csproj" />
     <Project Path="src\Aevatar.Platform.Host.Api\Aevatar.Platform.Host.Api.csproj" />
     <Project Path="src\Aevatar.Platform.Infrastructure\Aevatar.Platform.Infrastructure.csproj" />
-    <Project Path="src\Aevatar.Platform.Sagas\Aevatar.Platform.Sagas.csproj" />
     <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
   </Folder>
   <Folder Name="/src/workflow/">
     <Project Path="src/workflow/Aevatar.Workflow.Application.Abstractions/Aevatar.Workflow.Application.Abstractions.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
-    <Project Path="src/workflow/Aevatar.Workflow.Sagas/Aevatar.Workflow.Sagas.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Host.Api/Aevatar.Workflow.Host.Api.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
@@ -68,7 +66,6 @@
     <Project Path="src\maker\Aevatar.Maker.Host.Api\Aevatar.Maker.Host.Api.csproj" />
     <Project Path="src\maker\Aevatar.Maker.Infrastructure\Aevatar.Maker.Infrastructure.csproj" />
     <Project Path="src\maker\Aevatar.Maker.Projection\Aevatar.Maker.Projection.csproj" />
-    <Project Path="src\maker\Aevatar.Maker.Sagas\Aevatar.Maker.Sagas.csproj" />
   </Folder>
   <Folder Name="/test/">
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />

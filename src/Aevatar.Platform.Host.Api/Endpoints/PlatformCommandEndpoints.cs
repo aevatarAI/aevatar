@@ -1,6 +1,5 @@
 using Aevatar.Platform.Application.Abstractions.Commands;
 using Aevatar.Platform.Application.Abstractions.Queries;
-using Aevatar.Platform.Sagas.Queries;
 using Microsoft.AspNetCore.Routing;
 using System.Text.Json;
 
@@ -31,13 +30,6 @@ public static class PlatformCommandEndpoints
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/commands", ListCommandStatuses)
-            .Produces(StatusCodes.Status200OK);
-
-        group.MapGet("/sagas/platform/{commandId}", GetSagaStatus)
-            .Produces(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status404NotFound);
-
-        group.MapGet("/sagas/platform", ListSagaStatuses)
             .Produces(StatusCodes.Status200OK);
 
         return app;
@@ -126,21 +118,4 @@ public static class PlatformCommandEndpoints
         return Results.Ok(statuses);
     }
 
-    private static async Task<IResult> GetSagaStatus(
-        string commandId,
-        IPlatformCommandSagaQueryService queryService,
-        CancellationToken ct = default)
-    {
-        var saga = await queryService.GetAsync(commandId, ct);
-        return saga == null ? Results.NotFound() : Results.Ok(saga);
-    }
-
-    private static async Task<IResult> ListSagaStatuses(
-        IPlatformCommandSagaQueryService queryService,
-        int take = 50,
-        CancellationToken ct = default)
-    {
-        var statuses = await queryService.ListAsync(take, ct);
-        return Results.Ok(statuses);
-    }
 }

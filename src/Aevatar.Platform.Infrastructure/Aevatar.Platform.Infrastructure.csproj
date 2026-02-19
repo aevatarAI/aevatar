@@ -15,6 +15,5 @@
     <ProjectReference Include="..\Aevatar.Platform.Abstractions\Aevatar.Platform.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Platform.Application.Abstractions\Aevatar.Platform.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Platform.Application\Aevatar.Platform.Application.csproj" />
-    <ProjectReference Include="..\Aevatar.Platform.Sagas\Aevatar.Platform.Sagas.csproj" />
   </ItemGroup>
 </Project>

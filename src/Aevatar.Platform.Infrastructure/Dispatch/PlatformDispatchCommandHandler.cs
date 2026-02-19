@@ -10,18 +10,15 @@ internal sealed class PlatformDispatchCommandHandler : ICommandHandler<PlatformD
 {
     private readonly IPlatformCommandDispatchGateway _dispatchGateway;
     private readonly IPlatformCommandStateStore _stateStore;
-    private readonly IPlatformCommandSagaTracker _sagaTracker;
     private readonly ILogger<PlatformDispatchCommandHandler> _logger;
 
     public PlatformDispatchCommandHandler(
         IPlatformCommandDispatchGateway dispatchGateway,
         IPlatformCommandStateStore stateStore,
-        IPlatformCommandSagaTracker sagaTracker,
         ILogger<PlatformDispatchCommandHandler> logger)
     {
         _dispatchGateway = dispatchGateway;
         _stateStore = stateStore;
-        _sagaTracker = sagaTracker;
         _logger = logger;
     }
 
@@ -46,7 +43,6 @@ internal sealed class PlatformDispatchCommandHandler : ICommandHandler<PlatformD
             UpdatedAt = DateTimeOffset.UtcNow,
         };
         await _stateStore.UpsertAsync(runningStatus, ct);
-        await _sagaTracker.TrackAsync(runningStatus, envelope.CorrelationId, ct);
 
         try
         {
@@ -76,7 +72,6 @@ internal sealed class PlatformDispatchCommandHandler : ICommandHandler<PlatformD
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
             await _stateStore.UpsertAsync(resultStatus, ct);
-            await _sagaTracker.TrackAsync(resultStatus, envelope.CorrelationId, ct);
         }
         catch (Exception ex)
         {
@@ -101,7 +96,6 @@ internal sealed class PlatformDispatchCommandHandler : ICommandHandler<PlatformD
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
             await _stateStore.UpsertAsync(failedStatus, ct);
-            await _sagaTracker.TrackAsync(failedStatus, envelope.CorrelationId, ct);
 
             throw;
         }

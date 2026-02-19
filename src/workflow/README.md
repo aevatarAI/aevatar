@@ -25,10 +25,6 @@ flowchart LR
     P["Aevatar.Workflow.Projection"]
   end
 
-  subgraph Saga["Saga Layer"]
-    S["Aevatar.Workflow.Sagas"]
-  end
-
   subgraph Domain["Domain Layer"]
     C["Aevatar.Workflow.Core"]
   end
@@ -37,7 +33,6 @@ flowchart LR
     RH["Aevatar.CQRS.Runtime.Hosting"]
     CQRSC["Aevatar.CQRS.Core"]
     CQRSP["Aevatar.CQRS.Projection.Core"]
-    CQRSS["Aevatar.CQRS.Sagas.*"]
     F["Aevatar.Foundation.* / Aevatar.AI.Abstractions"]
   end
 
@@ -47,7 +42,6 @@ flowchart LR
   I --> A
   I --> P
   I --> AGUIA
-  I --> S
   A --> AB
   A --> C
   A --> CQRSC
@@ -55,8 +49,6 @@ flowchart LR
   P --> AB
   P --> C
   P --> CQRSP
-  S --> C
-  S --> CQRSS
   AGUIA --> P
   AGUIA --> C
   AGUIA --> F
@@ -164,26 +156,26 @@ flowchart TD
   WG --> OUT
 ```
 
-## 5. Saga 执行追踪链路
+## 5. ReadModel 查询链路
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
-  participant Runtime as "ActorSagaSubscriptionHostedService"
+  participant Runtime as "ActorStreamSubscriptionHub"
   participant Stream as "Actor Stream(EventEnvelope)"
-  participant SagaRt as "SagaRuntime"
-  participant Saga as "WorkflowExecutionSaga"
-  participant Repo as "ISagaRepository(FileSystem)"
-  participant Query as "IWorkflowExecutionSagaQueryService"
-  participant Api as "GET /api/sagas/workflow/{correlationId}"
+  participant Dispatcher as "ProjectionDispatcher"
+  participant Projector as "WorkflowExecutionReadModelProjector"
+  participant Store as "IProjectionReadModelStore"
+  participant Query as "IWorkflowExecutionQueryApplicationService"
+  participant Api as "GET /api/actors/{actorId}"
 
   Runtime->>Stream: "订阅 Actor 流"
-  Stream-->>SagaRt: "ObserveAsync(actorId, envelope)"
-  SagaRt->>Saga: "CanHandle/Handle"
-  Saga->>Repo: "Save(state by correlation_id)"
-  Api->>Query: "GetAsync(correlationId)"
-  Query->>Repo: "Load(workflow_execution, correlationId)"
-  Repo-->>Api: "WorkflowExecutionSagaState"
+  Stream-->>Dispatcher: "OnEvent(actorId, envelope)"
+  Dispatcher->>Projector: "ProjectAsync"
+  Projector->>Store: "Upsert(read model)"
+  Api->>Query: "GetActorSnapshotAsync(actorId)"
+  Query->>Store: "Get(actorId)"
+  Store-->>Api: "WorkflowActorSnapshot"
 ```
 
 ## 6. 关键实现约束
@@ -192,4 +184,4 @@ sequenceDiagram
 - Actor 事件域不承载 CQRS 命令语义：不在 `EventEnvelope` metadata 与 `StartWorkflowEvent` 中传递 `commandId`。
 - `WorkflowExecutionProjectionService` 以 `ActorId` 为共享投影上下文键，同一 Actor 多次触发共享读模型与事件流。
 - CQRS 与 AGUI 复用同一输入事件流（统一 `ProjectionCoordinator`），通过不同 Projector 分支输出。
-- Saga 以 `correlation_id` 作为长事务关联键，状态持久化在 `Aevatar.CQRS.Sagas.Runtime.FileSystem`，支持进程重启后恢复追踪。
+- Workflow 子系统不再承载“纯追踪型 Saga”；执行状态查询统一由 Projection ReadModel 提供。

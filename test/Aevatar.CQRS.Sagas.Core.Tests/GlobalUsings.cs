@@ -5,8 +5,6 @@ global using Aevatar.CQRS.Sagas.Abstractions.State;
 global using Aevatar.CQRS.Sagas.Core.Runtime;
 global using Aevatar.Foundation.Abstractions;
 global using Aevatar.Workflow.Core;
-global using Aevatar.Workflow.Sagas;
-global using Aevatar.Workflow.Sagas.States;
 global using FluentAssertions;
 global using Google.Protobuf;
 global using Microsoft.Extensions.Logging.Abstractions;

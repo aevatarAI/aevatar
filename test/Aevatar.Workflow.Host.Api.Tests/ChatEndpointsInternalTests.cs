@@ -3,8 +3,6 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Host.Api.Endpoints;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Sagas.Queries;
-using Aevatar.Workflow.Sagas.States;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -23,7 +21,6 @@ public class ChatEndpointsInternalTests
         builder.Services.AddSingleton<ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>(new FakeChatRunApplicationService());
         var queryService = new FakeQueryService { ActorQueryEnabledValue = true };
         builder.Services.AddSingleton<IWorkflowExecutionQueryApplicationService>(queryService);
-        builder.Services.AddSingleton<IWorkflowExecutionSagaQueryService>(new FakeSagaQueryService());
 
         var app = builder.Build();
         var endpoints = (IEndpointRouteBuilder)app;
@@ -43,8 +40,6 @@ public class ChatEndpointsInternalTests
         routePatterns.Should().Contain("/api/ws/chat");
         routePatterns.Should().Contain("/api/actors/{actorId}");
         routePatterns.Should().Contain("/api/actors/{actorId}/timeline");
-        routePatterns.Should().Contain("/api/sagas/workflow/{correlationId}");
-        routePatterns.Should().Contain("/api/sagas/workflow");
     }
 
     [Fact]
@@ -302,23 +297,6 @@ public class ChatEndpointsInternalTests
                 items = [];
 
             return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>(items.Take(Math.Max(1, take)).ToList());
-        }
-    }
-
-    private sealed class FakeSagaQueryService : IWorkflowExecutionSagaQueryService
-    {
-        public Task<WorkflowExecutionSagaState?> GetAsync(string correlationId, CancellationToken ct = default)
-        {
-            _ = correlationId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<WorkflowExecutionSagaState?>(null);
-        }
-
-        public Task<IReadOnlyList<WorkflowExecutionSagaState>> ListAsync(int take = 50, CancellationToken ct = default)
-        {
-            _ = take;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<WorkflowExecutionSagaState>>([]);
         }
     }
 

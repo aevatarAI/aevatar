@@ -11,7 +11,6 @@
     <ProjectReference Include="..\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />
-    <ProjectReference Include="..\Aevatar.Workflow.Sagas\Aevatar.Workflow.Sagas.csproj" />
     <ProjectReference Include="..\..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
   </ItemGroup>
   <ItemGroup>

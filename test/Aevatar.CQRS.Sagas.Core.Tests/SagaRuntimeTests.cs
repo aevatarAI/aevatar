@@ -8,13 +8,13 @@ namespace Aevatar.CQRS.Sagas.Core.Tests;
 public class SagaRuntimeTests
 {
     [Fact]
-    public async Task WorkflowExecutionSaga_ShouldTrackLifecycleByCorrelationId()
+    public async Task LifecycleSaga_ShouldTrackLifecycleByCorrelationId()
     {
         var repository = new InMemorySagaRepository();
         var commandEmitter = new CapturingCommandEmitter();
         var timeoutScheduler = new CapturingTimeoutScheduler();
         var runtime = CreateRuntime(
-            [new WorkflowExecutionSaga()],
+            [new LifecycleSaga()],
             repository,
             commandEmitter,
             timeoutScheduler);
@@ -25,7 +25,7 @@ public class SagaRuntimeTests
         await runtime.ObserveAsync("actor-root", Wrap(new StepCompletedEvent { StepId = "s1", Success = true }, correlationId));
         await runtime.ObserveAsync("actor-root", Wrap(new WorkflowCompletedEvent { WorkflowName = "demo", Success = true }, correlationId));
 
-        var state = await repository.LoadAsync<WorkflowExecutionSagaState>(WorkflowExecutionSagaNames.Execution, correlationId);
+        var state = await repository.LoadAsync<LifecycleSagaState>(LifecycleSaga.NameValue, correlationId);
 
         state.Should().NotBeNull();
         state!.WorkflowName.Should().Be("demo");
@@ -200,6 +200,87 @@ public class SagaRuntimeTests
 
     private sealed class ActionSagaState : SagaStateBase
     {
+    }
+
+    private sealed class LifecycleSagaState : SagaStateBase
+    {
+        public string WorkflowName { get; set; } = string.Empty;
+        public int RequestedSteps { get; set; }
+        public int CompletedSteps { get; set; }
+        public int FailedSteps { get; set; }
+        public bool? Success { get; set; }
+    }
+
+    private sealed class LifecycleSaga : SagaBase<LifecycleSagaState>
+    {
+        private static readonly string StartWorkflowTypeUrl = Any.Pack(new StartWorkflowEvent()).TypeUrl;
+        private static readonly string StepRequestTypeUrl = Any.Pack(new StepRequestEvent()).TypeUrl;
+        private static readonly string StepCompletedTypeUrl = Any.Pack(new StepCompletedEvent()).TypeUrl;
+        private static readonly string WorkflowCompletedTypeUrl = Any.Pack(new WorkflowCompletedEvent()).TypeUrl;
+
+        public const string NameValue = "lifecycle_saga";
+        public override string Name => NameValue;
+
+        public override ValueTask<bool> CanHandleAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = ct;
+            var typeUrl = envelope.Payload?.TypeUrl;
+            var canHandle = string.Equals(typeUrl, StartWorkflowTypeUrl, StringComparison.Ordinal) ||
+                            string.Equals(typeUrl, StepRequestTypeUrl, StringComparison.Ordinal) ||
+                            string.Equals(typeUrl, StepCompletedTypeUrl, StringComparison.Ordinal) ||
+                            string.Equals(typeUrl, WorkflowCompletedTypeUrl, StringComparison.Ordinal);
+            return ValueTask.FromResult(canHandle);
+        }
+
+        public override ValueTask<bool> CanStartAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = ct;
+            return ValueTask.FromResult(
+                string.Equals(envelope.Payload?.TypeUrl, StartWorkflowTypeUrl, StringComparison.Ordinal));
+        }
+
+        protected override ValueTask HandleAsync(
+            LifecycleSagaState state,
+            EventEnvelope envelope,
+            ISagaActionSink actions,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            var payload = envelope.Payload;
+            if (payload == null)
+                return ValueTask.CompletedTask;
+
+            if (payload.Is(StartWorkflowEvent.Descriptor))
+            {
+                var evt = payload.Unpack<StartWorkflowEvent>();
+                state.WorkflowName = evt.WorkflowName;
+                return ValueTask.CompletedTask;
+            }
+
+            if (payload.Is(StepRequestEvent.Descriptor))
+            {
+                state.RequestedSteps++;
+                return ValueTask.CompletedTask;
+            }
+
+            if (payload.Is(StepCompletedEvent.Descriptor))
+            {
+                var evt = payload.Unpack<StepCompletedEvent>();
+                state.CompletedSteps++;
+                if (!evt.Success)
+                    state.FailedSteps++;
+                return ValueTask.CompletedTask;
+            }
+
+            if (payload.Is(WorkflowCompletedEvent.Descriptor))
+            {
+                var evt = payload.Unpack<WorkflowCompletedEvent>();
+                state.Success = evt.Success;
+                actions.MarkCompleted();
+            }
+
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class ActionSaga : SagaBase<ActionSagaState>

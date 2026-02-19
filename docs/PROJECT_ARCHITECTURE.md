@@ -7,7 +7,7 @@
 1. 分层结构（Domain / Application / Infrastructure / Host）。
 2. 子系统边界（Workflow / Maker / Platform）。
 3. CQRS Runtime 抽象与并行实现（Wolverine / MassTransit）。
-4. 统一投影链路（CQRS + AGUI）与 Saga 长事务追踪。
+4. 统一投影链路（CQRS + AGUI）与 Saga 编排能力（可选）。
 5. API 所有权、依赖约束、CI 门禁与长期演进规则。
 
 ## 2. 解决方案结构
@@ -44,9 +44,9 @@ flowchart LR
 
 当前宿主职责：
 
-1. `Aevatar.Workflow.Host.Api`：workflow chat/sse/ws、workflow 查询与 workflow saga 查询。
-2. `Aevatar.Maker.Host.Api`：maker 执行入口与 maker saga 查询。
-3. `Aevatar.Platform.Host.Api`：平台命令受理、状态查询、platform saga 查询与路由目录。
+1. `Aevatar.Workflow.Host.Api`：workflow chat/sse/ws 与 workflow 查询。
+2. `Aevatar.Maker.Host.Api`：maker 执行入口。
+3. `Aevatar.Platform.Host.Api`：平台命令受理、状态查询与路由目录。
 
 ## 4. CQRS Runtime 统一接入
 
@@ -77,9 +77,8 @@ flowchart TB
 flowchart LR
     C["Command API"] --> APP["Application Service"] --> BUS["ICommandBus"] --> EXEC["IQueuedCommandExecutor"] --> ACT["Actor / GAgent"]
     ACT --> EVT["EventEnvelope Stream"] --> PROJ["Projection Pipeline"] --> RM["ReadModel Store"] --> Q["Query API"]
-    EVT --> SAGA["Saga Runtime"]
-    SAGA --> SS["Saga State Store"]
-    SS --> SQ["Saga Query API"]
+    EVT --> SAGA["Saga Runtime (Orchestration Only, Optional)"]
+    SAGA --> BUS
 ```
 
 关键约束：
@@ -87,7 +86,7 @@ flowchart LR
 1. `Command -> Event`，`Query -> ReadModel`。
 2. 不在会话内拼装投影流程。
 3. AGUI 输出是 Projection 分支，不是平行业务链路。
-4. Actor/Saga/ReadModel 三类状态必须分责，禁止跨职责写入。
+4. Saga 仅用于跨边界编排（超时/补偿/分支），不承担普通状态看板查询。
 
 ## 5.1 状态归属矩阵
 
@@ -131,11 +130,8 @@ flowchart TB
 |---|---|---|
 | `/api/chat`, `/api/ws/chat` | Workflow Host | Workflow 聊天协议 |
 | `/api/workflows`, `/api/actors/*` | Workflow Host | Workflow 查询 |
-| `/api/sagas/workflow*` | Workflow Host | Workflow Saga 执行状态查询 |
 | `/api/maker/runs` | Maker Host | Maker 执行 |
-| `/api/maker/sagas*` | Maker Host | Maker Saga 执行状态查询 |
 | `/api/commands`, `/api/commands/{id}` | Platform Host | 平台命令受理与状态查询 |
-| `/api/sagas/platform*` | Platform Host | Platform 命令生命周期 Saga 查询 |
 | `/api/routes/{subsystem}/*` | Platform Host | 子系统路由目录 |
 
 注：`/api/agents` 在 Workflow/Platform 存在语义重叠，需按部署路由或前缀治理收敛。

@@ -1,5 +1,4 @@
 using Aevatar.Workflow.Application.Abstractions.Queries;
-using Aevatar.Workflow.Sagas.Queries;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
@@ -20,13 +19,6 @@ public static class ChatQueryEndpoints
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/actors/{actorId}/timeline", ListActorTimeline)
-            .Produces(StatusCodes.Status200OK);
-
-        group.MapGet("/sagas/workflow/{correlationId}", GetWorkflowSaga)
-            .Produces(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status404NotFound);
-
-        group.MapGet("/sagas/workflow", ListWorkflowSagas)
             .Produces(StatusCodes.Status200OK);
     }
 
@@ -60,21 +52,4 @@ public static class ChatQueryEndpoints
         return Results.Ok(timeline);
     }
 
-    internal static async Task<IResult> GetWorkflowSaga(
-        string correlationId,
-        IWorkflowExecutionSagaQueryService queryService,
-        CancellationToken ct = default)
-    {
-        var saga = await queryService.GetAsync(correlationId, ct);
-        return saga == null ? Results.NotFound() : Results.Ok(saga);
-    }
-
-    internal static async Task<IResult> ListWorkflowSagas(
-        IWorkflowExecutionSagaQueryService queryService,
-        int take = 50,
-        CancellationToken ct = default)
-    {
-        var sagas = await queryService.ListAsync(take, ct);
-        return Results.Ok(sagas);
-    }
 }
