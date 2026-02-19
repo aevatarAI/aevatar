@@ -46,6 +46,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddWorkflowModule<WorkflowLoopModule>("workflow_loop");
         services.AddWorkflowModule<ConditionalModule>("conditional");
+        services.AddWorkflowModule<SwitchModule>("switch");
         services.AddWorkflowModule<WhileModule>("while", "loop");
         services.AddWorkflowModule<WorkflowCallModule>("workflow_call", "sub_workflow");
         services.AddWorkflowModule<CheckpointModule>("checkpoint");
@@ -54,6 +55,8 @@ public static class ServiceCollectionExtensions
         services.AddWorkflowModule<ParallelFanOutModule>("parallel_fanout", "parallel", "fan_out");
         services.AddWorkflowModule<VoteConsensusModule>("vote_consensus", "vote");
         services.AddWorkflowModule<ForEachModule>("foreach", "for_each");
+        services.AddWorkflowModule<RaceModule>("race", "select");
+        services.AddWorkflowModule<MapReduceModule>("map_reduce", "mapreduce");
 
         services.AddWorkflowModule<LLMCallModule>("llm_call");
         services.AddWorkflowModule<ToolCallModule>("tool_call");
@@ -61,5 +64,13 @@ public static class ServiceCollectionExtensions
 
         services.AddWorkflowModule<TransformModule>("transform");
         services.AddWorkflowModule<RetrieveFactsModule>("retrieve_facts");
+
+        services.AddWorkflowModule<WaitSignalModule>("wait_signal", "wait");
+        services.AddWorkflowModule<GuardModule>("guard", "assert");
+        services.AddWorkflowModule<EvaluateModule>("evaluate", "judge");
+        services.AddWorkflowModule<ReflectModule>("reflect");
+        services.AddWorkflowModule<DelayModule>("delay", "sleep");
+        services.AddWorkflowModule<EmitModule>("emit", "publish");
+        services.AddWorkflowModule<CacheModule>("cache");
     }
 }

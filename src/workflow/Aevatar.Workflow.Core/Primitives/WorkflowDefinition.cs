@@ -48,10 +48,27 @@ public sealed class WorkflowDefinition
     /// </summary>
     /// <param name="currentId">当前步骤 ID。</param>
     /// <returns>后继步骤定义，若无则返回 null。</returns>
-    public StepDefinition? GetNextStep(string currentId)
+    public StepDefinition? GetNextStep(string currentId) => GetNextStep(currentId, branchKey: null);
+
+    /// <summary>
+    /// 获取后继步骤，支持 switch/conditional 分支。
+    /// 当 <paramref name="branchKey"/> 非空时，优先从 <c>Branches[branchKey]</c> 查找目标步骤，
+    /// 找不到则尝试 <c>Branches["_default"]</c>，最后回退到 <see cref="GetNextStep(string)"/>。
+    /// </summary>
+    public StepDefinition? GetNextStep(string currentId, string? branchKey)
     {
         var s = GetStep(currentId);
-        if (s?.Next != null) return GetStep(s.Next);
+        if (s == null) return null;
+
+        if (!string.IsNullOrEmpty(branchKey) && s.Branches is { Count: > 0 })
+        {
+            if (s.Branches.TryGetValue(branchKey, out var target) && GetStep(target) is { } found)
+                return found;
+            if (s.Branches.TryGetValue("_default", out var def) && GetStep(def) is { } defFound)
+                return defFound;
+        }
+
+        if (s.Next != null) return GetStep(s.Next);
         var idx = Steps.FindIndex(x => x.Id == currentId);
         return idx >= 0 && idx + 1 < Steps.Count ? Steps[idx + 1] : null;
     }

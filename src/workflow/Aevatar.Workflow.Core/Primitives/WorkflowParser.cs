@@ -49,9 +49,28 @@ public sealed class WorkflowParser
         Type = s.Type ?? "llm_call", TargetRole = s.TargetRole ?? s.Role,
         Parameters = s.Parameters ?? [], Next = s.Next,
         Children = s.Children?.Select(MapStep).ToList(), Branches = s.Branches,
+        Retry = MapRetry(s.Retry), OnError = MapOnError(s.OnError), TimeoutMs = s.TimeoutMs,
     };
+
+    private static StepRetryPolicy? MapRetry(RawRetry? r) =>
+        r == null ? null : new StepRetryPolicy
+        {
+            MaxAttempts = r.MaxAttempts ?? 3,
+            Backoff = r.Backoff ?? "fixed",
+            DelayMs = r.DelayMs ?? 1000,
+        };
+
+    private static StepErrorPolicy? MapOnError(RawOnError? e) =>
+        e == null ? null : new StepErrorPolicy
+        {
+            Strategy = e.Strategy ?? "fail",
+            FallbackStep = e.FallbackStep,
+            DefaultOutput = e.DefaultOutput,
+        };
 
     private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } }
     private sealed class RawRole { public string? Id { get; set; } public string? Name { get; set; } public string? SystemPrompt { get; set; } public string? Provider { get; set; } public string? Model { get; set; } public string? EventModules { get; set; } public List<string>? Connectors { get; set; } }
-    private sealed class RawStep { public string? Id { get; set; } public string? Type { get; set; } public string? TargetRole { get; set; } public string? Role { get; set; } public Dictionary<string, string>? Parameters { get; set; } public string? Next { get; set; } public List<RawStep>? Children { get; set; } public Dictionary<string, string>? Branches { get; set; } }
+    private sealed class RawStep { public string? Id { get; set; } public string? Type { get; set; } public string? TargetRole { get; set; } public string? Role { get; set; } public Dictionary<string, string>? Parameters { get; set; } public string? Next { get; set; } public List<RawStep>? Children { get; set; } public Dictionary<string, string>? Branches { get; set; } public RawRetry? Retry { get; set; } public RawOnError? OnError { get; set; } public int? TimeoutMs { get; set; } }
+    private sealed class RawRetry { public int? MaxAttempts { get; set; } public string? Backoff { get; set; } public int? DelayMs { get; set; } }
+    private sealed class RawOnError { public string? Strategy { get; set; } public string? FallbackStep { get; set; } public string? DefaultOutput { get; set; } }
 }

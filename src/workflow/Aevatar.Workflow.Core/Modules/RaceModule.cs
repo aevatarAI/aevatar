@@ -1,0 +1,106 @@
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Abstractions.EventModules;
+using Microsoft.Extensions.Logging;
+
+namespace Aevatar.Workflow.Core.Modules;
+
+/// <summary>
+/// Race / select module: dispatches N parallel sub-steps and completes with the first
+/// successful result, discarding the rest. If all fail, the step fails.
+/// Unlike <see cref="ParallelFanOutModule"/>, race does not wait for all branches.
+/// </summary>
+public sealed class RaceModule : IEventModule
+{
+    private readonly Dictionary<string, RaceState> _races = [];
+
+    public string Name => "race";
+    public int Priority => 5;
+
+    public bool CanHandle(EventEnvelope envelope) =>
+        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
+        envelope.Payload?.Is(StepCompletedEvent.Descriptor) == true;
+
+    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    {
+        var payload = envelope.Payload;
+        if (payload == null) return;
+
+        if (payload.Is(StepRequestEvent.Descriptor))
+        {
+            var request = payload.Unpack<StepRequestEvent>();
+            if (request.StepType != "race") return;
+
+            var workers = new List<string>();
+            if (request.Parameters.TryGetValue("workers", out var w) && !string.IsNullOrEmpty(w))
+                workers.AddRange(w.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+            var count = workers.Count > 0 ? workers.Count
+                : int.TryParse(request.Parameters.GetValueOrDefault("count", "2"), out var n) ? n : 2;
+            count = Math.Clamp(count, 1, 10);
+
+            _races[request.StepId] = new RaceState(count, 0, false);
+
+            ctx.Logger.LogInformation("Race {StepId}: dispatching {Count} branches", request.StepId, count);
+
+            for (var i = 0; i < count; i++)
+            {
+                var role = i < workers.Count ? workers[i] : request.TargetRole;
+                await ctx.PublishAsync(new StepRequestEvent
+                {
+                    StepId = $"{request.StepId}_race_{i}",
+                    StepType = "llm_call",
+                    Input = request.Input,
+                    TargetRole = role ?? "",
+                }, EventDirection.Self, ct);
+            }
+        }
+        else if (payload.Is(StepCompletedEvent.Descriptor))
+        {
+            var evt = payload.Unpack<StepCompletedEvent>();
+            var parent = ExtractParent(evt.StepId);
+            if (parent == null || !_races.TryGetValue(parent, out var state)) return;
+
+            state = state with { Received = state.Received + 1 };
+            _races[parent] = state;
+
+            if (evt.Success && !state.Resolved)
+            {
+                _races[parent] = state with { Resolved = true };
+                ctx.Logger.LogInformation("Race {StepId}: winner={Winner}", parent, evt.StepId);
+
+                var completed = new StepCompletedEvent
+                {
+                    StepId = parent, Success = true, Output = evt.Output, WorkerId = evt.WorkerId,
+                };
+                completed.Metadata["race.winner"] = evt.StepId;
+                await ctx.PublishAsync(completed, EventDirection.Self, ct);
+
+                if (state.Received >= state.Total)
+                    _races.Remove(parent);
+                return;
+            }
+
+            if (state.Received >= state.Total)
+            {
+                _races.Remove(parent);
+                if (!state.Resolved)
+                {
+                    ctx.Logger.LogWarning("Race {StepId}: all {Count} branches failed", parent, state.Total);
+                    await ctx.PublishAsync(new StepCompletedEvent
+                    {
+                        StepId = parent, Success = false, Error = "all race branches failed",
+                    }, EventDirection.Self, ct);
+                }
+            }
+        }
+    }
+
+    private static string? ExtractParent(string stepId)
+    {
+        var idx = stepId.LastIndexOf("_race_", StringComparison.Ordinal);
+        return idx > 0 ? stepId[..idx] : null;
+    }
+
+    private sealed record RaceState(int Total, int Received, bool Resolved);
+}
