@@ -64,13 +64,15 @@ public sealed class LLMCallModule : IEventModule
 
             if (!string.IsNullOrEmpty(targetRole) && ctx.Agent is GAgentBase gab)
             {
+                var targetActorId = ResolveTargetActorId(ctx.AgentId, targetRole);
+
                 // Point-to-point: send ChatRequestEvent directly to the target role actor by ID
                 ctx.Logger.LogInformation(
-                    "LLMCallModule: step={StepId} → SendTo role={Role} prompt=({Len} chars) {Preview}",
-                    request.StepId, targetRole, prompt.Length, promptPreview);
+                    "LLMCallModule: step={StepId} → SendTo role={Role} actor={ActorId} prompt=({Len} chars) {Preview}",
+                    request.StepId, targetRole, targetActorId, prompt.Length, promptPreview);
 
                 var chatEvt = new ChatRequestEvent { Prompt = prompt, SessionId = chatSessionId };
-                await gab.EventPublisher.SendToAsync(targetRole, chatEvt, ct);
+                await gab.EventPublisher.SendToAsync(targetActorId, chatEvt, ct);
             }
             else
             {
@@ -131,5 +133,17 @@ public sealed class LLMCallModule : IEventModule
                 WorkerId = ctx.AgentId,
             }, EventDirection.Self, ct);
         }
+    }
+
+    private static string ResolveTargetActorId(string workflowActorId, string targetRole)
+    {
+        if (string.IsNullOrWhiteSpace(targetRole))
+            return targetRole;
+
+        // Workflow role ids are logical names. Concrete role actors are created as "{workflowActorId}:{roleId}".
+        if (!targetRole.Contains(':', StringComparison.Ordinal))
+            return $"{workflowActorId}:{targetRole}";
+
+        return targetRole;
     }
 }

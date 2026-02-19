@@ -257,8 +257,8 @@ public class ActorRuntimeWorkflowExecutionTopologyResolverTests
             new FakeActor("orphan", "unknown-parent", new FakeAgent("a-3", "orphan")),
         ]);
 
-        var resolver = new ActorRuntimeWorkflowExecutionTopologyResolver();
-        var topology = await resolver.ResolveAsync(runtime, "root", CancellationToken.None);
+        var resolver = new ActorRuntimeWorkflowExecutionTopologyResolver(runtime);
+        var topology = await resolver.ResolveAsync("root", CancellationToken.None);
 
         topology.Should().HaveCount(2);
         topology.Should().Contain(new WorkflowTopologyEdge("root", "child-1"));

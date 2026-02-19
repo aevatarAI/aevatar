@@ -5,8 +5,14 @@ namespace Aevatar.Workflow.Application.Orchestration;
 
 public sealed class ActorRuntimeWorkflowExecutionTopologyResolver : IWorkflowExecutionTopologyResolver
 {
+    private readonly IActorRuntime _runtime;
+
+    public ActorRuntimeWorkflowExecutionTopologyResolver(IActorRuntime runtime)
+    {
+        _runtime = runtime;
+    }
+
     public async Task<IReadOnlyList<WorkflowTopologyEdge>> ResolveAsync(
-        IActorRuntime runtime,
         string rootActorId,
         CancellationToken ct = default)
     {
@@ -15,7 +21,7 @@ public sealed class ActorRuntimeWorkflowExecutionTopologyResolver : IWorkflowExe
         if (string.IsNullOrWhiteSpace(rootActorId))
             return topology;
 
-        var root = await runtime.GetAsync(rootActorId);
+        var root = await _runtime.GetAsync(rootActorId);
         if (root == null)
             return topology;
 
@@ -28,7 +34,7 @@ public sealed class ActorRuntimeWorkflowExecutionTopologyResolver : IWorkflowExe
             ct.ThrowIfCancellationRequested();
             var parent = queue.Dequeue();
 
-            var parentActor = await runtime.GetAsync(parent);
+            var parentActor = await _runtime.GetAsync(parent);
             if (parentActor == null)
                 continue;
 

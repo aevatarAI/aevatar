@@ -14,7 +14,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddAevatarWorkflow();
         services.AddAevatarMakerCore();
-        services.AddSingleton<IMakerRunActorAdapter, WorkflowMakerRunActorAdapter>();
+        services.AddSingleton<IMakerRunExecutionPort, WorkflowMakerRunExecutionPort>();
         services.AddMakerApplication();
         return services;
     }

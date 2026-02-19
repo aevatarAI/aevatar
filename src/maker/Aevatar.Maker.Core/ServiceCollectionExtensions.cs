@@ -8,13 +8,13 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddAevatarMakerCore(this IServiceCollection services)
     {
-        services.Replace(ServiceDescriptor.Singleton<IEventModuleFactory, MakerModuleFactory>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IEventModuleFactory, MakerModuleFactory>());
         return services;
     }
 
     public static IServiceCollection AddMakerModuleFactory(this IServiceCollection services)
     {
-        services.Replace(ServiceDescriptor.Singleton<IEventModuleFactory, MakerModuleFactory>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IEventModuleFactory, MakerModuleFactory>());
         return services;
     }
 }

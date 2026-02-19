@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
-using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Demos.Cli.Messages;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Hooks;
@@ -373,7 +373,7 @@ internal static class DemoScenarioRunner
         services.AddTransient<DemoFaultyAgent>();
         services.AddTransient<DemoCounterAgent>();
         var sp = services.BuildServiceProvider();
-        var runtime = (LocalActorRuntime)sp.GetRequiredService<IActorRuntime>();
+        var runtime = sp.GetRequiredService<IActorRuntime>();
 
         try
         {
@@ -403,7 +403,7 @@ internal static class DemoScenarioRunner
         }
     }
 
-    private static async Task<DemoRunResult> RunHierarchyAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
+    private static async Task<DemoRunResult> RunHierarchyAsync(IActorRuntime runtime, DemoTraceStore traceStore)
     {
         var parent = await runtime.CreateAsync<DemoTransformerAgent>("parent");
         var child = await runtime.CreateAsync<DemoCollectorAgent>("child");
@@ -418,7 +418,7 @@ internal static class DemoScenarioRunner
         return await BuildResultAsync(runtime, "hierarchy", "Parent publishes Down event to child.", traceStore, parent.Id);
     }
 
-    private static async Task<DemoRunResult> RunFanoutAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
+    private static async Task<DemoRunResult> RunFanoutAsync(IActorRuntime runtime, DemoTraceStore traceStore)
     {
         var coord = await runtime.CreateAsync<DemoTransformerAgent>("coord");
         var w1 = await runtime.CreateAsync<DemoCollectorAgent>("w1");
@@ -446,7 +446,7 @@ internal static class DemoScenarioRunner
         return await BuildResultAsync(runtime, "fanout", "Coordinator broadcasts task to three workers.", traceStore, coord.Id);
     }
 
-    private static async Task<DemoRunResult> RunPipelineAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
+    private static async Task<DemoRunResult> RunPipelineAsync(IActorRuntime runtime, DemoTraceStore traceStore)
     {
         var transformer = await runtime.CreateAsync<DemoTransformerAgent>("transformer");
         var collector = await runtime.CreateAsync<DemoCollectorAgent>("sink");
@@ -469,7 +469,7 @@ internal static class DemoScenarioRunner
         return await BuildResultAsync(runtime, "pipeline", "Swap module to change pipeline behavior.", traceStore, transformer.Id);
     }
 
-    private static async Task<DemoRunResult> RunHooksAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
+    private static async Task<DemoRunResult> RunHooksAsync(IActorRuntime runtime, DemoTraceStore traceStore)
     {
         var faulty = await runtime.CreateAsync<DemoFaultyAgent>("faulty");
         await AttachTracingPublisherAsync(runtime, faulty, traceStore);
@@ -480,7 +480,7 @@ internal static class DemoScenarioRunner
         return await BuildResultAsync(runtime, "hooks", "Hook lifecycle around failing handler.", traceStore, faulty.Id);
     }
 
-    private static async Task<DemoRunResult> RunLifecycleAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
+    private static async Task<DemoRunResult> RunLifecycleAsync(IActorRuntime runtime, DemoTraceStore traceStore)
     {
         var actor = await runtime.CreateAsync<DemoCounterAgent>("stateful");
         await AttachTracingPublisherAsync(runtime, actor, traceStore);
@@ -495,7 +495,7 @@ internal static class DemoScenarioRunner
         return await BuildResultAsync(runtime, "lifecycle", "Deactivate/save and reactivate/load state.", traceStore, restored.Id);
     }
 
-    private static async Task AttachTracingPublisherAsync(LocalActorRuntime runtime, IActor actor, DemoTraceStore traceStore)
+    private static async Task AttachTracingPublisherAsync(IActorRuntime runtime, IActor actor, DemoTraceStore traceStore)
     {
         if (actor.Agent is not GAgentBase gab) return;
         var inner = gab.EventPublisher;
@@ -522,7 +522,7 @@ internal static class DemoScenarioRunner
     }
 
     private static async Task<DemoRunResult> BuildResultAsync(
-        LocalActorRuntime runtime,
+        IActorRuntime runtime,
         string scenario,
         string description,
         DemoTraceStore traceStore,

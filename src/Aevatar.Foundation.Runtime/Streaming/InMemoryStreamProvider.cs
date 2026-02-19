@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.Foundation.Runtime.Streaming;
 
 /// <summary>In-memory stream provider maintaining one event stream per actor.</summary>
-public sealed class InMemoryStreamProvider : IStreamProvider, IStreamLifecycleNotifier
+public sealed class InMemoryStreamProvider : IStreamProvider, IStreamLifecycleNotifier, IStreamLifecycleManager
 {
     private readonly ConcurrentDictionary<string, InMemoryStream> _streams = new();
     private readonly InMemoryStreamOptions _options;

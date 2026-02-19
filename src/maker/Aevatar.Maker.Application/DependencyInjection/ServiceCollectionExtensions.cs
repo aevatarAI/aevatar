@@ -9,7 +9,7 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddMakerApplication(this IServiceCollection services)
     {
-        services.TryAddSingleton<IMakerRunActorAdapter, UnconfiguredMakerRunActorAdapter>();
+        services.TryAddSingleton<IMakerRunExecutionPort, UnconfiguredMakerRunExecutionPort>();
         services.AddSingleton<IMakerRunApplicationService, MakerRunApplicationService>();
         return services;
     }

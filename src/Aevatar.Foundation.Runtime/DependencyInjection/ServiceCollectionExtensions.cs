@@ -37,6 +37,9 @@ public static class ServiceCollectionExtensions
             new InMemoryStreamProvider(
                 sp.GetRequiredService<InMemoryStreamOptions>(),
                 sp.GetService<ILoggerFactory>() ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance));
+        services.TryAddSingleton<IStreamLifecycleManager>(sp =>
+            sp.GetRequiredService<IStreamProvider>() as IStreamLifecycleManager
+            ?? NoopStreamLifecycleManager.Instance);
 
         // Actor Runtime
         services.TryAddSingleton<IActorRuntime, LocalActorRuntime>();
@@ -59,5 +62,15 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
 
         return services;
+    }
+
+    private sealed class NoopStreamLifecycleManager : IStreamLifecycleManager
+    {
+        public static readonly IStreamLifecycleManager Instance = new NoopStreamLifecycleManager();
+
+        public void RemoveStream(string actorId)
+        {
+            _ = actorId;
+        }
     }
 }

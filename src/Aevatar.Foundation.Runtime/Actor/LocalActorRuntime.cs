@@ -9,7 +9,6 @@ using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Runtime.Routing;
-using Aevatar.Foundation.Runtime.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -21,13 +20,20 @@ public sealed class LocalActorRuntime : IActorRuntime
 {
     private readonly ConcurrentDictionary<string, LocalActor> _actors = new();
     private readonly IStreamProvider _streams;
+    private readonly IStreamLifecycleManager? _streamLifecycleManager;
     private readonly IServiceProvider _services;
     private readonly ILogger<LocalActorRuntime> _logger;
 
     /// <summary>Creates local actor runtime.</summary>
-    public LocalActorRuntime(IStreamProvider streams, IServiceProvider services, ILogger<LocalActorRuntime>? logger = null)
+    public LocalActorRuntime(
+        IStreamProvider streams,
+        IServiceProvider services,
+        IStreamLifecycleManager? streamLifecycleManager = null,
+        ILogger<LocalActorRuntime>? logger = null)
     {
-        _streams = streams; _services = services;
+        _streams = streams;
+        _services = services;
+        _streamLifecycleManager = streamLifecycleManager;
         _logger = logger ?? NullLogger<LocalActorRuntime>.Instance;
     }
 
@@ -72,7 +78,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         if (!_actors.TryRemove(id, out var actor)) return;
         await actor.DeactivateAsync(ct);
         AgentMetrics.ActiveActors.Add(-1);
-        if (_streams is InMemoryStreamProvider msp) msp.RemoveStream(id);
+        _streamLifecycleManager?.RemoveStream(id);
         var manifestStore = _services.GetService<IAgentManifestStore>();
         if (manifestStore != null) await manifestStore.DeleteAsync(id, ct);
         _logger.LogInformation("Actor {Id} destroyed", id);
