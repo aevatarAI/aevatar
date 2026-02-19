@@ -12,6 +12,8 @@ public class ChatRunStartErrorMapperTests
     [InlineData(WorkflowChatRunStartError.WorkflowNotFound, StatusCodes.Status404NotFound)]
     [InlineData(WorkflowChatRunStartError.AgentTypeNotSupported, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.ProjectionDisabled, StatusCodes.Status503ServiceUnavailable)]
+    [InlineData(WorkflowChatRunStartError.WorkflowBindingMismatch, StatusCodes.Status409Conflict)]
+    [InlineData(WorkflowChatRunStartError.AgentWorkflowNotConfigured, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.None, StatusCodes.Status400BadRequest)]
     public void ToHttpStatusCode_ShouldMapExpectedCode(
         WorkflowChatRunStartError error,
@@ -27,5 +29,14 @@ public class ChatRunStartErrorMapperTests
 
         mapped.Code.Should().Be("WORKFLOW_NOT_FOUND");
         mapped.Message.Should().Be("Workflow not found.");
+    }
+
+    [Fact]
+    public void ToCommandError_WorkflowBindingMismatch_ShouldMapExpectedPayload()
+    {
+        var mapped = ChatRunStartErrorMapper.ToCommandError(WorkflowChatRunStartError.WorkflowBindingMismatch);
+
+        mapped.Code.Should().Be("WORKFLOW_BINDING_MISMATCH");
+        mapped.Message.Should().Be("Actor is bound to a different workflow.");
     }
 }

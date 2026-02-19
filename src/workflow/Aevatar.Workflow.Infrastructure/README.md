@@ -11,6 +11,7 @@
   - 报告序列化与 HTML 渲染。
 - `Workflows/WorkflowDefinitionFileLoader`
   - 从目录加载 `*.yaml/*.yml` 并注册到 `IWorkflowDefinitionRegistry`。
+  - 对重复 workflow 名称执行 fail-fast（抛异常，阻止静默覆盖）。
 - `Workflows/WorkflowDefinitionBootstrapHostedService`
   - 宿主启动时自动加载 workflow 文件源。
 - `CapabilityApi/*`
@@ -35,6 +36,13 @@
   - 报告输出目录，默认 `artifacts/workflow-executions`。
 - `WorkflowDefinitionFileSource:WorkflowDirectories`
   - workflow 定义扫描目录列表。
+  - 未知 YAML 字段与重复 workflow 名称会在启动期触发失败，避免运行时暴露配置问题。
+
+## API 语义约束
+
+- 一个 workflow 对应一个 actor，actor 绑定 workflow 后不可切换。
+- 当请求携带 `actorId` 时，表示在该 actor 上继续运行；`workflow` 必须为空或与已绑定 workflow 一致。
+- 若要运行另一个 workflow，必须创建新 actor（不复用旧 `actorId`）。
 
 ## 分层说明
 

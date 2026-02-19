@@ -204,8 +204,10 @@ flowchart LR
 1. `Mainnet Host` 默认打包 `Workflow Capability`（`AddWorkflowCapability(...)`）。
 2. `Workflow Host` 可作为同一能力的独立部署入口（开发/测试/隔离发布）。
 3. `Maker Host` 通过引用 Maker 项目并调用 `AddMakerCapability(...)` 接入。
-4. `AddAevatarCapability(...)` 对同名能力注册幂等，映射冲突时 fail-fast。
-5. 不允许新增或回流 `Aevatar.Platform.*` 项目引用。
+4. `Maker` 作为 `Workflow` 扩展能力，允许受控直连 `Workflow.Core`。
+5. 禁止 `Workflow` 反向依赖 `Maker`，禁止 `Maker` 越层依赖 `Workflow.Infrastructure/Host.Api/Presentation.*`。
+6. `AddAevatarCapability(...)` 对同名能力注册幂等，映射冲突时 fail-fast。
+7. 不允许新增或回流 `Aevatar.Platform.*` 项目引用。
 
 ## 12. 配置基线（`Cqrs:*`）
 
@@ -248,7 +250,8 @@ CI 架构门禁（摘要）：
 3. 禁止 Host/Infrastructure 直接拼装 `AddCqrsCore(...)`。
 4. 仅允许 Runtime.Hosting 直接引用 `Runtime.Implementations.*`。
 5. 禁止 `docs/agents-working-space` 工作文档进入 `aevatar.slnx`。
-6. 禁止 `Aevatar.Maker.Application` 直接依赖 `Aevatar.Maker.Projection`。
+6. 禁止 `Workflow` 反向依赖 `Maker`。
+7. 禁止 `Maker` 依赖 `Workflow.Infrastructure/Host.Api/Projection/Presentation.*`。
 
 ## 15. 结论
 

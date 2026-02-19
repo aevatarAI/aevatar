@@ -12,6 +12,8 @@ public enum WorkflowChatRunStartError
     WorkflowNotFound = 2,
     AgentTypeNotSupported = 3,
     ProjectionDisabled = 4,
+    WorkflowBindingMismatch = 5,
+    AgentWorkflowNotConfigured = 6,
 }
 
 public enum WorkflowProjectionCompletionStatus

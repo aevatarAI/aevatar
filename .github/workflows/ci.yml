@@ -70,8 +70,23 @@ jobs:
             exit 1
           fi
 
-          if rg -n "Aevatar\.Maker\.Projection\.csproj" src/maker/Aevatar.Maker.Application/Aevatar.Maker.Application.csproj; then
-            echo "Maker.Application must not reference Maker.Projection directly."
+          workflow_to_maker_violations="$(
+            rg -n "Aevatar\.Maker\..*\.csproj" src/workflow -g '*.csproj' || true
+          )"
+
+          if [ -n "$workflow_to_maker_violations" ]; then
+            echo "$workflow_to_maker_violations"
+            echo "Workflow projects must not reference Maker projects."
+            exit 1
+          fi
+
+          maker_to_workflow_implementation_violations="$(
+            rg -n "Aevatar\.Workflow\.(Infrastructure|Host\.Api|Projection|Presentation\.AGUIAdapter)\.csproj" src/maker -g '*.csproj' || true
+          )"
+
+          if [ -n "$maker_to_workflow_implementation_violations" ]; then
+            echo "$maker_to_workflow_implementation_violations"
+            echo "Maker projects must not reference Workflow implementation/host/presentation projects directly."
             exit 1
           fi
 

@@ -50,17 +50,33 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowRunCommandServi
         var started = runContext.ToStarted();
         var requestEnvelope = _requestEnvelopeFactory.CreateEnvelope(request, runContext.CommandContext);
         var processingTask = ProcessEnvelopeAsync(runContext, requestEnvelope, ct);
+        var projectionCompleted = false;
+        var projectionCompletionStatus = WorkflowProjectionCompletionStatus.Unknown;
 
         try
         {
             if (onStartedAsync != null)
                 await onStartedAsync(started, ct);
 
-            await _outputStreamer.StreamAsync(runContext.Sink, emitAsync, ct);
+            await _outputStreamer.StreamAsync(
+                runContext.Sink,
+                async (frame, token) =>
+                {
+                    if (!projectionCompleted &&
+                        TryResolveProjectionCompletionStatus(frame, out var status))
+                    {
+                        projectionCompleted = true;
+                        projectionCompletionStatus = status;
+                    }
+
+                    await emitAsync(frame, token);
+                },
+                ct);
             await JoinProcessingTaskAsync(processingTask);
-            var result = new WorkflowChatRunFinalizeResult(
-                WorkflowProjectionCompletionStatus.Completed,
-                true);
+            if (!projectionCompleted)
+                projectionCompletionStatus = WorkflowProjectionCompletionStatus.Failed;
+
+            var result = new WorkflowChatRunFinalizeResult(projectionCompletionStatus, projectionCompleted);
 
             return new WorkflowChatRunExecutionResult(
                 WorkflowChatRunStartError.None,
@@ -154,5 +170,25 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowRunCommandServi
     {
         sink.Complete();
         await sink.DisposeAsync();
+    }
+
+    private static bool TryResolveProjectionCompletionStatus(
+        WorkflowOutputFrame frame,
+        out WorkflowProjectionCompletionStatus status)
+    {
+        status = WorkflowProjectionCompletionStatus.Unknown;
+        if (string.Equals(frame.Type, "RUN_FINISHED", StringComparison.Ordinal))
+        {
+            status = WorkflowProjectionCompletionStatus.Completed;
+            return true;
+        }
+
+        if (string.Equals(frame.Type, "RUN_ERROR", StringComparison.Ordinal))
+        {
+            status = WorkflowProjectionCompletionStatus.Failed;
+            return true;
+        }
+
+        return false;
     }
 }

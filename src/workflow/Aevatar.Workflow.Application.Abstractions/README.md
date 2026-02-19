@@ -5,11 +5,11 @@ Workflow 应用层抽象契约，供 Host/Infrastructure 依赖。
 ## 包含内容
 
 - `Runs/`
-  - `IWorkflowChatRunApplicationService`
-  - `WorkflowChatRunRequest`、`WorkflowChatRunExecutionResult`、`WorkflowOutputFrame`
+  - `IWorkflowRunCommandService`
+  - `WorkflowChatRunRequest`、`WorkflowChatRunStarted`、`WorkflowChatRunExecutionResult`、`WorkflowOutputFrame`
 - `Queries/`
   - `IWorkflowExecutionQueryApplicationService`
-  - `WorkflowRunSummary`、`WorkflowRunReport`
+  - `WorkflowActorSnapshot`、`WorkflowActorTimelineItem`、`WorkflowRunReport`
 - `Workflows/`
   - `IWorkflowDefinitionRegistry`
 - `Reporting/`

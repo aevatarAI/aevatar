@@ -22,7 +22,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         WorkflowChatRunRequest request,
         CancellationToken ct = default)
     {
-        var workflowNameForRun = string.IsNullOrWhiteSpace(request.WorkflowName) ? "direct" : request.WorkflowName;
+        var requestedWorkflowName = NormalizeWorkflowName(request.WorkflowName);
+        var workflowNameForRun = string.IsNullOrWhiteSpace(requestedWorkflowName) ? "direct" : requestedWorkflowName;
 
         if (!string.IsNullOrWhiteSpace(request.ActorId))
         {
@@ -30,10 +31,28 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             if (existing == null)
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentNotFound);
 
-            if (existing.Agent is not WorkflowGAgent)
+            if (existing.Agent is not WorkflowGAgent workflowAgent)
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentTypeNotSupported);
 
-            return new WorkflowActorResolutionResult(existing, workflowNameForRun, WorkflowChatRunStartError.None);
+            var boundWorkflowName = NormalizeWorkflowName(workflowAgent.State.WorkflowName);
+            if (string.IsNullOrWhiteSpace(boundWorkflowName))
+            {
+                return new WorkflowActorResolutionResult(
+                    null,
+                    workflowNameForRun,
+                    WorkflowChatRunStartError.AgentWorkflowNotConfigured);
+            }
+
+            if (!string.IsNullOrWhiteSpace(requestedWorkflowName) &&
+                !string.Equals(requestedWorkflowName, boundWorkflowName, StringComparison.OrdinalIgnoreCase))
+            {
+                return new WorkflowActorResolutionResult(
+                    null,
+                    boundWorkflowName,
+                    WorkflowChatRunStartError.WorkflowBindingMismatch);
+            }
+
+            return new WorkflowActorResolutionResult(existing, boundWorkflowName, WorkflowChatRunStartError.None);
         }
 
         var yaml = _workflowRegistry.GetYaml(workflowNameForRun);
@@ -41,9 +60,12 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.WorkflowNotFound);
 
         var actor = await _runtime.CreateAsync<WorkflowGAgent>(ct: ct);
-        if (actor.Agent is WorkflowGAgent workflowAgent)
-            workflowAgent.ConfigureWorkflow(yaml, workflowNameForRun);
+        if (actor.Agent is WorkflowGAgent createdWorkflowAgent)
+            createdWorkflowAgent.ConfigureWorkflow(yaml, workflowNameForRun);
 
         return new WorkflowActorResolutionResult(actor, workflowNameForRun, WorkflowChatRunStartError.None);
     }
+
+    private static string NormalizeWorkflowName(string? workflowName) =>
+        string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
 }

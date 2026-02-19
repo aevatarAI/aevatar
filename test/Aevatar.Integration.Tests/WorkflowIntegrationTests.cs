@@ -142,6 +142,51 @@ public class WorkflowIntegrationTests
         errors.Should().Contain(e => e.Contains("重复"));
     }
 
+    [Fact(DisplayName = "给定子步骤 next 指向不存在步骤时，Validator 应报错")]
+    [Trait("Feature", "WorkflowValidation")]
+    public void Scenario1d_ChildStepNextShouldBeValidated()
+    {
+        var yaml = """
+            name: nested_bad_workflow
+            roles:
+              - id: r1
+                name: Role1
+            steps:
+              - id: root
+                type: parallel
+                children:
+                  - id: child1
+                    type: llm_call
+                    target_role: r1
+                    next: missing_step
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var errors = WorkflowValidator.Validate(workflow);
+
+        errors.Should().Contain(e => e.Contains("missing_step"));
+    }
+
+    [Fact(DisplayName = "给定包含未知字段的 YAML，Parser 应 fail-fast")]
+    [Trait("Feature", "WorkflowParsing")]
+    public void Scenario1e_UnknownYamlFieldShouldFailFast()
+    {
+        var yaml = """
+            name: invalid_workflow
+            roles:
+              - id: r1
+                name: Role1
+                unknown_field: not_allowed
+            steps:
+              - id: step1
+                type: llm_call
+                target_role: r1
+            """;
+
+        Action act = () => new WorkflowParser().Parse(yaml);
+        act.Should().Throw<Exception>();
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  Scenario 2: WorkflowGAgent 创建 Agent 树
     // ═══════════════════════════════════════════════════════════

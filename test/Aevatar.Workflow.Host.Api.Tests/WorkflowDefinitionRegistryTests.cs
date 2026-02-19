@@ -69,4 +69,28 @@ public class WorkflowDefinitionRegistryTests
             Directory.Delete(tmpDir, true);
         }
     }
+
+    [Fact]
+    public void FileLoader_DuplicateWorkflowName_ShouldThrow()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), $"wf_test_dup_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmpDir);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tmpDir, "review.yaml"), "name: review");
+            File.WriteAllText(Path.Combine(tmpDir, "review.yml"), "name: review_2");
+
+            var registry = new WorkflowDefinitionRegistry();
+            var loader = new WorkflowDefinitionFileLoader();
+
+            Action act = () => loader.LoadInto(registry, [tmpDir], NullLogger.Instance);
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*Duplicate workflow definition name*");
+        }
+        finally
+        {
+            Directory.Delete(tmpDir, true);
+        }
+    }
 }

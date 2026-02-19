@@ -76,9 +76,19 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     /// </summary>
     public void ConfigureWorkflow(string workflowYaml, string workflowName)
     {
+        var incomingWorkflowName = string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
+        var currentWorkflowName = string.IsNullOrWhiteSpace(State.WorkflowName) ? string.Empty : State.WorkflowName.Trim();
+        if (!string.IsNullOrWhiteSpace(currentWorkflowName) &&
+            !string.IsNullOrWhiteSpace(incomingWorkflowName) &&
+            !string.Equals(currentWorkflowName, incomingWorkflowName, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"WorkflowGAgent '{Id}' is already bound to workflow '{State.WorkflowName}' and cannot switch to '{workflowName}'.");
+        }
+
         State.WorkflowYaml = workflowYaml ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(workflowName))
-            State.WorkflowName = workflowName;
+        if (!string.IsNullOrWhiteSpace(incomingWorkflowName))
+            State.WorkflowName = incomingWorkflowName;
 
         _childAgentIds.Clear();
 
@@ -156,7 +166,8 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
 
         foreach (var role in _compiledWorkflow.Roles)
         {
-            var actor = await _runtime.CreateAsync(roleAgentType, role.Id);
+            var childActorId = BuildChildActorId(role.Id);
+            var actor = await _runtime.CreateAsync(roleAgentType, childActorId);
             if (actor.Agent is IRoleAgent roleAgent)
             {
                 roleAgent.SetRoleName(role.Name);
@@ -177,6 +188,14 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             _childAgentIds.Add(actor.Id);
         }
         Logger.LogInformation("Agent 树创建完成: {Count} 个 role agents", _childAgentIds.Count);
+    }
+
+    private string BuildChildActorId(string roleId)
+    {
+        if (string.IsNullOrWhiteSpace(roleId))
+            throw new InvalidOperationException("Role id is required to create child actor.");
+
+        return $"{Id}:{roleId.Trim()}";
     }
 
     // ─── Cognitive Modules 装配 ───

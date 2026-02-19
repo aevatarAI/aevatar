@@ -14,7 +14,7 @@ namespace Aevatar.Workflow.Core.Primitives;
 public sealed class WorkflowParser
 {
     private static readonly IDeserializer D = new DeserializerBuilder()
-        .WithNamingConvention(UnderscoredNamingConvention.Instance).IgnoreUnmatchedProperties().Build();
+        .WithNamingConvention(UnderscoredNamingConvention.Instance).Build();
 
     /// <summary>
     /// 解析 YAML 字符串为工作流定义。

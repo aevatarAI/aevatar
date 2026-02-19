@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -8,6 +9,7 @@ using Aevatar.Workflow.Application.Orchestration;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Workflows;
+using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -39,10 +41,176 @@ public class WorkflowChatRunApplicationServiceTests
         result.Started.Should().BeNull();
         projectionPort.EnsureActorProjectionCalled.Should().BeFalse();
     }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenStreamEndsWithRunFinished_ShouldFinalizeAsCompleted()
+    {
+        var actor = new FakeActor("actor-1", null, new FakeAgent("a-1", "actor-1"));
+        var service = new WorkflowChatRunApplicationService(
+            new StubWorkflowRunActorResolver(new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None)),
+            new FakeProjectionService(),
+            new FakeEnvelopeFactory(),
+            new FakeCommandContextPolicy(),
+            new StubWorkflowRunRequestExecutor(),
+            new StubWorkflowRunOutputStreamer(
+            [
+                new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = "RUN_FINISHED", ThreadId = "actor-1" },
+            ]));
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", "direct", "actor-1"),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        result.FinalizeResult.Should().NotBeNull();
+        result.FinalizeResult!.ProjectionCompletionStatus.Should().Be(WorkflowProjectionCompletionStatus.Completed);
+        result.FinalizeResult.ProjectionCompleted.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenStreamEndsWithRunError_ShouldFinalizeAsFailed()
+    {
+        var actor = new FakeActor("actor-1", null, new FakeAgent("a-1", "actor-1"));
+        var service = new WorkflowChatRunApplicationService(
+            new StubWorkflowRunActorResolver(new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None)),
+            new FakeProjectionService(),
+            new FakeEnvelopeFactory(),
+            new FakeCommandContextPolicy(),
+            new StubWorkflowRunRequestExecutor(),
+            new StubWorkflowRunOutputStreamer(
+            [
+                new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = "RUN_ERROR", Message = "boom" },
+            ]));
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", "direct", "actor-1"),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        result.FinalizeResult.Should().NotBeNull();
+        result.FinalizeResult!.ProjectionCompletionStatus.Should().Be(WorkflowProjectionCompletionStatus.Failed);
+        result.FinalizeResult.ProjectionCompleted.Should().BeTrue();
+    }
+}
+
+public class WorkflowRunActorResolverTests
+{
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenExistingActorWorkflowMismatches_ShouldReturnConflictError()
+    {
+        var workflowAgent = CreateWorkflowAgent("direct");
+        var runtime = new FakeActorRuntime([new FakeActor("actor-1", null, workflowAgent)]);
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+        registry.Register("other", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+        var resolver = new WorkflowRunActorResolver(runtime, registry);
+
+        var resolved = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", "other", "actor-1"),
+            CancellationToken.None);
+
+        resolved.Error.Should().Be(WorkflowChatRunStartError.WorkflowBindingMismatch);
+        resolved.Actor.Should().BeNull();
+        resolved.WorkflowNameForRun.Should().Be("direct");
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenExistingActorWorkflowMatches_ShouldUseBoundWorkflowName()
+    {
+        var workflowAgent = CreateWorkflowAgent("direct");
+        var actor = new FakeActor("actor-1", null, workflowAgent);
+        var runtime = new FakeActorRuntime([actor]);
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+        var resolver = new WorkflowRunActorResolver(runtime, registry);
+
+        var resolved = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", "direct", "actor-1"),
+            CancellationToken.None);
+
+        resolved.Error.Should().Be(WorkflowChatRunStartError.None);
+        resolved.Actor.Should().BeSameAs(actor);
+        resolved.WorkflowNameForRun.Should().Be("direct");
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenExistingActorHasNoBoundWorkflow_ShouldReturnNotConfiguredError()
+    {
+        var unconfigured = CreateUnconfiguredWorkflowAgent();
+        var runtime = new FakeActorRuntime([new FakeActor("actor-1", null, unconfigured)]);
+        var registry = new WorkflowDefinitionRegistry();
+        var resolver = new WorkflowRunActorResolver(runtime, registry);
+
+        var resolved = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", null, "actor-1"),
+            CancellationToken.None);
+
+        resolved.Error.Should().Be(WorkflowChatRunStartError.AgentWorkflowNotConfigured);
+        resolved.Actor.Should().BeNull();
+    }
+
+    [Fact]
+    public void ConfigureWorkflow_WhenSwitchingWorkflow_ShouldThrowInvalidOperation()
+    {
+        var workflowAgent = CreateWorkflowAgent("direct");
+
+        Action act = () => workflowAgent.ConfigureWorkflow(
+            WorkflowDefinitionRegistry.BuiltInDirectYaml,
+            "another");
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*already bound to workflow*");
+    }
+
+    private static WorkflowGAgent CreateWorkflowAgent(string workflowName)
+    {
+        var workflowAgent = CreateUnconfiguredWorkflowAgent();
+        workflowAgent.ConfigureWorkflow(WorkflowDefinitionRegistry.BuiltInDirectYaml, workflowName);
+        return workflowAgent;
+    }
+
+    private static WorkflowGAgent CreateUnconfiguredWorkflowAgent() =>
+        new(
+            new FakeActorRuntime([]),
+            new StubRoleAgentTypeResolver(),
+            [],
+            [],
+            []);
 }
 
 public class WorkflowExecutionQueryApplicationServiceTests
 {
+    [Fact]
+    public async Task ListAgentsAsync_ShouldOnlyReturnWorkflowActors()
+    {
+        var workflowActor = new FakeActor(
+            "wf-1",
+            null,
+            new WorkflowGAgent(
+                new FakeActorRuntime([]),
+                new StubRoleAgentTypeResolver(),
+                [],
+                [],
+                []));
+        var nonWorkflowActor = new FakeActor("role-1", "wf-1", new FakeAgent("role-agent-1", "role"));
+        var runtime = new FakeActorRuntime([workflowActor, nonWorkflowActor]);
+        var registry = new WorkflowDefinitionRegistry();
+        var queryService = new WorkflowExecutionQueryApplicationService(
+            runtime,
+            registry,
+            new FakeProjectionService());
+
+        var agents = await queryService.ListAgentsAsync(CancellationToken.None);
+
+        agents.Should().ContainSingle();
+        agents[0].Id.Should().Be("wf-1");
+        agents[0].Type.Should().Be(nameof(WorkflowGAgent));
+    }
+
     [Fact]
     public async Task GetActorSnapshotAsync_ShouldReturnProjectionPortResult()
     {
@@ -212,6 +380,68 @@ internal sealed class FakeActorRuntime : IActorRuntime
     public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
 
     public Task RestoreAllAsync(CancellationToken ct = default) => Task.CompletedTask;
+}
+
+internal sealed class StubWorkflowRunActorResolver : IWorkflowRunActorResolver
+{
+    private readonly WorkflowActorResolutionResult _result;
+
+    public StubWorkflowRunActorResolver(WorkflowActorResolutionResult result)
+    {
+        _result = result;
+    }
+
+    public Task<WorkflowActorResolutionResult> ResolveOrCreateAsync(
+        WorkflowChatRunRequest request,
+        CancellationToken ct = default)
+    {
+        _ = request;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(_result);
+    }
+}
+
+internal sealed class StubWorkflowRunRequestExecutor : IWorkflowRunRequestExecutor
+{
+    public Task ExecuteAsync(
+        IActor actor,
+        string actorId,
+        EventEnvelope requestEnvelope,
+        IWorkflowRunEventSink sink,
+        CancellationToken ct = default)
+    {
+        _ = actor;
+        _ = actorId;
+        _ = requestEnvelope;
+        _ = sink;
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class StubWorkflowRunOutputStreamer : IWorkflowRunOutputStreamer
+{
+    private readonly IReadOnlyList<WorkflowOutputFrame> _frames;
+
+    public StubWorkflowRunOutputStreamer(IReadOnlyList<WorkflowOutputFrame> frames)
+    {
+        _frames = frames;
+    }
+
+    public async Task StreamAsync(
+        IWorkflowRunEventSink sink,
+        Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+        CancellationToken ct = default)
+    {
+        _ = sink;
+        foreach (var frame in _frames)
+            await emitAsync(frame, ct);
+    }
+}
+
+internal sealed class StubRoleAgentTypeResolver : IRoleAgentTypeResolver
+{
+    public Type ResolveRoleAgentType() => typeof(FakeAgent);
 }
 
 internal sealed class FakeActor : IActor

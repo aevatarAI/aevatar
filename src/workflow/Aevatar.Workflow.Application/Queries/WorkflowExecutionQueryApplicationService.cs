@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Application.Queries;
 
@@ -31,6 +32,9 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
 
         foreach (var actor in actors)
         {
+            if (actor.Agent is not WorkflowGAgent)
+                continue;
+
             var description = await actor.Agent.GetDescriptionAsync();
             result.Add(new WorkflowAgentSummary(actor.Id, actor.Agent.GetType().Name, description));
         }

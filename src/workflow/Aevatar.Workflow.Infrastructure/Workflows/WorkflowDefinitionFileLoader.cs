@@ -15,13 +15,21 @@ public sealed class WorkflowDefinitionFileLoader
         ArgumentNullException.ThrowIfNull(logger);
 
         var loaded = 0;
+        var registeredNames = new HashSet<string>(registry.GetNames(), StringComparer.OrdinalIgnoreCase);
         foreach (var directory in directories.Where(Directory.Exists))
         {
             foreach (var file in Directory.EnumerateFiles(directory, "*.*")
+                         .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                          .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
                                   || f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)))
             {
                 var name = Path.GetFileNameWithoutExtension(file);
+                if (!registeredNames.Add(name))
+                {
+                    throw new InvalidOperationException(
+                        $"Duplicate workflow definition name '{name}' detected in '{file}'.");
+                }
+
                 var yaml = File.ReadAllText(file);
                 registry.Register(name, yaml);
                 loaded++;

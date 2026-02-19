@@ -19,6 +19,7 @@ public class EventEnvelopeToAGUIEventMapperTests
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
         PublisherId = "test",
+        CorrelationId = "cmd-1",
         Direction = EventDirection.Down,
     };
 
@@ -36,7 +37,7 @@ public class EventEnvelopeToAGUIEventMapperTests
         events[0].Should().BeOfType<RunStartedEvent>();
         var e = (RunStartedEvent)events[0];
         e.ThreadId.Should().Be("test");
-        e.RunId.Should().Be("test");
+        e.RunId.Should().Be("cmd-1");
     }
 
     [Fact]
@@ -115,7 +116,9 @@ public class EventEnvelopeToAGUIEventMapperTests
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<RunFinishedEvent>();
-        ((RunFinishedEvent)events[0]).ThreadId.Should().Be("test");
+        var runFinished = (RunFinishedEvent)events[0];
+        runFinished.ThreadId.Should().Be("test");
+        runFinished.RunId.Should().Be("cmd-1");
     }
 
     [Fact]
@@ -130,7 +133,26 @@ public class EventEnvelopeToAGUIEventMapperTests
 
         events.Should().HaveCount(1);
         events[0].Should().BeOfType<RunErrorEvent>();
-        ((RunErrorEvent)events[0]).Message.Should().Be("超时");
+        var runError = (RunErrorEvent)events[0];
+        runError.Message.Should().Be("超时");
+        runError.RunId.Should().Be("cmd-1");
+    }
+
+    [Fact]
+    public void StartWorkflowEvent_WithoutCorrelationId_RunIdFallsBackToThread()
+    {
+        var envelope = Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "review", Input = "hello",
+        });
+        envelope.CorrelationId = "";
+
+        var events = CreateMapper().Map(envelope);
+
+        events.Should().ContainSingle().Which.Should().BeOfType<RunStartedEvent>();
+        var runStarted = (RunStartedEvent)events[0];
+        runStarted.ThreadId.Should().Be("test");
+        runStarted.RunId.Should().Be("test");
     }
 
     [Fact]

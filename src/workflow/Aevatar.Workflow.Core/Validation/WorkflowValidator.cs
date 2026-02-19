@@ -24,17 +24,58 @@ public static class WorkflowValidator
         if (string.IsNullOrWhiteSpace(wf.Name)) errors.Add("缺少 name");
         if (wf.Steps.Count == 0) errors.Add("至少需要一个 step");
 
-        var stepIds = new HashSet<string>();
-        foreach (var s in wf.Steps) if (!stepIds.Add(s.Id)) errors.Add($"步骤 '{s.Id}' 重复");
-
-        var roleIds = wf.Roles.Select(r => r.Id).ToHashSet();
-        foreach (var s in wf.Steps)
+        var allSteps = EnumerateSteps(wf.Steps).ToList();
+        var stepIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var step in allSteps)
         {
-            if (s.TargetRole != null && !roleIds.Contains(s.TargetRole))
-                errors.Add($"步骤 '{s.Id}' 引用不存在的角色 '{s.TargetRole}'");
-            if (s.Next != null && !stepIds.Contains(s.Next))
-                errors.Add($"步骤 '{s.Id}' 的 next 引用不存在的步骤 '{s.Next}'");
+            if (string.IsNullOrWhiteSpace(step.Id))
+            {
+                errors.Add("存在缺少 id 的步骤");
+                continue;
+            }
+
+            if (!stepIds.Add(step.Id))
+                errors.Add($"步骤 '{step.Id}' 重复");
         }
+
+        var roleIds = wf.Roles.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var step in allSteps)
+        {
+            if (!string.IsNullOrWhiteSpace(step.TargetRole) && !roleIds.Contains(step.TargetRole))
+                errors.Add($"步骤 '{step.Id}' 引用不存在的角色 '{step.TargetRole}'");
+
+            if (!string.IsNullOrWhiteSpace(step.Next) && !stepIds.Contains(step.Next))
+                errors.Add($"步骤 '{step.Id}' 的 next 引用不存在的步骤 '{step.Next}'");
+
+            if (step.Branches == null)
+                continue;
+
+            foreach (var branch in step.Branches)
+            {
+                if (string.IsNullOrWhiteSpace(branch.Value))
+                {
+                    errors.Add($"步骤 '{step.Id}' 的分支 '{branch.Key}' 缺少目标步骤");
+                    continue;
+                }
+
+                if (!stepIds.Contains(branch.Value))
+                    errors.Add($"步骤 '{step.Id}' 的分支 '{branch.Key}' 引用不存在的步骤 '{branch.Value}'");
+            }
+        }
+
         return errors;
+    }
+
+    private static IEnumerable<StepDefinition> EnumerateSteps(IEnumerable<StepDefinition> steps)
+    {
+        foreach (var step in steps)
+        {
+            yield return step;
+            if (step.Children == null || step.Children.Count == 0)
+                continue;
+
+            foreach (var child in EnumerateSteps(step.Children))
+                yield return child;
+        }
     }
 }

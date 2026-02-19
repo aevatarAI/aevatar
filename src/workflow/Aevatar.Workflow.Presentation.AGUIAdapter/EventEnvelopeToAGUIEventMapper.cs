@@ -60,13 +60,14 @@ public sealed class StartWorkflowAGUIEventEnvelopeMappingHandler : IAGUIEventEnv
 
         var evt = envelope.Payload.Unpack<StartWorkflowEvent>();
         var threadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
+        var runId = AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, threadId);
         events =
         [
             new RunStartedEvent
             {
                 Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
                 ThreadId = threadId,
-                RunId = threadId,
+                RunId = runId,
             },
         ];
         return true;
@@ -235,26 +236,28 @@ public sealed class WorkflowCompletedAGUIEventEnvelopeMappingHandler : IAGUIEven
         if (evt.Success)
         {
             var threadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
+            var runId = AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, threadId);
             events =
             [
                 new RunFinishedEvent
                 {
                     Timestamp = ts,
                     ThreadId = threadId,
-                    RunId = threadId,
+                    RunId = runId,
                     Result = new { output = evt.Output },
                 },
             ];
             return true;
         }
 
+        var errorThreadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
         events =
         [
             new RunErrorEvent
             {
                 Timestamp = ts,
                 Message = evt.Error,
-                RunId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName),
+                RunId = AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, errorThreadId),
                 Code = "WORKFLOW_FAILED",
             },
         ];
@@ -324,6 +327,13 @@ internal static class AGUIEventEnvelopeMappingHelpers
         return string.IsNullOrWhiteSpace(envelope.PublisherId)
             ? fallback
             : envelope.PublisherId;
+    }
+
+    public static string ResolveRunId(EventEnvelope envelope, string fallbackThreadId)
+    {
+        return string.IsNullOrWhiteSpace(envelope.CorrelationId)
+            ? fallbackThreadId
+            : envelope.CorrelationId;
     }
 
     public static string ResolveMessageId(string? sessionId, string? envelopeId)
