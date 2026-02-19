@@ -6,14 +6,14 @@
     <Project Path="demos\Aevatar.Demos.CaseProjection\Aevatar.Demos.CaseProjection.csproj" />
     <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />
     <Project Path="demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj" />
+    <File Path="demos\README.md" />
   </Folder>
   <Folder Name="/docs/">
     <File Path="docs\FOUNDATION.md" />
-    <File Path="docs\COGNITIVE.md" />
     <File Path="docs\EVENT_SOURCING.md" />
     <File Path="docs\ROLE.md" />
     <File Path="docs\PROJECT_ARCHITECTURE.md" />
-    <File Path="docs\SAGA_INTRODUCTION_ANALYSIS.md" />
+    <File Path="docs\WORKFLOW.md" />
   </Folder>
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
@@ -68,12 +68,14 @@
     <Project Path="src\maker\Aevatar.Maker.Projection\Aevatar.Maker.Projection.csproj" />
   </Folder>
   <Folder Name="/test/">
+    <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" Type="Classic C#" />
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Sagas.Core.Tests\Aevatar.CQRS.Sagas.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
     <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Application.Tests\Aevatar.Workflow.Application.Tests.csproj" />
+    <Project Path="test\Aevatar.Workflow.Core.Tests\Aevatar.Workflow.Core.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />

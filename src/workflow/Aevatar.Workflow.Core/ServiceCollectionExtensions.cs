@@ -72,5 +72,7 @@ public static class ServiceCollectionExtensions
         services.AddWorkflowModule<DelayModule>("delay", "sleep");
         services.AddWorkflowModule<EmitModule>("emit", "publish");
         services.AddWorkflowModule<CacheModule>("cache");
+        services.AddWorkflowModule<HumanApprovalModule>("human_approval");
+        services.AddWorkflowModule<HumanInputModule>("human_input");
     }
 }
