@@ -86,6 +86,9 @@ public abstract class GAgentBase : IAgent
     /// 3. Executes handler
     /// 4. Calls IGAgentExecutionHook pipeline OnEventHandlerEndAsync
     /// 5. Calls virtual OnEventHandlerEndAsync
+    ///
+    /// Default behavior is fail-fast: handler exceptions are rethrown after hook callbacks.
+    /// Subclasses can override <see cref="ShouldSuppressHandlerException"/> to opt into best-effort continuation.
     /// </summary>
     public async Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
@@ -127,6 +130,9 @@ public abstract class GAgentBase : IAgent
                     hookCtx.Exception = ex;
                     Logger.LogError(ex, "Handler {Name} failed", handler.Name);
                     await RunHooksAsync(h => h.OnErrorAsync(hookCtx, ex, ct), "OnError");
+
+                    if (!ShouldSuppressHandlerException(envelope, handler.Name, ex))
+                        throw;
                 }
                 finally
                 {
@@ -151,6 +157,21 @@ public abstract class GAgentBase : IAgent
     protected virtual Task OnEventHandlerStartAsync(
         EventEnvelope envelope, string handlerName, object? payload, CancellationToken ct)
         => Task.CompletedTask;
+
+    /// <summary>
+    /// Controls whether a handler exception should be suppressed.
+    /// Default is <c>false</c> (rethrow).
+    /// </summary>
+    protected virtual bool ShouldSuppressHandlerException(
+        EventEnvelope envelope,
+        string handlerName,
+        Exception exception)
+    {
+        _ = envelope;
+        _ = handlerName;
+        _ = exception;
+        return false;
+    }
 
     /// <summary>Virtual hook after handler execution. Subclasses may override.</summary>
     protected virtual Task OnEventHandlerEndAsync(
