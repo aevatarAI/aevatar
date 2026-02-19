@@ -8,7 +8,7 @@
 - `Aevatar.Maker.Projection`：运行报告投影累加器与 JSON/HTML 报告写出。
 - `Aevatar.Maker.Application.Abstractions`：应用层契约与模型。
 - `Aevatar.Maker.Application`：命令执行应用服务（基于 `IActorRuntime + EventEnvelope`）。
-- `Aevatar.Maker.Infrastructure`：DI 组合入口与能力 API 定义（`AddMakerCapability` / `AddMakerInfrastructure` / `MapMakerCapabilityEndpoints`）。
+- `Aevatar.Maker.Infrastructure`：DI 组合入口与能力 API 定义（`AddMakerCapability(IServiceCollection, IConfiguration)` / `AddMakerCapability(WebApplicationBuilder)` / `AddMakerInfrastructure` / `MapMakerCapabilityEndpoints`）。
 
 ## 关系图
 

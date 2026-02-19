@@ -188,8 +188,8 @@ flowchart LR
 
 每个 Capability Host 统一接入：
 
-1. `builder.Host.UseAevatarCqrsRuntime(builder.Configuration);`
-2. `builder.Services.AddAevatarCqrsRuntime(builder.Configuration);`
+1. `builder.AddAevatarDefaultHost(...);`
+2. `app.UseAevatarDefaultHost();`
 
 目标接入：
 

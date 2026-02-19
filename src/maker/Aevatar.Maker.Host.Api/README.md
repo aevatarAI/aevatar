@@ -14,7 +14,9 @@
 
 运行时装配：
 
-- 通过 `UseAevatarCqrsRuntime(...)` 与 `AddAevatarCqrsRuntime(...)` 统一接入 CQRS Runtime。
+- `builder.AddAevatarDefaultHost(...)`
+- `builder.AddMakerCapability()`
+- `app.UseAevatarDefaultHost()`（自动挂载能力端点）
 
 运行：
 

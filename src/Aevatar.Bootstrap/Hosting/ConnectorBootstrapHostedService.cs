@@ -1,10 +1,11 @@
-using Aevatar.Bootstrap;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Workflow.Host.Api.Startup;
+namespace Aevatar.Bootstrap.Hosting;
 
-internal sealed class ConnectorBootstrapHostedService : IHostedService
+public sealed class ConnectorBootstrapHostedService : IHostedService
 {
     private readonly IConnectorRegistry _registry;
     private readonly IEnumerable<IConnectorBuilder> _connectorBuilders;

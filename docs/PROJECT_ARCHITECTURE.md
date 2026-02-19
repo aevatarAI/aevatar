@@ -29,10 +29,12 @@ flowchart TB
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    MH["Aevatar.Mainnet.Host.Api"] --> MADD["AddMainnetCore()"]
+    MH["Aevatar.Mainnet.Host.Api"] --> HADD["AddAevatarDefaultHost()"]
+    MH --> MADD["AddMainnetCore()"]
     MH --> WADD["AddWorkflowCapability()"]
 
-    KH["Aevatar.Maker.Host.Api"] --> KADD["AddMakerCapability()"]
+    KH["Aevatar.Maker.Host.Api"] --> KHADD["AddAevatarDefaultHost()"]
+    KH --> KADD["AddMakerCapability()"]
 
     WADD --> WIMPL["Workflow Capability Implementation"]
     KADD --> KIMPL["Maker Capability Implementation"]
@@ -48,10 +50,10 @@ flowchart LR
 
 ### 3.2 最小能力契约
 
-1. 每个能力提供一个 DI 扩展入口（`IServiceCollection` 扩展）。
-2. 每个能力提供端点挂载入口（`IEndpointRouteBuilder` 扩展）。
+1. 每个能力提供 Host 入口扩展（`WebApplicationBuilder` 扩展），一行接入能力。
+2. 能力内部可保留 `IServiceCollection` 与 `IEndpointRouteBuilder` 细粒度扩展，供非 Host 场景复用。
 3. 能力 API 契约（请求/响应模型 + endpoint 定义）归属能力项目，不在 Host 重复定义。
-4. 每个能力自己注册 Command Handler、Projector、Endpoint（如有）。
+4. 能力通过 `AddAevatarCapability(...)` 声明端点映射，默认由 `UseAevatarDefaultHost()` 统一挂载。
 5. 能力之间通过现有事件与应用服务协作，不要求新增通用微服务基础设施。
 
 ## 4. CQRS Runtime 统一接入
@@ -68,7 +70,7 @@ flowchart TB
 
 统一规则：
 
-1. Host 仅通过 `UseAevatarCqrsRuntime(...)` + `AddAevatarCqrsRuntime(...)` 接入。
+1. Host 仅通过 `AddAevatarDefaultHost(...)` + `UseAevatarDefaultHost()` 接入默认运行时。
 2. 业务能力项目不得直接引用 `Runtime.Implementations.*`。
 3. 运行时切换仅通过 `Cqrs:Runtime = Wolverine|MassTransit`。
 
@@ -122,7 +124,7 @@ CI（`.github/workflows/ci.yml`）应执行：
 
 ## 9. 演进路线
 
-1. Mainnet：引用 Workflow 并完成 `AddWorkflowCapability()` 装配。
-2. Maker：独立部署，引用 Maker 并完成 `AddMakerCapability()` 装配。
+1. Mainnet：`AddAevatarDefaultHost()` 后引用 Workflow 并完成 `AddWorkflowCapability()` 装配。
+2. Maker：`AddAevatarDefaultHost()` 后独立部署并完成 `AddMakerCapability()` 装配。
 3. 删除 `src/Aevatar.Platform.*` 与旧平台路由目录。
 4. 新能力统一按“新增项目引用 + 新增 Add 扩展 + Host 注册”接入。

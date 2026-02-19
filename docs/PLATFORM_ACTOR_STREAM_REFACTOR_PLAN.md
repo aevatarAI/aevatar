@@ -3,8 +3,8 @@
 ## 1. 目标
 
 1. `Workflow` 不再作为独立系统，改为 Mainnet 默认内置能力。
-2. Mainnet 通过“项目引用 + `AddWorkflowCapability()`”完成 Workflow 装配。
-3. `Maker` 作为独立系统，通过“项目引用 + `AddMakerCapability()`”装配。
+2. Mainnet 通过“`AddAevatarDefaultHost()` + 项目引用 + `AddWorkflowCapability()`”完成 Workflow 装配。
+3. `Maker` 作为独立系统，通过“`AddAevatarDefaultHost()` + 项目引用 + `AddMakerCapability()`”装配。
 4. 删除 `Aevatar.Platform.*` 全部代码与路由语义。
 5. 保持现有 Actor + EventEnvelope + Projection 主链路不变。
 
@@ -22,12 +22,14 @@
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
     C["Client"] --> MH["Aevatar.Mainnet.Host.Api"]
+    MH --> DH["AddAevatarDefaultHost()"]
     MH --> MW["AddWorkflowCapability()"]
     MW --> ACT["GAgent + EventEnvelope Stream"]
     ACT --> PP["Projection Pipeline"]
     PP --> Q["Query/SSE/WS"]
 
     C --> KH["Aevatar.Maker.Host.Api"]
+    KH --> KDH["AddAevatarDefaultHost()"]
     KH --> MK["AddMakerCapability()"]
 ```
 
@@ -35,30 +37,32 @@ flowchart LR
 
 ### 4.1 约定
 
-1. 每个能力提供一个 `IServiceCollection` 扩展方法。
-2. Host 只做两件事：添加项目引用、调用 `Add...Capability()`。
+1. Host 统一使用 `AddAevatarDefaultHost(...)` + `UseAevatarDefaultHost()`。
+2. 每个能力提供 `WebApplicationBuilder` 扩展方法（如 `AddWorkflowCapability()`）。
 3. 能力 API 契约（请求/响应模型 + endpoint 定义）归属能力实现层。
-4. Host 通过 `Map...CapabilityEndpoints()` 挂载能力 API，不复制 endpoint 代码。
+4. 能力通过 `AddAevatarCapability(...)` 声明端点映射，默认由 `UseAevatarDefaultHost()` 自动挂载。
 5. 能力内部自己注册 Handler、Projector、Endpoints。
 6. 能力升级通过 NuGet/ProjectReference 版本管理，不引入运行时动态发现。
 
 ### 4.2 Mainnet 装配示例
 
 ```csharp
-builder.Host.UseAevatarCqrsRuntime(builder.Configuration);
-builder.Services.AddAevatarCqrsRuntime(builder.Configuration);
-
+builder.AddAevatarDefaultHost(...);
 builder.Services.AddMainnetCore(builder.Configuration);
-builder.Services.AddWorkflowCapability(builder.Configuration);
+builder.AddWorkflowCapability();
+
+var app = builder.Build();
+app.UseAevatarDefaultHost();
 ```
 
 ### 4.3 Maker 系统装配示例
 
 ```csharp
-builder.Host.UseAevatarCqrsRuntime(builder.Configuration);
-builder.Services.AddAevatarCqrsRuntime(builder.Configuration);
+builder.AddAevatarDefaultHost(...);
+builder.AddMakerCapability();
 
-builder.Services.AddMakerCapability(builder.Configuration);
+var app = builder.Build();
+app.UseAevatarDefaultHost();
 ```
 
 ## 5. 重构范围（增改删并行）
