@@ -45,3 +45,4 @@
 - mermaid 默认指令（所有图统一加在代码块首行）：
   `%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%`
 - mermaid 的标签用引号包起来, 如 A2[“RoleGAgent”], 不要 A2[RoleGAgent]. 
+- 工作文档不需要添加到解决方案（`aevatar.slnx`）。
