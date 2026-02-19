@@ -81,7 +81,6 @@ flowchart LR
 flowchart TB
     Host["Host"] --> RH["Aevatar.CQRS.Runtime.Hosting"]
     RH --> RA["Aevatar.CQRS.Runtime.Abstractions"]
-    RH --> RF["Aevatar.CQRS.Runtime.FileSystem"]
     RH --> RW["Aevatar.CQRS.Runtime.Implementations.Wolverine"]
     RH --> RM["Aevatar.CQRS.Runtime.Implementations.MassTransit"]
 ```

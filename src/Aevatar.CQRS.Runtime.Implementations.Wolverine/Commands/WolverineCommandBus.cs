@@ -1,5 +1,5 @@
 using Aevatar.CQRS.Runtime.Abstractions.Commands;
-using Aevatar.CQRS.Runtime.Abstractions.Serialization;
+using System.Text.Json;
 using Wolverine;
 using AevatarCommandBus = Aevatar.CQRS.Runtime.Abstractions.Commands.ICommandBus;
 
@@ -7,15 +7,16 @@ namespace Aevatar.CQRS.Runtime.Implementations.Wolverine.Commands;
 
 internal sealed class WolverineCommandBus : AevatarCommandBus, ICommandScheduler
 {
-    private readonly IMessageBus _bus;
-    private readonly ICommandPayloadSerializer _serializer;
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
 
-    public WolverineCommandBus(
-        IMessageBus bus,
-        ICommandPayloadSerializer serializer)
+    private readonly IMessageBus _bus;
+
+    public WolverineCommandBus(IMessageBus bus)
     {
         _bus = bus;
-        _serializer = serializer;
     }
 
     public async Task EnqueueAsync<TCommand>(
@@ -30,7 +31,7 @@ internal sealed class WolverineCommandBus : AevatarCommandBus, ICommandScheduler
         var message = new QueuedCommandMessage(
             envelope,
             ResolveCommandType<TCommand>(),
-            _serializer.Serialize(command));
+            JsonSerializer.Serialize(command, JsonOptions));
 
         ct.ThrowIfCancellationRequested();
         await _bus.SendAsync(message);
@@ -54,7 +55,7 @@ internal sealed class WolverineCommandBus : AevatarCommandBus, ICommandScheduler
             new QueuedCommandMessage(
                 envelope,
                 ResolveCommandType<TCommand>(),
-                _serializer.Serialize(command)),
+                JsonSerializer.Serialize(command, JsonOptions)),
             delay,
             new DeliveryOptions());
     }

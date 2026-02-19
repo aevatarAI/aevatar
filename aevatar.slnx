@@ -31,7 +31,6 @@
     <Project Path="src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <Project Path="src\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.Abstractions\Aevatar.CQRS.Runtime.Abstractions.csproj" />
-    <Project Path="src\Aevatar.CQRS.Runtime.FileSystem\Aevatar.CQRS.Runtime.FileSystem.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.Hosting\Aevatar.CQRS.Runtime.Hosting.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.Implementations.Wolverine\Aevatar.CQRS.Runtime.Implementations.Wolverine.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.Implementations.MassTransit\Aevatar.CQRS.Runtime.Implementations.MassTransit.csproj" />

@@ -25,8 +25,7 @@
 |---|---|---|
 | Core Abstractions | `Aevatar.CQRS.Core.Abstractions` | 命令执行抽象、输出流抽象 |
 | Core | `Aevatar.CQRS.Core` | `ICommandContextPolicy` 默认实现、事件输出流默认实现 |
-| Runtime Abstractions | `Aevatar.CQRS.Runtime.Abstractions` | 命令总线/调度/处理器、执行器、状态与持久化契约 |
-| Runtime Base | `Aevatar.CQRS.Runtime.FileSystem` | 本地状态存储、执行器、出站分发、检查点 |
+| Runtime Abstractions | `Aevatar.CQRS.Runtime.Abstractions` | 命令总线/调度/处理器契约、运行配置 |
 | Runtime Hosting | `Aevatar.CQRS.Runtime.Hosting` | 统一装配入口（Core + Runtime + 实现选择） |
 | Runtime Impl | `Aevatar.CQRS.Runtime.Implementations.Wolverine` / `MassTransit` | 命令总线具体实现 |
 | Projection Abstractions | `Aevatar.CQRS.Projection.Abstractions` | 投影生命周期、分发、订阅、读模型契约 |
@@ -42,7 +41,6 @@ flowchart LR
   H["Host API"] --> RH["Aevatar.CQRS.Runtime.Hosting"]
   RH --> CC["Aevatar.CQRS.Core"]
   RH --> RA["Aevatar.CQRS.Runtime.Abstractions"]
-  RH --> RF["Aevatar.CQRS.Runtime.FileSystem"]
   RH --> RW["Aevatar.CQRS.Runtime.Implementations.Wolverine"]
   RH --> RM["Aevatar.CQRS.Runtime.Implementations.MassTransit"]
   RH --> PA["Aevatar.CQRS.Projection.Abstractions"]
@@ -56,9 +54,6 @@ flowchart LR
 1. `CommandContext`：`TargetId/CommandId/CorrelationId/Metadata`。
 2. `CommandEnvelope`：Runtime 级封装（含入队时间）。
 3. `QueuedCommandMessage`：总线传输对象。
-4. `CommandExecutionState`：执行状态快照（Accepted/Queued/Running/...）。
-
-状态枚举：`Accepted`、`Queued`、`Running`、`Retrying`、`Succeeded`、`Failed`、`Cancelled`、`TimedOut`、`DeadLettered`、`DuplicateIgnored`。
 
 ## 6. 两类命令执行路径
 
@@ -94,44 +89,35 @@ sequenceDiagram
   participant APP as "Application Service"
   participant BUS as "ICommandBus"
   participant Q as "Queue Middleware"
-  participant EXE as "IQueuedCommandExecutor"
-  participant DSP as "ICommandDispatcher"
+  participant CON as "Runtime Consumer/Handler"
   participant HND as "ICommandHandler<T>"
 
   API->>APP: "Submit command"
   APP->>BUS: "Enqueue(QueuedCommandMessage)"
   BUS-->>Q: "Transport delivery"
-  Q->>EXE: "ExecuteAsync(message)"
-  EXE->>DSP: "Dispatch(envelope, command)"
-  DSP->>HND: "HandleAsync"
+  Q->>CON: "Consume message"
+  CON->>HND: "HandleAsync(envelope, command)"
 ```
 
-特征：具备幂等、重试、死信、状态追踪与出站分发。
+特征：重试、死信、投递保证等语义由 Wolverine/MassTransit 中间件配置托管。
 
-## 7. 队列执行器与持久化
+## 7. 队列执行语义（中间件托管）
 
-`QueuedCommandExecutor`（`Aevatar.CQRS.Runtime.FileSystem`）统一处理：
+当前策略：
 
-1. Inbox 去重：`IInboxStore.TryAcquire(commandId)`。
-2. 状态推进：写 `ICommandStateStore`。
-3. 反序列化与分发：`ICommandPayloadSerializer` + `ICommandDispatcher`。
-4. 指数退避重试：`MaxRetryAttempts` + `RetryBaseDelayMs`。
-5. 失败落地：`IDeadLetterStore`。
-6. 成功出站：`IOutboxStore` + `OutboxDispatchHostedService`。
+1. 框架层仅定义 `QueuedCommandMessage` 契约与 `ICommandHandler<TCommand>` 处理契约。
+2. Wolverine/MassTransit 负责消息接收与失败重试/死信策略。
+3. Runtime 不再内置文件系统执行器与通用 Inbox/Outbox/DeadLetter 状态存储。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
-  M["QueuedCommandMessage"] --> I["Inbox.TryAcquire"]
-  I -->|Duplicate| S0["State: DuplicateIgnored"]
-  I -->|Acquired| S1["State: Running or Retrying"]
-  S1 --> D["Dispatch to ICommandHandler<T>"]
-  D -->|Success| S2["State: Succeeded"]
-  S2 --> O["Append Outbox"]
-  D -->|Retryable| R["Exponential Backoff"]
-  R --> S1
-  D -->|Exhausted| S3["State: DeadLettered"]
-  S3 --> DL["Append DeadLetter"]
+  M["QueuedCommandMessage"] --> Q["Wolverine or MassTransit Queue"]
+  Q --> C["Runtime Consumer/Handler"]
+  C --> H["ICommandHandler<T>"]
+  H -->|Success| OK["Ack"]
+  H -->|Failure| RETRY["Middleware Retry Policy"]
+  RETRY -->|Exhausted| DLQ["Middleware DeadLetter"]
 ```
 
 ## 8. 投影架构（读侧）
@@ -162,6 +148,14 @@ flowchart LR
 当前推荐模式：`Reducer` 负责 `TypeUrl` 精确匹配与反序列化，`Applier` 负责 read model 字段变换。
 变更语义约束：`Reducer/Applier` 返回 `mutated`，仅在 read model 实际变更时推进 `StateVersion/LastEventId`。
 并发隔离约束：live sink 仅按 `EventEnvelope.CorrelationId` 精确匹配，不允许空 correlation 回退到广播。
+
+订阅判定语义（关键）：
+
+1. `ReadModel` 的字段与能力接口仅表示“可写入能力”，不构成事件订阅声明。
+2. 事件订阅入口由 reducer 决定：`IProjectionEventReducer<,>.EventTypeUrl` + DI 注册集合。
+3. `Projector` 运行时按 `payload.TypeUrl` 命中 reducer；未命中的事件对该 ReadModel 为 no-op。
+4. applier 仅是 reducer 内部的字段映射扩展点，不单独参与事件路由。
+5. 事件与 ReadModel 关系是多对多：同一事件可被多个 ReadModel 订阅，一个 ReadModel 可订阅多个事件。
 
 ## 9. Runtime 实现并行策略
 
@@ -220,13 +214,7 @@ flowchart LR
 
 关键配置：
 
-1. `Cqrs:Runtime`
-2. `Cqrs:WorkingDirectory`
-3. `Cqrs:MaxRetryAttempts`
-4. `Cqrs:RetryBaseDelayMs`
-5. `Cqrs:QueueCapacity`
-6. `Cqrs:OutboxDispatchIntervalMs`
-7. `Cqrs:OutboxDispatchBatchSize`
+1. `Cqrs:Runtime`（`Wolverine` 或 `MassTransit`）
 
 ## 13. 扩展点与反模式
 
@@ -236,7 +224,6 @@ flowchart LR
 2. 新读模型：新增 projector/reducer + `IProjectionReadModelStore` 实现。
 3. 事件字段映射扩展：新增 `IProjectionEventApplier<TReadModel, TContext, TEvent>` 实现。
 4. 新运行时：实现 `ICommandBus/ICommandScheduler` 并在 Hosting 层接入。
-5. 新持久化：替换 `ICommandStateStore/IInboxStore/IOutboxStore/IDeadLetterStore`。
 
 禁止反模式：
 

@@ -1,20 +1,21 @@
 using Aevatar.CQRS.Runtime.Abstractions.Commands;
-using Aevatar.CQRS.Runtime.Abstractions.Serialization;
 using MassTransit;
+using System.Text.Json;
 
 namespace Aevatar.CQRS.Runtime.Implementations.MassTransit.Commands;
 
 internal sealed class MassTransitCommandBus : ICommandBus, ICommandScheduler
 {
-    private readonly IPublishEndpoint _publishEndpoint;
-    private readonly ICommandPayloadSerializer _serializer;
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
 
-    public MassTransitCommandBus(
-        IPublishEndpoint publishEndpoint,
-        ICommandPayloadSerializer serializer)
+    private readonly IPublishEndpoint _publishEndpoint;
+
+    public MassTransitCommandBus(IPublishEndpoint publishEndpoint)
     {
         _publishEndpoint = publishEndpoint;
-        _serializer = serializer;
     }
 
     public Task EnqueueAsync<TCommand>(
@@ -29,7 +30,7 @@ internal sealed class MassTransitCommandBus : ICommandBus, ICommandScheduler
         var message = new QueuedCommandMessage(
             envelope,
             ResolveCommandType<TCommand>(),
-            _serializer.Serialize(command));
+            JsonSerializer.Serialize(command, JsonOptions));
 
         return _publishEndpoint.Publish(message, ct);
     }

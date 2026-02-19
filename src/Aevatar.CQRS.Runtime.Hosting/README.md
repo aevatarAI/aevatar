@@ -4,7 +4,7 @@
 
 职责：
 
-- `AddAevatarCqrsRuntime(...)`：统一注册 `CQRS.Core + Runtime.FileSystem + Runtime.Implementations.*`。
+- `AddAevatarCqrsRuntime(...)`：统一注册 `CQRS.Core + Runtime.Implementations.*`。
 - `UseAevatarCqrsRuntime(...)`：统一挂接 Host 运行时（当前 Wolverine 需要 HostBuilder 扩展）。
 - 统一配置键：`Cqrs:Runtime = Wolverine|MassTransit`。
 
