@@ -33,8 +33,9 @@ public sealed class MakerRunApplicationService : IMakerRunApplicationService
         var actorCreated = resolved.Created;
         await _actorAdapter.ConfigureAsync(actor, request, ct);
 
+        var correlationId = Guid.NewGuid().ToString("N");
         var startedAt = DateTimeOffset.UtcNow;
-        var started = new MakerRunStarted(actor.Id, request.WorkflowName, startedAt);
+        var started = new MakerRunStarted(actor.Id, request.WorkflowName, correlationId, startedAt);
         var projection = new MakerRunProjectionAccumulator(actor.Id);
         var stream = _streamProvider.GetStream(actor.Id);
         var completedTcs = new TaskCompletionSource<MakerRunCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -48,7 +49,7 @@ public sealed class MakerRunApplicationService : IMakerRunApplicationService
             return Task.CompletedTask;
         }, ct);
 
-        await actor.HandleEventAsync(_actorAdapter.CreateStartEnvelope(request), ct);
+        await actor.HandleEventAsync(_actorAdapter.CreateStartEnvelope(request, correlationId), ct);
 
         var timeout = request.Timeout ?? TimeSpan.FromMinutes(10);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);

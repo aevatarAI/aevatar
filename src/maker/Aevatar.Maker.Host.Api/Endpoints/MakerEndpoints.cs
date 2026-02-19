@@ -1,4 +1,5 @@
 using Aevatar.Maker.Application.Abstractions.Runs;
+using Aevatar.Maker.Sagas.Queries;
 using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.Maker.Host.Api.Endpoints;
@@ -22,6 +23,13 @@ public static class MakerEndpoints
         group.MapPost("/runs", ExecuteRun)
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
+
+        group.MapGet("/sagas/{correlationId}", GetSaga)
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapGet("/sagas", ListSagas)
+            .Produces(StatusCodes.Status200OK);
 
         return app;
     }
@@ -55,11 +63,30 @@ public static class MakerEndpoints
         {
             actorId = result.Started.ActorId,
             workflowName = result.Started.WorkflowName,
+            correlationId = result.Started.CorrelationId,
             startedAt = result.Started.StartedAt,
             output = result.Output,
             success = result.Success,
             timedOut = result.TimedOut,
             error = result.Error,
         });
+    }
+
+    private static async Task<IResult> GetSaga(
+        string correlationId,
+        IMakerExecutionSagaQueryService queryService,
+        CancellationToken ct = default)
+    {
+        var saga = await queryService.GetAsync(correlationId, ct);
+        return saga == null ? Results.NotFound() : Results.Ok(saga);
+    }
+
+    private static async Task<IResult> ListSagas(
+        IMakerExecutionSagaQueryService queryService,
+        int take = 50,
+        CancellationToken ct = default)
+    {
+        var sagas = await queryService.ListAsync(take, ct);
+        return Results.Ok(sagas);
     }
 }

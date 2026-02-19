@@ -11,6 +11,7 @@ public sealed record MakerRunRequest(
 public sealed record MakerRunStarted(
     string ActorId,
     string WorkflowName,
+    string CorrelationId,
     DateTimeOffset StartedAt);
 
 public sealed record MakerRunExecutionResult(

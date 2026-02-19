@@ -20,7 +20,7 @@ internal sealed class UnconfiguredMakerRunActorAdapter : IMakerRunActorAdapter
         CancellationToken ct = default) =>
         throw CreateError();
 
-    public EventEnvelope CreateStartEnvelope(MakerRunRequest request) =>
+    public EventEnvelope CreateStartEnvelope(MakerRunRequest request, string correlationId) =>
         throw CreateError();
 
     public bool TryResolveCompletion(EventEnvelope envelope, out MakerRunCompletion completion)

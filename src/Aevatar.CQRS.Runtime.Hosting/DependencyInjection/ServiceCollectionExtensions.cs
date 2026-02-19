@@ -1,4 +1,6 @@
 using Aevatar.CQRS.Core.DependencyInjection;
+using Aevatar.CQRS.Sagas.Core.DependencyInjection;
+using Aevatar.CQRS.Sagas.Runtime.FileSystem.DependencyInjection;
 using Aevatar.CQRS.Runtime.FileSystem.DependencyInjection;
 using Aevatar.CQRS.Runtime.Implementations.MassTransit.DependencyInjection;
 using Aevatar.CQRS.Runtime.Implementations.Wolverine.DependencyInjection;
@@ -15,6 +17,8 @@ public static class ServiceCollectionExtensions
     {
         services.AddCqrsCore();
         services.AddCqrsRuntimeFileSystemCore(configuration);
+        services.AddCqrsSagasFileSystem(configuration);
+        services.AddCqrsSagasCore(configuration);
 
         var runtime = configuration["Cqrs:Runtime"] ?? "Wolverine";
         if (string.Equals(runtime, "MassTransit", StringComparison.OrdinalIgnoreCase))

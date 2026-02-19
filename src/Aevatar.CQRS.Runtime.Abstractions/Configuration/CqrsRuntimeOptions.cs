@@ -12,4 +12,8 @@ public sealed class CqrsRuntimeOptions
     public int RetryBaseDelayMs { get; set; } = 200;
 
     public int QueueCapacity { get; set; } = 4096;
+
+    public int OutboxDispatchIntervalMs { get; set; } = 500;
+
+    public int OutboxDispatchBatchSize { get; set; } = 128;
 }

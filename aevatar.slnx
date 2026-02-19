@@ -12,8 +12,8 @@
     <File Path="docs\COGNITIVE.md" />
     <File Path="docs\EVENT_SOURCING.md" />
     <File Path="docs\ROLE.md" />
-    <File Path="docs\LONG_TERM_ARCHITECTURE_MAINTENANCE.md" />
     <File Path="docs\PROJECT_ARCHITECTURE.md" />
+    <File Path="docs\SAGA_INTRODUCTION_ANALYSIS.md" />
   </Folder>
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
@@ -30,6 +30,9 @@
     <Project Path="src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <Project Path="src\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.Abstractions\Aevatar.CQRS.Runtime.Abstractions.csproj" />
+    <Project Path="src\Aevatar.CQRS.Sagas.Abstractions\Aevatar.CQRS.Sagas.Abstractions.csproj" />
+    <Project Path="src\Aevatar.CQRS.Sagas.Core\Aevatar.CQRS.Sagas.Core.csproj" />
+    <Project Path="src\Aevatar.CQRS.Sagas.Runtime.FileSystem\Aevatar.CQRS.Sagas.Runtime.FileSystem.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.FileSystem\Aevatar.CQRS.Runtime.FileSystem.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.Hosting\Aevatar.CQRS.Runtime.Hosting.csproj" />
     <Project Path="src\Aevatar.CQRS.Runtime.Implementations.Wolverine\Aevatar.CQRS.Runtime.Implementations.Wolverine.csproj" />
@@ -45,11 +48,13 @@
     <Project Path="src\Aevatar.Platform.Application\Aevatar.Platform.Application.csproj" />
     <Project Path="src\Aevatar.Platform.Host.Api\Aevatar.Platform.Host.Api.csproj" />
     <Project Path="src\Aevatar.Platform.Infrastructure\Aevatar.Platform.Infrastructure.csproj" />
+    <Project Path="src\Aevatar.Platform.Sagas\Aevatar.Platform.Sagas.csproj" />
     <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
   </Folder>
   <Folder Name="/src/workflow/">
     <Project Path="src/workflow/Aevatar.Workflow.Application.Abstractions/Aevatar.Workflow.Application.Abstractions.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
+    <Project Path="src/workflow/Aevatar.Workflow.Sagas/Aevatar.Workflow.Sagas.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Host.Api/Aevatar.Workflow.Host.Api.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
@@ -63,10 +68,12 @@
     <Project Path="src\maker\Aevatar.Maker.Host.Api\Aevatar.Maker.Host.Api.csproj" />
     <Project Path="src\maker\Aevatar.Maker.Infrastructure\Aevatar.Maker.Infrastructure.csproj" />
     <Project Path="src\maker\Aevatar.Maker.Projection\Aevatar.Maker.Projection.csproj" />
+    <Project Path="src\maker\Aevatar.Maker.Sagas\Aevatar.Maker.Sagas.csproj" />
   </Folder>
   <Folder Name="/test/">
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" />
+    <Project Path="test\Aevatar.CQRS.Sagas.Core.Tests\Aevatar.CQRS.Sagas.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
     <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Application.Tests\Aevatar.Workflow.Application.Tests.csproj" />

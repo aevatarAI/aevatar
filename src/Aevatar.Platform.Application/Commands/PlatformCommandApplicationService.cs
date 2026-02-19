@@ -13,6 +13,7 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
     private readonly ICommandContextPolicy _commandContextPolicy;
     private readonly ICommandBus _commandBus;
     private readonly IPlatformCommandStateStore _stateStore;
+    private readonly IPlatformCommandSagaTracker _sagaTracker;
     private readonly ILogger<PlatformCommandApplicationService> _logger;
 
     public PlatformCommandApplicationService(
@@ -20,12 +21,14 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
         ICommandContextPolicy commandContextPolicy,
         ICommandBus commandBus,
         IPlatformCommandStateStore stateStore,
+        IPlatformCommandSagaTracker sagaTracker,
         ILogger<PlatformCommandApplicationService> logger)
     {
         _commandRouter = commandRouter;
         _commandContextPolicy = commandContextPolicy;
         _commandBus = commandBus;
         _stateStore = stateStore;
+        _sagaTracker = sagaTracker;
         _logger = logger;
     }
 
@@ -54,7 +57,7 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
             target.ToString(),
             acceptedAt);
 
-        await _stateStore.UpsertAsync(new PlatformCommandStatus
+        var acceptedStatus = new PlatformCommandStatus
         {
             CommandId = started.CommandId,
             Subsystem = started.Subsystem,
@@ -65,7 +68,9 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
             Succeeded = false,
             AcceptedAt = acceptedAt,
             UpdatedAt = acceptedAt,
-        }, ct);
+        };
+        await _stateStore.UpsertAsync(acceptedStatus, ct);
+        await _sagaTracker.TrackAsync(acceptedStatus, commandContext.CorrelationId, ct);
 
         try
         {
@@ -87,7 +92,7 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
 
             await _commandBus.EnqueueAsync(envelope, command, ct);
 
-            await _stateStore.UpsertAsync(new PlatformCommandStatus
+            var queuedStatus = new PlatformCommandStatus
             {
                 CommandId = started.CommandId,
                 Subsystem = started.Subsystem,
@@ -98,7 +103,9 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
                 Succeeded = false,
                 AcceptedAt = started.AcceptedAt,
                 UpdatedAt = DateTimeOffset.UtcNow,
-            }, ct);
+            };
+            await _stateStore.UpsertAsync(queuedStatus, ct);
+            await _sagaTracker.TrackAsync(queuedStatus, commandContext.CorrelationId, ct);
 
             return new PlatformCommandEnqueueResult(PlatformCommandStartError.None, started);
         }
@@ -111,7 +118,7 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
                 started.Subsystem,
                 started.Command);
 
-            await _stateStore.UpsertAsync(new PlatformCommandStatus
+            var failedStatus = new PlatformCommandStatus
             {
                 CommandId = started.CommandId,
                 Subsystem = started.Subsystem,
@@ -123,7 +130,9 @@ public sealed class PlatformCommandApplicationService : IPlatformCommandApplicat
                 Error = ex.Message,
                 AcceptedAt = started.AcceptedAt,
                 UpdatedAt = DateTimeOffset.UtcNow,
-            }, ct);
+            };
+            await _stateStore.UpsertAsync(failedStatus, ct);
+            await _sagaTracker.TrackAsync(failedStatus, commandContext.CorrelationId, ct);
 
             return new PlatformCommandEnqueueResult(PlatformCommandStartError.EnqueueFailed, null);
         }

@@ -7,7 +7,7 @@
 1. 分层结构（Domain / Application / Infrastructure / Host）。
 2. 子系统边界（Workflow / Maker / Platform）。
 3. CQRS Runtime 抽象与并行实现（Wolverine / MassTransit）。
-4. 统一投影链路（CQRS + AGUI）。
+4. 统一投影链路（CQRS + AGUI）与 Saga 长事务追踪。
 5. API 所有权、依赖约束、CI 门禁与长期演进规则。
 
 ## 2. 解决方案结构
@@ -44,9 +44,9 @@ flowchart LR
 
 当前宿主职责：
 
-1. `Aevatar.Workflow.Host.Api`：workflow chat/sse/ws 与 workflow 查询。
-2. `Aevatar.Maker.Host.Api`：maker 执行入口。
-3. `Aevatar.Platform.Host.Api`：平台命令受理、状态查询与路由目录。
+1. `Aevatar.Workflow.Host.Api`：workflow chat/sse/ws、workflow 查询与 workflow saga 查询。
+2. `Aevatar.Maker.Host.Api`：maker 执行入口与 maker saga 查询。
+3. `Aevatar.Platform.Host.Api`：平台命令受理、状态查询、platform saga 查询与路由目录。
 
 ## 4. CQRS Runtime 统一接入
 
@@ -56,6 +56,9 @@ flowchart TB
     Host["Subsystem Host"] --> RH["Aevatar.CQRS.Runtime.Hosting"]
     RH --> RA["Aevatar.CQRS.Runtime.Abstractions"]
     RH --> RF["Aevatar.CQRS.Runtime.FileSystem"]
+    RH --> SA["Aevatar.CQRS.Sagas.Abstractions"]
+    RH --> SC["Aevatar.CQRS.Sagas.Core"]
+    RH --> SF["Aevatar.CQRS.Sagas.Runtime.FileSystem"]
     RH --> RW["Aevatar.CQRS.Runtime.Implementations.Wolverine"]
     RH --> RM["Aevatar.CQRS.Runtime.Implementations.MassTransit"]
 ```
@@ -65,6 +68,7 @@ flowchart TB
 1. Host 只能通过 `UseAevatarCqrsRuntime(...)` + `AddAevatarCqrsRuntime(...)` 接入。
 2. 子系统不得直接引用 `Runtime.Implementations.*`。
 3. 运行时切换仅通过 `Cqrs:Runtime = Wolverine|MassTransit`。
+4. Saga 运行时（订阅、状态持久化、动作分发）统一由 `Aevatar.CQRS.Runtime.Hosting` 装配。
 
 ## 5. 命令与查询主链路
 
@@ -73,6 +77,9 @@ flowchart TB
 flowchart LR
     C["Command API"] --> APP["Application Service"] --> BUS["ICommandBus"] --> EXEC["IQueuedCommandExecutor"] --> ACT["Actor / GAgent"]
     ACT --> EVT["EventEnvelope Stream"] --> PROJ["Projection Pipeline"] --> RM["ReadModel Store"] --> Q["Query API"]
+    EVT --> SAGA["Saga Runtime"]
+    SAGA --> SS["Saga State Store"]
+    SS --> SQ["Saga Query API"]
 ```
 
 关键约束：
@@ -80,6 +87,29 @@ flowchart LR
 1. `Command -> Event`，`Query -> ReadModel`。
 2. 不在会话内拼装投影流程。
 3. AGUI 输出是 Projection 分支，不是平行业务链路。
+4. Actor/Saga/ReadModel 三类状态必须分责，禁止跨职责写入。
+
+## 5.1 状态归属矩阵
+
+| 状态类型 | 真相范围 | 写入触发 | 持久化要求 | 禁止事项 |
+|---|---|---|---|---|
+| Actor State | 领域真相（业务不变量、领域行为） | Actor 处理事件时 | 依据领域需要持久化（EventSourcing/StateStore） | 不保存查询拼装字段，不承载跨系统流程补偿编排 |
+| Saga State | 流程真相（阶段、超时、补偿、关联） | SagaRuntime 观察 EventEnvelope 后 | 必须可恢复、可幂等（当前 FileSystem 基线） | 不复制完整业务聚合状态，不替代 Actor 业务决策 |
+| ReadModel | 查询视图（列表、时间线、聚合统计） | Projection Pipeline | 可重建，允许最终一致 | 不参与命令决策，不回写领域/流程状态 |
+
+## 5.2 单线程语义边界
+
+1. 当前仅保证“同一 Actor mailbox 串行处理”（per-actor single-thread）。
+2. 不同 Actor 之间并行执行，不存在全局单线程保证。
+3. SagaRuntime 以 `sagaName + correlation_id` 作为并发互斥粒度。
+4. Projection 读侧可并行消费，但不得假设跨 Actor 全序。
+
+## 5.3 一致性与恢复策略
+
+1. 一致性模型：`Actor(Event) -> Saga/Projection`，默认最终一致。
+2. Query 只能读 ReadModel/SagaState，不直接读 Actor 内存态。
+3. 进程重启后，SagaState 必须先于查询恢复；ReadModel 可通过重放恢复。
+4. 对外追踪建议：命令侧使用 `commandId`，事件链路使用 `correlation_id`。
 
 ## 6. 投影与展示
 
@@ -101,8 +131,11 @@ flowchart TB
 |---|---|---|
 | `/api/chat`, `/api/ws/chat` | Workflow Host | Workflow 聊天协议 |
 | `/api/workflows`, `/api/actors/*` | Workflow Host | Workflow 查询 |
+| `/api/sagas/workflow*` | Workflow Host | Workflow Saga 执行状态查询 |
 | `/api/maker/runs` | Maker Host | Maker 执行 |
+| `/api/maker/sagas*` | Maker Host | Maker Saga 执行状态查询 |
 | `/api/commands`, `/api/commands/{id}` | Platform Host | 平台命令受理与状态查询 |
+| `/api/sagas/platform*` | Platform Host | Platform 命令生命周期 Saga 查询 |
 | `/api/routes/{subsystem}/*` | Platform Host | 子系统路由目录 |
 
 注：`/api/agents` 在 Workflow/Platform 存在语义重叠，需按部署路由或前缀治理收敛。
@@ -126,10 +159,13 @@ CI（`.github/workflows/ci.yml`）当前执行：
 6. 强制三子系统 Host 使用统一 CQRS Runtime 接入扩展。
 7. 禁止 Host/Infrastructure 直接 `AddCqrsCore(...)`。
 8. 仅允许 `Aevatar.CQRS.Runtime.Hosting` 直接引用 `Runtime.Implementations.*`。
+9. 禁止在 SagaState 中落地 ReadModel 专用字段（列表展示/拼装视图字段）。
+10. 禁止 ReadModel 参与命令处理分支判断。
 
 ## 10. 长期演进路线
 
 1. 收敛 Workflow 与 Platform 的重复 API 语义（优先路径前缀策略）。
 2. 建立 Wolverine/MassTransit 一致性契约测试。
-3. 强化 ReadModel checkpoint/replay 的恢复演练。
-4. 每次架构变更必须同步更新 `docs/` 与 CI 门禁规则。
+3. 建立 Saga Runtime 的一致性契约测试（状态迁移、动作分发、恢复）。
+4. 强化 ReadModel checkpoint/replay 的恢复演练。
+5. 每次架构变更必须同步更新 `docs/` 与 CI 门禁规则。

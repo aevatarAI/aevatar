@@ -6,6 +6,7 @@ using Aevatar.Platform.Application.DependencyInjection;
 using Aevatar.Platform.Infrastructure.Catalog;
 using Aevatar.Platform.Infrastructure.Dispatch;
 using Aevatar.Platform.Infrastructure.Store;
+using Aevatar.Platform.Sagas.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -29,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPlatformCommandStateStore, FileSystemPlatformCommandStateStore>();
         services.AddSingleton<IPlatformCommandDispatchGateway, HttpPlatformCommandDispatchGateway>();
         services.AddSingleton<ICommandHandler<PlatformDispatchCommand>, PlatformDispatchCommandHandler>();
+        services.AddPlatformCommandSagas();
 
         services.AddPlatformApplication();
         return services;

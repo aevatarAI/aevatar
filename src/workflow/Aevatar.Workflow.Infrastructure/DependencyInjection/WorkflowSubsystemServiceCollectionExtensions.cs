@@ -3,6 +3,7 @@ using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Presentation.AGUIAdapter.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
+using Aevatar.Workflow.Sagas.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -16,6 +17,7 @@ public static class WorkflowSubsystemServiceCollectionExtensions
     {
         services.AddWorkflowExecutionProjectionCQRS(options =>
             configuration.GetSection("WorkflowExecutionProjection").Bind(options));
+        services.AddWorkflowExecutionSagas();
         services.AddWorkflowExecutionAGUIAdapter();
         services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
         services.AddWorkflowApplication();

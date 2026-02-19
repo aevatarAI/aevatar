@@ -10,6 +10,7 @@ using Aevatar.CQRS.Runtime.FileSystem.Stores;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.CQRS.Runtime.FileSystem.DependencyInjection;
 
@@ -27,6 +28,10 @@ public static class ServiceCollectionExtensions
                 options.Runtime = "Wolverine";
             if (string.IsNullOrWhiteSpace(options.WorkingDirectory))
                 options.WorkingDirectory = Path.Combine("artifacts", "cqrs");
+            if (options.OutboxDispatchIntervalMs <= 0)
+                options.OutboxDispatchIntervalMs = 500;
+            if (options.OutboxDispatchBatchSize <= 0)
+                options.OutboxDispatchBatchSize = 128;
         });
 
         services.TryAddSingleton<CqrsPathResolver>();
@@ -39,6 +44,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandPayloadSerializer, JsonCommandPayloadSerializer>();
         services.TryAddSingleton<ICommandDispatcher, ServiceProviderCommandDispatcher>();
         services.TryAddSingleton<IQueuedCommandExecutor, QueuedCommandExecutor>();
+        services.TryAddSingleton<IOutboxMessageDispatcher, LoggingOutboxMessageDispatcher>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, OutboxDispatchHostedService>());
 
         return services;
     }

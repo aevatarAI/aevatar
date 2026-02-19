@@ -6,7 +6,14 @@
 
 - 仅负责 HTTP 协议适配与依赖组合。
 - 调用 `IMakerRunApplicationService` 执行用例。
+- 提供 maker saga 查询（按 `correlationId` 追踪执行状态）。
 - 不承载 Maker 领域规则与编排逻辑。
+
+端点：
+
+- `POST /api/maker/runs`
+- `GET /api/maker/sagas`
+- `GET /api/maker/sagas/{correlationId}`
 
 运行时装配：
 

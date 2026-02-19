@@ -9,6 +9,7 @@
   - `POST /api/chat`（SSE）
   - `GET /api/ws/chat`（WebSocket）
   - `GET /api/agents`、`GET /api/workflows`、`GET /api/actors/{actorId}`、`GET /api/actors/{actorId}/timeline`
+  - `GET /api/sagas/workflow`、`GET /api/sagas/workflow/{correlationId}`
 - 调用应用层：
   - `ICommandExecutionService<WorkflowChatRunRequest,...>`
   - `IWorkflowExecutionQueryApplicationService`
@@ -26,8 +27,8 @@
 ## 运行语义
 
 - 默认按 `Actor` 共享事件流（同 Actor 多 run 不隔离）。
-- 单次请求在当前 `runId` 的终止事件（`RUN_FINISHED`/`RUN_ERROR`）后收尾。
-- `runId/sessionId` 均由服务端内部生成，客户端无需传入。
+- 单次请求在终止事件（`RUN_FINISHED`/`RUN_ERROR`）后收尾。
+- 客户端可通过 `commandId`（默认即 correlation id）查询对应 Saga 执行状态。
 
 ## 组合方式
 

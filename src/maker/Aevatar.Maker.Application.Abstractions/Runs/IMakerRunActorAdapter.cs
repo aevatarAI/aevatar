@@ -21,7 +21,7 @@ public interface IMakerRunActorAdapter
         MakerRunRequest request,
         CancellationToken ct = default);
 
-    EventEnvelope CreateStartEnvelope(MakerRunRequest request);
+    EventEnvelope CreateStartEnvelope(MakerRunRequest request, string correlationId);
 
     bool TryResolveCompletion(EventEnvelope envelope, out MakerRunCompletion completion);
 }

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.Platform.Sagas</AssemblyName>
+    <RootNamespace>Aevatar.Platform.Sagas</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.CQRS.Sagas.Abstractions\Aevatar.CQRS.Sagas.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Platform.Application.Abstractions\Aevatar.Platform.Application.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+</Project>

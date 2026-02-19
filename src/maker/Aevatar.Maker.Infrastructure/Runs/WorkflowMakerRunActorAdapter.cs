@@ -39,7 +39,7 @@ public sealed class WorkflowMakerRunActorAdapter : IMakerRunActorAdapter
         return Task.CompletedTask;
     }
 
-    public EventEnvelope CreateStartEnvelope(MakerRunRequest request) =>
+    public EventEnvelope CreateStartEnvelope(MakerRunRequest request, string correlationId) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -47,10 +47,11 @@ public sealed class WorkflowMakerRunActorAdapter : IMakerRunActorAdapter
             Payload = Any.Pack(new ChatRequestEvent
             {
                 Prompt = request.Input,
-                SessionId = $"maker-{Guid.NewGuid():N}",
+                SessionId = correlationId,
             }),
             PublisherId = "maker.application",
             Direction = EventDirection.Self,
+            CorrelationId = correlationId,
         };
 
     public bool TryResolveCompletion(EventEnvelope envelope, out MakerRunCompletion completion)

@@ -19,6 +19,11 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+
       - name: Restore
         run: dotnet restore aevatar.slnx --nologo
 
@@ -93,5 +98,42 @@ jobs:
           if [ -n "$implementation_ref_violations" ]; then
             echo "$implementation_ref_violations"
             echo "Only Runtime.Hosting may reference Runtime.Implementations.* directly."
+            exit 1
+          fi
+
+          saga_projection_ref_violations="$(
+            rg -n "<ProjectReference Include=\".*Projection.*\\.csproj\"" src -g '*Sagas*.csproj' || true
+          )"
+
+          if [ -n "$saga_projection_ref_violations" ]; then
+            echo "$saga_projection_ref_violations"
+            echo "Saga projects must not reference Projection projects."
+            exit 1
+          fi
+
+          saga_state_readmodel_violations="$(
+            rg -n "ReadModel|WorkflowExecutionReport|CaseProjectionReadModel|MakerRunReport|ActorSnapshot|TimelineItem" src -g '*SagaState*.cs' \
+            | rg -v "ISagaState|SagaStateBase" \
+            || true
+          )"
+
+          if [ -n "$saga_state_readmodel_violations" ]; then
+            echo "$saga_state_readmodel_violations"
+            echo "SagaState must not carry read-model/view fields."
+            exit 1
+          fi
+
+          command_side_readmodel_violations="$(
+            rg -n "IProjectionReadModelStore<|ReadModelStore" \
+              src/workflow/Aevatar.Workflow.Application \
+              src/workflow/Aevatar.Workflow.Host.Api \
+              src/Aevatar.Platform.Application \
+              src/Aevatar.Platform.Host.Api \
+              -g '*.cs' || true
+          )"
+
+          if [ -n "$command_side_readmodel_violations" ]; then
+            echo "$command_side_readmodel_violations"
+            echo "Command-side services/endpoints must not depend on projection read-model stores directly."
             exit 1
           fi
