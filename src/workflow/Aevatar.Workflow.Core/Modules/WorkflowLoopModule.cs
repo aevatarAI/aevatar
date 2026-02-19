@@ -1,8 +1,3 @@
-// ─────────────────────────────────────────────────────────────
-// WorkflowLoopModule — 工作流循环驱动模块
-// 响应 StartWorkflowEvent 与 StepCompletedEvent，串行调度步骤直至完成
-// ─────────────────────────────────────────────────────────────
-
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core.Primitives;
@@ -13,33 +8,21 @@ namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>
 /// 工作流循环驱动模块。负责接收启动与完成事件，按工作流定义依次调度步骤。
+/// 统一处理步骤级 retry / on_error / timeout / branch 逻辑。
 /// </summary>
 public sealed class WorkflowLoopModule : IEventModule
 {
     private WorkflowDefinition? _workflow;
     private bool _executionActive;
 
-    /// <summary>
-    /// 模块名称。
-    /// </summary>
-    public string Name => "workflow_loop";
+    private readonly Dictionary<string, int> _retryAttempts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CancellationTokenSource> _timeouts = new(StringComparer.Ordinal);
 
-    /// <summary>
-    /// 处理优先级，数值越小优先级越高。
-    /// </summary>
+    public string Name => "workflow_loop";
     public int Priority => 0;
 
-    /// <summary>
-    /// 设置当前要执行的工作流定义。
-    /// </summary>
-    /// <param name="workflow">工作流定义。</param>
     public void SetWorkflow(WorkflowDefinition workflow) => _workflow = workflow;
 
-    /// <summary>
-    /// 判断是否可处理该事件。
-    /// </summary>
-    /// <param name="envelope">事件信封。</param>
-    /// <returns>若为 StartWorkflowEvent 或 StepCompletedEvent 则返回 true。</returns>
     public bool CanHandle(EventEnvelope envelope)
     {
         var payload = envelope.Payload;
@@ -48,12 +31,6 @@ public sealed class WorkflowLoopModule : IEventModule
                 payload.Is(StepCompletedEvent.Descriptor));
     }
 
-    /// <summary>
-    /// 处理事件。启动时取入口步骤并下发；完成时取后继步骤并下发，无后继则发布 WorkflowCompletedEvent。
-    /// </summary>
-    /// <param name="envelope">事件信封。</param>
-    /// <param name="ctx">事件处理上下文。</param>
-    /// <param name="ct">取消令牌。</param>
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
         if (_workflow == null) return;
@@ -95,13 +72,13 @@ public sealed class WorkflowLoopModule : IEventModule
             if (!_executionActive) return;
             var current = _workflow.GetStep(evt.StepId);
 
-            // Ignore internal sub-step completions (e.g. analyze_item_0_sub_1 / *_vote).
-            // Workflow loop should advance only on declared top-level workflow steps.
             if (current == null)
             {
                 ctx.Logger.LogDebug("workflow_loop: ignore internal completion step={StepId}", evt.StepId);
                 return;
             }
+
+            CancelTimeout(evt.StepId);
 
             var outputPreview = (evt.Output ?? "").Length > 200 ? evt.Output![..200] + "..." : evt.Output ?? "";
             ctx.Logger.LogInformation("workflow_loop: step={StepId} completed success={Success} output=({Len} chars) {Preview}",
@@ -109,6 +86,9 @@ public sealed class WorkflowLoopModule : IEventModule
 
             if (!evt.Success)
             {
+                if (await TryRetryAsync(current, evt, ctx, ct)) return;
+                if (await TryOnErrorAsync(current, evt, ctx, ct)) return;
+
                 _executionActive = false;
                 await ctx.PublishAsync(new WorkflowCompletedEvent
                 {
@@ -118,7 +98,11 @@ public sealed class WorkflowLoopModule : IEventModule
                 }, EventDirection.Both, ct);
                 return;
             }
-            var next = _workflow.GetNextStep(current.Id);
+
+            _retryAttempts.Remove(evt.StepId);
+
+            var branchKey = evt.Metadata.TryGetValue("branch", out var bk) ? bk : null;
+            var next = _workflow.GetNextStep(current.Id, branchKey);
             if (next == null)
             {
                 _executionActive = false;
@@ -134,6 +118,80 @@ public sealed class WorkflowLoopModule : IEventModule
         }
     }
 
+    private async Task<bool> TryRetryAsync(StepDefinition step, StepCompletedEvent evt, IEventHandlerContext ctx, CancellationToken ct)
+    {
+        var policy = step.Retry;
+        if (policy == null) return false;
+
+        var maxAttempts = Math.Clamp(policy.MaxAttempts, 1, 10);
+        var attempt = _retryAttempts.GetValueOrDefault(step.Id, 0) + 1;
+        if (attempt >= maxAttempts) return false;
+
+        _retryAttempts[step.Id] = attempt;
+
+        var delayMs = policy.Backoff.Equals("exponential", StringComparison.OrdinalIgnoreCase)
+            ? policy.DelayMs * (1 << (attempt - 1))
+            : policy.DelayMs;
+        delayMs = Math.Clamp(delayMs, 0, 60_000);
+
+        ctx.Logger.LogWarning("workflow_loop: step={StepId} retry attempt={Attempt}/{Max} delay={Delay}ms error={Error}",
+            step.Id, attempt + 1, maxAttempts, delayMs, evt.Error);
+
+        if (delayMs > 0)
+            await Task.Delay(delayMs, ct);
+
+        await DispatchStep(step, evt.Output ?? "", ctx, ct);
+        return true;
+    }
+
+    private async Task<bool> TryOnErrorAsync(StepDefinition step, StepCompletedEvent evt, IEventHandlerContext ctx, CancellationToken ct)
+    {
+        var policy = step.OnError;
+        if (policy == null) return false;
+
+        switch (policy.Strategy.ToLowerInvariant())
+        {
+            case "skip":
+            {
+                var output = policy.DefaultOutput ?? evt.Output ?? "";
+                ctx.Logger.LogWarning("workflow_loop: step={StepId} failed, on_error=skip output=({Len} chars)",
+                    step.Id, output.Length);
+
+                _retryAttempts.Remove(step.Id);
+                var next = _workflow!.GetNextStep(step.Id);
+                if (next == null)
+                {
+                    _executionActive = false;
+                    await ctx.PublishAsync(new WorkflowCompletedEvent
+                    {
+                        WorkflowName = _workflow.Name,
+                        Success = true,
+                        Output = output,
+                    }, EventDirection.Both, ct);
+                }
+                else
+                {
+                    await DispatchStep(next, output, ctx, ct);
+                }
+                return true;
+            }
+            case "fallback" when !string.IsNullOrWhiteSpace(policy.FallbackStep):
+            {
+                var fallback = _workflow!.GetStep(policy.FallbackStep);
+                if (fallback == null) return false;
+
+                ctx.Logger.LogWarning("workflow_loop: step={StepId} failed, on_error=fallback → {Fallback}",
+                    step.Id, policy.FallbackStep);
+
+                _retryAttempts.Remove(step.Id);
+                await DispatchStep(fallback, evt.Output ?? "", ctx, ct);
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
+
     private async Task DispatchStep(StepDefinition step, string input, IEventHandlerContext ctx, CancellationToken ct)
     {
         var inputPreview = input.Length > 200 ? input[..200] + "..." : input;
@@ -143,7 +201,12 @@ public sealed class WorkflowLoopModule : IEventModule
         var req = new StepRequestEvent { StepId = step.Id, StepType = step.Type, Input = input, TargetRole = step.TargetRole ?? "" };
         foreach (var (k, v) in step.Parameters) req.Parameters[k] = v;
 
-        // 当步骤指定了 TargetRole 且该角色配置了 connectors 允许列表时，注入 allowed_connectors 供 ConnectorCallModule 校验
+        if (step.Branches is { Count: > 0 })
+        {
+            foreach (var (bk, bv) in step.Branches)
+                req.Parameters[$"branch.{bk}"] = bv;
+        }
+
         if (!string.IsNullOrWhiteSpace(step.TargetRole) && _workflow != null)
         {
             var role = _workflow.Roles.FirstOrDefault(r => string.Equals(r.Id, step.TargetRole, StringComparison.OrdinalIgnoreCase));
@@ -151,6 +214,42 @@ public sealed class WorkflowLoopModule : IEventModule
                 req.Parameters["allowed_connectors"] = string.Join(",", role.Connectors);
         }
 
+        StartTimeout(step, ctx, ct);
         await ctx.PublishAsync(req, EventDirection.Self, ct);
+    }
+
+    private void StartTimeout(StepDefinition step, IEventHandlerContext ctx, CancellationToken ct)
+    {
+        if (step.TimeoutMs is not > 0) return;
+
+        CancelTimeout(step.Id);
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _timeouts[step.Id] = cts;
+
+        var stepId = step.Id;
+        var timeoutMs = Math.Clamp(step.TimeoutMs.Value, 100, 600_000);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(timeoutMs, cts.Token);
+                ctx.Logger.LogWarning("workflow_loop: step={StepId} timed out after {Ms}ms", stepId, timeoutMs);
+                await ctx.PublishAsync(new StepCompletedEvent
+                {
+                    StepId = stepId,
+                    Success = false,
+                    Error = $"TIMEOUT after {timeoutMs}ms",
+                }, EventDirection.Self, CancellationToken.None);
+            }
+            catch (OperationCanceledException) { }
+        }, CancellationToken.None);
+    }
+
+    private void CancelTimeout(string stepId)
+    {
+        if (!_timeouts.Remove(stepId, out var cts)) return;
+        cts.Cancel();
+        cts.Dispose();
     }
 }
