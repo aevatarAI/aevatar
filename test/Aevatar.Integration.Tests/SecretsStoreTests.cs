@@ -48,11 +48,19 @@ public class SecretsStoreTests
             store.Set("K2", "V2");
             store.Remove("K1");
 
+            // Set/Remove 持久化后重新加载仍能正确读取（无论明文或加密均成立）
             var reloaded = new AevatarSecretsStore(path);
             reloaded.Get("K1").Should().BeNull();
             reloaded.Get("K2").Should().Be("V2");
 
+            // 明文文件内容断言：仅在无 master key 时文件为明文 JSON
+            // 若机器配置了 macOS Keychain 或 masterkey.bin，Save() 会走 AES-256-GCM
+            // 加密路径，文件内容为密文，无法直接匹配 key 字面量。
+            // 此时 Set/Remove 正确性已通过上方 reload 验证，跳过明文断言。
             var text = File.ReadAllText(path);
+            if (text.Contains("ciphertextB64", StringComparison.OrdinalIgnoreCase))
+                return;
+
             text.Should().Contain("\"K2\"");
             text.Should().NotContain("\"K1\"");
         }

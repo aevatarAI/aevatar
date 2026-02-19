@@ -162,6 +162,34 @@ public class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void WorkflowSuspendedEvent_ProjectsTo_HumanInputRequest()
+    {
+        var envelope = Wrap(new WorkflowSuspendedEvent
+        {
+            RunId = "run-1",
+            StepId = "get_context",
+            SuspensionType = "human_input",
+            Prompt = "请提供补充信息",
+            TimeoutSeconds = 1800,
+            Metadata = { { "variable", "user_context" } },
+        });
+
+        var events = CreateMapper().Map(envelope);
+
+        events.Should().HaveCount(1);
+        events[0].Should().BeOfType<HumanInputRequestEvent>();
+
+        var e = (HumanInputRequestEvent)events[0];
+        e.RunId.Should().Be("run-1");
+        e.StepId.Should().Be("get_context");
+        e.SuspensionType.Should().Be("human_input");
+        e.Prompt.Should().Be("请提供补充信息");
+        e.TimeoutSeconds.Should().Be(1800);
+        e.Metadata.Should().NotBeNull();
+        e.Metadata!["variable"].Should().Be("user_context");
+    }
+
+    [Fact]
     public void UnknownPayload_ReturnsEmpty()
     {
         // ParentChangedEvent 没有投影规则
@@ -195,6 +223,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             new AITextStreamAGUIEventEnvelopeMappingHandler(),
             new WorkflowCompletedAGUIEventEnvelopeMappingHandler(),
             new ToolCallAGUIEventEnvelopeMappingHandler(),
+            new WorkflowSuspendedAGUIEventEnvelopeMappingHandler(),
         ]);
     }
 }
