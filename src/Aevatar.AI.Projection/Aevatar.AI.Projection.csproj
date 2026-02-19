@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Abstractions\Aevatar.CQRS.Projection.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Foundation.Projection\Aevatar.Foundation.Projection.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />

@@ -1,10 +1,8 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.AI.Projection.DependencyInjection;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Stores;
 using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Workflow.Projection.Appliers;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -39,8 +37,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProjectionEventApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext, TextMessageEndEvent>, WorkflowTextMessageEndEventApplier>());
-        services.AddAITextMessageEndProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>();
+        services.AddAIDefaultProjectionLayer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>();
         RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
         services.TryAddSingleton<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
         services.TryAddSingleton<IProjectionDispatcher<WorkflowExecutionProjectionContext>, ProjectionDispatcher<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();

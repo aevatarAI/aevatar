@@ -110,7 +110,7 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void AddWorkflowExecutionProjectionCQRS_ShouldRegisterOnlyMappedAIReducers()
+    public void AddWorkflowExecutionProjectionCQRS_ShouldRegisterDefaultAIReducers()
     {
         var services = new ServiceCollection();
         services.AddWorkflowExecutionProjectionCQRS();
@@ -124,18 +124,56 @@ public class WorkflowExecutionProjectionRegistrationTests
         reducerTypes.Should().Contain(x =>
             x.IsGenericType &&
             x.GetGenericTypeDefinition() == typeof(TextMessageEndProjectionReducer<,>));
-        reducerTypes.Should().NotContain(x =>
+        reducerTypes.Should().Contain(x =>
             x.IsGenericType &&
             x.GetGenericTypeDefinition() == typeof(TextMessageStartProjectionReducer<,>));
-        reducerTypes.Should().NotContain(x =>
+        reducerTypes.Should().Contain(x =>
             x.IsGenericType &&
             x.GetGenericTypeDefinition() == typeof(TextMessageContentProjectionReducer<,>));
-        reducerTypes.Should().NotContain(x =>
+        reducerTypes.Should().Contain(x =>
             x.IsGenericType &&
             x.GetGenericTypeDefinition() == typeof(ToolCallProjectionReducer<,>));
-        reducerTypes.Should().NotContain(x =>
+        reducerTypes.Should().Contain(x =>
             x.IsGenericType &&
             x.GetGenericTypeDefinition() == typeof(ToolResultProjectionReducer<,>));
+    }
+
+    [Fact]
+    public async Task AddWorkflowExecutionProjectionCQRS_DefaultAILayer_ShouldProjectAIEventsWithoutWorkflowApplier()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowExecutionProjectionCQRS();
+
+        await using var provider = services.BuildServiceProvider();
+        var coordinator = provider.GetRequiredService<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
+        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+
+        var context = new WorkflowExecutionProjectionContext
+        {
+            ProjectionId = "ai-layer-1",
+            CommandId = "cmd-ai-layer-1",
+            RootActorId = "root",
+            WorkflowName = "wf",
+            StartedAt = DateTimeOffset.UtcNow,
+            Input = "hello",
+        };
+
+        await coordinator.InitializeAsync(context);
+        await coordinator.ProjectAsync(context, Wrap(new TextMessageStartEvent { SessionId = "s1" }, "assistant"));
+        await coordinator.ProjectAsync(context, Wrap(new TextMessageContentEvent { SessionId = "s1", Delta = "hi" }, "assistant"));
+        await coordinator.ProjectAsync(context, Wrap(new TextMessageEndEvent { SessionId = "s1", Content = "hello" }, "assistant"));
+        await coordinator.ProjectAsync(context, Wrap(new ToolCallEvent { ToolName = "search", CallId = "c1" }, "assistant"));
+        await coordinator.ProjectAsync(context, Wrap(new ToolResultEvent { CallId = "c1", Success = true }, "assistant"));
+        await coordinator.CompleteAsync(context, []);
+
+        var report = await store.GetAsync(context.RootActorId);
+        report.Should().NotBeNull();
+        report!.Timeline.Should().Contain(x => x.Stage == "llm.start");
+        report.Timeline.Should().Contain(x => x.Stage == "llm.content");
+        report.Timeline.Should().Contain(x => x.Stage == "llm.end");
+        report.Timeline.Should().Contain(x => x.Stage == "tool.call");
+        report.Timeline.Should().Contain(x => x.Stage == "tool.result");
+        report.RoleReplies.Should().ContainSingle(x => x.RoleId == "assistant");
     }
 
     private static EventEnvelope Wrap(IMessage evt, string publisherId = "test") => new()

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Aevatar.AI.Projection.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Projection;
@@ -7,7 +8,7 @@ namespace Aevatar.Workflow.Projection;
 /// Actor-scoped projection context for CQRS read model updates.
 /// </summary>
 public sealed class WorkflowExecutionProjectionContext
-    : IProjectionContext
+    : IProjectionContext, IAIProjectionContext
 {
     public required string ProjectionId { get; init; }
     public required string CommandId { get; set; }

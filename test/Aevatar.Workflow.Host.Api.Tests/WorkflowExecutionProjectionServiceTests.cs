@@ -1,4 +1,5 @@
 using Aevatar.AI.Projection.Reducers;
+using Aevatar.AI.Projection.Appliers;
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
@@ -8,7 +9,6 @@ using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
-using Aevatar.Workflow.Projection.Appliers;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Reducers;
@@ -175,8 +175,16 @@ public class WorkflowExecutionProjectionServiceTests
         new StartWorkflowEventReducer(),
         new StepRequestEventReducer(),
         new StepCompletedEventReducer(),
+        new TextMessageStartProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
+            [new AITextMessageStartProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
+        new TextMessageContentProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
+            [new AITextMessageContentProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
         new TextMessageEndProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
-            [new WorkflowTextMessageEndEventApplier()]),
+            [new AITextMessageEndProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
+        new ToolCallProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
+            [new AIToolCallProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
+        new ToolResultProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
+            [new AIToolResultProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
         new WorkflowCompletedEventReducer(),
     ];
 
