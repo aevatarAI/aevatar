@@ -1,6 +1,4 @@
 using Aevatar.Configuration;
-using Aevatar.CQRS.Runtime.Hosting.DependencyInjection;
-using Aevatar.CQRS.Runtime.Hosting.Hosting;
 using Aevatar.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -44,8 +42,6 @@ public static class WebApplicationBuilderExtensions
 
         builder.Configuration.AddAevatarConfig();
         builder.Services.AddAevatarBootstrap(builder.Configuration, configureBootstrap);
-        builder.Host.UseAevatarCqrsRuntime(builder.Configuration);
-        builder.Services.AddAevatarCqrsRuntime(builder.Configuration);
         builder.Services.AddSingleton(hostOptions);
 
         if (hostOptions.EnableConnectorBootstrap)

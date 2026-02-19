@@ -74,22 +74,20 @@ flowchart LR
 4. 禁止：`src/maker/* -> src/workflow/Aevatar.Workflow.Infrastructure|Host.Api|Presentation.*`（禁止跨到 Workflow 实现层与宿主层）。
 5. 如未来需要独立发布，再抽 `Workflow.Contracts`，但当前不作为强制前置条件。
 
-## 4. CQRS Runtime 统一接入
+## 4. CQRS 接入（无独立 Runtime 命令总线层）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
-    Host["Host"] --> RH["Aevatar.CQRS.Runtime.Hosting"]
-    RH --> RA["Aevatar.CQRS.Runtime.Abstractions"]
-    RH --> RW["Aevatar.CQRS.Runtime.Implementations.Wolverine"]
-    RH --> RM["Aevatar.CQRS.Runtime.Implementations.MassTransit"]
+    Host["Host"] --> CC["Aevatar.CQRS.Core"]
+    Host --> CP["Aevatar.CQRS.Projection.Core"]
 ```
 
 统一规则：
 
-1. Host 仅通过 `AddAevatarDefaultHost(...)` + `UseAevatarDefaultHost()` 接入默认运行时。
-2. 业务能力项目不得直接引用 `Runtime.Implementations.*`。
-3. 运行时切换仅通过 `Cqrs:Runtime = Wolverine|MassTransit`。
+1. Host 仅通过 `AddAevatarDefaultHost(...)` + `UseAevatarDefaultHost()` 接入统一宿主能力。
+2. 命令执行使用 Application 层 `ICommandExecutionService<...>` 直达 Actor，不再引入 `ICommandBus` 运行时抽象。
+3. CQRS 框架层仅保留 `Core + Projection`。
 
 ## 4.1 Actor Runtime 统一接入
 
@@ -104,7 +102,7 @@ flowchart TB
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    C["Command API"] --> APP["Application Service"] --> BUS["ICommandBus"] --> ACT["GAgent"]
+    C["Command API"] --> APP["Application Service"] --> ACT["GAgent"]
     ACT --> EVT["EventEnvelope Stream"] --> PROJ["Projection Pipeline"] --> RM["ReadModel"] --> Q["Query API"]
 ```
 
@@ -145,7 +143,7 @@ CI（`.github/workflows/ci.yml`）应执行：
 3. 禁止 `TypeUrl.Contains(...)` 字符串路由。
 4. 禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`。
 5. 禁止任何项目新增 `Aevatar.Platform.*` 引用。
-6. 强制 Mainnet Host 与 Maker Host 使用统一 CQRS Runtime 接入扩展。
+6. 强制 Mainnet Host 与 Maker Host 使用统一默认宿主接入扩展（`AddAevatarDefaultHost` / `UseAevatarDefaultHost`）。
 7. 禁止 Host/Infrastructure 直接 `AddCqrsCore(...)`。
 8. 禁止 `docs/agents-working-space` 下工作文档被加入 `aevatar.slnx`。
 9. 允许 Maker 对 Workflow 的受控直连（扩展语义），并禁止 Workflow 反向依赖 Maker。

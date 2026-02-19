@@ -36,14 +36,14 @@ flowchart LR
     C["Aevatar.Workflow.Core"]
   end
 
-  subgraph Shared["Shared Runtime / CQRS"]
-    RH["Aevatar.CQRS.Runtime.Hosting"]
+  subgraph Shared["Shared CQRS"]
     CQRSC["Aevatar.CQRS.Core"]
     CQRSP["Aevatar.CQRS.Projection.Core"]
     F["Aevatar.Foundation.* / Aevatar.AI.Abstractions"]
   end
 
-  H --> RH
+  H --> CQRSC
+  H --> CQRSP
   H --> I
   H --> AB
   I --> A
