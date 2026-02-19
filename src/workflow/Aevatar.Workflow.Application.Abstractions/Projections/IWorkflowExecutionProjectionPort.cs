@@ -18,6 +18,7 @@ public interface IWorkflowExecutionProjectionPort
 
     Task AttachLiveSinkAsync(
         string actorId,
+        string commandId,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default);
 

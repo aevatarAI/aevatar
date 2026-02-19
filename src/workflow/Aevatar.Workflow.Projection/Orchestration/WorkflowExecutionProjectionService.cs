@@ -51,14 +51,31 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
     {
         if (!ProjectionEnabled || string.IsNullOrWhiteSpace(rootActorId))
             return;
-        if (_contextsByActorId.ContainsKey(rootActorId))
+
+        if (_contextsByActorId.TryGetValue(rootActorId, out var existingContext))
+        {
+            existingContext.UpdateRunMetadata(
+                commandId,
+                workflowName,
+                input,
+                _clock.UtcNow);
+            await RefreshReportMetadataAsync(rootActorId, existingContext, ct);
             return;
+        }
 
         await _contextGate.WaitAsync(ct);
         try
         {
-            if (_contextsByActorId.ContainsKey(rootActorId))
+            if (_contextsByActorId.TryGetValue(rootActorId, out existingContext))
+            {
+                existingContext.UpdateRunMetadata(
+                    commandId,
+                    workflowName,
+                    input,
+                    _clock.UtcNow);
+                await RefreshReportMetadataAsync(rootActorId, existingContext, ct);
                 return;
+            }
 
             var startedAt = _clock.UtcNow;
             var projectionId = rootActorId;
@@ -78,8 +95,27 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         }
     }
 
+    private Task RefreshReportMetadataAsync(
+        string actorId,
+        WorkflowExecutionProjectionContext context,
+        CancellationToken ct)
+    {
+        return _store.MutateAsync(actorId, report =>
+        {
+            report.CommandId = context.CommandId;
+            report.WorkflowName = context.WorkflowName;
+            report.Input = context.Input;
+            report.StartedAt = context.StartedAt;
+            if (report.EndedAt < report.StartedAt)
+                report.EndedAt = report.StartedAt;
+
+            report.DurationMs = Math.Max(0, (report.EndedAt - report.StartedAt).TotalMilliseconds);
+        }, ct);
+    }
+
     public async Task AttachLiveSinkAsync(
         string actorId,
+        string commandId,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default)
     {
@@ -88,9 +124,9 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         if (!ProjectionEnabled || string.IsNullOrWhiteSpace(actorId))
             return;
 
-        await EnsureActorProjectionAsync(actorId, string.Empty, string.Empty, string.Empty, ct);
+        await EnsureActorProjectionAsync(actorId, string.Empty, string.Empty, commandId, ct);
         if (_contextsByActorId.TryGetValue(actorId, out var context))
-            context.AttachLiveSink(sink);
+            context.AttachLiveSink(commandId, sink);
     }
 
     public Task DetachLiveSinkAsync(

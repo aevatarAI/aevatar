@@ -61,7 +61,7 @@ jobs:
           fi
 
           for host_program in \
-            src/Aevatar.Platform.Host.Api/Program.cs \
+            src/Aevatar.Mainnet.Host.Api/Program.cs \
             src/workflow/Aevatar.Workflow.Host.Api/Program.cs \
             src/maker/Aevatar.Maker.Host.Api/Program.cs
           do
@@ -76,10 +76,9 @@ jobs:
           done
 
           if rg -n "AddCqrsCore\(" \
-            src/Aevatar.Platform.Host.Api \
+            src/Aevatar.Mainnet.Host.Api \
             src/workflow/Aevatar.Workflow.Host.Api \
             src/maker/Aevatar.Maker.Host.Api \
-            src/Aevatar.Platform.Infrastructure \
             src/workflow/Aevatar.Workflow.Infrastructure \
             src/maker/Aevatar.Maker.Infrastructure
           then
@@ -127,8 +126,8 @@ jobs:
             rg -n "IProjectionReadModelStore<|ReadModelStore" \
               src/workflow/Aevatar.Workflow.Application \
               src/workflow/Aevatar.Workflow.Host.Api \
-              src/Aevatar.Platform.Application \
-              src/Aevatar.Platform.Host.Api \
+              src/Aevatar.Mainnet.Application \
+              src/Aevatar.Mainnet.Host.Api \
               -g '*.cs' || true
           )"
 

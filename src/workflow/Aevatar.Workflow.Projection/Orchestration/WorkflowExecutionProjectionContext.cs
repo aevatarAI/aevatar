@@ -10,17 +10,17 @@ public sealed class WorkflowExecutionProjectionContext
     : IProjectionContext
 {
     public required string ProjectionId { get; init; }
-    public required string CommandId { get; init; }
+    public required string CommandId { get; set; }
     public required string RootActorId { get; init; }
-    public required string WorkflowName { get; init; }
-    public required DateTimeOffset StartedAt { get; init; }
-    public required string Input { get; init; }
+    public required string WorkflowName { get; set; }
+    public required DateTimeOffset StartedAt { get; set; }
+    public required string Input { get; set; }
 
     string IProjectionContext.ProjectionId => ProjectionId;
 
     private readonly ConcurrentDictionary<string, byte> _processedEventIds = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, object?> _properties = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<IWorkflowRunEventSink, byte> _liveSinks = new(ReferenceEqualityComparer.Instance);
+    private readonly ConcurrentDictionary<IWorkflowRunEventSink, string> _liveSinks = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     /// Returns true when the event is seen for the first time in this projection context.
@@ -52,9 +52,36 @@ public sealed class WorkflowExecutionProjectionContext
     /// </summary>
     public bool RemoveProperty(string key) => _properties.TryRemove(key, out _);
 
-    public void AttachLiveSink(IWorkflowRunEventSink sink) => _liveSinks[sink] = 0;
+    public void UpdateRunMetadata(
+        string commandId,
+        string workflowName,
+        string input,
+        DateTimeOffset startedAt)
+    {
+        if (!string.IsNullOrWhiteSpace(commandId))
+            CommandId = commandId;
+        if (!string.IsNullOrWhiteSpace(workflowName))
+            WorkflowName = workflowName;
+
+        Input = input;
+        StartedAt = startedAt;
+    }
+
+    public void AttachLiveSink(string commandId, IWorkflowRunEventSink sink)
+    {
+        _liveSinks[sink] = commandId;
+    }
 
     public void DetachLiveSink(IWorkflowRunEventSink sink) => _liveSinks.TryRemove(sink, out _);
 
-    public IReadOnlyList<IWorkflowRunEventSink> GetLiveSinksSnapshot() => _liveSinks.Keys.ToList();
+    public IReadOnlyList<IWorkflowRunEventSink> GetLiveSinksSnapshot(string? commandId = null)
+    {
+        if (string.IsNullOrWhiteSpace(commandId))
+            return _liveSinks.Keys.ToList();
+
+        return _liveSinks
+            .Where(x => string.Equals(x.Value, commandId, StringComparison.Ordinal))
+            .Select(x => x.Key)
+            .ToList();
+    }
 }

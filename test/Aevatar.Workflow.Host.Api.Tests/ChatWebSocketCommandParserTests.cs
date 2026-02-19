@@ -1,4 +1,4 @@
-using Aevatar.Workflow.Host.Api.Endpoints;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;

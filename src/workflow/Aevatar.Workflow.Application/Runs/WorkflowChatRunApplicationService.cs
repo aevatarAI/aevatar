@@ -108,7 +108,7 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowRunCommandServi
                 request.Prompt,
                 commandContext.CommandId,
                 ct);
-            await _projectionPort.AttachLiveSinkAsync(actor.Id, sink, ct);
+            await _projectionPort.AttachLiveSinkAsync(actor.Id, commandContext.CommandId, sink, ct);
         }
         catch
         {

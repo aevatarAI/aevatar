@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Workflow.Host.Api.Endpoints;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -15,7 +15,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public class ChatEndpointsInternalTests
 {
     [Fact]
-    public void MapChatEndpoints_ShouldRegisterCoreRoutes()
+    public void MapWorkflowCapabilityEndpoints_ShouldRegisterCoreRoutes()
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddSingleton<ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>(new FakeChatRunApplicationService());
@@ -25,7 +25,7 @@ public class ChatEndpointsInternalTests
         var app = builder.Build();
         var endpoints = (IEndpointRouteBuilder)app;
 
-        var returned = app.MapChatEndpoints();
+        var returned = app.MapWorkflowCapabilityEndpoints();
         var routePatterns = endpoints.DataSources
             .SelectMany(x => x.Endpoints)
             .OfType<RouteEndpoint>()
@@ -34,7 +34,6 @@ public class ChatEndpointsInternalTests
 
         returned.Should().BeSameAs(app);
         routePatterns.Should().Contain("/api/chat");
-        routePatterns.Should().Contain("/api/commands");
         routePatterns.Should().Contain("/api/agents");
         routePatterns.Should().Contain("/api/workflows");
         routePatterns.Should().Contain("/api/ws/chat");
@@ -55,7 +54,7 @@ public class ChatEndpointsInternalTests
                     null))),
         };
 
-        await ChatEndpoints.HandleChat(
+        await WorkflowCapabilityEndpoints.HandleChat(
             http,
             new ChatInput { Prompt = "hello", Workflow = "missing" },
             service,
@@ -98,7 +97,7 @@ public class ChatEndpointsInternalTests
             },
         };
 
-        await ChatEndpoints.HandleChat(
+        await WorkflowCapabilityEndpoints.HandleChat(
             http,
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             service,
@@ -133,7 +132,7 @@ public class ChatEndpointsInternalTests
             },
         };
 
-        var result = await ChatEndpoints.HandleCommand(
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             service,
             loggerFactory,
@@ -152,7 +151,7 @@ public class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         var service = new FakeChatRunApplicationService();
 
-        await ChatEndpoints.HandleChat(
+        await WorkflowCapabilityEndpoints.HandleChat(
             http,
             new ChatInput { Prompt = "  " },
             service,
@@ -167,7 +166,7 @@ public class ChatEndpointsInternalTests
         using var loggerFactory = LoggerFactory.Create(_ => { });
         var service = new FakeChatRunApplicationService();
 
-        var result = await ChatEndpoints.HandleCommand(
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
             new ChatInput { Prompt = "" },
             service,
             loggerFactory,
@@ -189,7 +188,7 @@ public class ChatEndpointsInternalTests
             ExecuteHandler = (_, _, _, _) => throw new InvalidOperationException("projection init failed"),
         };
 
-        var result = await ChatEndpoints.HandleCommand(
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             service,
             loggerFactory,

@@ -71,13 +71,32 @@ public class WorkflowExecutionProjectionServiceTests
 
         var sink = new WorkflowRunEventChannel();
         await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
-        await service.AttachLiveSinkAsync("root", sink);
+        await service.AttachLiveSinkAsync("root", "cmd-1", sink);
         await service.DetachLiveSinkAsync("root", sink);
 
         var snapshot = await service.GetActorSnapshotAsync("root");
         var timeline = await service.ListActorTimelineAsync("root", 50);
         snapshot.Should().BeNull();
         timeline.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EnsureActorProjectionAsync_WhenCalledRepeatedly_ShouldRefreshCommandMetadata()
+    {
+        var service = CreateService(
+            new WorkflowExecutionProjectionOptions
+            {
+                Enabled = true,
+                EnableActorQueryEndpoints = true,
+            },
+            out _);
+
+        await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
+        await service.EnsureActorProjectionAsync("root", "direct", "hello again", "cmd-2");
+
+        var refreshed = await service.GetActorSnapshotAsync("root");
+        refreshed.Should().NotBeNull();
+        refreshed!.LastCommandId.Should().Be("cmd-2");
     }
 
     private static WorkflowExecutionProjectionService CreateService(

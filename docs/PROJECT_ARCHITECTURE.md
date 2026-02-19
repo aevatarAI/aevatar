@@ -1,14 +1,15 @@
-# Aevatar 完整项目架构文档
+# Aevatar 完整项目架构文档（轻量能力装配版）
 
 ## 1. 目标与范围
 
-本文档定义 Aevatar 当前可执行架构基线，覆盖：
+本文档定义 Aevatar 的目标架构基线，覆盖：
 
 1. 分层结构（Domain / Application / Infrastructure / Host）。
-2. 子系统边界（Workflow / Maker / Platform）。
-3. CQRS Runtime 抽象与并行实现（Wolverine / MassTransit）。
-4. 统一投影链路（CQRS + AGUI）与 Saga 编排能力（可选）。
-5. API 所有权、依赖约束、CI 门禁与长期演进规则。
+2. 能力模型（`Workflow`、`Maker` 均为 Capability）。
+3. 轻量装配机制（引用能力项目 + `Add...` 注册）。
+4. 默认装配策略（`Mainnet` 默认装配 `Workflow`）。
+5. Maker 独立系统（引用 Maker 并 `Add...` 注册）。
+6. 平台旧层清理（删除 `Aevatar.Platform.*`）。
 
 ## 2. 解决方案结构
 
@@ -16,152 +17,112 @@
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
     R["aevatar.slnx"] --> SRC["src/"]
-    R --> TEST["test/"]
-    R --> DOCS["docs/"]
-    R --> DEMOS["demos/"]
-
+    SRC --> MN["src/Aevatar.Mainnet.*"]
     SRC --> WF["src/workflow/*"]
     SRC --> MK["src/maker/*"]
-    SRC --> PF["src/Aevatar.Platform.*"]
     SRC --> CQ["src/Aevatar.CQRS.*"]
     SRC --> FD["src/Aevatar.Foundation.*"]
-    SRC --> AI["src/Aevatar.AI.*"]
 ```
 
-## 3. 子系统与宿主
+## 3. 系统装配模型（轻量）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    WHost["Aevatar.Workflow.Host.Api"] --> WInfra["Aevatar.Workflow.Infrastructure"] --> WApp["Aevatar.Workflow.Application"] --> WCore["Aevatar.Workflow.Core"]
-    MHost["Aevatar.Maker.Host.Api"] --> MInfra["Aevatar.Maker.Infrastructure"] --> MApp["Aevatar.Maker.Application"] --> MCore["Aevatar.Maker.Core"]
-    PHost["Aevatar.Platform.Host.Api"] --> PInfra["Aevatar.Platform.Infrastructure"] --> PApp["Aevatar.Platform.Application"] --> PAbs["Aevatar.Platform.Abstractions"]
+    MH["Aevatar.Mainnet.Host.Api"] --> MADD["AddMainnetCore()"]
+    MH --> WADD["AddWorkflowCapability()"]
 
-    WApp --> CQAbs["Aevatar.CQRS.Runtime.Abstractions"]
-    MApp --> CQAbs
-    PApp --> CQAbs
+    KH["Aevatar.Maker.Host.Api"] --> KADD["AddMakerCapability()"]
+
+    WADD --> WIMPL["Workflow Capability Implementation"]
+    KADD --> KIMPL["Maker Capability Implementation"]
 ```
 
-当前宿主职责：
+### 3.1 核心约束
 
-1. `Aevatar.Workflow.Host.Api`：workflow chat/sse/ws 与 workflow 查询。
-2. `Aevatar.Maker.Host.Api`：maker 执行入口。
-3. `Aevatar.Platform.Host.Api`：平台命令受理、状态查询与路由目录。
+1. `Mainnet` 默认通过项目引用 `Workflow` 能力并调用 `AddWorkflowCapability()`。
+2. `Maker` 作为独立系统，通过项目引用 `Maker` 并调用 `AddMakerCapability()`。
+3. 能力接入不引入运行时发现/注册中心/动态路由框架。
+4. 能力开关优先使用配置 + DI 注册控制。
+5. 删除 `Aevatar.Platform.*`，不保留兼容壳层。
+
+### 3.2 最小能力契约
+
+1. 每个能力提供一个 DI 扩展入口（`IServiceCollection` 扩展）。
+2. 每个能力提供端点挂载入口（`IEndpointRouteBuilder` 扩展）。
+3. 能力 API 契约（请求/响应模型 + endpoint 定义）归属能力项目，不在 Host 重复定义。
+4. 每个能力自己注册 Command Handler、Projector、Endpoint（如有）。
+5. 能力之间通过现有事件与应用服务协作，不要求新增通用微服务基础设施。
 
 ## 4. CQRS Runtime 统一接入
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
-    Host["Subsystem Host"] --> RH["Aevatar.CQRS.Runtime.Hosting"]
+    Host["Host"] --> RH["Aevatar.CQRS.Runtime.Hosting"]
     RH --> RA["Aevatar.CQRS.Runtime.Abstractions"]
     RH --> RF["Aevatar.CQRS.Runtime.FileSystem"]
-    RH --> SA["Aevatar.CQRS.Sagas.Abstractions"]
-    RH --> SC["Aevatar.CQRS.Sagas.Core"]
-    RH --> SF["Aevatar.CQRS.Sagas.Runtime.FileSystem"]
     RH --> RW["Aevatar.CQRS.Runtime.Implementations.Wolverine"]
     RH --> RM["Aevatar.CQRS.Runtime.Implementations.MassTransit"]
 ```
 
 统一规则：
 
-1. Host 只能通过 `UseAevatarCqrsRuntime(...)` + `AddAevatarCqrsRuntime(...)` 接入。
-2. 子系统不得直接引用 `Runtime.Implementations.*`。
+1. Host 仅通过 `UseAevatarCqrsRuntime(...)` + `AddAevatarCqrsRuntime(...)` 接入。
+2. 业务能力项目不得直接引用 `Runtime.Implementations.*`。
 3. 运行时切换仅通过 `Cqrs:Runtime = Wolverine|MassTransit`。
-4. Saga 运行时（订阅、状态持久化、动作分发）统一由 `Aevatar.CQRS.Runtime.Hosting` 装配。
 
 ## 5. 命令与查询主链路
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    C["Command API"] --> APP["Application Service"] --> BUS["ICommandBus"] --> EXEC["IQueuedCommandExecutor"] --> ACT["Actor / GAgent"]
-    ACT --> EVT["EventEnvelope Stream"] --> PROJ["Projection Pipeline"] --> RM["ReadModel Store"] --> Q["Query API"]
-    EVT --> SAGA["Saga Runtime (Orchestration Only, Optional)"]
-    SAGA --> BUS
+    C["Command API"] --> APP["Application Service"] --> BUS["ICommandBus"] --> ACT["GAgent"]
+    ACT --> EVT["EventEnvelope Stream"] --> PROJ["Projection Pipeline"] --> RM["ReadModel"] --> Q["Query API"]
 ```
 
 关键约束：
 
 1. `Command -> Event`，`Query -> ReadModel`。
-2. 不在会话内拼装投影流程。
-3. AGUI 输出是 Projection 分支，不是平行业务链路。
-4. Saga 仅用于跨边界编排（超时/补偿/分支），不承担普通状态看板查询。
+2. AGUI/SSE/WS 只从统一投影链路输出。
+3. 不在 API 会话内拼装跨能力长链路流程。
 
-## 5.1 状态归属矩阵
-
-| 状态类型 | 真相范围 | 写入触发 | 持久化要求 | 禁止事项 |
-|---|---|---|---|---|
-| Actor State | 领域真相（业务不变量、领域行为） | Actor 处理事件时 | 依据领域需要持久化（EventSourcing/StateStore） | 不保存查询拼装字段，不承载跨系统流程补偿编排 |
-| Saga State | 流程真相（阶段、超时、补偿、关联） | SagaRuntime 观察 EventEnvelope 后 | 必须可恢复、可幂等（当前 FileSystem 基线） | 不复制完整业务聚合状态，不替代 Actor 业务决策 |
-| ReadModel | 查询视图（列表、时间线、聚合统计） | Projection Pipeline | 可重建，允许最终一致 | 不参与命令决策，不回写领域/流程状态 |
-
-## 5.2 单线程语义边界
-
-1. 当前仅保证“同一 Actor mailbox 串行处理”（per-actor single-thread）。
-2. 不同 Actor 之间并行执行，不存在全局单线程保证。
-3. SagaRuntime 以 `sagaName + correlation_id` 作为并发互斥粒度。
-4. Projection 读侧可并行消费，但不得假设跨 Actor 全序。
-
-## 5.3 一致性与恢复策略
-
-1. 一致性模型：`Actor(Event) -> Saga/Projection`，默认最终一致。
-2. Query 只能读 ReadModel/SagaState，不直接读 Actor 内存态。
-3. 进程重启后，SagaState 必须先于查询恢复；ReadModel 可通过重放恢复。
-4. 对外追踪建议：命令侧使用 `commandId`，事件链路使用 `correlation_id`。
-
-## 6. 投影与展示
-
-```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
-flowchart TB
-    E["EventEnvelope"] --> P0["Projection Pipeline"]
-    P0 --> P1["Workflow ReadModel Projector"]
-    P0 --> P2["Maker ReadModel Projector"]
-    P0 --> P3["AGUI Event Projector"]
-    P1 --> R1["Workflow ReadModel"]
-    P2 --> R2["Maker ReadModel"]
-    P3 --> S["SSE / WebSocket"]
-```
-
-## 7. API 所有权（当前）
+## 6. API 所有权（目标态）
 
 | 路径 | 所有者 | 说明 |
 |---|---|---|
-| `/api/chat`, `/api/ws/chat` | Workflow Host | Workflow 聊天协议 |
-| `/api/workflows`, `/api/actors/*` | Workflow Host | Workflow 查询 |
-| `/api/maker/runs` | Maker Host | Maker 执行 |
-| `/api/commands`, `/api/commands/{id}` | Platform Host | 平台命令受理与状态查询 |
-| `/api/routes/{subsystem}/*` | Platform Host | 子系统路由目录 |
+| `/api/chat`, `/api/ws/chat` | Mainnet Host | Workflow 运行入口（SSE/WS） |
+| `/api/agents`, `/api/workflows` | Mainnet Host | Workflow 查询入口 |
+| `/api/actors/{actorId}`, `/api/actors/{actorId}/timeline` | Mainnet Host | Actor 执行快照与时间线查询 |
+| `/api/maker/*` | Maker Host | Maker 能力入口 |
 
-注：`/api/agents` 在 Workflow/Platform 存在语义重叠，需按部署路由或前缀治理收敛。
+收敛要求：
 
-## 8. 依赖与命名规范
+1. 删除 `/api/routes/{subsystem}/*` 目录路由模型。
+2. 不再保留 `Platform Host` API 所有权。
+
+## 7. 依赖与命名规范
 
 1. 项目名、命名空间、目录语义一致。
-2. 多实现抽象下，实现侧命名空间使用复数语义容器（如 `Implementations`、`Providers`）。
-3. 缩写全大写：`LLM`、`CQRS`、`AGUI`。
-4. 删除无效层、重复抽象与空转发代码，不保留兼容壳层。
+2. 缩写全大写：`LLM`、`CQRS`、`AGUI`。
+3. 能力命名使用 `Capability` 语义，避免重复层次包装。
+4. 删除 `Aevatar.Platform.*` 相关代码与引用。
 
-## 9. CI 架构门禁
+## 8. CI 架构门禁
 
-CI（`.github/workflows/ci.yml`）当前执行：
+CI（`.github/workflows/ci.yml`）应执行：
 
 1. `build + test`。
 2. 禁止 `GetAwaiter().GetResult()`。
 3. 禁止 `TypeUrl.Contains(...)` 字符串路由。
-4. 禁止 `Workflow.Core -> AI.Core` 依赖。
-5. 禁止旧宿主回流（`Aevatar.Host.Api`、`Aevatar.Host.Gateway`）。
-6. 强制三子系统 Host 使用统一 CQRS Runtime 接入扩展。
+4. 禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`。
+5. 禁止任何项目新增 `Aevatar.Platform.*` 引用。
+6. 强制 Mainnet Host 与 Maker Host 使用统一 CQRS Runtime 接入扩展。
 7. 禁止 Host/Infrastructure 直接 `AddCqrsCore(...)`。
-8. 仅允许 `Aevatar.CQRS.Runtime.Hosting` 直接引用 `Runtime.Implementations.*`。
-9. 禁止在 SagaState 中落地 ReadModel 专用字段（列表展示/拼装视图字段）。
-10. 禁止 ReadModel 参与命令处理分支判断。
 
-## 10. 长期演进路线
+## 9. 演进路线
 
-1. 收敛 Workflow 与 Platform 的重复 API 语义（优先路径前缀策略）。
-2. 建立 Wolverine/MassTransit 一致性契约测试。
-3. 建立 Saga Runtime 的一致性契约测试（状态迁移、动作分发、恢复）。
-4. 强化 ReadModel checkpoint/replay 的恢复演练。
-5. 每次架构变更必须同步更新 `docs/` 与 CI 门禁规则。
+1. Mainnet：引用 Workflow 并完成 `AddWorkflowCapability()` 装配。
+2. Maker：独立部署，引用 Maker 并完成 `AddMakerCapability()` 装配。
+3. 删除 `src/Aevatar.Platform.*` 与旧平台路由目录。
+4. 新能力统一按“新增项目引用 + 新增 Add 扩展 + Host 注册”接入。

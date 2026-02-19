@@ -1,6 +1,6 @@
 # Aevatar.Maker.Host.Api
 
-`Aevatar.Maker.Host.Api` 是 Maker 子系统独立宿主。
+`Aevatar.Maker.Host.Api` 是 Maker 能力的独立宿主。
 
 职责：
 

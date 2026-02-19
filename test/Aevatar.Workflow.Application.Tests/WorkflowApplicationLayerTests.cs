@@ -125,6 +125,7 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
 
     public Task AttachLiveSinkAsync(
         string actorId,
+        string commandId,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default) =>
         Task.CompletedTask;

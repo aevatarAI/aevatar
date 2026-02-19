@@ -9,12 +9,13 @@
 3. 命令执行链路、投影链路、状态持久化链路。
 4. Wolverine / MassTransit 并行实现策略。
 5. Saga 与 CQRS 的关系（可选编排层，不替代读模型）。
+6. 按能力打包的系统接入规范（Mainnet 默认内置 Workflow，Maker 为独立能力提供系统）。
 
 ## 2. 顶层原则
 
 1. `Command -> Event`，`Query -> ReadModel`。
 2. Host 只做协议适配与依赖组合，不做业务编排。
-3. 抽象层不携带业务语义（不出现 workflow/maker/platform 术语）。
+3. 抽象层不携带具体能力语义（不依赖 workflow/maker 等实现项目）。
 4. `CorrelationId` 用于链路关联；`metadata` 仅用于透传与诊断。
 5. Projection 负责状态追踪；Saga 仅负责跨边界编排（可选）。
 
@@ -65,7 +66,7 @@ flowchart LR
 
 ### 6.1 直接执行路径（Actor 直达）
 
-用于需要即时启动并持续流式输出的场景（如 workflow/maker 当前实现）：
+用于需要即时启动并持续流式输出的场景（如 Mainnet 内置 Workflow 能力、Maker 能力实时执行）：
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -86,7 +87,7 @@ sequenceDiagram
 
 ### 6.2 入队执行路径（标准 CQRS Runtime）
 
-用于平台命令受理与异步执行：
+用于 Mainnet 命令受理与异步执行：
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -189,18 +190,23 @@ flowchart LR
 
 更多见：`docs/SAGA_ARCHITECTURE.md`。
 
-## 11. 子系统接入规范
+## 11. 系统接入规范（按能力打包）
 
-每个 Host 统一接入：
+每个 Capability Host 统一接入：
 
 1. `builder.Host.UseAevatarCqrsRuntime(builder.Configuration);`
 2. `builder.Services.AddAevatarCqrsRuntime(builder.Configuration);`
 
-当前已接入：
+目标接入：
 
-1. `src/workflow/Aevatar.Workflow.Host.Api/Program.cs`
+1. `src/Aevatar.Mainnet.Host.Api/Program.cs`
 2. `src/maker/Aevatar.Maker.Host.Api/Program.cs`
-3. `src/Aevatar.Platform.Host.Api/Program.cs`
+
+约束：
+
+1. `Mainnet Host` 默认打包 `Workflow Capability`，不再以独立 Workflow Host 形式接入。
+2. `Maker Host` 通过引用 Maker 项目并调用 `AddMakerCapability(...)` 接入。
+3. 不允许新增或回流 `Aevatar.Platform.*` 项目引用。
 
 ## 12. 配置基线（`Cqrs:*`）
 
@@ -253,4 +259,3 @@ Aevatar 当前 CQRS 架构已形成：
 2. 实现可切换（Wolverine 与 MassTransit 并行）。
 3. 读写职责清晰（写侧命令执行、读侧投影查询）。
 4. 编排能力可选（Saga 独立，不污染业务读模型路径）。
-

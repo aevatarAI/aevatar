@@ -1,4 +1,4 @@
-using Aevatar.Workflow.Host.Api.Endpoints;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;

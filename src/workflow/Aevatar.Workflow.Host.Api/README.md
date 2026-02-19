@@ -5,7 +5,6 @@
 ## 职责边界
 
 - 暴露端点：
-  - `POST /api/commands`（Accepted + commandId）
   - `POST /api/chat`（SSE）
   - `GET /api/ws/chat`（WebSocket）
   - `GET /api/agents`、`GET /api/workflows`、`GET /api/actors/{actorId}`、`GET /api/actors/{actorId}/timeline`
@@ -14,18 +13,15 @@
   - `IWorkflowExecutionQueryApplicationService`
 - 不承载 workflow/cqrs 业务编排。
 
-## Endpoint 结构
+## Endpoint 定义归属
 
-- `ChatEndpoints.cs`：仅路由与入口调用。
-- `ChatSseResponseWriter.cs`：SSE 启动与帧写出。
-- `ChatWebSocketCommandParser.cs`：WS 命令解析与校验。
-- `ChatWebSocketRunCoordinator.cs`：WS 命令执行协调。
-- `ChatRunStartErrorMapper.cs`：run 启动错误到 HTTP/WS 错误码映射。
-- `ChatQueryEndpoints.cs`：Query 端点。
+- `Workflow` 能力 API 定义位于 `Aevatar.Workflow.Infrastructure/CapabilityApi/*`。
+- Host 仅通过 `app.MapWorkflowCapabilityEndpoints()` 挂载能力端点。
+- Host 项目不再保留重复 endpoint 实现。
 
 ## 运行语义
 
-- 默认按 `Actor` 共享事件流（同 Actor 多 run 不隔离）。
+- 运行时按 `commandId` 过滤 live sink，避免同 Actor 并发 run 串流。
 - 单次请求在终止事件（`RUN_FINISHED`/`RUN_ERROR`）后收尾。
 - 客户端可通过 `actorId` 查询对应 ReadModel 视图（`/api/actors/*`）。
 
@@ -35,6 +31,6 @@
 
 - `UseAevatarCqrsRuntime(...)`
 - `AddAevatarCqrsRuntime(...)`
-- `AddWorkflowSubsystem(...)`
+- `AddWorkflowCapability(...)`
 
-Host 只做“协议 + 组合”，核心用例在 `workflow/*` 子系统。
+Host 只做“协议 + 组合”，核心用例在 `workflow/*` 能力实现层。

@@ -4,14 +4,14 @@
 
 本文档定义 Aevatar 当前 **框架级 Saga 能力** 的标准架构与实现边界，适用于：
 
-1. 跨 Actor / 跨子系统的长事务编排。
+1. 跨 Actor / 跨系统边界的长事务编排。
 2. 需要超时、补偿、延迟命令、重试控制的流程。
 3. 以 `CorrelationId` 串联事件链路。
 
 不在范围内：
 
 1. 普通执行状态看板与查询（应由 Projection / ReadModel 负责）。
-2. 业务子系统内“纯状态追踪型 Saga”（当前已移除）。
+2. 业务能力系统内“纯状态追踪型 Saga”（当前已移除）。
 
 ## 2. 架构定位
 
@@ -21,7 +21,7 @@
 2. `src/Aevatar.CQRS.Sagas.Core`
 3. `src/Aevatar.CQRS.Sagas.Runtime.FileSystem`
 
-业务侧 `Workflow/Maker/Platform` 不再内置追踪型 Saga，实现边界为：
+业务侧 `Mainnet Workflow Capability / Maker Capability Provider` 不再内置追踪型 Saga，实现边界为：
 
 1. `Saga` 只负责流程编排。
 2. `Projection` 负责读模型与查询。
@@ -31,7 +31,7 @@
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-  Host["Subsystem Host"] --> RH["Aevatar.CQRS.Runtime.Hosting"]
+  Host["Capability Host"] --> RH["Aevatar.CQRS.Runtime.Hosting"]
   RH --> SC["Aevatar.CQRS.Sagas.Core"]
   RH --> SF["Aevatar.CQRS.Sagas.Runtime.FileSystem"]
   RH --> RA["Aevatar.CQRS.Sagas.Abstractions"]
@@ -103,7 +103,7 @@ Saga 可产生四类动作：
 3. `SagaScheduleTimeoutAction`：注册超时。
 4. `SagaCompleteAction`：标记流程完成。
 
-## 7. 超时子系统
+## 7. 超时组件
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -169,7 +169,7 @@ sequenceDiagram
 
 1. 不在 Host/API 中硬编码 Saga 编排逻辑。
 2. 不让 SagaState 承担 ReadModel 字段。
-3. 不在业务子系统中恢复“追踪型 Saga 双写”。
+3. 不在业务能力系统中恢复“追踪型 Saga 双写”。
 
 ## 12. 观测与测试建议
 
@@ -190,7 +190,7 @@ sequenceDiagram
 
 满足以下条件才引入 Saga：
 
-1. 跨边界流程（跨 Actor/跨子系统）。
+1. 跨边界流程（跨 Actor/跨系统边界）。
 2. 需要等待、超时、补偿、重试中的至少一项。
 3. 仅靠 Projection 无法表达流程控制。
 
@@ -217,7 +217,7 @@ sequenceDiagram
 
 ## 15. 未来需要 Saga 的典型场景（示例）
 
-示例：企业采购流程（跨子系统补偿）
+示例：企业采购流程（跨系统补偿）
 
 1. `WorkflowActor` 触发 `预算Actor` 预占预算（成功）。
 2. 触发 `供应商Actor` 下单（成功）。
@@ -230,4 +230,4 @@ sequenceDiagram
 
 1. 统一记录流程阶段与失败点。
 2. 统一驱动补偿顺序与重试策略。
-3. 让跨子系统补偿逻辑不分散到多个 Actor 中。
+3. 让跨系统补偿逻辑不分散到多个 Actor 中。

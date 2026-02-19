@@ -33,7 +33,7 @@ public sealed class WorkflowExecutionAGUIEventProjector
     {
         ct.ThrowIfCancellationRequested();
 
-        var sinks = context.GetLiveSinksSnapshot();
+        var sinks = context.GetLiveSinksSnapshot(envelope.CorrelationId);
         if (sinks.Count == 0)
             return;
 

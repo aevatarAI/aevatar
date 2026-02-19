@@ -11,7 +11,7 @@
 ### 2.1 范围
 1. Foundation 事件处理与发布透传链路。
 2. CQRS Core/Projection Core 的统一分发与追踪抽象。
-3. 子系统（workflow/maker/demos）的接入方式标准化。
+3. 能力系统（mainnet/maker/demos）的接入方式标准化。
 4. 文档、测试、CI 架构门禁同步升级。
 
 ### 2.2 非目标
@@ -23,14 +23,14 @@
 1. `CorrelationId` 已具备透传能力，但缺少统一“追踪模型”与“自动投影契约”。
 2. Workflow 层仍承担部分通用追踪职责，导致框架与业务边界不清。
 3. 投影能力虽存在，但“追踪投影”和“业务投影”尚未在同一抽象模型下标准化。
-4. 新增子系统时，仍有较高概率在 Application/API 侧写流程判断逻辑，破坏 OCP。
+4. 新增能力系统时，仍有较高概率在 Application/API 侧写流程判断逻辑，破坏 OCP。
 5. 缺少统一的 Envelope 关联关系视图（`event_id`、`correlation_id`、`metadata["trace.causation_id"]`）。
 
 ## 4. 顶层架构原则（重构后）
 1. API 只做 Host：接收命令、查询读模型、推送读模型变化。
 2. 命令写侧：`Command -> EventEnvelope`。
 3. 查询读侧：`Query -> ReadModel`。
-4. 追踪能力：框架统一生成与投影，不放在任一业务子系统。
+4. 追踪能力：框架统一生成与投影，不放在任一业务能力系统。
 5. 投影能力：统一入口、一对多分发、幂等执行、可重放。
 6. 扩展方式：新增 `IProjector<>`/`IProcessManager<>` 实现并注册即可。
 7. `GAgentBase` 以 Raw `EventEnvelope` 作为处理上下文，不新增 `RequestContext/ResponseContext` 包装层。
@@ -143,9 +143,9 @@ flowchart LR
 2. `src/Aevatar.CQRS.Trace.Core`。
 3. `src/Aevatar.CQRS.Trace.Runtime.FileSystem`（默认本地实现，可选）。
 
-### 7.3 子系统职责收敛
-1. `src/workflow/*`：只保留 Workflow 业务投影与业务编排，不保留通用追踪基础设施。
-2. `src/maker/*`：同上。
+### 7.3 能力系统职责收敛
+1. `src/Aevatar.Mainnet.*`：主网内置 Workflow 能力与通用编排能力。
+2. `src/maker/*`：Maker 能力 Provider，仅保留能力语义投影与执行。
 3. `demos/*`：展示“同一投影内核 + 不同业务 projector”扩展能力。
 
 ## 8. 分阶段实施计划
@@ -169,10 +169,10 @@ flowchart LR
 2. 提供按 `command.id` 和 `correlation_id` 查询接口（`command.id` 在 CQRS 侧先映射到 `correlation_id`）。
 3. API 仅查询 Trace ReadModel，不再解析 Workflow 运行细节。
 
-### Phase 4: 子系统去耦与迁移
+### Phase 4: 能力系统去耦与迁移
 1. Workflow/Maker 删除通用追踪代码。
-2. 子系统只保留业务 read model projector。
-3. demos 增加“平行子系统接入样例”（不改核心，仅注册扩展）。
+2. 能力系统只保留业务 read model projector。
+3. demos 增加“平行能力系统接入样例”（不改核心，仅注册扩展）。
 
 ### Phase 5: 清理与门禁
 1. 删除冗余/废弃代码与无效抽象。
@@ -200,14 +200,15 @@ flowchart LR
 | `Aevatar.CQRS.Trace.*` | 新增追踪读模型与查询服务 | 追踪上移框架 |
 | `workflow/*` | 删除通用追踪逻辑，保留业务投影 | 业务边界清晰 |
 | `maker/*` | 同 Workflow | 业务边界清晰 |
-| `Aevatar.Platform.Host.Api` | 仅保留命令入口与查询出口 | Host 纯化 |
+| `Aevatar.Mainnet.Host.Api` | 仅保留命令入口与查询出口 | Host 纯化 |
+| `Aevatar.Platform.*` | 迁移完成后整体删除 | 旧平台层清除 |
 
 ## 10. 测试与 CI 门禁
 ### 10.1 必须补齐的测试
 1. Unit: 入站 Envelope 触发多级事件时，`correlation_id` 全链路一致。
 2. Unit: `metadata["trace.causation_id"]` 必须指向直接上游事件 `id`。
 3. Unit: 同一事件被多个 projector 消费时幂等一致。
-4. Integration: 子系统新增 projector 不改核心代码即可生效。
+4. Integration: 能力系统新增 projector 不改核心代码即可生效。
 5. Integration: Trace Query 与业务 Query 并存且互不污染。
 
 ### 10.2 CI 门禁规则
@@ -235,7 +236,7 @@ flowchart LR
 1. `CorrelationId` 与 `metadata["trace.causation_id"]` 由框架自动传播，业务层零手工代码。
 2. Trace Projection 成为框架能力，Workflow/Maker 不再承载通用追踪职责。
 3. 所有读侧均经统一 Projection Dispatcher，一对多分发无特判。
-4. 新增一个子系统 projector 只需“新增实现 + 注册”，无需改核心。
+4. 新增一个能力系统 projector 只需“新增实现 + 注册”，无需改核心。
 5. 架构文档、项目 README、测试、CI 门禁全部同步。
 
 ## 13. 执行顺序建议

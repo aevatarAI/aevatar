@@ -2,6 +2,8 @@
   "solution": {
     "path": "aevatar.slnx",
     "projects": [
+      "src\\Aevatar.Mainnet.Application\\Aevatar.Mainnet.Application.csproj",
+      "src\\Aevatar.Mainnet.Host.Api\\Aevatar.Mainnet.Host.Api.csproj",
       "src\\workflow\\Aevatar.Workflow.Application\\Aevatar.Workflow.Application.csproj",
       "src\\workflow\\Aevatar.Workflow.Application.Abstractions\\Aevatar.Workflow.Application.Abstractions.csproj",
       "src\\workflow\\Aevatar.Workflow.Core\\Aevatar.Workflow.Core.csproj",

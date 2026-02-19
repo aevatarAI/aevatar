@@ -1,4 +1,4 @@
-# Workflow 子系统架构（`src/workflow`）
+# Workflow 能力架构（`src/workflow`）
 
 本文档描述 `src/workflow` 的完整实现关系。当前语义是：一次 `Run` 本质上就是向 `WorkflowGAgent` 触发一次 `ChatRequestEvent`，后续全部通过事件流驱动执行与投影。`commandId` 保留在 CQRS/Application 侧，不注入 Actor 事件 payload 或 Envelope metadata。
 
@@ -74,8 +74,8 @@ sequenceDiagram
   CmdSvc->>AppSvc: "ExecuteAsync"
   AppSvc->>Resolver: "ResolveOrCreateAsync"
   Resolver-->>AppSvc: "ActorId + WorkflowName"
-  AppSvc->>Port: "EnsureActorProjectionAsync(actorId, commandId)"
-  AppSvc->>Port: "AttachLiveSinkAsync(actorId, sink)"
+  AppSvc->>Port: "EnsureActorProjectionAsync(actorId, workflowName, input, commandId)"
+  AppSvc->>Port: "AttachLiveSinkAsync(actorId, commandId, sink)"
   AppSvc->>WFAgent: "HandleEventAsync(EventEnvelope(ChatRequestEvent))"
   WFAgent-->>Sink: "投影分支持续写入 WorkflowRunEvent"
   AppSvc->>Sink: "ReadAllAsync + StreamAsync"
@@ -184,4 +184,4 @@ sequenceDiagram
 - Actor 事件域不承载 CQRS 命令语义：不在 `EventEnvelope` metadata 与 `StartWorkflowEvent` 中传递 `commandId`。
 - `WorkflowExecutionProjectionService` 以 `ActorId` 为共享投影上下文键，同一 Actor 多次触发共享读模型与事件流。
 - CQRS 与 AGUI 复用同一输入事件流（统一 `ProjectionCoordinator`），通过不同 Projector 分支输出。
-- Workflow 子系统不再承载“纯追踪型 Saga”；执行状态查询统一由 Projection ReadModel 提供。
+- Workflow 能力不再承载“纯追踪型 Saga”；执行状态查询统一由 Projection ReadModel 提供。

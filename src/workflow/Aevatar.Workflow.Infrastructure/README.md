@@ -13,6 +13,8 @@
   - 从目录加载 `*.yaml/*.yml` 并注册到 `IWorkflowDefinitionRegistry`。
 - `Workflows/WorkflowDefinitionBootstrapHostedService`
   - 宿主启动时自动加载 workflow 文件源。
+- `CapabilityApi/*`
+  - Workflow 能力 API 定义（`/api/chat`、`/api/ws/chat`、`/api/actors/*` 等）与协议适配实现。
 
 ## DI 扩展
 
@@ -20,8 +22,10 @@
   - 注册报告工件 sink。
 - `AddWorkflowDefinitionFileSource(...)`
   - 注册 workflow 文件源与启动加载 HostedService。
-- `AddWorkflowSubsystem(...)`
-  - 子系统一键组合（Application + Projection + AGUIAdapter + Infrastructure + workflow 文件源）。
+- `AddWorkflowCapability(...)`
+  - 能力一键组合（Application + Projection + AGUIAdapter + Infrastructure + workflow 文件源）。
+- `MapWorkflowCapabilityEndpoints(...)`
+  - 将 Workflow 能力 API 端点挂载到 Host。
 
 ## 配置
 
@@ -32,4 +36,4 @@
 
 ## 分层说明
 
-本项目是 workflow 子系统的组合层，按宿主场景装配 `Application/Projection/Adapter/Infrastructure`。
+本项目是 workflow 能力的组合层，按宿主场景装配 `Application/Projection/Adapter/Infrastructure`。

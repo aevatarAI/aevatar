@@ -19,7 +19,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddMakerSubsystem(
+    public static IServiceCollection AddMakerCapability(
         this IServiceCollection services,
         IConfiguration configuration)
     {
