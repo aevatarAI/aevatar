@@ -51,6 +51,8 @@ WorkflowGAgent (maker-root)
 demos/Aevatar.Demos.Maker/
 ├── Aevatar.Demos.Maker.csproj  # 可运行 Console 项目
 ├── Program.cs                    # 入口：装配运行时、加载 YAML、执行 workflow
+├── Reporting/
+│   └── MakerRunProjectionAccumulator.cs # Demo 运行报告累加器与 JSON/HTML 写出
 ├── workflows/
 │   └── maker_analysis.yaml       # MAKER 工作流定义
 ├── connectors/
@@ -62,7 +64,6 @@ demos/Aevatar.Demos.Maker/
 
 src/maker/
 ├── Aevatar.Maker.Core            # maker_vote / maker_recursive 模块与模块工厂
-├── Aevatar.Maker.Projection      # 运行报告投影与报告写出
 ├── Aevatar.Maker.Application*    # 应用层抽象与实现
 └── Aevatar.Maker.Infrastructure  # 子系统组合入口
 ```

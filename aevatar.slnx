@@ -56,7 +56,6 @@
     <Project Path="src\maker\Aevatar.Maker.Core\Aevatar.Maker.Core.csproj" />
     <Project Path="src\maker\Aevatar.Maker.Host.Api\Aevatar.Maker.Host.Api.csproj" />
     <Project Path="src\maker\Aevatar.Maker.Infrastructure\Aevatar.Maker.Infrastructure.csproj" />
-    <Project Path="src\maker\Aevatar.Maker.Projection\Aevatar.Maker.Projection.csproj" />
   </Folder>
   <Folder Name="/test/">
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />

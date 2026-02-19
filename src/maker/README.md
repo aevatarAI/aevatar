@@ -5,7 +5,7 @@
 ## 分层
 
 - `Aevatar.Maker.Core`：领域模块（`maker_recursive`、`maker_vote`）与模块工厂。
-- `Aevatar.Maker.Projection`：运行报告投影累加器与 JSON/HTML 报告写出。
+- `demos/Aevatar.Demos.Maker/Reporting`：Demo 报告累加器与 JSON/HTML 写出（仅 demo 使用，不在 Maker Host 主链路）。
 - `Aevatar.Maker.Application.Abstractions`：应用层契约与模型。
 - `Aevatar.Maker.Application`：命令执行应用服务（通过 `IMakerRunExecutionPort` 编排）。
 - `Aevatar.Maker.Infrastructure`：DI 组合入口与能力 API 定义（`AddMakerCapability(IServiceCollection, IConfiguration)` / `AddMakerCapability(WebApplicationBuilder)` / `AddMakerInfrastructure` / `MapMakerCapabilityEndpoints`）。
@@ -17,7 +17,7 @@
 flowchart TB
     A["Aevatar.Maker.Infrastructure"] --> B["Aevatar.Maker.Application"]
     A --> C["Aevatar.Maker.Core"]
+    A --> P["Aevatar.Workflow.Projection + AGUIAdapter"]
     B --> C
-    B --> D["Aevatar.Maker.Projection"]
     C --> E["Aevatar.Workflow.Core"]
 ```
