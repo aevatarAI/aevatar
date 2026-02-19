@@ -5,9 +5,7 @@ namespace Aevatar.Workflow.Projection.Reducers;
 
 public sealed class WorkflowCompletedEventReducer : WorkflowExecutionEventReducerBase<WorkflowCompletedEvent>
 {
-    public override int Order => 40;
-
-    protected override void Reduce(
+    protected override bool Reduce(
         WorkflowExecutionReport report,
         WorkflowExecutionProjectionContext context,
         EventEnvelope envelope,
@@ -33,5 +31,7 @@ public sealed class WorkflowCompletedEventReducer : WorkflowExecutionEventReduce
                 [WorkflowExecutionTimelineMetadataKeys.WorkflowName] = evt.WorkflowName,
                 [WorkflowExecutionTimelineMetadataKeys.CommandId] = report.CommandId,
             });
+
+        return true;
     }
 }

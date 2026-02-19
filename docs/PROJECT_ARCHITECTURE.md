@@ -114,6 +114,7 @@ flowchart LR
 1. `Command -> Event`，`Query -> ReadModel`。
 2. AGUI/SSE/WS 只从统一投影链路输出。
 3. 不在 API 会话内拼装跨能力长链路流程。
+4. 通用投影抽象按层拆分：`Foundation.Projection`（读模型基础）-> `AI.Projection`（通用事件 reducer/applier）-> 业务能力投影（如 `Workflow.Projection`）。
 
 ## 6. API 所有权（目标态）
 

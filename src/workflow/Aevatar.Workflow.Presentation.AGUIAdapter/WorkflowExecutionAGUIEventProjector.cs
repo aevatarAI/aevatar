@@ -21,8 +21,6 @@ public sealed class WorkflowExecutionAGUIEventProjector
         _mapper = mapper;
     }
 
-    public int Order => 100;
-
     public ValueTask InitializeAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -33,7 +31,7 @@ public sealed class WorkflowExecutionAGUIEventProjector
     {
         ct.ThrowIfCancellationRequested();
 
-        var sinks = context.GetLiveSinksSnapshot(envelope.CorrelationId);
+        var sinks = context.GetLiveSinksForCommand(envelope.CorrelationId ?? string.Empty);
         if (sinks.Count == 0)
             return;
 

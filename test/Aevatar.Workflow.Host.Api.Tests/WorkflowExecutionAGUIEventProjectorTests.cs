@@ -50,6 +50,44 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
         cmd2Sink.Events.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ProjectAsync_WithoutCorrelationId_ShouldNotPushToAnySink()
+    {
+        var projector = new WorkflowExecutionAGUIEventProjector(new StaticMapper(
+        [
+            new RunFinishedEvent
+            {
+                ThreadId = "actor-1",
+                RunId = "run-1",
+            },
+        ]));
+
+        var context = new WorkflowExecutionProjectionContext
+        {
+            ProjectionId = "actor-1",
+            CommandId = "cmd-1",
+            RootActorId = "actor-1",
+            WorkflowName = "direct",
+            Input = "hello",
+            StartedAt = DateTimeOffset.UtcNow,
+        };
+
+        var cmd1Sink = new RecordingSink();
+        var cmd2Sink = new RecordingSink();
+
+        context.AttachLiveSink("cmd-1", cmd1Sink);
+        context.AttachLiveSink("cmd-2", cmd2Sink);
+
+        await projector.ProjectAsync(context, new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+
+        cmd1Sink.Events.Should().BeEmpty();
+        cmd2Sink.Events.Should().BeEmpty();
+    }
+
     private sealed class StaticMapper : IEventEnvelopeToAGUIEventMapper
     {
         private readonly IReadOnlyList<AGUIEvent> _events;

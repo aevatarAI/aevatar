@@ -5,9 +5,7 @@ namespace Aevatar.Workflow.Projection.Reducers;
 
 public sealed class StepCompletedEventReducer : WorkflowExecutionEventReducerBase<StepCompletedEvent>
 {
-    public override int Order => 20;
-
-    protected override void Reduce(
+    protected override bool Reduce(
         WorkflowExecutionReport report,
         WorkflowExecutionProjectionContext context,
         EventEnvelope envelope,
@@ -32,5 +30,7 @@ public sealed class StepCompletedEventReducer : WorkflowExecutionEventReducerBas
             step.StepType,
             envelope.Payload?.TypeUrl ?? "",
             step.CompletionMetadata);
+
+        return true;
     }
 }

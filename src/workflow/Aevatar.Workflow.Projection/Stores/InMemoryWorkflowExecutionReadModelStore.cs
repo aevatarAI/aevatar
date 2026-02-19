@@ -69,6 +69,8 @@ public sealed class InMemoryWorkflowExecutionReadModelStore
         WorkflowName = source.WorkflowName,
         RootActorId = source.RootActorId,
         CommandId = source.CommandId,
+        StateVersion = source.StateVersion,
+        LastEventId = source.LastEventId,
         StartedAt = source.StartedAt,
         EndedAt = source.EndedAt,
         DurationMs = source.DurationMs,

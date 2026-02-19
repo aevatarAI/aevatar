@@ -1,14 +1,14 @@
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 /// <summary>
-/// Generic projector coordinator that executes an ordered projector pipeline.
+/// Generic projector coordinator that executes projectors in registration order.
 /// </summary>
 public class ProjectionCoordinator<TContext, TTopology> : IProjectionCoordinator<TContext, TTopology>
 {
     private readonly IReadOnlyList<IProjectionProjector<TContext, TTopology>> _projectors;
 
     public ProjectionCoordinator(IEnumerable<IProjectionProjector<TContext, TTopology>> projectors) =>
-        _projectors = projectors.OrderBy(x => x.Order).ToList();
+        _projectors = projectors.ToList();
 
     public async Task InitializeAsync(TContext context, CancellationToken ct = default)
     {

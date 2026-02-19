@@ -1,6 +1,8 @@
+using Aevatar.AI.Projection.Reducers;
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.Appliers;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
@@ -21,7 +23,8 @@ public class WorkflowExecutionReadModelProjectorTests
         new StartWorkflowEventReducer(),
         new StepRequestEventReducer(),
         new StepCompletedEventReducer(),
-        new TextMessageEndEventReducer(),
+        new TextMessageEndProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
+            [new WorkflowTextMessageEndEventApplier()]),
         new WorkflowCompletedEventReducer(),
     ];
 
@@ -162,6 +165,44 @@ public class WorkflowExecutionReadModelProjectorTests
         var report = await store.GetAsync("root");
         report.Should().NotBeNull();
         report!.Timeline.Count(x => x.Stage == "step.request").Should().Be(1);
+        report.StateVersion.Should().Be(1);
+        report.LastEventId.Should().Be("evt-dup-1");
+    }
+
+    [Fact]
+    public async Task Projector_NoOpReducer_ShouldNotAdvanceStateVersion()
+    {
+        var store = new InMemoryWorkflowExecutionReadModelStore();
+        IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>[] reducers =
+        [
+            new TextMessageStartProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>([]),
+        ];
+        var projector = new WorkflowExecutionReadModelProjector(store, reducers);
+        var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>([projector]);
+
+        var context = new WorkflowExecutionProjectionContext
+        {
+            ProjectionId = "projection-noop",
+            CommandId = "cmd-noop",
+            RootActorId = "root",
+            WorkflowName = "direct",
+            StartedAt = DateTimeOffset.UtcNow,
+            Input = "hello",
+        };
+
+        await coordinator.InitializeAsync(context);
+        await coordinator.ProjectAsync(context, Wrap(new AIEvents.TextMessageStartEvent
+        {
+            SessionId = "wf-run-1:s1",
+        }, id: "evt-noop-1"));
+        await coordinator.CompleteAsync(context, []);
+
+        var report = await store.GetAsync("root");
+        report.Should().NotBeNull();
+        report!.StateVersion.Should().Be(0);
+        report.LastEventId.Should().BeEmpty();
+        report.Timeline.Should().BeEmpty();
+        report.RoleReplies.Should().BeEmpty();
     }
 
     [Fact]

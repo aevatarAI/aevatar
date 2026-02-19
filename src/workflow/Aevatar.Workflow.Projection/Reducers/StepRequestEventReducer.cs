@@ -5,9 +5,7 @@ namespace Aevatar.Workflow.Projection.Reducers;
 
 public sealed class StepRequestEventReducer : WorkflowExecutionEventReducerBase<StepRequestEvent>
 {
-    public override int Order => 10;
-
-    protected override void Reduce(
+    protected override bool Reduce(
         WorkflowExecutionReport report,
         WorkflowExecutionProjectionContext context,
         EventEnvelope envelope,
@@ -30,5 +28,7 @@ public sealed class StepRequestEventReducer : WorkflowExecutionEventReducerBase<
             evt.StepType,
             envelope.Payload?.TypeUrl ?? "",
             step.RequestParameters);
+
+        return true;
     }
 }

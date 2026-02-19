@@ -31,6 +31,8 @@
 | Runtime Impl | `Aevatar.CQRS.Runtime.Implementations.Wolverine` / `MassTransit` | 命令总线具体实现 |
 | Projection Abstractions | `Aevatar.CQRS.Projection.Abstractions` | 投影生命周期、分发、订阅、读模型契约 |
 | Projection Core | `Aevatar.CQRS.Projection.Core` | 通用投影协调与订阅复用实现 |
+| Foundation Projection | `Aevatar.Foundation.Projection` | 读模型最小基类、通用读侧能力接口（Timeline/RoleReplies） |
+| AI Projection | `Aevatar.AI.Projection` | AI 通用事件 reducer（TextMessage/Tool）与事件 applier 模式 |
 
 ## 4. 总体架构图
 
@@ -140,7 +142,8 @@ Projection 内核由 `Aevatar.CQRS.Projection.Core` 提供，职责拆分：
 2. `ProjectionSubscriptionRegistry`：按 `actorId` 注册/注销投影上下文。
 3. `ActorStreamSubscriptionHub`：同一 actor 底层订阅复用，逻辑处理器多播。
 4. `ProjectionDispatcher`：统一事件分发入口。
-5. `ProjectionCoordinator`：按 `Order` 调度多个 projector。
+5. `ProjectionCoordinator`：按服务注册顺序调度多个 projector。
+6. `IProjectionEventApplier<,,>`：事件解析后对 read model 的细粒度 apply 扩展点。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -155,7 +158,10 @@ flowchart LR
   PJ2 --> OUT["Live Output Sink"]
 ```
 
-说明：CQRS 与 AGUI 输出统一走同一事件输入与投影管线，只是 projector 分支不同。
+说明：CQRS 与 AGUI 输出统一走同一事件输入与投影管线，只是 projector 分支不同。  
+当前推荐模式：`Reducer` 负责 `TypeUrl` 精确匹配与反序列化，`Applier` 负责 read model 字段变换。
+变更语义约束：`Reducer/Applier` 返回 `mutated`，仅在 read model 实际变更时推进 `StateVersion/LastEventId`。
+并发隔离约束：live sink 仅按 `EventEnvelope.CorrelationId` 精确匹配，不允许空 correlation 回退到广播。
 
 ## 9. Runtime 实现并行策略
 
@@ -228,8 +234,9 @@ flowchart LR
 
 1. 新命令类型：新增 `ICommandHandler<TCommand>`。
 2. 新读模型：新增 projector/reducer + `IProjectionReadModelStore` 实现。
-3. 新运行时：实现 `ICommandBus/ICommandScheduler` 并在 Hosting 层接入。
-4. 新持久化：替换 `ICommandStateStore/IInboxStore/IOutboxStore/IDeadLetterStore`。
+3. 事件字段映射扩展：新增 `IProjectionEventApplier<TReadModel, TContext, TEvent>` 实现。
+4. 新运行时：实现 `ICommandBus/ICommandScheduler` 并在 Hosting 层接入。
+5. 新持久化：替换 `ICommandStateStore/IInboxStore/IOutboxStore/IDeadLetterStore`。
 
 禁止反模式：
 

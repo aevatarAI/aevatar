@@ -2,9 +2,7 @@ namespace Aevatar.Demos.CaseProjection.Reducers;
 
 public sealed class CaseOwnerAssignedEventReducer : CaseProjectionEventReducerBase<CaseOwnerAssignedEvent>
 {
-    public override int Order => 10;
-
-    protected override void Reduce(
+    protected override bool Reduce(
         CaseProjectionReadModel readModel,
         CaseProjectionContext context,
         EventEnvelope envelope,
@@ -23,5 +21,7 @@ public sealed class CaseOwnerAssignedEventReducer : CaseProjectionEventReducerBa
             {
                 ["owner_id"] = evt.OwnerId,
             });
+
+        return true;
     }
 }

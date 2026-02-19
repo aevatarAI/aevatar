@@ -13,25 +13,25 @@ public abstract class WorkflowExecutionEventReducerBase<TEvent>
 {
     private static readonly string _eventTypeUrl = Any.Pack(new TEvent()).TypeUrl;
 
-    public abstract int Order { get; }
-
     public string EventTypeUrl => _eventTypeUrl;
 
-    public void Reduce(
+    public bool Reduce(
         WorkflowExecutionReport report,
         WorkflowExecutionProjectionContext context,
         EventEnvelope envelope,
         DateTimeOffset now)
     {
         var payload = envelope.Payload;
-        if (payload == null) return;
-        if (!string.Equals(payload.TypeUrl, _eventTypeUrl, StringComparison.Ordinal)) return;
+        if (payload == null)
+            return false;
+        if (!string.Equals(payload.TypeUrl, _eventTypeUrl, StringComparison.Ordinal))
+            return false;
 
         var evt = payload.Unpack<TEvent>();
-        Reduce(report, context, envelope, evt, now);
+        return Reduce(report, context, envelope, evt, now);
     }
 
-    protected abstract void Reduce(
+    protected abstract bool Reduce(
         WorkflowExecutionReport report,
         WorkflowExecutionProjectionContext context,
         EventEnvelope envelope,

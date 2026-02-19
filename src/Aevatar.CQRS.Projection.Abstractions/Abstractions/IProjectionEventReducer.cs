@@ -5,11 +5,9 @@ namespace Aevatar.CQRS.Projection.Abstractions;
 /// </summary>
 public interface IProjectionEventReducer<in TReadModel, in TContext>
 {
-    int Order { get; }
-
     string EventTypeUrl { get; }
 
-    void Reduce(
+    bool Reduce(
         TReadModel readModel,
         TContext context,
         EventEnvelope envelope,

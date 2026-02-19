@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.AI.Projection.Reducers;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Configuration;
@@ -108,6 +109,35 @@ public class WorkflowExecutionProjectionRegistrationTests
         projectors.Should().NotBeEmpty();
     }
 
+    [Fact]
+    public void AddWorkflowExecutionProjectionCQRS_ShouldRegisterOnlyMappedAIReducers()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowExecutionProjectionCQRS();
+
+        using var provider = services.BuildServiceProvider();
+        var reducerTypes = provider
+            .GetServices<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>()
+            .Select(x => x.GetType())
+            .ToList();
+
+        reducerTypes.Should().Contain(x =>
+            x.IsGenericType &&
+            x.GetGenericTypeDefinition() == typeof(TextMessageEndProjectionReducer<,>));
+        reducerTypes.Should().NotContain(x =>
+            x.IsGenericType &&
+            x.GetGenericTypeDefinition() == typeof(TextMessageStartProjectionReducer<,>));
+        reducerTypes.Should().NotContain(x =>
+            x.IsGenericType &&
+            x.GetGenericTypeDefinition() == typeof(TextMessageContentProjectionReducer<,>));
+        reducerTypes.Should().NotContain(x =>
+            x.IsGenericType &&
+            x.GetGenericTypeDefinition() == typeof(ToolCallProjectionReducer<,>));
+        reducerTypes.Should().NotContain(x =>
+            x.IsGenericType &&
+            x.GetGenericTypeDefinition() == typeof(ToolResultProjectionReducer<,>));
+    }
+
     private static EventEnvelope Wrap(IMessage evt, string publisherId = "test") => new()
     {
         Id = Guid.NewGuid().ToString("N"),
@@ -119,9 +149,7 @@ public class WorkflowExecutionProjectionRegistrationTests
 
     public sealed class CustomChatRequestReducer : WorkflowExecutionEventReducerBase<ChatRequestEvent>
     {
-        public override int Order => 1000;
-
-        protected override void Reduce(
+        protected override bool Reduce(
             WorkflowExecutionReport report,
             WorkflowExecutionProjectionContext context,
             EventEnvelope envelope,
@@ -136,6 +164,8 @@ public class WorkflowExecutionProjectionRegistrationTests
                 AgentId = envelope.PublisherId ?? "",
                 EventType = envelope.Payload?.TypeUrl ?? "",
             });
+
+            return true;
         }
     }
 }

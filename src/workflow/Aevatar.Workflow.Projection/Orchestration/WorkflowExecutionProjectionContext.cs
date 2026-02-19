@@ -79,6 +79,14 @@ public sealed class WorkflowExecutionProjectionContext
         if (string.IsNullOrWhiteSpace(commandId))
             return _liveSinks.Keys.ToList();
 
+        return GetLiveSinksForCommand(commandId);
+    }
+
+    public IReadOnlyList<IWorkflowRunEventSink> GetLiveSinksForCommand(string commandId)
+    {
+        if (string.IsNullOrWhiteSpace(commandId))
+            return [];
+
         return _liveSinks
             .Where(x => string.Equals(x.Value, commandId, StringComparison.Ordinal))
             .Select(x => x.Key)

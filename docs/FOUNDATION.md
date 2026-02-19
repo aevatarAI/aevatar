@@ -117,36 +117,37 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 - **订阅与编排内核** 在 `Aevatar.CQRS.Projection.Core`：
   - `ActorStreamSubscriptionHub<TMessage>`：按 `actorId` 复用底层 stream 订阅
-  - `ProjectionSubscriptionRegistry<,>`：维护 run 级激活态与完成态
+  - `ProjectionSubscriptionRegistry<,>`：维护 actor 级投影上下文激活态
   - `ProjectionCoordinator<,>`：一对多分发 projector
   - `ProjectionLifecycleService<,>`：统一 `start/wait/complete`
+- **读模型抽象分层**：
+  - `Aevatar.Foundation.Projection`：提供读模型最小公共字段（`RootActorId/CommandId/StateVersion/LastEventId`）与通用能力接口（Timeline / RoleReplies）
+  - `Aevatar.AI.Projection`：提供 AI 通用事件 reducer（`TextMessage*` / `Tool*`）和 `IProjectionEventApplier<,,>` 扩展模式
 - **WorkflowExecution 业务扩展** 在 `Aevatar.Workflow.Projection`：
-  - `IWorkflowExecutionProjectionService` 管理 run 级投影生命周期与查询
-  - `WorkflowExecutionReadModelProjector` + reducers 生成 `WorkflowExecutionReport`
-  - `WorkflowExecutionRunIdResolver` 负责从事件中解析 run 归属
+  - `WorkflowExecutionProjectionService` 管理 actor 投影上下文与查询
+  - `WorkflowExecutionReadModelProjector` 负责事件驱动 read model 落库
+  - 业务字段映射通过 `IProjectionEventApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext, TEvent>` 扩展
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
-  - `IWorkflowExecutionRunOrchestrator` 负责 start/wait/complete/rollback
-  - `WorkflowChatRunApplicationService` 统一执行入口与异常回滚
-  - `WorkflowExecutionQueryApplicationService` 统一查询与 DTO 映射
+  - `WorkflowChatRunApplicationService` 统一命令执行入口
+  - `WorkflowExecutionQueryApplicationService` 提供读侧查询
 - **宿主职责** 在 `Aevatar.Workflow.Host.Api`：
   - 仅做协议适配（HTTP/SSE/WebSocket）
   - 仅依赖 `Aevatar.Workflow.Application.Abstractions`
-  - 暴露 `/api/agents`、`/api/workflows`、`/api/runs*`（运行查询可开关）
+  - 暴露 `/api/agents`、`/api/workflows`（运行查询按配置开关）
 - **输出分支**：
   - `WorkflowExecutionReadModelProjector` 写入 read model store
-  - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS）
+  - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS），与 CQRS 读模型共享同一输入事件流
 
-运行语义约束（当前默认）：
+运行语义约束（当前实现）：
 
-- 订阅粒度是 Actor 级，不是 run 级。
-- `EnableRunEventIsolation = false` 时采用 `actor_shared` 语义（同一 Actor 的事件可被多个 run 上下文观察到）。
-- `EnableRunEventIsolation = true` 时由 projector 基于 runId 做过滤。
+- Stream 订阅粒度是 actor 级；live sink 分发粒度是 command/correlation 级。
+- `WorkflowExecutionAGUIEventProjector` 严格按 `EventEnvelope.CorrelationId` 匹配 sink，不做“空 correlation 广播”。
+- `WorkflowExecutionReadModelProjector` 仅在 read model 发生实际变更时记录 `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
 
 详细关系见：
 
 - `src/Aevatar.CQRS.Projection.Core/README.md`
 - `src/workflow/Aevatar.Workflow.Projection/README.md`
-- `docs/IDENTIFIER_RELATIONSHIPS.md`
 
 ## 测试项目
 

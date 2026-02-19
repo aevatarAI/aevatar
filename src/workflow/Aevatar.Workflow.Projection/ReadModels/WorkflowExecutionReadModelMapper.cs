@@ -11,6 +11,8 @@ public sealed class WorkflowExecutionReadModelMapper
             ActorId = source.RootActorId,
             WorkflowName = source.WorkflowName,
             LastCommandId = source.CommandId,
+            StateVersion = source.StateVersion,
+            LastEventId = source.LastEventId,
             LastUpdatedAt = source.EndedAt,
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,

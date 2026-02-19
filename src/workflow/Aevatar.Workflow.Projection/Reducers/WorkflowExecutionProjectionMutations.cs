@@ -4,6 +4,18 @@ namespace Aevatar.Workflow.Projection.Reducers;
 
 internal static class WorkflowExecutionProjectionMutations
 {
+    public static void RecordProjectedEvent(WorkflowExecutionReport report, EventEnvelope envelope)
+    {
+        var id = envelope.Id;
+        if (!string.IsNullOrWhiteSpace(id) &&
+            string.Equals(report.LastEventId, id, StringComparison.Ordinal))
+            return;
+
+        report.StateVersion++;
+        if (!string.IsNullOrWhiteSpace(id))
+            report.LastEventId = id;
+    }
+
     public static WorkflowExecutionStepTrace GetOrCreateStep(WorkflowExecutionReport report, string stepId)
     {
         var step = report.Steps.FirstOrDefault(x => x.StepId == stepId);

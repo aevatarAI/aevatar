@@ -10,6 +10,8 @@ public sealed class WorkflowActorSnapshot
     public string ActorId { get; set; } = string.Empty;
     public string WorkflowName { get; set; } = string.Empty;
     public string LastCommandId { get; set; } = string.Empty;
+    public long StateVersion { get; set; }
+    public string LastEventId { get; set; } = string.Empty;
     public DateTimeOffset LastUpdatedAt { get; set; }
     public bool? LastSuccess { get; set; }
     public string LastOutput { get; set; } = string.Empty;
@@ -68,6 +70,8 @@ public sealed class WorkflowRunReport
     public string WorkflowName { get; set; } = string.Empty;
     public string RootActorId { get; set; } = string.Empty;
     public string CommandId { get; set; } = string.Empty;
+    public long StateVersion { get; set; }
+    public string LastEventId { get; set; } = string.Empty;
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset EndedAt { get; set; }
     public double DurationMs { get; set; }
