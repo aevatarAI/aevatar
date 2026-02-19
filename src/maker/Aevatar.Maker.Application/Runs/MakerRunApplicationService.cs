@@ -1,9 +1,6 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Maker.Application.Abstractions.Runs;
 using Aevatar.Maker.Projection;
-using Aevatar.Workflow.Core;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Maker.Application.Runs;
@@ -12,15 +9,18 @@ public sealed class MakerRunApplicationService : IMakerRunApplicationService
 {
     private readonly IActorRuntime _runtime;
     private readonly IStreamProvider _streamProvider;
+    private readonly IMakerRunActorAdapter _actorAdapter;
     private readonly ILogger<MakerRunApplicationService> _logger;
 
     public MakerRunApplicationService(
         IActorRuntime runtime,
         IStreamProvider streamProvider,
+        IMakerRunActorAdapter actorAdapter,
         ILogger<MakerRunApplicationService> logger)
     {
         _runtime = runtime;
         _streamProvider = streamProvider;
+        _actorAdapter = actorAdapter;
         _logger = logger;
     }
 
@@ -28,62 +28,33 @@ public sealed class MakerRunApplicationService : IMakerRunApplicationService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var actorCreated = false;
-        IActor actor;
-
-        if (!string.IsNullOrWhiteSpace(request.ActorId))
-        {
-            actor = await _runtime.GetAsync(request.ActorId)
-                ?? throw new InvalidOperationException($"Actor '{request.ActorId}' not found.");
-        }
-        else
-        {
-            actor = await _runtime.CreateAsync<WorkflowGAgent>(ct: ct);
-            actorCreated = true;
-        }
-
-        if (actor.Agent is not WorkflowGAgent workflow)
-            throw new InvalidOperationException("Maker currently requires WorkflowGAgent actor.");
-
-        workflow.ConfigureWorkflow(request.WorkflowYaml, request.WorkflowName);
+        var resolved = await _actorAdapter.ResolveOrCreateAsync(_runtime, request.ActorId, ct);
+        var actor = resolved.Actor;
+        var actorCreated = resolved.Created;
+        await _actorAdapter.ConfigureAsync(actor, request, ct);
 
         var startedAt = DateTimeOffset.UtcNow;
         var started = new MakerRunStarted(actor.Id, request.WorkflowName, startedAt);
         var projection = new MakerRunProjectionAccumulator(actor.Id);
         var stream = _streamProvider.GetStream(actor.Id);
-        var completedTcs = new TaskCompletionSource<WorkflowCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completedTcs = new TaskCompletionSource<MakerRunCompletion>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var subscription = await stream.SubscribeAsync<EventEnvelope>(envelope =>
         {
             projection.RecordEnvelope(envelope);
-            var payload = envelope.Payload;
-            if (payload is null)
-                return Task.CompletedTask;
-
-            if (payload.Is(WorkflowCompletedEvent.Descriptor))
-                completedTcs.TrySetResult(payload.Unpack<WorkflowCompletedEvent>());
+            if (_actorAdapter.TryResolveCompletion(envelope, out var completion))
+                completedTcs.TrySetResult(completion);
 
             return Task.CompletedTask;
         }, ct);
 
-        await actor.HandleEventAsync(new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ChatRequestEvent
-            {
-                Prompt = request.Input,
-                SessionId = $"maker-{Guid.NewGuid():N}",
-            }),
-            PublisherId = "maker.application",
-            Direction = EventDirection.Self,
-        }, ct);
+        await actor.HandleEventAsync(_actorAdapter.CreateStartEnvelope(request), ct);
 
         var timeout = request.Timeout ?? TimeSpan.FromMinutes(10);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(timeout);
 
-        WorkflowCompletedEvent? completed = null;
+        MakerRunCompletion? completed = null;
         var timedOut = false;
 
         try

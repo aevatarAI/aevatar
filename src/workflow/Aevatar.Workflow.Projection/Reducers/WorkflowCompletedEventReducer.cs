@@ -30,8 +30,8 @@ public sealed class WorkflowCompletedEventReducer : WorkflowExecutionEventReduce
             envelope.Payload?.TypeUrl ?? "",
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["workflow_name"] = evt.WorkflowName,
-                ["command_id"] = report.CommandId,
+                [WorkflowExecutionTimelineMetadataKeys.WorkflowName] = evt.WorkflowName,
+                [WorkflowExecutionTimelineMetadataKeys.CommandId] = report.CommandId,
             });
     }
 }

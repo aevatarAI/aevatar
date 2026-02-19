@@ -6,4 +6,7 @@
     <AssemblyName>Aevatar.Maker.Application.Abstractions</AssemblyName>
     <RootNamespace>Aevatar.Maker.Application.Abstractions</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+  </ItemGroup>
 </Project>

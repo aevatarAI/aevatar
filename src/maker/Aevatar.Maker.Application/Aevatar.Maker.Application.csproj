@@ -10,9 +10,7 @@
     <ProjectReference Include="..\Aevatar.Maker.Application.Abstractions\Aevatar.Maker.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Maker.Core\Aevatar.Maker.Core.csproj" />
     <ProjectReference Include="..\Aevatar.Maker.Projection\Aevatar.Maker.Projection.csproj" />
-    <ProjectReference Include="..\..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
-    <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
