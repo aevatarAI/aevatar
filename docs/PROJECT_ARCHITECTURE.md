@@ -68,10 +68,10 @@ flowchart LR
 
 ### 3.4 Maker 扩展 Workflow（语义约束）
 
-1. `Maker` 定义为 `Workflow` 的扩展能力，允许受控的直接项目引用。
-2. 允许：`src/maker/* -> src/workflow/Aevatar.Workflow.Core`（必要时可含 `Application.Abstractions`）。
+1. `Maker` 定义为 `Workflow` 的扩展能力，允许直接项目引用与能力继承。
+2. 允许：`src/maker/* -> src/workflow/*`（Maker 可直接继承 Workflow 能力实现）。
 3. 禁止：`src/workflow/* -> src/maker/*`（禁止反向依赖）。
-4. 禁止：`src/maker/* -> src/workflow/Aevatar.Workflow.Infrastructure|Host.Api|Presentation.*`（禁止跨到 Workflow 实现层与宿主层）。
+4. 禁止：`src/maker/* -> src/workflow/Aevatar.Workflow.Host.Api`（宿主入口不作为能力继承目标）。
 5. 如未来需要独立发布，再抽 `Workflow.Contracts`，但当前不作为强制前置条件。
 
 ## 4. CQRS 接入（无独立 Runtime 命令总线层）
@@ -146,8 +146,8 @@ CI（`.github/workflows/ci.yml`）应执行：
 6. 强制 Mainnet Host 与 Maker Host 使用统一默认宿主接入扩展（`AddAevatarDefaultHost` / `UseAevatarDefaultHost`）。
 7. 禁止 Host/Infrastructure 直接 `AddCqrsCore(...)`。
 8. 禁止 `docs/agents-working-space` 下工作文档被加入 `aevatar.slnx`。
-9. 允许 Maker 对 Workflow 的受控直连（扩展语义），并禁止 Workflow 反向依赖 Maker。
-10. 禁止 Maker 直接依赖 Workflow 的实现层与宿主层（`Infrastructure/Host.Api/Presentation.*`）。
+9. 允许 Maker 对 Workflow 的直接继承与直连（扩展语义），并禁止 Workflow 反向依赖 Maker。
+10. 允许 Maker 直接依赖 Workflow 能力实现层；仅禁止依赖 `Workflow.Host.Api`。
 
 ## 9. 演进路线
 

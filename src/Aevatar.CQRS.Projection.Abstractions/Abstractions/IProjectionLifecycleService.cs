@@ -10,5 +10,7 @@ public interface IProjectionLifecycleService<in TContext, in TCompletion>
 
     Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default);
 
+    Task StopAsync(TContext context, CancellationToken ct = default);
+
     Task CompleteAsync(TContext context, TCompletion completion, CancellationToken ct = default);
 }

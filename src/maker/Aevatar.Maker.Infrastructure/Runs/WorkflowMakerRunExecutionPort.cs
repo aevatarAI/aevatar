@@ -109,6 +109,15 @@ public sealed class WorkflowMakerRunExecutionPort : IMakerRunExecutionPort
             {
                 try
                 {
+                    await _projectionPort.ReleaseActorProjectionAsync(actor.Id, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Release projection failed after maker run. actor={ActorId}", actor.Id);
+                }
+
+                try
+                {
                     await _runtime.DestroyAsync(actor.Id, ct);
                 }
                 catch (Exception ex)

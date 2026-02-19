@@ -30,6 +30,9 @@ public sealed class ProjectionLifecycleService<TContext, TCompletion>
     public Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default) =>
         _dispatcher.DispatchAsync(context, envelope, ct);
 
+    public Task StopAsync(TContext context, CancellationToken ct = default) =>
+        _subscriptionRegistry.UnregisterAsync(context.RootActorId, ct);
+
     public async Task CompleteAsync(TContext context, TCompletion completion, CancellationToken ct = default)
     {
         await _subscriptionRegistry.UnregisterAsync(context.RootActorId, ct);

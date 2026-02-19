@@ -27,6 +27,10 @@ public interface IWorkflowExecutionProjectionPort
         IWorkflowRunEventSink sink,
         CancellationToken ct = default);
 
+    Task ReleaseActorProjectionAsync(
+        string actorId,
+        CancellationToken ct = default);
+
     Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
         string actorId,
         CancellationToken ct = default);

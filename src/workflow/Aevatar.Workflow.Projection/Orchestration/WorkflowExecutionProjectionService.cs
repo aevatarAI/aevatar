@@ -114,6 +114,20 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         return Task.CompletedTask;
     }
 
+    public async Task ReleaseActorProjectionAsync(
+        string actorId,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!ProjectionEnabled || string.IsNullOrWhiteSpace(actorId))
+            return;
+
+        if (!_contextsByActorId.TryRemove(actorId, out var context))
+            return;
+
+        await _lifecycle.StopAsync(context, ct);
+    }
+
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
         string actorId,
         CancellationToken ct = default)

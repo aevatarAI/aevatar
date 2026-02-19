@@ -80,13 +80,13 @@ jobs:
             exit 1
           fi
 
-          maker_to_workflow_implementation_violations="$(
-            rg -n "Aevatar\.Workflow\.(Infrastructure|Host\.Api|Projection|Presentation\.AGUIAdapter)\.csproj" src/maker -g '*.csproj' || true
+          maker_to_workflow_host_violations="$(
+            rg -n "Aevatar\.Workflow\.Host\.Api\.csproj" src/maker -g '*.csproj' || true
           )"
 
-          if [ -n "$maker_to_workflow_implementation_violations" ]; then
-            echo "$maker_to_workflow_implementation_violations"
-            echo "Maker projects must not reference Workflow implementation/host/presentation projects directly."
+          if [ -n "$maker_to_workflow_host_violations" ]; then
+            echo "$maker_to_workflow_host_violations"
+            echo "Maker projects must not reference Workflow.Host.Api directly."
             exit 1
           fi
 

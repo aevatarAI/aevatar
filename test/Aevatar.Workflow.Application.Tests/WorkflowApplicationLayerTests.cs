@@ -302,6 +302,11 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
         CancellationToken ct = default) =>
         Task.CompletedTask;
 
+    public Task ReleaseActorProjectionAsync(
+        string actorId,
+        CancellationToken ct = default) =>
+        Task.CompletedTask;
+
     public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
     {
         SnapshotByActorId.TryGetValue(actorId, out var snapshot);

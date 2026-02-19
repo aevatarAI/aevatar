@@ -2,6 +2,12 @@
 
 `src/maker` 提供 MAKER 能力实现，并复用统一运行时与 CQRS 约束。
 
+## 能力继承约束
+
+- 允许：`Maker -> Workflow` 能力实现层直接继承（`Core/Application/Projection/Presentation/Infrastructure`）。
+- 禁止：`Maker -> Workflow.Host.Api`（宿主入口不作为能力继承目标）。
+- 禁止：`Workflow -> Maker` 反向依赖。
+
 ## 分层
 
 - `Aevatar.Maker.Core`：领域模块（`maker_recursive`、`maker_vote`）与模块工厂。

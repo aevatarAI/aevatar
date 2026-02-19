@@ -142,6 +142,47 @@ public class WorkflowExecutionProjectionServiceTests
         await sink.DisposeAsync();
     }
 
+    [Fact]
+    public async Task ReleaseActorProjectionAsync_ShouldStopReceivingNewEvents()
+    {
+        var service = CreateService(
+            new WorkflowExecutionProjectionOptions
+            {
+                Enabled = true,
+                EnableActorQueryEndpoints = true,
+            },
+            out var streams,
+            out _);
+
+        await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
+        await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "direct",
+            Input = "hello",
+        }));
+
+        await WaitUntilAsync(async () =>
+        {
+            var timelineItems = await service.ListActorTimelineAsync("root", 50);
+            return timelineItems.Any(x => x.Stage == "workflow.start");
+        });
+
+        var beforeRelease = await service.ListActorTimelineAsync("root", 50);
+        beforeRelease.Should().ContainSingle(x => x.Stage == "workflow.start");
+
+        await service.ReleaseActorProjectionAsync("root");
+        await streams.GetStream("root").ProduceAsync(Wrap(new StepRequestEvent
+        {
+            StepId = "s1",
+            StepType = "llm_call",
+            TargetRole = "assistant",
+        }));
+
+        await Task.Delay(50);
+        var afterRelease = await service.ListActorTimelineAsync("root", 50);
+        afterRelease.Count(x => x.Stage == "step.request").Should().Be(0);
+    }
+
     private static WorkflowExecutionProjectionService CreateService(
         WorkflowExecutionProjectionOptions options,
         out InMemoryStreamProvider streams,
