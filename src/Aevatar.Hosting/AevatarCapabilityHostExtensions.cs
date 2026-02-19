@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Aevatar.Bootstrap.Hosting;
+namespace Aevatar.Hosting;
 
 public static class AevatarCapabilityHostExtensions
 {

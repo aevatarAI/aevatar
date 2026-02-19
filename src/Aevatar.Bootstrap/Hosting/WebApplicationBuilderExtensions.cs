@@ -1,6 +1,7 @@
 using Aevatar.Configuration;
 using Aevatar.CQRS.Runtime.Hosting.DependencyInjection;
 using Aevatar.CQRS.Runtime.Hosting.Hosting;
+using Aevatar.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;

@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Routing;
 
-namespace Aevatar.Bootstrap.Hosting;
+namespace Aevatar.Hosting;
 
 public sealed class AevatarCapabilityRegistration
 {

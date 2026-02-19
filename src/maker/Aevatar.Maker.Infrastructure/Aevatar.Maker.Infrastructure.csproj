@@ -9,7 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Maker.Application\Aevatar.Maker.Application.csproj" />
     <ProjectReference Include="..\Aevatar.Maker.Core\Aevatar.Maker.Core.csproj" />
-    <ProjectReference Include="..\..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Hosting\Aevatar.Hosting.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
   </ItemGroup>
   <ItemGroup>

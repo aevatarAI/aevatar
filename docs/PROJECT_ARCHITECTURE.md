@@ -18,6 +18,7 @@
 flowchart TB
     R["aevatar.slnx"] --> SRC["src/"]
     SRC --> MN["src/Aevatar.Mainnet.*"]
+    SRC --> HT["src/Aevatar.Hosting"]
     SRC --> WF["src/workflow/*"]
     SRC --> MK["src/maker/*"]
     SRC --> CQ["src/Aevatar.CQRS.*"]
@@ -53,7 +54,7 @@ flowchart LR
 1. 每个能力提供 Host 入口扩展（`WebApplicationBuilder` 扩展），一行接入能力。
 2. 能力内部可保留 `IServiceCollection` 与 `IEndpointRouteBuilder` 细粒度扩展，供非 Host 场景复用。
 3. 能力 API 契约（请求/响应模型 + endpoint 定义）归属能力项目，不在 Host 重复定义。
-4. 能力通过 `AddAevatarCapability(...)` 声明端点映射，默认由 `UseAevatarDefaultHost()` 统一挂载。
+4. 能力通过 `Aevatar.Hosting` 的 `AddAevatarCapability(...)` 声明端点映射，默认由 `UseAevatarDefaultHost()` 统一挂载。
 5. 能力之间通过现有事件与应用服务协作，不要求新增通用微服务基础设施。
 
 ## 4. CQRS Runtime 统一接入

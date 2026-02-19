@@ -45,6 +45,11 @@ jobs:
             exit 1
           fi
 
+          if rg -n "docs\\\\SOLUTION_AUDIT_REPORT_" aevatar.slnx; then
+            echo "Working audit documents must not be added to solution."
+            exit 1
+          fi
+
           if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
             echo "Found sync-over-async usage."
             exit 1
@@ -65,12 +70,12 @@ jobs:
             src/workflow/Aevatar.Workflow.Host.Api/Program.cs \
             src/maker/Aevatar.Maker.Host.Api/Program.cs
           do
-            if ! rg -n "UseAevatarCqrsRuntime\(builder\.Configuration\)" "$host_program" >/dev/null; then
-              echo "Missing UseAevatarCqrsRuntime in $host_program"
+            if ! rg -n "AddAevatarDefaultHost\(" "$host_program" >/dev/null; then
+              echo "Missing AddAevatarDefaultHost in $host_program"
               exit 1
             fi
-            if ! rg -n "AddAevatarCqrsRuntime\(builder\.Configuration\)" "$host_program" >/dev/null; then
-              echo "Missing AddAevatarCqrsRuntime in $host_program"
+            if ! rg -n "UseAevatarDefaultHost\(" "$host_program" >/dev/null; then
+              echo "Missing UseAevatarDefaultHost in $host_program"
               exit 1
             fi
           done
@@ -104,7 +109,6 @@ jobs:
             rg -n "IProjectionReadModelStore<|ReadModelStore" \
               src/workflow/Aevatar.Workflow.Application \
               src/workflow/Aevatar.Workflow.Host.Api \
-              src/Aevatar.Mainnet.Application \
               src/Aevatar.Mainnet.Host.Api \
               -g '*.cs' || true
           )"

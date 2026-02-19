@@ -1,4 +1,4 @@
-using Aevatar.Bootstrap.Hosting;
+using Aevatar.Hosting;
 using Aevatar.Maker.Infrastructure.DependencyInjection;
 using Microsoft.AspNetCore.Builder;
 
