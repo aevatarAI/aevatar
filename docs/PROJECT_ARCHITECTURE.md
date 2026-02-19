@@ -19,6 +19,7 @@ flowchart TB
     R["aevatar.slnx"] --> SRC["src/"]
     SRC --> MN["src/Aevatar.Mainnet.*"]
     SRC --> HT["src/Aevatar.Hosting"]
+    SRC --> FRH["src/Aevatar.Foundation.Runtime.Hosting"]
     SRC --> WF["src/workflow/*"]
     SRC --> MK["src/maker/*"]
     SRC --> CQ["src/Aevatar.CQRS.*"]
@@ -56,6 +57,14 @@ flowchart LR
 3. 能力 API 契约（请求/响应模型 + endpoint 定义）归属能力项目，不在 Host 重复定义。
 4. 能力通过 `Aevatar.Hosting` 的 `AddAevatarCapability(...)` 声明端点映射，默认由 `UseAevatarDefaultHost()` 统一挂载。
 5. 能力之间通过现有事件与应用服务协作，不要求新增通用微服务基础设施。
+6. `AddAevatarCapability(...)` 对同名能力注册幂等；若同名能力使用不同端点映射器则启动前失败（fail-fast）。
+7. `MapAevatarCapabilities()` 对重复能力名映射执行冲突检查，禁止重复挂载。
+
+### 3.3 能力 API 契约归属（当前实现）
+
+1. Workflow 能力 API 输入契约定义在 `Aevatar.Workflow.Application.Abstractions`（如 `ChatInput`、`ChatWsCommand`）。
+2. Maker 能力 API 输入契约定义在 `Aevatar.Maker.Application.Abstractions`（如 `MakerRunInput`）。
+3. Infrastructure Endpoint 仅负责协议绑定与参数校验，不重复定义能力输入模型。
 
 ## 4. CQRS Runtime 统一接入
 
@@ -74,6 +83,13 @@ flowchart TB
 1. Host 仅通过 `AddAevatarDefaultHost(...)` + `UseAevatarDefaultHost()` 接入默认运行时。
 2. 业务能力项目不得直接引用 `Runtime.Implementations.*`。
 3. 运行时切换仅通过 `Cqrs:Runtime = Wolverine|MassTransit`。
+
+## 4.1 Actor Runtime 统一接入
+
+1. 默认 Host 通过 `Aevatar.Bootstrap` 统一调用 `AddAevatarActorRuntime(...)`。
+2. Actor Runtime 提供者通过配置键 `ActorRuntime:Provider` 选择，当前默认 `InMemory`。
+3. Mainnet/Subsystem Host 可通过 `EnableActorRestoreOnStartup` 控制启动恢复行为。
+4. `ActorRuntime:RestoreOnStartup` 可通过配置直接控制默认恢复开关。
 
 ## 5. 命令与查询主链路
 
@@ -122,6 +138,8 @@ CI（`.github/workflows/ci.yml`）应执行：
 5. 禁止任何项目新增 `Aevatar.Platform.*` 引用。
 6. 强制 Mainnet Host 与 Maker Host 使用统一 CQRS Runtime 接入扩展。
 7. 禁止 Host/Infrastructure 直接 `AddCqrsCore(...)`。
+8. 禁止 `docs/agents-working-space` 下工作文档被加入 `aevatar.slnx`。
+9. 禁止 `Aevatar.Maker.Application` 直接引用 `Aevatar.Maker.Projection`。
 
 ## 9. 演进路线
 

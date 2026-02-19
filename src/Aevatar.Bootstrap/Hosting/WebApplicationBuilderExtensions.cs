@@ -22,6 +22,8 @@ public sealed class AevatarDefaultHostOptions
 
     public bool EnableConnectorBootstrap { get; set; } = true;
 
+    public bool EnableActorRestoreOnStartup { get; set; } = true;
+
     public bool AutoMapCapabilities { get; set; } = true;
 }
 
@@ -35,6 +37,9 @@ public static class WebApplicationBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         var hostOptions = new AevatarDefaultHostOptions();
+        var restoreOnStartup = builder.Configuration.GetValue<bool?>("ActorRuntime:RestoreOnStartup");
+        if (restoreOnStartup.HasValue)
+            hostOptions.EnableActorRestoreOnStartup = restoreOnStartup.Value;
         configureHost?.Invoke(hostOptions);
 
         builder.Configuration.AddAevatarConfig();
@@ -45,6 +50,9 @@ public static class WebApplicationBuilderExtensions
 
         if (hostOptions.EnableConnectorBootstrap)
             builder.Services.AddHostedService<ConnectorBootstrapHostedService>();
+
+        if (hostOptions.EnableActorRestoreOnStartup)
+            builder.Services.AddHostedService<ActorRestoreHostedService>();
 
         if (hostOptions.EnableCors)
             AddDefaultCorsPolicy(builder, hostOptions.CorsPolicyName);

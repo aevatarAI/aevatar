@@ -50,6 +50,11 @@ jobs:
             exit 1
           fi
 
+          if rg -n "docs[\\\\/]agents-working-space[\\\\/]" aevatar.slnx; then
+            echo "Working documents under docs/agents-working-space must not be added to solution."
+            exit 1
+          fi
+
           if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
             echo "Found sync-over-async usage."
             exit 1
@@ -62,6 +67,11 @@ jobs:
 
           if rg -n "Aevatar\.AI\.Core\.csproj" src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj; then
             echo "Workflows.Core must not reference AI.Core."
+            exit 1
+          fi
+
+          if rg -n "Aevatar\.Maker\.Projection\.csproj" src/maker/Aevatar.Maker.Application/Aevatar.Maker.Application.csproj; then
+            echo "Maker.Application must not reference Maker.Projection directly."
             exit 1
           fi
 

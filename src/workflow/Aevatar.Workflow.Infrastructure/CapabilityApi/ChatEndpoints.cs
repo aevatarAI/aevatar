@@ -8,13 +8,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
-public sealed record ChatInput
-{
-    public required string Prompt { get; init; }
-    public string? Workflow { get; init; }
-    public string? AgentId { get; init; }
-}
-
 public static class WorkflowCapabilityEndpoints
 {
     public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
@@ -211,11 +204,4 @@ public static class WorkflowCapabilityEndpoints
             await ChatWebSocketProtocol.CloseAsync(socket, ct);
         }
     }
-}
-
-public sealed record ChatWsCommand
-{
-    public string Type { get; init; } = "chat.command";
-    public string? RequestId { get; init; }
-    public ChatInput? Payload { get; init; }
 }

@@ -190,17 +190,22 @@ flowchart LR
 
 1. `builder.AddAevatarDefaultHost(...);`
 2. `app.UseAevatarDefaultHost();`
+3. 默认 Host 内部统一完成：
+   `AddAevatarCqrsRuntime(...)` + `AddAevatarActorRuntime(...)`。
 
-目标接入：
+当前接入：
 
 1. `src/Aevatar.Mainnet.Host.Api/Program.cs`
-2. `src/maker/Aevatar.Maker.Host.Api/Program.cs`
+2. `src/workflow/Aevatar.Workflow.Host.Api/Program.cs`
+3. `src/maker/Aevatar.Maker.Host.Api/Program.cs`
 
 约束：
 
-1. `Mainnet Host` 默认打包 `Workflow Capability`，不再以独立 Workflow Host 形式接入。
-2. `Maker Host` 通过引用 Maker 项目并调用 `AddMakerCapability(...)` 接入。
-3. 不允许新增或回流 `Aevatar.Platform.*` 项目引用。
+1. `Mainnet Host` 默认打包 `Workflow Capability`（`AddWorkflowCapability(...)`）。
+2. `Workflow Host` 可作为同一能力的独立部署入口（开发/测试/隔离发布）。
+3. `Maker Host` 通过引用 Maker 项目并调用 `AddMakerCapability(...)` 接入。
+4. `AddAevatarCapability(...)` 对同名能力注册幂等，映射冲突时 fail-fast。
+5. 不允许新增或回流 `Aevatar.Platform.*` 项目引用。
 
 ## 12. 配置基线（`Cqrs:*`）
 
@@ -242,6 +247,8 @@ CI 架构门禁（摘要）：
 2. 禁止字符串匹配事件类型路由（`TypeUrl.Contains`）。
 3. 禁止 Host/Infrastructure 直接拼装 `AddCqrsCore(...)`。
 4. 仅允许 Runtime.Hosting 直接引用 `Runtime.Implementations.*`。
+5. 禁止 `docs/agents-working-space` 工作文档进入 `aevatar.slnx`。
+6. 禁止 `Aevatar.Maker.Application` 直接依赖 `Aevatar.Maker.Projection`。
 
 ## 15. 结论
 
