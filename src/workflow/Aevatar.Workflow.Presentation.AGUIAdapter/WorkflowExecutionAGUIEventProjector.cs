@@ -15,10 +15,14 @@ public sealed class WorkflowExecutionAGUIEventProjector
     : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
 {
     private readonly IEventEnvelopeToAGUIEventMapper _mapper;
+    private readonly IProjectionSessionEventHub<WorkflowRunEvent> _runEventStreamHub;
 
-    public WorkflowExecutionAGUIEventProjector(IEventEnvelopeToAGUIEventMapper mapper)
+    public WorkflowExecutionAGUIEventProjector(
+        IEventEnvelopeToAGUIEventMapper mapper,
+        IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub)
     {
         _mapper = mapper;
+        _runEventStreamHub = runEventStreamHub;
     }
 
     public ValueTask InitializeAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
@@ -30,34 +34,18 @@ public sealed class WorkflowExecutionAGUIEventProjector
     public async ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-
-        var sinks = context.GetLiveSinksForCommand(envelope.CorrelationId ?? string.Empty);
-        if (sinks.Count == 0)
+        var commandId = envelope.CorrelationId;
+        if (string.IsNullOrWhiteSpace(commandId))
             return;
 
         IReadOnlyList<AGUIEvent> aguiEvents = _mapper.Map(envelope);
+        if (aguiEvents.Count == 0)
+            return;
+
         foreach (var aguiEvent in aguiEvents)
         {
             var runEvent = AGUIEventToWorkflowRunEventMapper.Map(aguiEvent);
-            foreach (var sink in sinks)
-            {
-                try
-                {
-                    await sink.PushAsync(runEvent, ct);
-                }
-                catch (WorkflowRunEventSinkBackpressureException)
-                {
-                    continue;
-                }
-                catch (WorkflowRunEventSinkCompletedException)
-                {
-                    context.DetachLiveSink(sink);
-                }
-                catch (InvalidOperationException)
-                {
-                    context.DetachLiveSink(sink);
-                }
-            }
+            await _runEventStreamHub.PublishAsync(context.RootActorId, commandId, runEvent, ct);
         }
     }
 

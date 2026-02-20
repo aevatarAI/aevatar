@@ -15,7 +15,7 @@
 | Actor Runtime Provider | 默认 `InMemory` | 非 `InMemory` provider（Redis/数据库等） |
 | Actor 并发语义 | 单进程内邮箱串行 | 跨节点仍保持“同一 actorId 串行” |
 | Projection 启动并发（Ensure/Release） | 已由 `projection:{rootActorId}` 协调 Actor 串行裁决 | 分布式 Runtime 下保持同一 actorId 单激活 + 邮箱串行 |
-| LiveSink 绑定（Attach/Detach） | lease 句柄本地绑定输出通道 | 多节点场景需配套会话通道或粘性路由 |
+| LiveSink 绑定（Attach/Detach） | 通过 `workflow-run:{actorId}:{commandId}` 事件流订阅/退订 | 分布式 stream provider 下跨节点实时推送 |
 | ReadModel Store | Workflow 默认 InMemory store | 生产默认持久化 read model store |
 | 生产部署建议 | 单实例/开发验证 | 多实例 + 持久化 + 恢复能力 |
 
@@ -31,7 +31,7 @@
 ### 4.1 标识规则
 
 1. 每个工作流根 Actor 映射唯一投影协调 Actor：`projection:{rootActorId}`。
-2. 同一 `rootActorId` 的 `Ensure/Release` 请求都路由到该 Actor；`Attach/Detach` 保持 lease 会话句柄绑定语义。
+2. 同一 `rootActorId` 的 `Ensure/Release` 请求都路由到该 Actor；`Attach/Detach` 通过 `workflow-run:{actorId}:{commandId}` 事件流订阅语义执行。
 
 ### 4.2 职责边界
 
@@ -58,16 +58,16 @@
 
 1. 引入非 InMemory Runtime provider 与持久化 store 实现，并通过 `ActorRuntime:Provider` 切换。
 2. （已完成）实现投影协调 Actor，迁移 `Ensure/Release` 并发裁决到 Actor。
-3. 将 Workflow 投影默认读模型存储切换为持久化实现（InMemory 下沉为开发配置）。
-4. 设计并落地多节点 `Attach/Detach` 实时输出一致性策略（会话通道或粘性路由）。
+3. （已完成）`Attach/Detach` 改为 run-event stream 订阅/退订，移除 `ProjectionContext` 内存 sink 事实态。
+4. 将 Workflow 投影默认读模型存储切换为持久化实现（InMemory 下沉为开发配置）。
 5. 补充门禁与测试：多实例一致性、重启恢复、重复订阅与会话释放。
 
 ## 7. 架构审计评分口径
 
 1. 当前分：按当前代码快照评分（见 `docs/audit-scorecard/architecture-scorecard-2026-02-20.md`）。
 2. 已完成项：投影启动并发（`Ensure/Release`）从进程内门禁迁移至投影协调 Actor。
-3. 目标态加分条件：
+3. 已完成项：`Attach/Detach` 从进程内 sink 绑定迁移为 run-event stream 订阅/退订。
+4. 目标态加分条件：
    - 生产默认使用非 InMemory 读写存储；
-   - 多节点实时输出一致性策略落地；
    - 多节点一致性测试纳入 CI 或发布门禁。
-4. 任何“仅文档声明、未落地实现”的能力不计入评分加分。
+5. 任何“仅文档声明、未落地实现”的能力不计入评分加分。

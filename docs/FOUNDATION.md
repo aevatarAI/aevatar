@@ -147,8 +147,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 运行语义约束（当前实现）：
 
-- Stream 订阅粒度是 actor 级；live sink 分发粒度是 command/correlation 级。
-- `WorkflowExecutionAGUIEventProjector` 严格按 `EventEnvelope.CorrelationId` 匹配 sink，不做“空 correlation 广播”。
+- Stream 订阅粒度是 actor 级；run 输出分发粒度是 command/correlation 级。
+- `WorkflowExecutionAGUIEventProjector` 仅在 `EventEnvelope.CorrelationId` 非空时发布 run-event，并按 `workflow-run:{actorId}:{commandId}` 事件流路由。
 - `WorkflowExecutionReadModelProjector` 仅在 read model 发生实际变更时记录 `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
 
 详细关系见：

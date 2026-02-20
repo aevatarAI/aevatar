@@ -1,9 +1,12 @@
 using System.Runtime.CompilerServices;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.Orchestration;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -12,8 +15,12 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowExecutionAGUIEventProjectorTests
 {
     [Fact]
-    public async Task ProjectAsync_ShouldOnlyPushToSinksMatchingEnvelopeCommandId()
+    public async Task ProjectAsync_ShouldPublishToMatchingCommandStreamOnly()
     {
+        var streams = new InMemoryStreamProvider();
+        var streamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
+            streams,
+            new WorkflowRunEventSessionCodec());
         var projector = new WorkflowExecutionAGUIEventProjector(new StaticMapper(
         [
             new RunFinishedEvent
@@ -21,7 +28,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
                 ThreadId = "actor-1",
                 RunId = "run-1",
             },
-        ]));
+        ]), streamHub);
 
         var context = new WorkflowExecutionProjectionContext
         {
@@ -36,8 +43,14 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
         var cmd1Sink = new RecordingSink();
         var cmd2Sink = new RecordingSink();
 
-        context.AttachLiveSink("cmd-1", cmd1Sink);
-        context.AttachLiveSink("cmd-2", cmd2Sink);
+        await using var cmd1Subscription = await streamHub.SubscribeAsync(
+            "actor-1",
+            "cmd-1",
+            evt => cmd1Sink.PushAsync(evt));
+        await using var cmd2Subscription = await streamHub.SubscribeAsync(
+            "actor-1",
+            "cmd-2",
+            evt => cmd2Sink.PushAsync(evt));
 
         await projector.ProjectAsync(context, new EventEnvelope
         {
@@ -45,14 +58,19 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             CorrelationId = "cmd-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await WaitUntilAsync(() => cmd1Sink.Events.Count == 1);
 
         cmd1Sink.Events.Should().ContainSingle(x => x is WorkflowRunFinishedEvent);
         cmd2Sink.Events.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ProjectAsync_WithoutCorrelationId_ShouldNotPushToAnySink()
+    public async Task ProjectAsync_WithoutCorrelationId_ShouldNotPublishToAnyCommandStream()
     {
+        var streams = new InMemoryStreamProvider();
+        var streamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
+            streams,
+            new WorkflowRunEventSessionCodec());
         var projector = new WorkflowExecutionAGUIEventProjector(new StaticMapper(
         [
             new RunFinishedEvent
@@ -60,7 +78,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
                 ThreadId = "actor-1",
                 RunId = "run-1",
             },
-        ]));
+        ]), streamHub);
 
         var context = new WorkflowExecutionProjectionContext
         {
@@ -75,17 +93,41 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
         var cmd1Sink = new RecordingSink();
         var cmd2Sink = new RecordingSink();
 
-        context.AttachLiveSink("cmd-1", cmd1Sink);
-        context.AttachLiveSink("cmd-2", cmd2Sink);
+        await using var cmd1Subscription = await streamHub.SubscribeAsync(
+            "actor-1",
+            "cmd-1",
+            evt => cmd1Sink.PushAsync(evt));
+        await using var cmd2Subscription = await streamHub.SubscribeAsync(
+            "actor-1",
+            "cmd-2",
+            evt => cmd2Sink.PushAsync(evt));
 
         await projector.ProjectAsync(context, new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await Task.Delay(30);
 
         cmd1Sink.Events.Should().BeEmpty();
         cmd2Sink.Events.Should().BeEmpty();
+    }
+
+    private static async Task WaitUntilAsync(
+        Func<bool> predicate,
+        int timeoutMs = 1000,
+        int pollMs = 10)
+    {
+        var started = DateTimeOffset.UtcNow;
+        while ((DateTimeOffset.UtcNow - started).TotalMilliseconds < timeoutMs)
+        {
+            if (predicate())
+                return;
+
+            await Task.Delay(pollMs);
+        }
+
+        throw new TimeoutException("Condition not met before timeout.");
     }
 
     private sealed class StaticMapper : IEventEnvelopeToAGUIEventMapper

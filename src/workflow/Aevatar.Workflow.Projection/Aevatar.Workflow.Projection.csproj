@@ -17,14 +17,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
-    <PackageReference Include="Grpc.Tools">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
-  </ItemGroup>
-  <ItemGroup>
-    <Protobuf Include="projection_coordinator_messages.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

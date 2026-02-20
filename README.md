@@ -91,7 +91,7 @@ curl -X POST http://localhost:5000/api/chat \
 |---|---|---|
 | Actor Runtime | 默认 `ActorRuntime:Provider=InMemory`，适合开发/测试。 | 使用非 InMemory Provider（Redis/数据库等）与分布式 Actor Runtime。 |
 | Projection 启动并发（Ensure/Release） | 已由 `projection:{rootActorId}` 投影协调 Actor 串行裁决，不再依赖进程内 `SemaphoreSlim`。 | 分布式 Runtime 下继续依赖“同一 actorId 单激活 + 邮箱串行”保证并发互斥。 |
-| LiveSink 绑定（Attach/Detach） | 当前通过显式 lease 会话句柄在进程内绑定输出通道，不作为跨节点事实态。 | 按部署拓扑引入分布式会话通道或粘性路由策略，保证多节点实时输出一致性。 |
+| LiveSink 绑定（Attach/Detach） | 已通过 `workflow-run:{actorId}:{commandId}` 事件流订阅/退订；不再依赖 `ProjectionContext` 内存 sink 列表。 | 在分布式 stream provider 下天然支持跨节点推送；生产需保障 provider 可用性与顺序语义。 |
 | ReadModel 存储 | Workflow 默认 `InMemoryWorkflowExecutionReadModelStore`，可替换。 | 生产默认切换到持久化读模型存储，实现跨节点一致读。 |
 | 审计评分口径 | 以“当前已落地代码”为准评分。 | 目标态能力上线后，评分按实现结果重新审计。 |
 

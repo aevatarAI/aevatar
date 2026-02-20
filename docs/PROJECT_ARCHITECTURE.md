@@ -102,7 +102,7 @@ flowchart TB
 1. 生产部署以分布式 Actor Runtime 为目标，要求同一 `actorId` 全局单激活（single activation）与邮箱串行语义。
 2. Projection 编排 Actor 化：每个 `rootActorId` 固定映射一个投影协调 Actor（示例：`projection:{rootActorId}`）。
 3. `EnsureActorProjection / ReleaseActorProjection` 由投影协调 Actor 串行裁决，不再依赖中间层进程内并发门禁。
-4. `AttachLiveSink / DetachLiveSink` 通过显式 lease 句柄绑定运行态，不允许回退到 `actorId -> context` 反查模型。
+4. `AttachLiveSink / DetachLiveSink` 通过显式 lease 句柄管理 run-event stream 订阅（`workflow-run:{actorId}:{commandId}`），不允许回退到 `actorId -> context` 反查模型。
 5. 读侧持久化（`IProjectionReadModelStore`）在生产默认使用非 InMemory 实现；InMemory 仅保留本地开发与测试。
 6. 不为投影并发单独引入外部锁中心；并发互斥优先由“确定性 actorId + Actor 邮箱”保证。
 

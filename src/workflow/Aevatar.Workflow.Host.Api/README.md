@@ -21,7 +21,7 @@
 
 ## 运行语义
 
-- 运行时按 `commandId` 过滤 live sink，避免同 Actor 并发 run 串流。
+- 运行时通过 `workflow-run:{actorId}:{commandId}` 事件流订阅输出，避免同 Actor 并发 run 串流。
 - 单次请求在终止事件（`RUN_FINISHED`/`RUN_ERROR`）后收尾。
 - 客户端可通过 `actorId` 查询对应 ReadModel 视图（`/api/actors/*`）。
 

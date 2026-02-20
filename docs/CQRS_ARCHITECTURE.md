@@ -80,6 +80,7 @@ Projection 内核由 `Aevatar.CQRS.Projection.Core` 提供，职责拆分：
 4. `ProjectionDispatcher`：统一事件分发入口。
 5. `ProjectionCoordinator`：按服务注册顺序调度多个 projector。
 6. `IProjectionEventApplier<,,>`：事件解析后对 read model 的细粒度 apply 扩展点。
+7. `ActorProjectionOwnershipCoordinator` + `ProjectionOwnershipCoordinatorGAgent`：通用投影 ownership 裁决（`Acquire/Release`）。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -97,7 +98,7 @@ flowchart LR
 说明：CQRS 与 AGUI 输出统一走同一事件输入与投影管线，只是 projector 分支不同。  
 当前推荐模式：`Reducer` 负责 `TypeUrl` 精确匹配与反序列化，`Applier` 负责 read model 字段变换。
 变更语义约束：`Reducer/Applier` 返回 `mutated`，仅在 read model 实际变更时推进 `StateVersion/LastEventId`。
-并发隔离约束：live sink 仅按 `EventEnvelope.CorrelationId` 精确匹配，不允许空 correlation 回退到广播。
+并发隔离约束：AGUI projector 仅在 `EventEnvelope.CorrelationId` 非空时发布 run-event；按 `workflow-run:{actorId}:{commandId}` 精确路由，不对空 correlation 做广播。
 
 ### 7.1 当前实现口径（2026-02-20）
 
@@ -111,8 +112,8 @@ flowchart LR
 1. 生产环境使用分布式 Actor Runtime 与非 InMemory 持久化（state/event/manifest/read model）。
 2. 投影编排 Actor 化：每个 `rootActorId` 固定一个投影协调 Actor（示例：`projection:{rootActorId}`）。
 3. `Ensure/Release` 通过投影协调 Actor 串行裁决，利用 Actor 邮箱保证并发互斥。
-4. `Attach/Detach` 保持 lease 会话句柄绑定语义；在分布式部署中需配合会话通道/粘性路由策略保证输出一致性。
-5. 中间层服务不承担投影启动并发锁职责，不再依赖进程内门禁。
+4. `Attach/Detach` 通过 run-event stream 的订阅/退订落地（`workflow-run:{actorId}:{commandId}`），避免中间层进程内 sink 事实态。
+5. 中间层服务不承担投影启动并发锁职责，不依赖进程内门禁。
 
 订阅判定语义（关键）：
 

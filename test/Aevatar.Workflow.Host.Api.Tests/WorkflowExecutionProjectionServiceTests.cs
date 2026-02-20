@@ -312,14 +312,19 @@ public class WorkflowExecutionProjectionServiceTests
         var runtimeServices = new ServiceCollection();
         var runtimeProvider = runtimeServices.BuildServiceProvider();
         var runtime = new LocalActorRuntime(streams, runtimeProvider, streams);
+        var ownershipCoordinator = new ActorProjectionOwnershipCoordinator(runtime);
+        var runEventStreamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
+            streams,
+            new WorkflowRunEventSessionCodec());
 
         return new WorkflowExecutionProjectionService(
-            runtime,
+            ownershipCoordinator,
             options,
             lifecycle,
             store,
             clock ?? new SystemProjectionClock(),
             new DefaultWorkflowExecutionProjectionContextFactory(),
+            runEventStreamHub,
             new WorkflowExecutionReadModelMapper());
     }
 

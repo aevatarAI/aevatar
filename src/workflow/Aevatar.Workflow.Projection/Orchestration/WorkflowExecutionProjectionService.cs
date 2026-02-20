@@ -4,8 +4,6 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.CQRS.Projection.Abstractions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
@@ -14,31 +12,32 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 /// </summary>
 public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProjectionPort
 {
-    private const string ProjectionCoordinatorPublisherId = "workflow.projection.coordinator";
-
-    private readonly IActorRuntime _runtime;
+    private readonly IProjectionOwnershipCoordinator _ownershipCoordinator;
     private readonly WorkflowExecutionProjectionOptions _options;
     private readonly IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> _lifecycle;
     private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
     private readonly IProjectionClock _clock;
     private readonly IWorkflowExecutionProjectionContextFactory _contextFactory;
+    private readonly IProjectionSessionEventHub<WorkflowRunEvent> _runEventStreamHub;
     private readonly WorkflowExecutionReadModelMapper _mapper;
 
     public WorkflowExecutionProjectionService(
-        IActorRuntime runtime,
+        IProjectionOwnershipCoordinator ownershipCoordinator,
         WorkflowExecutionProjectionOptions options,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
         IProjectionReadModelStore<WorkflowExecutionReport, string> store,
         IProjectionClock clock,
         IWorkflowExecutionProjectionContextFactory contextFactory,
+        IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
         WorkflowExecutionReadModelMapper mapper)
     {
-        _runtime = runtime;
+        _ownershipCoordinator = ownershipCoordinator;
         _options = options;
         _lifecycle = lifecycle;
         _store = store;
         _clock = clock;
         _contextFactory = contextFactory;
+        _runEventStreamHub = runEventStreamHub;
         _mapper = mapper;
     }
 
@@ -110,10 +109,18 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
             return;
 
         var runtimeLease = ResolveRuntimeLease(lease);
-        runtimeLease.Context.AttachLiveSink(runtimeLease.CommandId, sink);
+        var streamSubscription = await _runEventStreamHub.SubscribeAsync(
+            runtimeLease.ActorId,
+            runtimeLease.CommandId,
+            evt => ForwardLiveEventAsync(runtimeLease, sink, evt),
+            ct);
+
+        var previous = runtimeLease.AttachOrReplaceLiveSinkSubscription(sink, streamSubscription);
+        if (previous != null)
+            await previous.DisposeAsync();
     }
 
-    public Task DetachLiveSinkAsync(
+    public async Task DetachLiveSinkAsync(
         IWorkflowExecutionProjectionLease lease,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default)
@@ -123,11 +130,10 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         ct.ThrowIfCancellationRequested();
 
         if (!ProjectionEnabled)
-            return Task.CompletedTask;
+            return;
 
         var runtimeLease = ResolveRuntimeLease(lease);
-        runtimeLease.Context.DetachLiveSink(sink);
-        return Task.CompletedTask;
+        await DetachLiveSinkSubscriptionAsync(runtimeLease, sink);
     }
 
     public async Task ReleaseActorProjectionAsync(
@@ -142,7 +148,7 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         var runtimeLease = ResolveRuntimeLease(lease);
         var context = runtimeLease.Context;
 
-        if (context.GetLiveSinksSnapshot().Count > 0)
+        if (runtimeLease.GetLiveSinkSubscriptionCount() > 0)
             return;
 
         await _lifecycle.StopAsync(context, ct);
@@ -208,15 +214,7 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         string commandId,
         CancellationToken ct)
     {
-        var coordinatorActor = await ResolveProjectionCoordinatorActorAsync(rootActorId, ct);
-        var envelope = CreateCoordinatorEnvelope(
-            new WorkflowExecutionProjectionAcquireEvent
-            {
-                RootActorId = rootActorId,
-                CommandId = commandId,
-            },
-            commandId);
-        await coordinatorActor.HandleEventAsync(envelope, ct);
+        await _ownershipCoordinator.AcquireAsync(rootActorId, commandId, ct);
     }
 
     private async Task ReleaseProjectionOwnershipAsync(
@@ -224,15 +222,7 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         string commandId,
         CancellationToken ct)
     {
-        var coordinatorActor = await ResolveProjectionCoordinatorActorAsync(rootActorId, ct);
-        var envelope = CreateCoordinatorEnvelope(
-            new WorkflowExecutionProjectionReleaseEvent
-            {
-                RootActorId = rootActorId,
-                CommandId = commandId,
-            },
-            commandId);
-        await coordinatorActor.HandleEventAsync(envelope, ct);
+        await _ownershipCoordinator.ReleaseAsync(rootActorId, commandId, ct);
     }
 
     private async Task TryReleaseProjectionOwnershipAsync(string rootActorId, string commandId)
@@ -247,51 +237,11 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         }
     }
 
-    private async Task<IActor> ResolveProjectionCoordinatorActorAsync(string rootActorId, CancellationToken ct)
-    {
-        var coordinatorActorId = WorkflowExecutionProjectionCoordinatorGAgent.BuildActorId(rootActorId);
-        var existing = await _runtime.GetAsync(coordinatorActorId);
-        if (existing != null)
-            return EnsureCoordinatorActorType(existing, coordinatorActorId);
-
-        try
-        {
-            var created = await _runtime.CreateAsync<WorkflowExecutionProjectionCoordinatorGAgent>(coordinatorActorId, ct);
-            return EnsureCoordinatorActorType(created, coordinatorActorId);
-        }
-        catch (InvalidOperationException)
-        {
-            // Another concurrent caller may have created it first.
-            var raced = await _runtime.GetAsync(coordinatorActorId);
-            if (raced != null)
-                return EnsureCoordinatorActorType(raced, coordinatorActorId);
-
-            throw;
-        }
-    }
-
-    private static IActor EnsureCoordinatorActorType(IActor actor, string actorId)
-    {
-        if (actor.Agent is WorkflowExecutionProjectionCoordinatorGAgent)
-            return actor;
-
-        throw new InvalidOperationException(
-            $"Actor '{actorId}' is not a workflow projection coordinator actor.");
-    }
-
-    private static EventEnvelope CreateCoordinatorEnvelope(IMessage payload, string correlationId) =>
-        new()
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(payload),
-            PublisherId = ProjectionCoordinatorPublisherId,
-            Direction = EventDirection.Self,
-            CorrelationId = correlationId,
-        };
-
     private sealed class WorkflowExecutionProjectionLease : IWorkflowExecutionProjectionLease
     {
+        private readonly object _liveSinkGate = new();
+        private readonly List<LiveSinkSubscription> _liveSinkSubscriptions = [];
+
         public WorkflowExecutionProjectionLease(WorkflowExecutionProjectionContext context)
         {
             Context = context;
@@ -302,6 +252,54 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         public string ActorId { get; }
         public string CommandId { get; }
         public WorkflowExecutionProjectionContext Context { get; }
+
+        public IAsyncDisposable? AttachOrReplaceLiveSinkSubscription(
+            IWorkflowRunEventSink sink,
+            IAsyncDisposable streamSubscription)
+        {
+            ArgumentNullException.ThrowIfNull(sink);
+            ArgumentNullException.ThrowIfNull(streamSubscription);
+
+            lock (_liveSinkGate)
+            {
+                var index = _liveSinkSubscriptions.FindIndex(x => ReferenceEquals(x.Sink, sink));
+                if (index < 0)
+                {
+                    _liveSinkSubscriptions.Add(new LiveSinkSubscription(sink, streamSubscription));
+                    return null;
+                }
+
+                var previous = _liveSinkSubscriptions[index].StreamSubscription;
+                _liveSinkSubscriptions[index] = new LiveSinkSubscription(sink, streamSubscription);
+                return previous;
+            }
+        }
+
+        public IAsyncDisposable? DetachLiveSinkSubscription(IWorkflowRunEventSink sink)
+        {
+            ArgumentNullException.ThrowIfNull(sink);
+
+            lock (_liveSinkGate)
+            {
+                var index = _liveSinkSubscriptions.FindIndex(x => ReferenceEquals(x.Sink, sink));
+                if (index < 0)
+                    return null;
+
+                var subscription = _liveSinkSubscriptions[index].StreamSubscription;
+                _liveSinkSubscriptions.RemoveAt(index);
+                return subscription;
+            }
+        }
+
+        public int GetLiveSinkSubscriptionCount()
+        {
+            lock (_liveSinkGate)
+                return _liveSinkSubscriptions.Count;
+        }
+
+        private sealed record LiveSinkSubscription(
+            IWorkflowRunEventSink Sink,
+            IAsyncDisposable StreamSubscription);
     }
 
     private Task MarkProjectionStoppedAsync(string actorId, CancellationToken ct)
@@ -316,5 +314,36 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
 
             report.DurationMs = Math.Max(0, (report.EndedAt - report.StartedAt).TotalMilliseconds);
         }, ct);
+    }
+
+    private async ValueTask ForwardLiveEventAsync(
+        WorkflowExecutionProjectionLease runtimeLease,
+        IWorkflowRunEventSink sink,
+        WorkflowRunEvent evt)
+    {
+        try
+        {
+            await sink.PushAsync(evt, CancellationToken.None);
+        }
+        catch (WorkflowRunEventSinkBackpressureException)
+        {
+        }
+        catch (WorkflowRunEventSinkCompletedException)
+        {
+            await DetachLiveSinkSubscriptionAsync(runtimeLease, sink);
+        }
+        catch (InvalidOperationException)
+        {
+            await DetachLiveSinkSubscriptionAsync(runtimeLease, sink);
+        }
+    }
+
+    private static async Task DetachLiveSinkSubscriptionAsync(
+        WorkflowExecutionProjectionLease runtimeLease,
+        IWorkflowRunEventSink sink)
+    {
+        var streamSubscription = runtimeLease.DetachLiveSinkSubscription(sink);
+        if (streamSubscription != null)
+            await streamSubscription.DisposeAsync();
     }
 }

@@ -4,6 +4,7 @@ using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Stores;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -45,6 +46,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDispatcher<WorkflowExecutionProjectionContext>, ProjectionDispatcher<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
         services.TryAddSingleton<IProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>, ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>>();
         services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
+        services.TryAddSingleton<IProjectionOwnershipCoordinator, ActorProjectionOwnershipCoordinator>();
+        services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowRunEvent>, WorkflowRunEventSessionCodec>();
+        services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEvent>, ProjectionSessionEventHub<WorkflowRunEvent>>();
         services.TryAddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
         services.TryAddSingleton<IWorkflowExecutionProjectionPort, WorkflowExecutionProjectionService>();
         return services;
