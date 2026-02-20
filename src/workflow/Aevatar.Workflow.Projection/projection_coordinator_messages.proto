@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+option csharp_namespace = "Aevatar.Workflow.Projection.Orchestration";
+
+import "google/protobuf/timestamp.proto";
+
+message WorkflowExecutionProjectionCoordinatorState {
+  string root_actor_id = 1;
+  string command_id = 2;
+  bool active = 3;
+  google.protobuf.Timestamp last_updated_at_utc = 4;
+}
+
+message WorkflowExecutionProjectionAcquireEvent {
+  string root_actor_id = 1;
+  string command_id = 2;
+}
+
+message WorkflowExecutionProjectionReleaseEvent {
+  string root_actor_id = 1;
+  string command_id = 2;
+}

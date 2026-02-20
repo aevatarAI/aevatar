@@ -19,7 +19,7 @@
 
 ## 统一运行链路
 
-1. `EnsureActorProjectionAsync` 创建 actor 共享 projection 上下文并注册 actor stream 订阅
+1. `EnsureActorProjectionAsync` 先向 `projection:{rootActorId}` 投影协调 Actor 申请 ownership，再创建 projection 上下文并注册 actor stream 订阅
 2. 每条 `EventEnvelope` 进入统一 coordinator，一对多调用已注册 projector
 3. `WorkflowExecutionReadModelProjector` 驱动 reducers 生成并更新 read model
 4. AI 通用事件由 `Aevatar.AI.Projection` 统一处理：默认 applier + reducer 直接写入 `WorkflowExecutionReport` 继承的 AI 层能力字段，业务层无需再维护 AI 事件映射代码
@@ -28,6 +28,7 @@
 AGUI 输出与 CQRS 读模型共享同一链路，只是在 projector 分支不同。
 应用层通过 `AttachLiveSinkAsync/DetachLiveSinkAsync` 挂载实时输出通道；
 AGUI 分支实现位于 `Aevatar.Workflow.Presentation.AGUIAdapter`。
+`ReleaseActorProjectionAsync` 在无 live sink 绑定时会释放协调 Actor ownership；保证同一 `rootActorId` 不会并发启动多个投影视图。
 live sink 严格按 `EventEnvelope.CorrelationId` 与 commandId 绑定匹配，不对空 correlation 做广播投递。
 
 ## 订阅判定规则（事件如何进入 ReadModel）

@@ -92,10 +92,19 @@ flowchart TB
 ## 4.1 Actor Runtime 统一接入
 
 1. 默认 Host 通过 `Aevatar.Bootstrap` 统一调用 `AddAevatarActorRuntime(...)`。
-2. Actor Runtime 提供者通过配置键 `ActorRuntime:Provider` 选择，当前默认 `InMemory`。
+2. Actor Runtime 提供者通过配置键 `ActorRuntime:Provider` 选择；当前代码默认 `InMemory`（开发/测试口径）。
 3. Mainnet/Subsystem Host 可通过 `EnableActorRestoreOnStartup` 控制启动恢复行为。
 4. `ActorRuntime:RestoreOnStartup` 可通过配置直接控制默认恢复开关。
-5. 口径说明：`InMemory*` 实现仅用于开发/测试；其内存增长问题不纳入生产整改范围，生产环境应使用 Redis/持久化实现并在该实现上评估容量风险。
+5. 口径说明：`InMemory*` 实现仅用于开发/测试；生产环境必须切换到非 InMemory 持久化实现（Redis/数据库等）并在该实现上评估容量风险。
+
+## 4.2 分布式 Runtime 目标态（必须）
+
+1. 生产部署以分布式 Actor Runtime 为目标，要求同一 `actorId` 全局单激活（single activation）与邮箱串行语义。
+2. Projection 编排 Actor 化：每个 `rootActorId` 固定映射一个投影协调 Actor（示例：`projection:{rootActorId}`）。
+3. `EnsureActorProjection / ReleaseActorProjection` 由投影协调 Actor 串行裁决，不再依赖中间层进程内并发门禁。
+4. `AttachLiveSink / DetachLiveSink` 通过显式 lease 句柄绑定运行态，不允许回退到 `actorId -> context` 反查模型。
+5. 读侧持久化（`IProjectionReadModelStore`）在生产默认使用非 InMemory 实现；InMemory 仅保留本地开发与测试。
+6. 不为投影并发单独引入外部锁中心；并发互斥优先由“确定性 actorId + Actor 邮箱”保证。
 
 ## 5. 命令与查询主链路
 
@@ -157,3 +166,11 @@ CI（`.github/workflows/ci.yml`）应执行：
 2. Maker：`AddAevatarDefaultHost()` 后独立部署并完成 `AddMakerCapability()` 装配。
 3. 删除 `src/Aevatar.Platform.*` 与旧平台路由目录。
 4. 新能力统一按“新增项目引用 + 新增 Add 扩展 + Host 注册”接入。
+5. Runtime 演进：从默认 InMemory（dev/test）过渡到分布式 Actor Runtime + 非 InMemory 持久化（prod）。
+6. Projection 演进：已落地“每个 root actor 一个投影协调 Actor”用于 `Ensure/Release` 裁决；后续补齐多节点实时输出一致性策略与持久化读模型默认实现。
+
+## 10. 审计评分口径
+
+1. 架构评分默认按“当前实现”计分，不按规划预支分数。
+2. 目标态评分提升条件：分布式 Runtime、非 InMemory 持久化、多节点一致性测试门禁全部落地。
+3. 评分文档：`docs/audit-scorecard/architecture-scorecard-2026-02-20.md`。

@@ -4,6 +4,8 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.CQRS.Projection.Abstractions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
@@ -12,15 +14,18 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 /// </summary>
 public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProjectionPort
 {
+    private const string ProjectionCoordinatorPublisherId = "workflow.projection.coordinator";
+
+    private readonly IActorRuntime _runtime;
     private readonly WorkflowExecutionProjectionOptions _options;
     private readonly IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> _lifecycle;
     private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
     private readonly IProjectionClock _clock;
     private readonly IWorkflowExecutionProjectionContextFactory _contextFactory;
     private readonly WorkflowExecutionReadModelMapper _mapper;
-    private readonly SemaphoreSlim _contextGate = new(1, 1);
 
     public WorkflowExecutionProjectionService(
+        IActorRuntime runtime,
         WorkflowExecutionProjectionOptions options,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
         IProjectionReadModelStore<WorkflowExecutionReport, string> store,
@@ -28,6 +33,7 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         IWorkflowExecutionProjectionContextFactory contextFactory,
         WorkflowExecutionReadModelMapper mapper)
     {
+        _runtime = runtime;
         _options = options;
         _lifecycle = lifecycle;
         _store = store;
@@ -50,13 +56,9 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         if (!ProjectionEnabled || string.IsNullOrWhiteSpace(rootActorId))
             return null;
 
-        await _contextGate.WaitAsync(ct);
+        await AcquireProjectionOwnershipAsync(rootActorId, commandId, ct);
         try
         {
-            var existingReport = await _store.GetAsync(rootActorId, ct);
-            if (existingReport?.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
-                throw new InvalidOperationException($"Projection for actor '{rootActorId}' is already active.");
-
             var startedAt = _clock.UtcNow;
             var context = _contextFactory.Create(
                 rootActorId,
@@ -70,9 +72,10 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
             await RefreshReportMetadataAsync(rootActorId, context, ct);
             return new WorkflowExecutionProjectionLease(context);
         }
-        finally
+        catch
         {
-            _contextGate.Release();
+            await TryReleaseProjectionOwnershipAsync(rootActorId, commandId);
+            throw;
         }
     }
 
@@ -144,6 +147,7 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
 
         await _lifecycle.StopAsync(context, ct);
         await MarkProjectionStoppedAsync(context.RootActorId, ct);
+        await ReleaseProjectionOwnershipAsync(context.RootActorId, runtimeLease.CommandId, ct);
     }
 
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
@@ -198,6 +202,93 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
     private static WorkflowExecutionProjectionLease ResolveRuntimeLease(IWorkflowExecutionProjectionLease lease) =>
         lease as WorkflowExecutionProjectionLease
         ?? throw new InvalidOperationException("Unsupported workflow projection lease implementation.");
+
+    private async Task AcquireProjectionOwnershipAsync(
+        string rootActorId,
+        string commandId,
+        CancellationToken ct)
+    {
+        var coordinatorActor = await ResolveProjectionCoordinatorActorAsync(rootActorId, ct);
+        var envelope = CreateCoordinatorEnvelope(
+            new WorkflowExecutionProjectionAcquireEvent
+            {
+                RootActorId = rootActorId,
+                CommandId = commandId,
+            },
+            commandId);
+        await coordinatorActor.HandleEventAsync(envelope, ct);
+    }
+
+    private async Task ReleaseProjectionOwnershipAsync(
+        string rootActorId,
+        string commandId,
+        CancellationToken ct)
+    {
+        var coordinatorActor = await ResolveProjectionCoordinatorActorAsync(rootActorId, ct);
+        var envelope = CreateCoordinatorEnvelope(
+            new WorkflowExecutionProjectionReleaseEvent
+            {
+                RootActorId = rootActorId,
+                CommandId = commandId,
+            },
+            commandId);
+        await coordinatorActor.HandleEventAsync(envelope, ct);
+    }
+
+    private async Task TryReleaseProjectionOwnershipAsync(string rootActorId, string commandId)
+    {
+        try
+        {
+            await ReleaseProjectionOwnershipAsync(rootActorId, commandId, CancellationToken.None);
+        }
+        catch
+        {
+            // Best effort cleanup: ownership may already be released or unavailable.
+        }
+    }
+
+    private async Task<IActor> ResolveProjectionCoordinatorActorAsync(string rootActorId, CancellationToken ct)
+    {
+        var coordinatorActorId = WorkflowExecutionProjectionCoordinatorGAgent.BuildActorId(rootActorId);
+        var existing = await _runtime.GetAsync(coordinatorActorId);
+        if (existing != null)
+            return EnsureCoordinatorActorType(existing, coordinatorActorId);
+
+        try
+        {
+            var created = await _runtime.CreateAsync<WorkflowExecutionProjectionCoordinatorGAgent>(coordinatorActorId, ct);
+            return EnsureCoordinatorActorType(created, coordinatorActorId);
+        }
+        catch (InvalidOperationException)
+        {
+            // Another concurrent caller may have created it first.
+            var raced = await _runtime.GetAsync(coordinatorActorId);
+            if (raced != null)
+                return EnsureCoordinatorActorType(raced, coordinatorActorId);
+
+            throw;
+        }
+    }
+
+    private static IActor EnsureCoordinatorActorType(IActor actor, string actorId)
+    {
+        if (actor.Agent is WorkflowExecutionProjectionCoordinatorGAgent)
+            return actor;
+
+        throw new InvalidOperationException(
+            $"Actor '{actorId}' is not a workflow projection coordinator actor.");
+    }
+
+    private static EventEnvelope CreateCoordinatorEnvelope(IMessage payload, string correlationId) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            PublisherId = ProjectionCoordinatorPublisherId,
+            Direction = EventDirection.Self,
+            CorrelationId = correlationId,
+        };
 
     private sealed class WorkflowExecutionProjectionLease : IWorkflowExecutionProjectionLease
     {

@@ -37,10 +37,10 @@ dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
 ```
 
 服务会加载根目录下的 `workflows/` 以及 `~/.aevatar` 中的配置与工作流。  
-如需平台统一入口与 Maker 子系统，可分别启动：
+如需统一入口与 Maker 子系统，可分别启动：
 
 ```bash
-dotnet run --project src/Aevatar.Platform.Host.Api
+dotnet run --project src/Aevatar.Mainnet.Host.Api
 dotnet run --project src/maker/Aevatar.Maker.Host.Api
 ```
 
@@ -70,8 +70,7 @@ curl -X POST http://localhost:5000/api/chat \
 
 ## 架构一眼看懂
 
-- **你**：优先通过 **Aevatar.Platform.Host.Api** 查询内置 GAgent 能力目录与子系统路由。
-- **Platform CQRS**：通过 `POST /api/commands` 统一受理命令，再用 `GET /api/commands/{commandId}` 查询执行状态。
+- **Mainnet Host**：`Aevatar.Mainnet.Host.Api` 作为默认统一入口，内置 Workflow Capability。
 - **Workflow Api**：`Aevatar.Workflow.Host.Api` 只做协议适配（HTTP/SSE/WebSocket）并调用 Application 层，不直接编排工作流。
 - **Maker Api**：`Aevatar.Maker.Host.Api` 负责 Maker 子系统命令入口。
 - **Workflow Application**：解析/创建 Actor、启动投影 run、发送请求事件、等待收敛并输出查询结果。
@@ -85,6 +84,16 @@ curl -X POST http://localhost:5000/api/chat \
 - 单次请求只在“当前 runId 的终止事件”到达时结束（`RUN_FINISHED` / `RUN_ERROR`）。
 - `RUN_STARTED` 由 `StartWorkflowEvent` 投影统一生成，`threadId` 为发布该事件的 ActorId。
 - `runId` 与内部 `sessionId` 都由服务端生成；客户端请求只需 `prompt/workflow/agentId`。
+
+### 当前实现与目标态（分布式 Runtime）
+
+| 主题 | 当前实现（2026-02-20） | 目标态（生产分布式） |
+|---|---|---|
+| Actor Runtime | 默认 `ActorRuntime:Provider=InMemory`，适合开发/测试。 | 使用非 InMemory Provider（Redis/数据库等）与分布式 Actor Runtime。 |
+| Projection 启动并发（Ensure/Release） | 已由 `projection:{rootActorId}` 投影协调 Actor 串行裁决，不再依赖进程内 `SemaphoreSlim`。 | 分布式 Runtime 下继续依赖“同一 actorId 单激活 + 邮箱串行”保证并发互斥。 |
+| LiveSink 绑定（Attach/Detach） | 当前通过显式 lease 会话句柄在进程内绑定输出通道，不作为跨节点事实态。 | 按部署拓扑引入分布式会话通道或粘性路由策略，保证多节点实时输出一致性。 |
+| ReadModel 存储 | Workflow 默认 `InMemoryWorkflowExecutionReadModelStore`，可替换。 | 生产默认切换到持久化读模型存储，实现跨节点一致读。 |
+| 审计评分口径 | 以“当前已落地代码”为准评分。 | 目标态能力上线后，评分按实现结果重新审计。 |
 
 下面这张图概括了「宿主（API + 运行时 + LLM + Connector）」与「Agent 树 + 工作流步骤」的关系。
 
@@ -120,7 +129,7 @@ flowchart TB
     Connectors --> M3
 ```
 
-- **宿主**：提供运行时、步骤执行能力、LLM、Connector。Aevatar.Host.Api 已把这些组装好，开箱可用。
+- **宿主**：提供运行时、步骤执行能力、LLM、Connector。当前由 Mainnet/Workflow/Maker 三个 Host 组合承载。
 - **Agent 树**：工作流 Agent 为根，按 YAML 中的角色创建子 Agent；事件在父子之间按「方向」路由（当前节点 / 父 / 子）。
 - **步骤模块**：每一步对应一种类型（如 `llm_call`、`connector_call`），由框架内置或你扩展的模块执行。
 
@@ -270,19 +279,23 @@ sequenceDiagram
 aevatar/
 ├── docs/
 │   ├── FOUNDATION.md       # 底层事件与 Pipeline 设计
+│   ├── PROJECT_ARCHITECTURE.md # 系统分层、能力装配、目标架构
+│   ├── CQRS_ARCHITECTURE.md # CQRS 与统一投影链路
 │   ├── ROLE.md             # Role、Workflow YAML、Connector 与外部服务
-│   ├── IDENTIFIER_RELATIONSHIPS.md # EventEnvelope / RunId / SessionId 关系
+│   ├── DISTRIBUTED_RUNTIME_PERSISTENCE_PLAN.md # 分布式 Runtime 与持久化演进
 │   └── EVENT_SOURCING.md   # Event Sourcing 使用说明
 ├── workflows/              # 示例工作流（simple_qa、summarize、brainstorm）
 ├── src/
-│   ├── Aevatar.Host.Api   # HTTP 服务入口（Chat 等），日常使用从这里启动
+│   ├── Aevatar.Mainnet.Host.Api # 默认统一入口（内置 Workflow 能力）
+│   ├── workflow/Aevatar.Workflow.Host.Api # Workflow 独立宿主
+│   ├── maker/Aevatar.Maker.Host.Api # Maker 独立宿主
+│   ├── Aevatar.Bootstrap   # 统一宿主装配与能力接入
 │   ├── workflow/Aevatar.Workflow.Core   # 工作流引擎与内置步骤模块
 │   ├── Aevatar.AI.Core     # 角色 Agent 与 LLM 集成
 │   ├── Aevatar.Foundation.Runtime  # 运行时（事件路由、存储、流）
 │   ├── Aevatar.Foundation.Core     # Agent 基类与事件管道
 │   ├── Aevatar.Foundation.Abstractions # 接口与契约
 │   ├── Aevatar.Configuration  # 配置与 Connector 模型
-│   ├── Aevatar.Host.Gateway  # 可组合网关（可选 MCP/Skills）
 │   └── Aevatar.AI.LLMProviders.MEAI / Aevatar.AI.ToolProviders.MCP / Aevatar.AI.ToolProviders.Skills  # LLM 与工具扩展
 ├── tools/
 │   └── Aevatar.Tools.Config  # aevatar-config（Web 界面配置 API Key）
@@ -292,19 +305,22 @@ aevatar/
 └── test/                   # 测试
 ```
 
-你主要会接触：**workflows/**（改或加 YAML）、**src/Aevatar.Host.Api**（启动服务）、**~/.aevatar/**（配置与 Connector）。其余目录在二次开发或排查问题时再看不迟。
+你主要会接触：**workflows/**（改或加 YAML）、**src/Aevatar.Mainnet.Host.Api** 或 **src/workflow/Aevatar.Workflow.Host.Api**（启动服务）、**~/.aevatar/**（配置与 Connector）。其余目录在二次开发或排查问题时再看不迟。
 
 ---
 
 ## 文档与进阶
 
 - **底层设计**： [docs/FOUNDATION.md](docs/FOUNDATION.md) — 事件模型与 Pipeline。
-- **标识符关系**： [docs/IDENTIFIER_RELATIONSHIPS.md](docs/IDENTIFIER_RELATIONSHIPS.md) — `EventEnvelope.Id`、`RunId`、`SessionId` 的职责与链路。
+- **系统架构总览**： [docs/PROJECT_ARCHITECTURE.md](docs/PROJECT_ARCHITECTURE.md) — 分层、能力装配、宿主边界。
+- **CQRS 架构**： [docs/CQRS_ARCHITECTURE.md](docs/CQRS_ARCHITECTURE.md) — 写侧/读侧、统一投影链路、接入约束。
 - **CQRS 投影架构**： [src/Aevatar.CQRS.Projection.Core/README.md](src/Aevatar.CQRS.Projection.Core/README.md) / [src/workflow/Aevatar.Workflow.Projection/README.md](src/workflow/Aevatar.Workflow.Projection/README.md) — 统一 Projection Lifecycle、Coordinator 与 ReadModel。
 - **Role 与 Connector**： [docs/ROLE.md](docs/ROLE.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
+- **分布式 Runtime 与持久化规划**： [docs/DISTRIBUTED_RUNTIME_PERSISTENCE_PLAN.md](docs/DISTRIBUTED_RUNTIME_PERSISTENCE_PLAN.md) — 目标态与迁移步骤。
 - **Event Sourcing**： [docs/EVENT_SOURCING.md](docs/EVENT_SOURCING.md) — 如何开启事件溯源。
 - **Connector 配置详解**： [src/Aevatar.Configuration/README.md](src/Aevatar.Configuration/README.md#connector-作用与配置) — 配置格式与示例。
 - **Maker 示例**： [demos/Aevatar.Demos.Maker](demos/Aevatar.Demos.Maker) — 自定义步骤类型与 MAKER 工作流。
+- **架构审计评分**： [docs/audit-scorecard/architecture-scorecard-2026-02-20.md](docs/audit-scorecard/architecture-scorecard-2026-02-20.md) — 当前实现分与目标态评分口径。
 
 ---
 

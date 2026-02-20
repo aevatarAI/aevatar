@@ -159,6 +159,11 @@ if rg -n "TryGetContext\(" src; then
   exit 1
 fi
 
+if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs; then
+  echo "WorkflowExecutionProjectionService must not use process-local SemaphoreSlim for projection start arbitration."
+  exit 1
+fi
+
 if rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs; then
   echo "ProjectionSubscriptionRegistry must not keep in-memory dictionary state."
   exit 1

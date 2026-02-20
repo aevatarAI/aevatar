@@ -99,6 +99,21 @@ flowchart LR
 变更语义约束：`Reducer/Applier` 返回 `mutated`，仅在 read model 实际变更时推进 `StateVersion/LastEventId`。
 并发隔离约束：live sink 仅按 `EventEnvelope.CorrelationId` 精确匹配，不允许空 correlation 回退到广播。
 
+### 7.1 当前实现口径（2026-02-20）
+
+1. 运行时默认 provider 仍是 `InMemory`（开发/测试默认）。
+2. Projection 生命周期已统一到 `LifecycleService + Coordinator + Dispatcher + Registry`。
+3. Workflow 投影接口已采用 lease/session 句柄，禁止 `actorId -> context` 反查。
+4. Projection 启动并发（`Ensure/Release`）已迁移为 `projection:{rootActorId}` 协调 Actor 串行裁决。
+
+### 7.2 目标态口径（分布式 Actor Runtime）
+
+1. 生产环境使用分布式 Actor Runtime 与非 InMemory 持久化（state/event/manifest/read model）。
+2. 投影编排 Actor 化：每个 `rootActorId` 固定一个投影协调 Actor（示例：`projection:{rootActorId}`）。
+3. `Ensure/Release` 通过投影协调 Actor 串行裁决，利用 Actor 邮箱保证并发互斥。
+4. `Attach/Detach` 保持 lease 会话句柄绑定语义；在分布式部署中需配合会话通道/粘性路由策略保证输出一致性。
+5. 中间层服务不承担投影启动并发锁职责，不再依赖进程内门禁。
+
 订阅判定语义（关键）：
 
 1. `ReadModel` 的字段与能力接口仅表示“可写入能力”，不构成事件订阅声明。
@@ -143,6 +158,7 @@ flowchart LR
 ## 10. 配置基线（`Cqrs:*`）
 
 当前无 `Cqrs:*` 强制配置项。
+Actor Runtime provider 使用 `ActorRuntime:Provider` 配置；生产必须为非 `InMemory`。
 
 ## 11. 扩展点与反模式
 
@@ -176,6 +192,12 @@ CI 架构门禁（摘要）：
 6. 禁止 `Workflow` 反向依赖 `Maker`。
 7. 允许 `Maker` 直接依赖 `Workflow` 能力实现层；仅禁止依赖 `Workflow.Host.Api`。
 
+评分口径说明：
+
+1. CQRS 架构审计分数只按当前代码实现计算。
+2. 投影协调 Actor 已上线；分布式 Runtime 与非 InMemory 持久化上线后再按实现结果复审计。
+3. 评分参考：`docs/audit-scorecard/architecture-scorecard-2026-02-20.md`。
+
 ## 13. 结论
 
 Aevatar 当前 CQRS 架构已形成：
@@ -184,3 +206,4 @@ Aevatar 当前 CQRS 架构已形成：
 2. 写侧执行链路收敛到 Application 直达 Actor。
 3. 读写职责清晰（写侧命令执行、读侧投影查询）。
 4. 编排通过事件链路完成，不新增额外运行时负担。
+5. 投影启动并发裁决已 Actor 化；后续通过“分布式 Actor Runtime + 非 InMemory 持久化”完成跨节点一致性收敛。

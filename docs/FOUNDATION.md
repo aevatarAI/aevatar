@@ -96,6 +96,13 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 - `InMemory*` 组件仅用于开发/测试环境，不作为生产容量治理对象。
 - 生产环境应替换为 Redis/持久化实现，并在生产实现上评估内存增长与容量风险。
 
+### 分布式目标态（生产）
+
+1. `IActorRuntime` 在生产环境提供分布式部署能力，保证同一 `actorId` 全局单激活与邮箱串行。
+2. `IStateStore<TState>` / `IEventStore` / `IAgentManifestStore` 使用非 InMemory 持久化实现。
+3. 投影相关编排运行态通过 Actor 化承载；中间层服务不持有跨节点事实态。
+4. `InMemory*` 仅保留本地开发与自动化测试使用。
+
 ### Routing 细节
 
 `Routing` 现在由两部分组成：
@@ -182,4 +189,4 @@ await ((GAgentBase)parent.Agent).EventPublisher
 
 ## 当前状态说明
 
-仓库处于持续迭代阶段，接口与目录会按架构约束逐步收敛。变更 Foundation 相关接口前，请同步更新 README、测试与本文档。
+仓库处于持续迭代阶段，接口与目录会按架构约束逐步收敛。变更 Foundation 相关接口前，请同步更新 README、测试与本文档；涉及 Runtime provider 语义时，同步更新 `docs/PROJECT_ARCHITECTURE.md` 与 `docs/CQRS_ARCHITECTURE.md`。

@@ -4,7 +4,9 @@ using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions.Deduplication;
+using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
@@ -17,6 +19,7 @@ using Aevatar.Workflow.Projection.Stores;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -104,6 +107,68 @@ public class WorkflowExecutionProjectionServiceTests
         var act = async () =>
             await service.EnsureActorProjectionAsync("root", "direct", "hello again", "cmd-2");
         await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task EnsureActorProjectionAsync_WhenStartedConcurrently_ShouldAllowOnlyOneLease()
+    {
+        var service = CreateService(
+            new WorkflowExecutionProjectionOptions
+            {
+                Enabled = true,
+                EnableActorQueryEndpoints = true,
+            },
+            out _,
+            out _);
+
+        var startGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<IWorkflowExecutionProjectionLease?> StartAsync(string commandId) => Task.Run(async () =>
+        {
+            await startGate.Task;
+            return await service.EnsureActorProjectionAsync("root", "direct", "hello", commandId);
+        });
+
+        var firstTask = StartAsync("cmd-1");
+        var secondTask = StartAsync("cmd-2");
+        startGate.SetResult(true);
+
+        var firstOutcome = await CaptureLeaseOutcomeAsync(firstTask);
+        var secondOutcome = await CaptureLeaseOutcomeAsync(secondTask);
+
+        var successfulLeases = new[] { firstOutcome.Lease, secondOutcome.Lease }
+            .Where(x => x != null)
+            .Cast<IWorkflowExecutionProjectionLease>()
+            .ToList();
+        var errors = new[] { firstOutcome.Error, secondOutcome.Error }
+            .Where(x => x != null)
+            .ToList();
+
+        successfulLeases.Should().HaveCount(1);
+        errors.Should().HaveCount(1);
+        errors[0].Should().BeOfType<InvalidOperationException>();
+
+        await service.ReleaseActorProjectionAsync(successfulLeases[0]);
+    }
+
+    [Fact]
+    public async Task EnsureActorProjectionAsync_AfterRelease_ShouldAllowRestart()
+    {
+        var service = CreateService(
+            new WorkflowExecutionProjectionOptions
+            {
+                Enabled = true,
+                EnableActorQueryEndpoints = true,
+            },
+            out _,
+            out _);
+
+        var firstLease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
+        firstLease.Should().NotBeNull();
+
+        await service.ReleaseActorProjectionAsync(firstLease!);
+
+        var secondLease = await service.EnsureActorProjectionAsync("root", "direct", "hello again", "cmd-2");
+        secondLease.Should().NotBeNull();
     }
 
     [Fact]
@@ -242,7 +307,14 @@ public class WorkflowExecutionProjectionServiceTests
             coordinator,
             dispatcher,
             runRegistry);
+
+        // Use a dedicated local actor runtime for projection coordinator actors.
+        var runtimeServices = new ServiceCollection();
+        var runtimeProvider = runtimeServices.BuildServiceProvider();
+        var runtime = new LocalActorRuntime(streams, runtimeProvider, streams);
+
         return new WorkflowExecutionProjectionService(
+            runtime,
             options,
             lifecycle,
             store,
@@ -293,6 +365,20 @@ public class WorkflowExecutionProjectionServiceTests
         }
 
         throw new TimeoutException("Condition not met before timeout.");
+    }
+
+    private static async Task<(IWorkflowExecutionProjectionLease? Lease, Exception? Error)> CaptureLeaseOutcomeAsync(
+        Task<IWorkflowExecutionProjectionLease?> task)
+    {
+        try
+        {
+            var lease = await task;
+            return (lease, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex);
+        }
     }
 
     private sealed class MutableProjectionClock : IProjectionClock
