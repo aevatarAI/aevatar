@@ -57,6 +57,48 @@ if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
   exit 1
 fi
 
+reducer_test_coverage_violations=""
+reducer_test_scan_roots=(
+  "src/Aevatar.AI.Projection/Reducers"
+  "src/workflow/Aevatar.Workflow.Projection/Reducers"
+)
+
+for root in "${reducer_test_scan_roots[@]}"; do
+  if [ ! -d "${root}" ]; then
+    continue
+  fi
+
+  while IFS= read -r file; do
+    while IFS= read -r class_line; do
+      if [ -z "${class_line}" ]; then
+        continue
+      fi
+
+      line_no="$(echo "${class_line}" | cut -d: -f1)"
+      decl="$(echo "${class_line}" | cut -d: -f2-)"
+
+      if echo "${decl}" | rg -q "\babstract\s+class\b"; then
+        continue
+      fi
+
+      class_name="$(echo "${decl}" | sed -E 's/.*class[[:space:]]+([A-Za-z0-9_]+).*/\1/')"
+      if [ -z "${class_name}" ]; then
+        continue
+      fi
+
+      if ! rg -n "\b${class_name}\b" test -g '*Tests.cs' >/dev/null; then
+        reducer_test_coverage_violations="${reducer_test_coverage_violations}${file}:${line_no}:${class_name}\n"
+      fi
+    done < <(rg -n "^\s*(public|internal)\s+(sealed\s+)?(abstract\s+)?class\s+[A-Za-z0-9_]*Reducer[A-Za-z0-9_]*\b" "${file}" || true)
+  done < <(rg --files "${root}" -g '*Reducer*.cs')
+done
+
+if [ -n "${reducer_test_coverage_violations}" ]; then
+  printf '%b' "${reducer_test_coverage_violations}"
+  echo "Projection reducer coverage guard failed: each non-abstract reducer class must be referenced by tests."
+  exit 1
+fi
+
 if rg -n "Aevatar\.AI\.Core\.csproj" src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj; then
   echo "Workflows.Core must not reference AI.Core."
   exit 1

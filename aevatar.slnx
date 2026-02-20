@@ -58,6 +58,8 @@
     <Project Path="src\maker\Aevatar.Maker.Infrastructure\Aevatar.Maker.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/test/">
+    <Project Path="test\Aevatar.CQRS.Core.Tests\Aevatar.CQRS.Core.Tests.csproj" />
+    <Project Path="test\Aevatar.CQRS.Projection.Core.Tests\Aevatar.CQRS.Projection.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
