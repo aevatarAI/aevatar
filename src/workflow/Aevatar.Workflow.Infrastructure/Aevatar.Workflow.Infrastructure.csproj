@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Workflow.Application\Aevatar.Workflow.Application.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />
     <ProjectReference Include="..\..\Aevatar.Configuration\Aevatar.Configuration.csproj" />

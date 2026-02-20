@@ -1,20 +1,19 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
-using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Application.Runs;
 
 public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 {
-    private readonly IActorRuntime _runtime;
+    private readonly IWorkflowRunActorPort _actorPort;
     private readonly IWorkflowDefinitionRegistry _workflowRegistry;
 
     public WorkflowRunActorResolver(
-        IActorRuntime runtime,
+        IWorkflowRunActorPort actorPort,
         IWorkflowDefinitionRegistry workflowRegistry)
     {
-        _runtime = runtime;
+        _actorPort = actorPort;
         _workflowRegistry = workflowRegistry;
     }
 
@@ -27,14 +26,14 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
         if (!string.IsNullOrWhiteSpace(request.ActorId))
         {
-            var existing = await _runtime.GetAsync(request.ActorId);
+            var existing = await _actorPort.GetAsync(request.ActorId, ct);
             if (existing == null)
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentNotFound);
 
-            if (existing.Agent is not WorkflowGAgent workflowAgent)
+            if (!_actorPort.IsWorkflowActor(existing))
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentTypeNotSupported);
 
-            var boundWorkflowName = NormalizeWorkflowName(workflowAgent.State.WorkflowName);
+            var boundWorkflowName = NormalizeWorkflowName(_actorPort.GetBoundWorkflowName(existing));
             if (string.IsNullOrWhiteSpace(boundWorkflowName))
             {
                 return new WorkflowActorResolutionResult(
@@ -59,9 +58,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         if (yaml == null)
             return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.WorkflowNotFound);
 
-        var actor = await _runtime.CreateAsync<WorkflowGAgent>(ct: ct);
-        if (actor.Agent is WorkflowGAgent createdWorkflowAgent)
-            createdWorkflowAgent.ConfigureWorkflow(yaml, workflowNameForRun);
+        var actor = await _actorPort.CreateAsync(ct);
+        _actorPort.ConfigureWorkflow(actor, yaml, workflowNameForRun);
 
         return new WorkflowActorResolutionResult(actor, workflowNameForRun, WorkflowChatRunStartError.None);
     }
