@@ -44,7 +44,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowExecutionReportArtifactSink, NoopWorkflowExecutionReportArtifactSink>();
         services.TryAddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
         services.AddSingleton<IWorkflowRunCommandService, WorkflowChatRunApplicationService>();
-        services.AddSingleton<IWorkflowExecutionCapability, WorkflowExecutionCapability>();
+        services.AddSingleton<IRunnableWorkflowActorCapability, RunnableWorkflowActorCapability>();
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
         services.TryAddSingleton<WorkflowCommandExecutionServiceAdapter>();
         services.TryAddSingleton<ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>(sp =>

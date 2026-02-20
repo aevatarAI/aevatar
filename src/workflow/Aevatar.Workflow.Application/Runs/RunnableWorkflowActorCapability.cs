@@ -9,18 +9,18 @@ namespace Aevatar.Workflow.Application.Runs;
 /// <summary>
 /// Workflow capability facade for sibling capabilities that need a single-run workflow execution contract.
 /// </summary>
-public sealed class WorkflowExecutionCapability : IWorkflowExecutionCapability
+public sealed class RunnableWorkflowActorCapability : IRunnableWorkflowActorCapability
 {
     private readonly IWorkflowRunCommandService _runService;
     private readonly IWorkflowDefinitionRegistry _workflowRegistry;
     private readonly IWorkflowRunActorPort _actorPort;
-    private readonly ILogger<WorkflowExecutionCapability> _logger;
+    private readonly ILogger<RunnableWorkflowActorCapability> _logger;
 
-    public WorkflowExecutionCapability(
+    public RunnableWorkflowActorCapability(
         IWorkflowRunCommandService runService,
         IWorkflowDefinitionRegistry workflowRegistry,
         IWorkflowRunActorPort actorPort,
-        ILogger<WorkflowExecutionCapability> logger)
+        ILogger<RunnableWorkflowActorCapability> logger)
     {
         _runService = runService;
         _workflowRegistry = workflowRegistry;
@@ -28,8 +28,8 @@ public sealed class WorkflowExecutionCapability : IWorkflowExecutionCapability
         _logger = logger;
     }
 
-    public async Task<WorkflowExecutionResult> ExecuteAsync(
-        WorkflowExecutionRequest request,
+    public async Task<RunnableWorkflowActorResult> RunAsync(
+        RunnableWorkflowActorRequest request,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask>? emitAsync = null,
         CancellationToken ct = default)
     {
@@ -153,7 +153,7 @@ public sealed class WorkflowExecutionCapability : IWorkflowExecutionCapability
             }
         }
 
-        WorkflowExecutionResult BuildResult() =>
+        RunnableWorkflowActorResult BuildResult() =>
             new(
                 actorId,
                 workflowName,

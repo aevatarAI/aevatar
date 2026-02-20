@@ -1,17 +1,17 @@
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
 /// <summary>
-/// Capability-level workflow execution entry point used by sibling capabilities (for example Maker).
+/// Stable capability contract for running a workflow actor from sibling capabilities.
 /// </summary>
-public interface IWorkflowExecutionCapability
+public interface IRunnableWorkflowActorCapability
 {
-    Task<WorkflowExecutionResult> ExecuteAsync(
-        WorkflowExecutionRequest request,
+    Task<RunnableWorkflowActorResult> RunAsync(
+        RunnableWorkflowActorRequest request,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask>? emitAsync = null,
         CancellationToken ct = default);
 }
 
-public sealed record WorkflowExecutionRequest(
+public sealed record RunnableWorkflowActorRequest(
     string Input,
     string WorkflowName,
     string WorkflowYaml,
@@ -19,7 +19,7 @@ public sealed record WorkflowExecutionRequest(
     TimeSpan? Timeout = null,
     bool DestroyActorAfterRun = false);
 
-public sealed record WorkflowExecutionResult(
+public sealed record RunnableWorkflowActorResult(
     string ActorId,
     string WorkflowName,
     string CommandId,

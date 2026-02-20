@@ -15,7 +15,7 @@
 - `demos/Aevatar.Demos.Maker/Reporting`：Demo 报告累加器与 JSON/HTML 写出（仅 demo 使用，不在 Maker Host 主链路）。
 - `Aevatar.Maker.Application.Abstractions`：应用层契约与模型。
 - `Aevatar.Maker.Application`：命令执行应用服务（通过 `IMakerRunExecutionPort` 编排）。
-- `Aevatar.Maker.Infrastructure`：Maker 侧 DI 与能力 API；执行委托给 `IWorkflowExecutionCapability`，不再直接编排 Workflow Actor/Projection。
+- `Aevatar.Maker.Infrastructure`：Maker 侧 DI 与能力 API；执行委托给 `IRunnableWorkflowActorCapability`，不再直接编排 Workflow Actor/Projection。
 
 ## 关系图
 

@@ -17,9 +17,9 @@ public class WorkflowMakerRunExecutionPortTests
     public async Task ExecuteAsync_ShouldMapRequestAndResultThroughWorkflowCapability()
     {
         var startedAt = DateTimeOffset.Parse("2026-02-20T00:00:00+00:00");
-        var workflowCapability = new FakeWorkflowExecutionCapability
+        var workflowCapability = new FakeRunnableWorkflowActorCapability
         {
-            NextResult = new WorkflowExecutionResult(
+            NextResult = new RunnableWorkflowActorResult(
                 ActorId: "actor-9",
                 WorkflowName: "workflow-9",
                 CommandId: "cmd-9",
@@ -42,7 +42,7 @@ public class WorkflowMakerRunExecutionPortTests
         var result = await executionPort.ExecuteAsync(request, cts.Token);
 
         workflowCapability.LastRequest.Should().Be(
-            new WorkflowExecutionRequest(
+            new RunnableWorkflowActorRequest(
                 Input: request.Input,
                 WorkflowName: request.WorkflowName,
                 WorkflowYaml: request.WorkflowYaml,
@@ -63,7 +63,7 @@ public class WorkflowMakerRunExecutionPortTests
     [Fact]
     public async Task ExecuteAsync_WhenRequestIsNull_ShouldThrowArgumentNullException()
     {
-        var executionPort = new WorkflowMakerRunExecutionPort(new FakeWorkflowExecutionCapability());
+        var executionPort = new WorkflowMakerRunExecutionPort(new FakeRunnableWorkflowActorCapability());
 
         var act = () => executionPort.ExecuteAsync(null!, CancellationToken.None);
 
@@ -78,7 +78,7 @@ public class MakerInfrastructureServiceCollectionExtensionsTests
     public void AddMakerInfrastructure_ShouldRegisterWorkflowExecutionAdapter()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IWorkflowExecutionCapability>(new FakeWorkflowExecutionCapability());
+        services.AddSingleton<IRunnableWorkflowActorCapability>(new FakeRunnableWorkflowActorCapability());
 
         services.AddMakerInfrastructure(new ConfigurationBuilder().Build());
 
@@ -95,7 +95,7 @@ public class MakerInfrastructureServiceCollectionExtensionsTests
     public void AddMakerCapability_ShouldRegisterWorkflowExecutionAdapter()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IWorkflowExecutionCapability>(new FakeWorkflowExecutionCapability());
+        services.AddSingleton<IRunnableWorkflowActorCapability>(new FakeRunnableWorkflowActorCapability());
 
         services.AddMakerCapability(new ConfigurationBuilder().Build());
 
@@ -128,13 +128,13 @@ public class MakerCapabilityEndpointsTests
     }
 }
 
-internal sealed class FakeWorkflowExecutionCapability : IWorkflowExecutionCapability
+internal sealed class FakeRunnableWorkflowActorCapability : IRunnableWorkflowActorCapability
 {
-    public WorkflowExecutionRequest? LastRequest { get; private set; }
+    public RunnableWorkflowActorRequest? LastRequest { get; private set; }
     public Func<WorkflowOutputFrame, CancellationToken, ValueTask>? LastEmitAsync { get; private set; }
     public CancellationToken LastCancellationToken { get; private set; }
 
-    public WorkflowExecutionResult NextResult { get; set; } = new(
+    public RunnableWorkflowActorResult NextResult { get; set; } = new(
         ActorId: "actor-default",
         WorkflowName: "workflow-default",
         CommandId: "cmd-default",
@@ -144,8 +144,8 @@ internal sealed class FakeWorkflowExecutionCapability : IWorkflowExecutionCapabi
         TimedOut: false,
         Error: null);
 
-    public Task<WorkflowExecutionResult> ExecuteAsync(
-        WorkflowExecutionRequest request,
+    public Task<RunnableWorkflowActorResult> RunAsync(
+        RunnableWorkflowActorRequest request,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask>? emitAsync = null,
         CancellationToken ct = default)
     {

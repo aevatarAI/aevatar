@@ -58,18 +58,18 @@
    - 承载 workflow 执行协议事件（protobuf + DTO）。
    - 对外提供稳定消息语义，不含编排/状态逻辑。
 2. 保留并收口：`src/workflow/Aevatar.Workflow.Application.Abstractions`
-   - 增加 `IWorkflowExecutionCapability`（统一执行入口）。
+   - 增加 `IRunnableWorkflowActorCapability`（统一执行入口）。
 3. 调整：`src/workflow/Aevatar.Workflow.Application`
-   - 实现 `IWorkflowExecutionCapability`，集中编排实现。
+   - 实现 `IRunnableWorkflowActorCapability`，集中编排实现。
 4. 调整：`src/maker/Aevatar.Maker.Infrastructure`
-   - 删除具体 `WorkflowGAgent` 依赖，改为调用 `IWorkflowExecutionCapability`。
+   - 删除具体 `WorkflowGAgent` 依赖，改为调用 `IRunnableWorkflowActorCapability`。
 5. 调整：`src/maker/Aevatar.Maker.Core`
    - 由依赖 `Workflow.Core` 改为依赖 `Workflow.Abstractions`。
 
 ### 4.2 统一能力接口（建议）
 
 ```csharp
-public sealed record WorkflowExecutionRequest(
+public sealed record RunnableWorkflowActorRequest(
     string Input,
     string? ActorId,
     string? WorkflowName,
@@ -77,7 +77,7 @@ public sealed record WorkflowExecutionRequest(
     TimeSpan? Timeout,
     bool DestroyActorAfterRun);
 
-public sealed record WorkflowExecutionResult(
+public sealed record RunnableWorkflowActorResult(
     string ActorId,
     string WorkflowName,
     string CommandId,
@@ -86,10 +86,10 @@ public sealed record WorkflowExecutionResult(
     string Output,
     string? Error);
 
-public interface IWorkflowExecutionCapability
+public interface IRunnableWorkflowActorCapability
 {
-    Task<WorkflowExecutionResult> ExecuteAsync(
-        WorkflowExecutionRequest request,
+    Task<RunnableWorkflowActorResult> RunAsync(
+        RunnableWorkflowActorRequest request,
         Func<WorkflowRunEvent, CancellationToken, ValueTask>? emitAsync = null,
         CancellationToken ct = default);
 }
@@ -99,7 +99,7 @@ public interface IWorkflowExecutionCapability
 
 1. `actorId` 作为 opaque handle，不暴露 `WorkflowGAgent` 类型语义。
 2. `emitAsync` 提供实时事件输出能力（SSE/WS/内部消费均可复用）。
-3. `WorkflowExecutionResult` 仅暴露执行结果，不暴露内部投影实现细节。
+3. `RunnableWorkflowActorResult` 仅暴露执行结果，不暴露内部投影实现细节。
 
 ## 5. 实施计划（一次性破坏式）
 
@@ -122,8 +122,8 @@ public interface IWorkflowExecutionCapability
 
 ### Phase 2：执行能力收口
 
-1. 在 `Workflow.Application.Abstractions` 增加 `IWorkflowExecutionCapability` 与请求/结果模型。
-2. 在 `Workflow.Application` 新增 `WorkflowExecutionCapability` 实现：
+1. 在 `Workflow.Application.Abstractions` 增加 `IRunnableWorkflowActorCapability` 与请求/结果模型。
+2. 在 `Workflow.Application` 新增 `RunnableWorkflowActorCapability` 实现：
    - 复用 `IWorkflowRunActorPort` 解析/创建 Actor
    - 复用 `IWorkflowExecutionProjectionPort` 进行 projection 生命周期管理
    - 统一 envelope 构建与 command context 策略
@@ -139,8 +139,8 @@ public interface IWorkflowExecutionCapability
 
 1. 删除 `WorkflowMakerRunExecutionPort` 中对 `IActorRuntime`、`WorkflowGAgent`、`IWorkflowExecutionProjectionPort` 的直接使用。
 2. 新实现 `MakerWorkflowExecutionPort`（命名可调整）：
-   - 仅依赖 `IWorkflowExecutionCapability`
-   - 只做 `MakerRunRequest <-> WorkflowExecutionRequest` 映射
+   - 仅依赖 `IRunnableWorkflowActorCapability`
+   - 只做 `MakerRunRequest <-> RunnableWorkflowActorRequest` 映射
 3. `MakerEndpoints` 保持输入输出语义不变（或按新模型统一升级）。
 4. 删除 `Maker.Infrastructure` 中对 Workflow 实现层装配调用：
    - 删除 `AddAevatarWorkflow()`

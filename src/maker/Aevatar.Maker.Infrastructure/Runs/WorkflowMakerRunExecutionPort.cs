@@ -4,23 +4,23 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 namespace Aevatar.Maker.Infrastructure.Runs;
 
 /// <summary>
-/// Maker execution adapter backed by the workflow execution capability facade.
+/// Maker execution adapter backed by the runnable workflow actor capability.
 /// </summary>
 public sealed class WorkflowMakerRunExecutionPort : IMakerRunExecutionPort
 {
-    private readonly IWorkflowExecutionCapability _workflowExecutionCapability;
+    private readonly IRunnableWorkflowActorCapability _workflowActorCapability;
 
-    public WorkflowMakerRunExecutionPort(IWorkflowExecutionCapability workflowExecutionCapability)
+    public WorkflowMakerRunExecutionPort(IRunnableWorkflowActorCapability workflowActorCapability)
     {
-        _workflowExecutionCapability = workflowExecutionCapability;
+        _workflowActorCapability = workflowActorCapability;
     }
 
     public async Task<MakerRunExecutionResult> ExecuteAsync(MakerRunRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var executionResult = await _workflowExecutionCapability.ExecuteAsync(
-            new WorkflowExecutionRequest(
+        var executionResult = await _workflowActorCapability.RunAsync(
+            new RunnableWorkflowActorRequest(
                 Input: request.Input,
                 WorkflowName: request.WorkflowName,
                 WorkflowYaml: request.WorkflowYaml,

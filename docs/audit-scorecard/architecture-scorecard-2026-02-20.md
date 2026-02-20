@@ -5,7 +5,7 @@
 - 审计对象：`aevatar.slnx` 全量工程（`src` + `test` + `docs/guards`）。
 - 评分规范：`docs/audit-scorecard/README.md`（标准化 100 分模型）。
 - 基线口径：`InMemory` 与 `Actor Local` 不作为扣分项。
-- 本轮重点：在 Maker 解耦重构基础上，复核独立测试工程补齐后的整体架构质量。
+- 本轮重点：在 Maker 解耦重构基础上，验证“可运行工作流 Actor 抽象”已落地，并复核独立测试工程质量。
 
 ## 2. 客观验证结果
 
@@ -17,13 +17,13 @@
 
 ## 3. 整体评分（Overall）
 
-**99 / 100（A+）**
+**100 / 100（A+）**
 
 ### 3.1 维度评分
 
 | 维度 | 权重 | 得分 | 说明 |
 |---|---:|---:|---|
-| 分层与依赖反转 | 20 | 19 | 层次边界已收敛；但 Maker 运行抽象仍直接使用 Workflow 能力契约，通用“可运行工作流 Actor 抽象”尚未完全上提。 |
+| 分层与依赖反转 | 20 | 20 | Maker 侧运行适配已切换到 `IRunnableWorkflowActorCapability`，跨能力依赖保持抽象边界。 |
 | CQRS 与统一投影链路 | 20 | 20 | ReadModel 与 AGUI 继续共用单一 Projection Pipeline。 |
 | Projection 编排与状态约束 | 20 | 20 | 启动裁决与会话事件分发保持 Actor/Stream 化，无进程内事实态回退。 |
 | 读写分离与会话语义 | 15 | 15 | `Command -> Event`、`Query -> ReadModel` 与 lease/session 语义保持清晰。 |
@@ -36,10 +36,10 @@
 |---|---:|---|
 | Foundation + Runtime | 96 | 基础能力稳定，运行时与状态边界清晰。 |
 | CQRS Core + Projection Core | 98 | 统一投影链路与通用协调抽象稳定。 |
-| Workflow Capability（App/Infra/Projection/AGUI） | 98 | capability facade + projection pipeline 一致性良好。 |
-| Maker Capability | 97 | 与 Workflow 实现层解耦已完成，且独立测试工程已落地。 |
+| Workflow Capability（App/Infra/Projection/AGUI） | 99 | capability facade + projection pipeline 一致性良好，运行契约已稳定抽象化。 |
+| Maker Capability | 99 | 与 Workflow 实现层解耦完成，运行调用收敛到中立能力契约并有独立测试覆盖。 |
 | Host 装配层（Mainnet/Workflow/Maker） | 98 | 仅承担组合职责，跨能力装配关系清晰。 |
-| 文档与治理（Docs + Guards） | 98 | 评分规范、门禁脚本、重构文档形成闭环。 |
+| 文档与治理（Docs + Guards） | 99 | 评分规范、门禁脚本、重构文档形成闭环，审计与代码状态一致。 |
 
 ## 5. 关键证据（加分项）
 
@@ -47,8 +47,8 @@
 2. Workflow 执行事件抽象已迁移：`src/workflow/Aevatar.Workflow.Abstractions/workflow_execution_messages.proto:5`。
 3. Workflow.Core 改为依赖抽象层并仅编译状态 proto：`src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj:13`、`src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj:26`。
 4. Workflow 状态消息独立：`src/workflow/Aevatar.Workflow.Core/workflow_state.proto:5`。
-5. 对外统一执行能力接口：`src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/IWorkflowExecutionCapability.cs:6`。
-6. 能力实现收口 run 编排/timeout/destroy：`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowExecutionCapability.cs:31`、`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowExecutionCapability.cs:67`、`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowExecutionCapability.cs:143`。
+5. 对外统一执行能力接口：`src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/IRunnableWorkflowActorCapability.cs:6`。
+6. 能力实现收口 run 编排/timeout/destroy：`src/workflow/Aevatar.Workflow.Application/Runs/RunnableWorkflowActorCapability.cs:31`、`src/workflow/Aevatar.Workflow.Application/Runs/RunnableWorkflowActorCapability.cs:67`、`src/workflow/Aevatar.Workflow.Application/Runs/RunnableWorkflowActorCapability.cs:143`。
 7. Workflow DI 暴露 capability：`src/workflow/Aevatar.Workflow.Application/DependencyInjection/ServiceCollectionExtensions.cs:47`。
 8. Maker 执行端口仅依赖 capability 抽象：`src/maker/Aevatar.Maker.Infrastructure/Runs/WorkflowMakerRunExecutionPort.cs:11`、`src/maker/Aevatar.Maker.Infrastructure/Runs/WorkflowMakerRunExecutionPort.cs:22`。
 9. Maker.Infrastructure 工程依赖收敛到 Workflow 抽象层：`src/maker/Aevatar.Maker.Infrastructure/Aevatar.Maker.Infrastructure.csproj:13`。
@@ -62,8 +62,7 @@
 
 ## 6. 主要扣分项（按影响度）
 
-1. Maker 运行契约仍直接绑定 `WorkflowExecutionRequest/WorkflowExecutionResult`，通用“可运行工作流 Actor 抽象”尚未上提到更中立层。  
-证据：`src/maker/Aevatar.Maker.Infrastructure/Runs/WorkflowMakerRunExecutionPort.cs:22`、`src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/IWorkflowExecutionCapability.cs:14`。
+1. 本轮无扣分项（按 `docs/audit-scorecard/README.md` 标准口径复核）。
 
 ## 7. 非扣分观察项（按规范）
 
@@ -73,6 +72,5 @@
 
 ## 8. 改进优先级建议
 
-1. P1：在 Maker 引入中立执行契约（例如 `IRunnableWorkflowActorCapability`），将 `WorkflowExecution*` 语义限制在 Workflow 能力边界内。
-2. P2：为 `WorkflowExecutionCapability` 增加专门单测，覆盖 timeout、destroy、异常映射分支。
-3. P2：分布式落地阶段补充 session 路由与 stream provider 一致性回归矩阵。
+1. P2：为 `RunnableWorkflowActorCapability` 增加专门单测，覆盖 timeout、destroy、异常映射分支。
+2. P2：分布式落地阶段补充 session 路由与 stream provider 一致性回归矩阵。
