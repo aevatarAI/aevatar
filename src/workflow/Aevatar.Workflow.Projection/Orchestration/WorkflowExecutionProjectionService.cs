@@ -53,6 +53,10 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         await _contextGate.WaitAsync(ct);
         try
         {
+            var existingReport = await _store.GetAsync(rootActorId, ct);
+            if (existingReport?.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
+                throw new InvalidOperationException($"Projection for actor '{rootActorId}' is already active.");
+
             var startedAt = _clock.UtcNow;
             var context = _contextFactory.Create(
                 rootActorId,
@@ -139,6 +143,7 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
             return;
 
         await _lifecycle.StopAsync(context, ct);
+        await MarkProjectionStoppedAsync(context.RootActorId, ct);
     }
 
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
@@ -206,5 +211,19 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         public string ActorId { get; }
         public string CommandId { get; }
         public WorkflowExecutionProjectionContext Context { get; }
+    }
+
+    private Task MarkProjectionStoppedAsync(string actorId, CancellationToken ct)
+    {
+        return _store.MutateAsync(actorId, report =>
+        {
+            if (report.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
+                report.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
+
+            if (report.EndedAt < report.StartedAt)
+                report.EndedAt = _clock.UtcNow;
+
+            report.DurationMs = Math.Max(0, (report.EndedAt - report.StartedAt).TotalMilliseconds);
+        }, ct);
     }
 }

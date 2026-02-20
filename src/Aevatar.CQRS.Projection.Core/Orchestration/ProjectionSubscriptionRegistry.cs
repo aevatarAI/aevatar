@@ -7,7 +7,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// </summary>
 public sealed class ProjectionSubscriptionRegistry<TContext>
     : IProjectionSubscriptionRegistry<TContext>, IAsyncDisposable
-    where TContext : IProjectionContext
+    where TContext : IProjectionContext, IProjectionStreamSubscriptionContext
 {
     private readonly IProjectionDispatcher<TContext> _dispatcher;
     private readonly IActorStreamSubscriptionHub<EventEnvelope> _subscriptionHub;
@@ -28,11 +28,13 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(context);
+        if (context.StreamSubscriptionLease != null)
+            throw new InvalidOperationException(
+                $"Projection '{context.ProjectionId}' for actor '{context.RootActorId}' is already registered.");
 
         var actorId = context.RootActorId;
-        await _subscriptionHub.RegisterAsync(
+        context.StreamSubscriptionLease = await _subscriptionHub.SubscribeAsync(
             actorId,
-            context.ProjectionId,
             envelope => DispatchAsync(actorId, context, envelope),
             ct);
 
@@ -51,7 +53,12 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
         if (string.IsNullOrWhiteSpace(context.RootActorId) || string.IsNullOrWhiteSpace(context.ProjectionId))
             return;
 
-        await _subscriptionHub.UnregisterAsync(context.RootActorId, context.ProjectionId, ct);
+        var lease = context.StreamSubscriptionLease;
+        if (lease == null)
+            return;
+
+        context.StreamSubscriptionLease = null;
+        await lease.DisposeAsync();
     }
 
     private async ValueTask DispatchAsync(string actorId, TContext context, EventEnvelope envelope)

@@ -7,7 +7,7 @@ namespace Aevatar.Workflow.Projection;
 /// Actor-scoped projection context for CQRS read model updates.
 /// </summary>
 public sealed class WorkflowExecutionProjectionContext
-    : IProjectionContext, IAIProjectionContext
+    : IProjectionContext, IAIProjectionContext, IProjectionStreamSubscriptionContext
 {
     public required string ProjectionId { get; init; }
     public required string CommandId { get; set; }
@@ -17,6 +17,8 @@ public sealed class WorkflowExecutionProjectionContext
     public required string Input { get; set; }
 
     string IProjectionContext.ProjectionId => ProjectionId;
+
+    public IActorStreamSubscriptionLease? StreamSubscriptionLease { get; set; }
 
     private readonly object _liveSinkGate = new();
     private readonly List<LiveSinkBinding> _liveSinkBindings = [];

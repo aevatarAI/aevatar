@@ -11,9 +11,11 @@
 - 变更必须可验证：架构调整需同步文档，且 `build/test` 通过。
 
 ## 中间层状态约束（强制）
-- 禁止在中间层新增可变集合运行态字段：`Dictionary<>`、`ConcurrentDictionary<>`、`HashSet<>`、`Queue<>`（典型场景：编排服务、投影服务、模块执行态）。
-- 需要显式状态时：优先写入 Actor 持久态；无法放入 Actor 时，使用抽象化分布式状态服务，不允许直接落进程内缓存作为事实源。
+- 禁止在中间层维护 `entity/actor/workflow-run/session` 等 ID 到上下文或事实状态的进程内映射（`Dictionary<>`、`ConcurrentDictionary<>`、`HashSet<>`、`Queue<>`）。
+- 允许 Actor 内部运行态集合保留在内存或 Actor `State`（例如 `module_runtime`）；前提是该状态不作为跨节点事实源，并且按生命周期及时清理。
+- 需要跨 Actor/跨节点一致性的显式状态时：优先写入 Actor 持久态；无法放入 Actor 时，使用抽象化分布式状态服务，不允许在中间层落进程内缓存作为事实源。
 - 明确例外：`InMemory` 持久化/基础设施实现仅用于开发与测试，可保留，但不得外溢到中间层业务语义。
+- 方法内局部临时集合可用，但不得提升为服务级/单例级事实状态字段。
 - 投影端口规范：禁止通过 `actorId -> context` 反查方式管理生命周期，改为显式 `lease/session` 句柄传递。
 
 ## 项目结构与模块组织
@@ -41,7 +43,7 @@
 - 测试栈：xUnit、FluentAssertions、`coverlet.collector`。
 - 测试文件命名：`*Tests.cs`，单文件聚焦一个行为域。
 - 行为变更必须补测试；重构不得降低关键路径覆盖率。
-- CI 守卫：禁止 `GetAwaiter().GetResult()`；禁止 `TypeUrl.Contains(...)` 字符串路由；禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`；禁止中间层新增可变 Dic 状态字段；禁止投影端口回退到 `actorId` 反查上下文模型。
+- CI 守卫（full-scan）：禁止 `GetAwaiter().GetResult()`；禁止 `TypeUrl.Contains(...)` 字符串路由；禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`；禁止中间层 `actor/entity/run/session` ID 映射 Dic 事实态字段（仅扫描 Projection/Application/Orchestration 中间层）；禁止投影端口回退到 `actorId` 反查上下文模型。
 
 ## 提交与 PR 规范
 - 提交信息使用祈使句并聚焦单一目的（如：`Refactor projection pipeline`）。

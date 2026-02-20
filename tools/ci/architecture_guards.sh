@@ -133,51 +133,50 @@ then
   exit 1
 fi
 
-if [[ "${DIFF_MODE}" == "range" ]]; then
-  changed_cs_source_cmd=(git diff --name-only "${DIFF_RANGE_VALUE}" -- '*.cs')
-else
-  changed_cs_source_cmd=(git diff --name-only HEAD -- '*.cs')
-fi
+id_mapping_state_pattern='^\s*(private|protected|internal)\s+((readonly|static)\s+)*(ConcurrentDictionary|Dictionary|HashSet|Queue)\s*<[^>]+>\s+_[A-Za-z0-9_]*(actor|entity|run|session)[A-Za-z0-9_]*\b'
+id_mapping_state_hits=""
 
-mutable_state_pattern='^\+.*\b(private|protected|internal)\s+((readonly|static)\s+)*(ConcurrentDictionary|Dictionary|HashSet|Queue)\s*<'
-mutable_state_hits=""
+id_mapping_scan_roots=(
+  "src/Aevatar.CQRS.Projection.Core"
+  "src/Aevatar.Foundation.Projection"
+  "src/Aevatar.AI.Projection"
+  "src/workflow/Aevatar.Workflow.Projection"
+  "src/workflow/Aevatar.Workflow.Application"
+  "src/maker/Aevatar.Maker.Application"
+)
 
-while IFS= read -r file; do
-  if [ -z "${file}" ]; then
-    continue
+scan_args=()
+for root in "${id_mapping_scan_roots[@]}"; do
+  if [ -d "${root}" ]; then
+    scan_args+=("${root}")
   fi
+done
 
-  case "${file}" in
-    src/Aevatar.CQRS.Projection.Core/*|src/workflow/Aevatar.Workflow.Projection/*|src/workflow/Aevatar.Workflow.Application/*|src/workflow/Aevatar.Workflow.Core/*|src/maker/Aevatar.Maker.Core/*|src/Aevatar.Foundation.Core/*)
-      ;;
-    *)
+if [ "${#scan_args[@]}" -gt 0 ]; then
+  while IFS= read -r file; do
+    if [ -z "${file}" ]; then
       continue
-      ;;
-  esac
+    fi
 
-  case "${file}" in
-    *InMemory*|*inmemory*)
-      continue
-      ;;
-  esac
+    case "${file}" in
+      *InMemory*|*inmemory*|*Tests.cs|*.g.cs)
+        continue
+        ;;
+    esac
 
-  if [[ "${DIFF_MODE}" == "range" ]]; then
-    hits="$(git diff --unified=0 "${DIFF_RANGE_VALUE}" -- "${file}" | rg -n "${mutable_state_pattern}" || true)"
-  else
-    hits="$(git diff --unified=0 HEAD -- "${file}" | rg -n "${mutable_state_pattern}" || true)"
-  fi
-
-  if [ -n "${hits}" ]; then
-    mutable_state_hits="${mutable_state_hits}
+    hits="$(rg -n -i "${id_mapping_state_pattern}" "${file}" || true)"
+    if [ -n "${hits}" ]; then
+      id_mapping_state_hits="${id_mapping_state_hits}
 ${file}
 ${hits}
 "
-  fi
-done < <("${changed_cs_source_cmd[@]}")
+    fi
+  done < <(rg --files "${scan_args[@]}" -g '*.cs')
+fi
 
-if [ -n "${mutable_state_hits}" ]; then
-  echo "${mutable_state_hits}"
-  echo "Mutable in-memory collection fields in middle layer are forbidden. Use actor state or distributed state abstractions."
+if [ -n "${id_mapping_state_hits}" ]; then
+  echo "${id_mapping_state_hits}"
+  echo "Full-scan violation: middle-layer actor/entity/run/session ID-mapping in-memory dictionary state is forbidden. Use actorized orchestration, lease/session handles, or distributed state abstractions."
   exit 1
 fi
 

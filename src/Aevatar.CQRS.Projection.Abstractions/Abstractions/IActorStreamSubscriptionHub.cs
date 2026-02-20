@@ -3,26 +3,18 @@ using Google.Protobuf;
 namespace Aevatar.CQRS.Projection.Abstractions;
 
 /// <summary>
-/// Shared actor-stream subscription hub that multiplexes one actor stream subscription
-/// to many logical handlers.
+/// Shared actor-stream subscription hub that creates per-handler subscriptions
+/// and returns explicit unsubscribe leases.
 /// </summary>
 public interface IActorStreamSubscriptionHub<TMessage>
     where TMessage : class, IMessage, new()
 {
     /// <summary>
-    /// Registers one keyed handler for the specified actor.
+    /// Subscribes one handler for the specified actor stream.
+    /// Returns a lease that must be disposed to detach the handler.
     /// </summary>
-    Task RegisterAsync(
+    Task<IActorStreamSubscriptionLease> SubscribeAsync(
         string actorId,
-        string key,
         Func<TMessage, ValueTask> handler,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Unregisters one keyed handler for the specified actor.
-    /// </summary>
-    Task UnregisterAsync(
-        string actorId,
-        string key,
         CancellationToken ct = default);
 }
