@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Aevatar.AI.Projection.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
@@ -19,39 +18,8 @@ public sealed class WorkflowExecutionProjectionContext
 
     string IProjectionContext.ProjectionId => ProjectionId;
 
-    private readonly ConcurrentDictionary<string, byte> _processedEventIds = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, object?> _properties = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<IWorkflowRunEventSink, string> _liveSinks = new(ReferenceEqualityComparer.Instance);
-
-    /// <summary>
-    /// Returns true when the event is seen for the first time in this projection context.
-    /// </summary>
-    public bool TryMarkProcessed(string eventId) => _processedEventIds.TryAdd(eventId, 0);
-
-    /// <summary>
-    /// Sets an extension property for this projection context.
-    /// </summary>
-    public void SetProperty(string key, object? value) => _properties[key] = value;
-
-    /// <summary>
-    /// Tries to read an extension property from this projection context.
-    /// </summary>
-    public bool TryGetProperty<T>(string key, out T? value)
-    {
-        if (_properties.TryGetValue(key, out var raw) && raw is T casted)
-        {
-            value = casted;
-            return true;
-        }
-
-        value = default;
-        return false;
-    }
-
-    /// <summary>
-    /// Removes an extension property.
-    /// </summary>
-    public bool RemoveProperty(string key) => _properties.TryRemove(key, out _);
+    private readonly object _liveSinkGate = new();
+    private readonly List<LiveSinkBinding> _liveSinkBindings = [];
 
     public void UpdateRunMetadata(
         string commandId,
@@ -70,17 +38,39 @@ public sealed class WorkflowExecutionProjectionContext
 
     public void AttachLiveSink(string commandId, IWorkflowRunEventSink sink)
     {
-        _liveSinks[sink] = commandId;
+        ArgumentNullException.ThrowIfNull(sink);
+        lock (_liveSinkGate)
+        {
+            var index = _liveSinkBindings.FindIndex(x => ReferenceEquals(x.Sink, sink));
+            if (index >= 0)
+            {
+                _liveSinkBindings[index] = new LiveSinkBinding(commandId, sink);
+                return;
+            }
+
+            _liveSinkBindings.Add(new LiveSinkBinding(commandId, sink));
+        }
     }
 
-    public void DetachLiveSink(IWorkflowRunEventSink sink) => _liveSinks.TryRemove(sink, out _);
+    public void DetachLiveSink(IWorkflowRunEventSink sink)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        lock (_liveSinkGate)
+            _liveSinkBindings.RemoveAll(x => ReferenceEquals(x.Sink, sink));
+    }
 
     public IReadOnlyList<IWorkflowRunEventSink> GetLiveSinksSnapshot(string? commandId = null)
     {
-        if (string.IsNullOrWhiteSpace(commandId))
-            return _liveSinks.Keys.ToList();
+        lock (_liveSinkGate)
+        {
+            if (string.IsNullOrWhiteSpace(commandId))
+                return _liveSinkBindings.Select(x => x.Sink).ToList();
 
-        return GetLiveSinksForCommand(commandId);
+            return _liveSinkBindings
+                .Where(x => string.Equals(x.CommandId, commandId, StringComparison.Ordinal))
+                .Select(x => x.Sink)
+                .ToList();
+        }
     }
 
     public IReadOnlyList<IWorkflowRunEventSink> GetLiveSinksForCommand(string commandId)
@@ -88,9 +78,8 @@ public sealed class WorkflowExecutionProjectionContext
         if (string.IsNullOrWhiteSpace(commandId))
             return [];
 
-        return _liveSinks
-            .Where(x => string.Equals(x.Value, commandId, StringComparison.Ordinal))
-            .Select(x => x.Key)
-            .ToList();
+        return GetLiveSinksSnapshot(commandId);
     }
+
+    private sealed record LiveSinkBinding(string CommandId, IWorkflowRunEventSink Sink);
 }

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -19,7 +18,6 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
     private readonly IProjectionClock _clock;
     private readonly IWorkflowExecutionProjectionContextFactory _contextFactory;
     private readonly WorkflowExecutionReadModelMapper _mapper;
-    private readonly ConcurrentDictionary<string, WorkflowExecutionProjectionContext> _contextsByActorId = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _contextGate = new(1, 1);
 
     public WorkflowExecutionProjectionService(
@@ -42,20 +40,36 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
 
     public bool EnableActorQueryEndpoints => _options.Enabled && _options.EnableActorQueryEndpoints;
 
-    public async Task EnsureActorProjectionAsync(
+    public async Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
         string rootActorId,
         string workflowName,
         string input,
         string commandId,
         CancellationToken ct = default)
     {
-        _ = await EnsureActorContextAsync(
-            rootActorId,
-            workflowName,
-            input,
-            commandId,
-            updateMetadata: true,
-            ct);
+        if (!ProjectionEnabled || string.IsNullOrWhiteSpace(rootActorId))
+            return null;
+
+        await _contextGate.WaitAsync(ct);
+        try
+        {
+            var startedAt = _clock.UtcNow;
+            var context = _contextFactory.Create(
+                rootActorId,
+                commandId,
+                rootActorId,
+                workflowName,
+                input,
+                startedAt);
+
+            await _lifecycle.StartAsync(context, ct);
+            await RefreshReportMetadataAsync(rootActorId, context, ct);
+            return new WorkflowExecutionProjectionLease(context);
+        }
+        finally
+        {
+            _contextGate.Release();
+        }
     }
 
     private Task RefreshReportMetadataAsync(
@@ -77,52 +91,51 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
     }
 
     public async Task AttachLiveSinkAsync(
-        string actorId,
-        string commandId,
+        IWorkflowExecutionProjectionLease lease,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(sink);
-
-        if (!ProjectionEnabled || string.IsNullOrWhiteSpace(actorId))
-            return;
-
-        var context = await EnsureActorContextAsync(
-            actorId,
-            string.Empty,
-            string.Empty,
-            commandId,
-            updateMetadata: false,
-            ct);
-        if (context != null)
-            context.AttachLiveSink(commandId, sink);
-    }
-
-    public Task DetachLiveSinkAsync(
-        string actorId,
-        IWorkflowRunEventSink sink,
-        CancellationToken ct = default)
-    {
+        ArgumentNullException.ThrowIfNull(lease);
         ArgumentNullException.ThrowIfNull(sink);
         ct.ThrowIfCancellationRequested();
 
-        if (!ProjectionEnabled || string.IsNullOrWhiteSpace(actorId))
+        if (!ProjectionEnabled)
+            return;
+
+        var runtimeLease = ResolveRuntimeLease(lease);
+        runtimeLease.Context.AttachLiveSink(runtimeLease.CommandId, sink);
+    }
+
+    public Task DetachLiveSinkAsync(
+        IWorkflowExecutionProjectionLease lease,
+        IWorkflowRunEventSink sink,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(sink);
+        ct.ThrowIfCancellationRequested();
+
+        if (!ProjectionEnabled)
             return Task.CompletedTask;
 
-        if (_contextsByActorId.TryGetValue(actorId, out var context))
-            context.DetachLiveSink(sink);
+        var runtimeLease = ResolveRuntimeLease(lease);
+        runtimeLease.Context.DetachLiveSink(sink);
         return Task.CompletedTask;
     }
 
     public async Task ReleaseActorProjectionAsync(
-        string actorId,
+        IWorkflowExecutionProjectionLease lease,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(lease);
         ct.ThrowIfCancellationRequested();
-        if (!ProjectionEnabled || string.IsNullOrWhiteSpace(actorId))
+        if (!ProjectionEnabled)
             return;
 
-        if (!_contextsByActorId.TryRemove(actorId, out var context))
+        var runtimeLease = ResolveRuntimeLease(lease);
+        var context = runtimeLease.Context;
+
+        if (context.GetLiveSinksSnapshot().Count > 0)
             return;
 
         await _lifecycle.StopAsync(context, ct);
@@ -177,65 +190,21 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         return timeline;
     }
 
-    private async Task<WorkflowExecutionProjectionContext?> EnsureActorContextAsync(
-        string rootActorId,
-        string workflowName,
-        string input,
-        string commandId,
-        bool updateMetadata,
-        CancellationToken ct)
+    private static WorkflowExecutionProjectionLease ResolveRuntimeLease(IWorkflowExecutionProjectionLease lease) =>
+        lease as WorkflowExecutionProjectionLease
+        ?? throw new InvalidOperationException("Unsupported workflow projection lease implementation.");
+
+    private sealed class WorkflowExecutionProjectionLease : IWorkflowExecutionProjectionLease
     {
-        if (!ProjectionEnabled || string.IsNullOrWhiteSpace(rootActorId))
-            return null;
-
-        if (_contextsByActorId.TryGetValue(rootActorId, out var existingContext))
+        public WorkflowExecutionProjectionLease(WorkflowExecutionProjectionContext context)
         {
-            if (updateMetadata)
-            {
-                existingContext.UpdateRunMetadata(
-                    commandId,
-                    workflowName,
-                    input,
-                    _clock.UtcNow);
-                await RefreshReportMetadataAsync(rootActorId, existingContext, ct);
-            }
-
-            return existingContext;
+            Context = context;
+            ActorId = context.RootActorId;
+            CommandId = context.CommandId;
         }
 
-        await _contextGate.WaitAsync(ct);
-        try
-        {
-            if (_contextsByActorId.TryGetValue(rootActorId, out existingContext))
-            {
-                if (updateMetadata)
-                {
-                    existingContext.UpdateRunMetadata(
-                        commandId,
-                        workflowName,
-                        input,
-                        _clock.UtcNow);
-                    await RefreshReportMetadataAsync(rootActorId, existingContext, ct);
-                }
-
-                return existingContext;
-            }
-
-            var startedAt = _clock.UtcNow;
-            var context = _contextFactory.Create(
-                rootActorId,
-                commandId,
-                rootActorId,
-                workflowName,
-                input,
-                startedAt);
-            await _lifecycle.StartAsync(context, ct);
-            _contextsByActorId[rootActorId] = context;
-            return context;
-        }
-        finally
-        {
-            _contextGate.Release();
-        }
+        public string ActorId { get; }
+        public string CommandId { get; }
+        public WorkflowExecutionProjectionContext Context { get; }
     }
 }

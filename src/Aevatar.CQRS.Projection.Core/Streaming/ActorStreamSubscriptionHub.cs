@@ -15,7 +15,6 @@ public sealed class ActorStreamSubscriptionHub<TMessage> : IActorStreamSubscript
     private readonly ILogger<ActorStreamSubscriptionHub<TMessage>>? _logger;
     private readonly ConcurrentDictionary<string, ActorSubscriptionState> _statesByActor = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private long _handlerIdSeed;
     private int _disposed;
 
     public ActorStreamSubscriptionHub(
@@ -26,17 +25,18 @@ public sealed class ActorStreamSubscriptionHub<TMessage> : IActorStreamSubscript
         _logger = logger;
     }
 
-    public async Task<IAsyncDisposable> RegisterAsync(
+    public async Task RegisterAsync(
         string actorId,
+        string key,
         Func<TMessage, ValueTask> handler,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(actorId))
             throw new ArgumentException("Actor id is required.", nameof(actorId));
+        if (string.IsNullOrWhiteSpace(key))
+            throw new ArgumentException("Handler key is required.", nameof(key));
         ArgumentNullException.ThrowIfNull(handler);
         ThrowIfDisposed();
-
-        var handlerId = Interlocked.Increment(ref _handlerIdSeed);
 
         await _gate.WaitAsync(ct);
         try
@@ -53,27 +53,33 @@ public sealed class ActorStreamSubscriptionHub<TMessage> : IActorStreamSubscript
                 _statesByActor[actorId] = state;
             }
 
-            state.Handlers[handlerId] = handler;
+            if (!state.Handlers.TryAdd(key, handler))
+                throw new InvalidOperationException($"Handler '{key}' is already registered for actor '{actorId}'.");
         }
         finally
         {
             _gate.Release();
         }
-
-        return new AsyncDisposableHandle(() => UnregisterAsync(actorId, handlerId));
     }
 
-    private async ValueTask UnregisterAsync(string actorId, long handlerId)
+    public async Task UnregisterAsync(
+        string actorId,
+        string key,
+        CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(actorId) || string.IsNullOrWhiteSpace(key))
+            return;
+
         IAsyncDisposable? streamSubscriptionToDispose = null;
 
-        await _gate.WaitAsync();
+        await _gate.WaitAsync(ct);
         try
         {
             if (!_statesByActor.TryGetValue(actorId, out var state))
                 return;
 
-            state.Handlers.TryRemove(handlerId, out _);
+            state.Handlers.TryRemove(key, out _);
             if (!state.Handlers.IsEmpty)
                 return;
 
@@ -153,22 +159,7 @@ public sealed class ActorStreamSubscriptionHub<TMessage> : IActorStreamSubscript
             StreamSubscription = streamSubscription;
 
         public IAsyncDisposable StreamSubscription { get; }
-        public ConcurrentDictionary<long, Func<TMessage, ValueTask>> Handlers { get; } = new();
-    }
-
-    private sealed class AsyncDisposableHandle : IAsyncDisposable
-    {
-        private readonly Func<ValueTask> _dispose;
-        private int _disposed;
-
-        public AsyncDisposableHandle(Func<ValueTask> dispose) => _dispose = dispose;
-
-        public ValueTask DisposeAsync()
-        {
-            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
-                return ValueTask.CompletedTask;
-
-            return _dispose();
-        }
+        public ConcurrentDictionary<string, Func<TMessage, ValueTask>> Handlers { get; } =
+            new(StringComparer.Ordinal);
     }
 }

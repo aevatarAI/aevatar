@@ -40,6 +40,7 @@ public sealed class WorkflowMakerRunExecutionPort : IMakerRunExecutionPort
         var startedAt = DateTimeOffset.UtcNow;
         var started = new MakerRunStarted(actor.Id, request.WorkflowName, commandId, startedAt);
         var shouldDestroyActor = request.DestroyActorAfterRun || actorCreated;
+        IWorkflowExecutionProjectionLease? projectionLease = null;
         MakerRunExecutionResult result;
 
         try
@@ -60,13 +61,23 @@ public sealed class WorkflowMakerRunExecutionPort : IMakerRunExecutionPort
 
             try
             {
-                await _projectionPort.EnsureActorProjectionAsync(
+                projectionLease = await _projectionPort.EnsureActorProjectionAsync(
                     actor.Id,
                     request.WorkflowName,
                     request.Input,
                     commandId,
                     ct);
-                await _projectionPort.AttachLiveSinkAsync(actor.Id, commandId, sink, ct);
+                if (projectionLease == null)
+                {
+                    return new MakerRunExecutionResult(
+                        started,
+                        Output: string.Empty,
+                        Success: false,
+                        TimedOut: false,
+                        Error: "Projection pipeline is disabled.");
+                }
+
+                await _projectionPort.AttachLiveSinkAsync(projectionLease, sink, ct);
 
                 await actor.HandleEventAsync(CreateStartEnvelope(request, commandId), ct);
 
@@ -89,7 +100,8 @@ public sealed class WorkflowMakerRunExecutionPort : IMakerRunExecutionPort
             }
             finally
             {
-                await _projectionPort.DetachLiveSinkAsync(actor.Id, sink, CancellationToken.None);
+                if (projectionLease != null)
+                    await _projectionPort.DetachLiveSinkAsync(projectionLease, sink, CancellationToken.None);
                 sink.Complete();
                 await sink.DisposeAsync();
             }
@@ -109,7 +121,8 @@ public sealed class WorkflowMakerRunExecutionPort : IMakerRunExecutionPort
             {
                 try
                 {
-                    await _projectionPort.ReleaseActorProjectionAsync(actor.Id, CancellationToken.None);
+                    if (projectionLease != null)
+                        await _projectionPort.ReleaseActorProjectionAsync(projectionLease, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {

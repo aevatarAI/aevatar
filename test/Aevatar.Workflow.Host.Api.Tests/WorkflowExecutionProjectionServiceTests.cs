@@ -3,6 +3,7 @@ using Aevatar.AI.Projection.Appliers;
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
@@ -33,7 +34,8 @@ public class WorkflowExecutionProjectionServiceTests
             out var streams,
             out _);
 
-        await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
+        var lease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
+        lease.Should().NotBeNull();
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
         {
             WorkflowName = "direct",
@@ -74,18 +76,18 @@ public class WorkflowExecutionProjectionServiceTests
             out _);
 
         var sink = new WorkflowRunEventChannel();
-        await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
-        await service.AttachLiveSinkAsync("root", "cmd-1", sink);
-        await service.DetachLiveSinkAsync("root", sink);
+        var lease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
+        lease.Should().BeNull();
 
         var snapshot = await service.GetActorSnapshotAsync("root");
         var timeline = await service.ListActorTimelineAsync("root", 50);
         snapshot.Should().BeNull();
         timeline.Should().BeEmpty();
+        await sink.DisposeAsync();
     }
 
     [Fact]
-    public async Task EnsureActorProjectionAsync_WhenCalledRepeatedly_ShouldRefreshCommandMetadata()
+    public async Task EnsureActorProjectionAsync_WhenCalledRepeatedly_ShouldThrow()
     {
         var service = CreateService(
             new WorkflowExecutionProjectionOptions
@@ -96,12 +98,12 @@ public class WorkflowExecutionProjectionServiceTests
             out _,
             out _);
 
-        await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
-        await service.EnsureActorProjectionAsync("root", "direct", "hello again", "cmd-2");
+        var firstLease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
+        firstLease.Should().NotBeNull();
 
-        var refreshed = await service.GetActorSnapshotAsync("root");
-        refreshed.Should().NotBeNull();
-        refreshed!.LastCommandId.Should().Be("cmd-2");
+        var act = async () =>
+            await service.EnsureActorProjectionAsync("root", "direct", "hello again", "cmd-2");
+        await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
     [Fact]
@@ -119,7 +121,8 @@ public class WorkflowExecutionProjectionServiceTests
             out var store,
             clock);
 
-        await service.EnsureActorProjectionAsync("root", "wf", "original-input", "cmd-1");
+        var lease = await service.EnsureActorProjectionAsync("root", "wf", "original-input", "cmd-1");
+        lease.Should().NotBeNull();
 
         var beforeAttach = await store.GetAsync("root");
         beforeAttach.Should().NotBeNull();
@@ -130,7 +133,7 @@ public class WorkflowExecutionProjectionServiceTests
 
         clock.UtcNow = initialStartedAt.AddMinutes(10);
         var sink = new WorkflowRunEventChannel();
-        await service.AttachLiveSinkAsync("root", "cmd-2", sink);
+        await service.AttachLiveSinkAsync(lease!, sink);
 
         var afterAttach = await store.GetAsync("root");
         afterAttach.Should().NotBeNull();
@@ -138,7 +141,7 @@ public class WorkflowExecutionProjectionServiceTests
         afterAttach.WorkflowName.Should().Be("wf");
         afterAttach.Input.Should().Be("original-input");
         afterAttach.StartedAt.Should().Be(initialStartedAt);
-        await service.DetachLiveSinkAsync("root", sink);
+        await service.DetachLiveSinkAsync(lease!, sink);
         await sink.DisposeAsync();
     }
 
@@ -154,7 +157,8 @@ public class WorkflowExecutionProjectionServiceTests
             out var streams,
             out _);
 
-        await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
+        var lease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
+        lease.Should().NotBeNull();
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
         {
             WorkflowName = "direct",
@@ -170,7 +174,7 @@ public class WorkflowExecutionProjectionServiceTests
         var beforeRelease = await service.ListActorTimelineAsync("root", 50);
         beforeRelease.Should().ContainSingle(x => x.Stage == "workflow.start");
 
-        await service.ReleaseActorProjectionAsync("root");
+        await service.ReleaseActorProjectionAsync(lease!);
         await streams.GetStream("root").ProduceAsync(Wrap(new StepRequestEvent
         {
             StepId = "s1",
@@ -183,6 +187,39 @@ public class WorkflowExecutionProjectionServiceTests
         afterRelease.Count(x => x.Stage == "step.request").Should().Be(0);
     }
 
+    [Fact]
+    public async Task ReleaseActorProjectionAsync_WhenLiveSinkAttached_ShouldKeepProjectionActive()
+    {
+        var service = CreateService(
+            new WorkflowExecutionProjectionOptions
+            {
+                Enabled = true,
+                EnableActorQueryEndpoints = true,
+            },
+            out var streams,
+            out _);
+
+        var lease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
+        lease.Should().NotBeNull();
+        var sink = new WorkflowRunEventChannel();
+        await service.AttachLiveSinkAsync(lease!, sink);
+        await service.ReleaseActorProjectionAsync(lease!);
+        await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "direct",
+            Input = "hello",
+        }));
+
+        await WaitUntilAsync(async () =>
+        {
+            var timelineItems = await service.ListActorTimelineAsync("root", 50);
+            return timelineItems.Any(x => x.Stage == "workflow.start");
+        });
+
+        await service.DetachLiveSinkAsync(lease!, sink);
+        await sink.DisposeAsync();
+    }
+
     private static WorkflowExecutionProjectionService CreateService(
         WorkflowExecutionProjectionOptions options,
         out InMemoryStreamProvider streams,
@@ -192,7 +229,10 @@ public class WorkflowExecutionProjectionServiceTests
         streams = new InMemoryStreamProvider();
         var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         store = new InMemoryWorkflowExecutionReadModelStore();
-        var projector = new WorkflowExecutionReadModelProjector(store, BuildReducers());
+        var projector = new WorkflowExecutionReadModelProjector(
+            store,
+            new TestEventDeduplicator(),
+            BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>([projector]);
         var dispatcher = new ProjectionDispatcher<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator);
         var runRegistry = new ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>(
@@ -263,5 +303,17 @@ public class WorkflowExecutionProjectionServiceTests
         }
 
         public DateTimeOffset UtcNow { get; set; }
+    }
+
+    private sealed class TestEventDeduplicator : IEventDeduplicator
+    {
+        private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
+        private readonly object _gate = new();
+
+        public Task<bool> TryRecordAsync(string eventId)
+        {
+            lock (_gate)
+                return Task.FromResult(_seen.Add(eventId));
+        }
     }
 }

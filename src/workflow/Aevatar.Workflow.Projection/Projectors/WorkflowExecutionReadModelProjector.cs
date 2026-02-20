@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Reducers;
+using Aevatar.Foundation.Abstractions.Deduplication;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
@@ -10,13 +11,16 @@ public sealed class WorkflowExecutionReadModelProjector
     : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
 {
     private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
+    private readonly IEventDeduplicator _deduplicator;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>> _reducersByType;
 
     public WorkflowExecutionReadModelProjector(
         IProjectionReadModelStore<WorkflowExecutionReport, string> store,
+        IEventDeduplicator deduplicator,
         IEnumerable<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> reducers)
     {
         _store = store;
+        _deduplicator = deduplicator;
         _reducersByType = reducers
             .GroupBy(x => x.EventTypeUrl, StringComparer.Ordinal)
             .ToDictionary(
@@ -44,16 +48,22 @@ public sealed class WorkflowExecutionReadModelProjector
         return new ValueTask(_store.UpsertAsync(report, ct));
     }
 
-    public ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
+    public async ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
         var typeUrl = envelope.Payload?.TypeUrl;
-        if (string.IsNullOrWhiteSpace(typeUrl)) return ValueTask.CompletedTask;
-        if (!_reducersByType.TryGetValue(typeUrl, out var reducers)) return ValueTask.CompletedTask;
-        if (!string.IsNullOrWhiteSpace(envelope.Id) && !context.TryMarkProcessed(envelope.Id))
-            return ValueTask.CompletedTask;
+        if (string.IsNullOrWhiteSpace(typeUrl))
+            return;
+        if (!_reducersByType.TryGetValue(typeUrl, out var reducers))
+            return;
+        if (!string.IsNullOrWhiteSpace(envelope.Id))
+        {
+            var dedupKey = $"{context.RootActorId}:{envelope.Id}";
+            if (!await _deduplicator.TryRecordAsync(dedupKey))
+                return;
+        }
 
         var now = ResolveEventTimestamp(envelope);
-        return new ValueTask(_store.MutateAsync(context.RootActorId, report =>
+        await _store.MutateAsync(context.RootActorId, report =>
         {
             var mutated = false;
             foreach (var reducer in reducers)
@@ -64,7 +74,7 @@ public sealed class WorkflowExecutionReadModelProjector
 
             WorkflowExecutionProjectionMutations.RecordProjectedEvent(report, envelope);
             WorkflowExecutionProjectionMutations.RefreshDerivedFields(report);
-        }, ct));
+        }, ct);
     }
 
     public ValueTask CompleteAsync(

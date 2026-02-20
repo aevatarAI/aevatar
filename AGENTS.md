@@ -3,11 +3,18 @@
 ## 顶级架构要求（最高优先级）
 - 严格分层：`Domain / Application / Infrastructure / Host`，`API` 仅做宿主与组合，不承载核心业务编排。
 - 统一投影链路：CQRS 与 AGUI 走同一套 Projection Pipeline，统一入口、一对多分发，避免双轨实现。
+- 投影编排 Actor 化：Projection 的会话、订阅、关联关系等运行态必须由 Actor 或分布式状态承载；禁止在中间层通过进程内注册表/字典持有事实状态。
 - 明确读写分离：`Command -> Event`，`Query -> ReadModel`；异步完成通过事件通知与推送，不在会话内临时拼装流程。
 - 严格依赖反转：上层依赖抽象，禁止跨层反向依赖和对具体实现的直接耦合。
 - 命名语义优先：项目名、命名空间、目录一致；缩写全大写（如 `LLM/CQRS/AGUI`）；集合语义使用复数。
 - 不保留无效层：空转发、重复抽象、无业务价值代码直接删除。
 - 变更必须可验证：架构调整需同步文档，且 `build/test` 通过。
+
+## 中间层状态约束（强制）
+- 禁止在中间层新增可变集合运行态字段：`Dictionary<>`、`ConcurrentDictionary<>`、`HashSet<>`、`Queue<>`（典型场景：编排服务、投影服务、模块执行态）。
+- 需要显式状态时：优先写入 Actor 持久态；无法放入 Actor 时，使用抽象化分布式状态服务，不允许直接落进程内缓存作为事实源。
+- 明确例外：`InMemory` 持久化/基础设施实现仅用于开发与测试，可保留，但不得外溢到中间层业务语义。
+- 投影端口规范：禁止通过 `actorId -> context` 反查方式管理生命周期，改为显式 `lease/session` 句柄传递。
 
 ## 项目结构与模块组织
 - `src/`：生产代码，按能力与分层组织（`Aevatar.Foundation.*`、`Aevatar.Workflow.Core`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Abstractions/Core/WorkflowExecution`、`Aevatar.Host.*`）。
@@ -19,6 +26,7 @@
 - `dotnet restore aevatar.slnx --nologo`：还原依赖。
 - `dotnet build aevatar.slnx --nologo`：编译全部项目。
 - `dotnet test aevatar.slnx --nologo`：运行全量测试。
+- `bash tools/ci/architecture_guards.sh`：本地执行 CI 架构门禁（与 CI 同步）。
 - `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
 - `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
 
@@ -33,7 +41,7 @@
 - 测试栈：xUnit、FluentAssertions、`coverlet.collector`。
 - 测试文件命名：`*Tests.cs`，单文件聚焦一个行为域。
 - 行为变更必须补测试；重构不得降低关键路径覆盖率。
-- CI 守卫：禁止 `GetAwaiter().GetResult()`；禁止 `TypeUrl.Contains(...)` 字符串路由；禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`。
+- CI 守卫：禁止 `GetAwaiter().GetResult()`；禁止 `TypeUrl.Contains(...)` 字符串路由；禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`；禁止中间层新增可变 Dic 状态字段；禁止投影端口回退到 `actorId` 反查上下文模型。
 
 ## 提交与 PR 规范
 - 提交信息使用祈使句并聚焦单一目的（如：`Refactor projection pipeline`）。

@@ -9,7 +9,7 @@ public interface IWorkflowExecutionProjectionPort
 
     bool EnableActorQueryEndpoints { get; }
 
-    Task EnsureActorProjectionAsync(
+    Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
         string rootActorId,
         string workflowName,
         string input,
@@ -17,18 +17,17 @@ public interface IWorkflowExecutionProjectionPort
         CancellationToken ct = default);
 
     Task AttachLiveSinkAsync(
-        string actorId,
-        string commandId,
+        IWorkflowExecutionProjectionLease lease,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default);
 
     Task DetachLiveSinkAsync(
-        string actorId,
+        IWorkflowExecutionProjectionLease lease,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default);
 
     Task ReleaseActorProjectionAsync(
-        string actorId,
+        IWorkflowExecutionProjectionLease lease,
         CancellationToken ct = default);
 
     Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(

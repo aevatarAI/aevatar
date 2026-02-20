@@ -3,10 +3,10 @@ namespace Aevatar.CQRS.Projection.Abstractions;
 /// <summary>
 /// Generic registry for actor-level projection subscription lifecycle.
 /// </summary>
-public interface IProjectionSubscriptionRegistry<in TContext>
+public interface IProjectionSubscriptionRegistry<TContext>
     where TContext : IProjectionContext
 {
     Task RegisterAsync(TContext context, CancellationToken ct = default);
 
-    Task UnregisterAsync(string actorId, CancellationToken ct = default);
+    Task UnregisterAsync(TContext context, CancellationToken ct = default);
 }

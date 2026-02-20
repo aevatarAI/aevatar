@@ -95,6 +95,32 @@ public class WorkflowChatRunApplicationServiceTests
         result.FinalizeResult!.ProjectionCompletionStatus.Should().Be(WorkflowProjectionCompletionStatus.Failed);
         result.FinalizeResult.ProjectionCompleted.Should().BeTrue();
     }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldReleaseProjectionAfterRunCleanup()
+    {
+        var actor = new FakeActor("actor-1", null, new FakeAgent("a-1", "actor-1"));
+        var projectionPort = new FakeProjectionService();
+        var service = new WorkflowChatRunApplicationService(
+            new StubWorkflowRunActorResolver(new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None)),
+            projectionPort,
+            new FakeEnvelopeFactory(),
+            new FakeCommandContextPolicy(),
+            new StubWorkflowRunRequestExecutor(),
+            new StubWorkflowRunOutputStreamer(
+            [
+                new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = "RUN_FINISHED", ThreadId = "actor-1" },
+            ]));
+
+        _ = await service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", "direct", "actor-1"),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        projectionPort.ReleaseActorProjectionCalled.Should().BeTrue();
+        projectionPort.ReleasedActorId.Should().Be("actor-1");
+    }
 }
 
 public class WorkflowRunActorResolverTests
@@ -272,13 +298,16 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
     public bool ProjectionEnabled { get; set; } = true;
     public bool EnableActorQueryEndpointsValue { get; set; } = true;
     public bool EnsureActorProjectionCalled { get; private set; }
+    public bool ReleaseActorProjectionCalled { get; private set; }
+    public string? ReleasedActorId { get; private set; }
+    public IWorkflowExecutionProjectionLease? LastLease { get; private set; }
     public Dictionary<string, WorkflowActorSnapshot> SnapshotByActorId { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, IReadOnlyList<WorkflowActorTimelineItem>> TimelineByActorId { get; set; } = new(StringComparer.Ordinal);
     public IReadOnlyList<WorkflowActorSnapshot> SnapshotList { get; set; } = [];
 
     public bool EnableActorQueryEndpoints => EnableActorQueryEndpointsValue;
 
-    public Task EnsureActorProjectionAsync(
+    public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
         string rootActorId,
         string workflowName,
         string input,
@@ -286,26 +315,30 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
         CancellationToken ct = default)
     {
         EnsureActorProjectionCalled = true;
-        return Task.CompletedTask;
+        LastLease = new FakeProjectionLease(rootActorId, commandId);
+        return Task.FromResult<IWorkflowExecutionProjectionLease?>(LastLease);
     }
 
     public Task AttachLiveSinkAsync(
-        string actorId,
-        string commandId,
+        IWorkflowExecutionProjectionLease lease,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default) =>
         Task.CompletedTask;
 
     public Task DetachLiveSinkAsync(
-        string actorId,
+        IWorkflowExecutionProjectionLease lease,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default) =>
         Task.CompletedTask;
 
     public Task ReleaseActorProjectionAsync(
-        string actorId,
-        CancellationToken ct = default) =>
-        Task.CompletedTask;
+        IWorkflowExecutionProjectionLease lease,
+        CancellationToken ct = default)
+    {
+        ReleasedActorId = lease.ActorId;
+        ReleaseActorProjectionCalled = true;
+        return Task.CompletedTask;
+    }
 
     public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
     {
@@ -331,6 +364,8 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
 
         return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>(timeline.Take(Math.Max(1, take)).ToList());
     }
+
+    private sealed record FakeProjectionLease(string ActorId, string CommandId) : IWorkflowExecutionProjectionLease;
 }
 
 internal sealed class FakeEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>

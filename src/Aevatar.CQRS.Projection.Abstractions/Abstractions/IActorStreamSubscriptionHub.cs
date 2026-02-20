@@ -10,10 +10,19 @@ public interface IActorStreamSubscriptionHub<TMessage>
     where TMessage : class, IMessage, new()
 {
     /// <summary>
-    /// Registers one handler for the specified actor and returns a disposable handle.
+    /// Registers one keyed handler for the specified actor.
     /// </summary>
-    Task<IAsyncDisposable> RegisterAsync(
+    Task RegisterAsync(
         string actorId,
+        string key,
         Func<TMessage, ValueTask> handler,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Unregisters one keyed handler for the specified actor.
+    /// </summary>
+    Task UnregisterAsync(
+        string actorId,
+        string key,
         CancellationToken ct = default);
 }

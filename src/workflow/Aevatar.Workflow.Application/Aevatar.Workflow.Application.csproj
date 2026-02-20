@@ -7,7 +7,6 @@
     <RootNamespace>Aevatar.Workflow.Application</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
     <ProjectReference Include="..\..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />

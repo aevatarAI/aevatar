@@ -36,5 +36,4 @@ public sealed class WorkflowExecutionProjectionOptions
     /// Extra grace wait before force-finalize when completion status is timeout.
     /// </summary>
     public int RunProjectionFinalizeGraceTimeoutMs { get; set; } = 1500;
-
 }

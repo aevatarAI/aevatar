@@ -31,11 +31,11 @@ public sealed class ProjectionLifecycleService<TContext, TCompletion>
         _dispatcher.DispatchAsync(context, envelope, ct);
 
     public Task StopAsync(TContext context, CancellationToken ct = default) =>
-        _subscriptionRegistry.UnregisterAsync(context.RootActorId, ct);
+        _subscriptionRegistry.UnregisterAsync(context, ct);
 
     public async Task CompleteAsync(TContext context, TCompletion completion, CancellationToken ct = default)
     {
-        await _subscriptionRegistry.UnregisterAsync(context.RootActorId, ct);
+        await _subscriptionRegistry.UnregisterAsync(context, ct);
         await _coordinator.CompleteAsync(context, completion, ct);
     }
 }

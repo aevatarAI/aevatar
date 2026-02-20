@@ -85,9 +85,16 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowRunCommandServi
         }
         finally
         {
-            await _projectionPort.DetachLiveSinkAsync(runContext.ActorId, runContext.Sink, CancellationToken.None);
-            await JoinProcessingTaskAsync(processingTask);
-            await DisposeSinkSafeAsync(runContext.Sink);
+            try
+            {
+                await _projectionPort.DetachLiveSinkAsync(runContext.ProjectionLease, runContext.Sink, CancellationToken.None);
+                await JoinProcessingTaskAsync(processingTask);
+                await _projectionPort.ReleaseActorProjectionAsync(runContext.ProjectionLease, CancellationToken.None);
+            }
+            finally
+            {
+                await DisposeSinkSafeAsync(runContext.Sink);
+            }
         }
     }
 
@@ -115,16 +122,20 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowRunCommandServi
             baseContext.CorrelationId,
             metadata);
         var sink = new WorkflowRunEventChannel();
+        IWorkflowExecutionProjectionLease? projectionLease = null;
 
         try
         {
-            await _projectionPort.EnsureActorProjectionAsync(
+            projectionLease = await _projectionPort.EnsureActorProjectionAsync(
                 actor.Id,
                 workflowNameForRun,
                 request.Prompt,
                 commandContext.CommandId,
                 ct);
-            await _projectionPort.AttachLiveSinkAsync(actor.Id, commandContext.CommandId, sink, ct);
+            if (projectionLease == null)
+                return new WorkflowRunContextCreateResult(WorkflowChatRunStartError.ProjectionDisabled, null);
+
+            await _projectionPort.AttachLiveSinkAsync(projectionLease, sink, ct);
         }
         catch
         {
@@ -141,6 +152,7 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowRunCommandServi
                 Sink = sink,
                 CommandId = commandContext.CommandId,
                 CommandContext = commandContext,
+                ProjectionLease = projectionLease!,
             });
     }
 
