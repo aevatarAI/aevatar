@@ -5,12 +5,12 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <AssemblyName>Aevatar.Maker.Application.Tests</AssemblyName>
-    <RootNamespace>Aevatar.Maker.Application.Tests</RootNamespace>
+    <AssemblyName>Aevatar.Workflow.Extensions.Maker.Tests</AssemblyName>
+    <RootNamespace>Aevatar.Workflow.Extensions.Maker.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\maker\Aevatar.Maker.Application\Aevatar.Maker.Application.csproj" />
-    <ProjectReference Include="..\..\src\maker\Aevatar.Maker.Application.Abstractions\Aevatar.Maker.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Maker\Aevatar.Workflow.Extensions.Maker.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />

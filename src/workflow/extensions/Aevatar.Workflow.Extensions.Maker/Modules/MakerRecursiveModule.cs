@@ -5,7 +5,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Maker.Core.Modules;
+namespace Aevatar.Workflow.Extensions.Maker.Modules;
 
 /// <summary>
 /// Recursive MAKER solver module.

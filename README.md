@@ -37,11 +37,10 @@ dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
 ```
 
 服务会加载根目录下的 `workflows/` 以及 `~/.aevatar` 中的配置与工作流。  
-如需统一入口与 Maker 子系统，可分别启动：
+生产/统一入口推荐直接启动 Mainnet：
 
 ```bash
 dotnet run --project src/Aevatar.Mainnet.Host.Api
-dotnet run --project src/maker/Aevatar.Maker.Host.Api
 ```
 
 ### 3. 发一次 Chat 请求
@@ -72,7 +71,7 @@ curl -X POST http://localhost:5000/api/chat \
 
 - **Mainnet Host**：`Aevatar.Mainnet.Host.Api` 作为默认统一入口，内置 Workflow Capability。
 - **Workflow Api**：`Aevatar.Workflow.Host.Api` 只做协议适配（HTTP/SSE/WebSocket）并调用 Application 层，不直接编排工作流。
-- **Maker Api**：`Aevatar.Maker.Host.Api` 负责 Maker 子系统命令入口。
+- **Maker Extension**：作为 Workflow 插件装配到 Mainnet，不再单独提供 Maker Host/API。
 - **Workflow Application**：解析/创建 Actor、启动投影 run、发送请求事件、等待收敛并输出查询结果。
 - **工作流 Agent**：按 YAML 里的步骤顺序，一步步派发任务（例如「这一步调 LLM」「这一步调外部接口」）。
 - **步骤**：由对应的「步骤模块」执行（LLM 调用、并行、投票、Connector 等），结果再交回工作流，进入下一步或结束。
@@ -129,7 +128,7 @@ flowchart TB
     Connectors --> M3
 ```
 
-- **宿主**：提供运行时、步骤执行能力、LLM、Connector。当前由 Mainnet/Workflow/Maker 三个 Host 组合承载。
+- **宿主**：提供运行时、步骤执行能力、LLM、Connector。当前以 Mainnet/Workflow 两个 Host 为主；Maker 以插件方式装配到 Mainnet。
 - **Agent 树**：工作流 Agent 为根，按 YAML 中的角色创建子 Agent；事件在父子之间按「方向」路由（当前节点 / 父 / 子）。
 - **步骤模块**：每一步对应一种类型（如 `llm_call`、`connector_call`），由框架内置或你扩展的模块执行。
 
@@ -288,7 +287,7 @@ aevatar/
 ├── src/
 │   ├── Aevatar.Mainnet.Host.Api # 默认统一入口（内置 Workflow 能力）
 │   ├── workflow/Aevatar.Workflow.Host.Api # Workflow 独立宿主
-│   ├── maker/Aevatar.Maker.Host.Api # Maker 独立宿主
+│   ├── workflow/extensions/Aevatar.Workflow.Extensions.Maker # Maker 插件（workflow 扩展）
 │   ├── Aevatar.Bootstrap   # 统一宿主装配与能力接入
 │   ├── workflow/Aevatar.Workflow.Abstractions # 工作流执行事件抽象契约
 │   ├── workflow/Aevatar.Workflow.Core   # 工作流引擎与内置步骤模块

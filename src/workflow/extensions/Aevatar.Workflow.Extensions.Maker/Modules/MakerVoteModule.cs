@@ -3,7 +3,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 
-namespace Aevatar.Maker.Core.Modules;
+namespace Aevatar.Workflow.Extensions.Maker.Modules;
 
 /// <summary>
 /// MAKER voting primitive:

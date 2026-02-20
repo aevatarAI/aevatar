@@ -1,11 +1,10 @@
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Maker.Core.Modules;
+using Aevatar.Workflow.Extensions.Maker.Modules;
 
-namespace Aevatar.Maker.Core;
+namespace Aevatar.Workflow.Extensions.Maker;
 
 /// <summary>
-/// Demo-scoped module factory for MAKER-specific primitives.
-/// Keeps framework-level Cognitive modules generic.
+/// Module factory for maker-specific workflow extensions.
 /// </summary>
 public sealed class MakerModuleFactory : IEventModuleFactory
 {

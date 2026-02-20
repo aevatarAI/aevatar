@@ -29,7 +29,7 @@ using Aevatar.Workflow.Core;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Runtime.DependencyInjection;
-using Aevatar.Maker.Core;
+using Aevatar.Workflow.Extensions.Maker;
 using Aevatar.Maker.Projection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
@@ -119,7 +119,7 @@ services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Information));
 services.AddAevatarRuntime();
 services.AddAevatarConfig();
 services.AddAevatarWorkflow();
-services.AddAevatarMakerCore();
+services.AddWorkflowMakerExtensions();
 services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
 if (isDeepSeek)

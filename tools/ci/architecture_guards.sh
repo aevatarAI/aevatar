@@ -117,45 +117,37 @@ if [ -n "${workflow_to_maker_violations}" ]; then
   exit 1
 fi
 
-maker_to_workflow_host_violations="$(
-  rg -n "Aevatar\.Workflow\.Host\.Api\.csproj" src/maker -g '*.csproj' || true
-)"
+for legacy_maker_project in \
+  src/maker/Aevatar.Maker.Application.Abstractions/Aevatar.Maker.Application.Abstractions.csproj \
+  src/maker/Aevatar.Maker.Application/Aevatar.Maker.Application.csproj \
+  src/maker/Aevatar.Maker.Infrastructure/Aevatar.Maker.Infrastructure.csproj \
+  src/maker/Aevatar.Maker.Host.Api/Aevatar.Maker.Host.Api.csproj \
+  src/maker/Aevatar.Maker.Core/Aevatar.Maker.Core.csproj
+do
+  if [ -f "${legacy_maker_project}" ]; then
+    echo "Legacy Maker capability project must be removed: ${legacy_maker_project}"
+    exit 1
+  fi
+done
 
-if [ -n "${maker_to_workflow_host_violations}" ]; then
-  echo "${maker_to_workflow_host_violations}"
-  echo "Maker projects must not reference Workflow.Host.Api directly."
+if rg -n "AddMakerCapability\(" src -g '*.cs'; then
+  echo "AddMakerCapability is forbidden. Maker must be wired as workflow extension plugin."
   exit 1
 fi
 
-maker_to_workflow_impl_violations="$(
-  rg -n "Aevatar\.Workflow\.(Core|Projection|Presentation\.AGUIAdapter)\.csproj" src/maker -g '*.csproj' || true
-)"
-
-if [ -n "${maker_to_workflow_impl_violations}" ]; then
-  echo "${maker_to_workflow_impl_violations}"
-  echo "Maker projects must not reference Workflow implementation projects directly (Core/Projection/Presentation.AGUIAdapter)."
+if rg -n "MapMakerCapabilityEndpoints|/api/maker" src -g '*.cs'; then
+  echo "Maker standalone capability endpoints are forbidden."
   exit 1
 fi
 
-if rg -n "WorkflowGAgent" src/maker -g '*.cs'; then
-  echo "Maker code must not reference WorkflowGAgent directly. Depend on workflow capability abstractions instead."
-  exit 1
-fi
-
-if rg -n "IWorkflowExecutionProjectionPort" src/maker -g '*.cs'; then
-  echo "Maker code must not depend on IWorkflowExecutionProjectionPort directly."
-  exit 1
-fi
-
-if rg -n "IActorRuntime" src/maker -g '*.cs'; then
-  echo "Maker execution flow must not depend on IActorRuntime directly."
+if ! rg -n "AddWorkflowMakerExtensions\(" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
+  echo "Mainnet host must register workflow maker extensions via AddWorkflowMakerExtensions()."
   exit 1
 fi
 
 for host_program in \
   src/Aevatar.Mainnet.Host.Api/Program.cs \
-  src/workflow/Aevatar.Workflow.Host.Api/Program.cs \
-  src/maker/Aevatar.Maker.Host.Api/Program.cs
+  src/workflow/Aevatar.Workflow.Host.Api/Program.cs
 do
   if ! rg -n "AddAevatarDefaultHost\(" "${host_program}" >/dev/null; then
     echo "Missing AddAevatarDefaultHost in ${host_program}"
@@ -171,9 +163,7 @@ done
 if rg -n "AddCqrsCore\(" \
   src/Aevatar.Mainnet.Host.Api \
   src/workflow/Aevatar.Workflow.Host.Api \
-  src/maker/Aevatar.Maker.Host.Api \
-  src/workflow/Aevatar.Workflow.Infrastructure \
-  src/maker/Aevatar.Maker.Infrastructure
+  src/workflow/Aevatar.Workflow.Infrastructure
 then
   echo "Direct AddCqrsCore wiring in hosts/infrastructure is forbidden. Use Aevatar.CQRS.Runtime.Hosting."
   exit 1
@@ -217,7 +207,6 @@ id_mapping_scan_roots=(
   "src/Aevatar.AI.Projection"
   "src/workflow/Aevatar.Workflow.Projection"
   "src/workflow/Aevatar.Workflow.Application"
-  "src/maker/Aevatar.Maker.Application"
 )
 
 scan_args=()

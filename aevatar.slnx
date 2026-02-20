@@ -45,26 +45,19 @@
     <Project Path="src/workflow/Aevatar.Workflow.Abstractions/Aevatar.Workflow.Abstractions.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Application.Abstractions/Aevatar.Workflow.Application.Abstractions.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
+    <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/Aevatar.Workflow.Extensions.Maker.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Host.Api/Aevatar.Workflow.Host.Api.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
   </Folder>
-  <Folder Name="/src/maker/">
-    <Project Path="src\maker\Aevatar.Maker.Application.Abstractions\Aevatar.Maker.Application.Abstractions.csproj" />
-    <Project Path="src\maker\Aevatar.Maker.Application\Aevatar.Maker.Application.csproj" />
-    <Project Path="src\maker\Aevatar.Maker.Core\Aevatar.Maker.Core.csproj" />
-    <Project Path="src\maker\Aevatar.Maker.Host.Api\Aevatar.Maker.Host.Api.csproj" />
-    <Project Path="src\maker\Aevatar.Maker.Infrastructure\Aevatar.Maker.Infrastructure.csproj" />
-  </Folder>
   <Folder Name="/test/">
     <Project Path="test\Aevatar.CQRS.Core.Tests\Aevatar.CQRS.Core.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Projection.Core.Tests\Aevatar.CQRS.Projection.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" />
-    <Project Path="test\Aevatar.Maker.Application.Tests\Aevatar.Maker.Application.Tests.csproj" />
-    <Project Path="test\Aevatar.Maker.Infrastructure.Tests\Aevatar.Maker.Infrastructure.Tests.csproj" />
+    <Project Path="test\Aevatar.Workflow.Extensions.Maker.Tests\Aevatar.Workflow.Extensions.Maker.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
     <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Application.Tests\Aevatar.Workflow.Application.Tests.csproj" />
