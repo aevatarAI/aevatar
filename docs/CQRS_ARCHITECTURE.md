@@ -138,6 +138,7 @@ flowchart LR
 5. 禁止 `Workflow` 反向依赖 `Maker`；禁止 `Maker` 依赖 `Workflow.Host.Api`（宿主入口禁止跨能力复用）。
 6. `AddAevatarCapability(...)` 对同名能力注册幂等，映射冲突时 fail-fast。
 7. 不允许新增或回流 `Aevatar.Platform.*` 项目引用。
+8. `Aevatar.Workflow.Application` 不直接引用 `Aevatar.Workflow.Core`；应用层通过抽象端口 `IWorkflowRunActorPort` 访问 workflow actor 行为，具体 `WorkflowGAgent` 适配位于 `Aevatar.Workflow.Infrastructure`。
 
 ## 10. 配置基线（`Cqrs:*`）
 
@@ -169,10 +170,11 @@ CI 架构门禁（摘要）：
 
 1. 禁止同步阻塞写法（如 `GetAwaiter().GetResult()`）。
 2. 禁止字符串匹配事件类型路由（`TypeUrl.Contains`）。
-3. 禁止 Host/Infrastructure 直接拼装 `AddCqrsCore(...)`。
-4. 禁止 `docs/agents-working-space` 工作文档进入 `aevatar.slnx`。
-5. 禁止 `Workflow` 反向依赖 `Maker`。
-6. 允许 `Maker` 直接依赖 `Workflow` 能力实现层；仅禁止依赖 `Workflow.Host.Api`。
+3. 事件类型到 reducer 路由映射必须通过专项静态规则（`tools/ci/projection_route_mapping_guard.sh`）：`Any.Pack(new TEvent()).TypeUrl` 派生 + `EventTypeUrl` 精确键路由。
+4. 禁止 Host/Infrastructure 直接拼装 `AddCqrsCore(...)`。
+5. 禁止 `docs/agents-working-space` 工作文档进入 `aevatar.slnx`。
+6. 禁止 `Workflow` 反向依赖 `Maker`。
+7. 允许 `Maker` 直接依赖 `Workflow` 能力实现层；仅禁止依赖 `Workflow.Host.Api`。
 
 ## 13. 结论
 

@@ -29,6 +29,7 @@
 - `dotnet build aevatar.slnx --nologo`：编译全部项目。
 - `dotnet test aevatar.slnx --nologo`：运行全量测试。
 - `bash tools/ci/architecture_guards.sh`：本地执行 CI 架构门禁（与 CI 同步）。
+- `bash tools/ci/projection_route_mapping_guard.sh`：单独执行“事件类型 -> reducer 路由映射正确性”静态门禁。
 - `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
 - `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
 
@@ -43,7 +44,7 @@
 - 测试栈：xUnit、FluentAssertions、`coverlet.collector`。
 - 测试文件命名：`*Tests.cs`，单文件聚焦一个行为域。
 - 行为变更必须补测试；重构不得降低关键路径覆盖率。
-- CI 守卫（full-scan）：禁止 `GetAwaiter().GetResult()`；禁止 `TypeUrl.Contains(...)` 字符串路由；禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`；禁止中间层 `actor/entity/run/session` ID 映射 Dic 事实态字段（仅扫描 Projection/Application/Orchestration 中间层）；禁止投影端口回退到 `actorId` 反查上下文模型；要求新增非抽象 `Reducer` 类必须被测试引用。
+- CI 守卫（full-scan）：禁止 `GetAwaiter().GetResult()`；禁止 `TypeUrl.Contains(...)` 字符串路由；禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`；禁止中间层 `actor/entity/run/session` ID 映射 Dic 事实态字段（仅扫描 Projection/Application/Orchestration 中间层）；禁止投影端口回退到 `actorId` 反查上下文模型；要求新增非抽象 `Reducer` 类必须被测试引用；要求事件类型到 reducer 的路由采用 `TypeUrl` 派生 + 精确键路由（由 `tools/ci/projection_route_mapping_guard.sh` 专项校验，含 `EventTypeUrl` 分组与 `TryGetValue` 命中）。
 
 ## 提交与 PR 规范
 - 提交信息使用祈使句并聚焦单一目的（如：`Refactor projection pipeline`）。

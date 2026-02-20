@@ -33,7 +33,7 @@ jobs:
       - name: Test
         run: dotnet test aevatar.slnx --nologo --no-build --tl:off -m:1 -p:UseSharedCompilation=false -p:NuGetAudit=false
 
-      - name: Architecture Guards
+      - name: Architecture Guards (full-scan + projection route mapping)
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_BASE_REF: ${{ github.base_ref }}

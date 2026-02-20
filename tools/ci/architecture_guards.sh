@@ -99,6 +99,9 @@ if [ -n "${reducer_test_coverage_violations}" ]; then
   exit 1
 fi
 
+echo "Running projection route-mapping guard..."
+bash tools/ci/projection_route_mapping_guard.sh
+
 if rg -n "Aevatar\.AI\.Core\.csproj" src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj; then
   echo "Workflows.Core must not reference AI.Core."
   exit 1

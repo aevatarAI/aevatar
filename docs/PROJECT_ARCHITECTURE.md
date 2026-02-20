@@ -133,6 +133,7 @@ flowchart LR
 2. 缩写全大写：`LLM`、`CQRS`、`AGUI`。
 3. 能力命名使用 `Capability` 语义，避免重复层次包装。
 4. 删除 `Aevatar.Platform.*` 相关代码与引用。
+5. `Application` 层不直接依赖能力 `Core` 实现层；以 `Workflow` 为例，`Aevatar.Workflow.Application` 通过 `IWorkflowRunActorPort` 访问 Actor 生命周期与绑定行为，由 `Aevatar.Workflow.Infrastructure` 适配 `WorkflowGAgent`。
 
 ## 8. CI 架构门禁
 
@@ -141,13 +142,14 @@ CI（`.github/workflows/ci.yml`）应执行：
 1. `build + test`。
 2. 禁止 `GetAwaiter().GetResult()`。
 3. 禁止 `TypeUrl.Contains(...)` 字符串路由。
-4. 禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`。
-5. 禁止任何项目新增 `Aevatar.Platform.*` 引用。
-6. 强制 Mainnet Host 与 Maker Host 使用统一默认宿主接入扩展（`AddAevatarDefaultHost` / `UseAevatarDefaultHost`）。
-7. 禁止 Host/Infrastructure 直接 `AddCqrsCore(...)`。
-8. 禁止 `docs/agents-working-space` 下工作文档被加入 `aevatar.slnx`。
-9. 允许 Maker 对 Workflow 的直接继承与直连（扩展语义），并禁止 Workflow 反向依赖 Maker。
-10. 允许 Maker 直接依赖 Workflow 能力实现层；仅禁止依赖 `Workflow.Host.Api`。
+4. 专项执行事件类型到 reducer 路由映射静态门禁（`tools/ci/projection_route_mapping_guard.sh`）：`TypeUrl` 派生 + 精确键路由。
+5. 禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`。
+6. 禁止任何项目新增 `Aevatar.Platform.*` 引用。
+7. 强制 Mainnet Host 与 Maker Host 使用统一默认宿主接入扩展（`AddAevatarDefaultHost` / `UseAevatarDefaultHost`）。
+8. 禁止 Host/Infrastructure 直接 `AddCqrsCore(...)`。
+9. 禁止 `docs/agents-working-space` 下工作文档被加入 `aevatar.slnx`。
+10. 允许 Maker 对 Workflow 的直接继承与直连（扩展语义），并禁止 Workflow 反向依赖 Maker。
+11. 允许 Maker 直接依赖 Workflow 能力实现层；仅禁止依赖 `Workflow.Host.Api`。
 
 ## 9. 演进路线
 
