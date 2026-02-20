@@ -9,5 +9,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <ProjectReference Include="..\Aevatar.Maker.Infrastructure\Aevatar.Maker.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

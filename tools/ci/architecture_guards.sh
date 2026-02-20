@@ -127,6 +127,31 @@ if [ -n "${maker_to_workflow_host_violations}" ]; then
   exit 1
 fi
 
+maker_to_workflow_impl_violations="$(
+  rg -n "Aevatar\.Workflow\.(Core|Projection|Presentation\.AGUIAdapter)\.csproj" src/maker -g '*.csproj' || true
+)"
+
+if [ -n "${maker_to_workflow_impl_violations}" ]; then
+  echo "${maker_to_workflow_impl_violations}"
+  echo "Maker projects must not reference Workflow implementation projects directly (Core/Projection/Presentation.AGUIAdapter)."
+  exit 1
+fi
+
+if rg -n "WorkflowGAgent" src/maker -g '*.cs'; then
+  echo "Maker code must not reference WorkflowGAgent directly. Depend on workflow capability abstractions instead."
+  exit 1
+fi
+
+if rg -n "IWorkflowExecutionProjectionPort" src/maker -g '*.cs'; then
+  echo "Maker code must not depend on IWorkflowExecutionProjectionPort directly."
+  exit 1
+fi
+
+if rg -n "IActorRuntime" src/maker -g '*.cs'; then
+  echo "Maker execution flow must not depend on IActorRuntime directly."
+  exit 1
+fi
+
 for host_program in \
   src/Aevatar.Mainnet.Host.Api/Program.cs \
   src/workflow/Aevatar.Workflow.Host.Api/Program.cs \

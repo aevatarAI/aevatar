@@ -15,6 +15,7 @@
 运行时装配：
 
 - `builder.AddAevatarDefaultHost(...)`
+- `builder.AddWorkflowCapability()`
 - `builder.AddMakerCapability()`
 - `app.UseAevatarDefaultHost()`（自动挂载能力端点）
 

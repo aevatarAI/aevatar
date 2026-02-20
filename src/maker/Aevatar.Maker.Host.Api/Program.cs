@@ -1,6 +1,7 @@
 using Aevatar.Bootstrap;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Maker.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,6 +16,7 @@ builder.AddAevatarDefaultHost(
     {
         options.ServiceName = "Aevatar.Maker.Host.Api";
     });
+builder.AddWorkflowCapability();
 builder.AddMakerCapability();
 
 var app = builder.Build();

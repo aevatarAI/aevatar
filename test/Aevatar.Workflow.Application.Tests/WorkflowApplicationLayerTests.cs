@@ -552,6 +552,13 @@ internal sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
         return Task.FromResult(actor);
     }
 
+    public Task DestroyAsync(string actorId, CancellationToken ct = default)
+    {
+        _ = ct;
+        _actorsById.Remove(actorId);
+        return Task.CompletedTask;
+    }
+
     public bool IsWorkflowActor(IActor actor) => actor.Agent is FakeWorkflowAgent;
 
     public string? GetBoundWorkflowName(IActor actor) =>

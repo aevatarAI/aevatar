@@ -35,6 +35,7 @@ flowchart LR
     MH --> WADD["AddWorkflowCapability()"]
 
     KH["Aevatar.Maker.Host.Api"] --> KHADD["AddAevatarDefaultHost()"]
+    KH --> KWADD["AddWorkflowCapability()"]
     KH --> KADD["AddMakerCapability()"]
 
     WADD --> WIMPL["Workflow Capability Implementation"]
@@ -44,7 +45,7 @@ flowchart LR
 ### 3.1 核心约束
 
 1. `Mainnet` 默认通过项目引用 `Workflow` 能力并调用 `AddWorkflowCapability()`。
-2. `Maker` 作为独立系统，通过项目引用 `Maker` 并调用 `AddMakerCapability()`。
+2. `Maker` 作为独立系统，宿主显式组合 `Workflow + Maker`（`AddWorkflowCapability()` + `AddMakerCapability()`）。
 3. 能力接入不引入运行时发现/注册中心/动态路由框架。
 4. 能力开关优先使用配置 + DI 注册控制。
 5. `Aevatar.Bootstrap` 仅保留通用装配，不承载 `Workflow` 具体能力注册。
@@ -68,11 +69,11 @@ flowchart LR
 
 ### 3.4 Maker 扩展 Workflow（语义约束）
 
-1. `Maker` 定义为 `Workflow` 的扩展能力，允许直接项目引用与能力继承。
-2. 允许：`src/maker/* -> src/workflow/*`（Maker 可直接继承 Workflow 能力实现）。
+1. `Maker` 定义为 `Workflow` 的扩展能力，但依赖边界收敛到抽象层。
+2. 允许：`src/maker/* -> src/workflow/Aevatar.Workflow.Abstractions` 与 `src/workflow/Aevatar.Workflow.Application.Abstractions`。
 3. 禁止：`src/workflow/* -> src/maker/*`（禁止反向依赖）。
 4. 禁止：`src/maker/* -> src/workflow/Aevatar.Workflow.Host.Api`（宿主入口不作为能力继承目标）。
-5. 如未来需要独立发布，再抽 `Workflow.Contracts`，但当前不作为强制前置条件。
+5. 禁止：`src/maker/* -> src/workflow/Aevatar.Workflow.Core/Projection/Presentation.AGUIAdapter`。
 
 ## 4. CQRS 接入（无独立 Runtime 命令总线层）
 
@@ -157,13 +158,13 @@ CI（`.github/workflows/ci.yml`）应执行：
 7. 强制 Mainnet Host 与 Maker Host 使用统一默认宿主接入扩展（`AddAevatarDefaultHost` / `UseAevatarDefaultHost`）。
 8. 禁止 Host/Infrastructure 直接 `AddCqrsCore(...)`。
 9. 禁止 `docs/agents-working-space` 下工作文档被加入 `aevatar.slnx`。
-10. 允许 Maker 对 Workflow 的直接继承与直连（扩展语义），并禁止 Workflow 反向依赖 Maker。
-11. 允许 Maker 直接依赖 Workflow 能力实现层；仅禁止依赖 `Workflow.Host.Api`。
+10. 允许 Maker 依赖 Workflow 抽象层（`Workflow.Abstractions`、`Workflow.Application.Abstractions`），并禁止 Workflow 反向依赖 Maker。
+11. 禁止 Maker 直接依赖 Workflow 能力实现层（`Workflow.Core/Projection/Presentation.AGUIAdapter`）；仅允许 Host 组合能力。
 
 ## 9. 演进路线
 
 1. Mainnet：`AddAevatarDefaultHost()` 后引用 Workflow 并完成 `AddWorkflowCapability()` 装配。
-2. Maker：`AddAevatarDefaultHost()` 后独立部署并完成 `AddMakerCapability()` 装配。
+2. Maker：`AddAevatarDefaultHost()` 后显式完成 `AddWorkflowCapability()` + `AddMakerCapability()` 组合装配。
 3. 删除 `src/Aevatar.Platform.*` 与旧平台路由目录。
 4. 新能力统一按“新增项目引用 + 新增 Add 扩展 + Host 注册”接入。
 5. Runtime 演进：从默认 InMemory（dev/test）过渡到分布式 Actor Runtime + 非 InMemory 持久化（prod）。

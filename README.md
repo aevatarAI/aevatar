@@ -290,6 +290,7 @@ aevatar/
 │   ├── workflow/Aevatar.Workflow.Host.Api # Workflow 独立宿主
 │   ├── maker/Aevatar.Maker.Host.Api # Maker 独立宿主
 │   ├── Aevatar.Bootstrap   # 统一宿主装配与能力接入
+│   ├── workflow/Aevatar.Workflow.Abstractions # 工作流执行事件抽象契约
 │   ├── workflow/Aevatar.Workflow.Core   # 工作流引擎与内置步骤模块
 │   ├── Aevatar.AI.Core     # 角色 Agent 与 LLM 集成
 │   ├── Aevatar.Foundation.Runtime  # 运行时（事件路由、存储、流）

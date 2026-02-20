@@ -25,6 +25,14 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
     public Task<IActor> CreateAsync(CancellationToken ct = default) =>
         _runtime.CreateAsync<WorkflowGAgent>(ct: ct);
 
+    public Task DestroyAsync(string actorId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorId))
+            throw new ArgumentException("Actor id is required.", nameof(actorId));
+
+        return _runtime.DestroyAsync(actorId, ct);
+    }
+
     public bool IsWorkflowActor(IActor actor) => actor.Agent is WorkflowGAgent;
 
     public string? GetBoundWorkflowName(IActor actor) =>

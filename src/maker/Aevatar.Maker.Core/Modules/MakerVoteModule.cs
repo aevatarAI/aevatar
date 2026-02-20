@@ -1,6 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
-using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 
 namespace Aevatar.Maker.Core.Modules;
