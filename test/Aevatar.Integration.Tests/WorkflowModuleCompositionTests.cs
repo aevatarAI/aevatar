@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -57,18 +58,20 @@ public class WorkflowModuleCompositionTests
     }
 
     [Fact]
-    public void AddAevatarWorkflow_ShouldRegisterDefaultCompositionServices()
+    public void AddAevatarWorkflow_ShouldRegisterDefaultCompositionModulePack()
     {
         var provider = new ServiceCollection()
             .AddAevatarWorkflow()
             .BuildServiceProvider();
 
-        var expanders = provider.GetServices<IWorkflowModuleDependencyExpander>().ToList();
-        var configurators = provider.GetServices<IWorkflowModuleConfigurator>().ToList();
+        var packs = provider.GetServices<IWorkflowModulePack>().ToList();
+        var moduleFactory = provider.GetRequiredService<IEventModuleFactory>();
+        var corePack = packs.Should().ContainSingle(x => x.GetType() == typeof(WorkflowCoreModulePack)).Subject;
 
-        expanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowLoopModuleDependencyExpander));
-        expanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowStepTypeModuleDependencyExpander));
-        expanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowImplicitModuleDependencyExpander));
-        configurators.Should().ContainSingle(x => x.GetType() == typeof(WorkflowLoopModuleConfigurator));
+        moduleFactory.Should().BeOfType<WorkflowModuleFactory>();
+        corePack.DependencyExpanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowLoopModuleDependencyExpander));
+        corePack.DependencyExpanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowStepTypeModuleDependencyExpander));
+        corePack.DependencyExpanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowImplicitModuleDependencyExpander));
+        corePack.Configurators.Should().ContainSingle(x => x.GetType() == typeof(WorkflowLoopModuleConfigurator));
     }
 }

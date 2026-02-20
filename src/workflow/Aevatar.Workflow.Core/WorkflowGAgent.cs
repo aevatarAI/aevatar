@@ -38,25 +38,36 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     private readonly List<string> _childAgentIds = [];
     private readonly IActorRuntime _runtime;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
-    private readonly IReadOnlyList<IEventModuleFactory> _eventModuleFactories;
+    private readonly IEventModuleFactory _eventModuleFactory;
     private readonly IReadOnlyList<IWorkflowModuleDependencyExpander> _moduleDependencyExpanders;
     private readonly IReadOnlyList<IWorkflowModuleConfigurator> _moduleConfigurators;
 
     public WorkflowGAgent(
         IActorRuntime runtime,
         IRoleAgentTypeResolver roleAgentTypeResolver,
-        IEnumerable<IEventModuleFactory> eventModuleFactories,
-        IEnumerable<IWorkflowModuleDependencyExpander> moduleDependencyExpanders,
-        IEnumerable<IWorkflowModuleConfigurator> moduleConfigurators)
+        IEventModuleFactory eventModuleFactory,
+        IEnumerable<IWorkflowModulePack> modulePacks)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
-        _eventModuleFactories = eventModuleFactories?.ToList()
-            ?? throw new ArgumentNullException(nameof(eventModuleFactories));
-        _moduleDependencyExpanders = moduleDependencyExpanders?.OrderBy(x => x.Order).ToList()
-            ?? throw new ArgumentNullException(nameof(moduleDependencyExpanders));
-        _moduleConfigurators = moduleConfigurators?.OrderBy(x => x.Order).ToList()
-            ?? throw new ArgumentNullException(nameof(moduleConfigurators));
+        _eventModuleFactory = eventModuleFactory ?? throw new ArgumentNullException(nameof(eventModuleFactory));
+
+        var packs = modulePacks?.ToList()
+            ?? throw new ArgumentNullException(nameof(modulePacks));
+
+        _moduleDependencyExpanders = packs
+            .SelectMany(x => x.DependencyExpanders)
+            .GroupBy(x => x.GetType())
+            .Select(x => x.First())
+            .OrderBy(x => x.Order)
+            .ToList();
+
+        _moduleConfigurators = packs
+            .SelectMany(x => x.Configurators)
+            .GroupBy(x => x.GetType())
+            .Select(x => x.First())
+            .OrderBy(x => x.Order)
+            .ToList();
     }
 
     // ─── 生命周期 ───
@@ -206,7 +217,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     /// </summary>
     private void InstallCognitiveModules()
     {
-        if (_eventModuleFactories.Count == 0) return;
+        if (_moduleDependencyExpanders.Count == 0) return;
 
         var needed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var expander in _moduleDependencyExpanders)
@@ -217,14 +228,10 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         var modules = new List<IEventModule>();
         foreach (var name in needed)
         {
-            foreach (var factory in _eventModuleFactories)
+            if (_eventModuleFactory.TryCreate(name, out var m) && m != null)
             {
-                if (factory.TryCreate(name, out var m) && m != null)
-                {
-                    ConfigureModule(m);
-                    modules.Add(m);
-                    break;
-                }
+                ConfigureModule(m);
+                modules.Add(m);
             }
         }
 

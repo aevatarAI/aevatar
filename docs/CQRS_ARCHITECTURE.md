@@ -23,7 +23,7 @@
 | Projection Core | `Aevatar.CQRS.Projection.*` | 投影生命周期、订阅、分发、协调 |
 | Foundation/AI Projection | `Aevatar.Foundation.Projection` / `Aevatar.AI.Projection` | 通用读模型能力与 AI reducer |
 | Workflow Projection | `src/workflow/Aevatar.Workflow.Projection` | Workflow 领域读模型与投影 |
-| Maker Extension | `src/workflow/extensions/Aevatar.Workflow.Extensions.Maker` | 仅模块扩展，不承载独立 CQRS |
+| Maker Extension | `src/workflow/extensions/Aevatar.Workflow.Extensions.Maker` | 通过 `IWorkflowModulePack` 扩展模块，不承载独立 CQRS |
 
 ## 4. 主链路
 
@@ -44,6 +44,13 @@ flowchart LR
 2. 事件订阅以 reducer 的 `EventTypeUrl` 精确匹配为准。
 3. 未命中 reducer 的事件必须为 no-op。
 4. Workflow 投影生命周期通过 lease/session 句柄管理，不允许 `actorId -> context` 反查。
+
+## 5.1 Metadata 口径（防理解偏差）
+
+1. `EventEnvelope.Metadata` 属于包络级元信息，用于传播/追踪，不作为业务完成语义主来源。
+2. `StepCompletedEvent.Metadata` 属于业务事件元信息，Maker/Connector/Parallel 等模块信息写入此处。
+3. ReadModel 聚合使用 `StepCompletedEvent.Metadata`，并落到 step `CompletionMetadata` 与 timeline `Data`。
+4. 实时输出是否带业务 metadata 由 mapper 明确定义；当前默认不自动透传 `StepCompletedEvent.Metadata` 全量字段。
 
 ## 6. 宿主接入规范
 

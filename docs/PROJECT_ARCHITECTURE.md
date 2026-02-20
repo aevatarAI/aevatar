@@ -49,11 +49,11 @@ Maker 插件工程：`src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`
 
 1. 提供 `maker_recursive`、`maker_vote` 模块实现。
 2. 提供 `AddWorkflowMakerExtensions()` 统一注册入口。
-3. 通过 `IEventModuleFactory` 扩展 Workflow 步骤能力。
+3. 通过 `IWorkflowModulePack` 贡献模块定义，与内建模块走同一注册体系。
 
 依赖约束：
 
-1. 允许：插件依赖 `Workflow.Abstractions` 与 Foundation 抽象。
+1. 允许：插件依赖 `Workflow.Core`/`Workflow.Abstractions` 与 Foundation 抽象。
 2. 禁止：`Workflow` 主能力反向依赖插件实现。
 3. 禁止：插件引入独立 CQRS/Projection 管线。
 

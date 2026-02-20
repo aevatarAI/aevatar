@@ -146,7 +146,8 @@ flowchart TD
   PV["WorkflowParser + WorkflowValidator"]
   TREE["EnsureAgentTreeAsync(IActorRuntime)"]
   EXP["IWorkflowModuleDependencyExpander[]"]
-  FACT["IEventModuleFactory[]"]
+  PACK["IWorkflowModulePack[]"]
+  FACT["WorkflowModuleFactory"]
   CFG["IWorkflowModuleConfigurator[]"]
   MOD["Workflow Modules(Loop/LLM/Tool/Connector/Parallel...)"]
   EVT["Workflow Domain Events(Start/Step/Completed...)"]
@@ -155,7 +156,11 @@ flowchart TD
   CR --> WG
   WG --> PV
   WG --> TREE
+  WG --> PACK
   WG --> EXP
+  PACK --> FACT
+  PACK --> EXP
+  PACK --> CFG
   EXP --> FACT
   FACT --> MOD
   CFG --> MOD
@@ -201,3 +206,11 @@ sequenceDiagram
 - Workflow 能力执行状态查询统一由 Projection ReadModel 提供，不引入独立状态机层。
 - `/api/agents` 仅返回 `WorkflowGAgent`，避免混入其他能力 Actor。
 - workflow 文件加载为启动期 fail-fast：重复名称或未知 YAML 字段直接失败，不做静默覆盖。
+- Workflow 内建模块与扩展模块统一走 `IWorkflowModulePack` 注册；`WorkflowModuleFactory` 聚合创建并对同名模块冲突 fail-fast。
+
+## 7. Metadata 语义备注（防混淆）
+
+- `EventEnvelope.Metadata` 是包络级传输/追踪元信息，参与内部传播策略，不等同业务结果字段。
+- `StepCompletedEvent.Metadata` 是业务事件级元信息（如 `maker.*`、`connector.*`、`parallel.*`）。
+- Workflow ReadModel 记录的是 `StepCompletedEvent.Metadata`（`CompletionMetadata` 与 timeline `Data`）。
+- 实时输出链路当前仅保证 run/step 基本事件；`StepCompletedEvent.Metadata` 默认不直接透传到 `WorkflowRunEvent`。

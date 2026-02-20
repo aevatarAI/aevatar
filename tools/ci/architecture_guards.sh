@@ -145,6 +145,21 @@ if ! rg -n "AddWorkflowMakerExtensions\(" src/Aevatar.Mainnet.Host.Api/Program.c
   exit 1
 fi
 
+if [ -f "src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/MakerModuleFactory.cs" ]; then
+  echo "Maker extension must use unified module pack model; MakerModuleFactory is forbidden."
+  exit 1
+fi
+
+if rg -n "IEventModuleFactory" src/workflow/extensions/Aevatar.Workflow.Extensions.Maker -g '*.cs'; then
+  echo "Maker extension must not register standalone IEventModuleFactory. Use IWorkflowModulePack."
+  exit 1
+fi
+
+if ! rg -n "AddWorkflowModulePack<MakerModulePack>\(" src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/ServiceCollectionExtensions.cs >/dev/null; then
+  echo "Maker extension must register MakerModulePack via AddWorkflowModulePack<MakerModulePack>()."
+  exit 1
+fi
+
 for host_program in \
   src/Aevatar.Mainnet.Host.Api/Program.cs \
   src/workflow/Aevatar.Workflow.Host.Api/Program.cs

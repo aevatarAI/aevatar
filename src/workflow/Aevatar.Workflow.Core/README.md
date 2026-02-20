@@ -12,7 +12,19 @@
 
 ## 模块装配（OCP）
 
-`WorkflowGAgent` 不再内嵌模块推断/特化分支，而是通过组合策略扩展：
+`WorkflowGAgent` 不再内嵌模块推断/特化分支，而是通过统一 Module Pack 扩展：
+
+- `IWorkflowModulePack`
+  - 内建模块与扩展模块都通过同一 pack 契约注册。
+  - pack 同时贡献：
+    - `WorkflowModuleRegistration`（模块名/别名 + 创建逻辑）
+    - `IWorkflowModuleDependencyExpander`
+    - `IWorkflowModuleConfigurator`
+- `WorkflowModuleFactory`
+  - 聚合所有 pack 的模块注册并按名称创建模块实例。
+  - 同名模块冲突 fail-fast。
+
+模块推断与实例配置仍由以下策略完成：
 
 - `IWorkflowModuleDependencyExpander`
   - 负责根据 workflow 推导所需模块集合。
@@ -29,10 +41,9 @@
 ## DI 入口
 
 - `AddAevatarWorkflow()`
-  - 注册默认模块描述器、模块工厂、connector registry。
-  - 同时注册默认 expander/configurator 组合。
-- `AddWorkflowModule<TModule>("name", "alias")`
-  - 扩展新模块与别名。
+  - 注册内建 `WorkflowCoreModulePack`、统一模块工厂与 connector registry。
+- `AddWorkflowModulePack<TModulePack>()`
+  - 注册扩展 pack（如 Maker pack）。
 
 ## 依赖
 

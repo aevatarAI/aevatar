@@ -72,8 +72,8 @@ public class WorkflowIntegrationTests
         services.AddSingleton<ILLMProvider>(mockLlm);
         services.AddSingleton<ILLMProviderFactory>(mockLlm);
 
-        // 注册 Cognitive Module Factory
-        services.AddSingleton<IEventModuleFactory, WorkflowModuleFactory>();
+        // 注册 Workflow 核心模块 pack 与统一模块工厂
+        services.AddAevatarWorkflow();
         services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
         var sp = services.BuildServiceProvider();
@@ -502,7 +502,7 @@ public class WorkflowIntegrationTests
 
         // ─── 不存在的类型 ───
         factory.TryCreate("nonexistent", out m).Should().BeFalse();
-        factory.TryCreate("maker_vote", out m).Should().BeFalse(); // maker_vote moved to sample-scoped factory
+        factory.TryCreate("maker_vote", out m).Should().BeFalse(); // maker module pack is not registered in this test scope
         m.Should().BeNull();
     }
 }
