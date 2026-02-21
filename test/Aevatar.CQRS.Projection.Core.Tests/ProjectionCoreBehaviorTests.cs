@@ -33,6 +33,58 @@ public class ProjectionCoordinatorTests
             "p1:complete:done",
             "p2:complete:done");
     }
+
+    [Fact]
+    public async Task ProjectAsync_WhenProjectorFails_ShouldContinueOtherProjectorsAndThrowAggregate()
+    {
+        var trace = new List<string>();
+        var coordinator = new ProjectionCoordinator<TestProjectionContext, string>(
+        [
+            new RecordingProjector("p1", trace),
+            new ThrowingProjector("p2", trace, new InvalidOperationException("boom")),
+            new RecordingProjector("p3", trace),
+        ]);
+        var context = new TestProjectionContext("projection-1", "actor-1");
+        var envelope = new EventEnvelope { Id = "evt-1" };
+
+        var act = () => coordinator.ProjectAsync(context, envelope, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<ProjectionDispatchAggregateException>();
+        ex.Which.Failures.Should().ContainSingle();
+        ex.Which.Failures[0].ProjectorName.Should().Be(nameof(ThrowingProjector));
+        ex.Which.Failures[0].ProjectorOrder.Should().Be(2);
+
+        trace.Should().Equal(
+            "p1:project",
+            "p2:project",
+            "p3:project");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WhenMultipleProjectorsFail_ShouldAggregateAllFailuresWithOrder()
+    {
+        var trace = new List<string>();
+        var coordinator = new ProjectionCoordinator<TestProjectionContext, string>(
+        [
+            new ThrowingProjector("p1", trace, new InvalidOperationException("boom-1")),
+            new RecordingProjector("p2", trace),
+            new ThrowingProjector("p3", trace, new ArgumentException("boom-2")),
+        ]);
+        var context = new TestProjectionContext("projection-1", "actor-1");
+        var envelope = new EventEnvelope { Id = "evt-1" };
+
+        var act = () => coordinator.ProjectAsync(context, envelope, CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<ProjectionDispatchAggregateException>();
+        ex.Which.Failures.Should().HaveCount(2);
+        ex.Which.Failures.Should().OnlyContain(x => x.ProjectorName == nameof(ThrowingProjector));
+        ex.Which.Failures.Select(x => x.ProjectorOrder).Should().Equal(1, 3);
+
+        trace.Should().Equal(
+            "p1:project",
+            "p2:project",
+            "p3:project");
+    }
 }
 
 public class ProjectionLifecycleServiceTests
@@ -141,6 +193,7 @@ public class ProjectionSubscriptionRegistryTests
         reporter.Calls[0].Context.Should().BeSameAs(context);
         reporter.Calls[0].Envelope.Should().BeSameAs(envelope);
         reporter.Calls[0].Exception.Should().BeOfType<InvalidOperationException>();
+        reporter.Calls[0].Token.CanBeCanceled.Should().BeFalse();
     }
 }
 
@@ -248,6 +301,32 @@ internal sealed class RecordingProjector : IProjectionProjector<TestProjectionCo
     }
 }
 
+internal sealed class ThrowingProjector : IProjectionProjector<TestProjectionContext, string>
+{
+    private readonly string _name;
+    private readonly IList<string> _trace;
+    private readonly Exception _exception;
+
+    public ThrowingProjector(string name, IList<string> trace, Exception exception)
+    {
+        _name = name;
+        _trace = trace;
+        _exception = exception;
+    }
+
+    public ValueTask InitializeAsync(TestProjectionContext context, CancellationToken ct = default) =>
+        ValueTask.CompletedTask;
+
+    public ValueTask ProjectAsync(TestProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
+    {
+        _trace.Add($"{_name}:project");
+        throw _exception;
+    }
+
+    public ValueTask CompleteAsync(TestProjectionContext context, string topology, CancellationToken ct = default) =>
+        ValueTask.CompletedTask;
+}
+
 internal sealed class FakeCoordinator : IProjectionCoordinator<TestProjectionContext, string>
 {
     private readonly IList<string> _trace;
@@ -353,7 +432,7 @@ internal sealed class ThrowingDispatcher : IProjectionDispatcher<TestProjectionC
 
 internal sealed class CapturingFailureReporter : IProjectionDispatchFailureReporter<TestProjectionContext>
 {
-    public List<(TestProjectionContext Context, EventEnvelope Envelope, Exception Exception)> Calls { get; } = [];
+    public List<(TestProjectionContext Context, EventEnvelope Envelope, Exception Exception, CancellationToken Token)> Calls { get; } = [];
 
     public ValueTask ReportAsync(
         TestProjectionContext context,
@@ -361,7 +440,7 @@ internal sealed class CapturingFailureReporter : IProjectionDispatchFailureRepor
         Exception exception,
         CancellationToken ct = default)
     {
-        Calls.Add((context, envelope, exception));
+        Calls.Add((context, envelope, exception, ct));
         return ValueTask.CompletedTask;
     }
 }

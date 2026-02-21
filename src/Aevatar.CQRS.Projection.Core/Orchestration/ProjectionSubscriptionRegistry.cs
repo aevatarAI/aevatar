@@ -100,7 +100,8 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
             {
                 try
                 {
-                    await _dispatchFailureReporter.ReportAsync(context, envelope, ex, dispatchToken);
+                    // Best-effort reporting should not be suppressed by dispatch cancellation.
+                    await _dispatchFailureReporter.ReportAsync(context, envelope, ex, CancellationToken.None);
                 }
                 catch (Exception reportEx)
                 {

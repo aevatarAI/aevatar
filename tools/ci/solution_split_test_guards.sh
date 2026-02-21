@@ -7,6 +7,7 @@ cd "${repo_root}"
 
 filters=(
   "aevatar.foundation.slnf"
+  "aevatar.ai.slnf"
   "aevatar.cqrs.slnf"
   "aevatar.workflow.slnf"
 )

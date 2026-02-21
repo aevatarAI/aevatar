@@ -25,6 +25,6 @@ services.AddMCPTools(o => o
 
 ## 依赖
 
-- `Aevatar.AI.Core`
+- `Aevatar.AI.Abstractions`
 - `ModelContextProtocol`
 - `Microsoft.Extensions.*.Abstractions`

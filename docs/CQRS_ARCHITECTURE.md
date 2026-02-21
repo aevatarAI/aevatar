@@ -44,6 +44,7 @@ flowchart LR
 2. 事件订阅以 reducer 的 `EventTypeUrl` 精确匹配为准。
 3. 未命中 reducer 的事件必须为 no-op。
 4. Workflow 投影生命周期通过 lease/session 句柄管理，不允许 `actorId -> context` 反查。
+5. 同一 `EventEnvelope` 分发到多个 projector 时采用“一对多全分支尝试”语义：单个 projector 失败不阻断其他 projector 执行，最终以聚合异常统一回传。
 
 ## 5.1 Metadata 口径（防理解偏差）
 

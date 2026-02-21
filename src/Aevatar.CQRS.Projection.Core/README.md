@@ -23,6 +23,7 @@
 1. 内核只处理通用编排，不绑定任何业务模型。
 2. 业务投影通过 `IProjectionEventReducer<,>` 与 `IProjectionProjector<,>` 扩展。
 3. 订阅按 `actorId` 复用底层 stream，再分发到投影上下文。
+4. 同一事件分发到多个 projector 时采用全分支尝试，最终按 projector 顺序聚合失败信息统一上报。
 
 ## 运行链路（通用）
 

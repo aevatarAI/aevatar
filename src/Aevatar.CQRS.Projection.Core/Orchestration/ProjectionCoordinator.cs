@@ -18,8 +18,27 @@ public class ProjectionCoordinator<TContext, TTopology> : IProjectionCoordinator
 
     public async Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        foreach (var projector in _projectors)
-            await projector.ProjectAsync(context, envelope, ct);
+        List<ProjectionDispatchFailure>? failures = null;
+        for (var index = 0; index < _projectors.Count; index++)
+        {
+            var projector = _projectors[index];
+            try
+            {
+                await projector.ProjectAsync(context, envelope, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                failures ??= [];
+                failures.Add(new ProjectionDispatchFailure(projector.GetType().Name, index + 1, ex));
+            }
+        }
+
+        if (failures is { Count: > 0 })
+            throw new ProjectionDispatchAggregateException(failures);
     }
 
     public async Task CompleteAsync(TContext context, TTopology topology, CancellationToken ct = default)

@@ -53,6 +53,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     /// <summary>对话历史。</summary>
     protected ChatHistory History { get; } = new();
 
+    // Track source-loaded tools so reconfiguration can remove stale entries.
+    private readonly HashSet<string> _sourceToolNames = new(StringComparer.OrdinalIgnoreCase);
     private AgentHookPipeline? _hooks;
     private ChatRuntime? _chat;
 
@@ -163,20 +165,42 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private async Task RegisterToolsFromSourcesAsync(CancellationToken ct)
     {
         var sources = Services.GetServices<IAgentToolSource>().ToList();
-        if (sources.Count == 0) return;
+        if (sources.Count == 0)
+        {
+            RefreshSourceTools([]);
+            return;
+        }
+
+        var discoveredTools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var source in sources)
         {
             try
             {
                 var tools = await source.DiscoverToolsAsync(ct);
-                if (tools.Count > 0)
-                    Tools.Register(tools);
+                foreach (var tool in tools)
+                    discoveredTools[tool.Name] = tool;
             }
             catch (Exception ex)
             {
                 Logger.LogWarning(ex, "Tool source discovery failed: {Source}", source.GetType().Name);
             }
+        }
+
+        RefreshSourceTools(discoveredTools.Values);
+    }
+
+    private void RefreshSourceTools(IEnumerable<IAgentTool> discoveredTools)
+    {
+        foreach (var toolName in _sourceToolNames)
+            Tools.Unregister(toolName);
+
+        _sourceToolNames.Clear();
+
+        foreach (var tool in discoveredTools)
+        {
+            Tools.Register(tool);
+            _sourceToolNames.Add(tool.Name);
         }
     }
 }

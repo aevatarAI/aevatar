@@ -7,7 +7,8 @@
       "src\\Aevatar.AI.LLMProviders.MEAI\\Aevatar.AI.LLMProviders.MEAI.csproj",
       "src\\Aevatar.AI.LLMProviders.Tornado\\Aevatar.AI.LLMProviders.Tornado.csproj",
       "src\\Aevatar.AI.ToolProviders.MCP\\Aevatar.AI.ToolProviders.MCP.csproj",
-      "src\\Aevatar.AI.ToolProviders.Skills\\Aevatar.AI.ToolProviders.Skills.csproj"
+      "src\\Aevatar.AI.ToolProviders.Skills\\Aevatar.AI.ToolProviders.Skills.csproj",
+      "test\\Aevatar.AI.Tests\\Aevatar.AI.Tests.csproj"
     ]
   }
 }

@@ -24,6 +24,10 @@ public sealed class ToolManager
     /// <summary>清空已注册工具。</summary>
     public void Clear() => _tools.Clear();
 
+    /// <summary>按名称注销工具。不存在时返回 false。</summary>
+    /// <param name="name">工具名称。</param>
+    public bool Unregister(string name) => _tools.Remove(name);
+
     /// <summary>按名称获取工具。未找到返回 null。</summary>
     /// <param name="name">工具名称。</param>
     /// <returns>对应的 IAgentTool，或 null。</returns>
