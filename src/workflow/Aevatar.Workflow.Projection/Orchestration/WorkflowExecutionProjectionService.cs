@@ -12,6 +12,8 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 /// </summary>
 public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProjectionPort
 {
+    private const string SinkBackpressureErrorCode = "RUN_SINK_BACKPRESSURE";
+    private const string SinkWriteErrorCode = "RUN_SINK_WRITE_FAILED";
     private readonly IProjectionOwnershipCoordinator _ownershipCoordinator;
     private readonly WorkflowExecutionProjectionOptions _options;
     private readonly IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> _lifecycle;
@@ -325,16 +327,19 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         {
             await sink.PushAsync(evt, CancellationToken.None);
         }
-        catch (WorkflowRunEventSinkBackpressureException)
+        catch (WorkflowRunEventSinkBackpressureException ex)
         {
+            await DetachLiveSinkSubscriptionAsync(runtimeLease, sink);
+            await PublishSinkFailureAsync(runtimeLease, SinkBackpressureErrorCode, ex.Message, evt);
         }
         catch (WorkflowRunEventSinkCompletedException)
         {
             await DetachLiveSinkSubscriptionAsync(runtimeLease, sink);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
             await DetachLiveSinkSubscriptionAsync(runtimeLease, sink);
+            await PublishSinkFailureAsync(runtimeLease, SinkWriteErrorCode, ex.Message, evt);
         }
     }
 
@@ -345,5 +350,36 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         var streamSubscription = runtimeLease.DetachLiveSinkSubscription(sink);
         if (streamSubscription != null)
             await streamSubscription.DisposeAsync();
+    }
+
+    private async Task PublishSinkFailureAsync(
+        WorkflowExecutionProjectionLease runtimeLease,
+        string code,
+        string message,
+        WorkflowRunEvent sourceEvent)
+    {
+        if (string.IsNullOrWhiteSpace(runtimeLease.ActorId) || string.IsNullOrWhiteSpace(runtimeLease.CommandId))
+            return;
+
+        var evtType = sourceEvent.Type;
+        var runError = new WorkflowRunErrorEvent
+        {
+            Code = code,
+            Message = $"Live sink delivery failed. eventType={evtType}, reason={message}",
+            Timestamp = _clock.UtcNow.ToUnixTimeMilliseconds(),
+        };
+
+        try
+        {
+            await _runEventStreamHub.PublishAsync(
+                runtimeLease.ActorId,
+                runtimeLease.CommandId,
+                runError,
+                CancellationToken.None);
+        }
+        catch
+        {
+            // Best-effort telemetry path; do not fail run processing on secondary publish errors.
+        }
     }
 }

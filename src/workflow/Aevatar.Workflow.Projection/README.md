@@ -15,14 +15,14 @@
 - `Aevatar.CQRS.Projection.Abstractions`（通用抽象）
 - `Aevatar.CQRS.Projection.Core`（通用生命周期/订阅/协调实现）
 - `Aevatar.Foundation.Projection`（最小 read model 基类与读侧能力接口）
-- `Aevatar.AI.Projection`（AI 通用事件 reducer/applier 与分层 read model 基类）
+- `Aevatar.Workflow.Extensions.AIProjection`（可选扩展：组合 `Aevatar.AI.Projection` 的通用 reducer/applier）
 
 ## 统一运行链路
 
 1. `EnsureActorProjectionAsync` 先通过 `Aevatar.CQRS.Projection.Core` 的通用 ownership coordinator 向 `projection:{rootActorId}` 协调 Actor 申请 ownership，再创建 projection 上下文并注册 actor stream 订阅
 2. 每条 `EventEnvelope` 进入统一 coordinator，一对多调用已注册 projector
 3. `WorkflowExecutionReadModelProjector` 驱动 reducers 生成并更新 read model
-4. AI 通用事件由 `Aevatar.AI.Projection` 统一处理：默认 applier + reducer 直接写入 `WorkflowExecutionReport` 继承的 AI 层能力字段，业务层无需再维护 AI 事件映射代码
+4. AI 通用事件通过 `Aevatar.Workflow.Extensions.AIProjection` 扩展接入，扩展内部复用 `Aevatar.AI.Projection` 的默认 applier + reducer，将事件写入 `WorkflowExecutionReport` 的 AI 能力字段，业务层无需重复维护映射代码
 5. AGUI 分支与读模型分支共享同一输入事件流；AGUI projector 将 run 输出发布到 `workflow-run:{actorId}:{commandId}` 事件流
 
 AGUI 输出与 CQRS 读模型共享同一链路，只是在 projector 分支不同。
