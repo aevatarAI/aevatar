@@ -1,9 +1,10 @@
 using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.Bootstrap.Connectors;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Bootstrap.Connectors;
+namespace Aevatar.Bootstrap.Extensions.AI.Connectors;
 
 public sealed class MCPConnectorBuilder : IConnectorBuilder
 {

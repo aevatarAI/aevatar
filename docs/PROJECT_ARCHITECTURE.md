@@ -17,7 +17,7 @@ flowchart TB
     R["aevatar.slnx"] --> SRC["src/"]
     SRC --> MN["Aevatar.Mainnet.Host.Api"]
     SRC --> WF["workflow/*"]
-    WF --> WFE["workflow/extensions/Aevatar.Workflow.Extensions.Maker"]
+    WF --> WFE["workflow/extensions/*"]
     SRC --> CQ["Aevatar.CQRS.*"]
     SRC --> FD["Aevatar.Foundation.*"]
 ```
@@ -28,16 +28,16 @@ flowchart TB
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
     MH["Aevatar.Mainnet.Host.Api"] --> H0["AddAevatarDefaultHost()"]
-    MH --> H1["AddWorkflowCapability()"]
+    MH --> H1["AddWorkflowCapabilityWithAIDefaults()"]
     MH --> H2["AddWorkflowMakerExtensions()"]
 
     WH["Aevatar.Workflow.Host.Api"] --> W0["AddAevatarDefaultHost()"]
-    WH --> W1["AddWorkflowCapability()"]
+    WH --> W1["AddWorkflowCapabilityWithAIDefaults()"]
 ```
 
 约束：
 
-1. Mainnet 必须注册 `AddWorkflowCapability()` 与 `AddWorkflowMakerExtensions()`。
+1. Mainnet 必须注册 `AddWorkflowCapabilityWithAIDefaults()` 与 `AddWorkflowMakerExtensions()`。
 2. Workflow Host 作为能力隔离入口，可不加载 Maker 插件。
 3. 不再保留 Maker 独立 Host 与 `/api/maker/*` API。
 

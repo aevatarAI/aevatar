@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions;
-using Aevatar.AI.Projection.Abstractions;
 using Aevatar.AI.Projection.Appliers;
 using Aevatar.AI.Projection.Reducers;
 using Aevatar.Foundation.Projection.ReadModels;
@@ -29,7 +28,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddAITextMessageEndProjectionApplier<TReadModel, TContext>(
         this IServiceCollection services)
         where TReadModel : class, IHasProjectionTimeline, IHasProjectionRoleReplies
-        where TContext : class, IAIProjectionContext
+        where TContext : class, IProjectionContext
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IProjectionEventApplier<TReadModel, TContext, TextMessageEndEvent>, AITextMessageEndProjectionApplier<TReadModel, TContext>>());
         return services;
@@ -89,7 +88,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddAIDefaultProjectionLayer<TReadModel, TContext>(
         this IServiceCollection services)
         where TReadModel : class, IHasProjectionTimeline, IHasProjectionRoleReplies
-        where TContext : class, IAIProjectionContext
+        where TContext : class, IProjectionContext
     {
         return services
             .AddAITextMessageStartProjectionApplier<TReadModel, TContext>()

@@ -107,6 +107,23 @@ if rg -n "Aevatar\.AI\.Core\.csproj" src/workflow/Aevatar.Workflow.Core/Aevatar.
   exit 1
 fi
 
+if rg -n "Aevatar\.AI\.(Abstractions|Core|LLMProviders\.MEAI|LLMProviders\.Tornado|ToolProviders\.MCP|ToolProviders\.Skills)\.csproj" \
+  src/Aevatar.Bootstrap/Aevatar.Bootstrap.csproj
+then
+  echo "Aevatar.Bootstrap must not directly reference AI implementations. Use Bootstrap.Extensions.AI composition package."
+  exit 1
+fi
+
+if rg -n "Aevatar\.AI\.Projection\.csproj" src/workflow/Aevatar.Workflow.Projection/Aevatar.Workflow.Projection.csproj; then
+  echo "Workflow.Projection must not directly reference AI.Projection. Use workflow extension composition."
+  exit 1
+fi
+
+if rg -n "AddAIDefaultProjectionLayer<" src/workflow/Aevatar.Workflow.Projection/DependencyInjection/ServiceCollectionExtensions.cs; then
+  echo "Workflow.Projection must not directly register AI default projection layer."
+  exit 1
+fi
+
 workflow_to_maker_violations="$(
   rg -n "Aevatar\.Maker\..*\.csproj" src/workflow -g '*.csproj' || true
 )"
@@ -142,6 +159,16 @@ fi
 
 if ! rg -n "AddWorkflowMakerExtensions\(" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
   echo "Mainnet host must register workflow maker extensions via AddWorkflowMakerExtensions()."
+  exit 1
+fi
+
+if ! rg -n "AddWorkflowCapabilityWithAIDefaults\(" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
+  echo "Mainnet host must register workflow capability + AI defaults via AddWorkflowCapabilityWithAIDefaults()."
+  exit 1
+fi
+
+if ! rg -n "AddWorkflowCapabilityWithAIDefaults\(" src/workflow/Aevatar.Workflow.Host.Api/Program.cs >/dev/null; then
+  echo "Workflow host must register workflow capability + AI defaults via AddWorkflowCapabilityWithAIDefaults()."
   exit 1
 fi
 

@@ -1,0 +1,17 @@
+{
+  "solution": {
+    "path": "aevatar.slnx",
+    "projects": [
+      "src\\Aevatar.Configuration\\Aevatar.Configuration.csproj",
+      "src\\Aevatar.Hosting\\Aevatar.Hosting.csproj",
+      "src\\Aevatar.Foundation.Runtime.Hosting\\Aevatar.Foundation.Runtime.Hosting.csproj",
+      "src\\Aevatar.Bootstrap\\Aevatar.Bootstrap.csproj",
+      "src\\Aevatar.Bootstrap.Extensions.AI\\Aevatar.Bootstrap.Extensions.AI.csproj",
+      "src\\Aevatar.Mainnet.Host.Api\\Aevatar.Mainnet.Host.Api.csproj",
+      "src\\workflow\\extensions\\Aevatar.Workflow.Extensions.AIProjection\\Aevatar.Workflow.Extensions.AIProjection.csproj",
+      "src\\workflow\\extensions\\Aevatar.Workflow.Extensions.Hosting\\Aevatar.Workflow.Extensions.Hosting.csproj",
+      "src\\workflow\\Aevatar.Workflow.Host.Api\\Aevatar.Workflow.Host.Api.csproj",
+      "tools\\Aevatar.Tools.Config\\Aevatar.Tools.Config.csproj"
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.Workflow.Extensions.Hosting</AssemblyName>
+    <RootNamespace>Aevatar.Workflow.Extensions.Hosting</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
+    <ProjectReference Include="..\Aevatar.Workflow.Extensions.AIProjection\Aevatar.Workflow.Extensions.AIProjection.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>

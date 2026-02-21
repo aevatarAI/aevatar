@@ -29,7 +29,6 @@ public static class WebApplicationBuilderExtensions
 {
     public static WebApplicationBuilder AddAevatarDefaultHost(
         this WebApplicationBuilder builder,
-        Action<AevatarBootstrapOptions>? configureBootstrap = null,
         Action<AevatarDefaultHostOptions>? configureHost = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -41,7 +40,7 @@ public static class WebApplicationBuilderExtensions
         configureHost?.Invoke(hostOptions);
 
         builder.Configuration.AddAevatarConfig();
-        builder.Services.AddAevatarBootstrap(builder.Configuration, configureBootstrap);
+        builder.Services.AddAevatarBootstrap(builder.Configuration);
         builder.Services.AddSingleton(hostOptions);
 
         if (hostOptions.EnableConnectorBootstrap)

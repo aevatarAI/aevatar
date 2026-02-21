@@ -1,4 +1,3 @@
-using Aevatar.AI.Projection.ReadModels;
 using Aevatar.Foundation.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.ReadModels;
@@ -29,7 +28,9 @@ public enum WorkflowExecutionCompletionStatus
 /// Read model for one workflow execution.
 /// </summary>
 public sealed class WorkflowExecutionReport
-    : AIProjectionReadModelBase
+    : AevatarReadModelBase,
+      IHasProjectionTimeline,
+      IHasProjectionRoleReplies
 {
     public string ReportVersion { get; set; } = "1.0";
     public WorkflowExecutionProjectionScope ProjectionScope { get; set; } = WorkflowExecutionProjectionScope.ActorShared;
@@ -47,7 +48,7 @@ public sealed class WorkflowExecutionReport
     public List<WorkflowExecutionTimelineEvent> Timeline { get; set; } = [];
     public WorkflowExecutionSummary Summary { get; set; } = new();
 
-    public override void AddTimeline(ProjectionTimelineEvent timelineEvent)
+    public void AddTimeline(ProjectionTimelineEvent timelineEvent)
     {
         ArgumentNullException.ThrowIfNull(timelineEvent);
 
@@ -64,7 +65,7 @@ public sealed class WorkflowExecutionReport
         });
     }
 
-    public override void AddRoleReply(ProjectionRoleReply roleReply)
+    public void AddRoleReply(ProjectionRoleReply roleReply)
     {
         ArgumentNullException.ThrowIfNull(roleReply);
 

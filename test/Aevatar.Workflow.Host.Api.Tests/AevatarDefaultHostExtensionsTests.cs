@@ -14,8 +14,7 @@ public class AevatarDefaultHostExtensionsTests
     {
         var builder = CreateBuilder();
 
-        builder.AddAevatarDefaultHost(
-            configureBootstrap: static options => options.EnableMEAIProviders = false);
+        builder.AddAevatarDefaultHost();
 
         builder.Services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
@@ -28,7 +27,6 @@ public class AevatarDefaultHostExtensionsTests
         var builder = CreateBuilder();
 
         builder.AddAevatarDefaultHost(
-            configureBootstrap: static options => options.EnableMEAIProviders = false,
             configureHost: static options => options.EnableConnectorBootstrap = false);
 
         builder.Services.Should().NotContain(descriptor =>

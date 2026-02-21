@@ -321,12 +321,17 @@ aevatar/
 - **Connector 配置详解**： [src/Aevatar.Configuration/README.md](src/Aevatar.Configuration/README.md#connector-作用与配置) — 配置格式与示例。
 - **Maker 示例**： [demos/Aevatar.Demos.Maker](demos/Aevatar.Demos.Maker) — 自定义步骤类型与 MAKER 工作流。
 - **架构审计评分**： [docs/audit-scorecard/architecture-scorecard-2026-02-20.md](docs/audit-scorecard/architecture-scorecard-2026-02-20.md) — 当前实现分与目标态评分口径。
+- **项目拆分策略**： [docs/PROJECT_SPLIT_STRATEGY.md](docs/PROJECT_SPLIT_STRATEGY.md) — 分片与拆仓路径。
+- **拆分细节审计**： [docs/audit-scorecard/project-split-scorecard-2026-02-21.md](docs/audit-scorecard/project-split-scorecard-2026-02-21.md) — 拆分就绪度评分与问题清单。
 
 ---
 
 ## 给开发者
 
 - **运行测试**：`dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj`
+- **分片守卫**：`bash tools/ci/solution_split_guards.sh`
+- **分片测试守卫**：`bash tools/ci/solution_split_test_guards.sh`
+- **按域构建**：`dotnet build aevatar.foundation.slnf` / `dotnet build aevatar.ai.slnf` / `dotnet build aevatar.cqrs.slnf` / `dotnet build aevatar.workflow.slnf` / `dotnet build aevatar.hosting.slnf`
 - **CLI 演示**（不看 LLM，只看事件流）：  
   `dotnet run --project demos/Aevatar.Demos.Cli -- run hierarchy --web artifacts/demo/hierarchy.html`
 - **Agent 命名约定**：带 **GAgent** 的类负责框架能力（事件分发、状态、路由）；业务逻辑放在基于 GAgent 的扩展或自定义步骤/Connector 里。

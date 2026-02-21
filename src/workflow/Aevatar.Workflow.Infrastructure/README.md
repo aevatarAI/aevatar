@@ -27,6 +27,8 @@
   - 能力一键组合（Application + Projection + AGUIAdapter + Infrastructure + workflow 文件源）。
 - `AddWorkflowCapability(WebApplicationBuilder)`
   - Host 侧一行接入 Workflow 能力（服务注册 + 能力端点声明）。
+- `Aevatar.Workflow.Extensions.Hosting.AddWorkflowCapabilityWithAIDefaults(WebApplicationBuilder)`
+  - 在 Host 入口统一装配 Workflow capability + AI features + AI projection extension（推荐用于生产组合入口）。
 - `MapWorkflowCapabilityEndpoints(...)`
   - 将 Workflow 能力 API 端点挂载到 Host（默认由 `UseAevatarDefaultHost()` 自动调用能力映射链路）。
 

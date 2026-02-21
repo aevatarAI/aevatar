@@ -13,7 +13,7 @@ public sealed class AevatarDefaultHostOptionsTests
     {
         var builder = WebApplication.CreateBuilder();
 
-        builder.AddAevatarDefaultHost(configureBootstrap: options => options.EnableMEAIProviders = false);
+        builder.AddAevatarDefaultHost();
 
         var hostedServices = builder.Services
             .Where(x => x.ServiceType == typeof(IHostedService))
@@ -28,7 +28,6 @@ public sealed class AevatarDefaultHostOptionsTests
         var builder = WebApplication.CreateBuilder();
 
         builder.AddAevatarDefaultHost(
-            configureBootstrap: options => options.EnableMEAIProviders = false,
             configureHost: options => options.EnableActorRestoreOnStartup = false);
 
         var hostedServices = builder.Services

@@ -10,6 +10,18 @@
 - 不保留无效层：空转发、重复抽象、无业务价值代码直接删除。
 - 变更必须可验证：架构调整需同步文档，且 `build/test` 通过。
 
+## 架构设计哲学（抽象）
+- 单一主干，插件扩展：系统只保留一条权威业务主链路；新增能力以插件/模块方式挂载，避免平行“第二系统”。
+- 内核最小化：核心层只承载稳定业务不变量与通用机制；波动能力下沉到扩展层，减少核心侵蚀。
+- 扩展对称性：内建能力与扩展能力遵循同一抽象模型与生命周期协议，不为扩展单独再造体系。
+- 抽象优先：依赖行为契约与语义接口，而非具体类型与实现细节；组合面向能力，非面向实现。
+- 边界清晰：协议适配、业务编排、状态管理分别归属不同层；每层只做本层职责，禁止跨层偷渡语义。
+- 事实源唯一：跨请求/跨节点的一致性事实必须有唯一权威来源（Actor 持久态或分布式状态），不依赖进程内偶然状态。
+- 数据语义分层：传输元数据用于追踪与上下文；业务语义以领域事件与读模型为准，不混用语义层次。
+- 渐进演进：开发期可用本地/内存实现提升反馈速度，但生产语义必须能无缝迁移到分布式与持久化实现。
+- 删除优于兼容：重构以清晰正确为第一目标；无业务价值或重复层应直接删除，不为历史包袱保留空壳。
+- 治理前置：架构规则必须可自动化验证（门禁、测试、文档一致性），避免依赖口头约定。
+
 ## 中间层状态约束（强制）
 - 禁止在中间层维护 `entity/actor/workflow-run/session` 等 ID 到上下文或事实状态的进程内映射（`Dictionary<>`、`ConcurrentDictionary<>`、`HashSet<>`、`Queue<>`）。
 - 允许 Actor 内部运行态集合保留在内存或 Actor `State`（例如 `module_runtime`）；前提是该状态不作为跨节点事实源，并且按生命周期及时清理。
@@ -30,6 +42,8 @@
 - `dotnet test aevatar.slnx --nologo`：运行全量测试。
 - `bash tools/ci/architecture_guards.sh`：本地执行 CI 架构门禁（与 CI 同步）。
 - `bash tools/ci/projection_route_mapping_guard.sh`：单独执行“事件类型 -> reducer 路由映射正确性”静态门禁。
+- `bash tools/ci/solution_split_guards.sh`：执行分片构建门禁（Foundation/AI/CQRS/Workflow/Hosting）。
+- `bash tools/ci/solution_split_test_guards.sh`：执行分片测试门禁（Foundation/CQRS/Workflow）。
 - `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
 - `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
 

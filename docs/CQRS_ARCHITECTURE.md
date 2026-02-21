@@ -62,7 +62,7 @@ flowchart LR
 接入约束：
 
 1. 必须使用 `AddAevatarDefaultHost(...)` + `UseAevatarDefaultHost()`。
-2. Mainnet 必须接入 `AddWorkflowCapability()`。
+2. Mainnet 与 Workflow Host 必须接入 `AddWorkflowCapabilityWithAIDefaults()`（统一装配 Workflow capability + AI features + AI projection extension）。
 3. Mainnet 通过 `AddWorkflowMakerExtensions()` 装配 Maker 插件。
 4. 禁止 `AddMakerCapability()` 与 `/api/maker/*` 独立路由模型。
 

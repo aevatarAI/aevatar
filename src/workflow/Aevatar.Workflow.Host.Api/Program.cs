@@ -9,25 +9,18 @@
 // LLM API Key 可从环境变量 DEEPSEEK_API_KEY / OPENAI_API_KEY 或 secrets 读取。
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Workflow.Infrastructure.CapabilityApi;
-using Aevatar.Bootstrap;
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.Workflow.Extensions.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddAevatarDefaultHost(
-    configureBootstrap: options =>
-    {
-        options.EnableMEAIProviders = true;
-        options.EnableMCPTools = true;
-        options.EnableSkills = true;
-    },
     configureHost: options =>
     {
         options.ServiceName = "Aevatar.Workflow.Host.Api";
         options.EnableWebSockets = true;
     });
-builder.AddWorkflowCapability();
+builder.AddWorkflowCapabilityWithAIDefaults();
 
 var app = builder.Build();
 

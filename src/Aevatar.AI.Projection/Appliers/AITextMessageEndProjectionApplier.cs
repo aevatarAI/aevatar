@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions;
-using Aevatar.AI.Projection.Abstractions;
 using Aevatar.Foundation.Projection.ReadModels;
 
 namespace Aevatar.AI.Projection.Appliers;
@@ -7,7 +6,7 @@ namespace Aevatar.AI.Projection.Appliers;
 public sealed class AITextMessageEndProjectionApplier<TReadModel, TContext>
     : IProjectionEventApplier<TReadModel, TContext, TextMessageEndEvent>
     where TReadModel : class, IHasProjectionTimeline, IHasProjectionRoleReplies
-    where TContext : class, IAIProjectionContext
+    where TContext : class, IProjectionContext
 {
     public bool Apply(
         TReadModel readModel,

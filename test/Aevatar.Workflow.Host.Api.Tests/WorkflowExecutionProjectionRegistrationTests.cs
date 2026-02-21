@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.AI.Projection.Reducers;
+using Aevatar.Workflow.Extensions.AIProjection;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Configuration;
@@ -110,10 +111,11 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void AddWorkflowExecutionProjectionCQRS_ShouldRegisterDefaultAIReducers()
+    public void AddWorkflowExecutionProjectionCQRS_WithAIExtensions_ShouldRegisterDefaultAIReducers()
     {
         var services = new ServiceCollection();
         services.AddWorkflowExecutionProjectionCQRS();
+        services.AddWorkflowAIProjectionExtensions();
 
         using var provider = services.BuildServiceProvider();
         var reducerTypes = provider
@@ -139,10 +141,11 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public async Task AddWorkflowExecutionProjectionCQRS_DefaultAILayer_ShouldProjectAIEventsWithoutWorkflowApplier()
+    public async Task AddWorkflowExecutionProjectionCQRS_WithAIExtensions_ShouldProjectAIEventsWithoutWorkflowApplier()
     {
         var services = new ServiceCollection();
         services.AddWorkflowExecutionProjectionCQRS();
+        services.AddWorkflowAIProjectionExtensions();
 
         await using var provider = services.BuildServiceProvider();
         var coordinator = provider.GetRequiredService<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
