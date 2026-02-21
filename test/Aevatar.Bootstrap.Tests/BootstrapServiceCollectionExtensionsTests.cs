@@ -69,6 +69,27 @@ public class BootstrapServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddAevatarDefaultHost_ShouldRespectRestoreOnStartupConfiguration()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:RestoreOnStartup"] = "false",
+        });
+
+        builder.AddAevatarDefaultHost();
+
+        var hostedServices = builder.Services
+            .Where(x => x.ServiceType == typeof(IHostedService))
+            .Select(x => x.ImplementationType)
+            .ToList();
+
+        hostedServices.Should().Contain(typeof(ConnectorBootstrapHostedService));
+        hostedServices.Should().NotContain(typeof(ActorRestoreHostedService));
+    }
+
+    [Fact]
     public void UseAevatarDefaultHost_WhenAutoMapCapabilitiesDisabled_ShouldOnlyMapRootHealthRoute()
     {
         using var home = new TemporaryAevatarHomeScope();

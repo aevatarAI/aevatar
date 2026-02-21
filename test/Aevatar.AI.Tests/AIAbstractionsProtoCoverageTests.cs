@@ -91,6 +91,13 @@ public sealed class AIAbstractionsProtoCoverageTests
 
         AiMessagesReflection.Descriptor.Should().NotBeNull();
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ChatRequestEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ChatResponseEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageStartEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageContentEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageEndEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolCallEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolResultEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleGAgentState));
     }
 
     [Fact]
@@ -116,6 +123,71 @@ public sealed class AIAbstractionsProtoCoverageTests
         setToolCallName.Should().Throw<ArgumentNullException>();
         setToolResultCallId.Should().Throw<ArgumentNullException>();
         setStateRoleName.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void ProtoMessages_ShouldCoverGeneratedBranchesAndUnknownFields()
+    {
+        var request = new ChatRequestEvent
+        {
+            Prompt = "p",
+            SessionId = "s",
+            Metadata = { ["k"] = "v" },
+        };
+        request.MergeFrom(new ChatRequestEvent());
+        request.MergeFrom((ChatRequestEvent)null!);
+        request.Equals(request).Should().BeTrue();
+        request.Equals((object?)null).Should().BeFalse();
+        request!.GetHashCode().Should().NotBe(0);
+
+        var response = new ChatResponseEvent { Content = "c", SessionId = "s" };
+        response.MergeFrom((ChatResponseEvent)null!);
+        response.Equals(response).Should().BeTrue();
+        response.Equals((object?)null).Should().BeFalse();
+
+        var textStart = new TextMessageStartEvent { SessionId = "s", AgentId = "a" };
+        textStart.MergeFrom((TextMessageStartEvent)null!);
+        textStart.Equals((object?)null).Should().BeFalse();
+
+        var textContent = new TextMessageContentEvent { SessionId = "s", Delta = "d" };
+        textContent.MergeFrom((TextMessageContentEvent)null!);
+        textContent.Equals((object?)null).Should().BeFalse();
+
+        var textEnd = new TextMessageEndEvent { SessionId = "s", Content = "e" };
+        textEnd.MergeFrom((TextMessageEndEvent)null!);
+        textEnd.Equals((object?)null).Should().BeFalse();
+
+        var toolCall = new ToolCallEvent { ToolName = "tool", ArgumentsJson = "{}", CallId = "call-1" };
+        toolCall.MergeFrom((ToolCallEvent)null!);
+        toolCall.Equals((object?)null).Should().BeFalse();
+
+        var toolResult = new ToolResultEvent { CallId = "call-1", ResultJson = "{}", Success = true, Error = "" };
+        toolResult.MergeFrom((ToolResultEvent)null!);
+        toolResult.Equals((object?)null).Should().BeFalse();
+
+        var state = new RoleGAgentState { RoleName = "assistant", MessageCount = 1 };
+        state.MergeFrom((RoleGAgentState)null!);
+        state.Equals((object?)null).Should().BeFalse();
+
+        var parsedResponse = ChatResponseEvent.Parser.ParseFrom(new byte[]
+        {
+            10, 1, (byte)'x', // content
+            18, 1, (byte)'s', // session_id
+            0x98, 0x06, 0x01, // unknown field 99 = 1
+        });
+        parsedResponse.Content.Should().Be("x");
+        parsedResponse.SessionId.Should().Be("s");
+        parsedResponse.ToByteArray().Length.Should().BeGreaterThan(4);
+
+        var parsedToolResult = ToolResultEvent.Parser.ParseFrom(new byte[]
+        {
+            10, 2, (byte)'i', (byte)'d', // call_id
+            24, 1,                       // success=true
+            0x98, 0x06, 0x01,            // unknown field 99 = 1
+        });
+        parsedToolResult.CallId.Should().Be("id");
+        parsedToolResult.Success.Should().BeTrue();
+        parsedToolResult.ToByteArray().Length.Should().BeGreaterThan(3);
     }
 
     private static T RoundTrip<T>(T message, MessageParser<T> parser)

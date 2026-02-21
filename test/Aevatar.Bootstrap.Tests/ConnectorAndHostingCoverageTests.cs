@@ -118,6 +118,183 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public async Task HttpConnector_ShouldCoverEscapeTimeoutExceptionAndSchemaBranches()
+    {
+        var escapeConnector = new HttpConnector(
+            "http-escape",
+            "https://example.com",
+            allowedMethods: ["POST"],
+            allowedPaths: ["/"],
+            client: new HttpClient(new StubHttpMessageHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") })));
+
+        var escaped = await escapeConnector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "//evil.example/path",
+        });
+        escaped.Success.Should().BeFalse();
+        escaped.Error.Should().Contain("escapes configured base_url");
+
+        var schemaConnector = new HttpConnector(
+            "http-schema",
+            "https://example.com",
+            allowedMethods: ["POST"],
+            allowedPaths: ["/allowed"],
+            allowedInputKeys: ["q"],
+            client: new HttpClient(new StubHttpMessageHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                })));
+
+        var nonObject = await schemaConnector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/allowed",
+            Payload = "[]",
+        });
+        nonObject.Success.Should().BeFalse();
+        nonObject.Error.Should().Contain("expected JSON object");
+
+        var invalidJson = await schemaConnector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/allowed",
+            Payload = "{oops",
+        });
+        invalidJson.Success.Should().BeFalse();
+        invalidJson.Error.Should().Contain("invalid JSON");
+
+        var timeoutConnector = new HttpConnector(
+            "http-timeout",
+            "https://example.com",
+            allowedMethods: ["POST"],
+            allowedPaths: ["/slow"],
+            client: new HttpClient(new DelayedHttpMessageHandler(TimeSpan.FromMilliseconds(800))));
+
+        var timeout = await timeoutConnector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/slow",
+            Parameters = new Dictionary<string, string> { ["timeout_ms"] = "100" },
+        });
+        timeout.Success.Should().BeFalse();
+        timeout.Error.Should().Contain("timeout");
+
+        var exceptionConnector = new HttpConnector(
+            "http-exception",
+            "https://example.com",
+            allowedMethods: ["POST"],
+            allowedPaths: ["/"],
+            client: new HttpClient(new ThrowingHttpMessageHandler(new InvalidOperationException("boom-http"))));
+
+        var failed = await exceptionConnector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/x",
+        });
+        failed.Success.Should().BeFalse();
+        failed.Error.Should().Contain("boom-http");
+    }
+
+    [Fact]
+    public async Task HttpConnector_ShouldSupportPathParameterGetBranchAndNonSuccessResponse()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            {
+                Content = new StringContent("down", Encoding.UTF8, "text/plain"),
+                ReasonPhrase = "Service Unavailable",
+            });
+
+        var connector = new HttpConnector(
+            "http-get",
+            "https://example.com",
+            allowedMethods: ["GET"],
+            allowedPaths: ["/"],
+            client: new HttpClient(handler));
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "",
+            Parameters = new Dictionary<string, string>
+            {
+                ["method"] = "GET",
+                ["path"] = "v1/ping",
+            },
+        });
+
+        response.Success.Should().BeFalse();
+        response.Error.Should().Contain("503");
+        response.Metadata["connector.http.method"].Should().Be("GET");
+        response.Metadata["connector.http.url"].Should().Contain("/v1/ping");
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Content.Should().BeNull();
+        handler.LastRequest.Headers.Accept.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task CliConnector_ShouldCoverConstructorValidationFailureAndExceptionBranches()
+    {
+        Action missingName = () => _ = new CliConnector("", "dotnet");
+        Action missingCommand = () => _ = new CliConnector("cli", "");
+        missingName.Should().Throw<ArgumentException>();
+        missingCommand.Should().Throw<ArgumentException>();
+
+        var schemaConnector = new CliConnector(
+            "cli-schema",
+            command: "dotnet",
+            fixedArguments: ["--version"],
+            allowedInputKeys: ["q"]);
+
+        var nonObject = await schemaConnector.ExecuteAsync(new ConnectorRequest
+        {
+            Payload = "[]",
+        });
+        nonObject.Success.Should().BeFalse();
+        nonObject.Error.Should().Contain("expected JSON object");
+
+        var invalidJson = await schemaConnector.ExecuteAsync(new ConnectorRequest
+        {
+            Payload = "{bad",
+        });
+        invalidJson.Success.Should().BeFalse();
+        invalidJson.Error.Should().Contain("invalid JSON");
+
+        var nonZero = new CliConnector("cli-nonzero", command: "dotnet");
+        var failed = await nonZero.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "definitely-not-a-dotnet-command",
+        });
+        failed.Success.Should().BeFalse();
+        failed.Error.Should().Contain("process exited with code");
+        failed.Metadata.Should().ContainKey("connector.cli.exit_code");
+
+        var exceptionConnector = new CliConnector("cli-ex", command: "/definitely/not/exist");
+        var ex = await exceptionConnector.ExecuteAsync(new ConnectorRequest());
+        ex.Success.Should().BeFalse();
+        ex.Error.Should().NotBeNullOrWhiteSpace();
+        ex.Metadata.Should().ContainKey("connector.cli.command");
+    }
+
+    [Fact]
+    public async Task CliConnector_ShouldCoverTimeoutBranch_OnUnix()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var timeoutConnector = new CliConnector(
+            "cli-timeout",
+            command: "/bin/sh",
+            fixedArguments: ["-c", "sleep 2"],
+            timeoutMs: 2000);
+
+        var timeout = await timeoutConnector.ExecuteAsync(new ConnectorRequest
+        {
+            Parameters = new Dictionary<string, string> { ["timeout_ms"] = "100" },
+        });
+
+        timeout.Success.Should().BeFalse();
+        timeout.Error.Should().Contain("timeout");
+    }
+
+    [Fact]
     public void ConnectorRegistration_ShouldBuildSupportedConnectorsOnly()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"connector-reg-tests-{Guid.NewGuid():N}");
@@ -297,6 +474,44 @@ public class ConnectorAndHostingCoverageTests
         {
             LastRequest = request;
             return Task.FromResult(_responseFactory(request));
+        }
+    }
+
+    private sealed class DelayedHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly TimeSpan _delay;
+
+        public DelayedHttpMessageHandler(TimeSpan delay)
+        {
+            _delay = delay;
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _ = request;
+            await Task.Delay(_delay, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}"),
+                ReasonPhrase = "OK",
+            };
+        }
+    }
+
+    private sealed class ThrowingHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly Exception _exception;
+
+        public ThrowingHttpMessageHandler(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _ = request;
+            _ = cancellationToken;
+            throw _exception;
         }
     }
 

@@ -2,6 +2,7 @@ using Aevatar.Configuration;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Integration.Tests;
 
@@ -72,7 +73,8 @@ public class AgentYamlLoaderAndWorkflowStateCoverageTests
         clone.Should().BeEquivalentTo(state);
 
         var bytes = state.ToByteArray();
-        var parsed = WorkflowState.Parser.ParseFrom(bytes);
+        WorkflowState parsed = WorkflowState.Parser.ParseFrom(bytes)
+            ?? throw new InvalidOperationException("WorkflowState parse returned null");
         parsed.WorkflowName.Should().Be("demo");
         parsed.Version.Should().Be(7);
         parsed.Compiled.Should().BeTrue();
@@ -82,5 +84,60 @@ public class AgentYamlLoaderAndWorkflowStateCoverageTests
 
         WorkflowStateReflection.Descriptor.Should().NotBeNull();
         WorkflowStateReflection.Descriptor.MessageTypes.Should().ContainSingle(x => x.Name == nameof(WorkflowState));
+    }
+
+    [Fact]
+    public void WorkflowStateProto_ShouldCoverMergeNullUnknownFieldsAndValidationBranches()
+    {
+        // Field 1 + field 2 + unknown varint field(99)
+        var raw = new byte[] { 10, 2, (byte)'y', (byte)'1', 18, 2, (byte)'w', (byte)'f', 0x98, 0x06, 0x01 };
+        WorkflowState parsed = WorkflowState.Parser.ParseFrom(raw)
+            ?? throw new InvalidOperationException("WorkflowState parse returned null");
+
+        parsed.WorkflowYaml.Should().Be("y1");
+        parsed.WorkflowName.Should().Be("wf");
+        parsed.ToByteArray().Length.Should().BeGreaterThan(raw.Length - 2);
+
+        parsed.Equals(parsed).Should().BeTrue();
+        parsed.Equals((object?)null).Should().BeFalse();
+        parsed!.GetHashCode().Should().NotBe(0);
+        parsed.ToString().Should().Contain("workflowYaml");
+        ((IMessage)parsed).Descriptor.Name.Should().Be(nameof(WorkflowState));
+
+        var empty = new WorkflowState();
+        empty.CalculateSize().Should().Be(0);
+        empty.MergeFrom((WorkflowState)null!);
+        empty.Should().BeEquivalentTo(new WorkflowState());
+
+        var full = new WorkflowState
+        {
+            WorkflowYaml = "yaml",
+            WorkflowName = "name",
+            Version = 2,
+            Compiled = true,
+            CompilationError = "none",
+            TotalExecutions = 3,
+            SuccessfulExecutions = 2,
+            FailedExecutions = 1,
+        };
+
+        var merged = new WorkflowState();
+        merged.MergeFrom(full);
+        merged.Should().BeEquivalentTo(full);
+
+        // Merge with default values should keep existing values in generated merge branches.
+        merged.MergeFrom(new WorkflowState());
+        merged.WorkflowName.Should().Be("name");
+        merged.Version.Should().Be(2);
+
+        Action setYamlNull = () => full.WorkflowYaml = null!;
+        Action setNameNull = () => full.WorkflowName = null!;
+        Action setErrorNull = () => full.CompilationError = null!;
+        setYamlNull.Should().Throw<ArgumentNullException>();
+        setNameNull.Should().Throw<ArgumentNullException>();
+        setErrorNull.Should().Throw<ArgumentNullException>();
+
+        // Touch timestamp dependency to ensure protobuf well-known types are linked.
+        Timestamp.FromDateTime(DateTime.UtcNow).Should().NotBeNull();
     }
 }
