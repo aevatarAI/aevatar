@@ -1,7 +1,6 @@
 // ─────────────────────────────────────────────────────────────
 // AIGAgentBase / AIAgentConfig — AI GAgent 基类（组合器）
-// 组合 ChatRuntime + ToolManager + ChatHistory + HookPipeline
-// 不是上帝类——实际逻辑在四个独立组件中
+// 组合 ChatRuntime + ToolManager + ChatHistory + HookPipeline + Middleware
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.Core.Chat;
@@ -9,6 +8,7 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Hooks.BuiltIn;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,7 +41,7 @@ public sealed class AIAgentConfig
     public int MaxHistoryMessages { get; set; } = 100;
 }
 
-/// <summary>AI GAgent 基类。组合 ChatRuntime、ToolManager、ChatHistory、HookPipeline。</summary>
+/// <summary>AI GAgent 基类。组合 ChatRuntime、ToolManager、ChatHistory、HookPipeline、Middleware。</summary>
 /// <typeparam name="TState">Agent 状态类型，须为 Protobuf IMessage。</typeparam>
 public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     where TState : class, IMessage<TState>, new()
@@ -79,9 +79,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     // ─── Chat 快捷方法 ───
 
     /// <summary>单轮 Chat（含 Tool Calling 循环）。</summary>
-    /// <param name="userMessage">用户输入。</param>
-    /// <param name="ct">取消令牌。</param>
-    /// <returns>LLM 最终回复文本，或 null。</returns>
     protected Task<string?> ChatAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
@@ -89,9 +86,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     }
 
     /// <summary>流式 Chat。</summary>
-    /// <param name="userMessage">用户输入。</param>
-    /// <param name="ct">取消令牌。</param>
-    /// <returns>增量文本的异步序列。</returns>
     protected IAsyncEnumerable<string> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
@@ -99,18 +93,10 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     }
 
     /// <summary>注册单个工具。</summary>
-    /// <param name="tool">要注册的工具。</param>
     protected void RegisterTool(IAgentTool tool) => Tools.Register(tool);
 
     /// <summary>清空对话历史。</summary>
     protected void ClearHistory() => History.Clear();
-
-    // ─── Hook 双通道说明 ───
-    // 1. Foundation 级（Event Handler hooks）：由 GAgentBase._hooks pipeline 驱动
-    //    → RebuildRuntime 中通过 RegisterHook() 注册 built-in IAIGAgentExecutionHook 到 Foundation pipeline
-    //    → IAIGAgentExecutionHook : IGAgentExecutionHook，所以 Foundation 可以调用 OnEventHandlerStart/End/OnError
-    // 2. AI 级（LLM / Tool hooks）：由 AIGAgentBase._hooks (AgentHookPipeline) 驱动
-    //    → ChatRuntime / ToolCallLoop 在 LLM/Tool 前后调用 AI pipeline
 
     // ─── 内部构建 ───
 
@@ -127,19 +113,26 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         hooks.AddRange(additional);
         _hooks = new AgentHookPipeline(hooks, Logger);
 
-        // 注册 AI hooks 到 Foundation 的 IGAgentExecutionHook pipeline
-        // IAIGAgentExecutionHook : IGAgentExecutionHook，所以 Foundation 层能调用 Event Handler hooks
         foreach (var hook in hooks)
             RegisterHook(hook);
 
+        // 收集 Middleware（DI 注入）
+        var agentMiddlewares = Services.GetServices<IAgentRunMiddleware>().ToList();
+        var toolMiddlewares = Services.GetServices<IToolCallMiddleware>().ToList();
+        var llmMiddlewares = Services.GetServices<ILLMCallMiddleware>().ToList();
+
         // 构建 Chat Runtime
-        var toolLoop = new ToolCallLoop(Tools, _hooks);
+        var toolLoop = new ToolCallLoop(Tools, _hooks, toolMiddlewares, llmMiddlewares);
         _chat = new ChatRuntime(
             providerFactory: GetLLMProvider,
             history: History,
             toolLoop: toolLoop,
             hooks: _hooks,
-            requestBuilder: BuildRequest);
+            requestBuilder: BuildRequest,
+            agentMiddlewares: agentMiddlewares,
+            llmMiddlewares: llmMiddlewares,
+            agentId: Id,
+            agentName: GetType().Name);
     }
 
     private ILLMProvider GetLLMProvider()

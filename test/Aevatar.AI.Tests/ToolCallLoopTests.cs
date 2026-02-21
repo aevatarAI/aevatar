@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Tools;
@@ -156,6 +157,56 @@ public class ToolCallLoopTests
         hook.LlmEndCount.Should().Be(1);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenToolMiddlewareRewritesArguments_ShouldUseRewrittenArguments()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-arg-rewrite",
+                        Name = "echo",
+                        ArgumentsJson = """{"v":"original"}""",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+
+        var capturedArguments = string.Empty;
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", args =>
+        {
+            capturedArguments = args;
+            return args;
+        }));
+
+        var rewriteMiddleware = new DelegateToolCallMiddleware(async (ctx, next) =>
+        {
+            ctx.ArgumentsJson = """{"v":"rewritten"}""";
+            await next();
+        });
+
+        var loop = new ToolCallLoop(
+            tools,
+            hooks: null,
+            toolMiddlewares: [rewriteMiddleware],
+            llmMiddlewares: []);
+
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        result.Should().Be("done");
+        capturedArguments.Should().Be("""{"v":"rewritten"}""");
+        messages.Should().Contain(m => m.Role == "tool" && m.ToolCallId == "tc-arg-rewrite" && m.Content == """{"v":"rewritten"}""");
+    }
+
     private sealed class QueueLLMProvider : ILLMProvider
     {
         private readonly Queue<LLMResponse> _responses;
@@ -205,6 +256,12 @@ public class ToolCallLoopTests
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(_execute(argumentsJson));
         }
+    }
+
+    private sealed class DelegateToolCallMiddleware(
+        Func<ToolCallContext, Func<Task>, Task> handler) : IToolCallMiddleware
+    {
+        public Task InvokeAsync(ToolCallContext context, Func<Task> next) => handler(context, next);
     }
 
     private sealed class RecordingHook : IAIGAgentExecutionHook

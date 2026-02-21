@@ -9,7 +9,6 @@
   </Folder>
   <Folder Name="/docs/">
     <File Path="docs\FOUNDATION.md" />
-    <File Path="docs\COGNITIVE.md" />
     <File Path="docs\EVENT_SOURCING.md" />
     <File Path="docs\ROLE.md" />
     <File Path="docs\PROJECT_ARCHITECTURE.md" />
@@ -56,6 +55,7 @@
     <Project Path="src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
   </Folder>
   <Folder Name="/test/">
+    <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Core.Tests\Aevatar.CQRS.Core.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Projection.Core.Tests\Aevatar.CQRS.Projection.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
