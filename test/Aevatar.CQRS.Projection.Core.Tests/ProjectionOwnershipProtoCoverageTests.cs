@@ -98,7 +98,7 @@ public sealed class ProjectionOwnershipProtoCoverageTests
         merged.Should().BeEquivalentTo(msg);
         msg.Equals((object?)null).Should().BeFalse();
 
-        Action setPayload = () => msg.Payload = null!;
+        Action setPayload = () => msg!.Payload = null!;
         setPayload.Should().Throw<ArgumentNullException>();
 
         ProjectionSessionEventTransportReflection.Descriptor.Should().NotBeNull();
