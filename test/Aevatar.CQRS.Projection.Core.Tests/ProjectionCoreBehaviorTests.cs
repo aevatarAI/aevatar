@@ -82,12 +82,11 @@ public class ProjectionSubscriptionRegistryTests
         await hub.EmitAsync(new EventEnvelope { Id = "evt-1" });
         dispatcher.DispatchCount.Should().Be(1);
 
-        var lease = (FakeLease?)context.StreamSubscriptionLease;
         await registry.UnregisterAsync(context, CancellationToken.None);
 
         context.StreamSubscriptionLease.Should().BeNull();
-        lease.Should().NotBeNull();
-        lease!.Disposed.Should().BeTrue();
+        hub.LastLease.Should().NotBeNull();
+        hub.LastLease!.Disposed.Should().BeTrue();
     }
 
     [Fact]
@@ -103,6 +102,45 @@ public class ProjectionSubscriptionRegistryTests
         Func<Task> act = () => registry.RegisterAsync(context, CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task RegisterAsync_ShouldForwardCancelableDispatchToken()
+    {
+        var dispatcher = new TokenCapturingDispatcher();
+        var hub = new FakeSubscriptionHub();
+        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
+        var context = new TestProjectionContext("projection-1", "actor-1");
+
+        await registry.RegisterAsync(context, CancellationToken.None);
+        await hub.EmitAsync(new EventEnvelope { Id = "evt-1" });
+
+        dispatcher.LastToken.Should().NotBeNull();
+        dispatcher.LastToken!.Value.CanBeCanceled.Should().BeTrue();
+
+        await registry.UnregisterAsync(context, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task RegisterAsync_ShouldReportFailure_WhenDispatcherThrows()
+    {
+        var dispatcher = new ThrowingDispatcher(new InvalidOperationException("boom"));
+        var reporter = new CapturingFailureReporter();
+        var hub = new FakeSubscriptionHub();
+        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(
+            dispatcher,
+            hub,
+            reporter);
+        var context = new TestProjectionContext("projection-1", "actor-1");
+        var envelope = new EventEnvelope { Id = "evt-1" };
+
+        await registry.RegisterAsync(context, CancellationToken.None);
+        await hub.EmitAsync(envelope);
+
+        reporter.Calls.Should().ContainSingle();
+        reporter.Calls[0].Context.Should().BeSameAs(context);
+        reporter.Calls[0].Envelope.Should().BeSameAs(envelope);
+        reporter.Calls[0].Exception.Should().BeOfType<InvalidOperationException>();
     }
 }
 
@@ -287,10 +325,52 @@ internal sealed class CountingDispatcher : IProjectionDispatcher<TestProjectionC
     }
 }
 
+internal sealed class TokenCapturingDispatcher : IProjectionDispatcher<TestProjectionContext>
+{
+    public CancellationToken? LastToken { get; private set; }
+
+    public Task DispatchAsync(TestProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
+    {
+        LastToken = ct;
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class ThrowingDispatcher : IProjectionDispatcher<TestProjectionContext>
+{
+    private readonly Exception _exception;
+
+    public ThrowingDispatcher(Exception exception)
+    {
+        _exception = exception;
+    }
+
+    public Task DispatchAsync(TestProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
+    {
+        throw _exception;
+    }
+}
+
+internal sealed class CapturingFailureReporter : IProjectionDispatchFailureReporter<TestProjectionContext>
+{
+    public List<(TestProjectionContext Context, EventEnvelope Envelope, Exception Exception)> Calls { get; } = [];
+
+    public ValueTask ReportAsync(
+        TestProjectionContext context,
+        EventEnvelope envelope,
+        Exception exception,
+        CancellationToken ct = default)
+    {
+        Calls.Add((context, envelope, exception));
+        return ValueTask.CompletedTask;
+    }
+}
+
 internal sealed class FakeSubscriptionHub : IActorStreamSubscriptionHub<EventEnvelope>
 {
     public string? LastActorId { get; private set; }
     public Func<EventEnvelope, ValueTask>? Handler { get; private set; }
+    public FakeLease? LastLease { get; private set; }
 
     public Task<IActorStreamSubscriptionLease> SubscribeAsync(
         string actorId,
@@ -299,7 +379,8 @@ internal sealed class FakeSubscriptionHub : IActorStreamSubscriptionHub<EventEnv
     {
         LastActorId = actorId;
         Handler = handler;
-        return Task.FromResult<IActorStreamSubscriptionLease>(new FakeLease(actorId));
+        LastLease = new FakeLease(actorId);
+        return Task.FromResult<IActorStreamSubscriptionLease>(LastLease);
     }
 
     public async Task EmitAsync(EventEnvelope envelope)

@@ -11,16 +11,19 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
 {
     private readonly IProjectionDispatcher<TContext> _dispatcher;
     private readonly IActorStreamSubscriptionHub<EventEnvelope> _subscriptionHub;
+    private readonly IProjectionDispatchFailureReporter<TContext>? _dispatchFailureReporter;
     private readonly ILogger<ProjectionSubscriptionRegistry<TContext>>? _logger;
     private int _disposed;
 
     public ProjectionSubscriptionRegistry(
         IProjectionDispatcher<TContext> dispatcher,
         IActorStreamSubscriptionHub<EventEnvelope> subscriptionHub,
+        IProjectionDispatchFailureReporter<TContext>? dispatchFailureReporter = null,
         ILogger<ProjectionSubscriptionRegistry<TContext>>? logger = null)
     {
         _dispatcher = dispatcher;
         _subscriptionHub = subscriptionHub;
+        _dispatchFailureReporter = dispatchFailureReporter;
         _logger = logger;
     }
 
@@ -33,10 +36,20 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
                 $"Projection '{context.ProjectionId}' for actor '{context.RootActorId}' is already registered.");
 
         var actorId = context.RootActorId;
-        context.StreamSubscriptionLease = await _subscriptionHub.SubscribeAsync(
-            actorId,
-            envelope => DispatchAsync(actorId, context, envelope),
-            ct);
+        var dispatchCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        try
+        {
+            var lease = await _subscriptionHub.SubscribeAsync(
+                actorId,
+                envelope => DispatchAsync(actorId, context, envelope, dispatchCts.Token),
+                ct);
+            context.StreamSubscriptionLease = new ProjectionStreamSubscriptionLease(actorId, lease, dispatchCts);
+        }
+        catch
+        {
+            dispatchCts.Dispose();
+            throw;
+        }
 
         _logger?.LogDebug(
             "Registered projection {ProjectionId} for actor {ActorId}.",
@@ -61,14 +74,44 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
         await lease.DisposeAsync();
     }
 
-    private async ValueTask DispatchAsync(string actorId, TContext context, EventEnvelope envelope)
+    private async ValueTask DispatchAsync(
+        string actorId,
+        TContext context,
+        EventEnvelope envelope,
+        CancellationToken dispatchToken)
     {
         try
         {
-            await _dispatcher.DispatchAsync(context, envelope, CancellationToken.None);
+            if (dispatchToken.IsCancellationRequested)
+                return;
+
+            await _dispatcher.DispatchAsync(context, envelope, dispatchToken);
+        }
+        catch (OperationCanceledException) when (dispatchToken.IsCancellationRequested)
+        {
+            _logger?.LogDebug(
+                "Projection dispatch cancelled for projection {ProjectionId} on actor {ActorId}.",
+                context.ProjectionId,
+                actorId);
         }
         catch (Exception ex)
         {
+            if (_dispatchFailureReporter != null)
+            {
+                try
+                {
+                    await _dispatchFailureReporter.ReportAsync(context, envelope, ex, dispatchToken);
+                }
+                catch (Exception reportEx)
+                {
+                    _logger?.LogError(
+                        reportEx,
+                        "Projection dispatch failure reporter failed for projection {ProjectionId} on actor {ActorId}.",
+                        context.ProjectionId,
+                        actorId);
+                }
+            }
+
             _logger?.LogWarning(
                 ex,
                 "Projection dispatch failed for projection {ProjectionId} on actor {ActorId}.",
@@ -89,5 +132,41 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
     {
         if (Volatile.Read(ref _disposed) != 0)
             throw new ObjectDisposedException(GetType().Name);
+    }
+
+    private sealed class ProjectionStreamSubscriptionLease : IActorStreamSubscriptionLease
+    {
+        private readonly IActorStreamSubscriptionLease _innerLease;
+        private readonly CancellationTokenSource _dispatchCts;
+        private int _disposed;
+
+        public ProjectionStreamSubscriptionLease(
+            string actorId,
+            IActorStreamSubscriptionLease innerLease,
+            CancellationTokenSource dispatchCts)
+        {
+            ActorId = actorId;
+            _innerLease = innerLease;
+            _dispatchCts = dispatchCts;
+        }
+
+        public string ActorId { get; }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
+                return;
+
+            try
+            {
+                _dispatchCts.Cancel();
+            }
+            finally
+            {
+                _dispatchCts.Dispose();
+            }
+
+            await _innerLease.DisposeAsync();
+        }
     }
 }
