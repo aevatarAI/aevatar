@@ -479,17 +479,16 @@ public class ConnectorAndHostingCoverageTests
 
     private sealed class DelayedHttpMessageHandler : HttpMessageHandler
     {
-        private readonly TimeSpan _delay;
-
         public DelayedHttpMessageHandler(TimeSpan delay)
         {
-            _delay = delay;
+            _ = delay;
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             _ = request;
-            await Task.Delay(_delay, cancellationToken);
+            var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await pending.Task.WaitAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("{}"),

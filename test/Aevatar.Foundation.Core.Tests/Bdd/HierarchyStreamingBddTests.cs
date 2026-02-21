@@ -40,8 +40,9 @@ public class HierarchyStreamingBddTests : IAsyncLifetime
         await _runtime.LinkAsync("p1", "c1");
 
         await ((GAgentBase)parent.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "hello" }, EventDirection.Down);
-        await WaitFor(() => ((CollectorAgent)child.Agent).ReceivedMessages.Count > 0);
-        ((CollectorAgent)child.Agent).ReceivedMessages.Should().Contain("hello");
+        var childAgent = (CollectorAgent)child.Agent;
+        await childAgent.WaitForMessageCountAsync(1, TimeSpan.FromSeconds(2));
+        childAgent.ReceivedMessages.Should().Contain("hello");
     }
 
     [Fact(DisplayName = "Given three workers, all should receive coordinator Down broadcast")]
@@ -56,14 +57,17 @@ public class HierarchyStreamingBddTests : IAsyncLifetime
         await _runtime.LinkAsync("coord", "w3");
 
         await ((GAgentBase)coord.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "task" }, EventDirection.Down);
-        await WaitFor(() =>
-            ((CollectorAgent)w1.Agent).ReceivedMessages.Count > 0 &&
-            ((CollectorAgent)w2.Agent).ReceivedMessages.Count > 0 &&
-            ((CollectorAgent)w3.Agent).ReceivedMessages.Count > 0);
+        var worker1 = (CollectorAgent)w1.Agent;
+        var worker2 = (CollectorAgent)w2.Agent;
+        var worker3 = (CollectorAgent)w3.Agent;
+        await Task.WhenAll(
+            worker1.WaitForMessageCountAsync(1, TimeSpan.FromSeconds(2)),
+            worker2.WaitForMessageCountAsync(1, TimeSpan.FromSeconds(2)),
+            worker3.WaitForMessageCountAsync(1, TimeSpan.FromSeconds(2)));
 
-        ((CollectorAgent)w1.Agent).ReceivedMessages.Should().Contain("task");
-        ((CollectorAgent)w2.Agent).ReceivedMessages.Should().Contain("task");
-        ((CollectorAgent)w3.Agent).ReceivedMessages.Should().Contain("task");
+        worker1.ReceivedMessages.Should().Contain("task");
+        worker2.ReceivedMessages.Should().Contain("task");
+        worker3.ReceivedMessages.Should().Contain("task");
     }
 
     [Fact(DisplayName = "Self event should not propagate to parent or child")]
@@ -76,16 +80,14 @@ public class HierarchyStreamingBddTests : IAsyncLifetime
         await _runtime.LinkAsync("m4", "c4");
 
         await ((GAgentBase)middle.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "self" }, EventDirection.Self);
-        await Task.Delay(100);
+        var parentCollector = (CollectorAgent)parent.Agent;
+        var childCollector = (CollectorAgent)child.Agent;
 
-        ((CollectorAgent)parent.Agent).ReceivedMessages.Should().BeEmpty();
-        ((CollectorAgent)child.Agent).ReceivedMessages.Should().BeEmpty();
-    }
-
-    private static async Task WaitFor(Func<bool> condition, int timeoutMs = 2000)
-    {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(20);
-        if (!condition()) throw new TimeoutException("Condition not met");
+        var parentUnexpected = () => parentCollector.WaitForMessageCountAsync(1, TimeSpan.FromMilliseconds(200));
+        var childUnexpected = () => childCollector.WaitForMessageCountAsync(1, TimeSpan.FromMilliseconds(200));
+        await parentUnexpected.Should().ThrowAsync<TimeoutException>();
+        await childUnexpected.Should().ThrowAsync<TimeoutException>();
+        parentCollector.ReceivedMessages.Should().BeEmpty();
+        childCollector.ReceivedMessages.Should().BeEmpty();
     }
 }

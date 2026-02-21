@@ -63,18 +63,27 @@ public sealed class InMemoryStreamCoverageTests
     {
         var stream = new InMemoryStream("s-dispose");
         var calls = 0;
+        var firstCall = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondCall = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var sub = await stream.SubscribeAsync<PingEvent>(_ =>
         {
-            Interlocked.Increment(ref calls);
+            var current = Interlocked.Increment(ref calls);
+            if (current == 1)
+                firstCall.TrySetResult(true);
+            else if (current == 2)
+                secondCall.TrySetResult(true);
+
             return Task.CompletedTask;
         });
 
         await stream.ProduceAsync(new PingEvent { Message = "one" });
-        await Task.Delay(50);
+        await firstCall.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await sub.DisposeAsync();
         await stream.ProduceAsync(new PingEvent { Message = "two" });
-        await Task.Delay(100);
+
+        using var noSecondCall = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => secondCall.Task.WaitAsync(noSecondCall.Token));
 
         calls.Should().Be(1);
     }
@@ -86,18 +95,26 @@ public sealed class InMemoryStreamCoverageTests
             "s-continue",
             new InMemoryStreamOptions { ThrowOnSubscriberError = false });
         var received = new List<string>();
+        var bothReceived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new object();
 
         await using var throwing = await stream.SubscribeAsync<PingEvent>(_ =>
             throw new InvalidOperationException("boom"));
         await using var collecting = await stream.SubscribeAsync<PingEvent>(evt =>
         {
-            received.Add(evt.Message);
+            lock (gate)
+            {
+                received.Add(evt.Message);
+                if (received.Count >= 2)
+                    bothReceived.TrySetResult(true);
+            }
+
             return Task.CompletedTask;
         });
 
         await stream.ProduceAsync(new PingEvent { Message = "m1" });
         await stream.ProduceAsync(new PingEvent { Message = "m2" });
-        await Task.Delay(150);
+        await bothReceived.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         received.Should().ContainInOrder("m1", "m2");
     }
@@ -108,12 +125,16 @@ public sealed class InMemoryStreamCoverageTests
         var stream = new InMemoryStream(
             "s-stop",
             new InMemoryStreamOptions { ThrowOnSubscriberError = true });
+        var firstDispatchObserved = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var throwing = await stream.SubscribeAsync<PingEvent>(_ =>
-            throw new InvalidOperationException("boom"));
+        {
+            firstDispatchObserved.TrySetResult(true);
+            throw new InvalidOperationException("boom");
+        });
 
         await stream.ProduceAsync(new PingEvent { Message = "first" });
-        await Task.Delay(100);
+        await firstDispatchObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Func<Task> act = async () => await stream.ProduceAsync(new PingEvent { Message = "second" });
         await act.Should().ThrowAsync<Exception>();
@@ -126,10 +147,11 @@ public sealed class InMemoryStreamCoverageTests
             "s-concurrent",
             new InMemoryStreamOptions { DispatchSubscribersConcurrently = true });
         var fast = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slowGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var slow = await stream.SubscribeAsync<PingEvent>(async _ =>
         {
-            await Task.Delay(400);
+            await slowGate.Task.WaitAsync(TimeSpan.FromSeconds(2));
         });
         await using var quick = await stream.SubscribeAsync<PingEvent>(_ =>
         {
@@ -139,6 +161,7 @@ public sealed class InMemoryStreamCoverageTests
 
         await stream.ProduceAsync(new PingEvent { Message = "x" });
         await fast.Task.WaitAsync(TimeSpan.FromMilliseconds(200));
+        slowGate.TrySetResult(true);
     }
 
     [Fact]

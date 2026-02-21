@@ -196,7 +196,9 @@ public sealed class ConnectorCallModuleCoverageTests
 
         public async Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
         {
-            await Task.Delay(500, ct);
+            _ = request;
+            var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await pending.Task.WaitAsync(ct);
             return new ConnectorResponse
             {
                 Success = true,

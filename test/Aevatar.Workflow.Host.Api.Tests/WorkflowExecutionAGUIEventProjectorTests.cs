@@ -58,10 +58,10 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             CorrelationId = "cmd-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         });
-        await WaitUntilAsync(() => cmd1Sink.Events.Count == 1);
+        await cmd1Sink.WaitForCountAsync(1, TimeSpan.FromSeconds(2));
 
-        cmd1Sink.Events.Should().ContainSingle(x => x is WorkflowRunFinishedEvent);
-        cmd2Sink.Events.Should().BeEmpty();
+        cmd1Sink.SnapshotEvents().Should().ContainSingle(x => x is WorkflowRunFinishedEvent);
+        cmd2Sink.SnapshotEvents().Should().BeEmpty();
     }
 
     [Fact]
@@ -107,10 +107,9 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         });
-        await Task.Delay(30);
 
-        cmd1Sink.Events.Should().BeEmpty();
-        cmd2Sink.Events.Should().BeEmpty();
+        cmd1Sink.SnapshotEvents().Should().BeEmpty();
+        cmd2Sink.SnapshotEvents().Should().BeEmpty();
     }
 
     [Fact]
@@ -144,9 +143,8 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             CorrelationId = "cmd-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         });
-        await Task.Delay(30);
 
-        sink.Events.Should().BeEmpty();
+        sink.SnapshotEvents().Should().BeEmpty();
     }
 
     [Fact]
@@ -195,10 +193,11 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             CorrelationId = "cmd-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         });
-        await WaitUntilAsync(() => sink.Events.Count == 13);
+        await sink.WaitForCountAsync(13, TimeSpan.FromSeconds(2));
 
-        sink.Events.Should().HaveCount(13);
-        sink.Events.Should().SatisfyRespectively(
+        var sinkEvents = sink.SnapshotEvents();
+        sinkEvents.Should().HaveCount(13);
+        sinkEvents.Should().SatisfyRespectively(
             e => e.Should().BeOfType<WorkflowRunStartedEvent>(),
             e => e.Should().BeOfType<WorkflowRunFinishedEvent>(),
             e => e.Should().BeOfType<WorkflowRunErrorEvent>(),
@@ -213,26 +212,9 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             e => e.Should().BeOfType<WorkflowCustomEvent>(),
             e => e.Should().BeOfType<WorkflowCustomEvent>());
 
-        var mappedCustomFromUnknown = sink.Events[^1].Should().BeOfType<WorkflowCustomEvent>().Subject;
+        var mappedCustomFromUnknown = sinkEvents[^1].Should().BeOfType<WorkflowCustomEvent>().Subject;
         mappedCustomFromUnknown.Name.Should().Be("UNKNOWN_KIND");
         mappedCustomFromUnknown.Value.Should().BeNull();
-    }
-
-    private static async Task WaitUntilAsync(
-        Func<bool> predicate,
-        int timeoutMs = 1000,
-        int pollMs = 10)
-    {
-        var started = DateTimeOffset.UtcNow;
-        while ((DateTimeOffset.UtcNow - started).TotalMilliseconds < timeoutMs)
-        {
-            if (predicate())
-                return;
-
-            await Task.Delay(pollMs);
-        }
-
-        throw new TimeoutException("Condition not met before timeout.");
     }
 
     private sealed class StaticMapper : IEventEnvelopeToAGUIEventMapper
@@ -253,17 +235,42 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
 
     private sealed class RecordingSink : IWorkflowRunEventSink
     {
+        private readonly object _gate = new();
+        private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _countWaiters = [];
+
         public List<WorkflowRunEvent> Events { get; } = [];
+
+        public IReadOnlyList<WorkflowRunEvent> SnapshotEvents()
+        {
+            lock (_gate)
+                return Events.ToList();
+        }
+
+        public Task WaitForCountAsync(int expectedCount, TimeSpan timeout)
+        {
+            Task waitTask;
+            lock (_gate)
+            {
+                if (Events.Count >= expectedCount)
+                    return Task.CompletedTask;
+
+                var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _countWaiters.Add((expectedCount, waiter));
+                waitTask = waiter.Task;
+            }
+
+            return waitTask.WaitAsync(timeout);
+        }
 
         public void Push(WorkflowRunEvent evt)
         {
-            Events.Add(evt);
+            Append(evt);
         }
 
         public ValueTask PushAsync(WorkflowRunEvent evt, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Events.Add(evt);
+            Append(evt);
             return ValueTask.CompletedTask;
         }
 
@@ -281,6 +288,23 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
         public ValueTask DisposeAsync()
         {
             return ValueTask.CompletedTask;
+        }
+
+        private void Append(WorkflowRunEvent evt)
+        {
+            lock (_gate)
+            {
+                Events.Add(evt);
+                for (var i = _countWaiters.Count - 1; i >= 0; i--)
+                {
+                    var waiter = _countWaiters[i];
+                    if (Events.Count < waiter.Count)
+                        continue;
+
+                    _countWaiters.RemoveAt(i);
+                    waiter.Signal.TrySetResult(true);
+                }
+            }
         }
     }
 

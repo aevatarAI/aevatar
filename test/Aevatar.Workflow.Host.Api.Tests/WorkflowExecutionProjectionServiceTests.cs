@@ -36,7 +36,7 @@ public class WorkflowExecutionProjectionServiceTests
                 EnableActorQueryEndpoints = true,
             },
             out var streams,
-            out _);
+            out var store);
 
         var lease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
         lease.Should().NotBeNull();
@@ -52,11 +52,7 @@ public class WorkflowExecutionProjectionServiceTests
             Output = "done",
         }));
 
-        await WaitUntilAsync(async () =>
-        {
-            var timelineItems = await service.ListActorTimelineAsync("root", 50);
-            return timelineItems.Any(x => x.Stage == "workflow.start");
-        });
+        await store.WaitForTimelineStageAsync("root", "workflow.start", TimeSpan.FromSeconds(2));
 
         var snapshot = await service.GetActorSnapshotAsync("root");
         var timeline = await service.ListActorTimelineAsync("root", 50);
@@ -221,7 +217,7 @@ public class WorkflowExecutionProjectionServiceTests
                 EnableActorQueryEndpoints = true,
             },
             out var streams,
-            out _);
+            out var store);
 
         var lease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
         lease.Should().NotBeNull();
@@ -231,24 +227,22 @@ public class WorkflowExecutionProjectionServiceTests
             Input = "hello",
         }));
 
-        await WaitUntilAsync(async () =>
-        {
-            var timelineItems = await service.ListActorTimelineAsync("root", 50);
-            return timelineItems.Any(x => x.Stage == "workflow.start");
-        });
+        await store.WaitForTimelineStageAsync("root", "workflow.start", TimeSpan.FromSeconds(2));
 
         var beforeRelease = await service.ListActorTimelineAsync("root", 50);
         beforeRelease.Should().ContainSingle(x => x.Stage == "workflow.start");
 
         await service.ReleaseActorProjectionAsync(lease!);
-        await streams.GetStream("root").ProduceAsync(Wrap(new StepRequestEvent
-        {
-            StepId = "s1",
-            StepType = "llm_call",
-            TargetRole = "assistant",
-        }));
-
-        await Task.Delay(50);
+        await WaitForProducedEventDispatchAsync<StepRequestEvent>(
+            streams,
+            "root",
+            () => streams.GetStream("root").ProduceAsync(Wrap(new StepRequestEvent
+            {
+                StepId = "s1",
+                StepType = "llm_call",
+                TargetRole = "assistant",
+            })),
+            TimeSpan.FromSeconds(2));
         var afterRelease = await service.ListActorTimelineAsync("root", 50);
         afterRelease.Count(x => x.Stage == "step.request").Should().Be(0);
     }
@@ -263,7 +257,7 @@ public class WorkflowExecutionProjectionServiceTests
                 EnableActorQueryEndpoints = true,
             },
             out var streams,
-            out _);
+            out var store);
 
         var lease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
         lease.Should().NotBeNull();
@@ -276,11 +270,7 @@ public class WorkflowExecutionProjectionServiceTests
             Input = "hello",
         }));
 
-        await WaitUntilAsync(async () =>
-        {
-            var timelineItems = await service.ListActorTimelineAsync("root", 50);
-            return timelineItems.Any(x => x.Stage == "workflow.start");
-        });
+        await store.WaitForTimelineStageAsync("root", "workflow.start", TimeSpan.FromSeconds(2));
 
         await service.DetachLiveSinkAsync(lease!, sink);
         await sink.DisposeAsync();
@@ -312,10 +302,9 @@ public class WorkflowExecutionProjectionServiceTests
             ThreadId = "thread-1",
         });
 
-        await WaitUntilAsync(() => Task.FromResult(
-            recordingSink.SnapshotEvents()
-                .OfType<WorkflowRunErrorEvent>()
-                .Any(x => x.Code == "RUN_SINK_BACKPRESSURE")));
+        await recordingSink.WaitForEventAsync(
+            evt => evt is WorkflowRunErrorEvent x && x.Code == "RUN_SINK_BACKPRESSURE",
+            TimeSpan.FromSeconds(2));
 
         failingSink.PushAsyncCallCount.Should().Be(1);
 
@@ -324,7 +313,9 @@ public class WorkflowExecutionProjectionServiceTests
             StepName = "step-2",
         });
 
-        await Task.Delay(50);
+        await recordingSink.WaitForEventAsync(
+            evt => evt is WorkflowStepStartedEvent x && x.StepName == "step-2",
+            TimeSpan.FromSeconds(2));
         failingSink.PushAsyncCallCount.Should().Be(1);
 
         var errorEvent = recordingSink.SnapshotEvents()
@@ -362,10 +353,9 @@ public class WorkflowExecutionProjectionServiceTests
             ThreadId = "thread-1",
         });
 
-        await WaitUntilAsync(() => Task.FromResult(
-            recordingSink.SnapshotEvents()
-                .OfType<WorkflowRunErrorEvent>()
-                .Any(x => x.Code == "RUN_SINK_WRITE_FAILED")));
+        await recordingSink.WaitForEventAsync(
+            evt => evt is WorkflowRunErrorEvent x && x.Code == "RUN_SINK_WRITE_FAILED",
+            TimeSpan.FromSeconds(2));
 
         failingSink.PushAsyncCallCount.Should().Be(1);
 
@@ -374,7 +364,9 @@ public class WorkflowExecutionProjectionServiceTests
             StepName = "step-2",
         });
 
-        await Task.Delay(50);
+        await recordingSink.WaitForEventAsync(
+            evt => evt is WorkflowStepStartedEvent x && x.StepName == "step-2",
+            TimeSpan.FromSeconds(2));
         failingSink.PushAsyncCallCount.Should().Be(1);
 
         await service.DetachLiveSinkAsync(lease!, recordingSink);
@@ -406,13 +398,15 @@ public class WorkflowExecutionProjectionServiceTests
         {
             ThreadId = "thread-1",
         });
-        await WaitUntilAsync(() => Task.FromResult(completedSink.PushAsyncCallCount == 1));
+        await completedSink.WaitForCallCountAsync(1, TimeSpan.FromSeconds(2));
 
         await runEventHub.PublishAsync("root", "cmd-1", new WorkflowStepStartedEvent
         {
             StepName = "step-2",
         });
-        await Task.Delay(50);
+        await recordingSink.WaitForEventAsync(
+            evt => evt is WorkflowStepStartedEvent x && x.StepName == "step-2",
+            TimeSpan.FromSeconds(2));
 
         completedSink.PushAsyncCallCount.Should().Be(1);
         recordingSink.SnapshotEvents().OfType<WorkflowRunErrorEvent>().Should().BeEmpty();
@@ -438,18 +432,22 @@ public class WorkflowExecutionProjectionServiceTests
         lease.Should().NotBeNull();
 
         var sink = new RecordingWorkflowRunEventSink();
+        var probeSink = new RecordingWorkflowRunEventSink();
         await service.AttachLiveSinkAsync(lease!, sink);
         await service.AttachLiveSinkAsync(lease!, sink);
+        await service.AttachLiveSinkAsync(lease!, probeSink);
 
         await runEventHub.PublishAsync("root", "cmd-1", new WorkflowRunStartedEvent
         {
             ThreadId = "thread-1",
         });
-        await WaitUntilAsync(() => Task.FromResult(sink.SnapshotEvents().Count >= 1));
-        await Task.Delay(50);
+        await probeSink.WaitForEventAsync(
+            evt => evt is WorkflowRunStartedEvent,
+            TimeSpan.FromSeconds(2));
 
         sink.SnapshotEvents().Should().HaveCount(1);
 
+        await service.DetachLiveSinkAsync(lease!, probeSink);
         await service.DetachLiveSinkAsync(lease!, sink);
         await service.ReleaseActorProjectionAsync(lease!);
     }
@@ -505,7 +503,7 @@ public class WorkflowExecutionProjectionServiceTests
     private static WorkflowExecutionProjectionService CreateService(
         WorkflowExecutionProjectionOptions options,
         out InMemoryStreamProvider streams,
-        out InMemoryWorkflowExecutionReadModelStore store,
+        out ObservableWorkflowExecutionReadModelStore store,
         IProjectionClock? clock = null)
     {
         return CreateService(
@@ -519,13 +517,13 @@ public class WorkflowExecutionProjectionServiceTests
     private static WorkflowExecutionProjectionService CreateService(
         WorkflowExecutionProjectionOptions options,
         out InMemoryStreamProvider streams,
-        out InMemoryWorkflowExecutionReadModelStore store,
+        out ObservableWorkflowExecutionReadModelStore store,
         out IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
         IProjectionClock? clock = null)
     {
         streams = new InMemoryStreamProvider();
         var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
-        store = new InMemoryWorkflowExecutionReadModelStore();
+        store = new ObservableWorkflowExecutionReadModelStore();
         var projector = new WorkflowExecutionReadModelProjector(
             store,
             new TestEventDeduplicator(),
@@ -606,21 +604,22 @@ public class WorkflowExecutionProjectionServiceTests
         Direction = EventDirection.Down,
     };
 
-    private static async Task WaitUntilAsync(
-        Func<Task<bool>> predicate,
-        int timeoutMs = 1000,
-        int pollMs = 10)
+    private static async Task WaitForProducedEventDispatchAsync<TEvent>(
+        InMemoryStreamProvider streams,
+        string streamId,
+        Func<Task> publishAsync,
+        TimeSpan timeout)
+        where TEvent : IMessage, new()
     {
-        var started = DateTimeOffset.UtcNow;
-        while ((DateTimeOffset.UtcNow - started).TotalMilliseconds < timeoutMs)
+        var observed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var probe = await streams.GetStream(streamId).SubscribeAsync<TEvent>(_ =>
         {
-            if (await predicate())
-                return;
+            observed.TrySetResult(true);
+            return Task.CompletedTask;
+        });
 
-            await Task.Delay(pollMs);
-        }
-
-        throw new TimeoutException("Condition not met before timeout.");
+        await publishAsync();
+        await observed.Task.WaitAsync(timeout);
     }
 
     private static async Task<(IWorkflowExecutionProjectionLease? Lease, Exception? Error)> CaptureLeaseOutcomeAsync(
@@ -647,6 +646,104 @@ public class WorkflowExecutionProjectionServiceTests
         public DateTimeOffset UtcNow { get; set; }
     }
 
+    private sealed class ObservableWorkflowExecutionReadModelStore
+        : IProjectionReadModelStore<WorkflowExecutionReport, string>
+    {
+        private readonly InMemoryWorkflowExecutionReadModelStore _inner = new();
+        private readonly object _gate = new();
+        private readonly List<StoreWaiter> _waiters = [];
+
+        public async Task UpsertAsync(WorkflowExecutionReport report, CancellationToken ct = default)
+        {
+            await _inner.UpsertAsync(report, ct);
+            await NotifyWaitersAsync(report.RootActorId, ct);
+        }
+
+        public async Task MutateAsync(string actorId, Action<WorkflowExecutionReport> mutate, CancellationToken ct = default)
+        {
+            await _inner.MutateAsync(actorId, mutate, ct);
+            await NotifyWaitersAsync(actorId, ct);
+        }
+
+        public Task<WorkflowExecutionReport?> GetAsync(string actorId, CancellationToken ct = default) =>
+            _inner.GetAsync(actorId, ct);
+
+        public Task<IReadOnlyList<WorkflowExecutionReport>> ListAsync(int take = 50, CancellationToken ct = default) =>
+            _inner.ListAsync(take, ct);
+
+        public async Task WaitForTimelineStageAsync(string actorId, string stage, TimeSpan timeout)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stage);
+
+            if (await HasTimelineStageAsync(actorId, stage))
+                return;
+
+            var waiter = new StoreWaiter(
+                actorId,
+                report => report?.Timeline.Any(x => string.Equals(x.Stage, stage, StringComparison.Ordinal)) == true);
+            Register(waiter);
+
+            try
+            {
+                if (await HasTimelineStageAsync(actorId, stage))
+                {
+                    waiter.Signal.TrySetResult(true);
+                }
+
+                await waiter.Signal.Task.WaitAsync(timeout);
+            }
+            finally
+            {
+                Unregister(waiter);
+            }
+        }
+
+        private async Task<bool> HasTimelineStageAsync(string actorId, string stage)
+        {
+            var report = await _inner.GetAsync(actorId);
+            return report?.Timeline.Any(x => string.Equals(x.Stage, stage, StringComparison.Ordinal)) == true;
+        }
+
+        private void Register(StoreWaiter waiter)
+        {
+            lock (_gate)
+                _waiters.Add(waiter);
+        }
+
+        private void Unregister(StoreWaiter waiter)
+        {
+            lock (_gate)
+                _waiters.Remove(waiter);
+        }
+
+        private async Task NotifyWaitersAsync(string actorId, CancellationToken ct)
+        {
+            var report = await _inner.GetAsync(actorId, ct);
+            List<StoreWaiter> ready;
+            lock (_gate)
+            {
+                ready = _waiters
+                    .Where(x => string.Equals(x.ActorId, actorId, StringComparison.Ordinal) && x.Predicate(report))
+                    .ToList();
+
+                foreach (var waiter in ready)
+                    _waiters.Remove(waiter);
+            }
+
+            foreach (var waiter in ready)
+                waiter.Signal.TrySetResult(true);
+        }
+
+        private sealed record StoreWaiter(
+            string ActorId,
+            Func<WorkflowExecutionReport?, bool> Predicate)
+        {
+            public TaskCompletionSource<bool> Signal { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+    }
+
     private sealed class TestEventDeduplicator : IEventDeduplicator
     {
         private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
@@ -661,6 +758,9 @@ public class WorkflowExecutionProjectionServiceTests
 
     private sealed class BackpressureFailingSink : IWorkflowRunEventSink
     {
+        private readonly object _gate = new();
+        private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _countWaiters = [];
+
         public int PushAsyncCallCount { get; private set; }
 
         public void Push(WorkflowRunEvent evt)
@@ -673,8 +773,24 @@ public class WorkflowExecutionProjectionServiceTests
         {
             ArgumentNullException.ThrowIfNull(evt);
             ct.ThrowIfCancellationRequested();
-            PushAsyncCallCount++;
+            RecordCall();
             throw new WorkflowRunEventSinkBackpressureException();
+        }
+
+        public Task WaitForCallCountAsync(int expectedCount, TimeSpan timeout)
+        {
+            Task waitTask;
+            lock (_gate)
+            {
+                if (PushAsyncCallCount >= expectedCount)
+                    return Task.CompletedTask;
+
+                var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _countWaiters.Add((expectedCount, waiter));
+                waitTask = waiter.Task;
+            }
+
+            return waitTask.WaitAsync(timeout);
         }
 
         public void Complete()
@@ -690,10 +806,30 @@ public class WorkflowExecutionProjectionServiceTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private void RecordCall()
+        {
+            lock (_gate)
+            {
+                PushAsyncCallCount++;
+                for (var i = _countWaiters.Count - 1; i >= 0; i--)
+                {
+                    var waiter = _countWaiters[i];
+                    if (PushAsyncCallCount < waiter.Count)
+                        continue;
+
+                    _countWaiters.RemoveAt(i);
+                    waiter.Signal.TrySetResult(true);
+                }
+            }
+        }
     }
 
     private sealed class InvalidOperationFailingSink : IWorkflowRunEventSink
     {
+        private readonly object _gate = new();
+        private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _countWaiters = [];
+
         public int PushAsyncCallCount { get; private set; }
 
         public void Push(WorkflowRunEvent evt)
@@ -706,8 +842,24 @@ public class WorkflowExecutionProjectionServiceTests
         {
             ArgumentNullException.ThrowIfNull(evt);
             ct.ThrowIfCancellationRequested();
-            PushAsyncCallCount++;
+            RecordCall();
             throw new InvalidOperationException("sink write failed");
+        }
+
+        public Task WaitForCallCountAsync(int expectedCount, TimeSpan timeout)
+        {
+            Task waitTask;
+            lock (_gate)
+            {
+                if (PushAsyncCallCount >= expectedCount)
+                    return Task.CompletedTask;
+
+                var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _countWaiters.Add((expectedCount, waiter));
+                waitTask = waiter.Task;
+            }
+
+            return waitTask.WaitAsync(timeout);
         }
 
         public void Complete()
@@ -723,10 +875,30 @@ public class WorkflowExecutionProjectionServiceTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private void RecordCall()
+        {
+            lock (_gate)
+            {
+                PushAsyncCallCount++;
+                for (var i = _countWaiters.Count - 1; i >= 0; i--)
+                {
+                    var waiter = _countWaiters[i];
+                    if (PushAsyncCallCount < waiter.Count)
+                        continue;
+
+                    _countWaiters.RemoveAt(i);
+                    waiter.Signal.TrySetResult(true);
+                }
+            }
+        }
     }
 
     private sealed class CompletedFailingSink : IWorkflowRunEventSink
     {
+        private readonly object _gate = new();
+        private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _countWaiters = [];
+
         public int PushAsyncCallCount { get; private set; }
 
         public void Push(WorkflowRunEvent evt)
@@ -739,8 +911,24 @@ public class WorkflowExecutionProjectionServiceTests
         {
             ArgumentNullException.ThrowIfNull(evt);
             ct.ThrowIfCancellationRequested();
-            PushAsyncCallCount++;
+            RecordCall();
             throw new WorkflowRunEventSinkCompletedException();
+        }
+
+        public Task WaitForCallCountAsync(int expectedCount, TimeSpan timeout)
+        {
+            Task waitTask;
+            lock (_gate)
+            {
+                if (PushAsyncCallCount >= expectedCount)
+                    return Task.CompletedTask;
+
+                var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _countWaiters.Add((expectedCount, waiter));
+                waitTask = waiter.Task;
+            }
+
+            return waitTask.WaitAsync(timeout);
         }
 
         public void Complete()
@@ -756,12 +944,31 @@ public class WorkflowExecutionProjectionServiceTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private void RecordCall()
+        {
+            lock (_gate)
+            {
+                PushAsyncCallCount++;
+                for (var i = _countWaiters.Count - 1; i >= 0; i--)
+                {
+                    var waiter = _countWaiters[i];
+                    if (PushAsyncCallCount < waiter.Count)
+                        continue;
+
+                    _countWaiters.RemoveAt(i);
+                    waiter.Signal.TrySetResult(true);
+                }
+            }
+        }
     }
 
     private sealed class RecordingWorkflowRunEventSink : IWorkflowRunEventSink
     {
         private readonly object _gate = new();
         private readonly List<WorkflowRunEvent> _events = [];
+        private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _countWaiters = [];
+        private readonly List<(Func<WorkflowRunEvent, bool> Predicate, TaskCompletionSource<bool> Signal)> _predicateWaiters = [];
 
         public IReadOnlyList<WorkflowRunEvent> SnapshotEvents()
         {
@@ -769,19 +976,50 @@ public class WorkflowExecutionProjectionServiceTests
                 return _events.ToList();
         }
 
+        public Task WaitForEventCountAsync(int expectedCount, TimeSpan timeout)
+        {
+            Task waitTask;
+            lock (_gate)
+            {
+                if (_events.Count >= expectedCount)
+                    return Task.CompletedTask;
+
+                var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _countWaiters.Add((expectedCount, waiter));
+                waitTask = waiter.Task;
+            }
+
+            return waitTask.WaitAsync(timeout);
+        }
+
+        public Task WaitForEventAsync(Func<WorkflowRunEvent, bool> predicate, TimeSpan timeout)
+        {
+            ArgumentNullException.ThrowIfNull(predicate);
+            Task waitTask;
+            lock (_gate)
+            {
+                if (_events.Any(predicate))
+                    return Task.CompletedTask;
+
+                var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _predicateWaiters.Add((predicate, waiter));
+                waitTask = waiter.Task;
+            }
+
+            return waitTask.WaitAsync(timeout);
+        }
+
         public void Push(WorkflowRunEvent evt)
         {
             ArgumentNullException.ThrowIfNull(evt);
-            lock (_gate)
-                _events.Add(evt);
+            Append(evt);
         }
 
         public ValueTask PushAsync(WorkflowRunEvent evt, CancellationToken ct = default)
         {
             ArgumentNullException.ThrowIfNull(evt);
             ct.ThrowIfCancellationRequested();
-            lock (_gate)
-                _events.Add(evt);
+            Append(evt);
             return ValueTask.CompletedTask;
         }
 
@@ -798,6 +1036,34 @@ public class WorkflowExecutionProjectionServiceTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private void Append(WorkflowRunEvent evt)
+        {
+            lock (_gate)
+            {
+                _events.Add(evt);
+
+                for (var i = _countWaiters.Count - 1; i >= 0; i--)
+                {
+                    var waiter = _countWaiters[i];
+                    if (_events.Count < waiter.Count)
+                        continue;
+
+                    _countWaiters.RemoveAt(i);
+                    waiter.Signal.TrySetResult(true);
+                }
+
+                for (var i = _predicateWaiters.Count - 1; i >= 0; i--)
+                {
+                    var waiter = _predicateWaiters[i];
+                    if (!waiter.Predicate(evt))
+                        continue;
+
+                    _predicateWaiters.RemoveAt(i);
+                    waiter.Signal.TrySetResult(true);
+                }
+            }
+        }
     }
 
     private sealed class TrackingOwnershipCoordinator : IProjectionOwnershipCoordinator

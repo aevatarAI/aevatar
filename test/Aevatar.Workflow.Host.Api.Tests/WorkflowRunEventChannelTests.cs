@@ -19,7 +19,6 @@ public class WorkflowRunEventChannelTests
             ThreadId = "actor-1",
         }, cts.Token).AsTask();
 
-        await Task.Delay(50, cts.Token);
         terminalPush.IsCompleted.Should().BeFalse();
 
         await using var enumerator = channel.ReadAllAsync(cts.Token).GetAsyncEnumerator(cts.Token);
