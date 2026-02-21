@@ -10,6 +10,7 @@ filters=(
   "aevatar.ai.slnf"
   "aevatar.cqrs.slnf"
   "aevatar.workflow.slnf"
+  "aevatar.hosting.slnf"
 )
 
 echo "Running solution split test guards..."
