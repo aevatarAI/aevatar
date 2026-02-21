@@ -46,7 +46,27 @@ flowchart LR
 4. Workflow 投影生命周期通过 lease/session 句柄管理，不允许 `actorId -> context` 反查。
 5. 同一 `EventEnvelope` 分发到多个 projector 时采用“一对多全分支尝试”语义：单个 projector 失败不阻断其他 projector 执行，最终以聚合异常统一回传。
 
-## 5.1 Metadata 口径（防理解偏差）
+## 5.1 编排减重落地（2026-02-22）
+
+1. Application 命令侧已拆分为：
+   `WorkflowChatRunApplicationService`（入口） +  
+   `WorkflowRunContextFactory`（上下文） +  
+   `WorkflowRunExecutionEngine`（执行） +  
+   `WorkflowRunCompletionPolicy`（终态） +  
+   `WorkflowRunResourceFinalizer`（清理）。
+2. Projection 端口实现已拆分为：
+   `WorkflowExecutionProjectionService`（facade） +  
+   `WorkflowProjectionActivationService`（激活） +  
+   `WorkflowProjectionReleaseService`（释放） +  
+   `WorkflowProjectionLeaseManager`（ownership） +  
+   `WorkflowProjectionSinkSubscriptionManager`（订阅生命周期） +  
+   `WorkflowProjectionLiveSinkForwarder`（sink 转发） +  
+   `WorkflowProjectionSinkFailurePolicy`（异常策略） +  
+   `WorkflowProjectionReadModelUpdater`（读模型元信息） +  
+   `WorkflowProjectionQueryReader`（查询映射）。
+3. CI 增加编排类体量守卫：关键编排类的非空行数与直接依赖数有上限，避免“重新变胖”。
+
+## 5.2 Metadata 口径（防理解偏差）
 
 1. `EventEnvelope.Metadata` 属于包络级元信息，用于传播/追踪，不作为业务完成语义主来源。
 2. `StepCompletedEvent.Metadata` 属于业务事件元信息，Maker/Connector/Parallel 等模块信息写入此处。

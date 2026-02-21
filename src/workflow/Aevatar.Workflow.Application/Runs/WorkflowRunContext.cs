@@ -5,7 +5,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
 
-internal sealed class WorkflowRunContext
+public sealed class WorkflowRunContext
 {
     public required IActor Actor { get; init; }
 
@@ -24,6 +24,6 @@ internal sealed class WorkflowRunContext
     public WorkflowChatRunStarted ToStarted() => new(ActorId, WorkflowName, CommandId);
 }
 
-internal sealed record WorkflowRunContextCreateResult(
+public sealed record WorkflowRunContextCreateResult(
     WorkflowChatRunStartError Error,
     WorkflowRunContext? Context);

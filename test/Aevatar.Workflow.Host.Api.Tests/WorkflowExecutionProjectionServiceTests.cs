@@ -543,38 +543,75 @@ public class WorkflowExecutionProjectionServiceTests
         var runtimeProvider = runtimeServices.BuildServiceProvider();
         var runtime = new LocalActorRuntime(streams, runtimeProvider, streams);
         var ownershipCoordinator = new ActorProjectionOwnershipCoordinator(runtime);
+        var resolvedClock = clock ?? new SystemProjectionClock();
         runEventStreamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
             streams,
             new WorkflowRunEventSessionCodec());
+        var mapper = new WorkflowExecutionReadModelMapper();
+        var leaseManager = new WorkflowProjectionLeaseManager(ownershipCoordinator);
+        var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventStreamHub);
+        var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventStreamHub, resolvedClock);
+        var readModelUpdater = new WorkflowProjectionReadModelUpdater(store, resolvedClock);
+        var queryReader = new WorkflowProjectionQueryReader(store, mapper);
+        var activationService = new WorkflowProjectionActivationService(
+            lifecycle,
+            resolvedClock,
+            new DefaultWorkflowExecutionProjectionContextFactory(),
+            leaseManager,
+            readModelUpdater);
+        var releaseService = new WorkflowProjectionReleaseService(
+            lifecycle,
+            sinkManager,
+            readModelUpdater,
+            leaseManager);
+        var liveSinkForwarder = new WorkflowProjectionLiveSinkForwarder(sinkFailurePolicy);
 
         return new WorkflowExecutionProjectionService(
-            ownershipCoordinator,
             options,
-            lifecycle,
-            store,
-            clock ?? new SystemProjectionClock(),
-            new DefaultWorkflowExecutionProjectionContextFactory(),
-            runEventStreamHub,
-            new WorkflowExecutionReadModelMapper());
+            queryReader,
+            activationService,
+            releaseService,
+            sinkManager,
+            liveSinkForwarder);
     }
 
     private static WorkflowExecutionProjectionService CreateServiceForStartFailure(
         IProjectionOwnershipCoordinator ownershipCoordinator,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle)
     {
+        var store = new InMemoryWorkflowExecutionReadModelStore();
+        var clock = new SystemProjectionClock();
+        var runEventHub = new NoOpWorkflowRunEventHub();
+        var mapper = new WorkflowExecutionReadModelMapper();
+        var leaseManager = new WorkflowProjectionLeaseManager(ownershipCoordinator);
+        var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventHub);
+        var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventHub, clock);
+        var readModelUpdater = new WorkflowProjectionReadModelUpdater(store, clock);
+        var queryReader = new WorkflowProjectionQueryReader(store, mapper);
+        var activationService = new WorkflowProjectionActivationService(
+            lifecycle,
+            clock,
+            new DefaultWorkflowExecutionProjectionContextFactory(),
+            leaseManager,
+            readModelUpdater);
+        var releaseService = new WorkflowProjectionReleaseService(
+            lifecycle,
+            sinkManager,
+            readModelUpdater,
+            leaseManager);
+        var liveSinkForwarder = new WorkflowProjectionLiveSinkForwarder(sinkFailurePolicy);
+
         return new WorkflowExecutionProjectionService(
-            ownershipCoordinator,
             new WorkflowExecutionProjectionOptions
             {
                 Enabled = true,
                 EnableActorQueryEndpoints = true,
             },
-            lifecycle,
-            new InMemoryWorkflowExecutionReadModelStore(),
-            new SystemProjectionClock(),
-            new DefaultWorkflowExecutionProjectionContextFactory(),
-            new NoOpWorkflowRunEventHub(),
-            new WorkflowExecutionReadModelMapper());
+            queryReader,
+            activationService,
+            releaseService,
+            sinkManager,
+            liveSinkForwarder);
     }
 
     private static IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> BuildReducers() =>

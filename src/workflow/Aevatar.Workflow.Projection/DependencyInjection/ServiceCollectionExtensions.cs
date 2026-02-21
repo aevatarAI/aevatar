@@ -48,6 +48,14 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionOwnershipCoordinator, ActorProjectionOwnershipCoordinator>();
         services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowRunEvent>, WorkflowRunEventSessionCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEvent>, ProjectionSessionEventHub<WorkflowRunEvent>>();
+        services.TryAddSingleton<IWorkflowProjectionLeaseManager, WorkflowProjectionLeaseManager>();
+        services.TryAddSingleton<IWorkflowProjectionActivationService, WorkflowProjectionActivationService>();
+        services.TryAddSingleton<IWorkflowProjectionReleaseService, WorkflowProjectionReleaseService>();
+        services.TryAddSingleton<IWorkflowProjectionSinkSubscriptionManager, WorkflowProjectionSinkSubscriptionManager>();
+        services.TryAddSingleton<IWorkflowProjectionSinkFailurePolicy, WorkflowProjectionSinkFailurePolicy>();
+        services.TryAddSingleton<IWorkflowProjectionLiveSinkForwarder, WorkflowProjectionLiveSinkForwarder>();
+        services.TryAddSingleton<IWorkflowProjectionReadModelUpdater, WorkflowProjectionReadModelUpdater>();
+        services.TryAddSingleton<IWorkflowProjectionQueryReader, WorkflowProjectionQueryReader>();
         services.TryAddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
         services.TryAddSingleton<IWorkflowExecutionProjectionPort, WorkflowExecutionProjectionService>();
         return services;

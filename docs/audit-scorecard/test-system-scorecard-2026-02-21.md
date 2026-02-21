@@ -10,12 +10,18 @@
 
 | 检查项 | 命令 | 结果 |
 |---|---|---|
-| 全量测试 | `dotnet test aevatar.slnx --nologo --no-build --tl:off -m:1 -p:UseSharedCompilation=false -p:NuGetAudit=false` | 通过（`469 passed / 0 failed`） |
-| 覆盖率门禁 | `bash tools/ci/coverage_quality_guard.sh` | 通过；过滤后生产程序集覆盖率：Line `89.8%`，Branch `75.6%` |
+| 全量测试 | `dotnet test aevatar.slnx --nologo --no-build --tl:off -m:1 -p:UseSharedCompilation=false -p:NuGetAudit=false` | 通过（`488 passed / 0 failed`） |
+| 覆盖率门禁 | `bash tools/ci/coverage_quality_guard.sh` | 通过；过滤后生产程序集覆盖率：Line `90.1%`，Branch `75.7%` |
 | 稳定性门禁 | `bash tools/ci/test_stability_guards.sh` | 通过（未发现 `Task.Delay/WaitUntilAsync` 轮询等待） |
 | CI 门禁 | GitHub Actions `ci.yml` | 含 restore/build/coverage gate + architecture guards + stability guards + split test guards |
 
-覆盖率证据：`artifacts/coverage/20260222-005948-ci-gate/report/Summary.json`。
+覆盖率证据：`artifacts/coverage/20260222-023555-ci-gate/report/Summary.json`。
+
+本轮新增测试证据：
+
+1. `test/Aevatar.Workflow.Application.Tests/WorkflowRunOrchestrationComponentTests.cs`
+2. `test/Aevatar.Workflow.Host.Api.Tests/WorkflowProjectionOrchestrationComponentTests.cs`
+3. `test/Aevatar.Foundation.Core.Tests/RuntimeRoutingAndDeduplicationCoverageTests.cs`
 
 ## 3. 总分与等级
 

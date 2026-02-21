@@ -5,6 +5,15 @@
 ## 职责边界
 
 - 应用层投影端口实现：`IWorkflowExecutionProjectionPort`（实现类 `WorkflowExecutionProjectionService`）
+- 编排组件拆分（避免单类过重）：
+  - `WorkflowProjectionActivationService`（projection 启动与上下文激活）
+  - `WorkflowProjectionReleaseService`（idle 检测与停止/释放）
+  - `WorkflowProjectionLeaseManager`（ownership acquire/release）
+  - `WorkflowProjectionSinkSubscriptionManager`（live sink attach/detach/replace）
+  - `WorkflowProjectionLiveSinkForwarder`（sink 推送与失败策略路由）
+  - `WorkflowProjectionSinkFailurePolicy`（sink 异常策略）
+  - `WorkflowProjectionReadModelUpdater`（read model 元信息更新）
+  - `WorkflowProjectionQueryReader`（query 映射读取）
 - 领域上下文：`IWorkflowExecutionProjectionContextFactory`、`WorkflowExecutionProjectionContext`
 - 实时输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
 - 领域投影实现：reducers、projectors、read model store
@@ -19,16 +28,16 @@
 
 ## 统一运行链路
 
-1. `EnsureActorProjectionAsync` 先通过 `Aevatar.CQRS.Projection.Core` 的通用 ownership coordinator 向 `projection:{rootActorId}` 协调 Actor 申请 ownership，再创建 projection 上下文并注册 actor stream 订阅
+1. `EnsureActorProjectionAsync` 由 `WorkflowExecutionProjectionService` 转发到 `WorkflowProjectionActivationService`，先通过 `WorkflowProjectionLeaseManager`（底层复用 `Aevatar.CQRS.Projection.Core` ownership coordinator）申请 ownership，再创建 projection 上下文并注册 actor stream 订阅
 2. 每条 `EventEnvelope` 进入统一 coordinator，一对多调用已注册 projector
 3. `WorkflowExecutionReadModelProjector` 驱动 reducers 生成并更新 read model
 4. AI 通用事件通过 `Aevatar.Workflow.Extensions.AIProjection` 扩展接入，扩展内部复用 `Aevatar.AI.Projection` 的默认 applier + reducer，将事件写入 `WorkflowExecutionReport` 的 AI 能力字段，业务层无需重复维护映射代码
 5. AGUI 分支与读模型分支共享同一输入事件流；AGUI projector 将 run 输出发布到 `workflow-run:{actorId}:{commandId}` 事件流
 
 AGUI 输出与 CQRS 读模型共享同一链路，只是在 projector 分支不同。
-应用层通过 `AttachLiveSinkAsync/DetachLiveSinkAsync` 订阅/退订 run-event stream；
+应用层通过 `AttachLiveSinkAsync/DetachLiveSinkAsync` 订阅/退订 run-event stream（由 `WorkflowProjectionSinkSubscriptionManager` 承载，sink 写入由 `WorkflowProjectionLiveSinkForwarder` 统一转发）；
 AGUI 分支实现位于 `Aevatar.Workflow.Presentation.AGUIAdapter`。
-`ReleaseActorProjectionAsync` 在无 live sink 绑定时会释放协调 Actor ownership；保证同一 `rootActorId` 不会并发启动多个投影视图。
+`ReleaseActorProjectionAsync` 由 `WorkflowProjectionReleaseService` 在无 live sink 绑定时停止投影并释放协调 Actor ownership；保证同一 `rootActorId` 不会并发启动多个投影视图（release 前由 `WorkflowProjectionReadModelUpdater` 写入 stopped 元信息）。
 run-event 严格按 `EventEnvelope.CorrelationId` 与 commandId 绑定匹配，不对空 correlation 做广播投递。
 
 ## 订阅判定规则（事件如何进入 ReadModel）

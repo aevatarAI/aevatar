@@ -37,6 +37,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandContextPolicy, WorkflowCommandContextPolicy>();
         services.AddSingleton<ICommandEnvelopeFactory<WorkflowChatRunRequest>, WorkflowChatRequestEnvelopeFactory>();
         services.AddSingleton<IWorkflowRunRequestExecutor, WorkflowRunRequestExecutor>();
+        services.AddSingleton<IWorkflowRunContextFactory, WorkflowRunContextFactory>();
+        services.AddSingleton<IWorkflowRunExecutionEngine, WorkflowRunExecutionEngine>();
+        services.TryAddSingleton<IWorkflowRunCompletionPolicy, WorkflowRunCompletionPolicy>();
+        services.TryAddSingleton<IWorkflowRunResourceFinalizer, WorkflowRunResourceFinalizer>();
         services.AddSingleton<WorkflowRunOutputStreamer>();
         services.AddSingleton<IWorkflowRunOutputStreamer>(sp => sp.GetRequiredService<WorkflowRunOutputStreamer>());
         services.TryAddSingleton<IEventOutputStream<WorkflowRunEvent, WorkflowOutputFrame>>(sp => sp.GetRequiredService<WorkflowRunOutputStreamer>());

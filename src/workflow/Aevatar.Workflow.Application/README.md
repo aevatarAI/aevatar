@@ -5,7 +5,15 @@
 ## 核心服务
 
 - `WorkflowChatRunApplicationService`
-  - `ExecuteAsync` 单入口：start -> execute -> stream -> finalize/rollback。
+  - `ExecuteAsync` 单入口：参数校验 + 获取 run context + 委托执行引擎。
+- `WorkflowRunContextFactory`
+  - 负责 actor 解析、command context 构造、projection lease 初始化与 live sink attach。
+- `WorkflowRunExecutionEngine`
+  - 负责请求执行、输出泵送、终态收敛与最终资源回收触发。
+- `WorkflowRunCompletionPolicy`
+  - 负责输出帧终态判定（`RUN_FINISHED` / `RUN_ERROR`）。
+- `WorkflowRunResourceFinalizer`
+  - 负责 `detach/release/complete/dispose` 兜底清理。
 - `WorkflowRunActorResolver`
   - 无 `actorId` 时创建并绑定 workflow actor。
   - 有 `actorId` 时仅复用既有 actor，不负责切换 workflow。

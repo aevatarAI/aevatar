@@ -131,11 +131,23 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `Aevatar.Foundation.Projection`：提供读模型最小公共字段（`RootActorId/CommandId/StateVersion/LastEventId`）与通用能力接口（Timeline / RoleReplies）
   - `Aevatar.AI.Projection`：提供 AI 通用事件 reducer（`TextMessage*` / `Tool*`）和 `IProjectionEventApplier<,,>` 扩展模式
 - **WorkflowExecution 业务扩展** 在 `Aevatar.Workflow.Projection`：
-  - `WorkflowExecutionProjectionService` 管理 actor 投影上下文与查询
+  - `WorkflowExecutionProjectionService` 作为应用端口 facade（仅流程编排）
+  - `WorkflowProjectionActivationService` 负责 projection 启动与上下文激活
+  - `WorkflowProjectionReleaseService` 负责 idle 检测与 stop/release
+  - `WorkflowProjectionLeaseManager` 负责 ownership acquire/release
+  - `WorkflowProjectionSinkSubscriptionManager` 负责 live sink attach/detach
+  - `WorkflowProjectionLiveSinkForwarder` 负责 run-event 推送与失败策略桥接
+  - `WorkflowProjectionSinkFailurePolicy` 负责 sink 异常降级与错误事件发布
+  - `WorkflowProjectionReadModelUpdater` 负责 read model 元信息更新
+  - `WorkflowProjectionQueryReader` 负责 read model 查询映射
   - `WorkflowExecutionReadModelProjector` 负责事件驱动 read model 落库
   - 业务字段映射通过 `IProjectionEventApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext, TEvent>` 扩展
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
-  - `WorkflowChatRunApplicationService` 统一命令执行入口
+  - `WorkflowChatRunApplicationService` 仅做请求校验与流程入口编排
+  - `WorkflowRunContextFactory` 负责 run 上下文与 projection lease 初始化
+  - `WorkflowRunExecutionEngine` 负责执行/输出泵送/终态收敛
+  - `WorkflowRunCompletionPolicy` 负责终态判定（`RUN_FINISHED` / `RUN_ERROR`）
+  - `WorkflowRunResourceFinalizer` 负责 detach/release/sink dispose 兜底
   - `WorkflowExecutionQueryApplicationService` 提供读侧查询
 - **宿主职责** 在 `Aevatar.Workflow.Host.Api`：
   - 仅做协议适配（HTTP/SSE/WebSocket）
@@ -150,6 +162,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 - Stream 订阅粒度是 actor 级；run 输出分发粒度是 command/correlation 级。
 - `WorkflowExecutionAGUIEventProjector` 仅在 `EventEnvelope.CorrelationId` 非空时发布 run-event，并按 `workflow-run:{actorId}:{commandId}` 事件流路由。
 - `WorkflowExecutionReadModelProjector` 仅在 read model 发生实际变更时记录 `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
+- 编排层守卫：
+  - `tools/ci/architecture_guards.sh` 强制关键编排类保持轻量（行数与依赖数上限），防止职责反弹。
 
 详细关系见：
 

@@ -21,13 +21,14 @@ public class WorkflowChatRunApplicationServiceTests
         var registry = new WorkflowDefinitionRegistry();
         var actorResolver = new WorkflowRunActorResolver(new FakeWorkflowRunActorPort([]), registry);
         var projectionPort = new FakeProjectionService();
-        var service = new WorkflowChatRunApplicationService(
-            actorResolver,
-            projectionPort,
+        var commandContextPolicy = new FakeCommandContextPolicy();
+        var service = CreateWorkflowRunService(
+            new WorkflowRunContextFactory(actorResolver, projectionPort, commandContextPolicy),
             new FakeEnvelopeFactory(),
-            new FakeCommandContextPolicy(),
             new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance),
-            new WorkflowRunOutputStreamer());
+            new WorkflowRunOutputStreamer(),
+            new WorkflowRunCompletionPolicy(),
+            new WorkflowRunResourceFinalizer(projectionPort));
 
         var result = await service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "missing", null),
@@ -43,17 +44,22 @@ public class WorkflowChatRunApplicationServiceTests
     public async Task ExecuteAsync_WhenStreamEndsWithRunFinished_ShouldFinalizeAsCompleted()
     {
         var actor = new FakeActor("actor-1", null, new FakeAgent("a-1", "actor-1"));
-        var service = new WorkflowChatRunApplicationService(
+        var projectionPort = new FakeProjectionService();
+        var runContextFactory = new WorkflowRunContextFactory(
             new StubWorkflowRunActorResolver(new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None)),
-            new FakeProjectionService(),
+            projectionPort,
+            new FakeCommandContextPolicy());
+        var service = CreateWorkflowRunService(
+            runContextFactory,
             new FakeEnvelopeFactory(),
-            new FakeCommandContextPolicy(),
             new StubWorkflowRunRequestExecutor(),
             new StubWorkflowRunOutputStreamer(
             [
                 new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
                 new WorkflowOutputFrame { Type = "RUN_FINISHED", ThreadId = "actor-1" },
-            ]));
+            ]),
+            new WorkflowRunCompletionPolicy(),
+            new WorkflowRunResourceFinalizer(projectionPort));
 
         var result = await service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "direct", "actor-1"),
@@ -70,17 +76,21 @@ public class WorkflowChatRunApplicationServiceTests
     public async Task ExecuteAsync_WhenStreamEndsWithRunError_ShouldFinalizeAsFailed()
     {
         var actor = new FakeActor("actor-1", null, new FakeAgent("a-1", "actor-1"));
-        var service = new WorkflowChatRunApplicationService(
-            new StubWorkflowRunActorResolver(new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None)),
-            new FakeProjectionService(),
+        var projectionPort = new FakeProjectionService();
+        var service = CreateWorkflowRunService(
+            new WorkflowRunContextFactory(
+                new StubWorkflowRunActorResolver(new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None)),
+                projectionPort,
+                new FakeCommandContextPolicy()),
             new FakeEnvelopeFactory(),
-            new FakeCommandContextPolicy(),
             new StubWorkflowRunRequestExecutor(),
             new StubWorkflowRunOutputStreamer(
             [
                 new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
                 new WorkflowOutputFrame { Type = "RUN_ERROR", Message = "boom" },
-            ]));
+            ]),
+            new WorkflowRunCompletionPolicy(),
+            new WorkflowRunResourceFinalizer(projectionPort));
 
         var result = await service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "direct", "actor-1"),
@@ -98,17 +108,20 @@ public class WorkflowChatRunApplicationServiceTests
     {
         var actor = new FakeActor("actor-1", null, new FakeAgent("a-1", "actor-1"));
         var projectionPort = new FakeProjectionService();
-        var service = new WorkflowChatRunApplicationService(
-            new StubWorkflowRunActorResolver(new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None)),
-            projectionPort,
+        var service = CreateWorkflowRunService(
+            new WorkflowRunContextFactory(
+                new StubWorkflowRunActorResolver(new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None)),
+                projectionPort,
+                new FakeCommandContextPolicy()),
             new FakeEnvelopeFactory(),
-            new FakeCommandContextPolicy(),
             new StubWorkflowRunRequestExecutor(),
             new StubWorkflowRunOutputStreamer(
             [
                 new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
                 new WorkflowOutputFrame { Type = "RUN_FINISHED", ThreadId = "actor-1" },
-            ]));
+            ]),
+            new WorkflowRunCompletionPolicy(),
+            new WorkflowRunResourceFinalizer(projectionPort));
 
         _ = await service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "direct", "actor-1"),
@@ -117,6 +130,23 @@ public class WorkflowChatRunApplicationServiceTests
 
         projectionPort.ReleaseActorProjectionCalled.Should().BeTrue();
         projectionPort.ReleasedActorId.Should().Be("actor-1");
+    }
+
+    private static WorkflowChatRunApplicationService CreateWorkflowRunService(
+        IWorkflowRunContextFactory runContextFactory,
+        ICommandEnvelopeFactory<WorkflowChatRunRequest> envelopeFactory,
+        IWorkflowRunRequestExecutor requestExecutor,
+        IWorkflowRunOutputStreamer outputStreamer,
+        IWorkflowRunCompletionPolicy completionPolicy,
+        IWorkflowRunResourceFinalizer resourceFinalizer)
+    {
+        var executionEngine = new WorkflowRunExecutionEngine(
+            envelopeFactory,
+            requestExecutor,
+            outputStreamer,
+            completionPolicy,
+            resourceFinalizer);
+        return new WorkflowChatRunApplicationService(runContextFactory, executionEngine);
     }
 }
 

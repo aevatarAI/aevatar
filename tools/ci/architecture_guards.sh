@@ -314,4 +314,43 @@ if [ -n "${command_side_readmodel_violations}" ]; then
   exit 1
 fi
 
+check_orchestration_class_guard() {
+  local file_path="$1"
+  local max_non_empty_lines="$2"
+  local max_private_dependencies="$3"
+
+  if [ ! -f "${file_path}" ]; then
+    return 0
+  fi
+
+  local non_empty_lines
+  non_empty_lines="$(awk 'NF && $1 !~ /^\/\// {count++} END {print count + 0}' "${file_path}")"
+  if [ "${non_empty_lines}" -gt "${max_non_empty_lines}" ]; then
+    echo "${file_path}: ${non_empty_lines} non-empty lines exceeds limit ${max_non_empty_lines}."
+    echo "Orchestration classes must stay thin. Extract strategy/resource details into dedicated components."
+    exit 1
+  fi
+
+  local dependency_count
+  dependency_count="$(rg -n "^\s*private readonly " "${file_path}" | wc -l | tr -d '[:space:]')"
+  if [ "${dependency_count}" -gt "${max_private_dependencies}" ]; then
+    echo "${file_path}: ${dependency_count} private dependencies exceeds limit ${max_private_dependencies}."
+    echo "Orchestration classes must not accumulate too many direct collaborators."
+    exit 1
+  fi
+}
+
+check_orchestration_class_guard \
+  "src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRunApplicationService.cs" \
+  60 \
+  4
+check_orchestration_class_guard \
+  "src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunExecutionEngine.cs" \
+  120 \
+  6
+check_orchestration_class_guard \
+  "src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs" \
+  190 \
+  10
+
 echo "Architecture guards passed."

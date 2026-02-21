@@ -71,6 +71,8 @@ sequenceDiagram
   participant Api as "ChatEndpoints"
   participant CmdSvc as "ICommandExecutionService"
   participant AppSvc as "WorkflowChatRunApplicationService"
+  participant CtxFactory as "WorkflowRunContextFactory"
+  participant Engine as "WorkflowRunExecutionEngine"
   participant Resolver as "WorkflowRunActorResolver"
   participant Port as "IWorkflowExecutionProjectionPort"
   participant WFAgent as "WorkflowGAgent"
@@ -79,13 +81,16 @@ sequenceDiagram
   Client->>Api: "POST /api/chat 或 WS command"
   Api->>CmdSvc: "ExecuteAsync(WorkflowChatRunRequest)"
   CmdSvc->>AppSvc: "ExecuteAsync"
-  AppSvc->>Resolver: "ResolveOrCreateAsync"
-  Resolver-->>AppSvc: "ActorId + BoundWorkflowName"
-  AppSvc->>Port: "EnsureActorProjectionAsync(...) -> ProjectionLease"
-  AppSvc->>Port: "AttachLiveSinkAsync(lease, sink)"
-  AppSvc->>WFAgent: "HandleEventAsync(EventEnvelope(ChatRequestEvent))"
+  AppSvc->>CtxFactory: "CreateAsync"
+  CtxFactory->>Resolver: "ResolveOrCreateAsync"
+  Resolver-->>CtxFactory: "ActorId + BoundWorkflowName"
+  CtxFactory->>Port: "EnsureActorProjectionAsync(...) -> ProjectionLease"
+  CtxFactory->>Port: "AttachLiveSinkAsync(lease, sink)"
+  CtxFactory-->>AppSvc: "WorkflowRunContext"
+  AppSvc->>Engine: "ExecuteAsync(runContext, request)"
+  Engine->>WFAgent: "HandleEventAsync(EventEnvelope(ChatRequestEvent))"
   WFAgent-->>Sink: "投影分支持续写入 WorkflowRunEvent"
-  AppSvc->>Sink: "ReadAllAsync + StreamAsync"
+  Engine->>Sink: "ReadAllAsync + StreamAsync"
   Sink-->>Api: "WorkflowOutputFrame 流"
   Api-->>Client: "SSE/WS 实时输出"
 ```
@@ -112,6 +117,11 @@ flowchart LR
   CH["WorkflowRunEventChannel"]
 
   QP["WorkflowExecutionProjectionService(IWorkflowExecutionProjectionPort)"]
+  ACT["WorkflowProjectionActivationService"]
+  REL["WorkflowProjectionReleaseService"]
+  SUB["WorkflowProjectionSinkSubscriptionManager"]
+  FWD["WorkflowProjectionLiveSinkForwarder"]
+  QRYR["WorkflowProjectionQueryReader"]
   QS["WorkflowExecutionQueryApplicationService"]
   APIQ["/api/actors/* Query Endpoints"]
 
@@ -128,10 +138,17 @@ flowchart LR
   COOR --> AGP
   AGP --> MAP
   MAP --> BUS
-  QP --> BUS
+  QP --> ACT
+  QP --> REL
+  QP --> SUB
+  QP --> FWD
+  QP --> QRYR
+  SUB --> BUS
+  SUB --> FWD
+  FWD --> CH
   BUS --> CH
+  QRYR --> STORE
 
-  STORE --> QP
   QP --> QS
   QS --> APIQ
 ```
@@ -199,6 +216,8 @@ sequenceDiagram
 - `WorkflowGAgent` 子 Actor ID 使用 `"{parentActorId}:{roleId}"` 命名空间，避免跨 workflow 根 Actor 冲突。
 - Actor 事件域不承载 CQRS 命令语义：不在 `EventEnvelope` metadata 与 `StartWorkflowEvent` 中传递 `commandId`。
 - `WorkflowExecutionProjectionService` 以 `ActorId` 为共享投影上下文键，同一 Actor 多次触发共享读模型与事件流。
+- `WorkflowExecutionProjectionService` 仅作为 facade，对外暴露统一端口；具体激活/释放/查询/sink 推送分别委托到 `Activation/Release/QueryReader/LiveSinkForwarder` 组件。
+- Application/Projection 编排类受 CI 体量守卫约束（非空行数与依赖数上限），避免职责反弹。
 - Projection 启动并发（`Ensure/Release`）由 `projection:{rootActorId}` 协调 Actor 串行裁决，不依赖进程内 `SemaphoreSlim`。
 - `AttachLiveSink/DetachLiveSink` 通过 `workflow-run:{actorId}:{commandId}` 事件流订阅/退订，不在 `WorkflowExecutionProjectionContext` 维护 sink 事实态。
 - CQRS 与 AGUI 复用同一输入事件流（统一 `ProjectionCoordinator`），通过不同 Projector 分支输出。
