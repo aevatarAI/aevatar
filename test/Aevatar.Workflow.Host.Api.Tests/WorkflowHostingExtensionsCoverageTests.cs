@@ -1,0 +1,57 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.Workflow.Application.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Runs;
+using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Infrastructure.Runs;
+using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Stores;
+using FluentAssertions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+
+namespace Aevatar.Workflow.Host.Api.Tests;
+
+public class WorkflowHostingExtensionsCoverageTests
+{
+    [Fact]
+    public void AddWorkflowCapabilityWithAIDefaults_ShouldValidateBuilder()
+    {
+        Action act = () => WorkflowCapabilityHostBuilderExtensions.AddWorkflowCapabilityWithAIDefaults(null!);
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task AddWorkflowCapabilityWithAIDefaults_ShouldRegisterWorkflowAndAIServices()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        builder.AddWorkflowCapabilityWithAIDefaults(options =>
+        {
+            options.EnableMCPTools = false;
+            options.EnableSkills = false;
+            options.ApiKey = "demo-key";
+            options.DefaultProvider = "openai";
+        });
+
+        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunRequestExecutor)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IProjectionReadModelStore<WorkflowExecutionReport, string>)).Should().BeTrue();
+
+        await using var provider = builder.Services.BuildServiceProvider();
+        provider.GetService<ILLMProviderFactory>().Should().NotBeNull();
+
+        var toolSources = provider.GetServices<IAgentToolSource>().ToList();
+        toolSources.Should().NotContain(x => x is MCPAgentToolSource);
+        toolSources.Should().NotContain(x => x is SkillsAgentToolSource);
+    }
+}

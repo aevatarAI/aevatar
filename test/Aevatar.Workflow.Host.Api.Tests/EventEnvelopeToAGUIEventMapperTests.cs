@@ -105,6 +105,47 @@ public class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void TextMessageStartAndEnd_ProjectsTo_AguiEvents()
+    {
+        var startEnvelope = Wrap(new Aevatar.AI.Abstractions.TextMessageStartEvent
+        {
+            SessionId = "s2",
+            AgentId = "agent-1",
+        });
+        var endEnvelope = Wrap(new Aevatar.AI.Abstractions.TextMessageEndEvent
+        {
+            SessionId = "s2",
+            Content = "done",
+        });
+
+        var start = CreateMapper().Map(startEnvelope);
+        var end = CreateMapper().Map(endEnvelope);
+
+        start.Should().ContainSingle().Which.Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageStartEvent>();
+        ((Aevatar.Presentation.AGUI.TextMessageStartEvent)start[0]).MessageId.Should().Be("msg:s2");
+        end.Should().ContainSingle().Which.Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageEndEvent>();
+        ((Aevatar.Presentation.AGUI.TextMessageEndEvent)end[0]).MessageId.Should().Be("msg:s2");
+    }
+
+    [Fact]
+    public void TextMessageContentEvent_WithoutSessionId_ShouldFallbackToEnvelopeIdMessageId()
+    {
+        var envelope = Wrap(new Aevatar.AI.Abstractions.TextMessageContentEvent
+        {
+            Delta = "fallback",
+            SessionId = "",
+        });
+        envelope.Id = "env-fallback";
+        envelope.Timestamp = null;
+
+        var events = CreateMapper().Map(envelope);
+
+        var content = events.Should().ContainSingle().Which.Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageContentEvent>().Subject;
+        content.MessageId.Should().Be("msg:env-fallback");
+        content.Timestamp.Should().BeNull();
+    }
+
+    [Fact]
     public void WorkflowCompletedEvent_Success_ProjectsTo_RunFinished()
     {
         var envelope = Wrap(new WorkflowCompletedEvent
@@ -136,6 +177,25 @@ public class EventEnvelopeToAGUIEventMapperTests
         var runError = (RunErrorEvent)events[0];
         runError.Message.Should().Be("超时");
         runError.RunId.Should().Be("cmd-1");
+    }
+
+    [Fact]
+    public void WorkflowCompletedEvent_WhenPublisherAndCorrelationMissing_ShouldFallbackRunAndThread()
+    {
+        var envelope = Wrap(new WorkflowCompletedEvent
+        {
+            WorkflowName = "review",
+            Success = true,
+            Output = "ok",
+        });
+        envelope.PublisherId = "";
+        envelope.CorrelationId = "";
+
+        var events = CreateMapper().Map(envelope);
+
+        var finished = events.Should().ContainSingle().Which.Should().BeOfType<RunFinishedEvent>().Subject;
+        finished.ThreadId.Should().Be("review");
+        finished.RunId.Should().Be("review");
     }
 
     [Fact]

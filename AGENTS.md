@@ -58,6 +58,7 @@
 - 测试栈：xUnit、FluentAssertions、`coverlet.collector`。
 - 测试文件命名：`*Tests.cs`，单文件聚焦一个行为域。
 - 行为变更必须补测试；重构不得降低关键路径覆盖率。
+- 自动生成代码（脚手架生成）不纳入代码覆盖率考核，不将覆盖率作为其合并门禁。
 - CI 守卫（full-scan）：禁止 `GetAwaiter().GetResult()`；禁止 `TypeUrl.Contains(...)` 字符串路由；禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`；禁止中间层 `actor/entity/run/session` ID 映射 Dic 事实态字段（仅扫描 Projection/Application/Orchestration 中间层）；禁止投影端口回退到 `actorId` 反查上下文模型；要求新增非抽象 `Reducer` 类必须被测试引用；要求事件类型到 reducer 的路由采用 `TypeUrl` 派生 + 精确键路由（由 `tools/ci/projection_route_mapping_guard.sh` 专项校验，含 `EventTypeUrl` 分组与 `TryGetValue` 命中）。
 
 ## 提交与 PR 规范

@@ -362,6 +362,423 @@ public sealed class WorkflowCoreModulesCoverageTests
         completions["transform-5"].Output.Should().Be("HELLO");
     }
 
+    [Fact]
+    public async Task RetrieveFactsModule_ShouldRankAndTakeTopK()
+    {
+        var module = new RetrieveFactsModule();
+        var ctx = CreateContext();
+        var request = new StepRequestEvent
+        {
+            StepId = "facts-1",
+            StepType = "retrieve_facts",
+            Input = "alpha beta\nalpha\ngamma beta\nother",
+            Parameters =
+            {
+                ["query"] = "alpha beta",
+                ["top_k"] = "2",
+            },
+        };
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Contain("alpha beta");
+        completion.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task VoteConsensusModule_ShouldHandleEmptyAndPickLongestCandidate()
+    {
+        var module = new VoteConsensusModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "vote-empty",
+                StepType = "vote",
+                Input = "",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var emptyResult = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        emptyResult.StepId.Should().Be("vote-empty");
+        emptyResult.Success.Should().BeFalse();
+        emptyResult.Error.Should().Contain("没有候选结果");
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "vote-1",
+                StepType = "vote",
+                Input = "short\n---\nvery very long candidate\n---\nmid",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var winner = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        winner.Success.Should().BeTrue();
+        winner.Output.Should().Be("very very long candidate");
+    }
+
+    [Fact]
+    public async Task WorkflowCallModule_ShouldPublishFailureWhenMissingWorkflow_AndStartWhenPresent()
+    {
+        var module = new WorkflowCallModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wf-1",
+                StepType = "workflow_call",
+                Input = "payload",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("缺少 workflow 参数");
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wf-2",
+                StepType = "workflow_call",
+                Input = "payload-2",
+                Parameters = { ["workflow"] = "sub_flow" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var start = ctx.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
+        start.WorkflowName.Should().Be("sub_flow");
+        start.Input.Should().Be("payload-2");
+    }
+
+    [Fact]
+    public void LLMCallModule_CanHandle_ShouldMatchSupportedPayloads()
+    {
+        var module = new LLMCallModule();
+
+        module.CanHandle(Envelope(new StepRequestEvent { StepType = "llm_call", StepId = "s1" })).Should().BeTrue();
+        module.CanHandle(Envelope(new TextMessageEndEvent { SessionId = "s1", Content = "done" })).Should().BeTrue();
+        module.CanHandle(Envelope(new ChatResponseEvent { SessionId = "s1", Content = "done" })).Should().BeTrue();
+        module.CanHandle(Envelope(new WorkflowCompletedEvent { WorkflowName = "wf", Success = true })).Should().BeFalse();
+        module.CanHandle(new EventEnvelope()).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task LLMCallModule_ShouldIgnoreNonLlmStep_AndPublishSelfChatRequestForLlmStep()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "not-llm",
+                StepType = "transform",
+                Input = "x",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-1",
+                StepType = "llm_call",
+                Input = "question",
+                Parameters = { ["prompt_prefix"] = "system" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
+        chat.Prompt.Should().Be("system\n\nquestion");
+        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-1"));
+        ctx.Published.Last().direction.Should().Be(EventDirection.Self);
+    }
+
+    [Fact]
+    public async Task LLMCallModule_TextMessageEndAndChatResponse_ShouldCompleteMatchingPendingStep()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-text",
+                StepType = "llm_call",
+                Input = "q1",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-text");
+        await module.HandleAsync(
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = textSessionId,
+                Content = "a1",
+            }, publisherId: "role-worker-1"),
+            ctx,
+            CancellationToken.None);
+
+        var textCompleted = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        textCompleted.StepId.Should().Be("llm-text");
+        textCompleted.Success.Should().BeTrue();
+        textCompleted.Output.Should().Be("a1");
+        textCompleted.WorkerId.Should().Be("role-worker-1");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-chat",
+                StepType = "llm_call",
+                Input = "q2",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-chat");
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = chatSessionId,
+                Content = "a2",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var chatCompleted = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        chatCompleted.StepId.Should().Be("llm-chat");
+        chatCompleted.WorkerId.Should().Be(ctx.AgentId);
+        chatCompleted.Output.Should().Be("a2");
+    }
+
+    [Fact]
+    public async Task LLMCallModule_WhenSessionNotPendingOrEmpty_ShouldIgnoreCompletionEvents()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = "",
+                Content = "x",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = "missing",
+                Content = "y",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task TransformModule_ShouldCoverAdditionalOperationsAndIgnoreNonTransformStep()
+    {
+        var module = new TransformModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "noop",
+                StepType = "llm_call",
+                Input = "raw",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "count-1",
+                StepType = "transform",
+                Input = "a\nb\nc",
+                Parameters = { ["op"] = "count" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "last-1",
+                StepType = "transform",
+                Input = "1\n2\n3",
+                Parameters = { ["op"] = "take_last", ["n"] = "2" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "join-1",
+                StepType = "transform",
+                Input = "a\n---\nb",
+                Parameters = { ["op"] = "join", ["separator"] = "|" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "distinct-1",
+                StepType = "transform",
+                Input = "x\nx\ny",
+                Parameters = { ["op"] = "distinct" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "lower-1",
+                StepType = "transform",
+                Input = "AbC",
+                Parameters = { ["op"] = "lowercase" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "trim-1",
+                StepType = "transform",
+                Input = "  hi  ",
+                Parameters = { ["op"] = "trim" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "rev-1",
+                StepType = "transform",
+                Input = "1\n2\n3",
+                Parameters = { ["op"] = "reverse_lines" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var outputs = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId, x => x.Output);
+        outputs["count-1"].Should().Be("3");
+        outputs["last-1"].Should().Be("2\n3");
+        outputs["join-1"].Should().Be("a|b");
+        outputs["distinct-1"].Should().Be("x\ny");
+        outputs["lower-1"].Should().Be("abc");
+        outputs["trim-1"].Should().Be("hi");
+        outputs["rev-1"].Should().Be("3\n2\n1");
+    }
+
+    [Fact]
+    public async Task AssignModule_ConditionalModule_CheckpointModule_ShouldHandleCorePaths()
+    {
+        var assign = new AssignModule();
+        var conditional = new ConditionalModule();
+        var checkpoint = new CheckpointModule();
+        var ctx = CreateContext();
+
+        await assign.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "assign-1",
+                StepType = "assign",
+                Input = "input-value",
+                Parameters =
+                {
+                    ["target"] = "x",
+                    ["value"] = "$prev",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await assign.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "assign-2",
+                StepType = "assign",
+                Parameters =
+                {
+                    ["target"] = "x",
+                    ["value"] = "literal",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await conditional.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cond-1",
+                StepType = "conditional",
+                Input = "contains KEY text",
+                Parameters = { ["condition"] = "key" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await conditional.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cond-2",
+                StepType = "conditional",
+                Input = "other text",
+                Parameters = { ["condition"] = "missing" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await checkpoint.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cp-1",
+                StepType = "checkpoint",
+                Input = "snapshot",
+                Parameters = { ["name"] = "ck1" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId, x => x);
+        completions["assign-1"].Output.Should().Be("input-value");
+        completions["assign-2"].Output.Should().Be("literal");
+        completions["cond-1"].Output.Should().Be("contains KEY text");
+        completions["cond-2"].Output.Should().Be("other text");
+        completions["cp-1"].Output.Should().Be("snapshot");
+    }
+
     private static RecordingEventHandlerContext CreateContext(IServiceProvider? services = null)
     {
         return new RecordingEventHandlerContext(
@@ -370,13 +787,14 @@ public sealed class WorkflowCoreModulesCoverageTests
             NullLogger.Instance);
     }
 
-    private static EventEnvelope Envelope(IMessage evt)
+    private static EventEnvelope Envelope(IMessage evt, string? publisherId = null)
     {
         return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
+            PublisherId = publisherId ?? "test-publisher",
             Direction = EventDirection.Self,
         };
     }
