@@ -24,6 +24,7 @@ public sealed class ChatRuntime
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly string? _agentId;
     private readonly string? _agentName;
+    private readonly int _streamBufferCapacity;
 
     public ChatRuntime(
         Func<ILLMProvider> providerFactory,
@@ -34,7 +35,8 @@ public sealed class ChatRuntime
         IReadOnlyList<IAgentRunMiddleware>? agentMiddlewares = null,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
         string? agentId = null,
-        string? agentName = null)
+        string? agentName = null,
+        int streamBufferCapacity = 256)
     {
         _providerFactory = providerFactory;
         _history = history;
@@ -45,6 +47,9 @@ public sealed class ChatRuntime
         _llmMiddlewares = llmMiddlewares ?? [];
         _agentId = string.IsNullOrWhiteSpace(agentId) ? null : agentId;
         _agentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName;
+        _streamBufferCapacity = streamBufferCapacity > 0
+            ? streamBufferCapacity
+            : throw new ArgumentOutOfRangeException(nameof(streamBufferCapacity), "Stream buffer capacity must be greater than zero.");
     }
 
     /// <summary>单轮 Chat（含 Tool Calling 循环），包裹 Agent Run Middleware。</summary>
@@ -87,10 +92,11 @@ public sealed class ChatRuntime
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var runToken = linkedCts.Token;
 
-        var channel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
+        var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(_streamBufferCapacity)
         {
             SingleReader = true,
             SingleWriter = true,
+            FullMode = BoundedChannelFullMode.Wait,
         });
 
         var runContext = new AgentRunContext

@@ -1,4 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Hooks.BuiltIn;
@@ -95,7 +97,7 @@ public class AIHooksAndRoleFactoryCoverageTests
         services.AddSingleton<IEventModuleFactory, StubEventModuleFactory>();
         await using var provider = services.BuildServiceProvider();
 
-        var agent = new RoleGAgent { Services = provider };
+        var agent = CreateRoleAgent(provider);
         var yaml = """
                    name: planner
                    system_prompt: "You are planner"
@@ -138,7 +140,7 @@ public class AIHooksAndRoleFactoryCoverageTests
             },
         };
 
-        var agent = new RoleGAgent { Services = provider };
+        var agent = CreateRoleAgent(provider);
         await RoleGAgentFactory.ApplyConfig(agent, cfg, provider);
 
         agent.RoleName.Should().Be("worker");
@@ -207,4 +209,13 @@ public class AIHooksAndRoleFactoryCoverageTests
             yield break;
         }
     }
+
+    private static RoleGAgent CreateRoleAgent(IServiceProvider provider) =>
+        new(
+            provider.GetRequiredService<ILLMProviderFactory>(),
+            provider.GetServices<IAIGAgentExecutionHook>(),
+            provider.GetServices<IAgentRunMiddleware>(),
+            provider.GetServices<IToolCallMiddleware>(),
+            provider.GetServices<ILLMCallMiddleware>(),
+            provider.GetServices<IAgentToolSource>());
 }
