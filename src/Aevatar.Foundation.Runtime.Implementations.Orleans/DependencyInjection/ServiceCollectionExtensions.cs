@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
 
         var options = new AevatarOrleansRuntimeOptions();
         configure?.Invoke(options);
+        ValidateOptions(options);
         services.Replace(ServiceDescriptor.Singleton(options));
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
@@ -35,11 +36,6 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
         services.AddAevatarFoundationRuntimeOrleansStreaming();
 
-        var isInMemory = string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendInMemory, StringComparison.OrdinalIgnoreCase);
-        var isMassTransitAdapter = string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase);
-        if (!isInMemory && !isMassTransitAdapter)
-            throw new InvalidOperationException($"Unsupported Orleans stream backend '{options.StreamBackend}'.");
-
         return services;
     }
 
@@ -51,24 +47,21 @@ public static class ServiceCollectionExtensions
 
         var options = new AevatarOrleansRuntimeOptions();
         configure?.Invoke(options);
+        ValidateOptions(options);
 
-        builder.AddMemoryGrainStorage(OrleansRuntimeConstants.GrainStateStorageName);
+        ConfigureGrainStateStorage(builder, options);
+        EnsurePersistentStreamPubSubStorage(builder, options);
 
-        if (string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase))
+        if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter))
         {
-            EnsurePersistentStreamPubSubStorage(builder);
             builder.AddPersistentStreams(
                 options.StreamProviderName,
                 (sp, _) => ResolveQueueAdapterFactory(sp),
                 _ => { });
         }
-        else if (string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendInMemory, StringComparison.OrdinalIgnoreCase))
+        else if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendInMemory))
         {
             builder.AddMemoryStreams(options.StreamProviderName, _ => { });
-        }
-        else
-        {
-            throw new InvalidOperationException($"Unsupported Orleans stream backend '{options.StreamBackend}'.");
         }
 
         builder.ConfigureServices(services =>
@@ -78,6 +71,8 @@ public static class ServiceCollectionExtensions
                 orleansOptions.StreamBackend = options.StreamBackend;
                 orleansOptions.StreamProviderName = options.StreamProviderName;
                 orleansOptions.ActorEventNamespace = options.ActorEventNamespace;
+                orleansOptions.PersistenceBackend = options.PersistenceBackend;
+                orleansOptions.GarnetConnectionString = options.GarnetConnectionString;
                 orleansOptions.QueueCount = options.QueueCount;
                 orleansOptions.QueueCacheSize = options.QueueCacheSize;
             });
@@ -86,10 +81,59 @@ public static class ServiceCollectionExtensions
         return builder;
     }
 
-    private static void EnsurePersistentStreamPubSubStorage(ISiloBuilder builder)
+    private static void ValidateOptions(AevatarOrleansRuntimeOptions options)
     {
-        // Orleans persistent streams need pub/sub metadata storage.
+        var isInMemoryStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendInMemory);
+        var isMassTransitAdapterStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter);
+        if (!isInMemoryStream && !isMassTransitAdapterStream)
+            throw new InvalidOperationException($"Unsupported Orleans stream backend '{options.StreamBackend}'.");
+
+        var isInMemoryPersistence = IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendInMemory);
+        var isGarnetPersistence = IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet);
+        if (!isInMemoryPersistence && !isGarnetPersistence)
+            throw new InvalidOperationException($"Unsupported Orleans persistence backend '{options.PersistenceBackend}'.");
+
+        if (isGarnetPersistence && string.IsNullOrWhiteSpace(options.GarnetConnectionString))
+            throw new InvalidOperationException("ActorRuntime Orleans Garnet connection string is required.");
+    }
+
+    private static void ConfigureGrainStateStorage(ISiloBuilder builder, AevatarOrleansRuntimeOptions options)
+    {
+        if (IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet))
+        {
+            builder.AddRedisGrainStorage(
+                OrleansRuntimeConstants.GrainStateStorageName,
+                redisOptions => redisOptions.ConfigurationOptions = StackExchange.Redis.ConfigurationOptions.Parse(options.GarnetConnectionString));
+            return;
+        }
+
+        builder.AddMemoryGrainStorage(OrleansRuntimeConstants.GrainStateStorageName);
+    }
+
+    private static void EnsurePersistentStreamPubSubStorage(
+        ISiloBuilder builder,
+        AevatarOrleansRuntimeOptions options)
+    {
+        // Orleans streams need pub/sub metadata storage.
+        if (IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet))
+        {
+            builder.AddRedisGrainStorage(
+                "PubSubStore",
+                redisOptions => redisOptions.ConfigurationOptions = StackExchange.Redis.ConfigurationOptions.Parse(options.GarnetConnectionString));
+            return;
+        }
+
         builder.AddMemoryGrainStorage("PubSubStore");
+    }
+
+    private static bool IsStreamBackend(AevatarOrleansRuntimeOptions options, string expectedBackend)
+    {
+        return string.Equals(options.StreamBackend, expectedBackend, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPersistenceBackend(AevatarOrleansRuntimeOptions options, string expectedBackend)
+    {
+        return string.Equals(options.PersistenceBackend, expectedBackend, StringComparison.OrdinalIgnoreCase);
     }
 
     private static IQueueAdapterFactory ResolveQueueAdapterFactory(IServiceProvider serviceProvider)

@@ -94,6 +94,7 @@
     <PackageVersion Include="Microsoft.Orleans.Core" Version="$(OrleansVersion)" />
     <PackageVersion Include="Microsoft.Orleans.EventSourcing" Version="$(OrleansVersion)" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.Memory" Version="$(OrleansVersion)" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.Redis" Version="$(OrleansVersion)" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="$(OrleansVersion)" />
     <PackageVersion Include="Microsoft.Orleans.Sdk" Version="$(OrleansVersion)" />
     <PackageVersion Include="Microsoft.Orleans.Serialization.Protobuf" Version="$(OrleansVersion)" />

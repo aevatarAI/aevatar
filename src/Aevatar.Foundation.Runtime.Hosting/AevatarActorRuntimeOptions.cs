@@ -9,8 +9,11 @@ public sealed class AevatarActorRuntimeOptions
     public const string MassTransitTransportBackendKafka = "Kafka";
     public const string OrleansStreamBackendInMemory = "InMemory";
     public const string OrleansStreamBackendMassTransitAdapter = "MassTransitAdapter";
+    public const string OrleansPersistenceBackendInMemory = "InMemory";
+    public const string OrleansPersistenceBackendGarnet = "Garnet";
     public const string DefaultOrleansStreamProviderName = "AevatarOrleansStreamProvider";
     public const string DefaultOrleansActorEventNamespace = "aevatar.actor.events";
+    public const string DefaultOrleansGarnetConnectionString = "localhost:6379";
 
     public string Provider { get; set; } = ProviderInMemory;
 
@@ -19,6 +22,10 @@ public sealed class AevatarActorRuntimeOptions
     public string OrleansStreamProviderName { get; set; } = DefaultOrleansStreamProviderName;
 
     public string OrleansActorEventNamespace { get; set; } = DefaultOrleansActorEventNamespace;
+
+    public string OrleansPersistenceBackend { get; set; } = OrleansPersistenceBackendInMemory;
+
+    public string OrleansGarnetConnectionString { get; set; } = DefaultOrleansGarnetConnectionString;
 
     public string MassTransitTransportBackend { get; set; } = MassTransitTransportBackendKafka;
 

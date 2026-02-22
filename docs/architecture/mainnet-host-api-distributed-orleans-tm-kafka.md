@@ -1,4 +1,4 @@
-# Aevatar.Mainnet.Host.Api Distributed Architecture (Orleans + TM + Kafka)
+# Aevatar.Mainnet.Host.Api Distributed Architecture (Orleans + TM + Kafka + Garnet)
 
 ## 目标
 
@@ -7,6 +7,7 @@
 - Actor Runtime: `Orleans`
 - Stream Backend: `MassTransitAdapter`
 - Transport: `Kafka`
+- Grain Persistence: `Garnet` (configurable)
 
 默认仍保留 InMemory 模式；仅当 `ActorRuntime:Provider=Orleans` 时启用分布式 Silo。
 
@@ -29,6 +30,8 @@
 
 - `ActorRuntime:Provider=Orleans`
 - `ActorRuntime:OrleansStreamBackend=MassTransitAdapter`
+- `ActorRuntime:OrleansPersistenceBackend` (`InMemory` / `Garnet`)
+- `ActorRuntime:OrleansGarnetConnectionString`（当持久化后端为 `Garnet` 时必填）
 - `ActorRuntime:MassTransitTransportBackend=Kafka`
 - `ActorRuntime:MassTransitKafkaBootstrapServers`
 - `ActorRuntime:MassTransitKafkaTopicName`
@@ -67,6 +70,7 @@ flowchart LR
 - 写路径保持 `Command -> Event`，事件通过 Orleans Stream + Kafka 扩散。
 - Stream Forward/Topology 的权威状态仍在 Orleans Grain（`IStreamTopologyGrain`），非中间层进程内事实态。
 - 该版本不改业务层编排逻辑，仅替换 runtime 与传输实现。
+- Orleans grain state 与 Stream `PubSubStore` 持久化可按配置切换到 Garnet。
 - `Localhost` 模式使用 `UseLocalhostClustering`，适合本机多进程开发。
 - `Development` 模式使用 `UseDevelopmentClustering + ConfigureEndpoints`，可通过主节点实现多机测试集群。
 - 生产跨主机集群建议替换为持久化 Membership Provider。
@@ -74,13 +78,13 @@ flowchart LR
 ## 启动示例
 
 ```bash
-docker compose up -d kafka
+docker compose up -d kafka garnet
 ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host.Api
 ```
 
 ## 多机测试集群（Docker）
 
-仓库提供 `docker-compose.mainnet-cluster.yml` + `tools/cluster/*.sh`：
+仓库提供 `docker-compose.mainnet-cluster.yml` + `tools/cluster/*.sh`（Kafka + Garnet + 3 个 Mainnet 节点）：
 
 ```bash
 bash tools/cluster/start-mainnet-cluster.sh
@@ -102,4 +106,8 @@ bash tools/cluster/stop-mainnet-cluster.sh
 
 ```bash
 dotnet build src/Aevatar.Mainnet.Host.Api/Aevatar.Mainnet.Host.Api.csproj --nologo
+bash tools/ci/orleans_garnet_persistence_smoke.sh
+bash tools/ci/distributed_3node_smoke.sh
 ```
+
+`tools/ci/distributed_3node_smoke.sh` 除了节点健康检查外，还会执行跨 3 节点的 `/api/workflows` 与 `/api/agents` 一致化集成测试。

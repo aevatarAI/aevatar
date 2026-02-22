@@ -30,6 +30,8 @@ public static class MainnetDistributedHostBuilderExtensions
                 orleansOptions.StreamBackend = runtimeOptions.OrleansStreamBackend;
                 orleansOptions.StreamProviderName = runtimeOptions.OrleansStreamProviderName;
                 orleansOptions.ActorEventNamespace = runtimeOptions.OrleansActorEventNamespace;
+                orleansOptions.PersistenceBackend = runtimeOptions.OrleansPersistenceBackend;
+                orleansOptions.GarnetConnectionString = runtimeOptions.OrleansGarnetConnectionString;
                 orleansOptions.QueueCount = hostOptions.QueueCount;
                 orleansOptions.QueueCacheSize = hostOptions.QueueCacheSize;
             });
@@ -99,6 +101,12 @@ public static class MainnetDistributedHostBuilderExtensions
         var configuredActorEventNamespace = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansActorEventNamespace"];
         if (!string.IsNullOrWhiteSpace(configuredActorEventNamespace))
             options.OrleansActorEventNamespace = configuredActorEventNamespace;
+        var configuredPersistenceBackend = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"];
+        if (!string.IsNullOrWhiteSpace(configuredPersistenceBackend))
+            options.OrleansPersistenceBackend = configuredPersistenceBackend;
+        var configuredGarnetConnectionString = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"];
+        if (!string.IsNullOrWhiteSpace(configuredGarnetConnectionString))
+            options.OrleansGarnetConnectionString = configuredGarnetConnectionString;
 
         return options;
     }

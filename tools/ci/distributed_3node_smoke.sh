@@ -7,6 +7,8 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 KAFKA_CONTAINER="aevatar-kafka"
+GARNET_HOST="127.0.0.1"
+GARNET_PORT=6379
 PUBLISH_DIR="/tmp/aevatar-mainnet-publish"
 APP_DLL="${PUBLISH_DIR}/Aevatar.Mainnet.Host.Api.dll"
 WAIT_SECONDS=120
@@ -58,6 +60,21 @@ wait_kafka() {
   return 1
 }
 
+wait_garnet() {
+  for i in {1..30}; do
+    if (echo >"/dev/tcp/${GARNET_HOST}/${GARNET_PORT}") >/dev/null 2>&1; then
+      echo "Garnet is reachable on ${GARNET_HOST}:${GARNET_PORT}."
+      return 0
+    fi
+
+    echo "Waiting for Garnet on ${GARNET_HOST}:${GARNET_PORT}..."
+    sleep 1
+  done
+
+  echo "Garnet failed to become reachable."
+  return 1
+}
+
 start_node() {
   local node="$1"
   local http_port="$2"
@@ -71,6 +88,8 @@ start_node() {
     ASPNETCORE_URLS="http://127.0.0.1:${http_port}" \
     AEVATAR_ActorRuntime__Provider=Orleans \
     AEVATAR_ActorRuntime__OrleansStreamBackend=MassTransitAdapter \
+    AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet \
+    AEVATAR_ActorRuntime__OrleansGarnetConnectionString="${GARNET_HOST}:${GARNET_PORT}" \
     AEVATAR_ActorRuntime__MassTransitTransportBackend=Kafka \
     AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers=localhost:9092 \
     AEVATAR_ActorRuntime__MassTransitKafkaTopicName=aevatar-mainnet-agent-events \
@@ -90,8 +109,9 @@ start_node() {
 }
 
 echo "Starting Kafka..."
-docker compose up -d kafka
+docker compose up -d kafka garnet
 wait_kafka
+wait_garnet
 
 echo "Publishing host app..."
 dotnet publish src/Aevatar.Mainnet.Host.Api/Aevatar.Mainnet.Host.Api.csproj \
@@ -166,5 +186,13 @@ for n in 1 2 3; do
     exit 1
   fi
 done
+
+echo "Running distributed cluster consistency integration tests..."
+AEVATAR_TEST_CLUSTER_NODE1_BASE_URL="http://127.0.0.1:${HTTP_PORTS[0]}" \
+AEVATAR_TEST_CLUSTER_NODE2_BASE_URL="http://127.0.0.1:${HTTP_PORTS[1]}" \
+AEVATAR_TEST_CLUSTER_NODE3_BASE_URL="http://127.0.0.1:${HTTP_PORTS[2]}" \
+dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj \
+  --nologo \
+  --filter "FullyQualifiedName~DistributedClusterConsistencyIntegrationTests"
 
 echo "Distributed 3-node smoke test passed."

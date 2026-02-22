@@ -205,6 +205,62 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
             .WithMessage("*Unsupported Orleans stream backend*");
     }
 
+    [Fact]
+    public void AddAevatarActorRuntime_WhenOrleansPersistenceOptionsConfigured_ShouldBindValues()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "garnet.local:6379,abortConnect=false",
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
+        options.OrleansPersistenceBackend.Should().Be(AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet);
+        options.OrleansGarnetConnectionString.Should().Be("garnet.local:6379,abortConnect=false");
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenOrleansPersistenceBackendIsUnsupported_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = "MongoDB",
+        });
+
+        var act = () => services.AddAevatarActorRuntime(configuration);
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*Unsupported Orleans persistence backend*");
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenOrleansPersistenceBackendIsGarnetWithoutConnectionString_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
+        });
+
+        var act = () => services.AddAevatarActorRuntime(configuration, options =>
+        {
+            options.OrleansGarnetConnectionString = "   ";
+        });
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*Garnet connection string is required*");
+    }
+
     private static IConfiguration BuildConfiguration(Dictionary<string, string?>? values = null)
     {
         var builder = new ConfigurationBuilder();

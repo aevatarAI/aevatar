@@ -7,11 +7,15 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      garnet:
+        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
       AEVATAR_ActorRuntime__Provider: Orleans
       AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
+      AEVATAR_ActorRuntime__OrleansGarnetConnectionString: garnet:6379
       AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
       AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
       AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events
@@ -38,11 +42,15 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      garnet:
+        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
       AEVATAR_ActorRuntime__Provider: Orleans
       AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
+      AEVATAR_ActorRuntime__OrleansGarnetConnectionString: garnet:6379
       AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
       AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
       AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events
@@ -69,11 +77,15 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      garnet:
+        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
       AEVATAR_ActorRuntime__Provider: Orleans
       AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
+      AEVATAR_ActorRuntime__OrleansGarnetConnectionString: garnet:6379
       AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
       AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
       AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events

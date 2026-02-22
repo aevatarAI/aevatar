@@ -1,1 +1,2 @@
-# Intentionally empty: all test polling waits have been removed.
+# Approved polling waits for external/distributed eventual-consistency probes.
+test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedClusterConsistencyIntegrationTests.cs
