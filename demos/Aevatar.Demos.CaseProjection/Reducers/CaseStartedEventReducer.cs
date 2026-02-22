@@ -2,9 +2,7 @@ namespace Aevatar.Demos.CaseProjection.Reducers;
 
 public sealed class CaseStartedEventReducer : CaseProjectionEventReducerBase<CaseStartedEvent>
 {
-    public override int Order => 0;
-
-    protected override void Reduce(
+    protected override bool Reduce(
         CaseProjectionReadModel readModel,
         CaseProjectionContext context,
         EventEnvelope envelope,
@@ -23,5 +21,7 @@ public sealed class CaseStartedEventReducer : CaseProjectionEventReducerBase<Cas
             "case.started",
             $"case={evt.CaseId}",
             envelope.Payload?.TypeUrl ?? "");
+
+        return true;
     }
 }

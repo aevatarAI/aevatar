@@ -15,13 +15,15 @@ public sealed class WorkflowExecutionAGUIEventProjector
     : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
 {
     private readonly IEventEnvelopeToAGUIEventMapper _mapper;
+    private readonly IProjectionSessionEventHub<WorkflowRunEvent> _runEventStreamHub;
 
-    public WorkflowExecutionAGUIEventProjector(IEventEnvelopeToAGUIEventMapper mapper)
+    public WorkflowExecutionAGUIEventProjector(
+        IEventEnvelopeToAGUIEventMapper mapper,
+        IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub)
     {
         _mapper = mapper;
+        _runEventStreamHub = runEventStreamHub;
     }
-
-    public int Order => 100;
 
     public ValueTask InitializeAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
     {
@@ -32,35 +34,18 @@ public sealed class WorkflowExecutionAGUIEventProjector
     public async ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-
-        var sink = context.GetRunEventSink();
-        if (sink == null)
+        var commandId = envelope.CorrelationId;
+        if (string.IsNullOrWhiteSpace(commandId))
             return;
 
         IReadOnlyList<AGUIEvent> aguiEvents = _mapper.Map(envelope);
+        if (aguiEvents.Count == 0)
+            return;
+
         foreach (var aguiEvent in aguiEvents)
         {
-            try
-            {
-                var runEvent = AGUIEventToWorkflowRunEventMapper.Map(aguiEvent);
-                await sink.PushAsync(runEvent, ct);
-            }
-            catch (WorkflowRunEventSinkBackpressureException)
-            {
-                // Non-terminal backpressure overflow in non-wait mode: drop current event but keep sink attached.
-                continue;
-            }
-            catch (WorkflowRunEventSinkCompletedException)
-            {
-                context.DetachRunEventSink();
-                break;
-            }
-            catch (InvalidOperationException)
-            {
-                // Sink is completed/full in non-wait mode; do not fail the whole projection pipeline.
-                context.DetachRunEventSink();
-                break;
-            }
+            var runEvent = AGUIEventToWorkflowRunEventMapper.Map(aguiEvent);
+            await _runEventStreamHub.PublishAsync(context.RootActorId, commandId, runEvent, ct);
         }
     }
 

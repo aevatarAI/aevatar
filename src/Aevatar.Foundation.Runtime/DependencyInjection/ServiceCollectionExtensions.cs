@@ -7,9 +7,15 @@ using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Context;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Propagation;
+using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.Foundation.Runtime.TypeSystem;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -31,13 +37,24 @@ public static class ServiceCollectionExtensions
         var streamOptions = new InMemoryStreamOptions();
         configureStreams?.Invoke(streamOptions);
         services.TryAddSingleton(streamOptions);
+        services.TryAddSingleton<InMemoryStreamForwardingRegistry>();
         services.TryAddSingleton<IStreamProvider>(sp =>
             new InMemoryStreamProvider(
                 sp.GetRequiredService<InMemoryStreamOptions>(),
-                sp.GetService<ILoggerFactory>() ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance));
+                sp.GetService<ILoggerFactory>() ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+                sp.GetRequiredService<InMemoryStreamForwardingRegistry>()));
+        services.TryAddSingleton<IStreamLifecycleManager>(sp =>
+            (IStreamLifecycleManager)sp.GetRequiredService<IStreamProvider>());
+        services.TryAddSingleton<IStreamForwardingRegistry>(sp =>
+            sp.GetRequiredService<InMemoryStreamForwardingRegistry>());
 
         // Actor Runtime
-        services.TryAddSingleton<IActorRuntime, LocalActorRuntime>();
+        services.TryAddSingleton<IActorRuntime>(sp =>
+            new LocalActorRuntime(
+                sp.GetRequiredService<IStreamProvider>(),
+                sp,
+                sp.GetRequiredService<IStreamLifecycleManager>(),
+                sp.GetService<ILogger<LocalActorRuntime>>()));
 
         // Persistence
         services.TryAddSingleton(typeof(IStateStore<>), typeof(InMemoryStateStore<>));
@@ -53,6 +70,10 @@ public static class ServiceCollectionExtensions
         // Context
         services.TryAddSingleton<IRunManager, RunManager>();
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
+        services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();
+        services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
+        services.TryAddSingleton<IActorTypeProbe, LocalActorTypeProbe>();
+        services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
 
         return services;
     }

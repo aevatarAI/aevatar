@@ -5,7 +5,12 @@
       "src\\Aevatar.Foundation.Abstractions\\Aevatar.Foundation.Abstractions.csproj",
       "src\\Aevatar.Foundation.Core\\Aevatar.Foundation.Core.csproj",
       "src\\Aevatar.Foundation.Runtime\\Aevatar.Foundation.Runtime.csproj",
-      "test\\Aevatar.Foundation.Abstractions.Tests\\Aevatar.Abstractions.Foundation.Tests.csproj",
+      "src\\Aevatar.Foundation.Runtime.Implementations.Orleans\\Aevatar.Foundation.Runtime.Implementations.Orleans.csproj",
+      "src\\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming\\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj",
+      "src\\Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit\\Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.csproj",
+      "src\\Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit\\Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit.csproj",
+      "src\\Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka\\Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka.csproj",
+      "test\\Aevatar.Foundation.Abstractions.Tests\\Aevatar.Foundation.Abstractions.Tests.csproj",
       "test\\Aevatar.Foundation.Core.Tests\\Aevatar.Foundation.Core.Tests.csproj"
     ]
   }

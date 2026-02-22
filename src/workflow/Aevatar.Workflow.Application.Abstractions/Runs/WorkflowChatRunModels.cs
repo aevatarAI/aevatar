@@ -1,5 +1,3 @@
-using Aevatar.Workflow.Application.Abstractions.Queries;
-
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
 public sealed record WorkflowChatRunRequest(
@@ -14,6 +12,8 @@ public enum WorkflowChatRunStartError
     WorkflowNotFound = 2,
     AgentTypeNotSupported = 3,
     ProjectionDisabled = 4,
+    WorkflowBindingMismatch = 5,
+    AgentWorkflowNotConfigured = 6,
 }
 
 public enum WorkflowProjectionCompletionStatus
@@ -30,12 +30,11 @@ public enum WorkflowProjectionCompletionStatus
 public sealed record WorkflowChatRunStarted(
     string ActorId,
     string WorkflowName,
-    string RunId);
+    string CommandId);
 
 public sealed record WorkflowChatRunFinalizeResult(
     WorkflowProjectionCompletionStatus ProjectionCompletionStatus,
-    bool ProjectionCompleted,
-    WorkflowRunReport? Report);
+    bool ProjectionCompleted);
 
 public sealed record WorkflowChatRunExecutionResult(
     WorkflowChatRunStartError Error,
@@ -50,7 +49,6 @@ public sealed record WorkflowOutputFrame
     public required string Type { get; init; }
     public long? Timestamp { get; init; }
     public string? ThreadId { get; init; }
-    public string? RunId { get; init; }
     public object? Result { get; init; }
     public string? Message { get; init; }
     public string? Code { get; init; }

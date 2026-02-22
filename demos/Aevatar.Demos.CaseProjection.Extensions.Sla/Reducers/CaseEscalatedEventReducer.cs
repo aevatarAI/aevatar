@@ -5,9 +5,7 @@ namespace Aevatar.Demos.CaseProjection.Extensions.Sla.Reducers;
 /// </summary>
 public sealed class CaseEscalatedEventReducer : CaseProjectionEventReducerBase<CaseEscalatedEvent>
 {
-    public override int Order => 30;
-
-    protected override void Reduce(
+    protected override bool Reduce(
         CaseProjectionReadModel readModel,
         CaseProjectionContext context,
         EventEnvelope envelope,
@@ -29,5 +27,7 @@ public sealed class CaseEscalatedEventReducer : CaseProjectionEventReducerBase<C
                 ["reason"] = evt.Reason,
             },
         });
+
+        return true;
     }
 }

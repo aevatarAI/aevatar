@@ -13,6 +13,9 @@ namespace Aevatar.Foundation.Abstractions.EventModules;
 /// </summary>
 public interface IEventHandlerContext
 {
+    /// <summary>Raw inbound envelope being handled.</summary>
+    EventEnvelope InboundEnvelope { get; }
+
     /// <summary>Current agent ID.</summary>
     string AgentId { get; }
 
@@ -29,4 +32,13 @@ public interface IEventHandlerContext
     /// <typeparam name="TEvent">Event type, must implement Protobuf IMessage.</typeparam>
     Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
         CancellationToken ct = default) where TEvent : IMessage;
+
+    /// <summary>Sends an event directly to a target actor.</summary>
+    /// <typeparam name="TEvent">Event type, must implement Protobuf IMessage.</typeparam>
+    Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
+        CancellationToken ct = default) where TEvent : IMessage
+    {
+        throw new NotSupportedException(
+            $"{GetType().Name} does not support SendToAsync.");
+    }
 }

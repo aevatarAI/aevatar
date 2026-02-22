@@ -60,8 +60,8 @@ public static class WorkflowExecutionReportWriter
         sb.AppendLine("<h2>Overview</h2>");
         sb.AppendLine("<table><tbody>");
         AppendRow(sb, "Workflow", report.WorkflowName);
-        AppendRow(sb, "RunId", report.RunId);
         AppendRow(sb, "RootActor", report.RootActorId);
+        AppendRow(sb, "CommandId", report.CommandId);
         AppendRow(sb, "ProjectionScope", report.ProjectionScope.ToString());
         AppendRow(sb, "CompletionStatus", report.CompletionStatus.ToString());
         AppendRow(sb, "TopologySource", report.TopologySource.ToString());

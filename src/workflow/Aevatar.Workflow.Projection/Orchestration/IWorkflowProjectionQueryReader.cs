@@ -1,0 +1,19 @@
+using Aevatar.Workflow.Application.Abstractions.Queries;
+
+namespace Aevatar.Workflow.Projection.Orchestration;
+
+public interface IWorkflowProjectionQueryReader
+{
+    Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
+        string actorId,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
+        int take = 200,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
+        string actorId,
+        int take = 200,
+        CancellationToken ct = default);
+}

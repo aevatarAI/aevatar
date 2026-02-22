@@ -11,7 +11,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Core;
@@ -39,6 +38,9 @@ public sealed class AIAgentConfig
 
     /// <summary>历史消息上限。</summary>
     public int MaxHistoryMessages { get; set; } = 100;
+
+    /// <summary>流式输出缓冲区容量（用于背压控制）。</summary>
+    public int StreamBufferCapacity { get; set; } = 256;
 }
 
 /// <summary>AI GAgent 基类。组合 ChatRuntime、ToolManager、ChatHistory、HookPipeline、Middleware。</summary>
@@ -46,6 +48,13 @@ public sealed class AIAgentConfig
 public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     where TState : class, IMessage<TState>, new()
 {
+    private readonly ILLMProviderFactory _llmProviderFactory;
+    private readonly IReadOnlyList<IAIGAgentExecutionHook> _additionalHooks;
+    private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
+    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
+    private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
+    private readonly IReadOnlyList<IAgentToolSource> _toolSources;
+
     // ─── 组合的组件（各做一件事） ───
     /// <summary>工具管理器。</summary>
     protected ToolManager Tools { get; } = new();
@@ -53,8 +62,27 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     /// <summary>对话历史。</summary>
     protected ChatHistory History { get; } = new();
 
+    // Track source-loaded tools so reconfiguration can remove stale entries.
+    private readonly HashSet<string> _sourceToolNames = new(StringComparer.OrdinalIgnoreCase);
+    private bool _foundationHooksRegistered;
     private AgentHookPipeline? _hooks;
     private ChatRuntime? _chat;
+
+    protected AIGAgentBase(
+        ILLMProviderFactory? llmProviderFactory = null,
+        IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
+        IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
+        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
+        IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
+        IEnumerable<IAgentToolSource>? toolSources = null)
+    {
+        _llmProviderFactory = llmProviderFactory ?? NullLLMProviderFactory.Instance;
+        _additionalHooks = (additionalHooks ?? []).ToArray();
+        _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
+        _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
+        _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
+        _toolSources = (toolSources ?? []).ToArray();
+    }
 
     // ─── 初始化 ───
 
@@ -100,43 +128,44 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
     private void RebuildRuntime()
     {
-        // 构建 AI Hook Pipeline（内置 + DI 注入）
+        // 构建 AI Hook Pipeline（内置 + 外部注入）
         var hooks = new List<IAIGAgentExecutionHook>
         {
             new ExecutionTraceHook(Logger),
             new ToolTruncationHook(),
             new BudgetMonitorHook(Logger),
         };
-        var additional = Services.GetServices<IAIGAgentExecutionHook>();
-        hooks.AddRange(additional);
+        hooks.AddRange(_additionalHooks);
         _hooks = new AgentHookPipeline(hooks, Logger);
 
-        foreach (var hook in hooks)
-            RegisterHook(hook);
+        if (!_foundationHooksRegistered)
+        {
+            foreach (var hook in hooks)
+                RegisterHook(hook);
 
-        // 收集 Middleware（DI 注入）
-        var agentMiddlewares = Services.GetServices<IAgentRunMiddleware>().ToList();
-        var toolMiddlewares = Services.GetServices<IToolCallMiddleware>().ToList();
-        var llmMiddlewares = Services.GetServices<ILLMCallMiddleware>().ToList();
+            _foundationHooksRegistered = true;
+        }
 
         // 构建 Chat Runtime
-        var toolLoop = new ToolCallLoop(Tools, _hooks, toolMiddlewares, llmMiddlewares);
+        var toolLoop = new ToolCallLoop(Tools, _hooks, _toolMiddlewares, _llmMiddlewares);
         _chat = new ChatRuntime(
             providerFactory: GetLLMProvider,
             history: History,
             toolLoop: toolLoop,
             hooks: _hooks,
             requestBuilder: BuildRequest,
-            agentMiddlewares: agentMiddlewares,
-            llmMiddlewares: llmMiddlewares,
+            agentMiddlewares: _agentMiddlewares,
+            llmMiddlewares: _llmMiddlewares,
             agentId: Id,
-            agentName: GetType().Name);
+            agentName: GetType().Name,
+            streamBufferCapacity: Config.StreamBufferCapacity);
     }
 
     private ILLMProvider GetLLMProvider()
     {
-        var factory = Services.GetRequiredService<ILLMProviderFactory>();
-        return string.IsNullOrEmpty(Config.ProviderName) ? factory.GetDefault() : factory.GetProvider(Config.ProviderName);
+        return string.IsNullOrEmpty(Config.ProviderName)
+            ? _llmProviderFactory.GetDefault()
+            : _llmProviderFactory.GetProvider(Config.ProviderName);
     }
 
     private LLMRequest BuildRequest() => new()
@@ -155,21 +184,55 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
     private async Task RegisterToolsFromSourcesAsync(CancellationToken ct)
     {
-        var sources = Services.GetServices<IAgentToolSource>().ToList();
-        if (sources.Count == 0) return;
+        if (_toolSources.Count == 0)
+        {
+            RefreshSourceTools([]);
+            return;
+        }
 
-        foreach (var source in sources)
+        var discoveredTools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var source in _toolSources)
         {
             try
             {
                 var tools = await source.DiscoverToolsAsync(ct);
-                if (tools.Count > 0)
-                    Tools.Register(tools);
+                foreach (var tool in tools)
+                    discoveredTools[tool.Name] = tool;
             }
             catch (Exception ex)
             {
                 Logger.LogWarning(ex, "Tool source discovery failed: {Source}", source.GetType().Name);
             }
         }
+
+        RefreshSourceTools(discoveredTools.Values);
+    }
+
+    private void RefreshSourceTools(IEnumerable<IAgentTool> discoveredTools)
+    {
+        foreach (var toolName in _sourceToolNames)
+            Tools.Unregister(toolName);
+
+        _sourceToolNames.Clear();
+
+        foreach (var tool in discoveredTools)
+        {
+            Tools.Register(tool);
+            _sourceToolNames.Add(tool.Name);
+        }
+    }
+
+    private sealed class NullLLMProviderFactory : ILLMProviderFactory
+    {
+        public static readonly NullLLMProviderFactory Instance = new();
+
+        public ILLMProvider GetProvider(string name) =>
+            throw new InvalidOperationException($"LLM provider factory is not configured. Cannot resolve provider '{name}'.");
+
+        public ILLMProvider GetDefault() =>
+            throw new InvalidOperationException("LLM provider factory is not configured. Cannot resolve default provider.");
+
+        public IReadOnlyList<string> GetAvailableProviders() => [];
     }
 }

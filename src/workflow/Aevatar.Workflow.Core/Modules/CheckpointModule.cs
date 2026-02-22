@@ -34,7 +34,7 @@ public sealed class CheckpointModule : IEventModule
         // 简化实现：将 input 透传为 output
         await ctx.PublishAsync(new StepCompletedEvent
         {
-            StepId = request.StepId, RunId = request.RunId,
+            StepId = request.StepId,
             Success = true, Output = request.Input,
         }, EventDirection.Self, ct);
     }

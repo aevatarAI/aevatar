@@ -9,11 +9,9 @@ public abstract class CaseProjectionEventReducerBase<TEvent>
 {
     private static readonly string EventType = Any.Pack(new TEvent()).TypeUrl;
 
-    public abstract int Order { get; }
-
     public string EventTypeUrl => EventType;
 
-    public void Reduce(
+    public bool Reduce(
         CaseProjectionReadModel readModel,
         CaseProjectionContext context,
         EventEnvelope envelope,
@@ -21,16 +19,16 @@ public abstract class CaseProjectionEventReducerBase<TEvent>
     {
         var payload = envelope.Payload;
         if (payload == null)
-            return;
+            return false;
 
         if (!string.Equals(payload.TypeUrl, EventType, StringComparison.Ordinal))
-            return;
+            return false;
 
         var evt = payload.Unpack<TEvent>();
-        Reduce(readModel, context, envelope, evt, now);
+        return Reduce(readModel, context, envelope, evt, now);
     }
 
-    protected abstract void Reduce(
+    protected abstract bool Reduce(
         CaseProjectionReadModel readModel,
         CaseProjectionContext context,
         EventEnvelope envelope,

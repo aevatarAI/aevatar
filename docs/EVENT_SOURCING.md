@@ -15,6 +15,7 @@
 - **ES 以 Mixin 方式提供**：不要求继承额外基类，通过 DI 注入 `IEventSourcingBehavior<TState>`，在 Agent 内显式调用。
 - **存储**：`IEventStore` 负责事件的追加与按版本查询；运行时默认提供 `InMemoryEventStore`，生产可替换为持久化实现。
 - **状态恢复**：激活时从 `IEventStore` 重放事件，通过 `TransitionState` 得到当前状态；变更时先 `RaiseEvent`，再 `ConfirmEventsAsync` 持久化。
+- **口径说明**：`InMemoryEventStore` 仅用于开发/测试，不作为生产容量治理目标；生产风险评估应基于 Redis/数据库等持久化实现。
 
 ## 1. 注册服务
 

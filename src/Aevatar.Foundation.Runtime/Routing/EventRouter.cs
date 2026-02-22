@@ -3,6 +3,8 @@
 // Routes events to Self / Up / Down / Both based on EventDirection.
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.Foundation.Abstractions.Streaming;
+
 namespace Aevatar.Foundation.Runtime.Routing;
 
 /// <summary>Event router that tracks actor hierarchy and routes by direction.</summary>
@@ -73,16 +75,13 @@ public sealed class EventRouter
         }
     }
 
-    private const string PubKey = "__publishers";
-
     private static HashSet<string> GetPublishers(EventEnvelope e) =>
-        e.Metadata.TryGetValue(PubKey, out var csv) && !string.IsNullOrEmpty(csv)
-            ? [..csv.Split(',')] : [];
+        e.Metadata.TryGetValue(PublisherChainMetadata.PublishersMetadataKey, out var csv) && !string.IsNullOrEmpty(csv)
+            ? [..csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)] : [];
 
     private static EventEnvelope AddPublisher(EventEnvelope e, string id)
     {
-        var cur = e.Metadata.GetValueOrDefault(PubKey, "");
-        e.Metadata[PubKey] = string.IsNullOrEmpty(cur) ? id : $"{cur},{id}";
+        PublisherChainMetadata.AppendIfMissing(e, id);
         return e;
     }
 }

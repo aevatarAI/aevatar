@@ -6,7 +6,7 @@
 
 - 演示通用投影内核可被外部领域复用。
 - 演示 OCP：通过外部程序集新增 reducer，不修改内核与主业务项目。
-- 演示 DI：RunId/Clock/CompletionDetector/ContextFactory 全部可替换。
+- 演示 DI：Clock/ContextFactory/Store/Reducer/Projector 可替换。
 
 ## 结构
 

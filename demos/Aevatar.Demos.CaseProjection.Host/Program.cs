@@ -24,7 +24,6 @@ internal static class Program
         {
             options.Enabled = true;
             options.EnableRunQueryEndpoints = true;
-            options.RunProjectionCompletionWaitTimeoutMs = 3000;
         });
 
         // OCP extension point: load external reducer/projector assembly with no core changes.
@@ -84,8 +83,6 @@ internal static class Program
             Resolved = true,
             Resolution = "Rolled back payment gateway release.",
         }, rootActorId));
-
-        _ = await projectionService.WaitForRunProjectionCompletedAsync(session.RunId);
 
         var report = await projectionService.CompleteAsync(session,
         [

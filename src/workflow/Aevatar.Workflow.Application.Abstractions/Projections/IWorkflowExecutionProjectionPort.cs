@@ -7,39 +7,39 @@ public interface IWorkflowExecutionProjectionPort
 {
     bool ProjectionEnabled { get; }
 
-    bool EnableRunQueryEndpoints { get; }
+    bool EnableActorQueryEndpoints { get; }
 
-    Task<WorkflowProjectionSession> StartAsync(
+    Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
         string rootActorId,
         string workflowName,
         string input,
+        string commandId,
+        CancellationToken ct = default);
+
+    Task AttachLiveSinkAsync(
+        IWorkflowExecutionProjectionLease lease,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default);
 
-    Task<WorkflowProjectionCompletionStatus> WaitForRunProjectionCompletionStatusAsync(
-        string runId,
-        TimeSpan? timeoutOverride = null,
+    Task DetachLiveSinkAsync(
+        IWorkflowExecutionProjectionLease lease,
+        IWorkflowRunEventSink sink,
         CancellationToken ct = default);
 
-    Task<WorkflowRunReport?> CompleteAsync(
-        WorkflowProjectionSession session,
-        IReadOnlyList<WorkflowRunTopologyEdge> topology,
+    Task ReleaseActorProjectionAsync(
+        IWorkflowExecutionProjectionLease lease,
         CancellationToken ct = default);
 
-    Task<IReadOnlyList<WorkflowRunSummary>> ListRunsAsync(
-        int take = 50,
+    Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
+        string actorId,
         CancellationToken ct = default);
 
-    Task<WorkflowRunReport?> GetRunAsync(
-        string runId,
+    Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
+        int take = 200,
         CancellationToken ct = default);
-}
 
-public sealed class WorkflowProjectionSession
-{
-    public required string RunId { get; init; }
-
-    public required DateTimeOffset StartedAt { get; init; }
-
-    public required bool Enabled { get; init; }
+    Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
+        string actorId,
+        int take = 200,
+        CancellationToken ct = default);
 }

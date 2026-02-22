@@ -15,8 +15,10 @@
     <AbpVersion>10.0.3</AbpVersion>
     <!-- OpenTelemetry -->
     <OpenTelemetryVersion>1.15.0</OpenTelemetryVersion>
-    <!-- MassTransit -->
-    <MassTransitVersion>9.0.0</MassTransitVersion>
+    <!-- MassTransit (pinned to v8.x; do not upgrade to v9 without explicit architecture decision) -->
+    <MassTransitVersion>8.5.7</MassTransitVersion>
+    <!-- Wolverine -->
+    <WolverineFxVersion>5.16.2</WolverineFxVersion>
     <!-- .NET Aspire -->
     <AspireVersion>13.1.0</AspireVersion>
     <!-- Roslyn (Microsoft.CodeAnalysis) -->
@@ -208,6 +210,11 @@
     <PackageVersion Include="MassTransit.Kafka" Version="$(MassTransitVersion)" />
     <PackageVersion Include="MassTransit.RabbitMQ" Version="$(MassTransitVersion)" />
     <PackageVersion Include="MassTransit.TestFramework" Version="$(MassTransitVersion)" />
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <!-- Wolverine                                                   -->
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="WolverineFx" Version="$(WolverineFxVersion)" />
 
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- Health Checks                                               -->

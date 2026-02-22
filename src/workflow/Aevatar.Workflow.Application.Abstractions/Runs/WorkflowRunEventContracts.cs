@@ -15,8 +15,6 @@ public sealed record WorkflowRunStartedEvent : WorkflowRunEvent
     public override string Type => "RUN_STARTED";
 
     public required string ThreadId { get; init; }
-
-    public required string RunId { get; init; }
 }
 
 public sealed record WorkflowRunFinishedEvent : WorkflowRunEvent
@@ -24,8 +22,6 @@ public sealed record WorkflowRunFinishedEvent : WorkflowRunEvent
     public override string Type => "RUN_FINISHED";
 
     public required string ThreadId { get; init; }
-
-    public required string RunId { get; init; }
 
     public object? Result { get; init; }
 }
@@ -35,8 +31,6 @@ public sealed record WorkflowRunErrorEvent : WorkflowRunEvent
     public override string Type => "RUN_ERROR";
 
     public required string Message { get; init; }
-
-    public string? RunId { get; init; }
 
     public string? Code { get; init; }
 }

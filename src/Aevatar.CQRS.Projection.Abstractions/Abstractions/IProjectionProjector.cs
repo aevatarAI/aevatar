@@ -5,8 +5,6 @@ namespace Aevatar.CQRS.Projection.Abstractions;
 /// </summary>
 public interface IProjectionProjector<in TContext, in TTopology>
 {
-    int Order { get; }
-
     ValueTask InitializeAsync(TContext context, CancellationToken ct = default);
 
     ValueTask ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default);

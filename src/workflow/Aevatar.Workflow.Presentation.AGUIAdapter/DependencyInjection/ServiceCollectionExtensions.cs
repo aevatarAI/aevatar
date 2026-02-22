@@ -15,7 +15,6 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAGUIEventEnvelopeMappingHandler, AITextStreamAGUIEventEnvelopeMappingHandler>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAGUIEventEnvelopeMappingHandler, WorkflowCompletedAGUIEventEnvelopeMappingHandler>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAGUIEventEnvelopeMappingHandler, ToolCallAGUIEventEnvelopeMappingHandler>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAGUIEventEnvelopeMappingHandler, WorkflowSuspendedAGUIEventEnvelopeMappingHandler>());
 
         return services;
     }

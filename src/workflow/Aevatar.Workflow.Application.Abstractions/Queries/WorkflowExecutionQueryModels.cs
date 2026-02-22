@@ -5,17 +5,36 @@ public sealed record WorkflowAgentSummary(
     string Type,
     string Description);
 
-public sealed record WorkflowRunSummary(
-    string RunId,
-    string WorkflowName,
-    string RootActorId,
-    DateTimeOffset StartedAt,
-    DateTimeOffset EndedAt,
-    double DurationMs,
-    bool? Success,
-    int TotalSteps,
-    WorkflowRunProjectionScope ProjectionScope,
-    WorkflowRunCompletionStatus CompletionStatus);
+public sealed class WorkflowActorSnapshot
+{
+    public string ActorId { get; set; } = string.Empty;
+    public string WorkflowName { get; set; } = string.Empty;
+    public string LastCommandId { get; set; } = string.Empty;
+    public long StateVersion { get; set; }
+    public string LastEventId { get; set; } = string.Empty;
+    public DateTimeOffset LastUpdatedAt { get; set; }
+    public bool? LastSuccess { get; set; }
+    public string LastOutput { get; set; } = string.Empty;
+    public string LastError { get; set; } = string.Empty;
+    public int TotalSteps { get; set; }
+    public int RequestedSteps { get; set; }
+    public int CompletedSteps { get; set; }
+    public int RoleReplyCount { get; set; }
+}
+
+public sealed class WorkflowActorTimelineItem
+{
+    public DateTimeOffset Timestamp { get; set; }
+    public string Stage { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+    public string AgentId { get; set; } = string.Empty;
+    public string StepId { get; set; } = string.Empty;
+    public string StepType { get; set; } = string.Empty;
+    public string EventType { get; set; } = string.Empty;
+    public Dictionary<string, string> Data { get; set; } = [];
+}
+
+public sealed record WorkflowTopologyEdge(string Parent, string Child);
 
 public enum WorkflowRunProjectionScope
 {
@@ -50,7 +69,9 @@ public sealed class WorkflowRunReport
     public WorkflowRunCompletionStatus CompletionStatus { get; set; } = WorkflowRunCompletionStatus.Unknown;
     public string WorkflowName { get; set; } = string.Empty;
     public string RootActorId { get; set; } = string.Empty;
-    public string RunId { get; set; } = string.Empty;
+    public string CommandId { get; set; } = string.Empty;
+    public long StateVersion { get; set; }
+    public string LastEventId { get; set; } = string.Empty;
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset EndedAt { get; set; }
     public double DurationMs { get; set; }
@@ -78,7 +99,6 @@ public sealed class WorkflowRunStepTrace
 {
     public string StepId { get; set; } = string.Empty;
     public string StepType { get; set; } = string.Empty;
-    public string RunId { get; set; } = string.Empty;
     public string TargetRole { get; set; } = string.Empty;
     public DateTimeOffset? RequestedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }

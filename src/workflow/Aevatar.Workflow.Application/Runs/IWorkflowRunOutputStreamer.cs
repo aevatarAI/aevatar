@@ -6,7 +6,6 @@ public interface IWorkflowRunOutputStreamer
 {
     Task StreamAsync(
         IWorkflowRunEventSink sink,
-        string runId,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default);
 }

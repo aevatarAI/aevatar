@@ -487,3 +487,5 @@ scripts/.pids/
 .env.production
 .playwright-mcp
 *.db
+docs/agents-working-space/*
+.tools/*

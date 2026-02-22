@@ -2,9 +2,7 @@ namespace Aevatar.Demos.CaseProjection.Reducers;
 
 public sealed class CaseResolvedEventReducer : CaseProjectionEventReducerBase<CaseResolvedEvent>
 {
-    public override int Order => 100;
-
-    protected override void Reduce(
+    protected override bool Reduce(
         CaseProjectionReadModel readModel,
         CaseProjectionContext context,
         EventEnvelope envelope,
@@ -25,5 +23,7 @@ public sealed class CaseResolvedEventReducer : CaseProjectionEventReducerBase<Ca
             {
                 ["resolved"] = evt.Resolved.ToString(),
             });
+
+        return true;
     }
 }

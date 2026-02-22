@@ -13,20 +13,17 @@ internal static class AGUIEventToWorkflowRunEventMapper
             {
                 Timestamp = e.Timestamp,
                 ThreadId = e.ThreadId,
-                RunId = e.RunId,
             },
             AGUI.RunFinishedEvent e => new WorkflowRunFinishedEvent
             {
                 Timestamp = e.Timestamp,
                 ThreadId = e.ThreadId,
-                RunId = e.RunId,
                 Result = e.Result,
             },
             AGUI.RunErrorEvent e => new WorkflowRunErrorEvent
             {
                 Timestamp = e.Timestamp,
                 Message = e.Message,
-                RunId = e.RunId,
                 Code = e.Code,
             },
             AGUI.StepStartedEvent e => new WorkflowStepStartedEvent

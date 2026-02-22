@@ -1,10 +1,7 @@
-using System.Collections.Concurrent;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.Configuration;
-using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.CQRS.Projection.Abstractions;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
@@ -13,130 +10,132 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 /// </summary>
 public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProjectionPort
 {
-    private readonly IProjectionRuntimeOptions _options;
-    private readonly IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> _lifecycle;
-    private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
-    private readonly IProjectionRunIdGenerator _runIdGenerator;
-    private readonly IProjectionClock _clock;
-    private readonly IWorkflowExecutionProjectionContextFactory _contextFactory;
-    private readonly WorkflowExecutionReadModelMapper _mapper;
-    private readonly ConcurrentDictionary<string, WorkflowExecutionProjectionContext> _contexts = new(StringComparer.Ordinal);
+    private readonly WorkflowExecutionProjectionOptions _options;
+    private readonly IWorkflowProjectionQueryReader _queryReader;
+    private readonly IWorkflowProjectionActivationService _activationService;
+    private readonly IWorkflowProjectionReleaseService _releaseService;
+    private readonly IWorkflowProjectionSinkSubscriptionManager _sinkSubscriptionManager;
+    private readonly IWorkflowProjectionLiveSinkForwarder _liveSinkForwarder;
 
     public WorkflowExecutionProjectionService(
-        IProjectionRuntimeOptions options,
-        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
-        IProjectionReadModelStore<WorkflowExecutionReport, string> store,
-        IProjectionRunIdGenerator runIdGenerator,
-        IProjectionClock clock,
-        IWorkflowExecutionProjectionContextFactory contextFactory,
-        WorkflowExecutionReadModelMapper mapper)
+        WorkflowExecutionProjectionOptions options,
+        IWorkflowProjectionQueryReader queryReader,
+        IWorkflowProjectionActivationService activationService,
+        IWorkflowProjectionReleaseService releaseService,
+        IWorkflowProjectionSinkSubscriptionManager sinkSubscriptionManager,
+        IWorkflowProjectionLiveSinkForwarder liveSinkForwarder)
     {
         _options = options;
-        _lifecycle = lifecycle;
-        _store = store;
-        _runIdGenerator = runIdGenerator;
-        _clock = clock;
-        _contextFactory = contextFactory;
-        _mapper = mapper;
+        _queryReader = queryReader;
+        _activationService = activationService;
+        _releaseService = releaseService;
+        _sinkSubscriptionManager = sinkSubscriptionManager;
+        _liveSinkForwarder = liveSinkForwarder;
     }
 
     public bool ProjectionEnabled => _options.Enabled;
 
-    public bool EnableRunQueryEndpoints => _options.Enabled && _options.EnableRunQueryEndpoints;
+    public bool EnableActorQueryEndpoints => _options.Enabled && _options.EnableActorQueryEndpoints;
 
-    public async Task<WorkflowProjectionSession> StartAsync(
+    public async Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
         string rootActorId,
         string workflowName,
         string input,
+        string commandId,
+        CancellationToken ct = default)
+    {
+        if (!ProjectionEnabled || string.IsNullOrWhiteSpace(rootActorId))
+            return null;
+
+        return await _activationService.EnsureAsync(
+            rootActorId,
+            workflowName,
+            input,
+            commandId,
+            ct);
+    }
+
+    public async Task AttachLiveSinkAsync(
+        IWorkflowExecutionProjectionLease lease,
         IWorkflowRunEventSink sink,
         CancellationToken ct = default)
     {
-        var runId = _runIdGenerator.NextRunId();
-        var startedAt = _clock.UtcNow;
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(sink);
+        ct.ThrowIfCancellationRequested();
 
         if (!ProjectionEnabled)
-        {
-            return new WorkflowProjectionSession
-            {
-                RunId = runId,
-                StartedAt = startedAt,
-                Enabled = false,
-            };
-        }
+            return;
 
-        var context = _contextFactory.Create(runId, rootActorId, workflowName, input, startedAt);
-        context.SetRunEventSink(sink);
-        await _lifecycle.StartAsync(context, ct);
-        _contexts[runId] = context;
-
-        return new WorkflowProjectionSession
-        {
-            RunId = runId,
-            StartedAt = startedAt,
-            Enabled = true,
-        };
+        var runtimeLease = ResolveRuntimeLease(lease);
+        await _sinkSubscriptionManager.AttachOrReplaceAsync(
+            runtimeLease,
+            sink,
+            evt => _liveSinkForwarder.ForwardAsync(runtimeLease, sink, evt, CancellationToken.None),
+            ct);
     }
 
-    public async Task<WorkflowProjectionCompletionStatus> WaitForRunProjectionCompletionStatusAsync(
-        string runId,
-        TimeSpan? timeoutOverride = null,
+    public async Task DetachLiveSinkAsync(
+        IWorkflowExecutionProjectionLease lease,
+        IWorkflowRunEventSink sink,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(sink);
+        ct.ThrowIfCancellationRequested();
+
         if (!ProjectionEnabled)
-            return WorkflowProjectionCompletionStatus.Disabled;
+            return;
 
-        var timeout = timeoutOverride ?? TimeSpan.FromMilliseconds(Math.Max(1, _options.RunProjectionCompletionWaitTimeoutMs));
-        var status = await _lifecycle.WaitForCompletionAsync(runId, timeout, ct);
-        return ToProjectionCompletionStatus(status);
+        var runtimeLease = ResolveRuntimeLease(lease);
+        await _sinkSubscriptionManager.DetachAsync(runtimeLease, sink, ct);
     }
 
-    public async Task<WorkflowRunReport?> CompleteAsync(
-        WorkflowProjectionSession session,
-        IReadOnlyList<WorkflowRunTopologyEdge> topology,
+    public async Task ReleaseActorProjectionAsync(
+        IWorkflowExecutionProjectionLease lease,
         CancellationToken ct = default)
     {
-        if (!ProjectionEnabled || !session.Enabled)
+        ArgumentNullException.ThrowIfNull(lease);
+        ct.ThrowIfCancellationRequested();
+        if (!ProjectionEnabled)
+            return;
+
+        var runtimeLease = ResolveRuntimeLease(lease);
+        await _releaseService.ReleaseIfIdleAsync(runtimeLease, ct);
+    }
+
+    public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
+        string actorId,
+        CancellationToken ct = default)
+    {
+        if (!EnableActorQueryEndpoints || string.IsNullOrWhiteSpace(actorId))
             return null;
 
-        if (_contexts.TryRemove(session.RunId, out var context))
-        {
-            var projectionTopology = topology.Select(x => new WorkflowExecutionTopologyEdge(x.Parent, x.Child)).ToList();
-            await _lifecycle.CompleteAsync(context, projectionTopology, ct);
-        }
-
-        var report = await _store.GetAsync(session.RunId, ct);
-        return report == null ? null : _mapper.ToReport(report);
+        return await _queryReader.GetActorSnapshotAsync(actorId, ct);
     }
 
-    public async Task<IReadOnlyList<WorkflowRunSummary>> ListRunsAsync(int take = 50, CancellationToken ct = default)
+    public async Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
+        int take = 200,
+        CancellationToken ct = default)
     {
-        if (!EnableRunQueryEndpoints)
+        if (!EnableActorQueryEndpoints)
             return [];
 
-        var reports = await _store.ListAsync(take, ct);
-        return reports.Select(_mapper.ToSummary).ToList();
+        return await _queryReader.ListActorSnapshotsAsync(take, ct);
     }
 
-    public async Task<WorkflowRunReport?> GetRunAsync(string runId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
+        string actorId,
+        int take = 200,
+        CancellationToken ct = default)
     {
-        if (!EnableRunQueryEndpoints)
-            return null;
+        if (!EnableActorQueryEndpoints || string.IsNullOrWhiteSpace(actorId))
+            return [];
 
-        var report = await _store.GetAsync(runId, ct);
-        return report == null ? null : _mapper.ToReport(report);
+        return await _queryReader.ListActorTimelineAsync(actorId, take, ct);
     }
 
-    private static WorkflowProjectionCompletionStatus ToProjectionCompletionStatus(ProjectionRunCompletionStatus status)
-    {
-        return status switch
-        {
-            ProjectionRunCompletionStatus.Completed => WorkflowProjectionCompletionStatus.Completed,
-            ProjectionRunCompletionStatus.TimedOut => WorkflowProjectionCompletionStatus.TimedOut,
-            ProjectionRunCompletionStatus.Failed => WorkflowProjectionCompletionStatus.Failed,
-            ProjectionRunCompletionStatus.Stopped => WorkflowProjectionCompletionStatus.Stopped,
-            ProjectionRunCompletionStatus.NotFound => WorkflowProjectionCompletionStatus.NotFound,
-            ProjectionRunCompletionStatus.Disabled => WorkflowProjectionCompletionStatus.Disabled,
-            _ => WorkflowProjectionCompletionStatus.Unknown,
-        };
-    }
+    private static WorkflowExecutionRuntimeLease ResolveRuntimeLease(IWorkflowExecutionProjectionLease lease) =>
+        lease as WorkflowExecutionRuntimeLease
+        ?? throw new InvalidOperationException("Unsupported workflow projection lease implementation.");
 }

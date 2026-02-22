@@ -59,13 +59,15 @@ public sealed class StartWorkflowAGUIEventEnvelopeMappingHandler : IAGUIEventEnv
         }
 
         var evt = envelope.Payload.Unpack<StartWorkflowEvent>();
+        var threadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
+        var runId = AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, threadId);
         events =
         [
             new RunStartedEvent
             {
                 Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
-                ThreadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName),
-                RunId = evt.RunId,
+                ThreadId = threadId,
+                RunId = runId,
             },
         ];
         return true;
@@ -93,7 +95,7 @@ public sealed class StepRequestAGUIEventEnvelopeMappingHandler : IAGUIEventEnvel
             {
                 Timestamp = ts,
                 Name = "aevatar.step.request",
-                Value = new { evt.StepId, evt.StepType, evt.TargetRole, evt.RunId },
+                Value = new { evt.StepId, evt.StepType, evt.TargetRole },
             },
         ];
         return true;
@@ -233,26 +235,29 @@ public sealed class WorkflowCompletedAGUIEventEnvelopeMappingHandler : IAGUIEven
 
         if (evt.Success)
         {
+            var threadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
+            var runId = AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, threadId);
             events =
             [
                 new RunFinishedEvent
                 {
                     Timestamp = ts,
-                    ThreadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName),
-                    RunId = evt.RunId,
+                    ThreadId = threadId,
+                    RunId = runId,
                     Result = new { output = evt.Output },
                 },
             ];
             return true;
         }
 
+        var errorThreadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
         events =
         [
             new RunErrorEvent
             {
                 Timestamp = ts,
                 Message = evt.Error,
-                RunId = evt.RunId,
+                RunId = AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, errorThreadId),
                 Code = "WORKFLOW_FAILED",
             },
         ];
@@ -307,42 +312,6 @@ public sealed class ToolCallAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelope
     }
 }
 
-public sealed class WorkflowSuspendedAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
-{
-    public int Order => 45;
-
-    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
-    {
-        if (envelope.Payload?.Is(WorkflowSuspendedEvent.Descriptor) != true)
-        {
-            events = [];
-            return false;
-        }
-
-        var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
-        var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
-
-        var metadata = new Dictionary<string, string>();
-        foreach (var (key, value) in evt.Metadata)
-            metadata[key] = value;
-
-        events =
-        [
-            new HumanInputRequestEvent
-            {
-                Timestamp = ts,
-                StepId = evt.StepId,
-                RunId = evt.RunId,
-                SuspensionType = evt.SuspensionType,
-                Prompt = evt.Prompt,
-                TimeoutSeconds = evt.TimeoutSeconds,
-                Metadata = metadata,
-            },
-        ];
-        return true;
-    }
-}
-
 internal static class AGUIEventEnvelopeMappingHelpers
 {
     public static long? ToUnixMs(Timestamp? ts)
@@ -358,6 +327,13 @@ internal static class AGUIEventEnvelopeMappingHelpers
         return string.IsNullOrWhiteSpace(envelope.PublisherId)
             ? fallback
             : envelope.PublisherId;
+    }
+
+    public static string ResolveRunId(EventEnvelope envelope, string fallbackThreadId)
+    {
+        return string.IsNullOrWhiteSpace(envelope.CorrelationId)
+            ? fallbackThreadId
+            : envelope.CorrelationId;
     }
 
     public static string ResolveMessageId(string? sessionId, string? envelopeId)

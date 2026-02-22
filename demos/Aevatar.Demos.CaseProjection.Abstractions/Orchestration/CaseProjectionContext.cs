@@ -3,16 +3,18 @@ using System.Collections.Concurrent;
 namespace Aevatar.Demos.CaseProjection.Abstractions;
 
 /// <summary>
-/// Per-run context for case projection.
+/// Projection context for case projection.
 /// </summary>
-public sealed class CaseProjectionContext : IProjectionRunContext
+public sealed class CaseProjectionContext : IProjectionContext, IProjectionStreamSubscriptionContext
 {
     public required string RunId { get; init; }
+    string IProjectionContext.ProjectionId => RunId;
     public required string RootActorId { get; init; }
     public required string CaseId { get; init; }
     public required string CaseType { get; init; }
     public required string Input { get; init; }
     public required DateTimeOffset StartedAt { get; init; }
+    public IActorStreamSubscriptionLease? StreamSubscriptionLease { get; set; }
 
     private readonly ConcurrentDictionary<string, byte> _processedEventIds = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, object?> _properties = new(StringComparer.Ordinal);

@@ -91,6 +91,18 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 - `MemoryCacheDeduplicator`：事件去重
 - `AddAevatarRuntime()`：一键注册本地运行时依赖
 
+口径说明：
+
+- `InMemory*` 组件仅用于开发/测试环境，不作为生产容量治理对象。
+- 生产环境应替换为 Redis/持久化实现，并在生产实现上评估内存增长与容量风险。
+
+### 分布式目标态（生产）
+
+1. `IActorRuntime` 在生产环境提供分布式部署能力，保证同一 `actorId` 全局单激活与邮箱串行。
+2. `IStateStore<TState>` / `IEventStore` / `IAgentManifestStore` 使用非 InMemory 持久化实现。
+3. 投影相关编排运行态通过 Actor 化承载；中间层服务不持有跨节点事实态。
+4. `InMemory*` 仅保留本地开发与自动化测试使用。
+
 ### Routing 细节
 
 `Routing` 现在由两部分组成：
@@ -112,36 +124,51 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 - **订阅与编排内核** 在 `Aevatar.CQRS.Projection.Core`：
   - `ActorStreamSubscriptionHub<TMessage>`：按 `actorId` 复用底层 stream 订阅
-  - `ProjectionSubscriptionRegistry<,>`：维护 run 级激活态与完成态
+  - `ProjectionSubscriptionRegistry<,>`：维护 actor 级投影上下文激活态
   - `ProjectionCoordinator<,>`：一对多分发 projector
   - `ProjectionLifecycleService<,>`：统一 `start/wait/complete`
+- **读模型抽象分层**：
+  - `Aevatar.Foundation.Projection`：提供读模型最小公共字段（`RootActorId/CommandId/StateVersion/LastEventId`）与通用能力接口（Timeline / RoleReplies）
+  - `Aevatar.AI.Projection`：提供 AI 通用事件 reducer（`TextMessage*` / `Tool*`）和 `IProjectionEventApplier<,,>` 扩展模式
 - **WorkflowExecution 业务扩展** 在 `Aevatar.Workflow.Projection`：
-  - `IWorkflowExecutionProjectionService` 管理 run 级投影生命周期与查询
-  - `WorkflowExecutionReadModelProjector` + reducers 生成 `WorkflowExecutionReport`
-  - `WorkflowExecutionRunIdResolver` 负责从事件中解析 run 归属
+  - `WorkflowExecutionProjectionService` 作为应用端口 facade（仅流程编排）
+  - `WorkflowProjectionActivationService` 负责 projection 启动与上下文激活
+  - `WorkflowProjectionReleaseService` 负责 idle 检测与 stop/release
+  - `WorkflowProjectionLeaseManager` 负责 ownership acquire/release
+  - `WorkflowProjectionSinkSubscriptionManager` 负责 live sink attach/detach
+  - `WorkflowProjectionLiveSinkForwarder` 负责 run-event 推送与失败策略桥接
+  - `WorkflowProjectionSinkFailurePolicy` 负责 sink 异常降级与错误事件发布
+  - `WorkflowProjectionReadModelUpdater` 负责 read model 元信息更新
+  - `WorkflowProjectionQueryReader` 负责 read model 查询映射
+  - `WorkflowExecutionReadModelProjector` 负责事件驱动 read model 落库
+  - 业务字段映射通过 `IProjectionEventApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext, TEvent>` 扩展
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
-  - `IWorkflowExecutionRunOrchestrator` 负责 start/wait/complete/rollback
-  - `WorkflowChatRunApplicationService` 统一执行入口与异常回滚
-  - `WorkflowExecutionQueryApplicationService` 统一查询与 DTO 映射
-- **宿主职责** 在 `Aevatar.Host.Api`：
+  - `WorkflowChatRunApplicationService` 仅做请求校验与流程入口编排
+  - `WorkflowRunContextFactory` 负责 run 上下文与 projection lease 初始化
+  - `WorkflowRunExecutionEngine` 负责执行/输出泵送/终态收敛
+  - `WorkflowRunCompletionPolicy` 负责终态判定（`RUN_FINISHED` / `RUN_ERROR`）
+  - `WorkflowRunResourceFinalizer` 负责 detach/release/sink dispose 兜底
+  - `WorkflowExecutionQueryApplicationService` 提供读侧查询
+- **宿主职责** 在 `Aevatar.Workflow.Host.Api`：
   - 仅做协议适配（HTTP/SSE/WebSocket）
   - 仅依赖 `Aevatar.Workflow.Application.Abstractions`
-  - 暴露 `/api/agents`、`/api/workflows`、`/api/runs*`（运行查询可开关）
+  - 暴露 `/api/agents`、`/api/workflows`（运行查询按配置开关）
 - **输出分支**：
   - `WorkflowExecutionReadModelProjector` 写入 read model store
-  - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS）
+  - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS），与 CQRS 读模型共享同一输入事件流
 
-运行语义约束（当前默认）：
+运行语义约束（当前实现）：
 
-- 订阅粒度是 Actor 级，不是 run 级。
-- `EnableRunEventIsolation = false` 时采用 `actor_shared` 语义（同一 Actor 的事件可被多个 run 上下文观察到）。
-- `EnableRunEventIsolation = true` 时由 projector 基于 runId 做过滤。
+- Stream 订阅粒度是 actor 级；run 输出分发粒度是 command/correlation 级。
+- `WorkflowExecutionAGUIEventProjector` 仅在 `EventEnvelope.CorrelationId` 非空时发布 run-event，并按 `workflow-run:{actorId}:{commandId}` 事件流路由。
+- `WorkflowExecutionReadModelProjector` 仅在 read model 发生实际变更时记录 `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
+- 编排层守卫：
+  - `tools/ci/architecture_guards.sh` 强制关键编排类保持轻量（行数与依赖数上限），防止职责反弹。
 
 详细关系见：
 
 - `src/Aevatar.CQRS.Projection.Core/README.md`
 - `src/workflow/Aevatar.Workflow.Projection/README.md`
-- `docs/IDENTIFIER_RELATIONSHIPS.md`
 
 ## 测试项目
 
@@ -176,4 +203,4 @@ await ((GAgentBase)parent.Agent).EventPublisher
 
 ## 当前状态说明
 
-仓库处于持续迭代阶段，接口与目录会按架构约束逐步收敛。变更 Foundation 相关接口前，请同步更新 README、测试与本文档。
+仓库处于持续迭代阶段，接口与目录会按架构约束逐步收敛。变更 Foundation 相关接口前，请同步更新 README、测试与本文档；涉及 Runtime provider 语义时，同步更新 `docs/PROJECT_ARCHITECTURE.md` 与 `docs/CQRS_ARCHITECTURE.md`。

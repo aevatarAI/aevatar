@@ -10,6 +10,10 @@
 using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
@@ -22,6 +26,23 @@ namespace Aevatar.AI.Core;
 /// </summary>
 public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 {
+    public RoleGAgent(
+        ILLMProviderFactory? llmProviderFactory = null,
+        IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
+        IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
+        IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
+        IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
+        IEnumerable<IAgentToolSource>? toolSources = null)
+        : base(
+            llmProviderFactory,
+            additionalHooks,
+            agentMiddlewares,
+            toolMiddlewares,
+            llmMiddlewares,
+            toolSources)
+    {
+    }
+
     /// <summary>Role name.</summary>
     public string RoleName { get; private set; } = "";
 
@@ -38,7 +59,25 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             MaxTokens = config.MaxTokens,
             MaxToolRounds = config.MaxToolRounds,
             MaxHistoryMessages = config.MaxHistoryMessages,
+            StreamBufferCapacity = config.StreamBufferCapacity,
         }, ct);
+
+    [EventHandler]
+    public async Task HandleConfigureRoleAgent(ConfigureRoleAgentEvent evt)
+    {
+        SetRoleName(evt.RoleName);
+        await ((IRoleAgent)this).ConfigureAsync(new RoleAgentConfig
+        {
+            ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? "deepseek" : evt.ProviderName,
+            Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,
+            SystemPrompt = evt.SystemPrompt ?? string.Empty,
+            Temperature = evt.Temperature == 0 ? null : evt.Temperature,
+            MaxTokens = evt.MaxTokens == 0 ? null : evt.MaxTokens,
+            MaxToolRounds = evt.MaxToolRounds <= 0 ? 10 : evt.MaxToolRounds,
+            MaxHistoryMessages = evt.MaxHistoryMessages <= 0 ? 100 : evt.MaxHistoryMessages,
+            StreamBufferCapacity = evt.StreamBufferCapacity <= 0 ? 256 : evt.StreamBufferCapacity,
+        });
+    }
 
     /// <summary>Returns agent description.</summary>
     public override Task<string> GetDescriptionAsync() =>

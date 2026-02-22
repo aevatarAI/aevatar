@@ -20,8 +20,6 @@ public interface ICaseProjectionService
         EventEnvelope envelope,
         CancellationToken ct = default);
 
-    Task<bool> WaitForRunProjectionCompletedAsync(string runId, CancellationToken ct = default);
-
     Task<CaseProjectionReadModel?> CompleteAsync(
         CaseProjectionSession session,
         IReadOnlyList<CaseTopologyEdge> topology,

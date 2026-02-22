@@ -2,9 +2,7 @@ namespace Aevatar.Demos.CaseProjection.Reducers;
 
 public sealed class CaseCommentAddedEventReducer : CaseProjectionEventReducerBase<CaseCommentAddedEvent>
 {
-    public override int Order => 20;
-
-    protected override void Reduce(
+    protected override bool Reduce(
         CaseProjectionReadModel readModel,
         CaseProjectionContext context,
         EventEnvelope envelope,
@@ -24,5 +22,7 @@ public sealed class CaseCommentAddedEventReducer : CaseProjectionEventReducerBas
             "case.comment.added",
             $"author={evt.AuthorId}, chars={(evt.Content ?? string.Empty).Length}",
             envelope.Payload?.TypeUrl ?? "");
+
+        return true;
     }
 }

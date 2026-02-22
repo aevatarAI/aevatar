@@ -10,7 +10,6 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -56,21 +55,23 @@ public sealed class LLMCallModule : IEventModule
             }
 
             // Use per-step session id to avoid collisions across concurrent llm_call steps.
-            var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(request.RunId, request.StepId);
+            var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, request.StepId);
             _pending[chatSessionId] = request;
 
             var targetRole = request.TargetRole;
             var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
 
-            if (!string.IsNullOrEmpty(targetRole) && ctx.Agent is GAgentBase gab)
+            if (!string.IsNullOrEmpty(targetRole))
             {
+                var targetActorId = ResolveTargetActorId(ctx.AgentId, targetRole);
+
                 // Point-to-point: send ChatRequestEvent directly to the target role actor by ID
                 ctx.Logger.LogInformation(
-                    "LLMCallModule: step={StepId} → SendTo role={Role} prompt=({Len} chars) {Preview}",
-                    request.StepId, targetRole, prompt.Length, promptPreview);
+                    "LLMCallModule: step={StepId} → SendTo role={Role} actor={ActorId} prompt=({Len} chars) {Preview}",
+                    request.StepId, targetRole, targetActorId, prompt.Length, promptPreview);
 
                 var chatEvt = new ChatRequestEvent { Prompt = prompt, SessionId = chatSessionId };
-                await gab.EventPublisher.SendToAsync(targetRole, chatEvt, ct);
+                await ctx.SendToAsync(targetActorId, chatEvt, ct);
             }
             else
             {
@@ -103,7 +104,7 @@ public sealed class LLMCallModule : IEventModule
 
             await ctx.PublishAsync(new StepCompletedEvent
             {
-                StepId = pending.StepId, RunId = pending.RunId,
+                StepId = pending.StepId,
                 Success = true, Output = evt.Content ?? "",
                 WorkerId = envelope.PublisherId,
             }, EventDirection.Self, ct);
@@ -126,10 +127,22 @@ public sealed class LLMCallModule : IEventModule
 
             await ctx.PublishAsync(new StepCompletedEvent
             {
-                StepId = pending.StepId, RunId = pending.RunId,
+                StepId = pending.StepId,
                 Success = true, Output = evt.Content ?? "",
                 WorkerId = ctx.AgentId,
             }, EventDirection.Self, ct);
         }
+    }
+
+    private static string ResolveTargetActorId(string workflowActorId, string targetRole)
+    {
+        if (string.IsNullOrWhiteSpace(targetRole))
+            return targetRole;
+
+        // Workflow role ids are logical names. Concrete role actors are created as "{workflowActorId}:{roleId}".
+        if (!targetRole.Contains(':', StringComparison.Ordinal))
+            return $"{workflowActorId}:{targetRole}";
+
+        return targetRole;
     }
 }

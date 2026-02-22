@@ -87,7 +87,6 @@ public sealed class ParallelFanOutModule : IEventModule
                 {
                     StepId = $"{evt.StepId}_sub_{i}",
                     StepType = "llm_call",
-                    RunId = evt.RunId,
                     Input = evt.Input,
                     TargetRole = role ?? "",
                 }, EventDirection.Self, ct);
@@ -110,7 +109,6 @@ public sealed class ParallelFanOutModule : IEventModule
                 var final = new StepCompletedEvent
                 {
                     StepId = voteParent,
-                    RunId = evt.RunId,
                     Success = workersSuccess && evt.Success,
                     Output = evt.Output,
                     Error = evt.Error,
@@ -151,7 +149,6 @@ public sealed class ParallelFanOutModule : IEventModule
                     {
                         StepId = voteStepId,
                         StepType = voteConfig.StepType,
-                        RunId = evt.RunId,
                         Input = merged,
                     };
                     foreach (var (key, value) in voteConfig.Parameters)
@@ -168,7 +165,6 @@ public sealed class ParallelFanOutModule : IEventModule
                     var completed = new StepCompletedEvent
                     {
                         StepId = parent,
-                        RunId = evt.RunId,
                         Success = allSuccess,
                         Output = merged,
                     };

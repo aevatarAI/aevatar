@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -36,8 +38,16 @@ internal sealed class StaticHandlerAdapter : IEventModule
     {
         object? arg = _meta.IsAllEventHandler ? envelope : Unpack(envelope);
         if (arg == null) return;
-        var result = _meta.Method.Invoke(_agent, [arg]);
-        if (result is Task task) await task;
+        try
+        {
+            var result = _meta.Method.Invoke(_agent, [arg]);
+            if (result is Task task) await task;
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException != null)
+        {
+            ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+            throw;
+        }
     }
 
     private object? Unpack(EventEnvelope envelope)

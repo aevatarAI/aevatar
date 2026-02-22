@@ -9,26 +9,29 @@
 - `Aevatar.CQRS.Projection.Core`
   - 通用运行时实现：
     - `ProjectionCoordinator<TContext, TTopology>`
-    - `ProjectionSubscriptionRegistry<TContext, TCompletion>`
+    - `ProjectionDispatcher<TContext, TTopology>`
+    - `ProjectionSubscriptionRegistry<TContext>`
     - `ProjectionLifecycleService<TContext, TCompletion>`
     - `ActorStreamSubscriptionHub<TMessage>`
     - `ProjectionAssemblyRegistration`
-    - `GuidProjectionRunIdGenerator` / `SystemProjectionClock`
-- `Aevatar.Workflow.Projection`
-  - WorkflowExecution 领域扩展（context/session/read model/reducer/projector/service/DI）。
+    - `SystemProjectionClock`
+- 领域扩展项目
+  - 在子系统内承载具体 context/read model/reducer/projector/service/DI。
 
 ## 设计原则
 
 1. 内核只处理通用编排，不绑定任何业务模型。
 2. 业务投影通过 `IProjectionEventReducer<,>` 与 `IProjectionProjector<,>` 扩展。
-3. 订阅按 `actorId` 复用底层 stream，再分发到 run 级 context。
+3. 订阅按 `actorId` 复用底层 stream，再分发到投影上下文。
+4. 同一事件分发到多个 projector 时采用全分支尝试，最终按 projector 顺序聚合失败信息统一上报。
 
 ## 运行链路（通用）
 
 1. `ProjectionLifecycleService.StartAsync` -> `Coordinator.InitializeAsync` + `SubscriptionRegistry.RegisterAsync`
-2. actor stream 到达 `EventEnvelope` 后，`SubscriptionRegistry` 分发给 `Coordinator.ProjectAsync`
-3. `Coordinator` 按顺序调用多个 projector
-4. `ProjectionLifecycleService.CompleteAsync` -> `SubscriptionRegistry.UnregisterAsync` + `Coordinator.CompleteAsync`
+2. actor stream 到达 `EventEnvelope` 后，`SubscriptionRegistry` 分发给 `ProjectionDispatcher.DispatchAsync`
+3. `ProjectionDispatcher` 调用 `Coordinator.ProjectAsync`
+4. `Coordinator` 按服务注册顺序调用多个 projector
+5. `ProjectionLifecycleService.CompleteAsync` -> `SubscriptionRegistry.UnregisterAsync` + `Coordinator.CompleteAsync`
 
 ## 扩展点
 

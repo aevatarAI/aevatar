@@ -26,5 +26,5 @@ services.AddSkills(o => o
 
 ## 依赖
 
-- `Aevatar.AI.Core`
+- `Aevatar.AI.Abstractions`
 - `Microsoft.Extensions.*.Abstractions`

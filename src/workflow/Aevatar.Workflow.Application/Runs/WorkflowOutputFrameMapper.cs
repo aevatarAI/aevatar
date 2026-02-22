@@ -13,21 +13,18 @@ internal static class WorkflowOutputFrameMapper
                 Type = e.Type,
                 Timestamp = e.Timestamp,
                 ThreadId = e.ThreadId,
-                RunId = e.RunId,
             },
             WorkflowRunFinishedEvent e => new WorkflowOutputFrame
             {
                 Type = e.Type,
                 Timestamp = e.Timestamp,
                 ThreadId = e.ThreadId,
-                RunId = e.RunId,
                 Result = e.Result,
             },
             WorkflowRunErrorEvent e => new WorkflowOutputFrame
             {
                 Type = e.Type,
                 Timestamp = e.Timestamp,
-                RunId = e.RunId,
                 Message = e.Message,
                 Code = e.Code,
             },

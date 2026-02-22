@@ -5,9 +5,7 @@ namespace Aevatar.Workflow.Projection.Reducers;
 
 public sealed class StepRequestEventReducer : WorkflowExecutionEventReducerBase<StepRequestEvent>
 {
-    public override int Order => 10;
-
-    protected override void Reduce(
+    protected override bool Reduce(
         WorkflowExecutionReport report,
         WorkflowExecutionProjectionContext context,
         EventEnvelope envelope,
@@ -16,7 +14,6 @@ public sealed class StepRequestEventReducer : WorkflowExecutionEventReducerBase<
     {
         var step = WorkflowExecutionProjectionMutations.GetOrCreateStep(report, evt.StepId);
         step.StepType = evt.StepType;
-        step.RunId = evt.RunId;
         step.TargetRole = evt.TargetRole;
         step.RequestedAt = now;
         step.RequestParameters = evt.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value);
@@ -31,5 +28,7 @@ public sealed class StepRequestEventReducer : WorkflowExecutionEventReducerBase<
             evt.StepType,
             envelope.Payload?.TypeUrl ?? "",
             step.RequestParameters);
+
+        return true;
     }
 }

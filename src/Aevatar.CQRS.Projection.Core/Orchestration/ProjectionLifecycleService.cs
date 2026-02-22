@@ -5,16 +5,19 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// </summary>
 public sealed class ProjectionLifecycleService<TContext, TCompletion>
     : IProjectionLifecycleService<TContext, TCompletion>
-    where TContext : IProjectionRunContext
+    where TContext : IProjectionContext
 {
     private readonly IProjectionCoordinator<TContext, TCompletion> _coordinator;
+    private readonly IProjectionDispatcher<TContext> _dispatcher;
     private readonly IProjectionSubscriptionRegistry<TContext> _subscriptionRegistry;
 
     public ProjectionLifecycleService(
         IProjectionCoordinator<TContext, TCompletion> coordinator,
+        IProjectionDispatcher<TContext> dispatcher,
         IProjectionSubscriptionRegistry<TContext> subscriptionRegistry)
     {
         _coordinator = coordinator;
+        _dispatcher = dispatcher;
         _subscriptionRegistry = subscriptionRegistry;
     }
 
@@ -25,14 +28,14 @@ public sealed class ProjectionLifecycleService<TContext, TCompletion>
     }
 
     public Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default) =>
-        _coordinator.ProjectAsync(context, envelope, ct);
+        _dispatcher.DispatchAsync(context, envelope, ct);
 
-    public Task<ProjectionRunCompletionStatus> WaitForCompletionAsync(string runId, TimeSpan timeout, CancellationToken ct = default) =>
-        _subscriptionRegistry.WaitForCompletionAsync(runId, timeout, ct);
+    public Task StopAsync(TContext context, CancellationToken ct = default) =>
+        _subscriptionRegistry.UnregisterAsync(context, ct);
 
     public async Task CompleteAsync(TContext context, TCompletion completion, CancellationToken ct = default)
     {
-        await _subscriptionRegistry.UnregisterAsync(context.RootActorId, context.RunId, ct);
+        await _subscriptionRegistry.UnregisterAsync(context, ct);
         await _coordinator.CompleteAsync(context, completion, ct);
     }
 }

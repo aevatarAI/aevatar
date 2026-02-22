@@ -1,120 +1,235 @@
-# Workflow 子系统
+# Workflow 能力架构（`src/workflow`）
 
-`src/workflow/` 是 Aevatar 的工作流引擎子系统，负责 YAML 工作流的解析、编排、执行、投影与协议输出。
+本文档描述 `src/workflow` 的完整实现关系。当前语义是：一次 `Run` 本质上就是向 `WorkflowGAgent` 触发一次 `ChatRequestEvent`，后续全部通过事件流驱动执行与投影。`commandId` 保留在 CQRS/Application 侧，不注入 Actor 事件 payload 或 Envelope metadata。
 
-## 项目一览
+## 0. 运行语义约束（2026-02-19 更新）
 
-| 项目 | 层级 | 职责 |
-|------|------|------|
-| `Aevatar.Workflow.Core` | Domain | 工作流引擎内核：`WorkflowGAgent`、步骤模块、Connector、YAML DSL |
-| `Aevatar.Workflow.Application` | Application | 用例编排：run 启动/流式输出/完成收敛、查询门面、workflow 注册表 |
-| `Aevatar.Workflow.Application.Abstractions` | Application 契约 | 稳定端口：`IWorkflowChatRunApplicationService`、Query/Run/Report 契约 |
-| `Aevatar.Workflow.Projection` | Application (CQRS 读侧) | 投影管线：ReadModel、Reducer、Projector、run 生命周期编排 |
-| `Aevatar.Workflow.Presentation.AGUIAdapter` | Presentation 适配 | `EventEnvelope -> AGUIEvent -> WorkflowRunEvent` 协议转换 |
-| `Aevatar.Workflow.Infrastructure` | Infrastructure | 文件加载、报告落盘、启动装配 |
+- 一个 `Workflow` 对应一个 `WorkflowGAgent`（一个 Actor）。
+- Actor 首次创建时绑定 workflow；绑定后不允许切换到另一个 workflow。
+- 带 `actorId` 的 run 请求只能“继续在该 Actor 上运行”；不能借同一个 `actorId` 切 workflow。
+- 若需要执行另一个 workflow，必须创建新的 Actor。
 
-## 分层依赖关系
+## 1. 分层与项目依赖图
 
 ```mermaid
-graph TD
-    Abstractions["Application.Abstractions"]
-    Core["Workflow.Core"]
-    App["Workflow.Application"]
-    Proj["Workflow.Projection"]
-    AGUI["Presentation.AGUIAdapter"]
-    Infra["Workflow.Infrastructure"]
-    Host["Host.Api"]
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  subgraph Host["Host Layer"]
+    H["Aevatar.Workflow.Host.Api"]
+  end
 
-    Host --> App
-    Host --> Proj
-    Host --> AGUI
-    Host --> Infra
-    App --> Abstractions
-    App --> Core
-    Proj --> Abstractions
-    Proj --> Core
-    AGUI --> Proj
-    Infra --> Abstractions
+  subgraph Infra["Infrastructure Layer"]
+    I["Aevatar.Workflow.Infrastructure"]
+    AGUIA["Aevatar.Workflow.Presentation.AGUIAdapter"]
+  end
+
+  subgraph App["Application Layer"]
+    A["Aevatar.Workflow.Application"]
+    AB["Aevatar.Workflow.Application.Abstractions"]
+  end
+
+  subgraph Projection["Projection Layer"]
+    P["Aevatar.Workflow.Projection"]
+  end
+
+  subgraph Domain["Domain Layer"]
+    C["Aevatar.Workflow.Core"]
+  end
+
+  subgraph Shared["Shared CQRS"]
+    CQRSC["Aevatar.CQRS.Core"]
+    CQRSP["Aevatar.CQRS.Projection.Core"]
+    F["Aevatar.Foundation.* / Aevatar.AI.Abstractions"]
+  end
+
+  H --> CQRSC
+  H --> CQRSP
+  H --> I
+  H --> AB
+  I --> A
+  I --> P
+  I --> AGUIA
+  A --> AB
+  A --> C
+  A --> CQRSC
+  A --> F
+  P --> AB
+  P --> C
+  P --> CQRSP
+  AGUIA --> P
+  AGUIA --> C
+  AGUIA --> F
+  C --> F
 ```
 
-关键约束：
+## 2. Run 执行主链路（命令侧）
 
-- `Core` 不依赖 `Application`；`Infrastructure` 不依赖 `Application` 实现。
-- `Presentation.AGUIAdapter` 依赖 `Projection`，但不依赖 `Application` 实现。
-- `Host` 做组合与协议适配，不承载业务编排。
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+sequenceDiagram
+  participant Client as "Client"
+  participant Api as "ChatEndpoints"
+  participant CmdSvc as "ICommandExecutionService"
+  participant AppSvc as "WorkflowChatRunApplicationService"
+  participant CtxFactory as "WorkflowRunContextFactory"
+  participant Engine as "WorkflowRunExecutionEngine"
+  participant Resolver as "WorkflowRunActorResolver"
+  participant Port as "IWorkflowExecutionProjectionPort"
+  participant WFAgent as "WorkflowGAgent"
+  participant Sink as "WorkflowRunEventChannel"
 
-## 执行链路概览
-
-```
-POST /api/chat
-  -> WorkflowChatRunApplicationService.ExecuteAsync
-     -> WorkflowRunActorResolver: 解析/创建 WorkflowGAgent
-     -> WorkflowExecutionRunOrchestrator.StartAsync: 启动投影 run
-     -> WorkflowRunRequestExecutor: 投递 ChatRequestEvent
-     -> WorkflowGAgent: 编译 YAML、创建角色树、安装模块
-        -> WorkflowLoopModule: 按步骤顺序派发
-           -> LLMCallModule / ConnectorCallModule / ParallelFanOutModule / ...
-     -> 事件 -> 统一 Projection Pipeline
-        -> WorkflowExecutionReadModelProjector (ReadModel 分支)
-        -> WorkflowExecutionAGUIEventProjector (AGUI 输出分支)
-     -> WorkflowRunOutputStreamer: 读取 run 事件 -> WorkflowOutputFrame
-     -> WorkflowExecutionRunOrchestrator.FinalizeAsync: 等待投影收敛、生成报告
-  <- SSE 流返回客户端
-```
-
-## 内置步骤模块
-
-| 类别 | 步骤类型 | 模块类 | 别名 |
-|------|----------|--------|------|
-| 引擎 | `workflow_loop` | `WorkflowLoopModule` | - |
-| 流程 | `conditional` | `ConditionalModule` | - |
-| | `while` | `WhileModule` | `loop` |
-| | `workflow_call` | `WorkflowCallModule` | `sub_workflow` |
-| | `checkpoint` | `CheckpointModule` | - |
-| | `assign` | `AssignModule` | - |
-| 并行 | `parallel_fanout` | `ParallelFanOutModule` | `parallel`、`fan_out` |
-| 共识 | `vote_consensus` | `VoteConsensusModule` | `vote` |
-| 迭代 | `foreach` | `ForEachModule` | `for_each` |
-| 执行 | `llm_call` | `LLMCallModule` | - |
-| | `tool_call` | `ToolCallModule` | - |
-| | `connector_call` | `ConnectorCallModule` | `bridge_call` |
-| 数据 | `transform` | `TransformModule` | - |
-| | `retrieve_facts` | `RetrieveFactsModule` | - |
-
-## 模块装配机制
-
-`WorkflowGAgent` 不内嵌硬编码的模块推断逻辑，而是通过组合策略扩展：
-
-1. **依赖推导**（`IWorkflowModuleDependencyExpander`）：根据 workflow 定义推导所需模块集合。
-   - `WorkflowLoopModuleDependencyExpander`：始终引入 `workflow_loop`
-   - `WorkflowStepTypeModuleDependencyExpander`：按 step type 推导
-   - `WorkflowImplicitModuleDependencyExpander`：补齐隐式依赖（如 `parallel -> llm_call`）
-2. **实例配置**（`IWorkflowModuleConfigurator`）：对已创建的模块实例做初始化。
-   - `WorkflowLoopModuleConfigurator`：向 `WorkflowLoopModule` 注入编译后的 workflow
-
-新增模块：实现 `IEventModule` + DI 注册 `AddWorkflowModule<T>("name", "alias")` 即可。
-
-## DI 组合示例
-
-宿主启动时组合全部层：
-
-```csharp
-services
-    .AddAevatarWorkflow()                          // Core: 模块、工厂、connector registry
-    .AddWorkflowApplication()                      // Application: 用例编排
-    .AddWorkflowExecutionProjectionCQRS()           // Projection: CQRS 读侧
-    .AddWorkflowExecutionAGUIAdapter()              // Presentation: AGUI 输出
-    .AddWorkflowInfrastructure()                    // Infrastructure: 报告落盘
-    .AddWorkflowDefinitionFileSource();             // Infrastructure: 文件加载
+  Client->>Api: "POST /api/chat 或 WS command"
+  Api->>CmdSvc: "ExecuteAsync(WorkflowChatRunRequest)"
+  CmdSvc->>AppSvc: "ExecuteAsync"
+  AppSvc->>CtxFactory: "CreateAsync"
+  CtxFactory->>Resolver: "ResolveOrCreateAsync"
+  Resolver-->>CtxFactory: "ActorId + BoundWorkflowName"
+  CtxFactory->>Port: "EnsureActorProjectionAsync(...) -> ProjectionLease"
+  CtxFactory->>Port: "AttachLiveSinkAsync(lease, sink)"
+  CtxFactory-->>AppSvc: "WorkflowRunContext"
+  AppSvc->>Engine: "ExecuteAsync(runContext, request)"
+  Engine->>WFAgent: "HandleEventAsync(EventEnvelope(ChatRequestEvent))"
+  WFAgent-->>Sink: "投影分支持续写入 WorkflowRunEvent"
+  Engine->>Sink: "ReadAllAsync + StreamAsync"
+  Sink-->>Api: "WorkflowOutputFrame 流"
+  Api-->>Client: "SSE/WS 实时输出"
 ```
 
-## 代码统计
+## 3. 统一 Projection Pipeline（读侧 + AGUI）
 
-| 项目 | .cs 文件数 | 主要关注点 |
-|------|-----------|-----------|
-| Core | ~35 | 引擎内核，模块数量最多 |
-| Application | ~21 | 用例编排，run 生命周期 |
-| Application.Abstractions | ~8 | 稳定契约，变更频率最低 |
-| Projection | ~24 | CQRS 投影，reducer/projector 最多 |
-| Presentation.AGUIAdapter | ~4 | 协议适配，handler chain |
-| Infrastructure | ~7 | IO 操作，配置加载 |
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  ES["Actor Event Stream(EventEnvelope)"]
+  LIFE["ProjectionLifecycleService"]
+  REG["ProjectionSubscriptionRegistry"]
+  HUB["ActorStreamSubscriptionHub(EventEnvelope)"]
+  DIS["ProjectionDispatcher"]
+  COOR["ProjectionCoordinator"]
+
+  RM["WorkflowExecutionReadModelProjector"]
+  RED["Reducers(Start/Step/TextEnd/Completed)"]
+  STORE["IProjectionReadModelStore(WorkflowExecutionReport)"]
+
+  AGP["WorkflowExecutionAGUIEventProjector"]
+  MAP["EventEnvelopeToAGUIEventMapper + Handlers"]
+  BUS["ProjectionSessionEventHub<WorkflowRunEvent>\nworkflow-run:{actorId}:{commandId}"]
+  CH["WorkflowRunEventChannel"]
+
+  QP["WorkflowExecutionProjectionService(IWorkflowExecutionProjectionPort)"]
+  ACT["WorkflowProjectionActivationService"]
+  REL["WorkflowProjectionReleaseService"]
+  SUB["WorkflowProjectionSinkSubscriptionManager"]
+  FWD["WorkflowProjectionLiveSinkForwarder"]
+  QRYR["WorkflowProjectionQueryReader"]
+  QS["WorkflowExecutionQueryApplicationService"]
+  APIQ["/api/actors/* Query Endpoints"]
+
+  LIFE --> REG
+  REG --> HUB
+  HUB --> ES
+  ES --> DIS
+  DIS --> COOR
+
+  COOR --> RM
+  RM --> RED
+  RED --> STORE
+
+  COOR --> AGP
+  AGP --> MAP
+  MAP --> BUS
+  QP --> ACT
+  QP --> REL
+  QP --> SUB
+  QP --> FWD
+  QP --> QRYR
+  SUB --> BUS
+  SUB --> FWD
+  FWD --> CH
+  BUS --> CH
+  QRYR --> STORE
+
+  QP --> QS
+  QS --> APIQ
+```
+
+## 4. Workflow Core 内部类关系
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart TD
+  CR["ChatRequestEvent"]
+  WG["WorkflowGAgent"]
+  PV["WorkflowParser + WorkflowValidator"]
+  TREE["EnsureAgentTreeAsync(IActorRuntime)"]
+  EXP["IWorkflowModuleDependencyExpander[]"]
+  PACK["IWorkflowModulePack[]"]
+  FACT["WorkflowModuleFactory"]
+  CFG["IWorkflowModuleConfigurator[]"]
+  MOD["Workflow Modules(Loop/LLM/Tool/Connector/Parallel...)"]
+  EVT["Workflow Domain Events(Start/Step/Completed...)"]
+  OUT["ChatResponseEvent / TextMessageEndEvent"]
+
+  CR --> WG
+  WG --> PV
+  WG --> TREE
+  WG --> PACK
+  WG --> EXP
+  PACK --> FACT
+  PACK --> EXP
+  PACK --> CFG
+  EXP --> FACT
+  FACT --> MOD
+  CFG --> MOD
+  MOD --> EVT
+  EVT --> WG
+  WG --> OUT
+```
+
+## 5. ReadModel 查询链路
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+sequenceDiagram
+  participant Runtime as "ActorStreamSubscriptionHub"
+  participant Stream as "Actor Stream(EventEnvelope)"
+  participant Dispatcher as "ProjectionDispatcher"
+  participant Projector as "WorkflowExecutionReadModelProjector"
+  participant Store as "IProjectionReadModelStore"
+  participant Query as "IWorkflowExecutionQueryApplicationService"
+  participant Api as "GET /api/actors/{actorId}"
+
+  Runtime->>Stream: "订阅 Actor 流"
+  Stream-->>Dispatcher: "OnEvent(actorId, envelope)"
+  Dispatcher->>Projector: "ProjectAsync"
+  Projector->>Store: "Upsert(read model)"
+  Api->>Query: "GetActorSnapshotAsync(actorId)"
+  Query->>Store: "Get(actorId)"
+  Store-->>Api: "WorkflowActorSnapshot"
+```
+
+## 6. 关键实现约束
+
+- Host 仅做协议适配与 DI 组合，不承载业务编排。
+- 一个 workflow 对应一个 actor；workflow 与 actor 绑定后不可变。
+- 传入 `actorId` 的 run 请求不允许切换 workflow；workflow 变更必须创建新 actor。
+- `WorkflowGAgent` 子 Actor ID 使用 `"{parentActorId}:{roleId}"` 命名空间，避免跨 workflow 根 Actor 冲突。
+- Actor 事件域不承载 CQRS 命令语义：不在 `EventEnvelope` metadata 与 `StartWorkflowEvent` 中传递 `commandId`。
+- `WorkflowExecutionProjectionService` 以 `ActorId` 为共享投影上下文键，同一 Actor 多次触发共享读模型与事件流。
+- `WorkflowExecutionProjectionService` 仅作为 facade，对外暴露统一端口；具体激活/释放/查询/sink 推送分别委托到 `Activation/Release/QueryReader/LiveSinkForwarder` 组件。
+- Application/Projection 编排类受 CI 体量守卫约束（非空行数与依赖数上限），避免职责反弹。
+- Projection 启动并发（`Ensure/Release`）由 `projection:{rootActorId}` 协调 Actor 串行裁决，不依赖进程内 `SemaphoreSlim`。
+- `AttachLiveSink/DetachLiveSink` 通过 `workflow-run:{actorId}:{commandId}` 事件流订阅/退订，不在 `WorkflowExecutionProjectionContext` 维护 sink 事实态。
+- CQRS 与 AGUI 复用同一输入事件流（统一 `ProjectionCoordinator`），通过不同 Projector 分支输出。
+- AGUI `runId` 优先使用 `correlationId`（命令维度），`threadId` 维持 actor 维度。
+- Workflow 能力执行状态查询统一由 Projection ReadModel 提供，不引入独立状态机层。
+- `/api/agents` 仅返回 `WorkflowGAgent`，避免混入其他能力 Actor。
+- workflow 文件加载为启动期 fail-fast：重复名称或未知 YAML 字段直接失败，不做静默覆盖。
+- Workflow 内建模块与扩展模块统一走 `IWorkflowModulePack` 注册；`WorkflowModuleFactory` 聚合创建并对同名模块冲突 fail-fast。
+
+## 7. Metadata 语义备注（防混淆）
+
+- `EventEnvelope.Metadata` 是包络级传输/追踪元信息，参与内部传播策略，不等同业务结果字段。
+- `StepCompletedEvent.Metadata` 是业务事件级元信息（如 `maker.*`、`connector.*`、`parallel.*`）。
+- Workflow ReadModel 记录的是 `StepCompletedEvent.Metadata`（`CompletionMetadata` 与 timeline `Data`）。
+- 实时输出链路当前仅保证 run/step 基本事件；`StepCompletedEvent.Metadata` 默认不直接透传到 `WorkflowRunEvent`。

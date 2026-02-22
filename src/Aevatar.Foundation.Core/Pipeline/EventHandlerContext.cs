@@ -15,11 +15,21 @@ namespace Aevatar.Foundation.Core.Pipeline;
 internal sealed class EventHandlerContext : IEventHandlerContext
 {
     private readonly IEventPublisher _publisher;
+    public EventEnvelope InboundEnvelope { get; }
 
     /// <summary>Builds context with agent, publisher, services, and logger.</summary>
-    public EventHandlerContext(IAgent agent, IEventPublisher publisher, IServiceProvider services, ILogger logger)
+    public EventHandlerContext(
+        IAgent agent,
+        IEventPublisher publisher,
+        IServiceProvider services,
+        ILogger logger,
+        EventEnvelope inboundEnvelope)
     {
-        Agent = agent; _publisher = publisher; Services = services; Logger = logger;
+        Agent = agent;
+        _publisher = publisher;
+        Services = services;
+        Logger = logger;
+        InboundEnvelope = inboundEnvelope;
     }
 
     /// <summary>Current agent ID.</summary>
@@ -37,5 +47,10 @@ internal sealed class EventHandlerContext : IEventHandlerContext
     /// <summary>Publishes an event to stream routing.</summary>
     public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
         CancellationToken ct = default) where TEvent : IMessage =>
-        _publisher.PublishAsync(evt, direction, ct);
+        _publisher.PublishAsync(evt, direction, ct, InboundEnvelope);
+
+    /// <summary>Sends an event directly to the target actor.</summary>
+    public Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
+        CancellationToken ct = default) where TEvent : IMessage =>
+        _publisher.SendToAsync(targetActorId, evt, ct, InboundEnvelope);
 }

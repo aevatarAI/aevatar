@@ -5,10 +5,11 @@
 
 using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions.Helpers;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Runtime.Routing;
-using Aevatar.Foundation.Runtime.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -20,13 +21,20 @@ public sealed class LocalActorRuntime : IActorRuntime
 {
     private readonly ConcurrentDictionary<string, LocalActor> _actors = new();
     private readonly IStreamProvider _streams;
+    private readonly IStreamLifecycleManager _streamLifecycleManager;
     private readonly IServiceProvider _services;
     private readonly ILogger<LocalActorRuntime> _logger;
 
     /// <summary>Creates local actor runtime.</summary>
-    public LocalActorRuntime(IStreamProvider streams, IServiceProvider services, ILogger<LocalActorRuntime>? logger = null)
+    public LocalActorRuntime(
+        IStreamProvider streams,
+        IServiceProvider services,
+        IStreamLifecycleManager streamLifecycleManager,
+        ILogger<LocalActorRuntime>? logger = null)
     {
-        _streams = streams; _services = services;
+        _streams = streams;
+        _services = services;
+        _streamLifecycleManager = streamLifecycleManager;
         _logger = logger ?? NullLogger<LocalActorRuntime>.Instance;
     }
 
@@ -41,8 +49,14 @@ public sealed class LocalActorRuntime : IActorRuntime
         var agent = CreateAgentInstance(agentType);
         var router = new EventRouter(actorId);
         var logger = _services.GetService<ILoggerFactory>()?.CreateLogger(agentType.Name) ?? NullLogger.Instance;
-        var publisher = new LocalActorPublisher(actorId, router, _streams);
-        var actor = new LocalActor(agent, actorId, router, _streams, logger);
+        var propagationPolicy = _services.GetService<IEnvelopePropagationPolicy>();
+        var publisher = new LocalActorPublisher(actorId, router, _streams, propagationPolicy);
+        var actor = new LocalActor(
+            agent,
+            actorId,
+            router,
+            _streams,
+            logger);
 
         InjectDependencies(agent, publisher, actorId, logger);
 
@@ -70,7 +84,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         if (!_actors.TryRemove(id, out var actor)) return;
         await actor.DeactivateAsync(ct);
         AgentMetrics.ActiveActors.Add(-1);
-        if (_streams is InMemoryStreamProvider msp) msp.RemoveStream(id);
+        _streamLifecycleManager.RemoveStream(id);
         var manifestStore = _services.GetService<IAgentManifestStore>();
         if (manifestStore != null) await manifestStore.DeleteAsync(id, ct);
         _logger.LogInformation("Actor {Id} destroyed", id);
@@ -79,19 +93,20 @@ public sealed class LocalActorRuntime : IActorRuntime
     /// <summary>Gets actor by ID.</summary>
     public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(_actors.GetValueOrDefault(id));
 
-    /// <summary>Gets all actors.</summary>
-    public Task<IReadOnlyList<IActor>> GetAllAsync() => Task.FromResult<IReadOnlyList<IActor>>(_actors.Values.ToList());
-
     /// <summary>Checks whether actor with specified ID exists.</summary>
     public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
 
-    /// <summary>Creates parent-child link: parent adds child, child subscribes to parent stream.</summary>
+    /// <summary>Creates parent-child link and registers stream-layer forwarding binding.</summary>
     public async Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
     {
         var parent = GetRequired(parentId);
         var child = GetRequired(childId);
         parent.AddChild(childId);
         await child.SubscribeToParentAsync(parentId, ct);
+        await _streams.GetStream(parentId).UpsertRelayAsync(
+            StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
+            ct);
+
         _logger.LogInformation("Link: {Parent} → {Child}", parentId, childId);
     }
 
@@ -101,7 +116,10 @@ public sealed class LocalActorRuntime : IActorRuntime
         if (!_actors.TryGetValue(childId, out var child)) return;
         var parentId = await child.GetParentIdAsync();
         if (parentId != null && _actors.TryGetValue(parentId, out var parent))
+        {
             parent.RemoveChild(childId);
+            await _streams.GetStream(parentId).RemoveRelayAsync(childId, ct);
+        }
         await child.UnsubscribeFromParentAsync();
     }
 

@@ -1,0 +1,5 @@
+syntax = "proto3";
+package aevatar.workflow;
+option csharp_namespace = "Aevatar.Workflow.Core";
+
+message WorkflowState { string workflow_yaml = 1; string workflow_name = 2; int32 version = 3; bool compiled = 4; string compilation_error = 5; int32 total_executions = 6; int32 successful_executions = 7; int32 failed_executions = 8; }

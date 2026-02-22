@@ -25,7 +25,7 @@ services.AddMEAIProviders(factory => factory
 
 ## 依赖
 
-- `Aevatar.AI.Core`
+- `Aevatar.AI.Abstractions`
 - `Microsoft.Extensions.AI`
 - `Microsoft.Extensions.AI.OpenAI`
 - `OpenAI`

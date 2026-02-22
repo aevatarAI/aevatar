@@ -25,7 +25,8 @@ public class HooksBddTests
     {
         var agent = new ThrowingAgent();
         agent.SetId("hook-2");
-        await agent.HandleEventAsync(TestHelper.Envelope(new IncrementEvent { Amount = 1 }));
+        var act = () => agent.HandleEventAsync(TestHelper.Envelope(new IncrementEvent { Amount = 1 }));
+        await act.Should().ThrowAsync<InvalidOperationException>();
 
         agent.LastException.Should().NotBeNull();
     }

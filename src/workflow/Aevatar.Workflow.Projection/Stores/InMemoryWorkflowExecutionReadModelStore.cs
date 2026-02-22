@@ -9,23 +9,23 @@ public sealed class InMemoryWorkflowExecutionReadModelStore
     : IProjectionReadModelStore<WorkflowExecutionReport, string>
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, WorkflowExecutionReport> _reports = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, WorkflowExecutionReport> _reportsByActorId = new(StringComparer.Ordinal);
 
     public Task UpsertAsync(WorkflowExecutionReport report, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         lock (_gate)
-            _reports[report.RunId] = CloneReport(report);
+            _reportsByActorId[report.RootActorId] = CloneReport(report);
         return Task.CompletedTask;
     }
 
-    public Task MutateAsync(string runId, Action<WorkflowExecutionReport> mutate, CancellationToken ct = default)
+    public Task MutateAsync(string actorId, Action<WorkflowExecutionReport> mutate, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            if (!_reports.TryGetValue(runId, out var report))
-                throw new WorkflowExecutionReadModelNotFoundException(runId);
+            if (!_reportsByActorId.TryGetValue(actorId, out var report))
+                throw new WorkflowExecutionReadModelNotFoundException(actorId);
 
             mutate(report);
         }
@@ -33,12 +33,12 @@ public sealed class InMemoryWorkflowExecutionReadModelStore
         return Task.CompletedTask;
     }
 
-    public Task<WorkflowExecutionReport?> GetAsync(string runId, CancellationToken ct = default)
+    public Task<WorkflowExecutionReport?> GetAsync(string actorId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            if (!_reports.TryGetValue(runId, out var report))
+            if (!_reportsByActorId.TryGetValue(actorId, out var report))
                 return Task.FromResult<WorkflowExecutionReport?>(null);
 
             return Task.FromResult<WorkflowExecutionReport?>(CloneReport(report));
@@ -51,7 +51,7 @@ public sealed class InMemoryWorkflowExecutionReadModelStore
         var boundedTake = Math.Clamp(take, 1, 200);
         lock (_gate)
         {
-            var items = _reports.Values
+            var items = _reportsByActorId.Values
                 .OrderByDescending(x => x.StartedAt)
                 .Take(boundedTake)
                 .Select(CloneReport)
@@ -68,7 +68,9 @@ public sealed class InMemoryWorkflowExecutionReadModelStore
         CompletionStatus = source.CompletionStatus,
         WorkflowName = source.WorkflowName,
         RootActorId = source.RootActorId,
-        RunId = source.RunId,
+        CommandId = source.CommandId,
+        StateVersion = source.StateVersion,
+        LastEventId = source.LastEventId,
         StartedAt = source.StartedAt,
         EndedAt = source.EndedAt,
         DurationMs = source.DurationMs,
@@ -87,7 +89,6 @@ public sealed class InMemoryWorkflowExecutionReadModelStore
     {
         StepId = source.StepId,
         StepType = source.StepType,
-        RunId = source.RunId,
         TargetRole = source.TargetRole,
         RequestedAt = source.RequestedAt,
         CompletedAt = source.CompletedAt,

@@ -1,9 +1,10 @@
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
-using Aevatar.Workflow.Projection.RunIdResolvers;
 using Aevatar.Workflow.Projection.Stores;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
@@ -32,19 +33,29 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
+        services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
 
         services.TryAddSingleton<IProjectionReadModelStore<WorkflowExecutionReport, string>, InMemoryWorkflowExecutionReadModelStore>();
-        services.TryAddSingleton<IProjectionRunIdGenerator, GuidProjectionRunIdGenerator>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowExecutionRunIdResolver, WorkflowCoreRunIdResolver>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowExecutionRunIdResolver, AIChatSessionRunIdResolver>());
         RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
         services.TryAddSingleton<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        services.TryAddSingleton<IProjectionCompletionDetector<WorkflowExecutionProjectionContext>, WorkflowCompletedEventProjectionCompletionDetector<WorkflowExecutionProjectionContext>>();
-        services.TryAddSingleton<IProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>, ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
+        services.TryAddSingleton<IProjectionDispatcher<WorkflowExecutionProjectionContext>, ProjectionDispatcher<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
+        services.TryAddSingleton<IProjectionDispatchFailureReporter<WorkflowExecutionProjectionContext>, WorkflowProjectionDispatchFailureReporter>();
+        services.TryAddSingleton<IProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>, ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>>();
         services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
+        services.TryAddSingleton<IProjectionOwnershipCoordinator, ActorProjectionOwnershipCoordinator>();
+        services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowRunEvent>, WorkflowRunEventSessionCodec>();
+        services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEvent>, ProjectionSessionEventHub<WorkflowRunEvent>>();
+        services.TryAddSingleton<IWorkflowProjectionLeaseManager, WorkflowProjectionLeaseManager>();
+        services.TryAddSingleton<IWorkflowProjectionActivationService, WorkflowProjectionActivationService>();
+        services.TryAddSingleton<IWorkflowProjectionReleaseService, WorkflowProjectionReleaseService>();
+        services.TryAddSingleton<IWorkflowProjectionSinkSubscriptionManager, WorkflowProjectionSinkSubscriptionManager>();
+        services.TryAddSingleton<IWorkflowProjectionSinkFailurePolicy, WorkflowProjectionSinkFailurePolicy>();
+        services.TryAddSingleton<IWorkflowProjectionLiveSinkForwarder, WorkflowProjectionLiveSinkForwarder>();
+        services.TryAddSingleton<IWorkflowProjectionReadModelUpdater, WorkflowProjectionReadModelUpdater>();
+        services.TryAddSingleton<IWorkflowProjectionQueryReader, WorkflowProjectionQueryReader>();
         services.TryAddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
         services.TryAddSingleton<IWorkflowExecutionProjectionPort, WorkflowExecutionProjectionService>();
         return services;
@@ -104,5 +115,14 @@ public static class ServiceCollectionExtensions
             WorkflowExecutionProjectorContract,
             ProjectionReducerContract,
             ProjectionProjectorContract);
+    }
+
+    private sealed class PassthroughEventDeduplicator : IEventDeduplicator
+    {
+        public Task<bool> TryRecordAsync(string eventId)
+        {
+            _ = eventId;
+            return Task.FromResult(true);
+        }
     }
 }

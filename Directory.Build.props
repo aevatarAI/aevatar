@@ -13,4 +13,10 @@
     <Protobuf_Protoc Condition="'$(OS)' == 'Unix' And '$(Protobuf_Protoc)' == '' And Exists('/usr/local/bin/protoc')">/usr/local/bin/protoc</Protobuf_Protoc>
     <Protobuf_Protoc Condition="'$(OS)' == 'Unix' And '$(Protobuf_Protoc)' == '' And Exists('/usr/bin/protoc')">/usr/bin/protoc</Protobuf_Protoc>
   </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsTestProject)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)test/xunit.runner.json"
+          Link="xunit.runner.json"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

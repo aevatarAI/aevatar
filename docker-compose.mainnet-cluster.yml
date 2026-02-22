@@ -1,0 +1,93 @@
+services:
+  mainnet-node1:
+    build:
+      context: .
+      dockerfile: src/Aevatar.Mainnet.Host.Api/Dockerfile
+    container_name: aevatar-mainnet-node1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Distributed
+      ASPNETCORE_URLS: http://+:8080
+      AEVATAR_ActorRuntime__Provider: Orleans
+      AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
+      AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
+      AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events
+      AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup: aevatar-mainnet-host-api
+      AEVATAR_Orleans__ClusteringMode: Development
+      AEVATAR_Orleans__ClusterId: aevatar-mainnet-cluster
+      AEVATAR_Orleans__ServiceId: aevatar-mainnet-host-api
+      AEVATAR_Orleans__SiloHost: mainnet-node1
+      AEVATAR_Orleans__PrimarySiloEndpoint: ""
+      AEVATAR_Orleans__SiloPort: 11111
+      AEVATAR_Orleans__GatewayPort: 30000
+      AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
+      AEVATAR_Orleans__QueueCount: 8
+      AEVATAR_Orleans__QueueCacheSize: 4096
+    ports:
+      - "19081:8080"
+    restart: unless-stopped
+
+  mainnet-node2:
+    build:
+      context: .
+      dockerfile: src/Aevatar.Mainnet.Host.Api/Dockerfile
+    container_name: aevatar-mainnet-node2
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Distributed
+      ASPNETCORE_URLS: http://+:8080
+      AEVATAR_ActorRuntime__Provider: Orleans
+      AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
+      AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
+      AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events
+      AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup: aevatar-mainnet-host-api
+      AEVATAR_Orleans__ClusteringMode: Development
+      AEVATAR_Orleans__ClusterId: aevatar-mainnet-cluster
+      AEVATAR_Orleans__ServiceId: aevatar-mainnet-host-api
+      AEVATAR_Orleans__SiloHost: mainnet-node2
+      AEVATAR_Orleans__PrimarySiloEndpoint: mainnet-node1:11111
+      AEVATAR_Orleans__SiloPort: 11111
+      AEVATAR_Orleans__GatewayPort: 30000
+      AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
+      AEVATAR_Orleans__QueueCount: 8
+      AEVATAR_Orleans__QueueCacheSize: 4096
+    ports:
+      - "19082:8080"
+    restart: unless-stopped
+
+  mainnet-node3:
+    build:
+      context: .
+      dockerfile: src/Aevatar.Mainnet.Host.Api/Dockerfile
+    container_name: aevatar-mainnet-node3
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Distributed
+      ASPNETCORE_URLS: http://+:8080
+      AEVATAR_ActorRuntime__Provider: Orleans
+      AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
+      AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
+      AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events
+      AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup: aevatar-mainnet-host-api
+      AEVATAR_Orleans__ClusteringMode: Development
+      AEVATAR_Orleans__ClusterId: aevatar-mainnet-cluster
+      AEVATAR_Orleans__ServiceId: aevatar-mainnet-host-api
+      AEVATAR_Orleans__SiloHost: mainnet-node3
+      AEVATAR_Orleans__PrimarySiloEndpoint: mainnet-node1:11111
+      AEVATAR_Orleans__SiloPort: 11111
+      AEVATAR_Orleans__GatewayPort: 30000
+      AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
+      AEVATAR_Orleans__QueueCount: 8
+      AEVATAR_Orleans__QueueCacheSize: 4096
+    ports:
+      - "19083:8080"
+    restart: unless-stopped

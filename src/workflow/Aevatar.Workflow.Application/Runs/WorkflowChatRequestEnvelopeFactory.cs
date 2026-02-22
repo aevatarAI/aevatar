@@ -1,29 +1,36 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Runs;
 
-internal sealed class WorkflowChatRequestEnvelopeFactory : IWorkflowChatRequestEnvelopeFactory
+internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>
 {
-    public EventEnvelope Create(string prompt, string runId)
+    public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
     {
+        var sessionId = context.Metadata.TryGetValue(WorkflowRunCommandMetadataKeys.SessionId, out var metadataSessionId) &&
+                        !string.IsNullOrWhiteSpace(metadataSessionId)
+            ? metadataSessionId
+            : context.CorrelationId;
+
         var chatRequest = new ChatRequestEvent
         {
-            Prompt = prompt,
-            SessionId = CreateInternalChatSessionId(),
+            Prompt = command.Prompt,
+            SessionId = sessionId,
         };
-        chatRequest.Metadata[ChatRequestMetadataKeys.RunId] = runId;
 
-        return new EventEnvelope
+        var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(chatRequest),
             PublisherId = "api",
             Direction = EventDirection.Self,
+            CorrelationId = context.CorrelationId,
+            TargetActorId = context.TargetId,
         };
+        return envelope;
     }
-
-    private static string CreateInternalChatSessionId() => $"chat-{Guid.NewGuid():N}";
 }

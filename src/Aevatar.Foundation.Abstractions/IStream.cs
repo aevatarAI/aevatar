@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Google.Protobuf;
+using Aevatar.Foundation.Abstractions.Streaming;
 
 namespace Aevatar.Foundation.Abstractions;
 
@@ -23,4 +24,13 @@ public interface IStream
     /// <typeparam name="T">Message type, must implement Protobuf IMessage.</typeparam>
     Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler,
         CancellationToken ct = default) where T : IMessage, new();
+
+    /// <summary>Upserts one relay binding with current stream as source.</summary>
+    Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default);
+
+    /// <summary>Removes one relay binding whose source is current stream.</summary>
+    Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default);
+
+    /// <summary>Lists relay bindings whose source is current stream.</summary>
+    Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default);
 }

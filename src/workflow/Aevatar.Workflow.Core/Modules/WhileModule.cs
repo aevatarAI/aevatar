@@ -45,7 +45,6 @@ public sealed class WhileModule : IEventModule
             {
                 StepId = $"{request.StepId}_iter_0",
                 StepType = subStepType,
-                RunId = request.RunId,
                 Input = request.Input,
                 TargetRole = request.TargetRole,
             }, EventDirection.Down, ct);
@@ -73,7 +72,6 @@ public sealed class WhileModule : IEventModule
                 {
                     StepId = $"{whileStepId}_iter_{iteration}",
                     StepType = "llm_call",
-                    RunId = completed.RunId,
                     Input = completed.Output,
                 }, EventDirection.Down, ct);
             }
@@ -84,7 +82,6 @@ public sealed class WhileModule : IEventModule
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = whileStepId,
-                    RunId = completed.RunId,
                     Success = true,
                     Output = completed.Output,
                 }, EventDirection.Self, ct);

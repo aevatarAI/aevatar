@@ -1,9 +1,10 @@
+using Aevatar.Foundation.Projection.ReadModels;
+
 namespace Aevatar.Workflow.Projection.ReadModels;
 
 public enum WorkflowExecutionProjectionScope
 {
     ActorShared = 0,
-    RunIsolated = 1,
 }
 
 public enum WorkflowExecutionTopologySource
@@ -27,16 +28,15 @@ public enum WorkflowExecutionCompletionStatus
 /// Read model for one workflow execution.
 /// </summary>
 public sealed class WorkflowExecutionReport
+    : AevatarReadModelBase,
+      IHasProjectionTimeline,
+      IHasProjectionRoleReplies
 {
     public string ReportVersion { get; set; } = "1.0";
     public WorkflowExecutionProjectionScope ProjectionScope { get; set; } = WorkflowExecutionProjectionScope.ActorShared;
     public WorkflowExecutionTopologySource TopologySource { get; set; } = WorkflowExecutionTopologySource.RuntimeSnapshot;
     public WorkflowExecutionCompletionStatus CompletionStatus { get; set; } = WorkflowExecutionCompletionStatus.Unknown;
     public string WorkflowName { get; set; } = "";
-    public string RootActorId { get; set; } = "";
-    public string RunId { get; set; } = "";
-    public DateTimeOffset StartedAt { get; set; }
-    public DateTimeOffset EndedAt { get; set; }
     public double DurationMs { get; set; }
     public bool? Success { get; set; }
     public string Input { get; set; } = "";
@@ -47,6 +47,37 @@ public sealed class WorkflowExecutionReport
     public List<WorkflowExecutionRoleReply> RoleReplies { get; set; } = [];
     public List<WorkflowExecutionTimelineEvent> Timeline { get; set; } = [];
     public WorkflowExecutionSummary Summary { get; set; } = new();
+
+    public void AddTimeline(ProjectionTimelineEvent timelineEvent)
+    {
+        ArgumentNullException.ThrowIfNull(timelineEvent);
+
+        Timeline.Add(new WorkflowExecutionTimelineEvent
+        {
+            Timestamp = timelineEvent.Timestamp,
+            Stage = timelineEvent.Stage,
+            Message = timelineEvent.Message,
+            AgentId = timelineEvent.AgentId,
+            StepId = timelineEvent.StepId,
+            StepType = timelineEvent.StepType,
+            EventType = timelineEvent.EventType,
+            Data = timelineEvent.Data.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+        });
+    }
+
+    public void AddRoleReply(ProjectionRoleReply roleReply)
+    {
+        ArgumentNullException.ThrowIfNull(roleReply);
+
+        RoleReplies.Add(new WorkflowExecutionRoleReply
+        {
+            Timestamp = roleReply.Timestamp,
+            RoleId = roleReply.RoleId,
+            SessionId = roleReply.SessionId,
+            Content = roleReply.Content,
+            ContentLength = roleReply.ContentLength,
+        });
+    }
 }
 
 public sealed class WorkflowExecutionSummary
@@ -62,7 +93,6 @@ public sealed class WorkflowExecutionStepTrace
 {
     public string StepId { get; set; } = "";
     public string StepType { get; set; } = "";
-    public string RunId { get; set; } = "";
     public string TargetRole { get; set; } = "";
     public DateTimeOffset? RequestedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }

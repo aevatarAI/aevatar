@@ -5,9 +5,7 @@ namespace Aevatar.Workflow.Projection.Reducers;
 
 public sealed class StartWorkflowEventReducer : WorkflowExecutionEventReducerBase<StartWorkflowEvent>
 {
-    public override int Order => 0;
-
-    protected override void Reduce(
+    protected override bool Reduce(
         WorkflowExecutionReport report,
         WorkflowExecutionProjectionContext context,
         EventEnvelope envelope,
@@ -20,10 +18,12 @@ public sealed class StartWorkflowEventReducer : WorkflowExecutionEventReducerBas
             report,
             now,
             "workflow.start",
-            $"run={evt.RunId}",
+            $"command={report.CommandId}",
             envelope.PublisherId,
             null,
             null,
             envelope.Payload?.TypeUrl ?? "");
+
+        return true;
     }
 }

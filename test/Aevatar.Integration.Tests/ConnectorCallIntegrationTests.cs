@@ -4,6 +4,7 @@ using Aevatar.AI.Core;
 using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Runtime.DependencyInjection;
@@ -186,8 +187,19 @@ public class ConnectorCallIntegrationTests
         string input)
     {
         var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-root-" + Guid.NewGuid().ToString("N")[..8]);
-        var wf = (WorkflowGAgent)actor.Agent;
-        wf.ConfigureWorkflow(workflowYaml, "connector_flow");
+        await actor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new ConfigureWorkflowEvent
+            {
+                WorkflowYaml = workflowYaml,
+                WorkflowName = "connector_flow",
+            }),
+            PublisherId = "test",
+            Direction = EventDirection.Self,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        });
 
         var stream = provider.GetRequiredService<IStreamProvider>().GetStream(actor.Id);
         var stepCompletions = new List<StepCompletedEvent>();

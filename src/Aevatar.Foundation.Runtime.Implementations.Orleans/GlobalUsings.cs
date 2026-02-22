@@ -1,0 +1,13 @@
+global using Aevatar.Foundation.Abstractions;
+global using Aevatar.Foundation.Abstractions.Context;
+global using Aevatar.Foundation.Abstractions.Deduplication;
+global using Aevatar.Foundation.Abstractions.Persistence;
+global using Aevatar.Foundation.Abstractions.Propagation;
+global using Aevatar.Foundation.Core;
+global using Aevatar.Foundation.Core.Propagation;
+global using Aevatar.Foundation.Runtime.Persistence;
+global using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
+global using Google.Protobuf;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.DependencyInjection.Extensions;
+global using Orleans;

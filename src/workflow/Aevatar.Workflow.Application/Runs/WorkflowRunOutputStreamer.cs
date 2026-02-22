@@ -1,30 +1,47 @@
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
 
-public sealed class WorkflowRunOutputStreamer : IWorkflowRunOutputStreamer
+public sealed class WorkflowRunOutputStreamer
+    : IWorkflowRunOutputStreamer,
+      IEventOutputStream<WorkflowRunEvent, WorkflowOutputFrame>,
+      IEventFrameMapper<WorkflowRunEvent, WorkflowOutputFrame>
 {
     public async Task StreamAsync(
         IWorkflowRunEventSink sink,
-        string runId,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default)
     {
-        await foreach (var evt in sink.ReadAllAsync(ct))
+        await PumpAsync(
+            sink.ReadAllAsync(ct),
+            emitAsync,
+            IsTerminal,
+            ct);
+    }
+
+    public async Task PumpAsync(
+        IAsyncEnumerable<WorkflowRunEvent> events,
+        Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+        Func<WorkflowRunEvent, bool>? shouldStop = null,
+        CancellationToken ct = default)
+    {
+        await foreach (var evt in events.WithCancellation(ct))
         {
-            var frame = WorkflowOutputFrameMapper.Map(evt);
-            await emitAsync(frame, ct);
-            if (IsTerminalEventForRun(evt, runId))
+            await emitAsync(Map(evt), ct);
+            if (shouldStop?.Invoke(evt) == true)
                 break;
         }
     }
 
-    private static bool IsTerminalEventForRun(WorkflowRunEvent evt, string runId)
+    public WorkflowOutputFrame Map(WorkflowRunEvent evt) => WorkflowOutputFrameMapper.Map(evt);
+
+    private static bool IsTerminal(WorkflowRunEvent evt)
     {
         return evt switch
         {
-            WorkflowRunFinishedEvent finished => string.Equals(finished.RunId, runId, StringComparison.Ordinal),
-            WorkflowRunErrorEvent error => string.Equals(error.RunId, runId, StringComparison.Ordinal),
+            WorkflowRunFinishedEvent => true,
+            WorkflowRunErrorEvent => true,
             _ => false,
         };
     }

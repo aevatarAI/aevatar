@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+**/.DS_Store
+**/.idea/
+**/.vscode/
+**/.vs/
+**/TestResults/
+.git/
+.gitignore
+README.md
+docs/
+demos/
+tools/

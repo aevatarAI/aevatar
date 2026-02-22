@@ -5,9 +5,7 @@ namespace Aevatar.Workflow.Projection.Reducers;
 
 public sealed class StepCompletedEventReducer : WorkflowExecutionEventReducerBase<StepCompletedEvent>
 {
-    public override int Order => 20;
-
-    protected override void Reduce(
+    protected override bool Reduce(
         WorkflowExecutionReport report,
         WorkflowExecutionProjectionContext context,
         EventEnvelope envelope,
@@ -15,9 +13,6 @@ public sealed class StepCompletedEventReducer : WorkflowExecutionEventReducerBas
         DateTimeOffset now)
     {
         var step = WorkflowExecutionProjectionMutations.GetOrCreateStep(report, evt.StepId);
-        if (string.IsNullOrWhiteSpace(step.RunId))
-            step.RunId = evt.RunId;
-
         step.CompletedAt = now;
         step.Success = evt.Success;
         step.Error = evt.Error ?? "";
@@ -35,5 +30,7 @@ public sealed class StepCompletedEventReducer : WorkflowExecutionEventReducerBas
             step.StepType,
             envelope.Payload?.TypeUrl ?? "",
             step.CompletionMetadata);
+
+        return true;
     }
 }

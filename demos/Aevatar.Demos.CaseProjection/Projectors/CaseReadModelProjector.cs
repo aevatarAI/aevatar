@@ -14,15 +14,12 @@ public sealed class CaseReadModelProjector
     {
         _store = store;
         _reducersByType = reducers
-            .OrderBy(x => x.Order)
             .GroupBy(x => x.EventTypeUrl, StringComparer.Ordinal)
             .ToDictionary(
                 x => x.Key,
                 x => (IReadOnlyList<IProjectionEventReducer<CaseProjectionReadModel, CaseProjectionContext>>)x.ToList(),
                 StringComparer.Ordinal);
     }
-
-    public int Order => 0;
 
     public ValueTask InitializeAsync(CaseProjectionContext context, CancellationToken ct = default)
     {
@@ -53,8 +50,12 @@ public sealed class CaseReadModelProjector
         var now = ResolveEventTimestamp(envelope);
         return new ValueTask(_store.MutateAsync(context.RunId, report =>
         {
+            var mutated = false;
             foreach (var reducer in reducers)
-                reducer.Reduce(report, context, envelope, now);
+                mutated |= reducer.Reduce(report, context, envelope, now);
+
+            if (!mutated)
+                return;
 
             CaseProjectionMutations.RefreshDerivedFields(report);
         }, ct));
