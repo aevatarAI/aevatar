@@ -1,10 +1,12 @@
 using System.Net;
 using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans;
@@ -69,6 +71,67 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
             (await grain.IsInitializedAsync()).Should().BeTrue();
             (await grain.GetParentAsync()).Should().Be("parent-garnet");
             (await grain.GetChildrenAsync()).Should().BeEquivalentTo("child-garnet-1", "child-garnet-2");
+
+            await grain.PurgeAsync();
+            (await grain.IsInitializedAsync()).Should().BeFalse();
+        }
+        finally
+        {
+            await secondHost.StopAsync();
+            secondHost.Dispose();
+        }
+    }
+
+    [GarnetIntegrationFact]
+    public async Task StatefulAgentSnapshot_ShouldPersistAcrossSiloRestart_WhenUsingGarnetStorage()
+    {
+        var garnetConnectionString = RequireGarnetConnectionString();
+        var actorId = $"stateful-actor-{Guid.NewGuid():N}";
+        var serviceId = $"aevatar-orleans-garnet-stateful-service-{Guid.NewGuid():N}";
+        var clusterId = $"aevatar-orleans-garnet-stateful-cluster-{Guid.NewGuid():N}";
+        var agentTypeName = typeof(RecordingGarnetStatefulAgent).AssemblyQualifiedName!;
+
+        var firstSiloPort = ReserveTcpPort();
+        var firstGatewayPort = ReserveTcpPort();
+        var firstHost = await StartSiloHostAsync(
+            garnetConnectionString,
+            clusterId,
+            serviceId,
+            firstSiloPort,
+            firstGatewayPort);
+
+        try
+        {
+            var grainFactory = firstHost.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+
+            (await grain.InitializeAgentAsync(agentTypeName)).Should().BeTrue();
+            (await grain.GetDescriptionAsync()).Should().Be("activation-count:1");
+
+            await grain.DeactivateAsync();
+        }
+        finally
+        {
+            await firstHost.StopAsync();
+            firstHost.Dispose();
+        }
+
+        var secondSiloPort = ReserveTcpPort();
+        var secondGatewayPort = ReserveTcpPort();
+        var secondHost = await StartSiloHostAsync(
+            garnetConnectionString,
+            clusterId,
+            serviceId,
+            secondSiloPort,
+            secondGatewayPort);
+
+        try
+        {
+            var grainFactory = secondHost.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+
+            (await grain.IsInitializedAsync()).Should().BeTrue();
+            (await grain.GetDescriptionAsync()).Should().Be("activation-count:2");
 
             await grain.PurgeAsync();
             (await grain.IsInitializedAsync()).Should().BeFalse();
@@ -147,5 +210,17 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class RecordingGarnetStatefulAgent : GAgentBase<Int32Value>
+    {
+        protected override Task OnActivateAsync(CancellationToken ct)
+        {
+            State.Value += 1;
+            return Task.CompletedTask;
+        }
+
+        public override Task<string> GetDescriptionAsync() =>
+            Task.FromResult($"activation-count:{State.Value}");
     }
 }
