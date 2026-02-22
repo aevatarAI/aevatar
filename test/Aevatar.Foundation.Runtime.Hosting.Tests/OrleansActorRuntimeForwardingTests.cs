@@ -74,9 +74,21 @@ public sealed class OrleansActorRuntimeForwardingTests
         (await registry.ListBySourceAsync("parent", CancellationToken.None)).Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task DestroyAsync_ShouldRemoveStreamFromLifecycleManager()
+    {
+        var lifecycleManager = new RecordingStreamLifecycleManager();
+        var runtime = CreateRuntime(out _, out _, lifecycleManager);
+
+        await runtime.DestroyAsync("actor-1");
+
+        lifecycleManager.RemovedStreamActorIds.Should().ContainSingle("actor-1");
+    }
+
     private static OrleansActorRuntime CreateRuntime(
         out InMemoryStreamForwardingRegistry registry,
-        out Dictionary<string, RecordingRuntimeActorGrain> grains)
+        out Dictionary<string, RecordingRuntimeActorGrain> grains,
+        IStreamLifecycleManager? streamLifecycleManager = null)
     {
         var grainMap = new Dictionary<string, RecordingRuntimeActorGrain>(StringComparer.Ordinal);
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
@@ -97,7 +109,8 @@ public sealed class OrleansActorRuntimeForwardingTests
             grainFactory,
             new InMemoryManifestStore(),
             registry,
-            new InMemoryStreamProvider());
+            new InMemoryStreamProvider(),
+            streamLifecycleManager);
     }
 
     private class GrainFactoryProxy : DispatchProxy
@@ -193,6 +206,16 @@ public sealed class OrleansActorRuntimeForwardingTests
             ParentId = null;
             Children.Clear();
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingStreamLifecycleManager : IStreamLifecycleManager
+    {
+        public List<string> RemovedStreamActorIds { get; } = [];
+
+        public void RemoveStream(string actorId)
+        {
+            RemovedStreamActorIds.Add(actorId);
         }
     }
 }

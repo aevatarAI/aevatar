@@ -11,17 +11,20 @@ internal sealed class OrleansKafkaQueueAdapter : IQueueAdapter
     private readonly string _topicName;
     private readonly IKafkaEnvelopeTransport _transport;
     private readonly IStreamQueueMapper _queueMapper;
+    private readonly string _actorEventNamespace;
 
     public OrleansKafkaQueueAdapter(
         string providerName,
         string topicName,
         IKafkaEnvelopeTransport transport,
-        IStreamQueueMapper queueMapper)
+        IStreamQueueMapper queueMapper,
+        string actorEventNamespace)
     {
         _providerName = providerName;
         _topicName = topicName;
         _transport = transport;
         _queueMapper = queueMapper;
+        _actorEventNamespace = actorEventNamespace;
     }
 
     public string Name => _providerName;
@@ -67,5 +70,10 @@ internal sealed class OrleansKafkaQueueAdapter : IQueueAdapter
     }
 
     public IQueueAdapterReceiver CreateReceiver(QueueId queueId) =>
-        new OrleansKafkaQueueAdapterReceiver(queueId, _queueMapper, _transport, _topicName);
+        new OrleansKafkaQueueAdapterReceiver(
+            queueId,
+            _queueMapper,
+            _transport,
+            _topicName,
+            _actorEventNamespace);
 }

@@ -5,6 +5,7 @@ using Orleans.Streams;
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 
 public sealed class OrleansStreamProviderAdapter : Aevatar.Foundation.Abstractions.IStreamProvider
+    , IStreamCacheManager
 {
     private readonly IClusterClient _clusterClient;
     private readonly AevatarOrleansRuntimeOptions _options;
@@ -27,5 +28,11 @@ public sealed class OrleansStreamProviderAdapter : Aevatar.Foundation.Abstractio
             var provider = _clusterClient.GetStreamProvider(_options.StreamProviderName);
             return new OrleansActorStream(id, _options.ActorEventNamespace, provider);
         });
+    }
+
+    public void RemoveStream(string actorId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        _streams.TryRemove(actorId, out _);
     }
 }

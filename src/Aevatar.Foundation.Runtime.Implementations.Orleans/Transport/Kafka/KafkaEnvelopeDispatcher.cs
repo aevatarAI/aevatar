@@ -1,9 +1,18 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.Kafka;
 
 internal sealed class KafkaEnvelopeDispatcher
 {
     private readonly Lock _handlersLock = new();
     private volatile Func<KafkaEnvelopeRecord, Task>[] _handlers = [];
+    private readonly ILogger<KafkaEnvelopeDispatcher> _logger;
+
+    public KafkaEnvelopeDispatcher(ILogger<KafkaEnvelopeDispatcher>? logger = null)
+    {
+        _logger = logger ?? NullLogger<KafkaEnvelopeDispatcher>.Instance;
+    }
 
     public Task<IAsyncDisposable> SubscribeAsync(Func<KafkaEnvelopeRecord, Task> handler)
     {
@@ -23,6 +32,8 @@ internal sealed class KafkaEnvelopeDispatcher
 
     public async Task DispatchAsync(KafkaEnvelopeRecord record)
     {
+        ArgumentNullException.ThrowIfNull(record);
+
         var handlers = _handlers;
         if (handlers.Length == 0)
             return;
@@ -31,7 +42,7 @@ internal sealed class KafkaEnvelopeDispatcher
         foreach (var handler in handlers)
         {
             tasks ??= new List<Task>(handlers.Length);
-            tasks.Add(DispatchOneAsync(handler, record));
+            tasks.Add(DispatchOneAsyncWithLogging(handler, record));
         }
 
         if (tasks is { Count: > 0 })
@@ -40,13 +51,23 @@ internal sealed class KafkaEnvelopeDispatcher
 
     private static async Task DispatchOneAsync(Func<KafkaEnvelopeRecord, Task> handler, KafkaEnvelopeRecord record)
     {
+        await handler(record);
+    }
+
+    private async Task DispatchOneAsyncWithLogging(Func<KafkaEnvelopeRecord, Task> handler, KafkaEnvelopeRecord record)
+    {
         try
         {
-            await handler(record);
+            await DispatchOneAsync(handler, record);
         }
-        catch
+        catch (Exception ex)
         {
-            // best-effort dispatch
+            _logger.LogError(
+                ex,
+                "Kafka envelope dispatch failed for stream {StreamNamespace}/{StreamId}.",
+                record.StreamNamespace,
+                record.StreamId);
+            throw;
         }
     }
 

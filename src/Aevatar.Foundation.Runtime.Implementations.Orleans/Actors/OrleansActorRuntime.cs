@@ -11,6 +11,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
     private readonly IAgentManifestStore _manifestStore;
     private readonly IStreamForwardingRegistry _streamForwardingRegistry;
     private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
+    private readonly IStreamLifecycleManager _streamLifecycleManager;
     private readonly ILogger<OrleansActorRuntime> _logger;
 
     public OrleansActorRuntime(
@@ -18,12 +19,14 @@ public sealed class OrleansActorRuntime : IActorRuntime
         IAgentManifestStore manifestStore,
         IStreamForwardingRegistry streamForwardingRegistry,
         Aevatar.Foundation.Abstractions.IStreamProvider streams,
+        IStreamLifecycleManager? streamLifecycleManager = null,
         ILogger<OrleansActorRuntime>? logger = null)
     {
         _grainFactory = grainFactory;
         _manifestStore = manifestStore;
         _streamForwardingRegistry = streamForwardingRegistry;
         _streams = streams;
+        _streamLifecycleManager = streamLifecycleManager ?? NullStreamLifecycleManager.Instance;
         _logger = logger ?? NullLogger<OrleansActorRuntime>.Instance;
     }
 
@@ -76,6 +79,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
         await grain.PurgeAsync();
         await grain.DeactivateAsync();
 
+        _streamLifecycleManager.RemoveStream(id);
         await _manifestStore.DeleteAsync(id, ct);
         _logger.LogInformation("Actor {Id} destroyed via Orleans runtime", id);
     }
@@ -127,4 +131,14 @@ public sealed class OrleansActorRuntime : IActorRuntime
 
     public Task RestoreAllAsync(CancellationToken ct = default) =>
         Task.CompletedTask;
+
+    private sealed class NullStreamLifecycleManager : IStreamLifecycleManager
+    {
+        public static NullStreamLifecycleManager Instance { get; } = new();
+
+        public void RemoveStream(string actorId)
+        {
+            _ = actorId;
+        }
+    }
 }

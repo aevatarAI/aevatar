@@ -63,7 +63,7 @@ public static class ServiceCollectionExtensions
 
         services.Replace(ServiceDescriptor.Singleton(options));
         services.Replace(ServiceDescriptor.Singleton<Aevatar.Foundation.Abstractions.IStreamProvider, MassTransitKafkaStreamProvider>());
-        services.Replace(ServiceDescriptor.Singleton<IStreamLifecycleManager, NoOpStreamLifecycleManager>());
+        services.Replace(ServiceDescriptor.Singleton<IStreamLifecycleManager, StreamProviderLifecycleManager>());
         return services;
     }
 
@@ -72,7 +72,7 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.Replace(ServiceDescriptor.Singleton<Aevatar.Foundation.Abstractions.IStreamProvider, OrleansStreamProviderAdapter>());
-        services.Replace(ServiceDescriptor.Singleton<IStreamLifecycleManager, NoOpStreamLifecycleManager>());
+        services.Replace(ServiceDescriptor.Singleton<IStreamLifecycleManager, StreamProviderLifecycleManager>());
         return services;
     }
 }

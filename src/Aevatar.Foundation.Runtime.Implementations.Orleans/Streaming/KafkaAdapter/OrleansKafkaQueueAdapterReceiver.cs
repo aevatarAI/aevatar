@@ -12,6 +12,7 @@ internal sealed class OrleansKafkaQueueAdapterReceiver : IQueueAdapterReceiver
     private readonly IStreamQueueMapper _queueMapper;
     private readonly IKafkaEnvelopeTransport _transport;
     private readonly string _topicName;
+    private readonly string _actorEventNamespace;
     private readonly ConcurrentQueue<IBatchContainer> _messages = new();
     private long _sequence;
     private IAsyncDisposable? _subscription;
@@ -20,12 +21,15 @@ internal sealed class OrleansKafkaQueueAdapterReceiver : IQueueAdapterReceiver
         QueueId queueId,
         IStreamQueueMapper queueMapper,
         IKafkaEnvelopeTransport transport,
-        string topicName)
+        string topicName,
+        string actorEventNamespace)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorEventNamespace);
         _queueId = queueId;
         _queueMapper = queueMapper;
         _transport = transport;
         _topicName = topicName;
+        _actorEventNamespace = actorEventNamespace;
     }
 
     public async Task Initialize(TimeSpan timeout)
@@ -37,8 +41,7 @@ internal sealed class OrleansKafkaQueueAdapterReceiver : IQueueAdapterReceiver
             if (record.Payload is not { Length: > 0 })
                 return;
 
-            if (!string.Equals(record.StreamNamespace, OrleansRuntimeConstants.ActorEventStreamNamespace, StringComparison.Ordinal) &&
-                !record.StreamNamespace.StartsWith("aevatar.", StringComparison.Ordinal))
+            if (!string.Equals(record.StreamNamespace, _actorEventNamespace, StringComparison.Ordinal))
             {
                 return;
             }

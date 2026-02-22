@@ -37,7 +37,15 @@ internal sealed class OrleansKafkaQueueAdapterFactory : IQueueAdapterFactory
             CacheSize = Math.Max(128, runtimeOptions.QueueCacheSize),
         };
         _cache = new SimpleQueueAdapterCache(cacheOptions, _providerName, loggerFactory);
-        _adapter = new OrleansKafkaQueueAdapter(_providerName, _transportOptions.TopicName, _transport, _queueMapper);
+        var actorEventNamespace = string.IsNullOrWhiteSpace(runtimeOptions.ActorEventNamespace)
+            ? OrleansRuntimeConstants.ActorEventStreamNamespace
+            : runtimeOptions.ActorEventNamespace;
+        _adapter = new OrleansKafkaQueueAdapter(
+            _providerName,
+            _transportOptions.TopicName,
+            _transport,
+            _queueMapper,
+            actorEventNamespace);
     }
 
     public Task<IQueueAdapter> CreateAdapter() =>

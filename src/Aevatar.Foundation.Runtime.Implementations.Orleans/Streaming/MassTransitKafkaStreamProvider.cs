@@ -3,7 +3,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.Kafka;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 
-public sealed class MassTransitKafkaStreamProvider : Aevatar.Foundation.Abstractions.IStreamProvider
+public sealed class MassTransitKafkaStreamProvider : Aevatar.Foundation.Abstractions.IStreamProvider, IStreamCacheManager
 {
     private readonly IKafkaEnvelopeTransport _transport;
     private readonly MassTransitKafkaStreamOptions _options;
@@ -23,5 +23,11 @@ public sealed class MassTransitKafkaStreamProvider : Aevatar.Foundation.Abstract
 
         return _streams.GetOrAdd(actorId, id =>
             new MassTransitKafkaStream(id, _options.StreamNamespace, _transport));
+    }
+
+    public void RemoveStream(string actorId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        _streams.TryRemove(actorId, out _);
     }
 }
