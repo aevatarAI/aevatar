@@ -22,6 +22,7 @@ public sealed class InMemoryStream : IStream
     private readonly Task _dispatchLoop;
     private readonly InMemoryStreamOptions _options;
     private readonly ILogger<InMemoryStream> _logger;
+    private readonly Func<EventEnvelope, Task>? _onDispatchedAsync;
 
     /// <summary>Stream ID, typically an actor ID.</summary>
     public string StreamId { get; }
@@ -31,7 +32,8 @@ public sealed class InMemoryStream : IStream
     public InMemoryStream(
         string streamId,
         InMemoryStreamOptions? options = null,
-        ILogger<InMemoryStream>? logger = null)
+        ILogger<InMemoryStream>? logger = null,
+        Func<EventEnvelope, Task>? onDispatchedAsync = null)
     {
         _options = options ?? new InMemoryStreamOptions();
         var capacity = _options.Capacity > 0 ? _options.Capacity : 4096;
@@ -48,6 +50,7 @@ public sealed class InMemoryStream : IStream
         });
         StreamId = streamId;
         _logger = logger ?? NullLogger<InMemoryStream>.Instance;
+        _onDispatchedAsync = onDispatchedAsync;
         _pumpLoop = Task.Run(PumpLoopAsync);
         _dispatchLoop = Task.Run(DispatchLoopAsync);
     }
@@ -143,6 +146,9 @@ public sealed class InMemoryStream : IStream
                         _ = Task.Run(() => InvokeSubscriberAsync(sub, envelope), CancellationToken.None);
                     }
 
+                    if (!await InvokePostDispatchAsync(envelope))
+                        return;
+
                     continue;
                 }
 
@@ -166,6 +172,9 @@ public sealed class InMemoryStream : IStream
                         }
                     }
                 }
+
+                if (!await InvokePostDispatchAsync(envelope))
+                    return;
             }
         }
         catch (OperationCanceledException) { }
@@ -189,6 +198,33 @@ public sealed class InMemoryStream : IStream
             {
                 StopWithError(ex);
             }
+        }
+    }
+
+    private async Task<bool> InvokePostDispatchAsync(EventEnvelope envelope)
+    {
+        if (_onDispatchedAsync == null)
+            return true;
+
+        try
+        {
+            await _onDispatchedAsync(envelope);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "In-memory stream post-dispatch forwarding failed. stream={StreamId}",
+                StreamId);
+
+            if (_options.ThrowOnSubscriberError)
+            {
+                StopWithError(ex);
+                return false;
+            }
+
+            return true;
         }
     }
 

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Helpers;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -8,15 +9,18 @@ public sealed class OrleansActorRuntime : IActorRuntime
 {
     private readonly IGrainFactory _grainFactory;
     private readonly IAgentManifestStore _manifestStore;
+    private readonly IStreamForwardingRegistry _streamForwardingRegistry;
     private readonly ILogger<OrleansActorRuntime> _logger;
 
     public OrleansActorRuntime(
         IGrainFactory grainFactory,
         IAgentManifestStore manifestStore,
+        IStreamForwardingRegistry streamForwardingRegistry,
         ILogger<OrleansActorRuntime>? logger = null)
     {
         _grainFactory = grainFactory;
         _manifestStore = manifestStore;
+        _streamForwardingRegistry = streamForwardingRegistry;
         _logger = logger ?? NullLogger<OrleansActorRuntime>.Instance;
     }
 
@@ -48,6 +52,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
 
     public async Task DestroyAsync(string id, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(id);
 
         var parentId = await grain.GetParentAsync();
@@ -55,11 +60,15 @@ public sealed class OrleansActorRuntime : IActorRuntime
         {
             var parent = _grainFactory.GetGrain<IRuntimeActorGrain>(parentId);
             await parent.RemoveChildAsync(id);
+            await _streamForwardingRegistry.RemoveAsync(parentId, id, ct);
         }
 
         var children = await grain.GetChildrenAsync();
-        await Task.WhenAll(children.Select(childId =>
-            _grainFactory.GetGrain<IRuntimeActorGrain>(childId).ClearParentAsync()));
+        await Task.WhenAll(children.Select(async childId =>
+        {
+            await _grainFactory.GetGrain<IRuntimeActorGrain>(childId).ClearParentAsync();
+            await _streamForwardingRegistry.RemoveAsync(id, childId, ct);
+        }));
 
         await grain.ClearParentAsync();
         await grain.DeactivateAsync();
@@ -82,22 +91,28 @@ public sealed class OrleansActorRuntime : IActorRuntime
 
     public async Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var parent = _grainFactory.GetGrain<IRuntimeActorGrain>(parentId);
         var child = _grainFactory.GetGrain<IRuntimeActorGrain>(childId);
 
         await parent.AddChildAsync(childId);
         await child.SetParentAsync(parentId);
+        await _streamForwardingRegistry.UpsertAsync(
+            StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
+            ct);
         _logger.LogInformation("Link: {Parent} -> {Child}", parentId, childId);
     }
 
     public async Task UnlinkAsync(string childId, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var child = _grainFactory.GetGrain<IRuntimeActorGrain>(childId);
         var parentId = await child.GetParentAsync();
         if (!string.IsNullOrWhiteSpace(parentId))
         {
             var parent = _grainFactory.GetGrain<IRuntimeActorGrain>(parentId);
             await parent.RemoveChildAsync(childId);
+            await _streamForwardingRegistry.RemoveAsync(parentId, childId, ct);
         }
 
         await child.ClearParentAsync();

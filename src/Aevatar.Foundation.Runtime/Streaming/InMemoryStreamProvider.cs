@@ -4,15 +4,22 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Collections.Concurrent;
+using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Foundation.Runtime.Streaming;
 
 /// <summary>In-memory stream provider maintaining one event stream per actor.</summary>
-public sealed class InMemoryStreamProvider : IStreamProvider, IStreamLifecycleNotifier, IStreamLifecycleManager
+public sealed class InMemoryStreamProvider :
+    IStreamProvider,
+    IStreamLifecycleNotifier,
+    IStreamLifecycleManager
 {
     private readonly ConcurrentDictionary<string, InMemoryStream> _streams = new();
+    private readonly IStreamForwardingBindingSource _forwardingRegistry;
+    private readonly InMemoryStreamForwardingEngine _forwardingEngine;
     private readonly InMemoryStreamOptions _options;
     private readonly ILoggerFactory _loggerFactory;
     private readonly Lock _callbacksLock = new();
@@ -20,16 +27,31 @@ public sealed class InMemoryStreamProvider : IStreamProvider, IStreamLifecycleNo
     private volatile Action<string>[] _removedCallbacks = [];
 
     public InMemoryStreamProvider()
-        : this(new InMemoryStreamOptions(), NullLoggerFactory.Instance)
+        : this(new InMemoryStreamOptions(), NullLoggerFactory.Instance, new InMemoryStreamForwardingRegistry())
     {
     }
 
     public InMemoryStreamProvider(
         InMemoryStreamOptions options,
         ILoggerFactory loggerFactory)
+        : this(options, loggerFactory, new InMemoryStreamForwardingRegistry())
+    {
+    }
+
+    public InMemoryStreamProvider(
+        InMemoryStreamOptions options,
+        ILoggerFactory loggerFactory,
+        IStreamForwardingRegistry forwardingRegistry)
     {
         _options = options;
         _loggerFactory = loggerFactory;
+        _forwardingRegistry = forwardingRegistry as IStreamForwardingBindingSource
+            ?? throw new InvalidOperationException(
+                $"{nameof(InMemoryStreamProvider)} requires forwarding registry implementing {nameof(IStreamForwardingBindingSource)}.");
+        _forwardingEngine = new InMemoryStreamForwardingEngine(
+            _forwardingRegistry,
+            streamId => GetStream(streamId),
+            loggerFactory.CreateLogger<InMemoryStreamProvider>());
     }
 
     /// <summary>Gets or creates stream for specified actor.</summary>
@@ -44,7 +66,8 @@ public sealed class InMemoryStreamProvider : IStreamProvider, IStreamLifecycleNo
             return new InMemoryStream(
                 id,
                 _options,
-                _loggerFactory.CreateLogger<InMemoryStream>());
+                _loggerFactory.CreateLogger<InMemoryStream>(),
+                envelope => _forwardingEngine.ForwardAsync(id, envelope));
         });
 
         if (created)
@@ -62,6 +85,8 @@ public sealed class InMemoryStreamProvider : IStreamProvider, IStreamLifecycleNo
             stream.Shutdown();
             NotifyRemoved(actorId);
         }
+
+        _forwardingRegistry.RemoveByActor(actorId);
     }
 
     public IDisposable SubscribeCreated(Action<string> onCreated)
@@ -155,4 +180,5 @@ public sealed class InMemoryStreamProvider : IStreamProvider, IStreamLifecycleNo
             _dispose();
         }
     }
+
 }

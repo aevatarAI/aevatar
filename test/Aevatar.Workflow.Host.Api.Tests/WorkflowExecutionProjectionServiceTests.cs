@@ -525,7 +525,11 @@ public class WorkflowExecutionProjectionServiceTests
         out IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
         IProjectionClock? clock = null)
     {
-        streams = new InMemoryStreamProvider();
+        var forwardingRegistry = new InMemoryStreamForwardingRegistry();
+        streams = new InMemoryStreamProvider(
+            new InMemoryStreamOptions(),
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            forwardingRegistry);
         var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         store = new ObservableWorkflowExecutionReadModelStore();
         var projector = new WorkflowExecutionReadModelProjector(
@@ -546,7 +550,11 @@ public class WorkflowExecutionProjectionServiceTests
         var runtimeServices = new ServiceCollection();
         runtimeServices.AddSingleton<IAgentManifestStore, InMemoryManifestStore>();
         var runtimeProvider = runtimeServices.BuildServiceProvider();
-        var runtime = new LocalActorRuntime(streams, runtimeProvider, streams);
+        var runtime = new LocalActorRuntime(
+            streams,
+            runtimeProvider,
+            streams,
+            forwardingRegistry);
         var runtimeTypeProbe = new RuntimeActorTypeProbe(runtime);
         var ownershipTypeVerifier = new DefaultAgentTypeVerifier(
             runtimeTypeProbe,

@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Propagation;
+using Aevatar.Foundation.Abstractions.Streaming;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
@@ -10,8 +10,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private readonly IPersistentState<RuntimeActorGrainState> _state;
     private IAgent? _agent;
     private IEventDeduplicator? _deduplicator;
-    private IEnvelopePropagationPolicy? _propagationPolicy;
-    private IEventLoopGuard? _loopGuard;
+    private IEnvelopePropagationPolicy _propagationPolicy =
+        new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
+    private IStreamForwardingRegistry _streamForwardingRegistry = null!;
     private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
 
     public RuntimeActorGrain(
@@ -24,9 +25,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
         _deduplicator = ServiceProvider.GetService<IEventDeduplicator>();
-        _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>()
-            ?? new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
-        _loopGuard = ServiceProvider.GetService<IEventLoopGuard>() ?? new PublisherChainLoopGuard();
+        _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>() ?? _propagationPolicy;
+        _streamForwardingRegistry = ServiceProvider.GetRequiredService<IStreamForwardingRegistry>();
 
         var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
         _logger = loggerFactory?.CreateLogger<RuntimeActorGrain>() ?? NullLogger<RuntimeActorGrain>.Instance;
@@ -78,7 +78,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 return;
         }
 
-        if ((_loopGuard ?? new PublisherChainLoopGuard()).ShouldDrop(this.GetPrimaryKeyString(), envelope))
+        if (PublisherChainMetadata.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
+            return;
+
+        if (StreamForwardingRules.ShouldSkipTransitOnlyHandling(this.GetPrimaryKeyString(), envelope))
             return;
 
         await _agent.HandleEventAsync(envelope);
@@ -207,10 +210,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             actorId,
             GrainFactory,
             () => _state.State.ParentId,
-            () => _state.State.Children.ToList(),
             envelope => HandleEnvelopeAsync(envelope.ToByteArray()),
-            _propagationPolicy ?? new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy()),
-            _loopGuard ?? new PublisherChainLoopGuard());
+            _propagationPolicy,
+            _streamForwardingRegistry);
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
         gAgent.ManifestStore = ServiceProvider.GetService<IAgentManifestStore>();

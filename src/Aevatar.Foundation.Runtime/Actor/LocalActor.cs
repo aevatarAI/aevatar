@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Observability;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.Runtime.Actors;
@@ -14,12 +15,20 @@ public sealed class LocalActor : IActor
     private readonly EventRouter _router;
     private readonly IStreamProvider _streams;
     private readonly ILogger _logger;
-    private IAsyncDisposable? _parentSubscription;
     private IAsyncDisposable? _selfSubscription;
 
-    public LocalActor(IAgent agent, string id, EventRouter router, IStreamProvider streams, ILogger logger)
+    public LocalActor(
+        IAgent agent,
+        string id,
+        EventRouter router,
+        IStreamProvider streams,
+        ILogger logger)
     {
-        Agent = agent; Id = id; _router = router; _streams = streams; _logger = logger;
+        Agent = agent;
+        Id = id;
+        _router = router;
+        _streams = streams;
+        _logger = logger;
     }
 
     public string Id { get; }
@@ -45,7 +54,18 @@ public sealed class LocalActor : IActor
                 await EnqueueAsync(envelope);
                 return;
             }
-            // Down events are not handled on self-stream (child actors handle them).
+
+            if (envelope.Direction is EventDirection.Down or EventDirection.Both &&
+                StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, Id))
+            {
+                if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
+                    return;
+
+                await EnqueueAsync(envelope);
+                return;
+            }
+
+            // Down/Both events are not handled on self-stream unless forwarded by stream-layer routing.
         }, ct);
 
         await Agent.ActivateAsync(ct);
@@ -53,7 +73,6 @@ public sealed class LocalActor : IActor
 
     public async Task DeactivateAsync(CancellationToken ct = default)
     {
-        if (_parentSubscription != null) { await _parentSubscription.DisposeAsync(); _parentSubscription = null; }
         if (_selfSubscription != null) { await _selfSubscription.DisposeAsync(); _selfSubscription = null; }
         await Agent.DeactivateAsync(ct);
     }
@@ -70,36 +89,17 @@ public sealed class LocalActor : IActor
     internal void AddChild(string childId) => _router.AddChild(childId);
     internal void RemoveChild(string childId) => _router.RemoveChild(childId);
 
-    internal async Task SubscribeToParentAsync(string parentId, CancellationToken ct)
+    internal Task SubscribeToParentAsync(string parentId, CancellationToken ct)
     {
-        if (_parentSubscription != null) { await _parentSubscription.DisposeAsync(); _parentSubscription = null; }
+        ct.ThrowIfCancellationRequested();
         _router.SetParent(parentId);
-
-        var parentStream = _streams.GetStream(parentId);
-        _parentSubscription = await parentStream.SubscribeAsync<EventEnvelope>(async envelope =>
-        {
-            // Filter: Self and Up events are not propagated to children.
-            if (envelope.Direction is EventDirection.Up or EventDirection.Self) return;
-            if (envelope.Metadata.TryGetValue("__publishers", out var pubs) && pubs.Contains(Id)) return;
-
-            await EnqueueAsync(envelope);
-
-            // Propagate downward to own children.
-            if (envelope.Direction is EventDirection.Down or EventDirection.Both && _router.ChildrenIds.Count > 0)
-            {
-                var down = envelope.Clone();
-                down.Direction = EventDirection.Down;
-                var p = down.Metadata.GetValueOrDefault("__publishers", "");
-                down.Metadata["__publishers"] = string.IsNullOrEmpty(p) ? Id : $"{p},{Id}";
-                await _streams.GetStream(Id).ProduceAsync(down, CancellationToken.None);
-            }
-        }, ct);
+        return Task.CompletedTask;
     }
 
-    internal async Task UnsubscribeFromParentAsync()
+    internal Task UnsubscribeFromParentAsync()
     {
-        if (_parentSubscription != null) { await _parentSubscription.DisposeAsync(); _parentSubscription = null; }
         _router.ClearParent();
+        return Task.CompletedTask;
     }
 
     // ─── Mailbox ───

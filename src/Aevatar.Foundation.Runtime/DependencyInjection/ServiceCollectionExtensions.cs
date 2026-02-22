@@ -8,6 +8,7 @@ using Aevatar.Foundation.Abstractions.Context;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Propagation;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Routing;
@@ -36,16 +37,25 @@ public static class ServiceCollectionExtensions
         var streamOptions = new InMemoryStreamOptions();
         configureStreams?.Invoke(streamOptions);
         services.TryAddSingleton(streamOptions);
+        services.TryAddSingleton<InMemoryStreamForwardingRegistry>();
         services.TryAddSingleton<IStreamProvider>(sp =>
             new InMemoryStreamProvider(
                 sp.GetRequiredService<InMemoryStreamOptions>(),
-                sp.GetService<ILoggerFactory>() ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance));
+                sp.GetService<ILoggerFactory>() ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+                sp.GetRequiredService<InMemoryStreamForwardingRegistry>()));
         services.TryAddSingleton<IStreamLifecycleManager>(sp =>
-            sp.GetRequiredService<IStreamProvider>() as IStreamLifecycleManager
-            ?? NoopStreamLifecycleManager.Instance);
+            (IStreamLifecycleManager)sp.GetRequiredService<IStreamProvider>());
+        services.TryAddSingleton<IStreamForwardingRegistry>(sp =>
+            sp.GetRequiredService<InMemoryStreamForwardingRegistry>());
 
         // Actor Runtime
-        services.TryAddSingleton<IActorRuntime, LocalActorRuntime>();
+        services.TryAddSingleton<IActorRuntime>(sp =>
+            new LocalActorRuntime(
+                sp.GetRequiredService<IStreamProvider>(),
+                sp,
+                sp.GetRequiredService<IStreamLifecycleManager>(),
+                sp.GetRequiredService<IStreamForwardingRegistry>(),
+                sp.GetService<ILogger<LocalActorRuntime>>()));
 
         // Persistence
         services.TryAddSingleton(typeof(IStateStore<>), typeof(InMemoryStateStore<>));
@@ -67,15 +77,5 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
 
         return services;
-    }
-
-    private sealed class NoopStreamLifecycleManager : IStreamLifecycleManager
-    {
-        public static readonly IStreamLifecycleManager Instance = new NoopStreamLifecycleManager();
-
-        public void RemoveStream(string actorId)
-        {
-            _ = actorId;
-        }
     }
 }

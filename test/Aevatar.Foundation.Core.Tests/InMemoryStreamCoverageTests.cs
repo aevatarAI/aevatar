@@ -165,6 +165,33 @@ public sealed class InMemoryStreamCoverageTests
     }
 
     [Fact]
+    public async Task DispatchSubscribersConcurrently_True_ShouldStillRunPostDispatchCallback()
+    {
+        var forwarded = new TaskCompletionSource<EventEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slowGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = new InMemoryStream(
+            "s-concurrent-forward",
+            new InMemoryStreamOptions { DispatchSubscribersConcurrently = true },
+            onDispatchedAsync: envelope =>
+            {
+                forwarded.TrySetResult(envelope);
+                return Task.CompletedTask;
+            });
+
+        await using var slow = await stream.SubscribeAsync<PingEvent>(async _ =>
+        {
+            await slowGate.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        });
+
+        await stream.ProduceAsync(new PingEvent { Message = "forward" });
+        var envelope = await forwarded.Task.WaitAsync(TimeSpan.FromMilliseconds(300));
+
+        envelope.Payload.Should().NotBeNull();
+        envelope.Payload!.Unpack<PingEvent>().Message.Should().Be("forward");
+        slowGate.TrySetResult(true);
+    }
+
+    [Fact]
     public async Task Shutdown_ShouldCompleteAndRejectFurtherWrites()
     {
         var stream = new InMemoryStream("s-shutdown");

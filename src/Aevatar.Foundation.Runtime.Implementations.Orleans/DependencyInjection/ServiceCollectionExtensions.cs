@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Propagation;
+using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Orleans.Hosting;
@@ -25,7 +26,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
         services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
-        services.TryAddSingleton<IEventLoopGuard, PublisherChainLoopGuard>();
+        services.TryAddSingleton<IStreamForwardingRegistry, InMemoryStreamForwardingRegistry>();
 
         return services;
     }

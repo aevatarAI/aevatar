@@ -5,6 +5,7 @@
 
 using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions.Helpers;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Propagation;
@@ -20,7 +21,8 @@ public sealed class LocalActorRuntime : IActorRuntime
 {
     private readonly ConcurrentDictionary<string, LocalActor> _actors = new();
     private readonly IStreamProvider _streams;
-    private readonly IStreamLifecycleManager? _streamLifecycleManager;
+    private readonly IStreamLifecycleManager _streamLifecycleManager;
+    private readonly IStreamForwardingRegistry _streamForwardingRegistry;
     private readonly IServiceProvider _services;
     private readonly ILogger<LocalActorRuntime> _logger;
 
@@ -28,12 +30,14 @@ public sealed class LocalActorRuntime : IActorRuntime
     public LocalActorRuntime(
         IStreamProvider streams,
         IServiceProvider services,
-        IStreamLifecycleManager? streamLifecycleManager = null,
+        IStreamLifecycleManager streamLifecycleManager,
+        IStreamForwardingRegistry streamForwardingRegistry,
         ILogger<LocalActorRuntime>? logger = null)
     {
         _streams = streams;
         _services = services;
         _streamLifecycleManager = streamLifecycleManager;
+        _streamForwardingRegistry = streamForwardingRegistry;
         _logger = logger ?? NullLogger<LocalActorRuntime>.Instance;
     }
 
@@ -50,7 +54,12 @@ public sealed class LocalActorRuntime : IActorRuntime
         var logger = _services.GetService<ILoggerFactory>()?.CreateLogger(agentType.Name) ?? NullLogger.Instance;
         var propagationPolicy = _services.GetService<IEnvelopePropagationPolicy>();
         var publisher = new LocalActorPublisher(actorId, router, _streams, propagationPolicy);
-        var actor = new LocalActor(agent, actorId, router, _streams, logger);
+        var actor = new LocalActor(
+            agent,
+            actorId,
+            router,
+            _streams,
+            logger);
 
         InjectDependencies(agent, publisher, actorId, logger);
 
@@ -78,7 +87,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         if (!_actors.TryRemove(id, out var actor)) return;
         await actor.DeactivateAsync(ct);
         AgentMetrics.ActiveActors.Add(-1);
-        _streamLifecycleManager?.RemoveStream(id);
+        _streamLifecycleManager.RemoveStream(id);
         var manifestStore = _services.GetService<IAgentManifestStore>();
         if (manifestStore != null) await manifestStore.DeleteAsync(id, ct);
         _logger.LogInformation("Actor {Id} destroyed", id);
@@ -90,13 +99,17 @@ public sealed class LocalActorRuntime : IActorRuntime
     /// <summary>Checks whether actor with specified ID exists.</summary>
     public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
 
-    /// <summary>Creates parent-child link: parent adds child, child subscribes to parent stream.</summary>
+    /// <summary>Creates parent-child link and registers stream-layer forwarding binding.</summary>
     public async Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
     {
         var parent = GetRequired(parentId);
         var child = GetRequired(childId);
         parent.AddChild(childId);
         await child.SubscribeToParentAsync(parentId, ct);
+        await _streamForwardingRegistry.UpsertAsync(
+            StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
+            ct);
+
         _logger.LogInformation("Link: {Parent} → {Child}", parentId, childId);
     }
 
@@ -106,7 +119,10 @@ public sealed class LocalActorRuntime : IActorRuntime
         if (!_actors.TryGetValue(childId, out var child)) return;
         var parentId = await child.GetParentIdAsync();
         if (parentId != null && _actors.TryGetValue(parentId, out var parent))
+        {
             parent.RemoveChild(childId);
+            await _streamForwardingRegistry.RemoveAsync(parentId, childId, ct);
+        }
         await child.UnsubscribeFromParentAsync();
     }
 

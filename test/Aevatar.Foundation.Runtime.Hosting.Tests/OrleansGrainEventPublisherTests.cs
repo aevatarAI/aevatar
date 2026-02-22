@@ -1,10 +1,11 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Implementations.Orleans;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Propagation;
+using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Orleans;
@@ -29,7 +30,7 @@ public class OrleansGrainEventPublisherTests
         await publisher.PublishAsync(new StringValue { Value = "hello" }, EventDirection.Self, CancellationToken.None);
 
         dispatched.Should().NotBeNull();
-        dispatched!.Metadata.ContainsKey(OrleansRuntimeConstants.PublishersMetadataKey).Should().BeFalse();
+        dispatched!.Metadata.ContainsKey(PublisherChainMetadata.PublishersMetadataKey).Should().BeFalse();
     }
 
     [Fact]
@@ -43,7 +44,7 @@ public class OrleansGrainEventPublisherTests
             getParentId: () => "parent-actor");
 
         var inbound = new EventEnvelope();
-        inbound.Metadata[OrleansRuntimeConstants.PublishersMetadataKey] = "parent-actor";
+        inbound.Metadata[PublisherChainMetadata.PublishersMetadataKey] = "parent-actor";
 
         await publisher.PublishAsync(
             new StringValue { Value = "reply" },
@@ -52,7 +53,7 @@ public class OrleansGrainEventPublisherTests
             inbound);
 
         remoteGrain.LastEnvelope.Should().NotBeNull();
-        remoteGrain.LastEnvelope!.Metadata.TryGetValue(OrleansRuntimeConstants.PublishersMetadataKey, out var chain)
+        remoteGrain.LastEnvelope!.Metadata.TryGetValue(PublisherChainMetadata.PublishersMetadataKey, out var chain)
             .Should().BeTrue();
         chain.Should().Be("parent-actor,child-actor");
     }
@@ -73,7 +74,7 @@ public class OrleansGrainEventPublisherTests
         await publisher.SendToAsync("actor-self", new StringValue { Value = "direct" }, CancellationToken.None);
 
         dispatched.Should().NotBeNull();
-        dispatched!.Metadata.ContainsKey(OrleansRuntimeConstants.PublishersMetadataKey).Should().BeFalse();
+        dispatched!.Metadata.ContainsKey(PublisherChainMetadata.PublishersMetadataKey).Should().BeFalse();
     }
 
     [Fact]
@@ -86,7 +87,7 @@ public class OrleansGrainEventPublisherTests
             resolveGrain: _ => remoteGrain);
 
         var inbound = new EventEnvelope();
-        inbound.Metadata[OrleansRuntimeConstants.PublishersMetadataKey] = "upstream";
+        inbound.Metadata[PublisherChainMetadata.PublishersMetadataKey] = "upstream";
 
         await publisher.SendToAsync(
             "receiver",
@@ -95,9 +96,137 @@ public class OrleansGrainEventPublisherTests
             inbound);
 
         remoteGrain.LastEnvelope.Should().NotBeNull();
-        remoteGrain.LastEnvelope!.Metadata.TryGetValue(OrleansRuntimeConstants.PublishersMetadataKey, out var chain)
+        remoteGrain.LastEnvelope!.Metadata.TryGetValue(PublisherChainMetadata.PublishersMetadataKey, out var chain)
             .Should().BeTrue();
         chain.Should().Be("upstream,sender");
+    }
+
+    [Fact]
+    public async Task PublishAsync_WhenDirectionIsDown_ShouldRouteByForwardingRegistry()
+    {
+        var childA = new RecordingRuntimeActorGrain();
+        var childB = new RecordingRuntimeActorGrain();
+        var registry = new InMemoryStreamForwardingRegistry();
+        await registry.UpsertAsync(
+            new StreamForwardingBinding
+            {
+                SourceStreamId = "root",
+                TargetStreamId = "child-a",
+                ForwardingMode = StreamForwardingMode.HandleThenForward,
+                DirectionFilter =
+                [
+                    EventDirection.Down,
+                    EventDirection.Both,
+                ],
+            },
+            CancellationToken.None);
+
+        var publisher = CreatePublisher(
+            actorId: "root",
+            onDispatchToSelf: _ => Task.CompletedTask,
+            resolveGrain: actorId => actorId switch
+            {
+                "child-a" => childA,
+                "child-b" => childB,
+                _ => throw new InvalidOperationException($"Unexpected grain id {actorId}."),
+            },
+            forwardingRegistry: registry);
+
+        await publisher.PublishAsync(new StringValue { Value = "task" }, EventDirection.Down, CancellationToken.None);
+
+        childA.LastEnvelope.Should().NotBeNull();
+        childA.LastEnvelope!.Payload!.Unpack<StringValue>().Value.Should().Be("task");
+        childA.LastEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardSourceKey].Should().Be("root");
+        childA.LastEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardTargetKey].Should().Be("child-a");
+        childA.LastEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardModeKey]
+            .Should().Be(StreamForwardingEnvelopeMetadata.ForwardModeHandle);
+        childB.LastEnvelope.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PublishAsync_WhenTransitOnlyBindingConfigured_ShouldSkipTransitActorAndReachLeaf()
+    {
+        var middle = new RecordingRuntimeActorGrain();
+        var leaf = new RecordingRuntimeActorGrain();
+        var registry = new InMemoryStreamForwardingRegistry();
+        await registry.UpsertAsync(
+            new StreamForwardingBinding
+            {
+                SourceStreamId = "root",
+                TargetStreamId = "middle",
+                ForwardingMode = StreamForwardingMode.TransitOnly,
+                DirectionFilter =
+                [
+                    EventDirection.Down,
+                    EventDirection.Both,
+                ],
+            },
+            CancellationToken.None);
+        await registry.UpsertAsync(
+            new StreamForwardingBinding
+            {
+                SourceStreamId = "middle",
+                TargetStreamId = "leaf",
+                ForwardingMode = StreamForwardingMode.HandleThenForward,
+                DirectionFilter =
+                [
+                    EventDirection.Down,
+                    EventDirection.Both,
+                ],
+            },
+            CancellationToken.None);
+
+        var publisher = CreatePublisher(
+            actorId: "root",
+            onDispatchToSelf: _ => Task.CompletedTask,
+            resolveGrain: actorId => actorId switch
+            {
+                "middle" => middle,
+                "leaf" => leaf,
+                _ => throw new InvalidOperationException($"Unexpected grain id {actorId}."),
+            },
+            forwardingRegistry: registry);
+
+        await publisher.PublishAsync(new StringValue { Value = "transit" }, EventDirection.Down, CancellationToken.None);
+
+        middle.LastEnvelope.Should().BeNull();
+        leaf.LastEnvelope.Should().NotBeNull();
+        leaf.LastEnvelope!.Payload!.Unpack<StringValue>().Value.Should().Be("transit");
+        leaf.LastEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardSourceKey].Should().Be("middle");
+        leaf.LastEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardTargetKey].Should().Be("leaf");
+        leaf.LastEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardModeKey]
+            .Should().Be(StreamForwardingEnvelopeMetadata.ForwardModeHandle);
+    }
+
+    [Fact]
+    public async Task PublishAsync_WhenForwardingGraphContainsCycle_ShouldSkipLoopbackTarget()
+    {
+        var middle = new RecordingRuntimeActorGrain();
+        var selfDispatchCount = 0;
+        var registry = new InMemoryStreamForwardingRegistry();
+        await registry.UpsertAsync(StreamForwardingRules.CreateHierarchyBinding("root", "middle"), CancellationToken.None);
+        await registry.UpsertAsync(StreamForwardingRules.CreateHierarchyBinding("middle", "root"), CancellationToken.None);
+
+        var publisher = CreatePublisher(
+            actorId: "root",
+            onDispatchToSelf: _ =>
+            {
+                Interlocked.Increment(ref selfDispatchCount);
+                return Task.CompletedTask;
+            },
+            resolveGrain: actorId => actorId switch
+            {
+                "middle" => middle,
+                _ => throw new InvalidOperationException($"Unexpected grain id {actorId}."),
+            },
+            forwardingRegistry: registry);
+
+        await publisher.PublishAsync(new StringValue { Value = "cycle" }, EventDirection.Down, CancellationToken.None);
+
+        middle.DispatchCount.Should().Be(1);
+        selfDispatchCount.Should().Be(0);
+        middle.LastEnvelope.Should().NotBeNull();
+        middle.LastEnvelope!.Metadata[PublisherChainMetadata.PublishersMetadataKey].Should().Be("root");
     }
 
     private static OrleansGrainEventPublisher CreatePublisher(
@@ -105,7 +234,7 @@ public class OrleansGrainEventPublisherTests
         Func<EventEnvelope, Task> onDispatchToSelf,
         Func<string, IRuntimeActorGrain> resolveGrain,
         Func<string?>? getParentId = null,
-        Func<IReadOnlyList<string>>? getChildrenIds = null)
+        IStreamForwardingRegistry? forwardingRegistry = null)
     {
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
         ((GrainFactoryProxy)(object)grainFactory).ResolveGrain = resolveGrain;
@@ -114,10 +243,9 @@ public class OrleansGrainEventPublisherTests
             actorId,
             grainFactory,
             getParentId ?? (() => null),
-            getChildrenIds ?? (() => []),
             onDispatchToSelf,
             new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy()),
-            new PublisherChainLoopGuard());
+            forwardingRegistry ?? new InMemoryStreamForwardingRegistry());
     }
 
     private class GrainFactoryProxy : DispatchProxy
@@ -144,6 +272,7 @@ public class OrleansGrainEventPublisherTests
     private sealed class RecordingRuntimeActorGrain : IRuntimeActorGrain
     {
         public EventEnvelope? LastEnvelope { get; private set; }
+        public int DispatchCount { get; private set; }
 
         public Task<bool> InitializeAgentAsync(string agentTypeName) => Task.FromResult(true);
 
@@ -152,6 +281,7 @@ public class OrleansGrainEventPublisherTests
         public Task HandleEnvelopeAsync(byte[] envelopeBytes)
         {
             LastEnvelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
+            DispatchCount++;
             return Task.CompletedTask;
         }
 

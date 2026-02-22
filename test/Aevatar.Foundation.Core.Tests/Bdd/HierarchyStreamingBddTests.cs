@@ -1,7 +1,7 @@
 // BDD: multi-agent hierarchy with stream communication.
 
 using Aevatar.Foundation.Runtime.Actors;
-using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.Foundation.Runtime.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -17,9 +17,7 @@ public class HierarchyStreamingBddTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IStreamProvider, InMemoryStreamProvider>();
-        services.AddSingleton<IActorRuntime>(sp =>
-            new LocalActorRuntime(sp.GetRequiredService<IStreamProvider>(), sp));
+        services.AddAevatarRuntime();
         _sp = services.BuildServiceProvider();
         _runtime = _sp.GetRequiredService<IActorRuntime>();
         return Task.CompletedTask;
