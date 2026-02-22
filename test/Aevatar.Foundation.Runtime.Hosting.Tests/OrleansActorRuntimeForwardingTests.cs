@@ -6,6 +6,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Orleans;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
@@ -104,12 +105,12 @@ public sealed class OrleansActorRuntimeForwardingTests
         };
 
         registry = new InMemoryStreamForwardingRegistry();
+        var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
         grains = grainMap;
         return new OrleansActorRuntime(
             grainFactory,
             new InMemoryManifestStore(),
-            registry,
-            new InMemoryStreamProvider(),
+            streams,
             streamLifecycleManager);
     }
 

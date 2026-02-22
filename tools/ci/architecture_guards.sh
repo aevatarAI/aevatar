@@ -286,6 +286,19 @@ if [ -n "${id_mapping_state_hits}" ]; then
   exit 1
 fi
 
+runtime_relay_hits="$(
+  rg -n "ListBySourceAsync\(|StreamForwardingRules\.TryBuildForwardedEnvelope\(" \
+    src/Aevatar.Foundation.Runtime/Actor \
+    src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors \
+    -g '*.cs' || true
+)"
+
+if [ -n "${runtime_relay_hits}" ]; then
+  echo "${runtime_relay_hits}"
+  echo "Runtime actor layer must not execute relay graph traversal. Relay execution must stay in stream/message-queue infrastructure."
+  exit 1
+fi
+
 implementation_ref_violations="$(
   rg -n "Aevatar\.CQRS\.Runtime\.Implementations\.(Wolverine|MassTransit)" src -g '*.csproj' \
   | rg -v "^src/Aevatar.CQRS.Runtime.Hosting/" \

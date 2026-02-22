@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -510,6 +511,26 @@ internal sealed class FakeStream : IStream
 
         _eventEnvelopeHandler = envelope => handler((T)(IMessage)envelope);
         return Task.FromResult<IAsyncDisposable>(Subscription);
+    }
+
+    public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+    {
+        _ = binding;
+        _ = ct;
+        return Task.CompletedTask;
+    }
+
+    public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default)
+    {
+        _ = targetStreamId;
+        _ = ct;
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default)
+    {
+        _ = ct;
+        return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
     }
 
     public async Task DeliverAsync(EventEnvelope envelope)

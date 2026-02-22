@@ -15,7 +15,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private IEventDeduplicator? _deduplicator;
     private IEnvelopePropagationPolicy _propagationPolicy =
         new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
-    private IStreamForwardingRegistry _streamForwardingRegistry = null!;
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
     private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
     private IAsyncStream<EventEnvelope>? _selfStream;
@@ -32,7 +31,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     {
         _deduplicator = ServiceProvider.GetService<IEventDeduplicator>();
         _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>() ?? _propagationPolicy;
-        _streamForwardingRegistry = ServiceProvider.GetRequiredService<IStreamForwardingRegistry>();
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
 
         var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
@@ -96,8 +94,30 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         if (PublisherChainMetadata.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
             return;
 
-        if (StreamForwardingRules.ShouldSkipTransitOnlyHandling(this.GetPrimaryKeyString(), envelope))
-            return;
+        var selfActorId = this.GetPrimaryKeyString();
+        switch (envelope.Direction)
+        {
+            case EventDirection.Self:
+            case EventDirection.Up:
+                break;
+            case EventDirection.Down:
+            case EventDirection.Both:
+                if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
+                {
+                    if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
+                        return;
+                    break;
+                }
+
+                if (envelope.Metadata.TryGetValue("__source_actor_id", out var sourceActorId) &&
+                    string.Equals(sourceActorId, selfActorId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                break;
+            default:
+                return;
+        }
 
         await _agent.HandleEventAsync(envelope);
     }
@@ -241,7 +261,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             () => _state.State.ParentId,
             envelope => HandleEnvelopeAsync(envelope.ToByteArray()),
             _propagationPolicy,
-            _streamForwardingRegistry,
             _streams);
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;

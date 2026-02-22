@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -473,6 +474,26 @@ internal sealed class SessionHubStream : IStream
 
         _handlers.Add(typedHandler);
         return Task.FromResult<IAsyncDisposable>(new SessionHubSubscription(() => _handlers.Remove(typedHandler)));
+    }
+
+    public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+    {
+        _ = binding;
+        _ = ct;
+        return Task.CompletedTask;
+    }
+
+    public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default)
+    {
+        _ = targetStreamId;
+        _ = ct;
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default)
+    {
+        _ = ct;
+        return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
     }
 
     public async Task EmitAsync(ProjectionSessionEventTransportMessage message)

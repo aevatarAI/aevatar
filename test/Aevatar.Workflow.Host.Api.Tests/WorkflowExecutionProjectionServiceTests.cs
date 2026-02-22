@@ -553,8 +553,7 @@ public class WorkflowExecutionProjectionServiceTests
         var runtime = new LocalActorRuntime(
             streams,
             runtimeProvider,
-            streams,
-            forwardingRegistry);
+            streams);
         var runtimeTypeProbe = new RuntimeActorTypeProbe(runtime);
         var ownershipTypeVerifier = new DefaultAgentTypeVerifier(
             runtimeTypeProbe,

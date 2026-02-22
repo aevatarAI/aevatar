@@ -9,7 +9,6 @@ public sealed class OrleansActorRuntime : IActorRuntime
 {
     private readonly IGrainFactory _grainFactory;
     private readonly IAgentManifestStore _manifestStore;
-    private readonly IStreamForwardingRegistry _streamForwardingRegistry;
     private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
     private readonly IStreamLifecycleManager _streamLifecycleManager;
     private readonly ILogger<OrleansActorRuntime> _logger;
@@ -17,14 +16,12 @@ public sealed class OrleansActorRuntime : IActorRuntime
     public OrleansActorRuntime(
         IGrainFactory grainFactory,
         IAgentManifestStore manifestStore,
-        IStreamForwardingRegistry streamForwardingRegistry,
         Aevatar.Foundation.Abstractions.IStreamProvider streams,
         IStreamLifecycleManager? streamLifecycleManager = null,
         ILogger<OrleansActorRuntime>? logger = null)
     {
         _grainFactory = grainFactory;
         _manifestStore = manifestStore;
-        _streamForwardingRegistry = streamForwardingRegistry;
         _streams = streams;
         _streamLifecycleManager = streamLifecycleManager ?? NullStreamLifecycleManager.Instance;
         _logger = logger ?? NullLogger<OrleansActorRuntime>.Instance;
@@ -66,14 +63,14 @@ public sealed class OrleansActorRuntime : IActorRuntime
         {
             var parent = _grainFactory.GetGrain<IRuntimeActorGrain>(parentId);
             await parent.RemoveChildAsync(id);
-            await _streamForwardingRegistry.RemoveAsync(parentId, id, ct);
+            await _streams.GetStream(parentId).RemoveRelayAsync(id, ct);
         }
 
         var children = await grain.GetChildrenAsync();
         await Task.WhenAll(children.Select(async childId =>
         {
             await _grainFactory.GetGrain<IRuntimeActorGrain>(childId).ClearParentAsync();
-            await _streamForwardingRegistry.RemoveAsync(id, childId, ct);
+            await _streams.GetStream(id).RemoveRelayAsync(childId, ct);
         }));
 
         await grain.PurgeAsync();
@@ -108,7 +105,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
 
         await parent.AddChildAsync(childId);
         await child.SetParentAsync(parentId);
-        await _streamForwardingRegistry.UpsertAsync(
+        await _streams.GetStream(parentId).UpsertRelayAsync(
             StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
             ct);
         _logger.LogInformation("Link: {Parent} -> {Child}", parentId, childId);
@@ -123,7 +120,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
         {
             var parent = _grainFactory.GetGrain<IRuntimeActorGrain>(parentId);
             await parent.RemoveChildAsync(childId);
-            await _streamForwardingRegistry.RemoveAsync(parentId, childId, ct);
+            await _streams.GetStream(parentId).RemoveRelayAsync(childId, ct);
         }
 
         await child.ClearParentAsync();

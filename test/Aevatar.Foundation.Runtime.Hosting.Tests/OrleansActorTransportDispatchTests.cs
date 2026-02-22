@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using FluentAssertions;
@@ -130,6 +131,26 @@ public sealed class OrleansActorTransportDispatchTests
             _ = handler;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IAsyncDisposable>(NoOpSubscription.Instance);
+        }
+
+        public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+        {
+            _ = binding;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default)
+        {
+            _ = targetStreamId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
         }
     }
 

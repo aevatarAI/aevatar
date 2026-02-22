@@ -10,7 +10,6 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
     private readonly Func<string?> _getParentId;
     private readonly Func<EventEnvelope, Task> _dispatchToSelfAsync;
     private readonly IEnvelopePropagationPolicy _propagationPolicy;
-    private readonly IStreamForwardingRegistry _forwardingRegistry;
     private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
 
     public OrleansGrainEventPublisher(
@@ -18,14 +17,12 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         Func<string?> getParentId,
         Func<EventEnvelope, Task> dispatchToSelfAsync,
         IEnvelopePropagationPolicy propagationPolicy,
-        IStreamForwardingRegistry forwardingRegistry,
         Aevatar.Foundation.Abstractions.IStreamProvider streams)
     {
         _actorId = actorId;
         _getParentId = getParentId;
         _dispatchToSelfAsync = dispatchToSelfAsync;
         _propagationPolicy = propagationPolicy;
-        _forwardingRegistry = forwardingRegistry;
         _streams = streams;
     }
 
@@ -44,6 +41,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             PublisherId = _actorId,
             Direction = direction,
         };
+        envelope.Metadata["__source_actor_id"] = _actorId;
 
         _propagationPolicy.Apply(envelope, sourceEnvelope);
 
@@ -53,7 +51,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
                 await DispatchAsync(_actorId, _actorId, envelope, ct);
                 break;
             case EventDirection.Down:
-                await DispatchDownAsync(envelope, ct);
+                await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
                 break;
             case EventDirection.Up:
             {
@@ -66,7 +64,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             {
                 var tasks = new List<Task>
                 {
-                    DispatchDownAsync(envelope, ct),
+                    _streams.GetStream(_actorId).ProduceAsync(envelope, ct),
                 };
                 var parentId = _getParentId();
                 if (!string.IsNullOrWhiteSpace(parentId))
@@ -93,53 +91,10 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             Direction = EventDirection.Self,
             TargetActorId = targetActorId,
         };
+        envelope.Metadata["__source_actor_id"] = _actorId;
 
         _propagationPolicy.Apply(envelope, sourceEnvelope);
         return DispatchAsync(_actorId, targetActorId, envelope, ct);
-    }
-
-    private async Task DispatchDownAsync(EventEnvelope envelope, CancellationToken ct)
-    {
-        var queue = new Queue<(string SourceActorId, EventEnvelope Envelope)>();
-        var visitedSources = new HashSet<string>(StringComparer.Ordinal);
-        queue.Enqueue((_actorId, envelope));
-
-        while (queue.Count > 0)
-        {
-            ct.ThrowIfCancellationRequested();
-            var (sourceActorId, currentEnvelope) = queue.Dequeue();
-            if (!visitedSources.Add(sourceActorId))
-                continue;
-
-            var bindings = await _forwardingRegistry.ListBySourceAsync(sourceActorId, ct);
-            List<Task>? dispatchTasks = null;
-
-            foreach (var binding in bindings)
-            {
-                if (!StreamForwardingRules.TryBuildForwardedEnvelope(
-                        sourceActorId,
-                        binding,
-                        currentEnvelope,
-                        out var forwarded) ||
-                    forwarded == null)
-                {
-                    continue;
-                }
-
-                queue.Enqueue((binding.TargetStreamId, forwarded));
-
-                if (binding.ForwardingMode == StreamForwardingMode.TransitOnly)
-                    continue;
-
-                dispatchTasks ??= new List<Task>();
-                dispatchTasks.Add(DispatchAsync(sourceActorId, binding.TargetStreamId, forwarded, ct));
-            }
-
-            if (dispatchTasks is { Count: > 0 })
-            {
-                await Task.WhenAll(dispatchTasks);
-            }
-        }
     }
 
     private Task DispatchAsync(string senderActorId, string targetActorId, EventEnvelope envelope, CancellationToken ct)

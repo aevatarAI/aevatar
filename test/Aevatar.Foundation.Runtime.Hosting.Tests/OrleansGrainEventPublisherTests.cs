@@ -123,8 +123,8 @@ public class OrleansGrainEventPublisherTests
     [Fact]
     public async Task PublishAsync_WhenDirectionIsDown_ShouldRouteByForwardingRegistry()
     {
-        var streams = new RecordingStreamProvider();
         var registry = new InMemoryStreamForwardingRegistry();
+        var streams = new RecordingStreamProvider(registry);
         await registry.UpsertAsync(
             new StreamForwardingBinding
             {
@@ -142,8 +142,7 @@ public class OrleansGrainEventPublisherTests
         var publisher = CreatePublisher(
             actorId: "root",
             streams: streams,
-            onDispatchToSelf: _ => Task.CompletedTask,
-            forwardingRegistry: registry);
+            onDispatchToSelf: _ => Task.CompletedTask);
 
         await publisher.PublishAsync(new StringValue { Value = "task" }, EventDirection.Down, CancellationToken.None);
 
@@ -159,8 +158,8 @@ public class OrleansGrainEventPublisherTests
     [Fact]
     public async Task PublishAsync_WhenTransitOnlyBindingConfigured_ShouldSkipTransitActorAndReachLeaf()
     {
-        var streams = new RecordingStreamProvider();
         var registry = new InMemoryStreamForwardingRegistry();
+        var streams = new RecordingStreamProvider(registry);
         await registry.UpsertAsync(
             new StreamForwardingBinding
             {
@@ -191,8 +190,7 @@ public class OrleansGrainEventPublisherTests
         var publisher = CreatePublisher(
             actorId: "root",
             streams: streams,
-            onDispatchToSelf: _ => Task.CompletedTask,
-            forwardingRegistry: registry);
+            onDispatchToSelf: _ => Task.CompletedTask);
 
         await publisher.PublishAsync(new StringValue { Value = "transit" }, EventDirection.Down, CancellationToken.None);
 
@@ -208,9 +206,9 @@ public class OrleansGrainEventPublisherTests
     [Fact]
     public async Task PublishAsync_WhenForwardingGraphContainsCycle_ShouldSkipLoopbackTarget()
     {
-        var streams = new RecordingStreamProvider();
         var selfDispatchCount = 0;
         var registry = new InMemoryStreamForwardingRegistry();
+        var streams = new RecordingStreamProvider(registry);
         await registry.UpsertAsync(StreamForwardingRules.CreateHierarchyBinding("root", "middle"), CancellationToken.None);
         await registry.UpsertAsync(StreamForwardingRules.CreateHierarchyBinding("middle", "root"), CancellationToken.None);
 
@@ -221,8 +219,7 @@ public class OrleansGrainEventPublisherTests
             {
                 Interlocked.Increment(ref selfDispatchCount);
                 return Task.CompletedTask;
-            },
-            forwardingRegistry: registry);
+            });
 
         await publisher.PublishAsync(new StringValue { Value = "cycle" }, EventDirection.Down, CancellationToken.None);
 
@@ -235,22 +232,26 @@ public class OrleansGrainEventPublisherTests
         string actorId,
         RecordingStreamProvider streams,
         Func<EventEnvelope, Task> onDispatchToSelf,
-        Func<string?>? getParentId = null,
-        IStreamForwardingRegistry? forwardingRegistry = null)
+        Func<string?>? getParentId = null)
     {
         return new OrleansGrainEventPublisher(
             actorId,
             getParentId ?? (() => null),
             onDispatchToSelf,
             new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy()),
-            forwardingRegistry ?? new InMemoryStreamForwardingRegistry(),
             streams);
     }
 
     private sealed class RecordingStreamProvider : IStreamProvider
     {
         private readonly Lock _lock = new();
+        private readonly IStreamForwardingRegistry _registry;
         private readonly Dictionary<string, RecordingStream> _streams = new(StringComparer.Ordinal);
+
+        public RecordingStreamProvider(IStreamForwardingRegistry? registry = null)
+        {
+            _registry = registry ?? new InMemoryStreamForwardingRegistry();
+        }
 
         public IStream GetStream(string actorId)
         {
@@ -258,12 +259,18 @@ public class OrleansGrainEventPublisherTests
             {
                 if (!_streams.TryGetValue(actorId, out var stream))
                 {
-                    stream = new RecordingStream(actorId);
+                    stream = new RecordingStream(actorId, _registry, this);
                     _streams[actorId] = stream;
                 }
 
                 return stream;
             }
+        }
+
+        public void Append(string actorId, EventEnvelope envelope)
+        {
+            var stream = (RecordingStream)GetStream(actorId);
+            stream.Messages.Add(envelope.Clone());
         }
 
         public IReadOnlyList<EventEnvelope> GetProduced(string actorId)
@@ -277,13 +284,16 @@ public class OrleansGrainEventPublisherTests
         }
     }
 
-    private sealed class RecordingStream(string streamId) : IStream
+    private sealed class RecordingStream(
+        string streamId,
+        IStreamForwardingRegistry registry,
+        RecordingStreamProvider owner) : IStream
     {
         public string StreamId => streamId;
 
         public List<EventEnvelope> Messages { get; } = [];
 
-        public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
+        public async Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
         {
             ct.ThrowIfCancellationRequested();
 
@@ -293,7 +303,7 @@ public class OrleansGrainEventPublisherTests
             };
 
             Messages.Add(envelope.Clone());
-            return Task.CompletedTask;
+            await RelayAsync(StreamId, envelope, ct);
         }
 
         public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
@@ -302,6 +312,70 @@ public class OrleansGrainEventPublisherTests
             _ = handler;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IAsyncDisposable>(NoOpSubscription.Instance);
+        }
+
+        public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return registry.UpsertAsync(new StreamForwardingBinding
+            {
+                SourceStreamId = StreamId,
+                TargetStreamId = binding.TargetStreamId,
+                ForwardingMode = binding.ForwardingMode,
+                DirectionFilter = new HashSet<EventDirection>(binding.DirectionFilter),
+                EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
+                Version = binding.Version,
+                LeaseId = binding.LeaseId,
+            }, ct);
+        }
+
+        public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return registry.RemoveAsync(StreamId, targetStreamId, ct);
+        }
+
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return registry.ListBySourceAsync(StreamId, ct);
+        }
+
+        private async Task RelayAsync(string sourceStreamId, EventEnvelope envelope, CancellationToken ct)
+        {
+            var queue = new Queue<(string SourceStreamId, EventEnvelope Envelope)>();
+            var visitedSources = new HashSet<string>(StringComparer.Ordinal);
+            queue.Enqueue((sourceStreamId, envelope));
+
+            while (queue.Count > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var (currentSourceId, currentEnvelope) = queue.Dequeue();
+                if (!visitedSources.Add(currentSourceId))
+                    continue;
+
+                var bindings = await registry.ListBySourceAsync(currentSourceId, ct);
+                foreach (var binding in bindings)
+                {
+                    if (!StreamForwardingRules.TryBuildForwardedEnvelope(
+                            currentSourceId,
+                            binding,
+                            currentEnvelope,
+                            out var forwarded) ||
+                        forwarded == null)
+                    {
+                        continue;
+                    }
+
+                    queue.Enqueue((binding.TargetStreamId, forwarded));
+
+                    if (binding.ForwardingMode == StreamForwardingMode.TransitOnly)
+                        continue;
+
+                    owner.Append(binding.TargetStreamId, forwarded);
+                }
+            }
         }
     }
 

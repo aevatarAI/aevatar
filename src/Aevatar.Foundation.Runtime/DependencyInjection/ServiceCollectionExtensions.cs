@@ -54,7 +54,6 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IStreamProvider>(),
                 sp,
                 sp.GetRequiredService<IStreamLifecycleManager>(),
-                sp.GetRequiredService<IStreamForwardingRegistry>(),
                 sp.GetService<ILogger<LocalActorRuntime>>()));
 
         // Persistence

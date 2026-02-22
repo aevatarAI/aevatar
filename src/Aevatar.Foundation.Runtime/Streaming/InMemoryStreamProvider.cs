@@ -18,7 +18,8 @@ public sealed class InMemoryStreamProvider :
     IStreamLifecycleManager
 {
     private readonly ConcurrentDictionary<string, InMemoryStream> _streams = new();
-    private readonly IStreamForwardingBindingSource _forwardingRegistry;
+    private readonly IStreamForwardingRegistry _forwardingRegistry;
+    private readonly IStreamForwardingBindingSource _forwardingBindingSource;
     private readonly InMemoryStreamForwardingEngine _forwardingEngine;
     private readonly InMemoryStreamOptions _options;
     private readonly ILoggerFactory _loggerFactory;
@@ -45,11 +46,12 @@ public sealed class InMemoryStreamProvider :
     {
         _options = options;
         _loggerFactory = loggerFactory;
-        _forwardingRegistry = forwardingRegistry as IStreamForwardingBindingSource
+        _forwardingRegistry = forwardingRegistry;
+        _forwardingBindingSource = forwardingRegistry as IStreamForwardingBindingSource
             ?? throw new InvalidOperationException(
                 $"{nameof(InMemoryStreamProvider)} requires forwarding registry implementing {nameof(IStreamForwardingBindingSource)}.");
         _forwardingEngine = new InMemoryStreamForwardingEngine(
-            _forwardingRegistry,
+            _forwardingBindingSource,
             streamId => GetStream(streamId),
             loggerFactory.CreateLogger<InMemoryStreamProvider>());
     }
@@ -67,7 +69,10 @@ public sealed class InMemoryStreamProvider :
                 id,
                 _options,
                 _loggerFactory.CreateLogger<InMemoryStream>(),
-                envelope => _forwardingEngine.ForwardAsync(id, envelope));
+                envelope => _forwardingEngine.ForwardAsync(id, envelope),
+                (binding, ct) => _forwardingRegistry.UpsertAsync(binding, ct),
+                (targetStreamId, ct) => _forwardingRegistry.RemoveAsync(id, targetStreamId, ct),
+                ct => _forwardingRegistry.ListBySourceAsync(id, ct));
         });
 
         if (created)
@@ -86,7 +91,7 @@ public sealed class InMemoryStreamProvider :
             NotifyRemoved(actorId);
         }
 
-        _forwardingRegistry.RemoveByActor(actorId);
+        _forwardingBindingSource.RemoveByActor(actorId);
     }
 
     public IDisposable SubscribeCreated(Action<string> onCreated)

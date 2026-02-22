@@ -22,7 +22,6 @@ public sealed class LocalActorRuntime : IActorRuntime
     private readonly ConcurrentDictionary<string, LocalActor> _actors = new();
     private readonly IStreamProvider _streams;
     private readonly IStreamLifecycleManager _streamLifecycleManager;
-    private readonly IStreamForwardingRegistry _streamForwardingRegistry;
     private readonly IServiceProvider _services;
     private readonly ILogger<LocalActorRuntime> _logger;
 
@@ -31,13 +30,11 @@ public sealed class LocalActorRuntime : IActorRuntime
         IStreamProvider streams,
         IServiceProvider services,
         IStreamLifecycleManager streamLifecycleManager,
-        IStreamForwardingRegistry streamForwardingRegistry,
         ILogger<LocalActorRuntime>? logger = null)
     {
         _streams = streams;
         _services = services;
         _streamLifecycleManager = streamLifecycleManager;
-        _streamForwardingRegistry = streamForwardingRegistry;
         _logger = logger ?? NullLogger<LocalActorRuntime>.Instance;
     }
 
@@ -106,7 +103,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         var child = GetRequired(childId);
         parent.AddChild(childId);
         await child.SubscribeToParentAsync(parentId, ct);
-        await _streamForwardingRegistry.UpsertAsync(
+        await _streams.GetStream(parentId).UpsertRelayAsync(
             StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
             ct);
 
@@ -121,7 +118,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         if (parentId != null && _actors.TryGetValue(parentId, out var parent))
         {
             parent.RemoveChild(childId);
-            await _streamForwardingRegistry.RemoveAsync(parentId, childId, ct);
+            await _streams.GetStream(parentId).RemoveRelayAsync(childId, ct);
         }
         await child.UnsubscribeFromParentAsync();
     }

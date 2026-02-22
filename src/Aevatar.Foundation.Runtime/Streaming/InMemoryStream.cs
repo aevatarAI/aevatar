@@ -7,6 +7,7 @@ using System.Threading.Channels;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 
 namespace Aevatar.Foundation.Runtime.Streaming;
 
@@ -23,6 +24,9 @@ public sealed class InMemoryStream : IStream
     private readonly InMemoryStreamOptions _options;
     private readonly ILogger<InMemoryStream> _logger;
     private readonly Func<EventEnvelope, Task>? _onDispatchedAsync;
+    private readonly Func<StreamForwardingBinding, CancellationToken, Task> _upsertRelayAsync;
+    private readonly Func<string, CancellationToken, Task> _removeRelayAsync;
+    private readonly Func<CancellationToken, Task<IReadOnlyList<StreamForwardingBinding>>> _listRelaysAsync;
 
     /// <summary>Stream ID, typically an actor ID.</summary>
     public string StreamId { get; }
@@ -33,7 +37,10 @@ public sealed class InMemoryStream : IStream
         string streamId,
         InMemoryStreamOptions? options = null,
         ILogger<InMemoryStream>? logger = null,
-        Func<EventEnvelope, Task>? onDispatchedAsync = null)
+        Func<EventEnvelope, Task>? onDispatchedAsync = null,
+        Func<StreamForwardingBinding, CancellationToken, Task>? upsertRelayAsync = null,
+        Func<string, CancellationToken, Task>? removeRelayAsync = null,
+        Func<CancellationToken, Task<IReadOnlyList<StreamForwardingBinding>>>? listRelaysAsync = null)
     {
         _options = options ?? new InMemoryStreamOptions();
         var capacity = _options.Capacity > 0 ? _options.Capacity : 4096;
@@ -51,6 +58,9 @@ public sealed class InMemoryStream : IStream
         StreamId = streamId;
         _logger = logger ?? NullLogger<InMemoryStream>.Instance;
         _onDispatchedAsync = onDispatchedAsync;
+        _upsertRelayAsync = upsertRelayAsync ?? ((_, _) => Task.CompletedTask);
+        _removeRelayAsync = removeRelayAsync ?? ((_, _) => Task.CompletedTask);
+        _listRelaysAsync = listRelaysAsync ?? (_ => Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]));
         _pumpLoop = Task.Run(PumpLoopAsync);
         _dispatchLoop = Task.Run(DispatchLoopAsync);
     }
@@ -113,6 +123,28 @@ public sealed class InMemoryStream : IStream
             lock (_lock) { _subscribers = _subscribers.Where(s => s != envelopeHandler).ToArray(); }
         });
         return Task.FromResult<IAsyncDisposable>(sub);
+    }
+
+    public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ct.ThrowIfCancellationRequested();
+
+        var normalized = CloneBindingForCurrentStream(binding);
+        return _upsertRelayAsync(normalized, ct);
+    }
+
+    public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
+        ct.ThrowIfCancellationRequested();
+        return _removeRelayAsync(targetStreamId, ct);
+    }
+
+    public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return _listRelaysAsync(ct);
     }
 
     private async Task PumpLoopAsync()
@@ -242,4 +274,16 @@ public sealed class InMemoryStream : IStream
         _dispatchChannel.Writer.TryComplete();
         _cts.Cancel();
     }
+
+    private StreamForwardingBinding CloneBindingForCurrentStream(StreamForwardingBinding binding) =>
+        new()
+        {
+            SourceStreamId = StreamId,
+            TargetStreamId = binding.TargetStreamId,
+            ForwardingMode = binding.ForwardingMode,
+            DirectionFilter = new HashSet<EventDirection>(binding.DirectionFilter),
+            EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
+            Version = binding.Version,
+            LeaseId = binding.LeaseId,
+        };
 }
