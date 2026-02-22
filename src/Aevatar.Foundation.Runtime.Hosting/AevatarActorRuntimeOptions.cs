@@ -1,27 +1,30 @@
-using Aevatar.Foundation.Runtime.Implementations.Orleans;
-
 namespace Aevatar.Foundation.Runtime.Hosting;
 
 public sealed class AevatarActorRuntimeOptions
 {
     public const string SectionName = "ActorRuntime";
     public const string ProviderInMemory = "InMemory";
-    public const string ProviderMassTransitKafka = "MassTransitKafka";
+    public const string ProviderMassTransit = "MassTransit";
     public const string ProviderOrleans = "Orleans";
+    public const string MassTransitTransportBackendKafka = "Kafka";
     public const string OrleansStreamBackendInMemory = "InMemory";
-    public const string OrleansStreamBackendKafkaAdapter = "KafkaAdapter";
+    public const string OrleansStreamBackendMassTransitAdapter = "MassTransitAdapter";
+    public const string DefaultOrleansStreamProviderName = "AevatarOrleansStreamProvider";
+    public const string DefaultOrleansActorEventNamespace = "aevatar.actor.events";
 
     public string Provider { get; set; } = ProviderInMemory;
 
     public string OrleansStreamBackend { get; set; } = OrleansStreamBackendInMemory;
 
-    public string OrleansStreamProviderName { get; set; } = OrleansRuntimeConstants.DefaultOrleansStreamProviderName;
+    public string OrleansStreamProviderName { get; set; } = DefaultOrleansStreamProviderName;
 
-    public string OrleansActorEventNamespace { get; set; } = OrleansRuntimeConstants.ActorEventStreamNamespace;
+    public string OrleansActorEventNamespace { get; set; } = DefaultOrleansActorEventNamespace;
 
-    public string KafkaBootstrapServers { get; set; } = "localhost:9092";
+    public string MassTransitTransportBackend { get; set; } = MassTransitTransportBackendKafka;
 
-    public string KafkaTopicName { get; set; } = OrleansRuntimeConstants.KafkaEventTopicName;
+    public string MassTransitKafkaBootstrapServers { get; set; } = "localhost:9092";
 
-    public string KafkaConsumerGroup { get; set; } = OrleansRuntimeConstants.KafkaDefaultConsumerGroup;
+    public string MassTransitKafkaTopicName { get; set; } = "aevatar-foundation-agent-events";
+
+    public string MassTransitKafkaConsumerGroup { get; set; } = "aevatar-foundation-kafka-streaming";
 }

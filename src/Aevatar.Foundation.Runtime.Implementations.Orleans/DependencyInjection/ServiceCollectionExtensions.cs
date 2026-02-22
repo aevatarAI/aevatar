@@ -1,11 +1,10 @@
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.KafkaAdapter;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.Kafka;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.DependencyInjection;
 using Orleans.Hosting;
+using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 
@@ -34,12 +33,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
         services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
-        services.Replace(ServiceDescriptor.Singleton<IStreamForwardingRegistry, OrleansDistributedStreamForwardingRegistry>());
-        services.AddAevatarOrleansStreamProviderAdapter();
+        services.AddAevatarFoundationRuntimeOrleansStreaming();
 
-        if (string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendKafkaAdapter, StringComparison.OrdinalIgnoreCase))
-            services.TryAddSingleton<OrleansKafkaQueueAdapterFactory>();
-        else if (!string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendInMemory, StringComparison.OrdinalIgnoreCase))
+        var isInMemory = string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendInMemory, StringComparison.OrdinalIgnoreCase);
+        var isMassTransitAdapter = string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase);
+        if (!isInMemory && !isMassTransitAdapter)
             throw new InvalidOperationException($"Unsupported Orleans stream backend '{options.StreamBackend}'.");
 
         return services;
@@ -56,11 +54,11 @@ public static class ServiceCollectionExtensions
 
         builder.AddMemoryGrainStorage(OrleansRuntimeConstants.GrainStateStorageName);
 
-        if (string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendKafkaAdapter, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase))
         {
             builder.AddPersistentStreams(
                 options.StreamProviderName,
-                (sp, _) => sp.GetRequiredService<OrleansKafkaQueueAdapterFactory>(),
+                (sp, _) => ResolveQueueAdapterFactory(sp),
                 _ => { });
         }
         else if (string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendInMemory, StringComparison.OrdinalIgnoreCase))
@@ -85,6 +83,17 @@ public static class ServiceCollectionExtensions
         });
 
         return builder;
+    }
+
+    private static IQueueAdapterFactory ResolveQueueAdapterFactory(IServiceProvider serviceProvider)
+    {
+        var queueAdapterFactory = serviceProvider.GetService<IQueueAdapterFactory>();
+        if (queueAdapterFactory != null)
+            return queueAdapterFactory;
+
+        throw new InvalidOperationException(
+            "Missing Orleans stream queue adapter factory for MassTransitAdapter backend. " +
+            "Register it via AddAevatarFoundationRuntimeOrleansMassTransitAdapter().");
     }
 
 }

@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;

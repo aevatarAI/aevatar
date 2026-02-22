@@ -3,23 +3,18 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>Aevatar.Foundation.Runtime.Implementations.Orleans</AssemblyName>
-    <RootNamespace>Aevatar.Foundation.Runtime.Implementations.Orleans</RootNamespace>
+    <AssemblyName>Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming</AssemblyName>
+    <RootNamespace>Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
-    <ProjectReference Include="..\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
-    <ProjectReference Include="..\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
-    <ProjectReference Include="..\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Orleans.Client" />
     <PackageReference Include="Microsoft.Orleans.Core" />
     <PackageReference Include="Microsoft.Orleans.Runtime" />
-    <PackageReference Include="Microsoft.Orleans.Server" />
     <PackageReference Include="Microsoft.Orleans.Streaming" />
     <PackageReference Include="Microsoft.Orleans.Sdk" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Orleans.Persistence.Memory" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />

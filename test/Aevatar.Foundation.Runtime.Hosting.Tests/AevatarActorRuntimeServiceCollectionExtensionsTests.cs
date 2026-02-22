@@ -5,7 +5,7 @@ using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.Kafka;
+using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -97,49 +97,52 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddAevatarActorRuntime_WhenOrleansWithKafkaAdapterBackend_ShouldRegisterKafkaTransportAndStreamAdapter()
+    public void AddAevatarActorRuntime_WhenOrleansWithMassTransitAdapterBackend_ShouldRegisterMassTransitTransportAndStreamAdapter()
     {
         var services = new ServiceCollection();
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
             [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
-            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendKafkaAdapter,
-            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"] = "localhost:19092",
-            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"] = "runtime-events",
-            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"] = "runtime-group",
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter,
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitTransportBackend"] = AevatarActorRuntimeOptions.MassTransitTransportBackendKafka,
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaBootstrapServers"] = "localhost:19092",
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaTopicName"] = "runtime-events",
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaConsumerGroup"] = "runtime-group",
         });
 
         services.AddAevatarActorRuntime(configuration);
 
-        services.Should().Contain(x => x.ServiceType == typeof(IKafkaEnvelopeTransport));
+        services.Should().Contain(x => x.ServiceType == typeof(IMassTransitEnvelopeTransport));
         services.Should().Contain(x => x.ServiceType == typeof(Aevatar.Foundation.Abstractions.IStreamProvider) &&
                                        x.ImplementationType == typeof(OrleansStreamProviderAdapter));
 
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
-        options.OrleansStreamBackend.Should().Be(AevatarActorRuntimeOptions.OrleansStreamBackendKafkaAdapter);
-        options.KafkaBootstrapServers.Should().Be("localhost:19092");
-        options.KafkaTopicName.Should().Be("runtime-events");
-        options.KafkaConsumerGroup.Should().Be("runtime-group");
+        options.OrleansStreamBackend.Should().Be(AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter);
+        options.MassTransitTransportBackend.Should().Be(AevatarActorRuntimeOptions.MassTransitTransportBackendKafka);
+        options.MassTransitKafkaBootstrapServers.Should().Be("localhost:19092");
+        options.MassTransitKafkaTopicName.Should().Be("runtime-events");
+        options.MassTransitKafkaConsumerGroup.Should().Be("runtime-group");
     }
 
     [Fact]
-    public void AddAevatarActorRuntime_WhenProviderIsMassTransitKafka_ShouldUseDirectKafkaStreamProvider()
+    public void AddAevatarActorRuntime_WhenProviderIsMassTransit_ShouldUseDirectMassTransitStreamProvider()
     {
         var services = new ServiceCollection();
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
-            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderMassTransitKafka,
-            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"] = "localhost:29092",
-            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"] = "direct-events",
-            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"] = "direct-runtime-group",
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderMassTransit,
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitTransportBackend"] = AevatarActorRuntimeOptions.MassTransitTransportBackendKafka,
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaBootstrapServers"] = "localhost:29092",
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaTopicName"] = "direct-events",
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaConsumerGroup"] = "direct-runtime-group",
         });
 
         services.AddAevatarActorRuntime(configuration);
 
-        services.Should().Contain(x => x.ServiceType == typeof(IKafkaEnvelopeTransport));
+        services.Should().Contain(x => x.ServiceType == typeof(IMassTransitEnvelopeTransport));
         services.Should().Contain(x => x.ServiceType == typeof(Aevatar.Foundation.Abstractions.IStreamProvider) &&
-                                       x.ImplementationType == typeof(MassTransitKafkaStreamProvider));
+                                       x.ImplementationType == typeof(MassTransitStreamProvider));
 
         var actorRuntimeDescriptor = services.LastOrDefault(x => x.ServiceType == typeof(IActorRuntime));
         actorRuntimeDescriptor.Should().NotBeNull();
@@ -147,10 +150,28 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
 
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
-        options.Provider.Should().Be(AevatarActorRuntimeOptions.ProviderMassTransitKafka);
-        options.KafkaBootstrapServers.Should().Be("localhost:29092");
-        options.KafkaTopicName.Should().Be("direct-events");
-        options.KafkaConsumerGroup.Should().Be("direct-runtime-group");
+        options.Provider.Should().Be(AevatarActorRuntimeOptions.ProviderMassTransit);
+        options.MassTransitTransportBackend.Should().Be(AevatarActorRuntimeOptions.MassTransitTransportBackendKafka);
+        options.MassTransitKafkaBootstrapServers.Should().Be("localhost:29092");
+        options.MassTransitKafkaTopicName.Should().Be("direct-events");
+        options.MassTransitKafkaConsumerGroup.Should().Be("direct-runtime-group");
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenMassTransitTransportBackendIsUnsupported_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderMassTransit,
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitTransportBackend"] = "RabbitMq",
+        });
+
+        var act = () => services.AddAevatarActorRuntime(configuration);
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*Unsupported MassTransit transport backend*");
     }
 
     [Fact]

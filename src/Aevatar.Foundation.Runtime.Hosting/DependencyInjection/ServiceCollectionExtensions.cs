@@ -1,6 +1,8 @@
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.Kafka;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
+using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
+using Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -21,15 +23,18 @@ public static class ServiceCollectionExtensions
         var configuredProvider = configuration[$"{AevatarActorRuntimeOptions.SectionName}:Provider"];
         if (!string.IsNullOrWhiteSpace(configuredProvider))
             options.Provider = configuredProvider;
-        var configuredKafkaBootstrap = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"];
-        if (!string.IsNullOrWhiteSpace(configuredKafkaBootstrap))
-            options.KafkaBootstrapServers = configuredKafkaBootstrap;
-        var configuredKafkaTopic = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"];
-        if (!string.IsNullOrWhiteSpace(configuredKafkaTopic))
-            options.KafkaTopicName = configuredKafkaTopic;
-        var configuredKafkaConsumerGroup = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"];
-        if (!string.IsNullOrWhiteSpace(configuredKafkaConsumerGroup))
-            options.KafkaConsumerGroup = configuredKafkaConsumerGroup;
+        var configuredMassTransitTransportBackend = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitTransportBackend"];
+        if (!string.IsNullOrWhiteSpace(configuredMassTransitTransportBackend))
+            options.MassTransitTransportBackend = configuredMassTransitTransportBackend;
+        var configuredMassTransitKafkaBootstrap = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaBootstrapServers"];
+        if (!string.IsNullOrWhiteSpace(configuredMassTransitKafkaBootstrap))
+            options.MassTransitKafkaBootstrapServers = configuredMassTransitKafkaBootstrap;
+        var configuredMassTransitKafkaTopic = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaTopicName"];
+        if (!string.IsNullOrWhiteSpace(configuredMassTransitKafkaTopic))
+            options.MassTransitKafkaTopicName = configuredMassTransitKafkaTopic;
+        var configuredMassTransitKafkaConsumerGroup = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaConsumerGroup"];
+        if (!string.IsNullOrWhiteSpace(configuredMassTransitKafkaConsumerGroup))
+            options.MassTransitKafkaConsumerGroup = configuredMassTransitKafkaConsumerGroup;
         var configuredOrleansStreamBackend = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"];
         if (!string.IsNullOrWhiteSpace(configuredOrleansStreamBackend))
             options.OrleansStreamBackend = configuredOrleansStreamBackend;
@@ -49,16 +54,11 @@ public static class ServiceCollectionExtensions
             return services;
         }
 
-        if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderMassTransitKafka, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderMassTransit, StringComparison.OrdinalIgnoreCase))
         {
             services.AddAevatarRuntime();
-            services.AddAevatarFoundationRuntimeMassTransitKafkaTransport(transportOptions =>
-            {
-                transportOptions.BootstrapServers = options.KafkaBootstrapServers;
-                transportOptions.TopicName = options.KafkaTopicName;
-                transportOptions.ConsumerGroup = options.KafkaConsumerGroup;
-            });
-            services.AddAevatarMassTransitKafkaStreamProvider();
+            ConfigureMassTransitTransport(services, options);
+            services.AddAevatarMassTransitStreamProvider();
             return services;
         }
 
@@ -75,15 +75,10 @@ public static class ServiceCollectionExtensions
             if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendInMemory, StringComparison.OrdinalIgnoreCase))
                 return services;
 
-            if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendKafkaAdapter, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase))
             {
-                services.AddAevatarFoundationRuntimeMassTransitKafkaTransport(transportOptions =>
-                {
-                    transportOptions.BootstrapServers = options.KafkaBootstrapServers;
-                    transportOptions.TopicName = options.KafkaTopicName;
-                    transportOptions.ConsumerGroup = options.KafkaConsumerGroup;
-                });
-                services.AddAevatarOrleansStreamProviderAdapter();
+                ConfigureMassTransitTransport(services, options);
+                services.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
                 return services;
             }
 
@@ -93,5 +88,26 @@ public static class ServiceCollectionExtensions
 
         throw new InvalidOperationException(
             $"Unsupported ActorRuntime provider '{options.Provider}'.");
+    }
+
+    private static void ConfigureMassTransitTransport(
+        IServiceCollection services,
+        AevatarActorRuntimeOptions options)
+    {
+        if (!string.Equals(
+                options.MassTransitTransportBackend,
+                AevatarActorRuntimeOptions.MassTransitTransportBackendKafka,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Unsupported MassTransit transport backend '{options.MassTransitTransportBackend}'.");
+        }
+
+        services.AddAevatarFoundationRuntimeMassTransitKafkaTransport(transportOptions =>
+        {
+            transportOptions.BootstrapServers = options.MassTransitKafkaBootstrapServers;
+            transportOptions.TopicName = options.MassTransitKafkaTopicName;
+            transportOptions.ConsumerGroup = options.MassTransitKafkaConsumerGroup;
+        });
     }
 }
