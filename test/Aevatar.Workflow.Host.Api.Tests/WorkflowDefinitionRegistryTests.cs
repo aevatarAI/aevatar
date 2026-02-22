@@ -93,4 +93,29 @@ public class WorkflowDefinitionRegistryTests
             Directory.Delete(tmpDir, true);
         }
     }
+
+    [Fact]
+    public void FileLoader_DuplicateDirectoryEntries_ShouldLoadOnlyOnce()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), $"wf_test_dup_dir_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmpDir);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tmpDir, "brainstorm.yaml"), "name: brainstorm");
+            var equivalentPath = Path.Combine(tmpDir, ".");
+
+            var registry = new WorkflowDefinitionRegistry();
+            var loader = new WorkflowDefinitionFileLoader();
+
+            var count = loader.LoadInto(registry, [tmpDir, equivalentPath], NullLogger.Instance);
+
+            count.Should().Be(1);
+            registry.GetNames().Should().ContainSingle().Which.Should().Be("brainstorm");
+        }
+        finally
+        {
+            Directory.Delete(tmpDir, true);
+        }
+    }
 }

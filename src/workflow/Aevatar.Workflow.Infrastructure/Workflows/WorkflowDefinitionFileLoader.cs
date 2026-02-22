@@ -16,7 +16,14 @@ public sealed class WorkflowDefinitionFileLoader
 
         var loaded = 0;
         var registeredNames = new HashSet<string>(registry.GetNames(), StringComparer.OrdinalIgnoreCase);
-        foreach (var directory in directories.Where(Directory.Exists))
+        var normalizedDirectories = directories
+            .Where(static directory => !string.IsNullOrWhiteSpace(directory))
+            .Select(static directory => Path.GetFullPath(directory))
+            .Select(static directory => Path.TrimEndingDirectorySeparator(directory))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(Directory.Exists);
+
+        foreach (var directory in normalizedDirectories)
         {
             foreach (var file in Directory.EnumerateFiles(directory, "*.*")
                          .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
