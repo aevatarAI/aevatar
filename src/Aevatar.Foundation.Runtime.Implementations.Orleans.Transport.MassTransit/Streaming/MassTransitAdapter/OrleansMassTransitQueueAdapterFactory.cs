@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Configuration;
 using Orleans.Providers.Streams.Common;
@@ -10,19 +11,29 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTrans
 internal sealed class OrleansMassTransitQueueAdapterFactory : IQueueAdapterFactory
 {
     private readonly string _providerName;
-    private readonly IMassTransitEnvelopeTransport _transport;
     private readonly IQueueAdapterCache _cache;
     private readonly IStreamQueueMapper _queueMapper;
     private readonly OrleansMassTransitQueueAdapter _adapter;
     private static readonly IStreamFailureHandler NoOpFailureHandler = new NoOpStreamDeliveryFailureHandler();
 
+    [ActivatorUtilitiesConstructor]
     public OrleansMassTransitQueueAdapterFactory(
         AevatarOrleansRuntimeOptions runtimeOptions,
-        IMassTransitEnvelopeTransport transport,
+        IServiceProvider serviceProvider,
+        ILoggerFactory loggerFactory)
+        : this(
+            runtimeOptions,
+            () => serviceProvider.GetRequiredService<IMassTransitEnvelopeTransport>(),
+            loggerFactory)
+    {
+    }
+
+    private OrleansMassTransitQueueAdapterFactory(
+        AevatarOrleansRuntimeOptions runtimeOptions,
+        Func<IMassTransitEnvelopeTransport> resolveTransport,
         ILoggerFactory loggerFactory)
     {
         _providerName = runtimeOptions.StreamProviderName;
-        _transport = transport;
 
         var mapperOptions = new HashRingStreamQueueMapperOptions
         {
@@ -40,7 +51,7 @@ internal sealed class OrleansMassTransitQueueAdapterFactory : IQueueAdapterFacto
             : runtimeOptions.ActorEventNamespace;
         _adapter = new OrleansMassTransitQueueAdapter(
             _providerName,
-            _transport,
+            resolveTransport,
             _queueMapper,
             actorEventNamespace);
     }

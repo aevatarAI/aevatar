@@ -9,7 +9,7 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTrans
 internal sealed class OrleansMassTransitQueueAdapter : IQueueAdapter
 {
     private readonly string _providerName;
-    private readonly IMassTransitEnvelopeTransport _transport;
+    private readonly Lazy<IMassTransitEnvelopeTransport> _transport;
     private readonly IStreamQueueMapper _queueMapper;
     private readonly string _actorEventNamespace;
 
@@ -18,9 +18,18 @@ internal sealed class OrleansMassTransitQueueAdapter : IQueueAdapter
         IMassTransitEnvelopeTransport transport,
         IStreamQueueMapper queueMapper,
         string actorEventNamespace)
+        : this(providerName, () => transport, queueMapper, actorEventNamespace)
+    {
+    }
+
+    public OrleansMassTransitQueueAdapter(
+        string providerName,
+        Func<IMassTransitEnvelopeTransport> resolveTransport,
+        IStreamQueueMapper queueMapper,
+        string actorEventNamespace)
     {
         _providerName = providerName;
-        _transport = transport;
+        _transport = new Lazy<IMassTransitEnvelopeTransport>(resolveTransport);
         _queueMapper = queueMapper;
         _actorEventNamespace = actorEventNamespace;
     }
@@ -59,7 +68,7 @@ internal sealed class OrleansMassTransitQueueAdapter : IQueueAdapter
                 continue;
 
             var streamNamespace = streamId.GetNamespace() ?? OrleansRuntimeConstants.ActorEventStreamNamespace;
-            await _transport.PublishAsync(
+            await _transport.Value.PublishAsync(
                 streamNamespace,
                 streamId.GetKeyAsString(),
                 envelope.ToByteArray(),
@@ -71,6 +80,6 @@ internal sealed class OrleansMassTransitQueueAdapter : IQueueAdapter
         new OrleansMassTransitQueueAdapterReceiver(
             queueId,
             _queueMapper,
-            _transport,
+            () => _transport.Value,
             _actorEventNamespace);
 }

@@ -56,6 +56,7 @@ public static class ServiceCollectionExtensions
 
         if (string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase))
         {
+            EnsurePersistentStreamPubSubStorage(builder);
             builder.AddPersistentStreams(
                 options.StreamProviderName,
                 (sp, _) => ResolveQueueAdapterFactory(sp),
@@ -83,6 +84,12 @@ public static class ServiceCollectionExtensions
         });
 
         return builder;
+    }
+
+    private static void EnsurePersistentStreamPubSubStorage(ISiloBuilder builder)
+    {
+        // Orleans persistent streams need pub/sub metadata storage.
+        builder.AddMemoryGrainStorage("PubSubStore");
     }
 
     private static IQueueAdapterFactory ResolveQueueAdapterFactory(IServiceProvider serviceProvider)

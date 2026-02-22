@@ -10,7 +10,7 @@ internal sealed class OrleansMassTransitQueueAdapterReceiver : IQueueAdapterRece
 {
     private readonly QueueId _queueId;
     private readonly IStreamQueueMapper _queueMapper;
-    private readonly IMassTransitEnvelopeTransport _transport;
+    private readonly Lazy<IMassTransitEnvelopeTransport> _transport;
     private readonly string _actorEventNamespace;
     private readonly ConcurrentQueue<IBatchContainer> _messages = new();
     private long _sequence;
@@ -21,11 +21,20 @@ internal sealed class OrleansMassTransitQueueAdapterReceiver : IQueueAdapterRece
         IStreamQueueMapper queueMapper,
         IMassTransitEnvelopeTransport transport,
         string actorEventNamespace)
+        : this(queueId, queueMapper, () => transport, actorEventNamespace)
+    {
+    }
+
+    public OrleansMassTransitQueueAdapterReceiver(
+        QueueId queueId,
+        IStreamQueueMapper queueMapper,
+        Func<IMassTransitEnvelopeTransport> resolveTransport,
+        string actorEventNamespace)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorEventNamespace);
         _queueId = queueId;
         _queueMapper = queueMapper;
-        _transport = transport;
+        _transport = new Lazy<IMassTransitEnvelopeTransport>(resolveTransport);
         _actorEventNamespace = actorEventNamespace;
     }
 
@@ -33,7 +42,7 @@ internal sealed class OrleansMassTransitQueueAdapterReceiver : IQueueAdapterRece
     {
         _ = timeout;
 
-        _subscription = await _transport.SubscribeAsync(async record =>
+        _subscription = await _transport.Value.SubscribeAsync(async record =>
         {
             if (record.Payload is not { Length: > 0 })
                 return;

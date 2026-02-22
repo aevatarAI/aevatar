@@ -1,12 +1,39 @@
 using MassTransit;
+using Microsoft.Extensions.DependencyInjection;
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 
 namespace Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka;
 
-internal sealed class MassTransitKafkaEnvelopeTransport(
-    ITopicProducer<KafkaStreamEnvelopeMessage> producer,
-    MassTransitKafkaEnvelopeDispatcher dispatcher) : IMassTransitEnvelopeTransport
+internal sealed class MassTransitKafkaEnvelopeTransport : IMassTransitEnvelopeTransport
 {
+    private readonly Lazy<ITopicProducer<KafkaStreamEnvelopeMessage>> _producer;
+    private readonly MassTransitKafkaEnvelopeDispatcher _dispatcher;
+
+    [ActivatorUtilitiesConstructor]
+    public MassTransitKafkaEnvelopeTransport(
+        IServiceProvider serviceProvider,
+        MassTransitKafkaEnvelopeDispatcher dispatcher)
+        : this(
+            () => serviceProvider.GetRequiredService<ITopicProducer<KafkaStreamEnvelopeMessage>>(),
+            dispatcher)
+    {
+    }
+
+    internal MassTransitKafkaEnvelopeTransport(
+        ITopicProducer<KafkaStreamEnvelopeMessage> producer,
+        MassTransitKafkaEnvelopeDispatcher dispatcher)
+        : this(() => producer, dispatcher)
+    {
+    }
+
+    private MassTransitKafkaEnvelopeTransport(
+        Func<ITopicProducer<KafkaStreamEnvelopeMessage>> resolveProducer,
+        MassTransitKafkaEnvelopeDispatcher dispatcher)
+    {
+        _producer = new Lazy<ITopicProducer<KafkaStreamEnvelopeMessage>>(resolveProducer);
+        _dispatcher = dispatcher;
+    }
+
     public Task PublishAsync(
         string streamNamespace,
         string streamId,
@@ -24,7 +51,7 @@ internal sealed class MassTransitKafkaEnvelopeTransport(
             Payload = payload,
         };
 
-        return producer.Produce(message, ct);
+        return _producer.Value.Produce(message, ct);
     }
 
     public Task<IAsyncDisposable> SubscribeAsync(
@@ -32,6 +59,6 @@ internal sealed class MassTransitKafkaEnvelopeTransport(
         CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        return dispatcher.SubscribeAsync(handler);
+        return _dispatcher.SubscribeAsync(handler);
     }
 }

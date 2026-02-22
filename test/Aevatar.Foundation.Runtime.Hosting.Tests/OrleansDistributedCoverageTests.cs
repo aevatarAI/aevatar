@@ -253,6 +253,90 @@ public sealed class OrleansDistributedCoverageTests
     }
 
     [Fact]
+    public async Task StreamTopologyGrain_UpsertWithSameCountsButDifferentDirectionOrEventType_ShouldWrite()
+    {
+        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
+        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
+        var grain = new StreamTopologyGrain(state);
+
+        await grain.UpsertAsync(new StreamForwardingBinding
+        {
+            SourceStreamId = "source-1",
+            TargetStreamId = "target-1",
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = new HashSet<EventDirection> { EventDirection.Down, EventDirection.Both },
+            EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt-a", "evt-b" },
+            Version = 1,
+            LeaseId = "lease-1",
+        });
+        stateProxy.WriteCount.Should().Be(1);
+
+        await grain.UpsertAsync(new StreamForwardingBinding
+        {
+            SourceStreamId = "source-1",
+            TargetStreamId = "target-1",
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = new HashSet<EventDirection> { EventDirection.Down, EventDirection.Up },
+            EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt-a", "evt-b" },
+            Version = 1,
+            LeaseId = "lease-1",
+        });
+        stateProxy.WriteCount.Should().Be(2);
+
+        await grain.UpsertAsync(new StreamForwardingBinding
+        {
+            SourceStreamId = "source-1",
+            TargetStreamId = "target-1",
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = new HashSet<EventDirection> { EventDirection.Down, EventDirection.Up },
+            EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt-a", "evt-c" },
+            Version = 1,
+            LeaseId = "lease-1",
+        });
+        stateProxy.WriteCount.Should().Be(3);
+
+        var listed = await grain.ListAsync();
+        listed.Should().ContainSingle();
+        listed[0].DirectionFilter.Should().BeEquivalentTo(new[] { EventDirection.Down, EventDirection.Up });
+        listed[0].EventTypeFilter.Should().BeEquivalentTo("evt-a", "evt-c");
+    }
+
+    [Fact]
+    public async Task StreamTopologyGrain_LegacyBindingsWithBlankTarget_ShouldSkipInvalidEntry()
+    {
+        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
+        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
+        stateProxy.State.Bindings.Add(new StreamForwardingBindingEntry
+        {
+            SourceStreamId = "source-legacy",
+            TargetStreamId = " ",
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = [EventDirection.Down],
+            EventTypeFilter = ["evt"],
+            Version = 1,
+            LeaseId = "lease-invalid",
+        });
+        stateProxy.State.Bindings.Add(new StreamForwardingBindingEntry
+        {
+            SourceStreamId = "source-legacy",
+            TargetStreamId = "target-valid",
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = [EventDirection.Down],
+            EventTypeFilter = ["evt"],
+            Version = 2,
+            LeaseId = "lease-valid",
+        });
+
+        var grain = new StreamTopologyGrain(state);
+        var listed = await grain.ListAsync();
+
+        listed.Should().ContainSingle();
+        listed[0].TargetStreamId.Should().Be("target-valid");
+        listed[0].LeaseId.Should().Be("lease-valid");
+        stateProxy.State.Bindings.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RuntimeActorGrain_ShouldManageStateWithoutActivationContext()
     {
         var state = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();

@@ -5,6 +5,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Configuration;
 using Orleans.Providers.Streams.Common;
@@ -83,6 +84,9 @@ public sealed class OrleansMassTransitQueueAdapterCoverageTests
     public async Task OrleansMassTransitQueueAdapterFactory_ShouldBuildAdapterAndInfrastructure()
     {
         var transport = new RecordingEnvelopeTransport();
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton<IMassTransitEnvelopeTransport>(transport)
+            .BuildServiceProvider();
         var factory = new OrleansMassTransitQueueAdapterFactory(
             new AevatarOrleansRuntimeOptions
             {
@@ -91,7 +95,7 @@ public sealed class OrleansMassTransitQueueAdapterCoverageTests
                 QueueCacheSize = 1,
                 ActorEventNamespace = " ",
             },
-            transport,
+            serviceProvider,
             NullLoggerFactory.Instance);
 
         var adapter = await factory.CreateAdapter();
@@ -114,6 +118,9 @@ public sealed class OrleansMassTransitQueueAdapterCoverageTests
     public async Task OrleansMassTransitQueueAdapterFactory_ShouldHonorCustomActorEventNamespace()
     {
         var transport = new RecordingEnvelopeTransport();
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton<IMassTransitEnvelopeTransport>(transport)
+            .BuildServiceProvider();
         var options = new AevatarOrleansRuntimeOptions
         {
             StreamProviderName = "provider-c",
@@ -121,7 +128,7 @@ public sealed class OrleansMassTransitQueueAdapterCoverageTests
             QueueCacheSize = 256,
             ActorEventNamespace = "custom.actor.events",
         };
-        var factory = new OrleansMassTransitQueueAdapterFactory(options, transport, NullLoggerFactory.Instance);
+        var factory = new OrleansMassTransitQueueAdapterFactory(options, serviceProvider, NullLoggerFactory.Instance);
         var adapter = await factory.CreateAdapter();
         var queueId = factory.GetStreamQueueMapper().GetAllQueues().First();
         var receiver = (OrleansMassTransitQueueAdapterReceiver)adapter.CreateReceiver(queueId);

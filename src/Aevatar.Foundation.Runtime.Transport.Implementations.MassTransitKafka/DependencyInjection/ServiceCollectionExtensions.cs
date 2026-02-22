@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
+using Confluent.Kafka;
 using MassTransit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -40,6 +41,8 @@ public static class ServiceCollectionExtensions
                         options.ConsumerGroup,
                         endpoint =>
                         {
+                            endpoint.CreateIfMissing(_ => { });
+                            endpoint.AutoOffsetReset = AutoOffsetReset.Earliest;
                             endpoint.ConfigureConsumer<MassTransitKafkaEnvelopeConsumer>(context);
                         });
                 });
