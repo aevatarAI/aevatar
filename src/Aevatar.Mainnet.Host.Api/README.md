@@ -20,8 +20,6 @@ docker compose up -d kafka
 2. 以 Distributed 环境启动：
 
 ```bash
-# MassTransit 9 需要 License（可通过 MT_LICENSE 或 MT_LICENSE_PATH 提供）
-# export MT_LICENSE="<your-base64-license>"
 ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host.Api
 ```
 
@@ -50,7 +48,6 @@ export AEVATAR_Orleans__GatewayPort=30000
 仓库提供了 `docker-compose.mainnet-cluster.yml`（3 节点 Mainnet + Kafka）。
 
 ```bash
-export MT_LICENSE="<your-base64-license>"
 bash tools/cluster/start-mainnet-cluster.sh
 ```
 

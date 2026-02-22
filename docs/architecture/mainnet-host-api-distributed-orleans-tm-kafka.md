@@ -75,8 +75,6 @@ flowchart LR
 
 ```bash
 docker compose up -d kafka
-# MassTransit 9 需要 License（MT_LICENSE 或 MT_LICENSE_PATH）
-# export MT_LICENSE="<your-base64-license>"
 ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host.Api
 ```
 
@@ -85,7 +83,6 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 仓库提供 `docker-compose.mainnet-cluster.yml` + `tools/cluster/*.sh`：
 
 ```bash
-export MT_LICENSE="<your-base64-license>"
 bash tools/cluster/start-mainnet-cluster.sh
 ```
 

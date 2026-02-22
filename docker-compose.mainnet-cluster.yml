@@ -10,8 +10,6 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
-      MT_LICENSE: ${MT_LICENSE:-}
-      MT_LICENSE_PATH: ${MT_LICENSE_PATH:-}
       AEVATAR_ActorRuntime__Provider: Orleans
       AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
       AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
@@ -43,8 +41,6 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
-      MT_LICENSE: ${MT_LICENSE:-}
-      MT_LICENSE_PATH: ${MT_LICENSE_PATH:-}
       AEVATAR_ActorRuntime__Provider: Orleans
       AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
       AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
@@ -76,8 +72,6 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
-      MT_LICENSE: ${MT_LICENSE:-}
-      MT_LICENSE_PATH: ${MT_LICENSE_PATH:-}
       AEVATAR_ActorRuntime__Provider: Orleans
       AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
       AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka

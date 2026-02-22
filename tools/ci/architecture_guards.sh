@@ -57,6 +57,23 @@ if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
   exit 1
 fi
 
+if rg -n "<MassTransitVersion>9\." Directory.Packages.props; then
+  echo "MassTransit v9 is forbidden in this repository. Keep MassTransitVersion on v8.x."
+  exit 1
+fi
+
+mass_transit_v9_refs="$(
+  rg -n "<Package(Reference|Version) Include=\"MassTransit(\.[^\"]*)?\" Version=\"9\." \
+    Directory.Packages.props src test demos tools \
+    -g 'Directory.Packages.props' -g '*.csproj' || true
+)"
+
+if [ -n "${mass_transit_v9_refs}" ]; then
+  echo "${mass_transit_v9_refs}"
+  echo "MassTransit package references must stay on v8.x. v9 references are forbidden."
+  exit 1
+fi
+
 reducer_test_coverage_violations=""
 reducer_test_scan_roots=(
   "src/Aevatar.AI.Projection/Reducers"
