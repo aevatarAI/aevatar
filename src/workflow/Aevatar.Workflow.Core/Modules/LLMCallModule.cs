@@ -10,7 +10,6 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -62,7 +61,7 @@ public sealed class LLMCallModule : IEventModule
             var targetRole = request.TargetRole;
             var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
 
-            if (!string.IsNullOrEmpty(targetRole) && ctx.Agent is GAgentBase gab)
+            if (!string.IsNullOrEmpty(targetRole))
             {
                 var targetActorId = ResolveTargetActorId(ctx.AgentId, targetRole);
 
@@ -72,7 +71,7 @@ public sealed class LLMCallModule : IEventModule
                     request.StepId, targetRole, targetActorId, prompt.Length, promptPreview);
 
                 var chatEvt = new ChatRequestEvent { Prompt = prompt, SessionId = chatSessionId };
-                await gab.EventPublisher.SendToAsync(targetActorId, chatEvt, ct);
+                await ctx.SendToAsync(targetActorId, chatEvt, ct);
             }
             else
             {

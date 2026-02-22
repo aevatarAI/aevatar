@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -9,6 +10,7 @@ using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Workflows;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -35,6 +37,7 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddSingleton<IWorkflowExecutionReportArtifactSink>(new FakeReportSink());
         services.AddLogging();
         services.AddSingleton<IActorRuntime>(new FakeActorRuntime());
+        services.AddSingleton<IAgentManifestStore>(new FakeAgentManifestStore());
 
         services.AddWorkflowInfrastructure(options =>
         {
@@ -177,7 +180,8 @@ public sealed class WorkflowInfrastructureCoverageTests
     public async Task WorkflowRunActorPort_ShouldForwardRuntimeCalls_AndValidateArguments()
     {
         var runtime = new FakeActorRuntime();
-        var port = new WorkflowRunActorPort(runtime);
+        var manifestStore = new FakeAgentManifestStore();
+        var port = new WorkflowRunActorPort(runtime, manifestStore);
 
         runtime.ActorToReturn = new StubActor("actor-1", new StubAgent("agent-1"));
         var got = await port.GetAsync("actor-1", CancellationToken.None);
@@ -195,29 +199,37 @@ public sealed class WorkflowInfrastructureCoverageTests
         await port.DestroyAsync("actor-1", CancellationToken.None);
         runtime.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
 
-        port.IsWorkflowActor(new StubActor("x", new StubAgent("a"))).Should().BeFalse();
-        port.GetBoundWorkflowName(new StubActor("x", new StubAgent("a"))).Should().BeNull();
+        var unknownActor = new StubActor("x", new StubAgent("a"));
+        (await port.IsWorkflowActorAsync(unknownActor, CancellationToken.None)).Should().BeFalse();
+        (await port.GetBoundWorkflowNameAsync(unknownActor, CancellationToken.None)).Should().BeNull();
 
-        var invalidConfigure = () => port.ConfigureWorkflow(new StubActor("x", new StubAgent("a")), "name: x", "x");
-        invalidConfigure.Should().Throw<InvalidOperationException>();
+        var recordingActor = new StubActor("wf-actor", new StubAgent("wf-agent"));
+        await port.ConfigureWorkflowAsync(recordingActor, "name: x", "x", CancellationToken.None);
+        recordingActor.LastHandledEnvelope.Should().NotBeNull();
+        recordingActor.LastHandledEnvelope!.Payload.Should().NotBeNull();
+        recordingActor.LastHandledEnvelope.Payload!.Is(ConfigureWorkflowEvent.Descriptor).Should().BeTrue();
     }
 
     [Fact]
-    public void WorkflowRunActorPort_WhenWorkflowActor_ShouldConfigureAndReadWorkflowName()
+    public async Task WorkflowRunActorPort_WhenWorkflowManifestExists_ShouldReadWorkflowBinding()
     {
         var runtime = new FakeActorRuntime();
-        var port = new WorkflowRunActorPort(runtime);
-        var workflowAgent = new WorkflowGAgent(
-            runtime,
-            new FakeRoleAgentTypeResolver(),
-            new FakeEventModuleFactory(),
-            [new EmptyWorkflowModulePack()]);
-        var actor = new StubActor("wf-actor", workflowAgent);
+        var manifestStore = new FakeAgentManifestStore();
+        var port = new WorkflowRunActorPort(runtime, manifestStore);
+        var actor = new StubActor("wf-actor", new StubAgent("wf-agent"));
 
-        port.ConfigureWorkflow(actor, WorkflowDefinitionRegistry.BuiltInDirectYaml, "direct");
+        await manifestStore.SaveAsync(actor.Id, new AgentManifest
+        {
+            AgentId = actor.Id,
+            AgentTypeName = typeof(WorkflowGAgent).AssemblyQualifiedName!,
+            Metadata =
+            {
+                [WorkflowManifestMetadataKeys.WorkflowName] = "direct",
+            },
+        });
 
-        port.IsWorkflowActor(actor).Should().BeTrue();
-        port.GetBoundWorkflowName(actor).Should().Be("direct");
+        (await port.IsWorkflowActorAsync(actor, CancellationToken.None)).Should().BeTrue();
+        (await port.GetBoundWorkflowNameAsync(actor, CancellationToken.None)).Should().Be("direct");
     }
 
     [Fact]
@@ -352,9 +364,14 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         public string Id { get; }
         public IAgent Agent { get; }
+        public EventEnvelope? LastHandledEnvelope { get; private set; }
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            LastHandledEnvelope = envelope;
+            return Task.CompletedTask;
+        }
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
@@ -367,6 +384,38 @@ public sealed class WorkflowInfrastructureCoverageTests
         public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class FakeAgentManifestStore : IAgentManifestStore
+    {
+        private readonly Dictionary<string, AgentManifest> _manifests = new(StringComparer.Ordinal);
+
+        public Task<AgentManifest?> LoadAsync(string agentId, CancellationToken ct = default)
+        {
+            _ = ct;
+            _manifests.TryGetValue(agentId, out var manifest);
+            return Task.FromResult(manifest);
+        }
+
+        public Task SaveAsync(string agentId, AgentManifest manifest, CancellationToken ct = default)
+        {
+            _ = ct;
+            _manifests[agentId] = manifest;
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(string agentId, CancellationToken ct = default)
+        {
+            _ = ct;
+            _manifests.Remove(agentId);
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<AgentManifest>> ListAsync(CancellationToken ct = default)
+        {
+            _ = ct;
+            return Task.FromResult<IReadOnlyList<AgentManifest>>(_manifests.Values.ToList());
+        }
     }
 
     private sealed class FakeRoleAgentTypeResolver : IRoleAgentTypeResolver

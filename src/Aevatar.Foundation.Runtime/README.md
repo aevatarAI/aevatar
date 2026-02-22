@@ -97,6 +97,27 @@ var runtime = sp.GetRequiredService<IActorRuntime>();
 
 ---
 
+## 并行实现（Provider）
+
+Foundation Runtime 目前支持两种并行 Provider：
+
+- `InMemory`（默认）：`Aevatar.Foundation.Runtime` 本地实现。
+- `Orleans`：`Aevatar.Foundation.Runtime.Implementations.Orleans` 分布式运行时实现。
+
+通过 `ActorRuntime:Provider` 选择：
+
+```json
+{
+  "ActorRuntime": {
+    "Provider": "InMemory"
+  }
+}
+```
+
+`Orleans` 模式要求宿主已注册 Orleans `IGrainFactory`/Client 或 Silo。
+
+---
+
 ## 依赖说明（面向开发者）
 
 Runtime 依赖 Aevatar.Foundation.Core（Agent 基类与事件管道）、以及 .NET 的依赖注入与缓存、可观测性库。具体依赖见项目文件；部署时与 Aevatar.Workflow.Host.Api 一起使用即可。

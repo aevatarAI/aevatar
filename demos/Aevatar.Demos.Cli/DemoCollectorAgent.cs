@@ -11,6 +11,7 @@ internal sealed class DemoCollectorAgent : GAgentBase<CounterState>
     public Task OnPing(PingEvent evt)
     {
         Received.Add(evt.Message);
+        DemoAgentBase.RecordCollectorValue(Id, nameof(PingEvent), evt.Message);
         return Task.CompletedTask;
     }
 
@@ -18,6 +19,7 @@ internal sealed class DemoCollectorAgent : GAgentBase<CounterState>
     public Task OnPong(PongEvent evt)
     {
         Received.Add(evt.Reply);
+        DemoAgentBase.RecordCollectorValue(Id, nameof(PongEvent), evt.Reply);
         return Task.CompletedTask;
     }
 }

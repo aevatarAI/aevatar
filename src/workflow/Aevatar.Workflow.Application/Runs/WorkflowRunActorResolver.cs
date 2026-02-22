@@ -30,10 +30,10 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             if (existing == null)
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentNotFound);
 
-            if (!_actorPort.IsWorkflowActor(existing))
+            if (!await _actorPort.IsWorkflowActorAsync(existing, ct))
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentTypeNotSupported);
 
-            var boundWorkflowName = NormalizeWorkflowName(_actorPort.GetBoundWorkflowName(existing));
+            var boundWorkflowName = NormalizeWorkflowName(await _actorPort.GetBoundWorkflowNameAsync(existing, ct));
             if (string.IsNullOrWhiteSpace(boundWorkflowName))
             {
                 return new WorkflowActorResolutionResult(
@@ -59,7 +59,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.WorkflowNotFound);
 
         var actor = await _actorPort.CreateAsync(ct);
-        _actorPort.ConfigureWorkflow(actor, yaml, workflowNameForRun);
+        await _actorPort.ConfigureWorkflowAsync(actor, yaml, workflowNameForRun, ct);
 
         return new WorkflowActorResolutionResult(actor, workflowNameForRun, WorkflowChatRunStartError.None);
     }

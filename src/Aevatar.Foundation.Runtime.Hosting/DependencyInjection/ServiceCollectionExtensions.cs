@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -23,9 +24,16 @@ public static class ServiceCollectionExtensions
 
         services.Replace(ServiceDescriptor.Singleton(options));
 
-        if (string.Equals(options.Provider, "InMemory", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderInMemory, StringComparison.OrdinalIgnoreCase))
         {
             services.AddAevatarRuntime();
+            return services;
+        }
+
+        if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderOrleans, StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddAevatarRuntime();
+            services.AddAevatarFoundationRuntimeOrleans();
             return services;
         }
 

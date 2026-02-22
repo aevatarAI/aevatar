@@ -62,6 +62,23 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             StreamBufferCapacity = config.StreamBufferCapacity,
         }, ct);
 
+    [EventHandler]
+    public async Task HandleConfigureRoleAgent(ConfigureRoleAgentEvent evt)
+    {
+        SetRoleName(evt.RoleName);
+        await ((IRoleAgent)this).ConfigureAsync(new RoleAgentConfig
+        {
+            ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? "deepseek" : evt.ProviderName,
+            Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,
+            SystemPrompt = evt.SystemPrompt ?? string.Empty,
+            Temperature = evt.Temperature == 0 ? null : evt.Temperature,
+            MaxTokens = evt.MaxTokens == 0 ? null : evt.MaxTokens,
+            MaxToolRounds = evt.MaxToolRounds <= 0 ? 10 : evt.MaxToolRounds,
+            MaxHistoryMessages = evt.MaxHistoryMessages <= 0 ? 100 : evt.MaxHistoryMessages,
+            StreamBufferCapacity = evt.StreamBufferCapacity <= 0 ? 256 : evt.StreamBufferCapacity,
+        });
+    }
+
     /// <summary>Returns agent description.</summary>
     public override Task<string> GetDescriptionAsync() =>
         Task.FromResult($"RoleGAgent[{RoleName}]:{Id}");

@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
 using Google.Protobuf;
 
@@ -11,7 +12,8 @@ public class ActorProjectionOwnershipCoordinatorTests
     public async Task AcquireAsync_ShouldCreateCoordinatorActor_AndDispatchAcquireEvent()
     {
         var runtime = new OwnershipCoordinatorRuntime();
-        var coordinator = new ActorProjectionOwnershipCoordinator(runtime);
+        var manifestStore = new TestAgentManifestStore();
+        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, manifestStore);
 
         await coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -32,10 +34,11 @@ public class ActorProjectionOwnershipCoordinatorTests
     public async Task ReleaseAsync_ShouldReuseExistingCoordinatorActor()
     {
         var runtime = new OwnershipCoordinatorRuntime();
+        var manifestStore = new TestAgentManifestStore();
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         var actor = new RuntimeActor(actorId, new ProjectionOwnershipCoordinatorGAgent());
         runtime.SetActor(actorId, actor);
-        var coordinator = new ActorProjectionOwnershipCoordinator(runtime);
+        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, manifestStore);
 
         await coordinator.ReleaseAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -51,10 +54,11 @@ public class ActorProjectionOwnershipCoordinatorTests
     public async Task AcquireAsync_ShouldRecover_WhenCreateRaces()
     {
         var runtime = new OwnershipCoordinatorRuntime();
+        var manifestStore = new TestAgentManifestStore();
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         var racedActor = new RuntimeActor(actorId, new ProjectionOwnershipCoordinatorGAgent());
         runtime.SetCreateRaceActor(actorId, racedActor);
-        var coordinator = new ActorProjectionOwnershipCoordinator(runtime);
+        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, manifestStore);
 
         await coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -66,9 +70,15 @@ public class ActorProjectionOwnershipCoordinatorTests
     public async Task AcquireAsync_ShouldThrow_WhenResolvedActorTypeIsInvalid()
     {
         var runtime = new OwnershipCoordinatorRuntime();
+        var manifestStore = new TestAgentManifestStore();
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         runtime.SetActor(actorId, new RuntimeActor(actorId, new PlainTestAgent("agent-1")));
-        var coordinator = new ActorProjectionOwnershipCoordinator(runtime);
+        await manifestStore.SaveAsync(actorId, new AgentManifest
+        {
+            AgentId = actorId,
+            AgentTypeName = typeof(PlainTestAgent).AssemblyQualifiedName!,
+        });
+        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, manifestStore);
 
         Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -417,5 +427,37 @@ internal sealed class SessionHubSubscription : IAsyncDisposable
 
         _disposeAction();
         return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class TestAgentManifestStore : IAgentManifestStore
+{
+    private readonly Dictionary<string, AgentManifest> _manifests = new(StringComparer.Ordinal);
+
+    public Task<AgentManifest?> LoadAsync(string agentId, CancellationToken ct = default)
+    {
+        _ = ct;
+        _manifests.TryGetValue(agentId, out var manifest);
+        return Task.FromResult(manifest);
+    }
+
+    public Task SaveAsync(string agentId, AgentManifest manifest, CancellationToken ct = default)
+    {
+        _ = ct;
+        _manifests[agentId] = manifest;
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteAsync(string agentId, CancellationToken ct = default)
+    {
+        _ = ct;
+        _manifests.Remove(agentId);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<AgentManifest>> ListAsync(CancellationToken ct = default)
+    {
+        _ = ct;
+        return Task.FromResult<IReadOnlyList<AgentManifest>>(_manifests.Values.ToList());
     }
 }

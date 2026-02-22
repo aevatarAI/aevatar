@@ -1,0 +1,248 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Orleans.Runtime;
+
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
+
+public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
+{
+    private readonly IPersistentState<RuntimeActorGrainState> _state;
+    private IAgent? _agent;
+    private IEventDeduplicator? _deduplicator;
+    private IEnvelopePropagationPolicy? _propagationPolicy;
+    private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
+
+    public RuntimeActorGrain(
+        [PersistentState("agent", OrleansRuntimeConstants.GrainStateStorageName)]
+        IPersistentState<RuntimeActorGrainState> state)
+    {
+        _state = state;
+    }
+
+    public override async Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        _deduplicator = ServiceProvider.GetService<IEventDeduplicator>();
+        _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>()
+            ?? new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
+
+        var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
+        _logger = loggerFactory?.CreateLogger<RuntimeActorGrain>() ?? NullLogger<RuntimeActorGrain>.Instance;
+
+        if (!string.IsNullOrWhiteSpace(_state.State.AgentTypeName))
+            await InitializeAgentInternalAsync(_state.State.AgentTypeName, cancellationToken);
+    }
+
+    public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
+    {
+        if (_agent != null)
+        {
+            await _agent.DeactivateAsync(cancellationToken);
+            _agent = null;
+        }
+    }
+
+    public async Task<bool> InitializeAgentAsync(string agentTypeName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentTypeName);
+
+        if (_agent != null)
+            return string.Equals(_state.State.AgentTypeName, agentTypeName, StringComparison.Ordinal);
+
+        var initialized = await InitializeAgentInternalAsync(agentTypeName);
+        if (!initialized)
+            return false;
+
+        _state.State.AgentId = this.GetPrimaryKeyString();
+        _state.State.AgentTypeName = agentTypeName;
+        await _state.WriteStateAsync();
+        return true;
+    }
+
+    public Task<bool> IsInitializedAsync() =>
+        Task.FromResult(_agent != null);
+
+    public async Task HandleEnvelopeAsync(byte[] envelopeBytes)
+    {
+        if (_agent == null)
+            throw new InvalidOperationException("Grain agent is not initialized.");
+
+        var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
+
+        if (!string.IsNullOrWhiteSpace(envelope.Id) && _deduplicator != null)
+        {
+            var dedupKey = $"{this.GetPrimaryKeyString()}:{envelope.Id}";
+            if (!await _deduplicator.TryRecordAsync(dedupKey))
+                return;
+        }
+
+        if (ContainsPublisher(envelope))
+            return;
+
+        await _agent.HandleEventAsync(envelope);
+    }
+
+    public async Task AddChildAsync(string childId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(childId);
+        if (_state.State.Children.Contains(childId, StringComparer.Ordinal))
+            return;
+
+        _state.State.Children.Add(childId);
+        await _state.WriteStateAsync();
+    }
+
+    public async Task RemoveChildAsync(string childId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(childId);
+        if (!_state.State.Children.Remove(childId))
+            return;
+
+        await _state.WriteStateAsync();
+    }
+
+    public async Task SetParentAsync(string parentId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentId);
+        _state.State.ParentId = parentId;
+        await _state.WriteStateAsync();
+    }
+
+    public async Task ClearParentAsync()
+    {
+        if (_state.State.ParentId == null)
+            return;
+
+        _state.State.ParentId = null;
+        await _state.WriteStateAsync();
+    }
+
+    public Task<IReadOnlyList<string>> GetChildrenAsync() =>
+        Task.FromResult<IReadOnlyList<string>>(_state.State.Children.ToList());
+
+    public Task<string?> GetParentAsync() =>
+        Task.FromResult(_state.State.ParentId);
+
+    public Task<string> GetDescriptionAsync()
+    {
+        if (_agent == null)
+            return Task.FromResult($"Uninitialized:{this.GetPrimaryKeyString()}");
+
+        return _agent.GetDescriptionAsync();
+    }
+
+    public Task<string> GetAgentTypeNameAsync() =>
+        Task.FromResult(_state.State.AgentTypeName ?? string.Empty);
+
+    public async Task DeactivateAsync()
+    {
+        if (_agent != null)
+        {
+            await _agent.DeactivateAsync();
+            _agent = null;
+        }
+
+        DeactivateOnIdle();
+    }
+
+    private async Task<bool> InitializeAgentInternalAsync(string agentTypeName, CancellationToken ct = default)
+    {
+        var agentType = ResolveAgentType(agentTypeName);
+        if (agentType == null)
+        {
+            _logger.LogError("Unable to resolve agent type {AgentTypeName}", agentTypeName);
+            return false;
+        }
+
+        try
+        {
+            var agent = CreateAgentInstance(agentType);
+            InjectDependencies(agent, this.GetPrimaryKeyString());
+            await agent.ActivateAsync(ct);
+            _agent = agent;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to initialize grain actor {ActorId}", this.GetPrimaryKeyString());
+            return false;
+        }
+    }
+
+    private static Type? ResolveAgentType(string agentTypeName)
+    {
+        var resolved = Type.GetType(agentTypeName, throwOnError: false);
+        if (resolved != null)
+            return resolved;
+
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            resolved = assembly.GetType(agentTypeName, throwOnError: false);
+            if (resolved != null)
+                return resolved;
+        }
+
+        return null;
+    }
+
+    private IAgent CreateAgentInstance(Type agentType)
+    {
+        var instance = ActivatorUtilities.CreateInstance(ServiceProvider, agentType);
+        return instance as IAgent
+            ?? throw new InvalidOperationException($"Unable to create agent instance for {agentType.FullName}");
+    }
+
+    private void InjectDependencies(IAgent agent, string actorId)
+    {
+        if (agent is not GAgentBase gAgent)
+            return;
+
+        var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
+        var agentLogger = loggerFactory?.CreateLogger(agent.GetType().Name) ?? NullLogger.Instance;
+
+        gAgent.SetId(actorId);
+        gAgent.EventPublisher = new Actors.OrleansGrainEventPublisher(
+            actorId,
+            GrainFactory,
+            () => _state.State.ParentId,
+            () => _state.State.Children.ToList(),
+            envelope => HandleEnvelopeAsync(envelope.ToByteArray()),
+            _propagationPolicy ?? new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy()));
+        gAgent.Logger = agentLogger;
+        gAgent.Services = ServiceProvider;
+        gAgent.ManifestStore = ServiceProvider.GetService<IAgentManifestStore>();
+
+        InjectStateStore(agent);
+    }
+
+    private void InjectStateStore(IAgent agent)
+    {
+        var type = agent.GetType();
+        while (type != null)
+        {
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(GAgentBase<>))
+            {
+                var stateType = type.GetGenericArguments()[0];
+                var stateStoreType = typeof(IStateStore<>).MakeGenericType(stateType);
+                var stateStore = ServiceProvider.GetService(stateStoreType);
+                if (stateStore != null)
+                    type.GetProperty("StateStore")?.SetValue(agent, stateStore);
+                break;
+            }
+
+            type = type.BaseType;
+        }
+    }
+
+    private bool ContainsPublisher(EventEnvelope envelope)
+    {
+        if (!envelope.Metadata.TryGetValue(OrleansRuntimeConstants.PublishersMetadataKey, out var chain) ||
+            string.IsNullOrWhiteSpace(chain))
+        {
+            return false;
+        }
+
+        var selfId = this.GetPrimaryKeyString();
+        var ids = chain.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return ids.Contains(selfId, StringComparer.Ordinal);
+    }
+}

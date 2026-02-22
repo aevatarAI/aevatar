@@ -14,9 +14,9 @@ public interface IWorkflowRunActorPort
 
     Task DestroyAsync(string actorId, CancellationToken ct = default);
 
-    bool IsWorkflowActor(IActor actor);
+    Task<bool> IsWorkflowActorAsync(IActor actor, CancellationToken ct = default);
 
-    string? GetBoundWorkflowName(IActor actor);
+    Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default);
 
-    void ConfigureWorkflow(IActor actor, string workflowYaml, string workflowName);
+    Task ConfigureWorkflowAsync(IActor actor, string workflowYaml, string workflowName, CancellationToken ct = default);
 }

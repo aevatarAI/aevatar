@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -11,10 +12,12 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
 {
     private const string CoordinatorPublisherId = "projection.ownership.coordinator";
     private readonly IActorRuntime _runtime;
+    private readonly IAgentManifestStore _manifestStore;
 
-    public ActorProjectionOwnershipCoordinator(IActorRuntime runtime)
+    public ActorProjectionOwnershipCoordinator(IActorRuntime runtime, IAgentManifestStore manifestStore)
     {
         _runtime = runtime;
+        _manifestStore = manifestStore;
     }
 
     public async Task AcquireAsync(
@@ -54,30 +57,45 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
         var coordinatorActorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId(scopeId);
         var existing = await _runtime.GetAsync(coordinatorActorId);
         if (existing != null)
-            return EnsureCoordinatorActorType(existing, coordinatorActorId);
+            return await EnsureCoordinatorActorTypeAsync(existing, coordinatorActorId, ct);
 
         try
         {
             var created = await _runtime.CreateAsync<ProjectionOwnershipCoordinatorGAgent>(coordinatorActorId, ct);
-            return EnsureCoordinatorActorType(created, coordinatorActorId);
+            return await EnsureCoordinatorActorTypeAsync(created, coordinatorActorId, ct);
         }
         catch (InvalidOperationException)
         {
             var raced = await _runtime.GetAsync(coordinatorActorId);
             if (raced != null)
-                return EnsureCoordinatorActorType(raced, coordinatorActorId);
+                return await EnsureCoordinatorActorTypeAsync(raced, coordinatorActorId, ct);
 
             throw;
         }
     }
 
-    private static IActor EnsureCoordinatorActorType(IActor actor, string actorId)
+    private async Task<IActor> EnsureCoordinatorActorTypeAsync(IActor actor, string actorId, CancellationToken ct)
     {
-        if (actor.Agent is ProjectionOwnershipCoordinatorGAgent)
+        var manifest = await _manifestStore.LoadAsync(actorId, ct);
+        if (manifest == null || IsCoordinatorAgentType(manifest.AgentTypeName))
             return actor;
 
         throw new InvalidOperationException(
             $"Actor '{actorId}' is not a projection ownership coordinator actor.");
+    }
+
+    private static bool IsCoordinatorAgentType(string? agentTypeName)
+    {
+        if (string.IsNullOrWhiteSpace(agentTypeName))
+            return false;
+
+        var resolved = System.Type.GetType(agentTypeName, throwOnError: false);
+        if (resolved != null)
+            return typeof(ProjectionOwnershipCoordinatorGAgent).IsAssignableFrom(resolved);
+
+        var expectedTypeName = typeof(ProjectionOwnershipCoordinatorGAgent).FullName
+            ?? nameof(ProjectionOwnershipCoordinatorGAgent);
+        return agentTypeName.Contains(expectedTypeName, StringComparison.Ordinal);
     }
 
     private static EventEnvelope CreateCoordinatorEnvelope(IMessage payload, string correlationId) =>

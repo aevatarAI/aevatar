@@ -302,7 +302,22 @@ public class WorkflowGAgentCoverageTests
             return Task.CompletedTask;
         }
 
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            if (envelope.Payload?.Is(ConfigureRoleAgentEvent.Descriptor) == true)
+            {
+                var evt = envelope.Payload.Unpack<ConfigureRoleAgentEvent>();
+                SetRoleName(evt.RoleName);
+                LastConfig = new RoleAgentConfig
+                {
+                    ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? "deepseek" : evt.ProviderName,
+                    Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,
+                    SystemPrompt = evt.SystemPrompt ?? string.Empty,
+                };
+            }
+
+            return Task.CompletedTask;
+        }
         public Task<string> GetDescriptionAsync() => Task.FromResult("fake-role");
         public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;

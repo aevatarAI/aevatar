@@ -5,6 +5,7 @@ using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Extensions.Maker;
@@ -95,8 +96,19 @@ public class MakerRecursiveRegressionTests
         string input)
     {
         var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-maker-" + Guid.NewGuid().ToString("N")[..8]);
-        var wf = (WorkflowGAgent)actor.Agent;
-        wf.ConfigureWorkflow(workflowYaml, "maker_regression");
+        await actor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new ConfigureWorkflowEvent
+            {
+                WorkflowYaml = workflowYaml,
+                WorkflowName = "maker_regression",
+            }),
+            PublisherId = "test",
+            Direction = EventDirection.Self,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        });
 
         var stream = provider.GetRequiredService<IStreamProvider>().GetStream(actor.Id);
         var stepCompletions = new List<StepCompletedEvent>();

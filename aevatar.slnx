@@ -19,6 +19,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src\Aevatar.Foundation.Runtime.Hosting\Aevatar.Foundation.Runtime.Hosting.csproj" />
+    <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans/Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
     <Project Path="src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <Project Path="src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <Project Path="src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />

@@ -48,4 +48,9 @@ internal sealed class EventHandlerContext : IEventHandlerContext
     public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
         CancellationToken ct = default) where TEvent : IMessage =>
         _publisher.PublishAsync(evt, direction, ct, InboundEnvelope);
+
+    /// <summary>Sends an event directly to the target actor.</summary>
+    public Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
+        CancellationToken ct = default) where TEvent : IMessage =>
+        _publisher.SendToAsync(targetActorId, evt, ct, InboundEnvelope);
 }

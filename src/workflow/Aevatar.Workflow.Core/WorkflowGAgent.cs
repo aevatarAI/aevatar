@@ -17,11 +17,14 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core;
@@ -115,6 +118,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         }
 
         InstallCognitiveModules();
+        SchedulePersistWorkflowBinding(workflowName);
     }
 
     /// <inheritdoc />
@@ -148,6 +152,13 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         }, EventDirection.Self);
     }
 
+    [EventHandler]
+    public async Task HandleConfigureWorkflow(ConfigureWorkflowEvent request)
+    {
+        ConfigureWorkflow(request.WorkflowYaml, request.WorkflowName);
+        await PersistWorkflowBindingAsync(request.WorkflowName);
+    }
+
     // ─── 工作流完成 ───
 
     /// <summary>处理工作流完成事件：汇总结果，更新统计。</summary>
@@ -174,28 +185,20 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         if (_childAgentIds.Count > 0 || _compiledWorkflow == null) return;
 
         var roleAgentType = _roleAgentTypeResolver.ResolveRoleAgentType();
+        if (!typeof(IRoleAgent).IsAssignableFrom(roleAgentType))
+        {
+            throw new InvalidOperationException(
+                $"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
+        }
 
         foreach (var role in _compiledWorkflow.Roles)
         {
             var childActorId = BuildChildActorId(role.Id);
             var actor = await _runtime.CreateAsync(roleAgentType, childActorId);
-            if (actor.Agent is IRoleAgent roleAgent)
-            {
-                roleAgent.SetRoleName(role.Name);
-                await roleAgent.ConfigureAsync(new RoleAgentConfig
-                {
-                    SystemPrompt = role.SystemPrompt,
-                    ProviderName = role.Provider ?? "deepseek",
-                    Model = role.Model,
-                });
-            }
-            else
-            {
-                throw new InvalidOperationException(
-                    $"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
-            }
-
             await _runtime.LinkAsync(Id, actor.Id);
+
+            await actor.HandleEventAsync(CreateRoleAgentConfigureEnvelope(role));
+
             _childAgentIds.Add(actor.Id);
         }
         Logger.LogInformation("Agent 树创建完成: {Count} 个 role agents", _childAgentIds.Count);
@@ -273,4 +276,53 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             _compiledWorkflow = null;
         }
     }
+
+    private void SchedulePersistWorkflowBinding(string workflowName)
+    {
+        _ = PersistWorkflowBindingSafeAsync(workflowName);
+    }
+
+    private async Task PersistWorkflowBindingSafeAsync(string workflowName)
+    {
+        try
+        {
+            await PersistWorkflowBindingAsync(workflowName);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to persist workflow binding metadata for actor {ActorId}", Id);
+        }
+    }
+
+    private async Task PersistWorkflowBindingAsync(string workflowName, CancellationToken ct = default)
+    {
+        if (ManifestStore == null || string.IsNullOrWhiteSpace(Id))
+            return;
+
+        var manifest = await ManifestStore.LoadAsync(Id, ct) ?? new AgentManifest { AgentId = Id };
+        var agentTypeName = GetType().AssemblyQualifiedName ?? GetType().FullName ?? GetType().Name;
+        manifest.AgentTypeName = agentTypeName;
+
+        if (!string.IsNullOrWhiteSpace(workflowName))
+            manifest.Metadata[WorkflowManifestMetadataKeys.WorkflowName] = workflowName.Trim();
+
+        await ManifestStore.SaveAsync(Id, manifest, ct);
+    }
+
+    private EventEnvelope CreateRoleAgentConfigureEnvelope(RoleDefinition role) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new ConfigureRoleAgentEvent
+            {
+                RoleName = role.Name ?? string.Empty,
+                ProviderName = role.Provider ?? "deepseek",
+                Model = role.Model ?? string.Empty,
+                SystemPrompt = role.SystemPrompt ?? string.Empty,
+            }),
+            PublisherId = Id,
+            Direction = EventDirection.Self,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        };
 }

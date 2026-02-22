@@ -589,17 +589,30 @@ internal sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
         return Task.CompletedTask;
     }
 
-    public bool IsWorkflowActor(IActor actor) => actor.Agent is FakeWorkflowAgent;
-
-    public string? GetBoundWorkflowName(IActor actor) =>
-        (actor.Agent as FakeWorkflowAgent)?.WorkflowName;
-
-    public void ConfigureWorkflow(IActor actor, string workflowYaml, string workflowName)
+    public Task<bool> IsWorkflowActorAsync(IActor actor, CancellationToken ct = default)
     {
+        _ = ct;
+        return Task.FromResult(actor.Agent is FakeWorkflowAgent);
+    }
+
+    public Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default)
+    {
+        _ = ct;
+        return Task.FromResult((actor.Agent as FakeWorkflowAgent)?.WorkflowName);
+    }
+
+    public Task ConfigureWorkflowAsync(
+        IActor actor,
+        string workflowYaml,
+        string workflowName,
+        CancellationToken ct = default)
+    {
+        _ = ct;
         if (actor.Agent is not FakeWorkflowAgent workflowAgent)
             throw new InvalidOperationException("Current actor adapter requires FakeWorkflowAgent.");
 
         workflowAgent.ConfigureWorkflow(workflowYaml, workflowName);
+        return Task.CompletedTask;
     }
 }
 

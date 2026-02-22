@@ -29,6 +29,7 @@ using Aevatar.Workflow.Core;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Extensions.Maker;
 using Aevatar.Maker.Projection;
 using Google.Protobuf.WellKnownTypes;
@@ -184,11 +185,19 @@ logger.LogInformation("Loaded workflow: {Path}", workflowPath);
 
 var actor = await runtime.CreateAsync<WorkflowGAgent>("maker-root");
 var workflowName = "maker_analysis";
-if (actor.Agent is WorkflowGAgent wf)
+await actor.HandleEventAsync(new EventEnvelope
 {
-    wf.ConfigureWorkflow(workflowYaml, workflowName);
-    workflowName = wf.State.WorkflowName;
-}
+    Id = Guid.NewGuid().ToString("N"),
+    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+    Payload = Any.Pack(new ConfigureWorkflowEvent
+    {
+        WorkflowYaml = workflowYaml,
+        WorkflowName = workflowName,
+    }),
+    PublisherId = "maker.demo",
+    Direction = EventDirection.Self,
+    CorrelationId = Guid.NewGuid().ToString("N"),
+});
 
 logger.LogInformation("WorkflowGAgent created: {Id}", actor.Id);
 

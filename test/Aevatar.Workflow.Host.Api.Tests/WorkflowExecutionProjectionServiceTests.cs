@@ -3,8 +3,10 @@ using Aevatar.AI.Projection.Appliers;
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -540,9 +542,12 @@ public class WorkflowExecutionProjectionServiceTests
 
         // Use a dedicated local actor runtime for projection coordinator actors.
         var runtimeServices = new ServiceCollection();
+        runtimeServices.AddSingleton<IAgentManifestStore, InMemoryManifestStore>();
         var runtimeProvider = runtimeServices.BuildServiceProvider();
         var runtime = new LocalActorRuntime(streams, runtimeProvider, streams);
-        var ownershipCoordinator = new ActorProjectionOwnershipCoordinator(runtime);
+        var ownershipCoordinator = new ActorProjectionOwnershipCoordinator(
+            runtime,
+            runtimeProvider.GetRequiredService<IAgentManifestStore>());
         var resolvedClock = clock ?? new SystemProjectionClock();
         runEventStreamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
             streams,

@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,7 +20,23 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
 
         provider.GetService<IActorRuntime>().Should().NotBeNull();
-        provider.GetRequiredService<AevatarActorRuntimeOptions>().Provider.Should().Be("InMemory");
+        provider.GetRequiredService<AevatarActorRuntimeOptions>().Provider.Should().Be(AevatarActorRuntimeOptions.ProviderInMemory);
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenProviderIsOrleans_ShouldRegisterOrleansRuntime()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+
+        var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IActorRuntime));
+        descriptor.Should().NotBeNull();
+        descriptor!.ImplementationType.Should().Be(typeof(OrleansActorRuntime));
     }
 
     [Fact]
@@ -51,7 +68,7 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
 
         provider.GetService<IActorRuntime>().Should().NotBeNull();
-        provider.GetRequiredService<AevatarActorRuntimeOptions>().Provider.Should().Be("InMemory");
+        provider.GetRequiredService<AevatarActorRuntimeOptions>().Provider.Should().Be(AevatarActorRuntimeOptions.ProviderInMemory);
     }
 
     private static IConfiguration BuildConfiguration(Dictionary<string, string?>? values = null)
