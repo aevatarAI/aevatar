@@ -52,3 +52,40 @@ jobs:
           SPLIT_TEST_NO_RESTORE: "1"
           SPLIT_TEST_NO_BUILD: "1"
         run: bash tools/ci/solution_split_test_guards.sh
+
+      - name: Start Kafka for Distributed Integration Test
+        run: docker compose up -d kafka
+
+      - name: Wait for Kafka Health
+        run: |
+          for i in {1..30}; do
+            status="$(docker inspect --format='{{.State.Health.Status}}' aevatar-kafka || true)"
+            if [ "${status}" = "healthy" ]; then
+              echo "Kafka is healthy."
+              exit 0
+            fi
+
+            echo "Kafka status: ${status:-unknown}"
+            sleep 2
+          done
+
+          echo "Kafka failed to become healthy."
+          docker logs aevatar-kafka || true
+          exit 1
+
+      - name: Distributed Kafka Integration Test
+        env:
+          AEVATAR_TEST_KAFKA_BOOTSTRAP_SERVERS: "localhost:9092"
+        run: |
+          dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj \
+            --nologo \
+            --tl:off \
+            -m:1 \
+            -p:UseSharedCompilation=false \
+            -p:NuGetAudit=false \
+            --no-restore \
+            --filter "FullyQualifiedName~OrleansMassTransitRuntimeIntegrationTests.KafkaTransport_ShouldDeliverEnvelopeToRuntimeActorGrain"
+
+      - name: Stop Kafka (always)
+        if: always()
+        run: docker compose down --volumes --remove-orphans

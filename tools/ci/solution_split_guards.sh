@@ -11,6 +11,7 @@ filters=(
   "aevatar.cqrs.slnf"
   "aevatar.workflow.slnf"
   "aevatar.hosting.slnf"
+  "aevatar.distributed.slnf"
 )
 
 echo "Running solution split guards..."
