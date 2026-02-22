@@ -128,6 +128,54 @@ public sealed class OrleansDistributedCoverageTests
     }
 
     [Fact]
+    public async Task OrleansDistributedStreamForwardingRegistry_ShouldCacheListByRevision()
+    {
+        var grains = new Dictionary<string, TopologyGrainStub>(StringComparer.Ordinal);
+        var grainFactory = CreateGrainFactory((grainType, sourceId) =>
+        {
+            grainType.Should().Be(typeof(IStreamTopologyGrain));
+            if (!grains.TryGetValue(sourceId, out var grain))
+            {
+                grain = new TopologyGrainStub();
+                grains[sourceId] = grain;
+            }
+
+            return grain;
+        });
+
+        var registry = new OrleansDistributedStreamForwardingRegistry(grainFactory, TimeSpan.Zero);
+        await registry.UpsertAsync(new StreamForwardingBinding
+        {
+            SourceStreamId = "source-cache",
+            TargetStreamId = "target-1",
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            Version = 1,
+            LeaseId = "lease-1",
+        });
+
+        var grain = grains["source-cache"];
+        (await registry.ListBySourceAsync("source-cache")).Should().ContainSingle();
+        grain.ListCallCount.Should().Be(1);
+
+        (await registry.ListBySourceAsync("source-cache")).Should().ContainSingle();
+        grain.ListCallCount.Should().Be(1);
+        grain.RevisionCallCount.Should().BeGreaterThanOrEqualTo(2);
+
+        await registry.UpsertAsync(new StreamForwardingBinding
+        {
+            SourceStreamId = "source-cache",
+            TargetStreamId = "target-1",
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            Version = 2,
+            LeaseId = "lease-2",
+        });
+
+        var updated = await registry.ListBySourceAsync("source-cache");
+        updated.Should().ContainSingle(x => x.Version == 2 && x.LeaseId == "lease-2");
+        grain.ListCallCount.Should().Be(2);
+    }
+
+    [Fact]
     public async Task StreamTopologyGrain_ShouldHandleUpsertRemoveAndClear()
     {
         var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
@@ -160,6 +208,48 @@ public sealed class OrleansDistributedCoverageTests
         await grain.ClearAsync();
         stateProxy.WriteCount.Should().Be(5);
         (await grain.ListAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StreamTopologyGrain_UpsertSameBinding_ShouldSkipDuplicateWrite()
+    {
+        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
+        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
+        var grain = new StreamTopologyGrain(state);
+
+        var binding = CreateBinding("source-1", "target-1", 1, "lease-1");
+        await grain.UpsertAsync(binding);
+        stateProxy.WriteCount.Should().Be(1);
+
+        await grain.UpsertAsync(CreateBinding("source-1", "target-1", 1, "lease-1"));
+        stateProxy.WriteCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task StreamTopologyGrain_ShouldSupportLegacyListState()
+    {
+        var state = DispatchProxy.Create<IPersistentState<StreamTopologyGrainState>, StreamTopologyPersistentStateProxy>();
+        var stateProxy = (StreamTopologyPersistentStateProxy)(object)state;
+        stateProxy.State.Bindings.Add(new StreamForwardingBindingEntry
+        {
+            SourceStreamId = "source-legacy",
+            TargetStreamId = "target-legacy",
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = [EventDirection.Down],
+            EventTypeFilter = ["evt"],
+            Version = 7,
+            LeaseId = "lease-legacy",
+        });
+
+        var grain = new StreamTopologyGrain(state);
+        var listed = await grain.ListAsync();
+
+        listed.Should().ContainSingle();
+        listed[0].SourceStreamId.Should().Be("source-legacy");
+        listed[0].TargetStreamId.Should().Be("target-legacy");
+        listed[0].Version.Should().Be(7);
+        listed[0].LeaseId.Should().Be("lease-legacy");
+        stateProxy.WriteCount.Should().Be(0);
     }
 
     [Fact]
@@ -334,6 +424,11 @@ public sealed class OrleansDistributedCoverageTests
     private sealed class TopologyGrainStub : IStreamTopologyGrain
     {
         private readonly List<StreamForwardingBinding> _bindings = [];
+        private long _revision;
+
+        public int ListCallCount { get; private set; }
+
+        public int RevisionCallCount { get; private set; }
 
         public Task UpsertAsync(StreamForwardingBinding binding)
         {
@@ -343,20 +438,34 @@ public sealed class OrleansDistributedCoverageTests
                 _bindings[index] = clone;
             else
                 _bindings.Add(clone);
+
+            _revision++;
             return Task.CompletedTask;
         }
 
         public Task RemoveAsync(string targetStreamId)
         {
-            _bindings.RemoveAll(x => string.Equals(x.TargetStreamId, targetStreamId, StringComparison.Ordinal));
+            if (_bindings.RemoveAll(x => string.Equals(x.TargetStreamId, targetStreamId, StringComparison.Ordinal)) > 0)
+                _revision++;
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<StreamForwardingBinding>> ListAsync() =>
-            Task.FromResult<IReadOnlyList<StreamForwardingBinding>>(_bindings.Select(Clone).ToList());
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListAsync()
+        {
+            ListCallCount++;
+            return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>(_bindings.Select(Clone).ToList());
+        }
+
+        public Task<long> GetRevisionAsync()
+        {
+            RevisionCallCount++;
+            return Task.FromResult(_revision);
+        }
 
         public Task ClearAsync()
         {
+            if (_bindings.Count > 0)
+                _revision++;
             _bindings.Clear();
             return Task.CompletedTask;
         }

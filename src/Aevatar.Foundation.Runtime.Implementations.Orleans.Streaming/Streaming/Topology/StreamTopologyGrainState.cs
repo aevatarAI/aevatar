@@ -7,6 +7,12 @@ public sealed class StreamTopologyGrainState
 {
     [Id(0)]
     public List<StreamForwardingBindingEntry> Bindings { get; set; } = [];
+
+    [Id(1)]
+    public Dictionary<string, StreamForwardingBindingEntry> BindingsByTarget { get; set; } = [];
+
+    [Id(2)]
+    public long Revision { get; set; }
 }
 
 [GenerateSerializer]
