@@ -19,7 +19,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         await foreach (var chunk in runtime.ChatStreamAsync("hello"))
         {
             output.Append(chunk);
-            await Task.Delay(2);
         }
 
         output.ToString().Should().Be("ABCD");
