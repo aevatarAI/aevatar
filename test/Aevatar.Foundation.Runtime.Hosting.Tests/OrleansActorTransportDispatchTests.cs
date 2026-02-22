@@ -1,8 +1,8 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
@@ -10,45 +10,33 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class OrleansActorTransportDispatchTests
 {
     [Fact]
-    public async Task HandleEventAsync_WhenTransportSenderConfigured_ShouldDispatchViaTransport()
+    public async Task HandleEventAsync_ShouldDispatchViaStreamProvider()
     {
         var grain = new RecordingRuntimeActorGrain();
-        var sender = new RecordingTransportEventSender();
-        var actor = new OrleansActor("actor-1", grain, sender);
+        var streams = new RecordingStreamProvider();
+        var actor = new OrleansActor("actor-1", grain, streams);
         var envelope = new EventEnvelope { Payload = Any.Pack(new StringValue { Value = "payload" }) };
 
         await actor.HandleEventAsync(envelope, CancellationToken.None);
 
-        sender.Messages.Should().ContainSingle();
-        sender.Messages.Single().TargetActorId.Should().Be("actor-1");
+        streams.GetProduced("actor-1").Should().ContainSingle();
+        streams.GetProduced("actor-1")[0].Payload!.Unpack<StringValue>().Value.Should().Be("payload");
         grain.DispatchCount.Should().Be(0);
     }
 
     [Fact]
-    public async Task AgentProxy_WhenTransportSenderConfigured_ShouldDispatchViaTransport()
+    public async Task AgentProxyHandleEventAsync_ShouldDispatchViaStreamProvider()
     {
         var grain = new RecordingRuntimeActorGrain();
-        var sender = new RecordingTransportEventSender();
-        var actor = new OrleansActor("actor-2", grain, sender);
+        var streams = new RecordingStreamProvider();
+        var actor = new OrleansActor("actor-2", grain, streams);
         var envelope = new EventEnvelope { Payload = Any.Pack(new StringValue { Value = "payload" }) };
 
         await actor.Agent.HandleEventAsync(envelope, CancellationToken.None);
 
-        sender.Messages.Should().ContainSingle();
-        sender.Messages.Single().TargetActorId.Should().Be("actor-2");
+        streams.GetProduced("actor-2").Should().ContainSingle();
+        streams.GetProduced("actor-2")[0].Payload!.Unpack<StringValue>().Value.Should().Be("payload");
         grain.DispatchCount.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task HandleEventAsync_WhenNoTransportSender_ShouldDispatchToGrain()
-    {
-        var grain = new RecordingRuntimeActorGrain();
-        var actor = new OrleansActor("actor-3", grain);
-        var envelope = new EventEnvelope { Payload = Any.Pack(new StringValue { Value = "payload" }) };
-
-        await actor.HandleEventAsync(envelope, CancellationToken.None);
-
-        grain.DispatchCount.Should().Be(1);
     }
 
     private sealed class RecordingRuntimeActorGrain : IRuntimeActorGrain
@@ -83,16 +71,72 @@ public sealed class OrleansActorTransportDispatchTests
         public Task<string> GetAgentTypeNameAsync() => Task.FromResult(string.Empty);
 
         public Task DeactivateAsync() => Task.CompletedTask;
+
+        public Task PurgeAsync() => Task.CompletedTask;
     }
 
-    private sealed class RecordingTransportEventSender : IOrleansTransportEventSender
+    private sealed class RecordingStreamProvider : IStreamProvider
     {
-        public List<(string TargetActorId, EventEnvelope Envelope)> Messages { get; } = [];
+        private readonly Lock _lock = new();
+        private readonly Dictionary<string, RecordingStream> _streams = new(StringComparer.Ordinal);
 
-        public Task SendAsync(string targetActorId, EventEnvelope envelope, CancellationToken ct = default)
+        public IStream GetStream(string actorId)
         {
-            Messages.Add((targetActorId, envelope.Clone()));
+            lock (_lock)
+            {
+                if (!_streams.TryGetValue(actorId, out var stream))
+                {
+                    stream = new RecordingStream(actorId);
+                    _streams[actorId] = stream;
+                }
+
+                return stream;
+            }
+        }
+
+        public IReadOnlyList<EventEnvelope> GetProduced(string actorId)
+        {
+            lock (_lock)
+            {
+                return _streams.TryGetValue(actorId, out var stream)
+                    ? stream.Messages.ToList()
+                    : [];
+            }
+        }
+    }
+
+    private sealed class RecordingStream(string streamId) : IStream
+    {
+        public string StreamId => streamId;
+
+        public List<EventEnvelope> Messages { get; } = [];
+
+        public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var envelope = message as EventEnvelope ?? new EventEnvelope
+            {
+                Payload = Any.Pack(message),
+            };
+
+            Messages.Add(envelope.Clone());
             return Task.CompletedTask;
         }
+
+        public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
+            where T : IMessage, new()
+        {
+            _ = handler;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IAsyncDisposable>(NoOpSubscription.Instance);
+        }
+    }
+
+    private sealed class NoOpSubscription : IAsyncDisposable
+    {
+        public static NoOpSubscription Instance { get; } = new();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

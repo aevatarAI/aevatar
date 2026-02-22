@@ -2,10 +2,11 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
+using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
+[ImplicitStreamSubscription(OrleansRuntimeConstants.ActorEventStreamNamespace)]
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
     private readonly IPersistentState<RuntimeActorGrainState> _state;
@@ -14,7 +15,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private IEnvelopePropagationPolicy _propagationPolicy =
         new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
     private IStreamForwardingRegistry _streamForwardingRegistry = null!;
+    private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
     private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
+    private IAsyncStream<EventEnvelope>? _selfStream;
+    private StreamSubscriptionHandle<EventEnvelope>? _selfStreamHandle;
 
     public RuntimeActorGrain(
         [PersistentState("agent", OrleansRuntimeConstants.GrainStateStorageName)]
@@ -28,9 +32,12 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _deduplicator = ServiceProvider.GetService<IEventDeduplicator>();
         _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>() ?? _propagationPolicy;
         _streamForwardingRegistry = ServiceProvider.GetRequiredService<IStreamForwardingRegistry>();
+        _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
 
         var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
         _logger = loggerFactory?.CreateLogger<RuntimeActorGrain>() ?? NullLogger<RuntimeActorGrain>.Instance;
+
+        await SubscribeSelfStreamAsync();
 
         if (!string.IsNullOrWhiteSpace(_state.State.AgentTypeName))
             await InitializeAgentInternalAsync(_state.State.AgentTypeName, cancellationToken);
@@ -38,6 +45,12 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
+        if (_selfStreamHandle != null)
+        {
+            await _selfStreamHandle.UnsubscribeAsync();
+            _selfStreamHandle = null;
+        }
+
         if (_agent != null)
         {
             await _agent.DeactivateAsync(cancellationToken);
@@ -63,7 +76,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     }
 
     public Task<bool> IsInitializedAsync() =>
-        Task.FromResult(_agent != null);
+        Task.FromResult(_agent != null || !string.IsNullOrWhiteSpace(_state.State.AgentTypeName));
 
     public async Task HandleEnvelopeAsync(byte[] envelopeBytes)
     {
@@ -151,6 +164,20 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         DeactivateOnIdle();
     }
 
+    public async Task PurgeAsync()
+    {
+        if (_agent != null)
+        {
+            await _agent.DeactivateAsync();
+            _agent = null;
+        }
+
+        _state.State.AgentTypeName = null;
+        _state.State.ParentId = null;
+        _state.State.Children.Clear();
+        await _state.WriteStateAsync();
+    }
+
     private async Task<bool> InitializeAgentInternalAsync(string agentTypeName, CancellationToken ct = default)
     {
         var agentType = ResolveAgentType(agentTypeName);
@@ -209,12 +236,11 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         gAgent.SetId(actorId);
         gAgent.EventPublisher = new Actors.OrleansGrainEventPublisher(
             actorId,
-            GrainFactory,
             () => _state.State.ParentId,
             envelope => HandleEnvelopeAsync(envelope.ToByteArray()),
             _propagationPolicy,
             _streamForwardingRegistry,
-            ServiceProvider.GetService<IOrleansTransportEventSender>());
+            _streams);
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
         gAgent.ManifestStore = ServiceProvider.GetService<IAgentManifestStore>();
@@ -239,6 +265,25 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
             type = type.BaseType;
         }
+    }
+
+    private async Task SubscribeSelfStreamAsync()
+    {
+        if (_selfStreamHandle != null)
+            return;
+
+        var options = ServiceProvider.GetService<AevatarOrleansRuntimeOptions>() ?? new AevatarOrleansRuntimeOptions();
+        var streamProvider = this.GetStreamProvider(options.StreamProviderName);
+        var streamId = StreamId.Create(options.ActorEventNamespace, this.GetPrimaryKeyString());
+        _selfStream = streamProvider.GetStream<EventEnvelope>(streamId);
+
+        _selfStreamHandle = await _selfStream.SubscribeAsync(OnSelfStreamEventAsync);
+    }
+
+    private Task OnSelfStreamEventAsync(EventEnvelope envelope, StreamSequenceToken? token = null)
+    {
+        _ = token;
+        return HandleEnvelopeAsync(envelope.ToByteArray());
     }
 
 }

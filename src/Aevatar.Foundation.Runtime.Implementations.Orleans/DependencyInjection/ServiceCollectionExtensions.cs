@@ -1,18 +1,25 @@
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
-using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.KafkaAdapter;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.Kafka;
 using Orleans.Hosting;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddAevatarFoundationRuntimeOrleans(this IServiceCollection services)
+    public static IServiceCollection AddAevatarFoundationRuntimeOrleans(
+        this IServiceCollection services,
+        Action<AevatarOrleansRuntimeOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        var options = new AevatarOrleansRuntimeOptions();
+        configure?.Invoke(options);
+        services.Replace(ServiceDescriptor.Singleton(options));
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
 
@@ -27,32 +34,81 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
         services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
-        services.TryAddSingleton<IStreamForwardingRegistry, InMemoryStreamForwardingRegistry>();
+        services.Replace(ServiceDescriptor.Singleton<IStreamForwardingRegistry, OrleansDistributedStreamForwardingRegistry>());
+        services.AddAevatarOrleansStreamProviderAdapter();
+
+        if (string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendKafkaAdapter, StringComparison.OrdinalIgnoreCase))
+            services.TryAddSingleton<OrleansKafkaQueueAdapterFactory>();
+        else if (!string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendInMemory, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Unsupported Orleans stream backend '{options.StreamBackend}'.");
 
         return services;
     }
 
-    public static ISiloBuilder AddAevatarFoundationRuntimeOrleans(this ISiloBuilder builder)
+    public static ISiloBuilder AddAevatarFoundationRuntimeOrleans(
+        this ISiloBuilder builder,
+        Action<AevatarOrleansRuntimeOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        return builder
-            .AddMemoryGrainStorage(OrleansRuntimeConstants.GrainStateStorageName)
-            .ConfigureServices(services => services.AddAevatarFoundationRuntimeOrleans());
+        var options = new AevatarOrleansRuntimeOptions();
+        configure?.Invoke(options);
+
+        builder.AddMemoryGrainStorage(OrleansRuntimeConstants.GrainStateStorageName);
+
+        if (string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendKafkaAdapter, StringComparison.OrdinalIgnoreCase))
+        {
+            builder.AddPersistentStreams(
+                options.StreamProviderName,
+                (sp, _) => sp.GetRequiredService<OrleansKafkaQueueAdapterFactory>(),
+                _ => { });
+        }
+        else if (string.Equals(options.StreamBackend, AevatarOrleansRuntimeOptions.StreamBackendInMemory, StringComparison.OrdinalIgnoreCase))
+        {
+            builder.AddMemoryStreams(options.StreamProviderName, _ => { });
+        }
+        else
+        {
+            throw new InvalidOperationException($"Unsupported Orleans stream backend '{options.StreamBackend}'.");
+        }
+
+        builder.ConfigureServices(services =>
+        {
+            services.AddAevatarFoundationRuntimeOrleans(orleansOptions =>
+            {
+                orleansOptions.StreamBackend = options.StreamBackend;
+                orleansOptions.StreamProviderName = options.StreamProviderName;
+                orleansOptions.ActorEventNamespace = options.ActorEventNamespace;
+                orleansOptions.QueueCount = options.QueueCount;
+                orleansOptions.QueueCacheSize = options.QueueCacheSize;
+            });
+        });
+
+        return builder;
     }
 
     public static ISiloBuilder AddAevatarFoundationRuntimeOrleansWithKafkaTransport(
         this ISiloBuilder builder,
-        Action<OrleansKafkaTransportOptions>? configure = null)
+        Action<MassTransitKafkaTransportOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        return builder
-            .AddMemoryGrainStorage(OrleansRuntimeConstants.GrainStateStorageName)
-            .ConfigureServices(services =>
+        var transportOptions = new MassTransitKafkaTransportOptions();
+        configure?.Invoke(transportOptions);
+
+        return builder.ConfigureServices(services =>
+        {
+            services.AddAevatarFoundationRuntimeMassTransitKafkaTransport(_ =>
             {
-                services.AddAevatarFoundationRuntimeOrleans();
-                services.AddAevatarFoundationRuntimeOrleansKafkaSiloTransport(configure);
+                _.BootstrapServers = transportOptions.BootstrapServers;
+                _.TopicName = transportOptions.TopicName;
+                _.ConsumerGroup = transportOptions.ConsumerGroup;
             });
+
+            services.AddAevatarFoundationRuntimeOrleans(options =>
+            {
+                options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendKafkaAdapter;
+            });
+        });
     }
 }

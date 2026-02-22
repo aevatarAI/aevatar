@@ -1,21 +1,19 @@
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
-
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
 internal sealed class OrleansAgentProxy : IAgent
 {
     private static readonly IReadOnlyList<Type> EmptySubscribedTypes = Array.Empty<Type>();
     private readonly IRuntimeActorGrain _grain;
-    private readonly IOrleansTransportEventSender? _transportEventSender;
+    private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
 
     public OrleansAgentProxy(
         string actorId,
         IRuntimeActorGrain grain,
-        IOrleansTransportEventSender? transportEventSender = null)
+        Aevatar.Foundation.Abstractions.IStreamProvider streams)
     {
         Id = actorId;
         _grain = grain;
-        _transportEventSender = transportEventSender;
+        _streams = streams;
     }
 
     public string Id { get; }
@@ -24,10 +22,7 @@ internal sealed class OrleansAgentProxy : IAgent
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (_transportEventSender != null)
-            return _transportEventSender.SendAsync(Id, envelope, ct);
-
-        return _grain.HandleEnvelopeAsync(envelope.ToByteArray());
+        return _streams.GetStream(Id).ProduceAsync(envelope, ct);
     }
 
     public Task<string> GetDescriptionAsync() =>

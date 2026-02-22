@@ -1,9 +1,10 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
-using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.Kafka;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -69,7 +70,7 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
             [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = "Redis",
         });
 
-        services.AddAevatarActorRuntime(configuration, options => options.Provider = "InMemory");
+        services.AddAevatarActorRuntime(configuration, options => options.Provider = AevatarActorRuntimeOptions.ProviderInMemory);
         using var provider = services.BuildServiceProvider();
 
         provider.GetService<IActorRuntime>().Should().NotBeNull();
@@ -77,42 +78,47 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddAevatarActorRuntime_WhenOrleansWithKafkaTransport_ShouldRegisterTransportSender()
+    public void AddAevatarActorRuntime_WhenOrleansWithKafkaAdapterBackend_ShouldRegisterKafkaTransportAndStreamAdapter()
     {
         var services = new ServiceCollection();
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
             [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
-            [$"{AevatarActorRuntimeOptions.SectionName}:Transport"] = AevatarActorRuntimeOptions.TransportKafka,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendKafkaAdapter,
             [$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"] = "localhost:19092",
             [$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"] = "runtime-events",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"] = "runtime-group",
         });
 
         services.AddAevatarActorRuntime(configuration);
 
-        services.Should().Contain(x => x.ServiceType == typeof(IOrleansTransportEventSender));
+        services.Should().Contain(x => x.ServiceType == typeof(IKafkaEnvelopeTransport));
+        services.Should().Contain(x => x.ServiceType == typeof(Aevatar.Foundation.Abstractions.IStreamProvider) &&
+                                       x.ImplementationType == typeof(OrleansStreamProviderAdapter));
+
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
-        options.Transport.Should().Be(AevatarActorRuntimeOptions.TransportKafka);
+        options.OrleansStreamBackend.Should().Be(AevatarActorRuntimeOptions.OrleansStreamBackendKafkaAdapter);
         options.KafkaBootstrapServers.Should().Be("localhost:19092");
         options.KafkaTopicName.Should().Be("runtime-events");
+        options.KafkaConsumerGroup.Should().Be("runtime-group");
     }
 
     [Fact]
-    public void AddAevatarActorRuntime_WhenOrleansTransportIsUnsupported_ShouldThrow()
+    public void AddAevatarActorRuntime_WhenOrleansStreamBackendIsUnsupported_ShouldThrow()
     {
         var services = new ServiceCollection();
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
             [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
-            [$"{AevatarActorRuntimeOptions.SectionName}:Transport"] = "RabbitMq",
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = "RabbitMq",
         });
 
         var act = () => services.AddAevatarActorRuntime(configuration);
 
         act.Should()
             .Throw<InvalidOperationException>()
-            .WithMessage("*Unsupported Orleans transport*");
+            .WithMessage("*Unsupported Orleans stream backend*");
     }
 
     private static IConfiguration BuildConfiguration(Dictionary<string, string?>? values = null)

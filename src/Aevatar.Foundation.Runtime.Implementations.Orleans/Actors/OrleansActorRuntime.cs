@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -11,20 +10,20 @@ public sealed class OrleansActorRuntime : IActorRuntime
     private readonly IGrainFactory _grainFactory;
     private readonly IAgentManifestStore _manifestStore;
     private readonly IStreamForwardingRegistry _streamForwardingRegistry;
-    private readonly IOrleansTransportEventSender? _transportEventSender;
+    private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
     private readonly ILogger<OrleansActorRuntime> _logger;
 
     public OrleansActorRuntime(
         IGrainFactory grainFactory,
         IAgentManifestStore manifestStore,
         IStreamForwardingRegistry streamForwardingRegistry,
-        IOrleansTransportEventSender? transportEventSender = null,
+        Aevatar.Foundation.Abstractions.IStreamProvider streams,
         ILogger<OrleansActorRuntime>? logger = null)
     {
         _grainFactory = grainFactory;
         _manifestStore = manifestStore;
         _streamForwardingRegistry = streamForwardingRegistry;
-        _transportEventSender = transportEventSender;
+        _streams = streams;
         _logger = logger ?? NullLogger<OrleansActorRuntime>.Instance;
     }
 
@@ -51,7 +50,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
         await _manifestStore.SaveAsync(actorId, manifest, ct);
 
         _logger.LogInformation("Actor {Id} ({Type}) created via Orleans runtime", actorId, agentType.Name);
-        return new OrleansActor(actorId, grain, _transportEventSender);
+        return new OrleansActor(actorId, grain, _streams);
     }
 
     public async Task DestroyAsync(string id, CancellationToken ct = default)
@@ -74,7 +73,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
             await _streamForwardingRegistry.RemoveAsync(id, childId, ct);
         }));
 
-        await grain.ClearParentAsync();
+        await grain.PurgeAsync();
         await grain.DeactivateAsync();
 
         await _manifestStore.DeleteAsync(id, ct);
@@ -84,7 +83,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
     public async Task<IActor?> GetAsync(string id)
     {
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(id);
-        return await grain.IsInitializedAsync() ? new OrleansActor(id, grain, _transportEventSender) : null;
+        return await grain.IsInitializedAsync() ? new OrleansActor(id, grain, _streams) : null;
     }
 
     public Task<bool> ExistsAsync(string id)
@@ -98,6 +97,10 @@ public sealed class OrleansActorRuntime : IActorRuntime
         ct.ThrowIfCancellationRequested();
         var parent = _grainFactory.GetGrain<IRuntimeActorGrain>(parentId);
         var child = _grainFactory.GetGrain<IRuntimeActorGrain>(childId);
+        if (!await parent.IsInitializedAsync())
+            throw new InvalidOperationException($"Parent actor {parentId} is not initialized.");
+        if (!await child.IsInitializedAsync())
+            throw new InvalidOperationException($"Child actor {childId} is not initialized.");
 
         await parent.AddChildAsync(childId);
         await child.SetParentAsync(parentId);

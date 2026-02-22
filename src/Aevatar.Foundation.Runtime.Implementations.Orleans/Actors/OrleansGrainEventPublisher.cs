@@ -1,36 +1,32 @@
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
 internal sealed class OrleansGrainEventPublisher : IEventPublisher
 {
     private readonly string _actorId;
-    private readonly IGrainFactory _grainFactory;
     private readonly Func<string?> _getParentId;
     private readonly Func<EventEnvelope, Task> _dispatchToSelfAsync;
     private readonly IEnvelopePropagationPolicy _propagationPolicy;
     private readonly IStreamForwardingRegistry _forwardingRegistry;
-    private readonly IOrleansTransportEventSender? _transportEventSender;
+    private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
 
     public OrleansGrainEventPublisher(
         string actorId,
-        IGrainFactory grainFactory,
         Func<string?> getParentId,
         Func<EventEnvelope, Task> dispatchToSelfAsync,
         IEnvelopePropagationPolicy propagationPolicy,
         IStreamForwardingRegistry forwardingRegistry,
-        IOrleansTransportEventSender? transportEventSender = null)
+        Aevatar.Foundation.Abstractions.IStreamProvider streams)
     {
         _actorId = actorId;
-        _grainFactory = grainFactory;
         _getParentId = getParentId;
         _dispatchToSelfAsync = dispatchToSelfAsync;
         _propagationPolicy = propagationPolicy;
         _forwardingRegistry = forwardingRegistry;
-        _transportEventSender = transportEventSender;
+        _streams = streams;
     }
 
     public async Task PublishAsync<TEvent>(
@@ -154,10 +150,6 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         if (string.Equals(targetActorId, _actorId, StringComparison.Ordinal))
             return _dispatchToSelfAsync(routedEnvelope);
 
-        if (_transportEventSender != null)
-            return _transportEventSender.SendAsync(targetActorId, routedEnvelope, ct);
-
-        var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(targetActorId);
-        return grain.HandleEnvelopeAsync(routedEnvelope.ToByteArray());
+        return _streams.GetStream(targetActorId).ProduceAsync(routedEnvelope, ct);
     }
 }

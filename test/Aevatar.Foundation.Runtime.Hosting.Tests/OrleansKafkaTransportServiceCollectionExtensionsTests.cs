@@ -1,5 +1,4 @@
-using Aevatar.Foundation.Runtime.Implementations.Orleans;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.Kafka;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -8,39 +7,41 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public class OrleansKafkaTransportServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddKafkaClientTransport_ShouldRegisterSender_AndPersistOptions()
+    public void AddMassTransitKafkaTransport_ShouldRegisterTransport_AndPersistOptions()
     {
         var services = new ServiceCollection();
 
-        services.AddAevatarFoundationRuntimeOrleansKafkaClientTransport(options =>
+        services.AddAevatarFoundationRuntimeMassTransitKafkaTransport(options =>
         {
             options.BootstrapServers = "localhost:39092";
             options.TopicName = "agent-events";
-            options.ConsumerGroup = "client-group";
+            options.ConsumerGroup = "transport-group";
         });
 
-        services.Should().Contain(x => x.ServiceType == typeof(IOrleansTransportEventSender));
+        services.Should().Contain(x => x.ServiceType == typeof(IKafkaEnvelopeTransport));
 
         using var provider = services.BuildServiceProvider();
-        var options = provider.GetRequiredService<OrleansKafkaTransportOptions>();
+        var options = provider.GetRequiredService<MassTransitKafkaTransportOptions>();
         options.BootstrapServers.Should().Be("localhost:39092");
         options.TopicName.Should().Be("agent-events");
-        options.ConsumerGroup.Should().Be("client-group");
+        options.ConsumerGroup.Should().Be("transport-group");
     }
 
     [Fact]
-    public void AddKafkaSiloTransport_ShouldRegisterHandlerAndSender()
+    public void AddMassTransitKafkaStreamProvider_ShouldRegisterStreamProvider_AndLifecycleManager()
     {
         var services = new ServiceCollection();
 
-        services.AddAevatarFoundationRuntimeOrleansKafkaSiloTransport(options =>
+        services.AddAevatarMassTransitKafkaStreamProvider(options =>
         {
-            options.BootstrapServers = "localhost:49092";
-            options.TopicName = OrleansRuntimeConstants.KafkaEventTopicName;
-            options.ConsumerGroup = "silo-group";
+            options.StreamNamespace = "aevatar.test.events";
         });
 
-        services.Should().Contain(x => x.ServiceType == typeof(IOrleansTransportEventSender));
-        services.Should().Contain(x => x.ServiceType == typeof(IOrleansTransportEventHandler));
+        services.Should().Contain(x => x.ServiceType == typeof(Aevatar.Foundation.Abstractions.IStreamProvider));
+        services.Should().Contain(x => x.ServiceType == typeof(Aevatar.Foundation.Abstractions.IStreamLifecycleManager));
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.MassTransitKafkaStreamOptions>();
+        options.StreamNamespace.Should().Be("aevatar.test.events");
     }
 }

@@ -79,7 +79,8 @@ public sealed class OrleansActorRuntimeForwardingTests
         return new OrleansActorRuntime(
             grainFactory,
             new InMemoryManifestStore(),
-            registry);
+            registry,
+            new InMemoryStreamProvider());
     }
 
     private class GrainFactoryProxy : DispatchProxy
@@ -161,5 +162,12 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public Task DeactivateAsync() =>
             Task.CompletedTask;
+
+        public Task PurgeAsync()
+        {
+            ParentId = null;
+            Children.Clear();
+            return Task.CompletedTask;
+        }
     }
 }

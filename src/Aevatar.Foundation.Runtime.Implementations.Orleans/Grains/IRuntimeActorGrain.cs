@@ -25,4 +25,6 @@ public interface IRuntimeActorGrain : IGrainWithStringKey
     Task<string> GetAgentTypeNameAsync();
 
     Task DeactivateAsync();
+
+    Task PurgeAsync();
 }
