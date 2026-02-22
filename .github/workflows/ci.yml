@@ -7,9 +7,13 @@ on:
       - main
       - dev
       - refactor/**
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 jobs:
-  build-test:
+  fast-build-test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,3 +93,21 @@ jobs:
       - name: Stop Kafka (always)
         if: always()
         run: docker compose down --volumes --remove-orphans
+
+  distributed-3node-smoke:
+    if: |
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: 3-Node Distributed Smoke Test
+        run: bash tools/ci/distributed_3node_smoke.sh
