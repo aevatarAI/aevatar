@@ -22,6 +22,8 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.Replace(ServiceDescriptor.Singleton<IStreamProvider, OrleansStreamProviderAdapter>());
+        services.Replace(ServiceDescriptor.Singleton<OrleansStreamProviderAdapter>(sp =>
+            (OrleansStreamProviderAdapter)sp.GetRequiredService<IStreamProvider>()));
         services.Replace(ServiceDescriptor.Singleton<IStreamLifecycleManager, StreamProviderLifecycleManager>());
         return services;
     }

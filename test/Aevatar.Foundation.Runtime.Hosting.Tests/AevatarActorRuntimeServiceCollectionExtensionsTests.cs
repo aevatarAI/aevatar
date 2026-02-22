@@ -65,6 +65,20 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddAevatarActorRuntime_WhenProviderIsOrleans_ShouldExposeConcreteOrleansStreamProvider()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+
+        services.Should().Contain(x => x.ServiceType == typeof(OrleansStreamProviderAdapter));
+    }
+
+    [Fact]
     public void AddAevatarActorRuntime_WhenProviderIsUnsupported_ShouldThrow()
     {
         var services = new ServiceCollection();

@@ -136,24 +136,10 @@ public sealed class InMemoryStreamingCoverageTests
 
         await stream.ProduceAsync(new StringValue { Value = "first" });
         await firstDispatchObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitForDispatchLoopToTerminateAsync(stream, TimeSpan.FromSeconds(2));
 
-        var threw = false;
-        for (var attempt = 0; attempt < 20; attempt++)
-        {
-            try
-            {
-                await stream.ProduceAsync(new StringValue { Value = "second" });
-            }
-            catch
-            {
-                threw = true;
-                break;
-            }
-
-            await Task.Delay(20);
-        }
-
-        threw.Should().BeTrue();
+        Func<Task> writeAfterFailure = async () => await stream.ProduceAsync(new StringValue { Value = "second" });
+        await writeAfterFailure.Should().ThrowAsync<Exception>();
     }
 
     [Fact]
@@ -396,6 +382,18 @@ public sealed class InMemoryStreamingCoverageTests
             new NonBindingSourceRegistry());
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*IStreamForwardingBindingSource*");
+    }
+
+    private static async Task WaitForDispatchLoopToTerminateAsync(InMemoryStream stream, TimeSpan timeout)
+    {
+        var dispatchLoopField = typeof(InMemoryStream).GetField(
+            "_dispatchLoop",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        dispatchLoopField.Should().NotBeNull("InMemoryStream should expose dispatch loop for deterministic test synchronization");
+
+        var dispatchLoop = dispatchLoopField!.GetValue(stream) as Task;
+        dispatchLoop.Should().NotBeNull();
+        await dispatchLoop!.WaitAsync(timeout);
     }
 
     private sealed class NonBindingSourceRegistry : IStreamForwardingRegistry

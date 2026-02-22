@@ -1,4 +1,5 @@
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Extensions.Maker;
 
@@ -10,6 +11,7 @@ builder.AddAevatarDefaultHost(
         options.ServiceName = "Aevatar.Mainnet.Host.Api";
         options.EnableWebSockets = true;
     });
+builder.AddMainnetDistributedOrleansHost();
 builder.AddWorkflowCapabilityWithAIDefaults();
 builder.Services.AddWorkflowMakerExtensions();
 
