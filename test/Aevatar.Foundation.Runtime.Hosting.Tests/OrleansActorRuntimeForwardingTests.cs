@@ -55,6 +55,23 @@ public sealed class OrleansActorRuntimeForwardingTests
         grains["child-2"].ParentId.Should().BeNull();
         (await registry.ListBySourceAsync("parent", CancellationToken.None)).Should().BeEmpty();
         (await registry.ListBySourceAsync("middle", CancellationToken.None)).Should().BeEmpty();
+        grains["middle"].Calls.Should().ContainInOrder("Purge", "Deactivate");
+    }
+
+    [Fact]
+    public async Task LinkAsync_WhenParentIsNotInitialized_ShouldThrow_AndNotMutateTopology()
+    {
+        var runtime = CreateRuntime(out var registry, out var grains);
+        await runtime.ExistsAsync("parent");
+        await runtime.ExistsAsync("child");
+        grains["parent"].Initialized = false;
+
+        var act = () => runtime.LinkAsync("parent", "child");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Parent actor parent is not initialized.*");
+        grains["child"].ParentId.Should().BeNull();
+        (await registry.ListBySourceAsync("parent", CancellationToken.None)).Should().BeEmpty();
     }
 
     private static OrleansActorRuntime CreateRuntime(
@@ -110,13 +127,17 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public HashSet<string> Children { get; } = new(StringComparer.Ordinal);
 
+        public bool Initialized { get; set; } = true;
+
+        public List<string> Calls { get; } = [];
+
         public Task<bool> InitializeAgentAsync(string agentTypeName)
         {
             _ = agentTypeName;
             return Task.FromResult(true);
         }
 
-        public Task<bool> IsInitializedAsync() => Task.FromResult(true);
+        public Task<bool> IsInitializedAsync() => Task.FromResult(Initialized);
 
         public Task HandleEnvelopeAsync(byte[] envelopeBytes)
         {
@@ -160,11 +181,15 @@ public sealed class OrleansActorRuntimeForwardingTests
         public Task<string> GetAgentTypeNameAsync() =>
             Task.FromResult(string.Empty);
 
-        public Task DeactivateAsync() =>
-            Task.CompletedTask;
+        public Task DeactivateAsync()
+        {
+            Calls.Add("Deactivate");
+            return Task.CompletedTask;
+        }
 
         public Task PurgeAsync()
         {
+            Calls.Add("Purge");
             ParentId = null;
             Children.Clear();
             return Task.CompletedTask;

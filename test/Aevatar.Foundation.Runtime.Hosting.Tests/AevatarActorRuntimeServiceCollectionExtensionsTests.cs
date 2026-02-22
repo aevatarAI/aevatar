@@ -1,10 +1,12 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.Kafka;
+using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -43,6 +45,23 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         descriptor.Should().NotBeNull();
         descriptor!.ImplementationType.Should().Be(typeof(OrleansActorRuntime));
         services.Should().Contain(x => x.ServiceType == typeof(IActorTypeProbe) && x.ImplementationType == typeof(OrleansActorTypeProbe));
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenProviderIsOrleans_ShouldUseDistributedForwardingRegistry()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+
+        var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IStreamForwardingRegistry));
+        descriptor.Should().NotBeNull();
+        descriptor!.ImplementationType.Should().Be(typeof(OrleansDistributedStreamForwardingRegistry));
+        descriptor.ImplementationType.Should().NotBe(typeof(InMemoryStreamForwardingRegistry));
     }
 
     [Fact]
@@ -102,6 +121,36 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         options.KafkaBootstrapServers.Should().Be("localhost:19092");
         options.KafkaTopicName.Should().Be("runtime-events");
         options.KafkaConsumerGroup.Should().Be("runtime-group");
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenProviderIsMassTransitKafka_ShouldUseDirectKafkaStreamProvider()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderMassTransitKafka,
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"] = "localhost:29092",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"] = "direct-events",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"] = "direct-runtime-group",
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+
+        services.Should().Contain(x => x.ServiceType == typeof(IKafkaEnvelopeTransport));
+        services.Should().Contain(x => x.ServiceType == typeof(Aevatar.Foundation.Abstractions.IStreamProvider) &&
+                                       x.ImplementationType == typeof(MassTransitKafkaStreamProvider));
+
+        var actorRuntimeDescriptor = services.LastOrDefault(x => x.ServiceType == typeof(IActorRuntime));
+        actorRuntimeDescriptor.Should().NotBeNull();
+        actorRuntimeDescriptor!.ImplementationType.Should().NotBe(typeof(OrleansActorRuntime));
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
+        options.Provider.Should().Be(AevatarActorRuntimeOptions.ProviderMassTransitKafka);
+        options.KafkaBootstrapServers.Should().Be("localhost:29092");
+        options.KafkaTopicName.Should().Be("direct-events");
+        options.KafkaConsumerGroup.Should().Be("direct-runtime-group");
     }
 
     [Fact]

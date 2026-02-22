@@ -87,28 +87,4 @@ public static class ServiceCollectionExtensions
         return builder;
     }
 
-    public static ISiloBuilder AddAevatarFoundationRuntimeOrleansWithKafkaTransport(
-        this ISiloBuilder builder,
-        Action<MassTransitKafkaTransportOptions>? configure = null)
-    {
-        ArgumentNullException.ThrowIfNull(builder);
-
-        var transportOptions = new MassTransitKafkaTransportOptions();
-        configure?.Invoke(transportOptions);
-
-        return builder.ConfigureServices(services =>
-        {
-            services.AddAevatarFoundationRuntimeMassTransitKafkaTransport(_ =>
-            {
-                _.BootstrapServers = transportOptions.BootstrapServers;
-                _.TopicName = transportOptions.TopicName;
-                _.ConsumerGroup = transportOptions.ConsumerGroup;
-            });
-
-            services.AddAevatarFoundationRuntimeOrleans(options =>
-            {
-                options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendKafkaAdapter;
-            });
-        });
-    }
 }

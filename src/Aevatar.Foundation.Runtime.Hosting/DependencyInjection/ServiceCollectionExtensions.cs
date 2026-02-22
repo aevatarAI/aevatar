@@ -21,9 +21,6 @@ public static class ServiceCollectionExtensions
         var configuredProvider = configuration[$"{AevatarActorRuntimeOptions.SectionName}:Provider"];
         if (!string.IsNullOrWhiteSpace(configuredProvider))
             options.Provider = configuredProvider;
-        var configuredTransport = configuration[$"{AevatarActorRuntimeOptions.SectionName}:Transport"];
-        if (!string.IsNullOrWhiteSpace(configuredTransport))
-            options.Transport = configuredTransport;
         var configuredKafkaBootstrap = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"];
         if (!string.IsNullOrWhiteSpace(configuredKafkaBootstrap))
             options.KafkaBootstrapServers = configuredKafkaBootstrap;

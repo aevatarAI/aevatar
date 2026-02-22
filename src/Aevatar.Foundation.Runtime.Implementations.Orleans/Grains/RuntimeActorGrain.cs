@@ -172,6 +172,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             _agent = null;
         }
 
+        _state.State.AgentId = string.Empty;
         _state.State.AgentTypeName = null;
         _state.State.ParentId = null;
         _state.State.Children.Clear();
