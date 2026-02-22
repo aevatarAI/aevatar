@@ -171,11 +171,14 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                 task = _receivedEnvelope.Task;
             }
 
-            var completedTask = await Task.WhenAny(task, Task.Delay(timeout));
-            if (completedTask != task)
+            try
+            {
+                return await task.WaitAsync(timeout);
+            }
+            catch (TimeoutException)
+            {
                 throw new TimeoutException($"Timed out after {timeout} waiting for Kafka envelope.");
-
-            return await task;
+            }
         }
 
         private static TaskCompletionSource<EventEnvelope> CreateTcs() =>
