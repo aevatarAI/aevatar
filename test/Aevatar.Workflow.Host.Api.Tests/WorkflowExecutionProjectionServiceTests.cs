@@ -8,6 +8,8 @@ using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
@@ -545,9 +547,13 @@ public class WorkflowExecutionProjectionServiceTests
         runtimeServices.AddSingleton<IAgentManifestStore, InMemoryManifestStore>();
         var runtimeProvider = runtimeServices.BuildServiceProvider();
         var runtime = new LocalActorRuntime(streams, runtimeProvider, streams);
+        var runtimeTypeProbe = new RuntimeActorTypeProbe(runtime);
+        var ownershipTypeVerifier = new DefaultAgentTypeVerifier(
+            runtimeTypeProbe,
+            runtimeProvider.GetRequiredService<IAgentManifestStore>());
         var ownershipCoordinator = new ActorProjectionOwnershipCoordinator(
             runtime,
-            runtimeProvider.GetRequiredService<IAgentManifestStore>());
+            ownershipTypeVerifier);
         var resolvedClock = clock ?? new SystemProjectionClock();
         runEventStreamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
             streams,
@@ -1161,5 +1167,23 @@ public class WorkflowExecutionProjectionServiceTests
     {
         public string ActorId { get; } = actorId;
         public string CommandId { get; } = commandId;
+    }
+
+    private sealed class RuntimeActorTypeProbe : IActorTypeProbe
+    {
+        private readonly IActorRuntime _runtime;
+
+        public RuntimeActorTypeProbe(IActorRuntime runtime)
+        {
+            _runtime = runtime;
+        }
+
+        public async Task<string?> GetRuntimeAgentTypeNameAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = ct;
+            var actor = await _runtime.GetAsync(actorId);
+            var runtimeType = actor?.Agent.GetType();
+            return runtimeType?.AssemblyQualifiedName ?? runtimeType?.FullName;
+        }
     }
 }

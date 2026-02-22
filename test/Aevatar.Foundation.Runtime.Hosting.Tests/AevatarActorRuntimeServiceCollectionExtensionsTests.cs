@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,6 +21,8 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
 
         provider.GetService<IActorRuntime>().Should().NotBeNull();
+        provider.GetService<IAgentTypeVerifier>().Should().NotBeNull();
+        provider.GetService<IActorTypeProbe>().Should().NotBeNull();
         provider.GetRequiredService<AevatarActorRuntimeOptions>().Provider.Should().Be(AevatarActorRuntimeOptions.ProviderInMemory);
     }
 
@@ -37,6 +40,7 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IActorRuntime));
         descriptor.Should().NotBeNull();
         descriptor!.ImplementationType.Should().Be(typeof(OrleansActorRuntime));
+        services.Should().Contain(x => x.ServiceType == typeof(IActorTypeProbe) && x.ImplementationType == typeof(OrleansActorTypeProbe));
     }
 
     [Fact]

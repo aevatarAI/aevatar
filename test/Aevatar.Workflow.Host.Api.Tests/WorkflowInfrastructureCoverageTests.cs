@@ -2,6 +2,8 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
@@ -38,6 +40,8 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddLogging();
         services.AddSingleton<IActorRuntime>(new FakeActorRuntime());
         services.AddSingleton<IAgentManifestStore>(new FakeAgentManifestStore());
+        services.AddSingleton<IActorTypeProbe, RuntimeBackedActorTypeProbe>();
+        services.AddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
 
         services.AddWorkflowInfrastructure(options =>
         {
@@ -181,7 +185,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     {
         var runtime = new FakeActorRuntime();
         var manifestStore = new FakeAgentManifestStore();
-        var port = new WorkflowRunActorPort(runtime, manifestStore);
+        var port = CreatePort(runtime, manifestStore);
 
         runtime.ActorToReturn = new StubActor("actor-1", new StubAgent("agent-1"));
         var got = await port.GetAsync("actor-1", CancellationToken.None);
@@ -215,7 +219,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     {
         var runtime = new FakeActorRuntime();
         var manifestStore = new FakeAgentManifestStore();
-        var port = new WorkflowRunActorPort(runtime, manifestStore);
+        var port = CreatePort(runtime, manifestStore);
         var actor = new StubActor("wf-actor", new StubAgent("wf-agent"));
 
         await manifestStore.SaveAsync(actor.Id, new AgentManifest
@@ -230,6 +234,40 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         (await port.IsWorkflowActorAsync(actor, CancellationToken.None)).Should().BeTrue();
         (await port.GetBoundWorkflowNameAsync(actor, CancellationToken.None)).Should().Be("direct");
+    }
+
+    [Fact]
+    public async Task WorkflowRunActorPort_WhenManifestUsesFullName_ShouldRecognizeWorkflowAgent()
+    {
+        var runtime = new FakeActorRuntime();
+        var manifestStore = new FakeAgentManifestStore();
+        var port = CreatePort(runtime, manifestStore);
+        var actor = new StubActor("wf-actor", new StubAgent("wf-agent"));
+
+        await manifestStore.SaveAsync(actor.Id, new AgentManifest
+        {
+            AgentId = actor.Id,
+            AgentTypeName = typeof(WorkflowGAgent).FullName!,
+        });
+
+        (await port.IsWorkflowActorAsync(actor, CancellationToken.None)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task WorkflowRunActorPort_WhenManifestTypeNameLooksSimilar_ShouldRejectWorkflowAgentMatch()
+    {
+        var runtime = new FakeActorRuntime();
+        var manifestStore = new FakeAgentManifestStore();
+        var port = CreatePort(runtime, manifestStore);
+        var actor = new StubActor("wf-actor", new StubAgent("wf-agent"));
+
+        await manifestStore.SaveAsync(actor.Id, new AgentManifest
+        {
+            AgentId = actor.Id,
+            AgentTypeName = $"{typeof(WorkflowGAgent).FullName}Shadow",
+        });
+
+        (await port.IsWorkflowActorAsync(actor, CancellationToken.None)).Should().BeFalse();
     }
 
     [Fact]
@@ -277,6 +315,12 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
+    }
+
+    private static WorkflowRunActorPort CreatePort(FakeActorRuntime runtime, FakeAgentManifestStore manifestStore)
+    {
+        var verifier = new DefaultAgentTypeVerifier(new RuntimeBackedActorTypeProbe(runtime), manifestStore);
+        return new WorkflowRunActorPort(runtime, manifestStore, verifier);
     }
 
     private sealed class FakeReportSink : IWorkflowExecutionReportArtifactSink
@@ -439,5 +483,23 @@ public sealed class WorkflowInfrastructureCoverageTests
         public IReadOnlyList<WorkflowModuleRegistration> Modules { get; } = [];
         public IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanders { get; } = [];
         public IReadOnlyList<IWorkflowModuleConfigurator> Configurators { get; } = [];
+    }
+
+    private sealed class RuntimeBackedActorTypeProbe : IActorTypeProbe
+    {
+        private readonly IActorRuntime _runtime;
+
+        public RuntimeBackedActorTypeProbe(IActorRuntime runtime)
+        {
+            _runtime = runtime;
+        }
+
+        public async Task<string?> GetRuntimeAgentTypeNameAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = ct;
+            var actor = await _runtime.GetAsync(actorId);
+            var runtimeType = actor?.Agent.GetType();
+            return runtimeType?.AssemblyQualifiedName ?? runtimeType?.FullName;
+        }
     }
 }

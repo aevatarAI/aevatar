@@ -1,5 +1,6 @@
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Propagation;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
@@ -11,6 +12,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
     private readonly Func<IReadOnlyList<string>> _getChildrenIds;
     private readonly Func<EventEnvelope, Task> _dispatchToSelfAsync;
     private readonly IEnvelopePropagationPolicy _propagationPolicy;
+    private readonly IEventLoopGuard _loopGuard;
 
     public OrleansGrainEventPublisher(
         string actorId,
@@ -18,7 +20,8 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         Func<string?> getParentId,
         Func<IReadOnlyList<string>> getChildrenIds,
         Func<EventEnvelope, Task> dispatchToSelfAsync,
-        IEnvelopePropagationPolicy propagationPolicy)
+        IEnvelopePropagationPolicy propagationPolicy,
+        IEventLoopGuard loopGuard)
     {
         _actorId = actorId;
         _grainFactory = grainFactory;
@@ -26,6 +29,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         _getChildrenIds = getChildrenIds;
         _dispatchToSelfAsync = dispatchToSelfAsync;
         _propagationPolicy = propagationPolicy;
+        _loopGuard = loopGuard;
     }
 
     public async Task PublishAsync<TEvent>(
@@ -105,28 +109,12 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
     private Task DispatchAsync(string targetActorId, EventEnvelope envelope)
     {
         var routedEnvelope = envelope.Clone();
-        AppendPublisherMetadata(routedEnvelope);
+        _loopGuard.BeforeDispatch(_actorId, targetActorId, routedEnvelope);
 
         if (string.Equals(targetActorId, _actorId, StringComparison.Ordinal))
             return _dispatchToSelfAsync(routedEnvelope);
 
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(targetActorId);
         return grain.HandleEnvelopeAsync(routedEnvelope.ToByteArray());
-    }
-
-    private void AppendPublisherMetadata(EventEnvelope envelope)
-    {
-        if (!envelope.Metadata.TryGetValue(OrleansRuntimeConstants.PublishersMetadataKey, out var chain) ||
-            string.IsNullOrWhiteSpace(chain))
-        {
-            envelope.Metadata[OrleansRuntimeConstants.PublishersMetadataKey] = _actorId;
-            return;
-        }
-
-        var ids = chain.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (ids.Contains(_actorId, StringComparer.Ordinal))
-            return;
-
-        envelope.Metadata[OrleansRuntimeConstants.PublishersMetadataKey] = $"{chain},{_actorId}";
     }
 }

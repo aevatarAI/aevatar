@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Propagation;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
@@ -10,6 +11,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private IAgent? _agent;
     private IEventDeduplicator? _deduplicator;
     private IEnvelopePropagationPolicy? _propagationPolicy;
+    private IEventLoopGuard? _loopGuard;
     private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
 
     public RuntimeActorGrain(
@@ -24,6 +26,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _deduplicator = ServiceProvider.GetService<IEventDeduplicator>();
         _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>()
             ?? new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
+        _loopGuard = ServiceProvider.GetService<IEventLoopGuard>() ?? new PublisherChainLoopGuard();
 
         var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
         _logger = loggerFactory?.CreateLogger<RuntimeActorGrain>() ?? NullLogger<RuntimeActorGrain>.Instance;
@@ -75,7 +78,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 return;
         }
 
-        if (ContainsPublisher(envelope))
+        if ((_loopGuard ?? new PublisherChainLoopGuard()).ShouldDrop(this.GetPrimaryKeyString(), envelope))
             return;
 
         await _agent.HandleEventAsync(envelope);
@@ -206,7 +209,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             () => _state.State.ParentId,
             () => _state.State.Children.ToList(),
             envelope => HandleEnvelopeAsync(envelope.ToByteArray()),
-            _propagationPolicy ?? new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy()));
+            _propagationPolicy ?? new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy()),
+            _loopGuard ?? new PublisherChainLoopGuard());
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
         gAgent.ManifestStore = ServiceProvider.GetService<IAgentManifestStore>();
@@ -233,16 +237,4 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
     }
 
-    private bool ContainsPublisher(EventEnvelope envelope)
-    {
-        if (!envelope.Metadata.TryGetValue(OrleansRuntimeConstants.PublishersMetadataKey, out var chain) ||
-            string.IsNullOrWhiteSpace(chain))
-        {
-            return false;
-        }
-
-        var selfId = this.GetPrimaryKeyString();
-        var ids = chain.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return ids.Contains(selfId, StringComparer.Ordinal);
-    }
 }

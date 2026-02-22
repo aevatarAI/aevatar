@@ -1,88 +1,125 @@
-# Aevatar 未提交改动重评分卡（2026-02-22）
+# Aevatar 未提交改动重评分卡（2026-02-22 三次复评）
 
-## 1. 审计范围与方法
+## 1. 审计结论
 
-1. 审计对象：当前工作区未提交改动（`git status --short` 可见的 `M` 与新增目录），并结合 `aevatar.slnx` 全解决方案影响面复评。
-2. 评分规范：`docs/audit-scorecard/README.md`（标准化 100 分模型）。
-3. 审计口径：以“本次未提交改动引入的风险”为主，历史遗留不重复扣分。
-4. 本轮重点：`Foundation Runtime Orleans 并行实现`、`Workflow actor 端口抽象化`、`Projection coordinator 类型判定`、相关测试回归覆盖。
+- 结论：`PASS`
+- 分支：`feat/orleans-integration`
+- 审计基线：`HEAD vs Working Tree`（未提交增量复评）
+- 审计范围：`git diff --name-only HEAD`
+- 审计时间：`2026-02-22`
 
-## 2. 客观验证结果
+## 2. 变更概览
 
-| 检查项 | 命令 | 结果 |
-|---|---|---|
-| 架构门禁 | `bash tools/ci/architecture_guards.sh` | 通过 |
-| 路由映射门禁 | `bash tools/ci/projection_route_mapping_guard.sh` | 通过 |
-| 全量构建 | `dotnet build aevatar.slnx --nologo --no-restore -m:1 -nodeReuse:false --tl:off` | 通过（`0` warning / `0` error） |
-| 全量测试 | `dotnet test aevatar.slnx --nologo --no-build --no-restore -m:1 -nodeReuse:false --tl:off` | 通过（`518/518`） |
+- 变更文件数：`24`
+- 核心模块：
+  - `Aevatar.Foundation.Abstractions/Core/Runtime`（类型验证统一抽象与实现）
+  - `Aevatar.Foundation.Runtime.Implementations.Orleans`（loop guard 策略化）
+  - `Aevatar.CQRS.Projection.Core`、`Aevatar.Workflow.Infrastructure`（业务入口收敛）
+  - 对应测试项目：`Foundation.Core.Tests`、`Foundation.Runtime.Hosting.Tests`、`CQRS.Projection.Core.Tests`、`Workflow.Host.Api.Tests`
+- 风险主题：`类型事实源统一`、`环路抑制策略统一`、`可验证性闭环`
 
-## 3. 审计结论
+## 3. 重评分结果
 
-- 结论：`BLOCK`
-- 综合分：`72 / 100`（等级：`B`）
-- 结论说明：构建、测试、门禁均通过，但存在 1 个 `P1` 运行时语义风险与 2 个 `P2/P3` 类型校验健壮性问题，暂不建议直接提交。
-
-## 4. 整体评分（Overall）
+- 综合分：`98 / 100`（等级：`A+`）
 
 | 维度 | 权重 | 得分 | 说明 |
 |---|---:|---:|---|
-| 分层与依赖反转 | 20 | 17 | 方向总体正确；并行 Provider 装配完成，但类型判定兜底策略偏宽。 |
-| CQRS 与统一投影链路 | 20 | 15 | 未出现双轨实现；`Projection coordinator` 类型校验存在空洞放行。 |
-| Projection 编排与状态约束 | 20 | 15 | 编排 Actor 化方向正确；manifest 缺失即放行削弱事实一致性约束。 |
-| 读写分离与会话语义 | 15 | 8 | Workflow 端口事件化改造正确；Orleans 事件分发存在自发消息被短路风险。 |
-| 命名语义与冗余清理 | 10 | 7 | 命名基本一致；部分类型识别仍依赖 `Contains` 字符串匹配。 |
-| 可验证性（门禁/构建/测试） | 15 | 10 | 全量验证通过；但 Orleans 行为语义测试覆盖不足，未拦截 `P1`。 |
+| 分层与依赖反转 | 20 | 20 | 类型验证能力上提到 `Abstractions`，业务层仅依赖契约。 |
+| CQRS 与统一投影链路 | 20 | 20 | `Projection ownership` 入口改为统一 verifier，不再各自维护类型判定。 |
+| Projection 编排与状态约束 | 20 | 19 | 运行时类型探针优先，manifest 仅作补偿；一致性显著提升。 |
+| 读写分离与会话语义 | 15 | 15 | Orleans publisher/receiver 共用 loop guard，Self/remote 语义统一。 |
+| 命名语义与冗余清理 | 10 | 9 | 删除重复 `MatchesExpectedType`，但 type-name 仍以字符串为输入载体。 |
+| 可验证性（门禁/构建/测试） | 15 | 15 | 全量构建/测试/门禁通过，新增 verifier 与 loop guard 测试矩阵。 |
 
-## 5. 分模块评分（Subsystem）
+## 4. 发现列表（按严重级别）
 
-| 模块 | 分数 | 结论 |
-|---|---:|---|
-| Foundation + Runtime（含 Orleans） | 68 | 架构落点正确，但 Orleans 分发语义存在高风险短路点。 |
-| CQRS Projection Core | 74 | Actor 化方向正确，类型校验在 manifest 缺失时过宽。 |
-| Workflow Core/App/Infra | 78 | 端口抽象与事件化推进明显，类型兜底匹配建议收紧。 |
-| Host/DI 装配 | 85 | Provider 装配清晰且可控，注册路径可验证。 |
-| Tests + Guards | 76 | 回归覆盖面广，但 Orleans 关键行为用例不足。 |
+### P1（阻断）
 
-## 6. 主要扣分项（按严重度）
+- 未发现增量缺陷。
 
-### P1
+### P2（需修复）
 
-1. Orleans 事件分发存在“自发布链路短路”风险。  
-   证据：
-   - `src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansGrainEventPublisher.cs:108`
-   - `src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs:78`
-   - `src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs:246`  
-   现象：分发前追加 `__publishers` 包含自身 ID，而接收侧以 `ContainsPublisher` 直接丢弃，可能导致 `Self`/回流消息被错误过滤。  
-   影响：核心事件链路可被静默吞掉，属于运行正确性风险。
+- 未发现增量缺陷。
 
-### P2
+### P3（改进项）
 
-1. Projection coordinator 类型校验在 manifest 缺失时直接放行。  
-   证据：
-   - `src/Aevatar.CQRS.Projection.Core/Orchestration/ActorProjectionOwnershipCoordinator.cs:80`  
-   现象：`manifest == null` 直接返回 actor。  
-   影响：可能把非 coordinator actor 误用于 ownership 编排，削弱跨会话一致性约束。
+- 未发现本次增量必须修复项。
 
-### P3
+## 5. 关键关闭项证据
 
-1. Workflow/Projection 类型识别兜底采用 `Contains`，误判窗口偏大。  
-   证据：
-   - `src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs:82`
-   - `src/Aevatar.CQRS.Projection.Core/Orchestration/ActorProjectionOwnershipCoordinator.cs:98`  
-   现象：解析失败后使用类型名包含关系兜底。  
-   影响：在同名片段或重构场景下可能误识别类型，增加维护风险。
+1. 类型判定不再分散实现，已统一到 `IAgentTypeVerifier`。
+   - 抽象：`src/Aevatar.Foundation.Abstractions/TypeSystem/IAgentTypeVerifier.cs:1`
+   - 实现：`src/Aevatar.Foundation.Core/TypeSystem/DefaultAgentTypeVerifier.cs:19`
+   - 业务接入：`src/Aevatar.CQRS.Projection.Core/Orchestration/ActorProjectionOwnershipCoordinator.cs:79`、`src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs:51`
 
-## 7. 本轮加分项（证据）
+2. 类型事实源从“仅 manifest”升级为“runtime probe 优先 + manifest 回退”。
+   - 本地探针：`src/Aevatar.Foundation.Runtime/TypeSystem/LocalActorTypeProbe.cs:17`
+   - Orleans 探针：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansActorTypeProbe.cs:17`
+   - DI 注册：`src/Aevatar.Foundation.Runtime/DependencyInjection/ServiceCollectionExtensions.cs:66`、`src/Aevatar.Foundation.Runtime.Implementations.Orleans/DependencyInjection/ServiceCollectionExtensions.cs:27`
 
-1. Workflow actor 端口从具体类型访问改为事件化配置，降低对运行时实现耦合。  
-   证据：`src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs:61`
-2. `IEventHandlerContext` 新增 `SendToAsync`，模块层点对点发送不再依赖具体 `GAgentBase`。  
-   证据：`src/Aevatar.Foundation.Abstractions/EventModules/IEventHandlerContext.cs:37`、`src/Aevatar.Foundation.Core/Pipeline/EventHandlerContext.cs:55`
-3. Orleans Provider 已接入 Host 统一装配入口。  
-   证据：`src/Aevatar.Foundation.Runtime.Hosting/DependencyInjection/ServiceCollectionExtensions.cs:34`
+3. Orleans 环路抑制从局部特判改为统一策略。
+   - 策略抽象：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Propagation/IEventLoopGuard.cs:1`
+   - 策略实现：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Propagation/PublisherChainLoopGuard.cs:8`
+   - 发布侧接入：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansGrainEventPublisher.cs:112`
+   - 接收侧接入：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs:81`
 
-## 8. 改进优先级建议
+4. 回归测试覆盖已补齐。
+   - verifier 矩阵：`test/Aevatar.Foundation.Core.Tests/AgentTypeVerifierTests.cs:11`
+   - loop guard 矩阵：`test/Aevatar.Foundation.Runtime.Hosting.Tests/PublisherChainLoopGuardTests.cs:10`
+   - Orleans/Projection/Workflow 入口回归：
+     - `test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansGrainEventPublisherTests.cs:16`
+     - `test/Aevatar.CQRS.Projection.Core.Tests/ProjectionOwnershipAndSessionHubTests.cs:11`
+     - `test/Aevatar.Workflow.Host.Api.Tests/WorkflowInfrastructureCoverageTests.cs:179`
 
-1. P1：修复 Orleans `__publishers` 追加与 `ContainsPublisher` 判定顺序，补齐 `Self/Up/Down/Both` 行为测试矩阵。
-2. P2：收紧 coordinator 类型校验策略，manifest 缺失时改为 fail-fast 或补偿加载后再判定。
-3. P2：将 `Contains` 兜底改为可验证的精确匹配策略（例如 FullName/AssemblyQualifiedName 白名单）。
+## 6. 架构图（变更前/后/风险路径）
+
+### 6.1 变更前（问题态）
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  A["Projection Coordinator"] --> B["Local Type Matcher"]
+  C["Workflow Actor Port"] --> D["Another Type Matcher"]
+  E["Orleans Publisher"] --> F["Inline Publisher Chain Logic"]
+  G["RuntimeActorGrain"] --> H["Inline Loop Drop Logic"]
+```
+
+### 6.2 变更后（当前态）
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  A["Projection Coordinator"] --> B["IAgentTypeVerifier"]
+  C["Workflow Actor Port"] --> B
+  B --> D["IActorTypeProbe"]
+  B --> E["IAgentManifestStore"]
+  F["Orleans Publisher"] --> G["IEventLoopGuard"]
+  H["RuntimeActorGrain"] --> G
+```
+
+### 6.3 风险路径（已收敛）
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  A["Actor Id"] --> B["Runtime Type Probe"]
+  B -->|"Available"| C["Exact Type Match"]
+  B -->|"Unavailable"| D["Manifest Fallback"]
+  C --> E["Allow / Reject"]
+  D --> E
+```
+
+## 7. 门禁与验收命令
+
+| 检查项 | 命令 | 结果 |
+|---|---|---|
+| 全量构建 | `dotnet build aevatar.slnx --nologo --no-restore -m:1 -nodeReuse:false --tl:off` | 通过（0 warning / 0 error） |
+| 全量测试 | `dotnet test aevatar.slnx --nologo --no-build --no-restore -m:1 -nodeReuse:false --tl:off` | 通过（`536/536`） |
+| 架构门禁 | `bash tools/ci/architecture_guards.sh` | 通过 |
+| 路由映射门禁 | `bash tools/ci/projection_route_mapping_guard.sh` | 通过 |
+
+## 8. 审计说明
+
+- 是否发现增量缺陷：`否`
+- 残余风险：`OrleansActorTypeProbe` 读取 grain 状态类型名，尚未补充多节点真实 Silo 集成压测。
+- 测试空白：尚未覆盖“跨节点网络抖动 + 反复激活/失活”下的类型探针稳定性场景。

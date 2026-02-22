@@ -1,5 +1,5 @@
 using Aevatar.CQRS.Projection.Abstractions;
-using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -12,12 +12,12 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
 {
     private const string CoordinatorPublisherId = "projection.ownership.coordinator";
     private readonly IActorRuntime _runtime;
-    private readonly IAgentManifestStore _manifestStore;
+    private readonly IAgentTypeVerifier _agentTypeVerifier;
 
-    public ActorProjectionOwnershipCoordinator(IActorRuntime runtime, IAgentManifestStore manifestStore)
+    public ActorProjectionOwnershipCoordinator(IActorRuntime runtime, IAgentTypeVerifier agentTypeVerifier)
     {
         _runtime = runtime;
-        _manifestStore = manifestStore;
+        _agentTypeVerifier = agentTypeVerifier;
     }
 
     public async Task AcquireAsync(
@@ -76,26 +76,11 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
 
     private async Task<IActor> EnsureCoordinatorActorTypeAsync(IActor actor, string actorId, CancellationToken ct)
     {
-        var manifest = await _manifestStore.LoadAsync(actorId, ct);
-        if (manifest == null || IsCoordinatorAgentType(manifest.AgentTypeName))
+        if (await _agentTypeVerifier.IsExpectedAsync(actorId, typeof(ProjectionOwnershipCoordinatorGAgent), ct))
             return actor;
 
         throw new InvalidOperationException(
             $"Actor '{actorId}' is not a projection ownership coordinator actor.");
-    }
-
-    private static bool IsCoordinatorAgentType(string? agentTypeName)
-    {
-        if (string.IsNullOrWhiteSpace(agentTypeName))
-            return false;
-
-        var resolved = System.Type.GetType(agentTypeName, throwOnError: false);
-        if (resolved != null)
-            return typeof(ProjectionOwnershipCoordinatorGAgent).IsAssignableFrom(resolved);
-
-        var expectedTypeName = typeof(ProjectionOwnershipCoordinatorGAgent).FullName
-            ?? nameof(ProjectionOwnershipCoordinatorGAgent);
-        return agentTypeName.Contains(expectedTypeName, StringComparison.Ordinal);
     }
 
     private static EventEnvelope CreateCoordinatorEnvelope(IMessage payload, string correlationId) =>

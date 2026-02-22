@@ -1,6 +1,8 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using FluentAssertions;
 using Google.Protobuf;
 
@@ -13,7 +15,7 @@ public class ActorProjectionOwnershipCoordinatorTests
     {
         var runtime = new OwnershipCoordinatorRuntime();
         var manifestStore = new TestAgentManifestStore();
-        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, manifestStore);
+        var coordinator = CreateCoordinator(runtime, manifestStore);
 
         await coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -38,7 +40,7 @@ public class ActorProjectionOwnershipCoordinatorTests
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         var actor = new RuntimeActor(actorId, new ProjectionOwnershipCoordinatorGAgent());
         runtime.SetActor(actorId, actor);
-        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, manifestStore);
+        var coordinator = CreateCoordinator(runtime, manifestStore);
 
         await coordinator.ReleaseAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -58,7 +60,7 @@ public class ActorProjectionOwnershipCoordinatorTests
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         var racedActor = new RuntimeActor(actorId, new ProjectionOwnershipCoordinatorGAgent());
         runtime.SetCreateRaceActor(actorId, racedActor);
-        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, manifestStore);
+        var coordinator = CreateCoordinator(runtime, manifestStore);
 
         await coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -78,11 +80,53 @@ public class ActorProjectionOwnershipCoordinatorTests
             AgentId = actorId,
             AgentTypeName = typeof(PlainTestAgent).AssemblyQualifiedName!,
         });
-        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, manifestStore);
+        var coordinator = CreateCoordinator(runtime, manifestStore);
 
         Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task AcquireAsync_ShouldThrow_WhenManifestMissingAndAgentTypeCannotBeProven()
+    {
+        var runtime = new OwnershipCoordinatorRuntime();
+        var manifestStore = new TestAgentManifestStore();
+        var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
+        runtime.SetActor(actorId, new RuntimeActor(actorId, new PlainTestAgent("agent-1")));
+        var coordinator = CreateCoordinator(runtime, manifestStore);
+
+        Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task AcquireAsync_ShouldThrow_WhenManifestTypeNameOnlyLooksSimilar()
+    {
+        var runtime = new OwnershipCoordinatorRuntime();
+        var manifestStore = new TestAgentManifestStore();
+        var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
+        runtime.SetActor(actorId, new RuntimeActor(actorId, new ProjectionOwnershipCoordinatorGAgent()));
+        await manifestStore.SaveAsync(actorId, new AgentManifest
+        {
+            AgentId = actorId,
+            AgentTypeName = $"{typeof(ProjectionOwnershipCoordinatorGAgent).FullName}Shadow",
+        });
+        var verifier = new DefaultAgentTypeVerifier(new NullActorTypeProbe(), manifestStore);
+        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, verifier);
+
+        Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    private static ActorProjectionOwnershipCoordinator CreateCoordinator(
+        IActorRuntime runtime,
+        IAgentManifestStore manifestStore)
+    {
+        var verifier = new DefaultAgentTypeVerifier(new RuntimeActorTypeProbe(runtime), manifestStore);
+        return new ActorProjectionOwnershipCoordinator(runtime, verifier);
     }
 }
 
@@ -370,6 +414,34 @@ internal sealed class SessionHubStreamProvider : IStreamProvider
     }
 
     IStream IStreamProvider.GetStream(string actorId) => GetStream(actorId);
+}
+
+internal sealed class RuntimeActorTypeProbe : IActorTypeProbe
+{
+    private readonly IActorRuntime _runtime;
+
+    public RuntimeActorTypeProbe(IActorRuntime runtime)
+    {
+        _runtime = runtime;
+    }
+
+    public async Task<string?> GetRuntimeAgentTypeNameAsync(string actorId, CancellationToken ct = default)
+    {
+        _ = ct;
+        var actor = await _runtime.GetAsync(actorId);
+        var type = actor?.Agent.GetType();
+        return type?.AssemblyQualifiedName ?? type?.FullName;
+    }
+}
+
+internal sealed class NullActorTypeProbe : IActorTypeProbe
+{
+    public Task<string?> GetRuntimeAgentTypeNameAsync(string actorId, CancellationToken ct = default)
+    {
+        _ = actorId;
+        _ = ct;
+        return Task.FromResult<string?>(null);
+    }
 }
 
 internal sealed class SessionHubStream : IStream

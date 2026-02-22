@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
@@ -15,11 +16,16 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
     private const string WorkflowRunActorPortPublisherId = "workflow.run.actor.port";
     private readonly IActorRuntime _runtime;
     private readonly IAgentManifestStore _manifestStore;
+    private readonly IAgentTypeVerifier _agentTypeVerifier;
 
-    public WorkflowRunActorPort(IActorRuntime runtime, IAgentManifestStore manifestStore)
+    public WorkflowRunActorPort(
+        IActorRuntime runtime,
+        IAgentManifestStore manifestStore,
+        IAgentTypeVerifier agentTypeVerifier)
     {
         _runtime = runtime;
         _manifestStore = manifestStore;
+        _agentTypeVerifier = agentTypeVerifier;
     }
 
     public Task<IActor?> GetAsync(string actorId, CancellationToken ct = default)
@@ -42,8 +48,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
     public async Task<bool> IsWorkflowActorAsync(IActor actor, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(actor);
-        var manifest = await _manifestStore.LoadAsync(actor.Id, ct);
-        return IsWorkflowAgentType(manifest?.AgentTypeName);
+        return await _agentTypeVerifier.IsExpectedAsync(actor.Id, typeof(WorkflowGAgent), ct);
     }
 
     public async Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default)
@@ -67,19 +72,6 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         ArgumentNullException.ThrowIfNull(actor);
         var envelope = CreateConfigureWorkflowEnvelope(workflowYaml, workflowName);
         return actor.HandleEventAsync(envelope, ct);
-    }
-
-    private static bool IsWorkflowAgentType(string? agentTypeName)
-    {
-        if (string.IsNullOrWhiteSpace(agentTypeName))
-            return false;
-
-        var resolved = System.Type.GetType(agentTypeName, throwOnError: false);
-        if (resolved != null)
-            return typeof(WorkflowGAgent).IsAssignableFrom(resolved);
-
-        var workflowTypeName = typeof(WorkflowGAgent).FullName ?? nameof(WorkflowGAgent);
-        return agentTypeName.Contains(workflowTypeName, StringComparison.Ordinal);
     }
 
     private static EventEnvelope CreateConfigureWorkflowEnvelope(string workflowYaml, string workflowName) =>

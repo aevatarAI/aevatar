@@ -12,6 +12,9 @@ using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.Foundation.Runtime.TypeSystem;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -60,6 +63,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
         services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
+        services.TryAddSingleton<IActorTypeProbe, LocalActorTypeProbe>();
+        services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
 
         return services;
     }
