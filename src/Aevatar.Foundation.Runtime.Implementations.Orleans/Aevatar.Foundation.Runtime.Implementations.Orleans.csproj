@@ -22,5 +22,7 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="MassTransit" />
+    <PackageReference Include="MassTransit.Kafka" />
   </ItemGroup>
 </Project>

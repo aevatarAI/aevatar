@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
@@ -212,7 +213,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             () => _state.State.ParentId,
             envelope => HandleEnvelopeAsync(envelope.ToByteArray()),
             _propagationPolicy,
-            _streamForwardingRegistry);
+            _streamForwardingRegistry,
+            ServiceProvider.GetService<IOrleansTransportEventSender>());
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
         gAgent.ManifestStore = ServiceProvider.GetService<IAgentManifestStore>();

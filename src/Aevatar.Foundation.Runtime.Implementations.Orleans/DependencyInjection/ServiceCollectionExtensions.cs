@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -38,5 +39,20 @@ public static class ServiceCollectionExtensions
         return builder
             .AddMemoryGrainStorage(OrleansRuntimeConstants.GrainStateStorageName)
             .ConfigureServices(services => services.AddAevatarFoundationRuntimeOrleans());
+    }
+
+    public static ISiloBuilder AddAevatarFoundationRuntimeOrleansWithKafkaTransport(
+        this ISiloBuilder builder,
+        Action<OrleansKafkaTransportOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        return builder
+            .AddMemoryGrainStorage(OrleansRuntimeConstants.GrainStateStorageName)
+            .ConfigureServices(services =>
+            {
+                services.AddAevatarFoundationRuntimeOrleans();
+                services.AddAevatarFoundationRuntimeOrleansKafkaSiloTransport(configure);
+            });
     }
 }

@@ -86,9 +86,10 @@ curl -X POST http://localhost:5000/api/chat \
 
 ### 当前实现与目标态（分布式 Runtime）
 
-| 主题 | 当前实现（2026-02-20） | 目标态（生产分布式） |
+| 主题 | 当前实现（2026-02-22） | 目标态（生产分布式） |
 |---|---|---|
 | Actor Runtime | 默认 `ActorRuntime:Provider=InMemory`，适合开发/测试。 | 使用非 InMemory Provider（Redis/数据库等）与分布式 Actor Runtime。 |
+| Orleans Transport | `ActorRuntime:Provider=Orleans` 默认仍走内置链路；可选 `ActorRuntime:Transport=Kafka` 启用 MassTransit/Kafka 传输插件。 | 生产按部署拓扑启用可插拔 transport，并统一由 stream/queue 层承载跨节点转发。 |
 | Projection 启动并发（Ensure/Release） | 已由 `projection:{rootActorId}` 投影协调 Actor 串行裁决，不再依赖进程内 `SemaphoreSlim`。 | 分布式 Runtime 下继续依赖“同一 actorId 单激活 + 邮箱串行”保证并发互斥。 |
 | LiveSink 绑定（Attach/Detach） | 已通过 `workflow-run:{actorId}:{commandId}` 事件流订阅/退订；不再依赖 `ProjectionContext` 内存 sink 列表。 | 在分布式 stream provider 下天然支持跨节点推送；生产需保障 provider 可用性与顺序语义。 |
 | ReadModel 存储 | Workflow 默认 `InMemoryWorkflowExecutionReadModelStore`，可替换。 | 生产默认切换到持久化读模型存储，实现跨节点一致读。 |
@@ -317,6 +318,7 @@ aevatar/
 - **CQRS 投影架构**： [src/Aevatar.CQRS.Projection.Core/README.md](src/Aevatar.CQRS.Projection.Core/README.md) / [src/workflow/Aevatar.Workflow.Projection/README.md](src/workflow/Aevatar.Workflow.Projection/README.md) — 统一 Projection Lifecycle、Coordinator 与 ReadModel。
 - **Role 与 Connector**： [docs/ROLE.md](docs/ROLE.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
 - **分布式 Runtime 与持久化规划**： [docs/DISTRIBUTED_RUNTIME_PERSISTENCE_PLAN.md](docs/DISTRIBUTED_RUNTIME_PERSISTENCE_PLAN.md) — 目标态与迁移步骤。
+- **Orleans Kafka Transport**： [docs/ORLEANS_KAFKA_TRANSPORT_GUIDE.md](docs/ORLEANS_KAFKA_TRANSPORT_GUIDE.md) — Orleans 可选 Kafka transport 接入与配置。
 - **Event Sourcing**： [docs/EVENT_SOURCING.md](docs/EVENT_SOURCING.md) — 如何开启事件溯源。
 - **Connector 配置详解**： [src/Aevatar.Configuration/README.md](src/Aevatar.Configuration/README.md#connector-作用与配置) — 配置格式与示例。
 - **Maker 示例**： [demos/Aevatar.Demos.Maker](demos/Aevatar.Demos.Maker) — 自定义步骤类型与 MAKER 工作流。

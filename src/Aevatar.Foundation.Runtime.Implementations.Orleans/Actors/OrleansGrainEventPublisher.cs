@@ -1,6 +1,7 @@
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
@@ -12,6 +13,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
     private readonly Func<EventEnvelope, Task> _dispatchToSelfAsync;
     private readonly IEnvelopePropagationPolicy _propagationPolicy;
     private readonly IStreamForwardingRegistry _forwardingRegistry;
+    private readonly IOrleansTransportEventSender? _transportEventSender;
 
     public OrleansGrainEventPublisher(
         string actorId,
@@ -19,7 +21,8 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         Func<string?> getParentId,
         Func<EventEnvelope, Task> dispatchToSelfAsync,
         IEnvelopePropagationPolicy propagationPolicy,
-        IStreamForwardingRegistry forwardingRegistry)
+        IStreamForwardingRegistry forwardingRegistry,
+        IOrleansTransportEventSender? transportEventSender = null)
     {
         _actorId = actorId;
         _grainFactory = grainFactory;
@@ -27,6 +30,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         _dispatchToSelfAsync = dispatchToSelfAsync;
         _propagationPolicy = propagationPolicy;
         _forwardingRegistry = forwardingRegistry;
+        _transportEventSender = transportEventSender;
     }
 
     public async Task PublishAsync<TEvent>(
@@ -50,7 +54,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         switch (direction)
         {
             case EventDirection.Self:
-                await DispatchAsync(_actorId, _actorId, envelope);
+                await DispatchAsync(_actorId, _actorId, envelope, ct);
                 break;
             case EventDirection.Down:
                 await DispatchDownAsync(envelope, ct);
@@ -59,7 +63,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             {
                 var parentId = _getParentId();
                 if (!string.IsNullOrWhiteSpace(parentId))
-                    await DispatchAsync(_actorId, parentId, envelope);
+                    await DispatchAsync(_actorId, parentId, envelope, ct);
                 break;
             }
             case EventDirection.Both:
@@ -70,7 +74,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
                 };
                 var parentId = _getParentId();
                 if (!string.IsNullOrWhiteSpace(parentId))
-                    tasks.Add(DispatchAsync(_actorId, parentId, envelope));
+                    tasks.Add(DispatchAsync(_actorId, parentId, envelope, ct));
                 await Task.WhenAll(tasks);
                 break;
             }
@@ -95,7 +99,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         };
 
         _propagationPolicy.Apply(envelope, sourceEnvelope);
-        return DispatchAsync(_actorId, targetActorId, envelope);
+        return DispatchAsync(_actorId, targetActorId, envelope, ct);
     }
 
     private async Task DispatchDownAsync(EventEnvelope envelope, CancellationToken ct)
@@ -132,7 +136,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
                     continue;
 
                 dispatchTasks ??= new List<Task>();
-                dispatchTasks.Add(DispatchAsync(sourceActorId, binding.TargetStreamId, forwarded));
+                dispatchTasks.Add(DispatchAsync(sourceActorId, binding.TargetStreamId, forwarded, ct));
             }
 
             if (dispatchTasks is { Count: > 0 })
@@ -142,13 +146,16 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         }
     }
 
-    private Task DispatchAsync(string senderActorId, string targetActorId, EventEnvelope envelope)
+    private Task DispatchAsync(string senderActorId, string targetActorId, EventEnvelope envelope, CancellationToken ct)
     {
         var routedEnvelope = envelope.Clone();
         PublisherChainMetadata.AppendDispatchPublisher(routedEnvelope, senderActorId, targetActorId);
 
         if (string.Equals(targetActorId, _actorId, StringComparison.Ordinal))
             return _dispatchToSelfAsync(routedEnvelope);
+
+        if (_transportEventSender != null)
+            return _transportEventSender.SendAsync(targetActorId, routedEnvelope, ct);
 
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(targetActorId);
         return grain.HandleEnvelopeAsync(routedEnvelope.ToByteArray());

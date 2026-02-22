@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -73,6 +74,45 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
 
         provider.GetService<IActorRuntime>().Should().NotBeNull();
         provider.GetRequiredService<AevatarActorRuntimeOptions>().Provider.Should().Be(AevatarActorRuntimeOptions.ProviderInMemory);
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenOrleansWithKafkaTransport_ShouldRegisterTransportSender()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+            [$"{AevatarActorRuntimeOptions.SectionName}:Transport"] = AevatarActorRuntimeOptions.TransportKafka,
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"] = "localhost:19092",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"] = "runtime-events",
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+
+        services.Should().Contain(x => x.ServiceType == typeof(IOrleansTransportEventSender));
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
+        options.Transport.Should().Be(AevatarActorRuntimeOptions.TransportKafka);
+        options.KafkaBootstrapServers.Should().Be("localhost:19092");
+        options.KafkaTopicName.Should().Be("runtime-events");
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenOrleansTransportIsUnsupported_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+            [$"{AevatarActorRuntimeOptions.SectionName}:Transport"] = "RabbitMq",
+        });
+
+        var act = () => services.AddAevatarActorRuntime(configuration);
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*Unsupported Orleans transport*");
     }
 
     private static IConfiguration BuildConfiguration(Dictionary<string, string?>? values = null)

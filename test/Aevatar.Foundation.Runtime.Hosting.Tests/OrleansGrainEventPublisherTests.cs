@@ -5,6 +5,7 @@ using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Implementations.Orleans;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -99,6 +100,27 @@ public class OrleansGrainEventPublisherTests
         remoteGrain.LastEnvelope!.Metadata.TryGetValue(PublisherChainMetadata.PublishersMetadataKey, out var chain)
             .Should().BeTrue();
         chain.Should().Be("upstream,sender");
+    }
+
+    [Fact]
+    public async Task SendToAsync_WhenTransportSenderConfigured_ShouldUseTransportSender()
+    {
+        var sender = new RecordingTransportEventSender();
+        var publisher = CreatePublisher(
+            actorId: "sender",
+            onDispatchToSelf: _ => Task.CompletedTask,
+            resolveGrain: _ => throw new InvalidOperationException("Grain dispatch should not be used when transport sender is configured."),
+            transportEventSender: sender);
+
+        await publisher.SendToAsync("receiver", new StringValue { Value = "transport" }, CancellationToken.None);
+
+        sender.Messages.Should().ContainSingle();
+        var delivered = sender.Messages.Single();
+        delivered.TargetActorId.Should().Be("receiver");
+        delivered.Envelope.Payload!.Unpack<StringValue>().Value.Should().Be("transport");
+        delivered.Envelope.Metadata.TryGetValue(PublisherChainMetadata.PublishersMetadataKey, out var chain)
+            .Should().BeTrue();
+        chain.Should().Be("sender");
     }
 
     [Fact]
@@ -234,7 +256,8 @@ public class OrleansGrainEventPublisherTests
         Func<EventEnvelope, Task> onDispatchToSelf,
         Func<string, IRuntimeActorGrain> resolveGrain,
         Func<string?>? getParentId = null,
-        IStreamForwardingRegistry? forwardingRegistry = null)
+        IStreamForwardingRegistry? forwardingRegistry = null,
+        IOrleansTransportEventSender? transportEventSender = null)
     {
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
         ((GrainFactoryProxy)(object)grainFactory).ResolveGrain = resolveGrain;
@@ -245,7 +268,8 @@ public class OrleansGrainEventPublisherTests
             getParentId ?? (() => null),
             onDispatchToSelf,
             new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy()),
-            forwardingRegistry ?? new InMemoryStreamForwardingRegistry());
+            forwardingRegistry ?? new InMemoryStreamForwardingRegistry(),
+            transportEventSender);
     }
 
     private class GrainFactoryProxy : DispatchProxy
@@ -302,5 +326,16 @@ public class OrleansGrainEventPublisherTests
         public Task<string> GetAgentTypeNameAsync() => Task.FromResult(string.Empty);
 
         public Task DeactivateAsync() => Task.CompletedTask;
+    }
+
+    private sealed class RecordingTransportEventSender : IOrleansTransportEventSender
+    {
+        public List<(string TargetActorId, EventEnvelope Envelope)> Messages { get; } = [];
+
+        public Task SendAsync(string targetActorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Messages.Add((targetActorId, envelope.Clone()));
+            return Task.CompletedTask;
+        }
     }
 }

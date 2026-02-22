@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -10,17 +11,20 @@ public sealed class OrleansActorRuntime : IActorRuntime
     private readonly IGrainFactory _grainFactory;
     private readonly IAgentManifestStore _manifestStore;
     private readonly IStreamForwardingRegistry _streamForwardingRegistry;
+    private readonly IOrleansTransportEventSender? _transportEventSender;
     private readonly ILogger<OrleansActorRuntime> _logger;
 
     public OrleansActorRuntime(
         IGrainFactory grainFactory,
         IAgentManifestStore manifestStore,
         IStreamForwardingRegistry streamForwardingRegistry,
+        IOrleansTransportEventSender? transportEventSender = null,
         ILogger<OrleansActorRuntime>? logger = null)
     {
         _grainFactory = grainFactory;
         _manifestStore = manifestStore;
         _streamForwardingRegistry = streamForwardingRegistry;
+        _transportEventSender = transportEventSender;
         _logger = logger ?? NullLogger<OrleansActorRuntime>.Instance;
     }
 
@@ -47,7 +51,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
         await _manifestStore.SaveAsync(actorId, manifest, ct);
 
         _logger.LogInformation("Actor {Id} ({Type}) created via Orleans runtime", actorId, agentType.Name);
-        return new OrleansActor(actorId, grain);
+        return new OrleansActor(actorId, grain, _transportEventSender);
     }
 
     public async Task DestroyAsync(string id, CancellationToken ct = default)
@@ -80,7 +84,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
     public async Task<IActor?> GetAsync(string id)
     {
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(id);
-        return await grain.IsInitializedAsync() ? new OrleansActor(id, grain) : null;
+        return await grain.IsInitializedAsync() ? new OrleansActor(id, grain, _transportEventSender) : null;
     }
 
     public Task<bool> ExistsAsync(string id)
