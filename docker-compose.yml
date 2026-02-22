@@ -2,11 +2,12 @@
 # Aevatar Development Infrastructure
 #
 # Quick start:
-#   docker compose up -d          # start Kafka + UI
+#   docker compose up -d          # start Kafka + Garnet + UI
 #   docker compose down            # stop everything
 #
 # Kafka:     localhost:9092
 # Kafka UI:  http://localhost:8080
+# Garnet:    localhost:6379
 # ─────────────────────────────────────────────────────────────
 
 services:
@@ -56,6 +57,15 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+
+  # ── Garnet (Redis protocol compatible cache/store) ──
+  garnet:
+    image: ghcr.io/microsoft/garnet:latest
+    container_name: aevatar-garnet
+    command: ["--lua", "true"]
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
 
 volumes:
   kafka-data:

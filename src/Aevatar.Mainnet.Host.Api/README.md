@@ -11,10 +11,10 @@
 
 ## 分布式模式（Orleans + TM + Kafka）
 
-1. 启动 Kafka（仓库根目录）：
+1. 启动 Kafka 与 Garnet（仓库根目录）：
 
 ```bash
-docker compose up -d kafka
+docker compose up -d kafka garnet
 ```
 
 2. 以 Distributed 环境启动：
@@ -27,6 +27,7 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 
 - `ActorRuntime:Provider=Orleans`
 - `ActorRuntime:OrleansStreamBackend=MassTransitAdapter`
+- `ActorRuntime:OrleansPersistenceBackend=Garnet`
 - `ActorRuntime:MassTransitTransportBackend=Kafka`
 - `Orleans:ClusteringMode=Localhost`
 
@@ -39,13 +40,15 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 
 ```bash
 export AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers=localhost:9092
+export AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet
+export AEVATAR_ActorRuntime__OrleansGarnetConnectionString=localhost:6379
 export AEVATAR_Orleans__SiloPort=11111
 export AEVATAR_Orleans__GatewayPort=30000
 ```
 
 ## 多机集群测试（Docker）
 
-仓库提供了 `docker-compose.mainnet-cluster.yml`（3 节点 Mainnet + Kafka）。
+仓库提供了 `docker-compose.mainnet-cluster.yml`（3 节点 Mainnet + Kafka + Garnet）。
 
 ```bash
 bash tools/cluster/start-mainnet-cluster.sh
@@ -55,6 +58,18 @@ bash tools/cluster/start-mainnet-cluster.sh
 
 ```bash
 bash tools/cluster/stop-mainnet-cluster.sh
+```
+
+Orleans + Garnet 持久化集成测试：
+
+```bash
+bash tools/ci/orleans_garnet_persistence_smoke.sh
+```
+
+三节点集群一致化测试（包含节点健康检查 + 跨节点 `/api/workflows`、`/api/agents` 一致性断言）：
+
+```bash
+bash tools/ci/distributed_3node_smoke.sh
 ```
 
 ## 端点

@@ -44,6 +44,12 @@ public static class ServiceCollectionExtensions
         var configuredOrleansActorNamespace = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansActorEventNamespace"];
         if (!string.IsNullOrWhiteSpace(configuredOrleansActorNamespace))
             options.OrleansActorEventNamespace = configuredOrleansActorNamespace;
+        var configuredOrleansPersistenceBackend = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"];
+        if (!string.IsNullOrWhiteSpace(configuredOrleansPersistenceBackend))
+            options.OrleansPersistenceBackend = configuredOrleansPersistenceBackend;
+        var configuredOrleansGarnetConnectionString = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"];
+        if (!string.IsNullOrWhiteSpace(configuredOrleansGarnetConnectionString))
+            options.OrleansGarnetConnectionString = configuredOrleansGarnetConnectionString;
         configure?.Invoke(options);
 
         services.Replace(ServiceDescriptor.Singleton(options));
@@ -70,6 +76,8 @@ public static class ServiceCollectionExtensions
                 orleansOptions.StreamBackend = options.OrleansStreamBackend;
                 orleansOptions.StreamProviderName = options.OrleansStreamProviderName;
                 orleansOptions.ActorEventNamespace = options.OrleansActorEventNamespace;
+                orleansOptions.PersistenceBackend = options.OrleansPersistenceBackend;
+                orleansOptions.GarnetConnectionString = options.OrleansGarnetConnectionString;
             });
 
             if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendInMemory, StringComparison.OrdinalIgnoreCase))

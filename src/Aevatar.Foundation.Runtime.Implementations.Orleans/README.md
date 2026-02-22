@@ -38,6 +38,23 @@ siloBuilder.AddAevatarFoundationRuntimeOrleans();
 
 默认 stream backend 为 `InMemory`。
 
+## Grain 持久化后端
+
+Orleans grain state 支持两种后端：
+
+- `InMemory`（默认）：`AevatarOrleansRuntimeOptions.PersistenceBackend = InMemory`
+- `Garnet`：`AevatarOrleansRuntimeOptions.PersistenceBackend = Garnet`，并设置 `GarnetConnectionString`
+
+示例：
+
+```csharp
+siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
+{
+    options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendGarnet;
+    options.GarnetConnectionString = "localhost:6379";
+});
+```
+
 ## MassTransitAdapter 启用方式
 
 当需要 Orleans Stream 通过 MassTransit 传输时，显式启用 MassTransit 适配扩展，并选择 Kafka 作为传输实现：

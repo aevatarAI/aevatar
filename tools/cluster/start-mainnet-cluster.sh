@@ -14,6 +14,7 @@ echo "Mainnet cluster is starting. API endpoints:"
 echo "  node1: http://localhost:19081/"
 echo "  node2: http://localhost:19082/"
 echo "  node3: http://localhost:19083/"
+echo "  garnet: localhost:6379"
 echo
 docker compose \
   -f docker-compose.yml \
