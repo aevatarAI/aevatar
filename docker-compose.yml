@@ -12,7 +12,7 @@
 services:
   # ── Kafka (KRaft mode, no Zookeeper) ──
   kafka:
-    image: bitnami/kafka:latest
+    image: bitnamilegacy/kafka:latest
     container_name: aevatar-kafka
     ports:
       - "9092:9092"
@@ -27,6 +27,7 @@ services:
       KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,EXTERNAL://localhost:9092
       KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      ALLOW_PLAINTEXT_LISTENER: "yes"
       # Auto-create topics for development
       KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
       # Performance
