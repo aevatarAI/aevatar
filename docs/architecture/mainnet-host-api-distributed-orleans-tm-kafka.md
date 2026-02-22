@@ -36,8 +36,11 @@
 
 ### Orleans
 
+- `Orleans:ClusteringMode` (`Localhost` / `Development`)
 - `Orleans:ClusterId`
 - `Orleans:ServiceId`
+- `Orleans:SiloHost`
+- `Orleans:PrimarySiloEndpoint`
 - `Orleans:SiloPort`
 - `Orleans:GatewayPort`
 - `Orleans:QueueCount`
@@ -64,7 +67,9 @@ flowchart LR
 - 写路径保持 `Command -> Event`，事件通过 Orleans Stream + Kafka 扩散。
 - Stream Forward/Topology 的权威状态仍在 Orleans Grain（`IStreamTopologyGrain`），非中间层进程内事实态。
 - 该版本不改业务层编排逻辑，仅替换 runtime 与传输实现。
-- 当前宿主使用 `UseLocalhostClustering`，适合本地/单机多进程验证；跨主机生产集群建议替换为持久化 Membership Provider。
+- `Localhost` 模式使用 `UseLocalhostClustering`，适合本机多进程开发。
+- `Development` 模式使用 `UseDevelopmentClustering + ConfigureEndpoints`，可通过主节点实现多机测试集群。
+- 生产跨主机集群建议替换为持久化 Membership Provider。
 
 ## 启动示例
 
@@ -73,6 +78,27 @@ docker compose up -d kafka
 # MassTransit 9 需要 License（MT_LICENSE 或 MT_LICENSE_PATH）
 # export MT_LICENSE="<your-base64-license>"
 ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host.Api
+```
+
+## 多机测试集群（Docker）
+
+仓库提供 `docker-compose.mainnet-cluster.yml` + `tools/cluster/*.sh`：
+
+```bash
+export MT_LICENSE="<your-base64-license>"
+bash tools/cluster/start-mainnet-cluster.sh
+```
+
+节点入口：
+
+- `http://localhost:19081`
+- `http://localhost:19082`
+- `http://localhost:19083`
+
+停止：
+
+```bash
+bash tools/cluster/stop-mainnet-cluster.sh
 ```
 
 ## 验证
