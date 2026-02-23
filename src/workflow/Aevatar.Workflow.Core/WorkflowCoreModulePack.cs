@@ -31,6 +31,8 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<DelayModule>("delay", "sleep"),
         WorkflowModuleRegistration.Create<EmitModule>("emit", "publish"),
         WorkflowModuleRegistration.Create<CacheModule>("cache"),
+        WorkflowModuleRegistration.Create<HumanApprovalModule>("human_approval"),
+        WorkflowModuleRegistration.Create<HumanInputModule>("human_input"),
     ];
 
     private static readonly IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanderRegistrations =
