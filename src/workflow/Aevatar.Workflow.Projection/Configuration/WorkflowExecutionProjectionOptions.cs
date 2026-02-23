@@ -53,6 +53,11 @@ public sealed class WorkflowExecutionProjectionOptions
     public bool FailOnUnsupportedCapabilities { get; set; } = true;
 
     /// <summary>
+    /// Whether to pre-validate read-model provider selection and capabilities during host startup.
+    /// </summary>
+    public bool ValidateReadModelProviderOnStartup { get; set; } = true;
+
+    /// <summary>
     /// Optional read-model binding requirements (ReadModelName -> IndexKind).
     /// </summary>
     public Dictionary<string, string> ReadModelBindings { get; }

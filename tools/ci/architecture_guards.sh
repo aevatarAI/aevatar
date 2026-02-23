@@ -388,6 +388,13 @@ if ! rg -n "AddWorkflowCapabilityWithAIDefaults\(" src/workflow/Aevatar.Workflow
   exit 1
 fi
 
+if ! rg -n "AddWorkflowProjectionReadModelProviders\(" \
+  src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowCapabilityHostBuilderExtensions.cs >/dev/null
+then
+  echo "Workflow hosting extension must register read-model providers via AddWorkflowProjectionReadModelProviders()."
+  exit 1
+fi
+
 if [ -f "src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/MakerModuleFactory.cs" ]; then
   echo "Maker extension must use unified module pack model; MakerModuleFactory is forbidden."
   exit 1
@@ -424,6 +431,21 @@ if rg -n "AddCqrsCore\(" \
   src/workflow/Aevatar.Workflow.Infrastructure
 then
   echo "Direct AddCqrsCore wiring in hosts/infrastructure is forbidden. Use Aevatar.CQRS.Runtime.Hosting."
+  exit 1
+fi
+
+if rg -n "Aevatar\.CQRS\.Projection\.Providers\..*\.csproj" \
+  src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj
+then
+  echo "Workflow.Infrastructure must not reference projection provider implementation projects. Register providers in host/extensions layer."
+  exit 1
+fi
+
+if rg -n "using\s+Aevatar\.CQRS\.Projection\.Providers\." \
+  src/workflow/Aevatar.Workflow.Infrastructure \
+  -g '*.cs'
+then
+  echo "Workflow.Infrastructure source must not reference projection provider namespaces. Register providers in host/extensions layer."
   exit 1
 fi
 

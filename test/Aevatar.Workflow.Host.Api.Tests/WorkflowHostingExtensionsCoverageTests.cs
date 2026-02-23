@@ -11,6 +11,7 @@ using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -52,5 +53,36 @@ public class WorkflowHostingExtensionsCoverageTests
         var toolSources = provider.GetServices<IAgentToolSource>().ToList();
         toolSources.Should().NotContain(x => x is MCPAgentToolSource);
         toolSources.Should().NotContain(x => x is SkillsAgentToolSource);
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityWithAIDefaults_ShouldRegisterReadModelProvidersInHostLayer()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        builder.AddWorkflowCapabilityWithAIDefaults();
+
+        var providerRegistrations = builder.Services
+            .Where(x => x.ServiceType == typeof(IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>))
+            .ToList();
+        providerRegistrations.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_MultipleCalls_ShouldBeIdempotent()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        var providerRegistrations = services
+            .Where(x => x.ServiceType == typeof(IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>))
+            .ToList();
+        providerRegistrations.Should().HaveCount(3);
     }
 }

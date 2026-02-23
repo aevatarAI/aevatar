@@ -18,11 +18,57 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowExecutionProjectionRegistrationTests
 {
+    [Fact]
+    public async Task AddWorkflowExecutionProjectionCQRS_WhenStartupValidationEnabledAndProviderMissing_ShouldFailFast()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowExecutionProjectionCQRS();
+
+        await using var provider = services.BuildServiceProvider();
+        Func<Task> act = () => StartHostedServicesAsync(provider);
+
+        await act.Should().ThrowAsync<ProjectionProviderSelectionException>()
+            .WithMessage("*No provider registrations were found*");
+    }
+
+    [Fact]
+    public async Task AddWorkflowExecutionProjectionCQRS_WhenStartupValidationFindsUnsupportedCapabilities_ShouldFailFast()
+    {
+        var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
+        services.AddWorkflowExecutionProjectionCQRS(options =>
+        {
+            options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory;
+            options.ReadModelBindings[nameof(WorkflowExecutionReport)] = ProjectionReadModelIndexKind.Document.ToString();
+            options.FailOnUnsupportedCapabilities = true;
+        });
+
+        await using var provider = services.BuildServiceProvider();
+        Func<Task> act = () => StartHostedServicesAsync(provider);
+
+        await act.Should().ThrowAsync<ProjectionReadModelCapabilityValidationException>()
+            .Where(ex => ex.ReadModelType == typeof(WorkflowExecutionReport));
+    }
+
+    [Fact]
+    public async Task AddWorkflowExecutionProjectionCQRS_WhenStartupValidationConfiguredCorrectly_ShouldPass()
+    {
+        var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
+        services.AddWorkflowExecutionProjectionCQRS();
+
+        await using var provider = services.BuildServiceProvider();
+        Func<Task> act = () => StartHostedServicesAsync(provider);
+
+        await act.Should().NotThrowAsync();
+    }
+
     [Fact]
     public void AddWorkflowExecutionProjectionCQRS_ShouldUseInMemoryProviderByDefault()
     {
@@ -397,5 +443,12 @@ public class WorkflowExecutionProjectionRegistrationTests
 
             return true;
         }
+    }
+
+    private static async Task StartHostedServicesAsync(ServiceProvider provider)
+    {
+        var hostedServices = provider.GetServices<IHostedService>();
+        foreach (var hostedService in hostedServices)
+            await hostedService.StartAsync(CancellationToken.None);
     }
 }

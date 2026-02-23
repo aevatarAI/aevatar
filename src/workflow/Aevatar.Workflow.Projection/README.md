@@ -18,7 +18,7 @@
 - 实时输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
 - 领域投影实现：reducers、projectors、read model（不包含 Provider Store 实现）
 - 领域 DI 组合：`AddWorkflowExecutionProjectionCQRS(...)`
-- Provider 能力校验：基于 `ProjectionReadModelCapabilityValidator` 在装配期校验 `ReadModelBindings` 与 Provider 能力匹配
+- Provider 能力校验：启动期由 `WorkflowReadModelStartupValidationHostedService` 预校验，运行时选择阶段继续按 `ProjectionReadModelCapabilityValidator` 校验
 
 本项目依赖：
 
@@ -76,7 +76,7 @@ FAQ：
   - 在 DI 中注册
 - 扩展 ReadModel Provider（推荐）：
   - 实现 `IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>`
-  - 在 Infrastructure 侧注册（例如 `AddInMemoryReadModelStoreRegistration` / `AddElasticsearchReadModelStoreRegistration`）
+  - 在 Host/Extensions 侧注册（例如 `Aevatar.Workflow.Extensions.Hosting.AddWorkflowProjectionReadModelProviders(...)`）
   - 通过 `WorkflowExecutionProjection:ReadModelProvider` 或 `Projection:ReadModel:Provider` 选择 Provider
 - 直接替换 Store（仅测试/临时场景）：
   - 调用 `AddWorkflowExecutionProjectionReadModelStore<TStore>()` 直接覆盖 `IProjectionReadModelStore<WorkflowExecutionReport, string>`
@@ -86,6 +86,7 @@ FAQ：
 
 - `WorkflowExecutionProjection:ReadModelProvider`：`InMemory`（默认）/`Elasticsearch`
 - `WorkflowExecutionProjection:FailOnUnsupportedCapabilities`：能力不匹配时是否 fail-fast（默认 `true`）
+- `WorkflowExecutionProjection:ValidateReadModelProviderOnStartup`：是否在 Host 启动阶段预校验 Provider 选择与能力（默认 `true`）
 - `WorkflowExecutionProjection:ReadModelBindings`：ReadModel -> IndexKind 约束（如 `WorkflowExecutionReport: Document`）
 - 推荐统一配置入口：`Projection:ReadModel:*`（由 Infrastructure 映射到 Workflow 投影选项）
 - `Projection:ReadModel:Provider`：全局默认 Provider（当前由 `WorkflowCapabilityServiceCollectionExtensions` 覆盖到模块选项）

@@ -25,10 +25,12 @@
   - 注册 workflow 文件源与启动加载 HostedService。
 - `AddWorkflowCapability(IServiceCollection, IConfiguration)`
   - 能力一键组合（Application + Projection + AGUIAdapter + Infrastructure + workflow 文件源）。
+  - 不负责具体 ReadModel Provider 注册（Provider 组合下沉到 Host/Extensions 层）。
 - `AddWorkflowCapability(WebApplicationBuilder)`
   - Host 侧一行接入 Workflow 能力（服务注册 + 能力端点声明）。
 - `Aevatar.Workflow.Extensions.Hosting.AddWorkflowCapabilityWithAIDefaults(WebApplicationBuilder)`
   - 在 Host 入口统一装配 Workflow capability + AI features + AI projection extension（推荐用于生产组合入口）。
+  - 默认同时注册 Workflow 读模型 Provider（InMemory/Elasticsearch/Neo4j）。
 - `MapWorkflowCapabilityEndpoints(...)`
   - 将 Workflow 能力 API 端点挂载到 Host（默认由 `UseAevatarDefaultHost()` 自动调用能力映射链路）。
 
