@@ -1,11 +1,12 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using FluentAssertions;
 using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
@@ -133,10 +134,17 @@ public class ActorProjectionOwnershipCoordinatorTests
 
 public class ProjectionOwnershipCoordinatorGAgentTests
 {
+    private static IServiceProvider CreateStatefulAgentServices()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IEventStore, TestInMemoryEventStore>();
+        return services.BuildServiceProvider();
+    }
+
     [Fact]
     public async Task HandleAcquireAsync_ShouldActivateOwnershipState()
     {
-        var agent = new ProjectionOwnershipCoordinatorGAgent();
+        var agent = new ProjectionOwnershipCoordinatorGAgent { Services = CreateStatefulAgentServices() };
 
         await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
         {
@@ -153,7 +161,7 @@ public class ProjectionOwnershipCoordinatorGAgentTests
     [Fact]
     public async Task HandleAcquireAsync_ShouldThrow_WhenOwnershipAlreadyActive()
     {
-        var agent = new ProjectionOwnershipCoordinatorGAgent();
+        var agent = new ProjectionOwnershipCoordinatorGAgent { Services = CreateStatefulAgentServices() };
         await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
         {
             ScopeId = "scope-1",
@@ -172,7 +180,7 @@ public class ProjectionOwnershipCoordinatorGAgentTests
     [Fact]
     public async Task HandleReleaseAsync_ShouldDeactivate_WhenScopeAndSessionMatch()
     {
-        var agent = new ProjectionOwnershipCoordinatorGAgent();
+        var agent = new ProjectionOwnershipCoordinatorGAgent { Services = CreateStatefulAgentServices() };
         await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
         {
             ScopeId = "scope-1",
@@ -192,7 +200,7 @@ public class ProjectionOwnershipCoordinatorGAgentTests
     [Fact]
     public async Task HandleReleaseAsync_ShouldThrow_WhenScopeDoesNotMatch()
     {
-        var agent = new ProjectionOwnershipCoordinatorGAgent();
+        var agent = new ProjectionOwnershipCoordinatorGAgent { Services = CreateStatefulAgentServices() };
         await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
         {
             ScopeId = "scope-1",
@@ -398,6 +406,71 @@ internal sealed class StringSessionEventCodec : IProjectionSessionEventCodec<str
 
     public string? Deserialize(string eventType, string payload) =>
         string.Equals(eventType, "string", StringComparison.Ordinal) ? payload : null;
+}
+
+internal sealed class TestInMemoryEventStore : IEventStore
+{
+    private readonly Dictionary<string, List<StateEvent>> _streams = new(StringComparer.Ordinal);
+    private readonly object _sync = new();
+
+    public Task<long> AppendAsync(
+        string agentId,
+        IEnumerable<StateEvent> events,
+        long expectedVersion,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        lock (_sync)
+        {
+            if (!_streams.TryGetValue(agentId, out var stream))
+            {
+                stream = [];
+                _streams[agentId] = stream;
+            }
+
+            var currentVersion = stream.Count == 0 ? 0 : stream[^1].Version;
+            if (currentVersion != expectedVersion)
+            {
+                throw new InvalidOperationException(
+                    $"Version mismatch for stream '{agentId}'. expected={expectedVersion}, actual={currentVersion}.");
+            }
+
+            var appended = events.ToList();
+            stream.AddRange(appended.Select(x => x.Clone()));
+            var latest = stream.Count == 0 ? 0 : stream[^1].Version;
+            return Task.FromResult(latest);
+        }
+    }
+
+    public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+        string agentId,
+        long? fromVersion = null,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        lock (_sync)
+        {
+            if (!_streams.TryGetValue(agentId, out var stream))
+                return Task.FromResult<IReadOnlyList<StateEvent>>([]);
+
+            var filtered = fromVersion.HasValue
+                ? stream.Where(x => x.Version > fromVersion.Value).ToList()
+                : stream.ToList();
+            return Task.FromResult<IReadOnlyList<StateEvent>>(filtered.Select(x => x.Clone()).ToList());
+        }
+    }
+
+    public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        lock (_sync)
+        {
+            if (!_streams.TryGetValue(agentId, out var stream) || stream.Count == 0)
+                return Task.FromResult(0L);
+
+            return Task.FromResult(stream[^1].Version);
+        }
+    }
 }
 
 internal sealed class SessionHubStreamProvider : IStreamProvider

@@ -219,14 +219,19 @@ public class EventSourcingBehaviorTests
             : base(eventStore, agentId, snapshotStore, snapshotStrategy) { }
 
         public override CounterState TransitionState(CounterState current, IMessage evt)
-        {
-            if (evt is not Any any) return current;
-            if (any.TryUnpack<IncrementEvent>(out var inc))
-                return new CounterState { Count = current.Count + inc.Amount, Name = current.Name };
-            if (any.TryUnpack<DecrementEvent>(out var dec))
-                return new CounterState { Count = current.Count - dec.Amount, Name = current.Name };
-            return base.TransitionState(current, evt);
-        }
+            => StateTransitionMatcher
+                .Match(current, evt)
+                .On<IncrementEvent>((state, inc) => new CounterState
+                {
+                    Count = state.Count + inc.Amount,
+                    Name = state.Name,
+                })
+                .On<DecrementEvent>((state, dec) => new CounterState
+                {
+                    Count = state.Count - dec.Amount,
+                    Name = state.Name,
+                })
+                .OrCurrent();
     }
 
     private sealed class InMemoryEventSourcingSnapshotStore<TState> : IEventSourcingSnapshotStore<TState>
@@ -384,6 +389,73 @@ public class EventSourcingAgentTests
         WireAgent(agent);
         var act = () => agent.ActivateAsync();
         await act.ShouldThrowAsync<InvalidOperationException>();
+    }
+}
+
+public class StateEventApplierIntegrationTests
+{
+    [Fact]
+    public async Task PersistDomainEventAsync_ShouldUseRegisteredAppliers_ForRuntimeAndReplay()
+    {
+        var store = new InMemoryEventStore();
+        var services = new ServiceCollection()
+            .AddSingleton<IEventStore>(store)
+            .AddSingleton<IStateEventApplier<CounterState>, CounterIncrementApplier>()
+            .AddSingleton<IStateEventApplier<CounterState>, CounterDecrementApplier>()
+            .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>())
+            .BuildServiceProvider();
+
+        var agent1 = new ApplierBackedCounterAgent
+        {
+            Services = services,
+        };
+        agent1.SetId("applier-agent");
+        await agent1.ActivateAsync();
+        await agent1.HandleEventAsync(TestHelper.Envelope(new IncrementEvent { Amount = 8 }));
+        await agent1.HandleEventAsync(TestHelper.Envelope(new DecrementEvent { Amount = 3 }));
+        agent1.State.Count.ShouldBe(5);
+        await agent1.DeactivateAsync();
+
+        var agent2 = new ApplierBackedCounterAgent
+        {
+            Services = services,
+        };
+        agent2.SetId("applier-agent");
+        await agent2.ActivateAsync();
+        agent2.State.Count.ShouldBe(5);
+    }
+
+    private sealed class ApplierBackedCounterAgent : GAgentBase<CounterState>
+    {
+        [EventHandler]
+        public Task HandleIncrement(IncrementEvent evt) =>
+            PersistDomainEventAsync(evt);
+
+        [EventHandler]
+        public Task HandleDecrement(DecrementEvent evt) =>
+            PersistDomainEventAsync(evt);
+    }
+
+    private sealed class CounterIncrementApplier
+        : StateEventApplierBase<CounterState, IncrementEvent>
+    {
+        protected override CounterState Apply(CounterState current, IncrementEvent evt) =>
+            new()
+            {
+                Count = current.Count + evt.Amount,
+                Name = current.Name,
+            };
+    }
+
+    private sealed class CounterDecrementApplier
+        : StateEventApplierBase<CounterState, DecrementEvent>
+    {
+        protected override CounterState Apply(CounterState current, DecrementEvent evt) =>
+            new()
+            {
+                Count = current.Count - evt.Amount,
+                Name = current.Name,
+            };
     }
 }
 

@@ -19,6 +19,9 @@
 ### 3.1 Event Sourcing
 - 契约：`src/Aevatar.Foundation.Core/EventSourcing/IEventSourcingBehavior.cs`
 - 实现：`src/Aevatar.Foundation.Core/EventSourcing/EventSourcingBehavior.cs`
+- 状态转换扩展：`src/Aevatar.Foundation.Core/EventSourcing/IStateEventApplier.cs`
+- Typed 状态转换基类：`src/Aevatar.Foundation.Core/EventSourcing/StateEventApplierBase.cs`
+- 状态匹配器：`src/Aevatar.Foundation.Core/EventSourcing/StateTransitionMatcher.cs`
 - 生命周期：`src/Aevatar.Foundation.Core/GAgentBase.TState.cs`
 - 运行时注入边界：
   - `src/Aevatar.Foundation.Runtime/Actor/LocalActorRuntime.cs`
@@ -27,9 +30,11 @@
 当前语义：
 1. `ActivateAsync` 强制 Replay 恢复状态。
 2. `DeactivateAsync` 强制 `ConfirmEventsAsync + PersistSnapshotAsync`。
-3. 未设置 `EventSourcing` 时，`GAgentBase<TState>` 在泛型上下文内用 `IEventStore` 静态构造 `EventSourcingBehavior<TState>`。
+3. 未设置 `EventSourcing` 时，`GAgentBase<TState>` 在泛型上下文内用 `IEventStore` 静态构造 `AgentBackedEventSourcingBehavior`（继承 `EventSourcingBehavior<TState>`）。
 4. 缺失 `IEventStore` 时 fail-fast。
 5. `ConfirmDerivedEventsAsync` / `IDomainEventDeriver` / `EventSourcingAutoPersistenceOptions` 已从主链路移除。
+6. 运行期通过 `PersistDomainEventAsync` / `PersistDomainEventsAsync` 执行“持久化 + 顺序 apply”；Replay 主要用于激活恢复。
+7. `TransitionState` 可由 Agent override 或 `IStateEventApplier<TState>` 组合实现。
 
 ### 3.2 Provider Runtime
 - 抽象：`src/Aevatar.CQRS.Projection.Abstractions`
@@ -68,6 +73,10 @@
 
 ### R-ES-04 静态泛型装配
 - ES 行为构造必须在泛型上下文完成，不得回退到 Runtime 反射注入。
+
+### R-ES-05 状态转换可组合
+- `event -> state` 转换必须支持模块化拆分，避免在单个 Agent 中膨胀式 `switch`。
+- 支持 `IStateEventApplier<TState>` 组合式 apply，顺序由 `Order` 控制。
 
 ### R-RM-01 Provider 解耦业务
 - Provider 项目不得引用 Workflow/AI 业务读模型类型。
@@ -108,7 +117,8 @@
 ### P3（进行中）一致性与可维护性收口
 1. 清理文档与代码中的历史双轨口径。
 2. 补齐跨模块契约测试：`Command -> Events -> Replay -> State`。
-3. 统一配置示例与错误合同说明（启动失败与能力不匹配）。
+3. 收敛 state transition 模型（Agent override + applier 组合）。
+4. 统一配置示例与错误合同说明（启动失败与能力不匹配）。
 
 ### P4（待执行）性能与生产化增强
 1. 为持久化 `IEventStore` 提供生产落地方案与压测基线。

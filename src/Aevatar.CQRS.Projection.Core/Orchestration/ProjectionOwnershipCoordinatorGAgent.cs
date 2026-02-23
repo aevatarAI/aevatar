@@ -1,5 +1,7 @@
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
@@ -21,7 +23,7 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
     }
 
     [EventHandler]
-    public Task HandleAcquireAsync(ProjectionOwnershipAcquireEvent evt)
+    public async Task HandleAcquireAsync(ProjectionOwnershipAcquireEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
         if (string.IsNullOrWhiteSpace(evt.ScopeId))
@@ -35,20 +37,16 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
                 $"Projection ownership for scope '{State.ScopeId}' is already active (session '{State.SessionId}').");
         }
 
-        State.ScopeId = evt.ScopeId;
-        State.SessionId = evt.SessionId;
-        State.Active = true;
-        State.LastUpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
-        return Task.CompletedTask;
+        await PersistDomainEventAsync(evt);
     }
 
     [EventHandler]
-    public Task HandleReleaseAsync(ProjectionOwnershipReleaseEvent evt)
+    public async Task HandleReleaseAsync(ProjectionOwnershipReleaseEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
 
         if (!State.Active)
-            return Task.CompletedTask;
+            return;
 
         if (!string.IsNullOrWhiteSpace(evt.ScopeId) &&
             !string.Equals(evt.ScopeId, State.ScopeId, StringComparison.Ordinal))
@@ -64,9 +62,42 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
                 $"Projection ownership coordinator '{Id}' session mismatch. expected='{State.SessionId}', actual='{evt.SessionId}'.");
         }
 
-        State.Active = false;
-        State.SessionId = string.Empty;
-        State.LastUpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
-        return Task.CompletedTask;
+        await PersistDomainEventAsync(evt);
+    }
+
+    protected override ProjectionOwnershipCoordinatorState TransitionState(
+        ProjectionOwnershipCoordinatorState current,
+        IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<ProjectionOwnershipAcquireEvent>(ApplyAcquire)
+            .On<ProjectionOwnershipReleaseEvent>(ApplyRelease)
+            .OrCurrent();
+
+    private static ProjectionOwnershipCoordinatorState ApplyAcquire(
+        ProjectionOwnershipCoordinatorState current,
+        ProjectionOwnershipAcquireEvent evt)
+    {
+        var next = current.Clone();
+        next.ScopeId = evt.ScopeId;
+        next.SessionId = evt.SessionId;
+        next.Active = true;
+        next.LastUpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
+        return next;
+    }
+
+    private static ProjectionOwnershipCoordinatorState ApplyRelease(
+        ProjectionOwnershipCoordinatorState current,
+        ProjectionOwnershipReleaseEvent evt)
+    {
+        _ = evt;
+        if (!current.Active)
+            return current;
+
+        var next = current.Clone();
+        next.Active = false;
+        next.SessionId = string.Empty;
+        next.LastUpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
+        return next;
     }
 }

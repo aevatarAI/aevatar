@@ -15,6 +15,9 @@
 ## 3. 当前代码事实（权威路径）
 - ES 行为契约：`src/Aevatar.Foundation.Core/EventSourcing/IEventSourcingBehavior.cs`
 - ES 默认实现：`src/Aevatar.Foundation.Core/EventSourcing/EventSourcingBehavior.cs`
+- 状态事件 applier 抽象：`src/Aevatar.Foundation.Core/EventSourcing/IStateEventApplier.cs`
+- Typed applier 基类：`src/Aevatar.Foundation.Core/EventSourcing/StateEventApplierBase.cs`
+- 状态事件匹配器：`src/Aevatar.Foundation.Core/EventSourcing/StateTransitionMatcher.cs`
 - 有状态生命周期：`src/Aevatar.Foundation.Core/GAgentBase.TState.cs`
 - Local Runtime 注入边界：`src/Aevatar.Foundation.Runtime/Actor/LocalActorRuntime.cs`
 - Orleans Runtime 注入边界：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs`
@@ -25,7 +28,7 @@
 - `GAgentBase<TState>.ActivateAsync` 先调用 `base.ActivateAsync` 恢复模块。
 - 然后调用 `EnsureEventSourcingConfigured()`：
   - 若已设置 `EventSourcing`，直接使用。
-  - 若未设置，则通过 `Services.GetService(typeof(IEventStore))` 解析 `IEventStore`，并静态构造 `EventSourcingBehavior<TState>(eventStore, actorId)`。
+  - 若未设置，则通过 `Services.GetService(typeof(IEventStore))` 解析 `IEventStore`，并静态构造 `AgentBackedEventSourcingBehavior`（继承 `EventSourcingBehavior<TState>`）。
 - 最后执行 `ReplayAsync(actorId)`，以 Replay 结果恢复 `State`。
 
 ### 4.2 Deactivate
@@ -41,9 +44,11 @@
 
 ## 5. 开发者实现规范
 1. 命令处理代码必须显式构建领域事件：`RaiseEvent(domainEvent)`。
-2. 必须调用 `ConfirmEventsAsync` 提交 pending events。
+2. 推荐直接使用 `PersistDomainEventAsync(...)` / `PersistDomainEventsAsync(...)` 完成“提交 + apply”。
 3. 必须保证“可重放同态”：`Replay` 后状态与在线运行状态一致。
-4. 推荐通过重写 `TransitionState` 明确定义事件到状态转换。
+4. 推荐通过以下两种方式之一定义 `event -> state`：
+   - 在 Agent 中重写 `TransitionState`
+   - 通过 DI 注册 `IStateEventApplier<TState>`（复杂领域推荐）
 
 示例（简化）：
 
@@ -51,13 +56,7 @@
 [EventHandler]
 public async Task Handle(IncrementRequested evt)
 {
-    EventSourcing!.RaiseEvent(new IncrementApplied { Amount = evt.Amount });
-    await EventSourcing.ConfirmEventsAsync();
-
-    // 当前基线下，最直接的一致性方式是回放后更新内存状态
-    var replayed = await EventSourcing.ReplayAsync(Id);
-    if (replayed != null)
-        State = replayed;
+    await PersistDomainEventAsync(new IncrementApplied { Amount = evt.Amount });
 }
 ```
 
@@ -65,6 +64,8 @@ public async Task Handle(IncrementRequested evt)
 - `AddAevatarRuntime()` 默认注册 `IEventStore -> InMemoryEventStore`（开发/测试）。
 - 生产环境应替换为持久化实现（Redis/DB/日志存储等）。
 - 如需自定义 ES 行为，可直接为 Agent 预设 `EventSourcing`，但必须保持相同语义契约。
+- 如需解耦 Agent 里的 `TransitionState` 逻辑，可注册多个 `IStateEventApplier<TState>`，按 `Order` 升序匹配应用。
+- Agent 侧推荐使用 `StateTransitionMatcher.Match(...).On<TEvent>(...).OrCurrent()`，避免重复 `Any + switch` 样板代码。
 
 ## 7. 快照语义
 1. 快照仅用于减少回放开销。
