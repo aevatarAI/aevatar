@@ -373,16 +373,19 @@ public sealed class MakerRecursiveModule : IEventModule
     }
 
     private static string BuildAtomicPrompt(NodeState node) =>
-        $"{node.AtomicPrompt}\n\nTASK:\n{node.OriginalTask}";
+        $"{node.AtomicPrompt}\n\n{BuildContextBlock(node, "atomic_decision")}\n\nTASK:\n{node.OriginalTask}";
 
     private static string BuildDecomposePrompt(NodeState node) =>
-        $"{node.DecomposePrompt}\n\nDELIMITER:\n{node.Delimiter}\n\nTASK:\n{node.OriginalTask}";
+        $"{node.DecomposePrompt}\n\n{BuildContextBlock(node, "decompose")}\n\nDELIMITER:\n{node.Delimiter}\n\nTASK:\n{node.OriginalTask}";
 
     private static string BuildSolvePrompt(NodeState node) =>
-        $"{node.SolvePrompt}\n\nTASK:\n{node.OriginalTask}";
+        $"{node.SolvePrompt}\n\n{BuildContextBlock(node, "solve")}\n\nTASK:\n{node.OriginalTask}";
 
     private static string BuildComposePrompt(NodeState node, string childOutputs) =>
-        $"{node.ComposePrompt}\n\nPARENT TASK:\n{node.OriginalTask}\n\nCHILD SOLUTIONS (use delimiter {node.Delimiter}):\n{childOutputs}";
+        $"{node.ComposePrompt}\n\n{BuildContextBlock(node, "compose")}\n\nPARENT TASK:\n{node.OriginalTask}\n\nCHILD SOLUTIONS (use delimiter {node.Delimiter}):\n{childOutputs}";
+
+    private static string BuildContextBlock(NodeState node, string phase) =>
+        $"MAKER_CONTEXT:\nPHASE: {phase}\nDEPTH: {node.Depth}\nMAX_DEPTH: {node.MaxDepth}\nREMAINING_DEPTH: {Math.Max(0, node.MaxDepth - node.Depth)}\nMAX_SUBTASKS: {node.MaxSubtasks}\nVOTE_K: {node.K}\nMAX_RESPONSE_LENGTH: {node.MaxResponseLength}";
 
     private enum InternalStage
     {

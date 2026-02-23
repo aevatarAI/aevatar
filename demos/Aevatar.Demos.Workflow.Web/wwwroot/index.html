@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aevatar Workflow Primitives</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <h1>Aevatar</h1>
+        <p class="subtitle">Workflow Primitives</p>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-btn active" data-view="workflows">Workflows</button>
+        <button class="nav-btn" data-view="primitives">Primitives</button>
+      </nav>
+
+      <div id="llm-status" class="llm-badge"></div>
+
+      <div id="sidebar-workflows" class="sidebar-section">
+        <div class="section-label">Deterministic</div>
+        <ul id="list-deterministic" class="workflow-list"></ul>
+        <div class="section-label">LLM-Powered</div>
+        <ul id="list-llm" class="workflow-list"></ul>
+      </div>
+
+      <div id="sidebar-primitives" class="sidebar-section hidden">
+        <div class="section-label">Module Catalog</div>
+        <ul id="primitives-list" class="primitives-list"></ul>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div id="view-empty" class="view center-content">
+        <div class="empty-state">
+          <div class="empty-icon">⬡</div>
+          <h2>Select a workflow</h2>
+          <p>Choose a workflow from the sidebar to view its flow diagram and run it.</p>
+        </div>
+      </div>
+
+      <div id="view-workflow" class="view hidden">
+        <header class="main-header">
+          <div class="header-info">
+            <h2 id="wf-name"></h2>
+            <p id="wf-description"></p>
+          </div>
+          <div class="header-actions">
+            <button id="btn-run" class="btn btn-primary" disabled>Run</button>
+            <button id="btn-reset" class="btn btn-secondary hidden">Reset</button>
+          </div>
+        </header>
+
+        <div class="main-body">
+          <section class="flow-yaml-row">
+            <div class="flow-panel">
+              <div class="section-title">Flow Diagram</div>
+              <div id="flow-container" class="flow-container"></div>
+            </div>
+            <div class="yaml-panel">
+              <div class="section-title">YAML Source</div>
+              <pre id="yaml-source" class="yaml-source"></pre>
+            </div>
+          </section>
+
+          <section class="details-section">
+            <div id="input-section" class="detail-block">
+              <div class="detail-label">Input</div>
+              <textarea id="wf-input" class="input-area" rows="3"></textarea>
+            </div>
+
+            <div id="roles-section" class="detail-block hidden">
+              <div class="detail-label">Roles</div>
+              <div id="roles-list" class="roles-grid"></div>
+            </div>
+
+            <div id="exec-log" class="detail-block hidden">
+              <div class="detail-label">Execution Log</div>
+              <div id="log-entries" class="log-entries"></div>
+            </div>
+
+            <div id="result-section" class="detail-block hidden">
+              <div class="detail-label">Result</div>
+              <pre id="wf-result" class="result-pre"></pre>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <div id="view-primitive-detail" class="view hidden">
+        <header class="main-header">
+          <div class="header-info">
+            <h2 id="prim-name"></h2>
+            <p id="prim-description"></p>
+          </div>
+        </header>
+        <div class="main-body">
+          <div class="detail-block">
+            <div class="detail-label">Aliases</div>
+            <div id="prim-aliases" class="tag-list"></div>
+          </div>
+          <div class="detail-block">
+            <div class="detail-label">Category</div>
+            <span id="prim-category" class="category-badge"></span>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

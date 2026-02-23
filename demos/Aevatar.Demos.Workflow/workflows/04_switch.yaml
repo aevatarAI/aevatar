@@ -1,0 +1,52 @@
+name: 04_switch
+description: |
+  Demonstrates the `switch` primitive — multi-way branching.
+  Routes input based on category keyword: bug/feature/question → respective handler.
+  The switch module matches the input content against branch keys using
+  case-insensitive contains matching, and sets metadata["branch"].
+
+roles: []
+
+steps:
+  - id: route
+    type: switch
+    parameters:
+      branch.bug: handle_bug
+      branch.feature: handle_feature
+      branch.question: handle_question
+      branch._default: handle_other
+    branches:
+      bug: handle_bug
+      feature: handle_feature
+      question: handle_question
+      _default: handle_other
+
+  - id: handle_bug
+    type: transform
+    parameters:
+      op: "uppercase"
+    next: done
+
+  - id: handle_feature
+    type: transform
+    parameters:
+      op: "lowercase"
+    next: done
+
+  - id: handle_question
+    type: transform
+    parameters:
+      op: "count_words"
+    next: done
+
+  - id: handle_other
+    type: transform
+    parameters:
+      op: "trim"
+    next: done
+
+  - id: done
+    type: assign
+    parameters:
+      target: "result"
+      value: "$input"

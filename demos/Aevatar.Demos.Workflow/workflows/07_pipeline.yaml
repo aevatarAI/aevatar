@@ -1,0 +1,34 @@
+name: 07_pipeline
+description: |
+  Demonstrates a multi-primitive deterministic pipeline combining
+  guard, assign, transform, and retrieve_facts in sequence.
+  Validates input → assigns to variable → retrieves facts → counts results.
+
+roles: []
+
+steps:
+  - id: validate
+    type: guard
+    parameters:
+      check: "not_empty"
+      on_fail: "fail"
+    next: save
+
+  - id: save
+    type: assign
+    parameters:
+      target: "raw_input"
+      value: "$input"
+    next: find
+
+  - id: find
+    type: retrieve_facts
+    parameters:
+      query: "speed light"
+      top_k: "2"
+    next: count
+
+  - id: count
+    type: transform
+    parameters:
+      op: "count"

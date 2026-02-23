@@ -294,6 +294,7 @@ public sealed class MakerRunProjectionAccumulator
                 },
             };
 
+            report.Verification = EvaluateVerification(report.Steps, report.Timeline, report.Summary);
             return report;
         }
     }
@@ -339,6 +340,113 @@ public sealed class MakerRunProjectionAccumulator
 
     private static int TryParseInt(string? value) =>
         int.TryParse(value, out var n) ? n : 0;
+
+    private static MakerRunVerification EvaluateVerification(
+        IReadOnlyList<MakerStepTrace> steps,
+        IReadOnlyList<MakerTimelineEvent> timeline,
+        MakerRunSummary summary)
+    {
+        var checks = new List<MakerVerificationCheck>();
+
+        var recursiveSteps = steps
+            .Where(x => string.Equals(x.StepType, "maker_recursive", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var recursiveStages = recursiveSteps
+            .Select(x => x.CompletionMetadata.TryGetValue("maker.stage", out var stage) ? stage : "")
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        AddCheck(
+            checks,
+            "recursive_stage_coverage",
+            recursiveStages.Any(x => string.Equals(x, "leaf", StringComparison.OrdinalIgnoreCase)) &&
+            recursiveStages.Any(x => string.Equals(x, "composed", StringComparison.OrdinalIgnoreCase)),
+            $"stages=[{string.Join(",", recursiveStages)}]");
+
+        var hasAtomicVote = steps.Any(x => x.StepId.Contains("_atomic_vote", StringComparison.Ordinal));
+        var hasDecomposeVote = steps.Any(x => x.StepId.Contains("_decompose_vote", StringComparison.Ordinal));
+        var hasLeafVote = steps.Any(x => x.StepId.Contains("_leaf_vote", StringComparison.Ordinal));
+        var hasComposeVote = steps.Any(x => x.StepId.Contains("_compose_vote", StringComparison.Ordinal));
+        AddCheck(
+            checks,
+            "internal_vote_step_coverage",
+            hasAtomicVote && hasDecomposeVote && hasLeafVote && hasComposeVote,
+            $"atomic={hasAtomicVote},decompose={hasDecomposeVote},leaf={hasLeafVote},compose={hasComposeVote}");
+
+        var childRecursiveStepCount = steps.Count(x =>
+            string.Equals(x.StepType, "maker_recursive", StringComparison.OrdinalIgnoreCase) &&
+            x.StepId.Contains("_child_", StringComparison.Ordinal));
+        AddCheck(
+            checks,
+            "child_recursion_presence",
+            childRecursiveStepCount > 0,
+            $"child_recursive_steps={childRecursiveStepCount}");
+
+        var actualVoteSteps = steps.Count(x => string.Equals(x.StepType, "maker_vote", StringComparison.OrdinalIgnoreCase));
+        AddCheck(
+            checks,
+            "summary_vote_steps_consistency",
+            summary.VoteSteps == actualVoteSteps,
+            $"summary={summary.VoteSteps},actual={actualVoteSteps}");
+
+        var actualRedFlagged = steps
+            .Where(x => string.Equals(x.StepType, "maker_vote", StringComparison.OrdinalIgnoreCase))
+            .Select(x => TryParseInt(x.CompletionMetadata.GetValueOrDefault("maker_vote.red_flagged")))
+            .Sum();
+        AddCheck(
+            checks,
+            "summary_red_flag_consistency",
+            summary.TotalRedFlaggedCandidates == actualRedFlagged,
+            $"summary={summary.TotalRedFlaggedCandidates},actual={actualRedFlagged}");
+
+        var timelineStages = timeline
+            .Select(x => x.Stage)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var requiredTimelineStages = new[] { "maker.recursive", "maker.vote", "maker.red_flag", "connector.call" };
+        var missingTimelineStages = requiredTimelineStages
+            .Where(stage => !timelineStages.Contains(stage))
+            .ToList();
+        AddCheck(
+            checks,
+            "timeline_stage_coverage",
+            missingTimelineStages.Count == 0,
+            missingTimelineStages.Count == 0
+                ? "all required timeline stages present"
+                : $"missing=[{string.Join(",", missingTimelineStages)}]");
+
+        var failedChecks = checks
+            .Where(x => !x.Passed)
+            .Select(x => x.Name)
+            .ToList();
+
+        var warnings = new List<string>();
+        if (!steps.Any(x => string.Equals(x.StepType, "connector_call", StringComparison.OrdinalIgnoreCase)))
+            warnings.Add("No connector_call step found in this run.");
+        if (recursiveSteps.Count == 0)
+            warnings.Add("No maker_recursive step found in this run.");
+
+        return new MakerRunVerification
+        {
+            FullFlowPassed = failedChecks.Count == 0,
+            Checks = checks,
+            FailedChecks = failedChecks,
+            Warnings = warnings,
+        };
+    }
+
+    private static void AddCheck(
+        ICollection<MakerVerificationCheck> checks,
+        string name,
+        bool passed,
+        string evidence)
+    {
+        checks.Add(new MakerVerificationCheck
+        {
+            Name = name,
+            Passed = passed,
+            Evidence = evidence,
+        });
+    }
 }
 
 public static class MakerRunReportWriter
@@ -371,6 +479,7 @@ public static class MakerRunReportWriter
 
     private static string BuildHtml(MakerRunReport report)
     {
+        var verification = report.Verification ?? new MakerRunVerification();
         var sb = new StringBuilder();
         sb.AppendLine("<!doctype html>");
         sb.AppendLine("<html><head><meta charset=\"utf-8\"/>");
@@ -416,6 +525,33 @@ public static class MakerRunReportWriter
             AppendRow(sb, $"StepType.{stepType}", count.ToString());
         foreach (var (connectorType, count) in report.Summary.ConnectorTypeCounts.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
             AppendRow(sb, $"ConnectorType.{connectorType}", count.ToString());
+        sb.AppendLine("</tbody></table></div>");
+
+        sb.AppendLine("<div class='card'><h2>Verification</h2><table><tbody>");
+        AppendRow(sb, "FullFlowPassed", verification.FullFlowPassed ? "PASS" : "FAIL");
+        AppendRow(sb, "CheckCount", verification.Checks.Count.ToString());
+        if (verification.FailedChecks.Count > 0)
+            AppendRow(sb, "FailedChecks", string.Join(", ", verification.FailedChecks));
+        if (verification.Warnings.Count > 0)
+            AppendRow(sb, "Warnings", string.Join(" | ", verification.Warnings));
+        sb.AppendLine("</tbody></table>");
+
+        sb.AppendLine("<table><thead><tr><th>Check</th><th>Passed</th><th>Evidence</th></tr></thead><tbody>");
+        if (verification.Checks.Count == 0)
+        {
+            sb.AppendLine("<tr><td colspan='3' class='muted'>(no verification checks)</td></tr>");
+        }
+        else
+        {
+            foreach (var check in verification.Checks)
+            {
+                sb.AppendLine("<tr>");
+                sb.AppendLine($"<td><code>{E(check.Name)}</code></td>");
+                sb.AppendLine($"<td>{(check.Passed ? "PASS" : "FAIL")}</td>");
+                sb.AppendLine($"<td>{E(check.Evidence)}</td>");
+                sb.AppendLine("</tr>");
+            }
+        }
         sb.AppendLine("</tbody></table></div>");
 
         sb.AppendLine("<div class='card'><h2>Input</h2>");
@@ -535,6 +671,7 @@ public sealed class MakerRunReport
     public List<MakerRoleReply> RoleReplies { get; set; } = [];
     public List<MakerTimelineEvent> Timeline { get; set; } = [];
     public MakerRunSummary Summary { get; set; } = new();
+    public MakerRunVerification Verification { get; set; } = new();
 }
 
 public sealed class MakerRunSummary
@@ -548,6 +685,21 @@ public sealed class MakerRunSummary
     public int RoleReplyCount { get; set; }
     public Dictionary<string, int> StepTypeCounts { get; set; } = [];
     public Dictionary<string, int> ConnectorTypeCounts { get; set; } = [];
+}
+
+public sealed class MakerRunVerification
+{
+    public bool FullFlowPassed { get; set; }
+    public List<MakerVerificationCheck> Checks { get; set; } = [];
+    public List<string> FailedChecks { get; set; } = [];
+    public List<string> Warnings { get; set; } = [];
+}
+
+public sealed class MakerVerificationCheck
+{
+    public string Name { get; set; } = "";
+    public bool Passed { get; set; }
+    public string Evidence { get; set; } = "";
 }
 
 public sealed class MakerStepTrace

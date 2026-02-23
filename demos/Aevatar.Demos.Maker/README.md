@@ -71,7 +71,15 @@ src/maker/
 ```bash
 # 在仓库根目录
 cd demos/Aevatar.Demos.Maker
-dotnet run
+
+# 可复现全流程验证模式（推荐验收基线，不依赖外部 API Key）
+dotnet run -- --mode deterministic
+
+# 真实 LLM 模式（默认）
+dotnet run -- --mode llm
+
+# 真实 LLM + 自定义输入
+dotnet run -- --mode llm -- "Your paper text here..."
 ```
 
 每次执行都会自动在仓库根目录生成本次运行报告：
@@ -79,7 +87,35 @@ dotnet run
 - `artifacts/maker/maker-run-<timestamp>.json`
 - `artifacts/maker/maker-run-<timestamp>.html`
 
-JSON 包含完整时间线与结构化步骤数据；HTML 用于可视化查看执行细节（包含 `atomic / decompose / recursion / vote / red_flag` 等阶段）。
+JSON 包含完整时间线、结构化步骤数据与自动校验结果；HTML 用于可视化查看执行细节（包含 `atomic / decompose / recursion / vote / red_flag` 等阶段），并显示 Verification 判定卡片。
+
+报告中的 `verification` 字段会输出：
+
+- `fullFlowPassed`：是否覆盖 MAKER 关键流程并通过一致性校验
+- `checks[]`：逐项校验明细（通过/失败 + evidence）
+- `failedChecks[]`：失败项名称
+- `warnings[]`：非阻断性告警
+
+当前内置校验项：
+
+- `recursive_stage_coverage`：是否同时出现 `maker.stage=leaf` 与 `maker.stage=composed`
+- `internal_vote_step_coverage`：是否出现 `_atomic_vote/_decompose_vote/_leaf_vote/_compose_vote`
+- `child_recursion_presence`：是否出现至少一个 `*_child_*` 递归节点
+- `summary_vote_steps_consistency`：`summary.voteSteps` 是否与 `maker_vote` 实际步数一致
+- `summary_red_flag_consistency`：`summary.totalRedFlaggedCandidates` 是否与明细求和一致
+- `timeline_stage_coverage`：timeline 是否包含 `maker.recursive/maker.vote/maker.red_flag/connector.call`
+
+## 流程正确性验证
+
+推荐验收顺序：
+
+```bash
+# 1) 跑可复现全流程 demo（期望 report.verification.fullFlowPassed=true）
+dotnet run --project demos/Aevatar.Demos.Maker -- --mode deterministic
+
+# 2) 跑集成测试（覆盖 full-flow 正例 + atomic-only 负例）
+dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo
+```
 
 `maker_analysis.yaml` 包含两个关键步骤：
 

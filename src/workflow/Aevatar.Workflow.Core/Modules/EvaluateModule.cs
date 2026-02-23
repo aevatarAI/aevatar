@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -55,9 +54,13 @@ public sealed class EvaluateModule : IEventModule
             _pending[sessionId] = new EvalContext(request.StepId, request.Input ?? "", threshold, onBelow);
 
             var targetRole = request.TargetRole;
-            if (!string.IsNullOrEmpty(targetRole) && ctx.Agent is GAgentBase gab)
+            if (!string.IsNullOrEmpty(targetRole))
             {
-                await gab.EventPublisher.SendToAsync(targetRole, new ChatRequestEvent
+                var targetActorId = ResolveTargetActorId(ctx.AgentId, targetRole);
+                ctx.Logger.LogInformation(
+                    "EvaluateModule: step={StepId} → SendTo role={Role} actor={ActorId}",
+                    request.StepId, targetRole, targetActorId);
+                await ctx.SendToAsync(targetActorId, new ChatRequestEvent
                 {
                     Prompt = prompt, SessionId = sessionId,
                 }, ct);
@@ -119,6 +122,14 @@ public sealed class EvaluateModule : IEventModule
             if (double.TryParse(word, out var n)) return n;
         }
         return 0;
+    }
+
+    private static string ResolveTargetActorId(string workflowActorId, string targetRole)
+    {
+        if (string.IsNullOrWhiteSpace(targetRole)) return targetRole;
+        return targetRole.Contains(':', StringComparison.Ordinal)
+            ? targetRole
+            : $"{workflowActorId}:{targetRole}";
     }
 
     private sealed record EvalContext(string StepId, string OriginalInput, double Threshold, string OnBelow);

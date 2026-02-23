@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -112,8 +111,11 @@ public sealed class ReflectModule : IEventModule
         var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, $"{state.StepId}_r{state.Round}_critique");
         _pendingLLM[sessionId] = state;
 
-        if (!string.IsNullOrEmpty(state.TargetRole) && ctx.Agent is GAgentBase gab)
-            await gab.EventPublisher.SendToAsync(state.TargetRole, new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, ct);
+        if (!string.IsNullOrEmpty(state.TargetRole))
+        {
+            var targetActorId = ResolveTargetActorId(ctx.AgentId, state.TargetRole);
+            await ctx.SendToAsync(targetActorId, new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, ct);
+        }
         else
             await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, EventDirection.Self, ct);
     }
@@ -133,10 +135,21 @@ public sealed class ReflectModule : IEventModule
         var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, $"{state.StepId}_r{state.Round}_improve");
         _pendingLLM[sessionId] = state;
 
-        if (!string.IsNullOrEmpty(state.TargetRole) && ctx.Agent is GAgentBase gab)
-            await gab.EventPublisher.SendToAsync(state.TargetRole, new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, ct);
+        if (!string.IsNullOrEmpty(state.TargetRole))
+        {
+            var targetActorId = ResolveTargetActorId(ctx.AgentId, state.TargetRole);
+            await ctx.SendToAsync(targetActorId, new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, ct);
+        }
         else
             await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, EventDirection.Self, ct);
+    }
+
+    private static string ResolveTargetActorId(string workflowActorId, string targetRole)
+    {
+        if (string.IsNullOrWhiteSpace(targetRole)) return targetRole;
+        return targetRole.Contains(':', StringComparison.Ordinal)
+            ? targetRole
+            : $"{workflowActorId}:{targetRole}";
     }
 
     private enum ReflectPhase { Critique, Improve }
