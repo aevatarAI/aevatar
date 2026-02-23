@@ -128,6 +128,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
             var snapshotStore = options.EnableSnapshots
                 ? Services.GetService<IEventSourcingSnapshotStore<TState>>()
                 : null;
+            var compactionScheduler = Services.GetService<IEventStoreCompactionScheduler>();
             ISnapshotStrategy snapshotStrategy = options.EnableSnapshots && snapshotStore != null
                 ? new IntervalSnapshotStrategy(options.SnapshotInterval)
                 : NeverSnapshotStrategy.Instance;
@@ -139,7 +140,8 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
                 snapshotStore,
                 snapshotStrategy,
                 options.EnableEventCompaction,
-                options.RetainedEventsAfterSnapshot);
+                options.RetainedEventsAfterSnapshot,
+                compactionScheduler);
             return EventSourcing;
         }
 
@@ -178,14 +180,16 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
             IEventSourcingSnapshotStore<TState>? snapshotStore,
             ISnapshotStrategy snapshotStrategy,
             bool enableEventCompaction,
-            int retainedEventsAfterSnapshot)
+            int retainedEventsAfterSnapshot,
+            IEventStoreCompactionScheduler? compactionScheduler)
             : base(
                 eventStore,
                 agentId,
                 snapshotStore,
                 snapshotStrategy,
                 enableEventCompaction: enableEventCompaction,
-                retainedEventsAfterSnapshot: retainedEventsAfterSnapshot)
+                retainedEventsAfterSnapshot: retainedEventsAfterSnapshot,
+                compactionScheduler: compactionScheduler)
         {
             _owner = owner;
         }

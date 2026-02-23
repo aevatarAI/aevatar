@@ -19,10 +19,16 @@
 ### 3.1 Event Sourcing
 - 契约：`src/Aevatar.Foundation.Core/EventSourcing/IEventSourcingBehavior.cs`
 - 实现：`src/Aevatar.Foundation.Core/EventSourcing/EventSourcingBehavior.cs`
+- 裁剪调度抽象：`src/Aevatar.Foundation.Core/EventSourcing/IEventStoreCompactionScheduler.cs`
+- 运行时裁剪调度实现：`src/Aevatar.Foundation.Runtime/Persistence/DeferredEventStoreCompactionScheduler.cs`
 - 状态转换扩展：`src/Aevatar.Foundation.Core/EventSourcing/IStateEventApplier.cs`
 - Typed 状态转换基类：`src/Aevatar.Foundation.Core/EventSourcing/StateEventApplierBase.cs`
 - 状态匹配器：`src/Aevatar.Foundation.Core/EventSourcing/StateTransitionMatcher.cs`
 - 生命周期：`src/Aevatar.Foundation.Core/GAgentBase.TState.cs`
+- Runtime 停用钩子抽象：`src/Aevatar.Foundation.Runtime/Actor/IActorDeactivationHook.cs`
+- Runtime 停用钩子分发器：`src/Aevatar.Foundation.Runtime/Actor/IActorDeactivationHookDispatcher.cs`
+- Runtime 停用钩子分发实现：`src/Aevatar.Foundation.Runtime/Actor/ActorDeactivationHookDispatcher.cs`
+- Runtime 默认裁剪钩子：`src/Aevatar.Foundation.Runtime/Actor/EventStoreCompactionDeactivationHook.cs`
 - 本地持久化 EventStore 基线：`src/Aevatar.Foundation.Runtime/Persistence/FileEventStore.cs`
 - 运行时注入边界：
   - `src/Aevatar.Foundation.Runtime/Actor/LocalActorRuntime.cs`
@@ -39,7 +45,7 @@
 8. `TransitionState` 可由 Agent override 或 `IStateEventApplier<TState>` 组合实现。
 9. 默认启用自动快照与事件流裁剪：
    - 快照：`EventSourcingRuntimeOptions.SnapshotInterval`
-   - 裁剪：快照成功后调用 `IEventStore.DeleteEventsUpToAsync(...)`
+   - 裁剪：快照成功后通过 `IEventStoreCompactionScheduler.ScheduleAsync(...)` 记录待清理版本，在空闲期由 runtime `IActorDeactivationHookDispatcher` 分发 deactivation hooks，默认裁剪钩子触发 `RunOnIdleAsync(...)` 异步调用 `IEventStore.DeleteEventsUpToAsync(...)`
    - 保留窗口：`RetainedEventsAfterSnapshot`
 
 ### 3.2 Provider Runtime

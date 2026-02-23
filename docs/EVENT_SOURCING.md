@@ -16,10 +16,15 @@
 ## 3. 当前代码事实（权威路径）
 - ES 行为契约：`src/Aevatar.Foundation.Core/EventSourcing/IEventSourcingBehavior.cs`
 - ES 默认实现：`src/Aevatar.Foundation.Core/EventSourcing/EventSourcingBehavior.cs`
+- 事件裁剪调度抽象：`src/Aevatar.Foundation.Core/EventSourcing/IEventStoreCompactionScheduler.cs`
 - 状态事件 applier 抽象：`src/Aevatar.Foundation.Core/EventSourcing/IStateEventApplier.cs`
 - Typed applier 基类：`src/Aevatar.Foundation.Core/EventSourcing/StateEventApplierBase.cs`
 - 状态事件匹配器：`src/Aevatar.Foundation.Core/EventSourcing/StateTransitionMatcher.cs`
 - 有状态生命周期：`src/Aevatar.Foundation.Core/GAgentBase.TState.cs`
+- Runtime 停用钩子抽象：`src/Aevatar.Foundation.Runtime/Actor/IActorDeactivationHook.cs`
+- Runtime 停用钩子分发器：`src/Aevatar.Foundation.Runtime/Actor/IActorDeactivationHookDispatcher.cs`
+- Runtime 停用钩子分发实现：`src/Aevatar.Foundation.Runtime/Actor/ActorDeactivationHookDispatcher.cs`
+- Runtime 默认裁剪钩子：`src/Aevatar.Foundation.Runtime/Actor/EventStoreCompactionDeactivationHook.cs`
 - 本地持久化 EventStore：`src/Aevatar.Foundation.Runtime/Persistence/FileEventStore.cs`
 - Local Runtime 注入边界：`src/Aevatar.Foundation.Runtime/Actor/LocalActorRuntime.cs`
 - Orleans Runtime 注入边界：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs`
@@ -39,7 +44,7 @@
   - `ConfirmEventsAsync`
   - `PersistSnapshotAsync`
 - 不再调用 `StateStore.SaveAsync` 写事实态。
-- 快照保存成功后，会调用 `IEventStore.DeleteEventsUpToAsync(...)` 自动清理历史事件（保留窗口可配置）。
+- 快照保存成功后仅记录“待清理版本”；历史事件清理由 runtime `IActorDeactivationHookDispatcher` 分发所有 `IActorDeactivationHook`，其中默认裁剪钩子触发 `IEventStoreCompactionScheduler.RunOnIdleAsync(...)` 异步执行。
 
 ### 4.3 Fail-Fast 条件
 - 未预设 `EventSourcing` 且容器中无 `IEventStore`：激活失败（`InvalidOperationException`）。
@@ -66,6 +71,9 @@ public async Task Handle(IncrementRequested evt)
 ## 6. DI 与容器约定
 - `AddAevatarRuntime()` 默认注册 `IEventStore -> InMemoryEventStore`（开发/测试）。
 - `AddAevatarRuntime()` 默认注册 `IEventSourcingSnapshotStore<TState> -> InMemoryEventSourcingSnapshotStore<TState>`。
+- `AddAevatarRuntime()` 默认注册 `IEventStoreCompactionScheduler -> DeferredEventStoreCompactionScheduler`（记录裁剪意图，空闲期执行）。
+- `AddAevatarRuntime()` 默认注册 `IActorDeactivationHook -> EventStoreCompactionDeactivationHook`。
+- `AddAevatarRuntime()` 默认注册 `IActorDeactivationHookDispatcher -> ActorDeactivationHookDispatcher`（支持多 hook 顺序分发）。
 - 可通过 `AddFileEventStore(...)` 将 `IEventStore` 切换为本地持久化实现：`src/Aevatar.Foundation.Runtime/Persistence/FileEventStore.cs`。
 - 调用 `AddFileEventStore(...)` 时，`IEventSourcingSnapshotStore<TState>` 会切换为 `FileEventSourcingSnapshotStore<TState>`，支持快照与事件裁剪后的持久化恢复。
 - 生产环境应替换为持久化实现（Redis/DB/日志存储等）。
@@ -83,7 +91,8 @@ public async Task Handle(IncrementRequested evt)
 2. 快照写入失败不得影响已提交事件事实。
 3. 恢复顺序：先快照，再从快照版本之后回放事件增量。
 4. 事件裁剪只在“快照写入成功”后触发，避免清理后无快照可恢复。
-5. 裁剪后事件流版本号必须保持单调递增，后续 append 继续基于最新版本并发控制。
+5. 裁剪执行为异步延迟任务，默认在 Actor 空闲停用阶段触发，不阻塞命令写入主路径。
+6. 裁剪后事件流版本号必须保持单调递增，后续 append 继续基于最新版本并发控制。
 
 ## 8. 明确禁止项
 1. 把 `TState` 本体当事件写入 `EventStore`。

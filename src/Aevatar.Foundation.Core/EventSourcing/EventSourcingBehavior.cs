@@ -22,6 +22,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
     private readonly IEventStore _eventStore;
     private readonly IEventSourcingSnapshotStore<TState>? _snapshotStore;
     private readonly ISnapshotStrategy _snapshotStrategy;
+    private readonly IEventStoreCompactionScheduler? _compactionScheduler;
     private readonly bool _enableEventCompaction;
     private readonly int _retainedEventsAfterSnapshot;
     private readonly ILogger<EventSourcingBehavior<TState>> _logger;
@@ -36,12 +37,14 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         ISnapshotStrategy? snapshotStrategy = null,
         ILogger<EventSourcingBehavior<TState>>? logger = null,
         bool enableEventCompaction = false,
-        int retainedEventsAfterSnapshot = 0)
+        int retainedEventsAfterSnapshot = 0,
+        IEventStoreCompactionScheduler? compactionScheduler = null)
     {
         _eventStore = eventStore;
         _agentId = agentId;
         _snapshotStore = snapshotStore;
         _snapshotStrategy = snapshotStrategy ?? NeverSnapshotStrategy.Instance;
+        _compactionScheduler = compactionScheduler;
         _enableEventCompaction = enableEventCompaction;
         _retainedEventsAfterSnapshot = Math.Max(0, retainedEventsAfterSnapshot);
         _logger = logger ?? NullLogger<EventSourcingBehavior<TState>>.Instance;
@@ -123,7 +126,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                 _agentId,
                 new EventSourcingSnapshot<TState>(currentState.Clone(), _currentVersion),
                 ct);
-            await TryCompactEventsAsync(ct);
+            await TryScheduleCompactionAsync(ct);
         }
         catch (Exception ex)
         {
@@ -204,9 +207,12 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         return eventTypes.Length == 0 ? "<none>" : string.Join(",", eventTypes);
     }
 
-    private async Task TryCompactEventsAsync(CancellationToken ct)
+    private async Task TryScheduleCompactionAsync(CancellationToken ct)
     {
         if (!_enableEventCompaction)
+            return;
+
+        if (_compactionScheduler == null)
             return;
 
         var compactToVersion = _currentVersion - _retainedEventsAfterSnapshot;
@@ -215,23 +221,13 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
 
         try
         {
-            var deleted = await _eventStore.DeleteEventsUpToAsync(_agentId, compactToVersion, ct);
-            if (deleted <= 0)
-                return;
-
-            _logger.LogInformation(
-                "Event sourcing compaction completed. agentId={AgentId} compactToVersion={CompactToVersion} deletedEvents={DeletedEvents} retainedRecentEvents={RetainedRecentEvents} result={Result}",
-                _agentId,
-                compactToVersion,
-                deleted,
-                _retainedEventsAfterSnapshot,
-                "ok");
+            await _compactionScheduler.ScheduleAsync(_agentId, compactToVersion, ct);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(
                 ex,
-                "Event sourcing compaction failed and will be ignored. agentId={AgentId} compactToVersion={CompactToVersion} retainedRecentEvents={RetainedRecentEvents} result={Result} errorType={ErrorType}",
+                "Event sourcing compaction scheduling failed and will be ignored. agentId={AgentId} compactToVersion={CompactToVersion} retainedRecentEvents={RetainedRecentEvents} result={Result} errorType={ErrorType}",
                 _agentId,
                 compactToVersion,
                 _retainedEventsAfterSnapshot,

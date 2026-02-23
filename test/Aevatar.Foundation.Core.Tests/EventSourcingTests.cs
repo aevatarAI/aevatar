@@ -160,27 +160,34 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
-    public async Task PersistSnapshotAsync_WhenCompactionEnabled_ShouldDeleteHistoricalEvents_AndKeepReplayWorking()
+    public async Task PersistSnapshotAsync_WhenCompactionEnabled_ShouldDeferDeletion_UntilDeferredCompactionRuns()
     {
         var store = new InMemoryEventStore();
         var snapshotStore = new InMemoryEventSourcingSnapshotStore<CounterState>();
+        var scheduler = new DeferredEventStoreCompactionScheduler(store);
         var behavior = new CounterEventSourcingBehavior(
             store,
             "agent-snapshot-compact",
             snapshotStore: snapshotStore,
             snapshotStrategy: new IntervalSnapshotStrategy(1),
             enableEventCompaction: true,
-            retainedEventsAfterSnapshot: 0);
+            retainedEventsAfterSnapshot: 0,
+            compactionScheduler: scheduler);
 
         behavior.RaiseEvent(new IncrementEvent { Amount = 4 });
         behavior.RaiseEvent(new IncrementEvent { Amount = 6 });
         await behavior.ConfirmEventsAsync();
         await behavior.PersistSnapshotAsync(new CounterState { Count = 10, Name = "snapshot" });
 
-        var version = await store.GetVersionAsync("agent-snapshot-compact");
         var events = await store.GetEventsAsync("agent-snapshot-compact");
+        events.Count.ShouldBe(2);
+
+        await scheduler.RunOnIdleAsync("agent-snapshot-compact");
+
+        var version = await store.GetVersionAsync("agent-snapshot-compact");
+        var compacted = await store.GetEventsAsync("agent-snapshot-compact");
         version.ShouldBe(2);
-        events.ShouldBeEmpty();
+        compacted.ShouldBeEmpty();
 
         var replayed = await behavior.ReplayAsync("agent-snapshot-compact");
         replayed.ShouldNotBeNull();
@@ -246,14 +253,16 @@ public class EventSourcingBehaviorTests
             IEventSourcingSnapshotStore<CounterState>? snapshotStore = null,
             ISnapshotStrategy? snapshotStrategy = null,
             bool enableEventCompaction = false,
-            int retainedEventsAfterSnapshot = 0)
+            int retainedEventsAfterSnapshot = 0,
+            IEventStoreCompactionScheduler? compactionScheduler = null)
             : base(
                 eventStore,
                 agentId,
                 snapshotStore,
                 snapshotStrategy,
                 enableEventCompaction: enableEventCompaction,
-                retainedEventsAfterSnapshot: retainedEventsAfterSnapshot) { }
+                retainedEventsAfterSnapshot: retainedEventsAfterSnapshot,
+                compactionScheduler: compactionScheduler) { }
 
         public override CounterState TransitionState(CounterState current, IMessage evt)
             => StateTransitionMatcher
