@@ -131,7 +131,7 @@
 |---|---|---|---|---|---|
 | R-ES-01 | 强制事件优先恢复 | 所有 `GAgentBase<TState>` 恢复来自 replay | Done | `GAgentBase.TState.cs` | 无 |
 | R-ES-02 | 显式事件构建 | 无自动派生事件主链路 | Done | `PersistDomainEventsAsync` + 守卫脚本 | 无 |
-| R-ES-03 | 回放同态 | 关键 actor 有统一合同测试 | Partial | `EventSourcingTests.cs` 等 | 缺全类别标准化合同矩阵 |
+| R-ES-03 | 回放同态 | 关键 actor 有统一合同测试 | Done | `WorkflowGAgentCoverageTests` / `ProjectionOwnershipAndSessionHubTests` / `RoleGAgentReplayContractTests` + 守卫 | 无 |
 | R-ES-04 | 静态装配 ES 行为 | Runtime 无反射注入 | Done | `architecture_guards.sh` | 无 |
 | R-ES-05 | 禁止直写 State | 含间接继承链全部受控 | Done | `StateGuard` + awk 扫描门禁 | 无 |
 | R-ES-06 | 快照后异步清理 | 由 runtime 空闲机制执行删除 | Done | `DeferredEventStoreCompactionScheduler` + hook | 无 |
@@ -145,10 +145,7 @@
 
 ## 8. 差距详解
 
-### 8.1 Gap-C（R-ES-03）Replay 合同覆盖不足
-- 现有测试覆盖核心路径，但缺“新增关键 actor 必须关联合同测试”的制度化约束。
-
-### 8.2 Gap-P（生产化）EventStore 生产后端与压测基线未闭环
+### 8.1 Gap-P（生产化）EventStore 生产后端与压测基线未闭环
 - 当前 `IEventStore` 仍以 InMemory/File 为主。
 - 尚未建立容量压测与参数治理基线（快照间隔、保留事件数、压缩频率）。
 
@@ -225,7 +222,7 @@ flowchart LR
   1. 启动期校验实现。
   2. 启动失败测试：provider 未注册、能力不匹配、binding 非法。
 
-### WP-3：Replay 同态合同测试矩阵（优先级 P1）
+### WP-3：Replay 同态合同测试矩阵（优先级 P1，已完成）
 - 目标：完成 R-ES-03。
 - 设计：
   1. 抽象统一测试模板：`Command -> Events -> Replay -> StateEquals`。
@@ -299,14 +296,14 @@ flowchart LR
 ## 15. 执行清单（可勾选）
 - [x] 完成 WP-1：Workflow 解耦与 Host 组合下沉
 - [x] 完成 WP-2：启动期全量能力校验
-- [ ] 完成 WP-3：Replay 合同测试矩阵
+- [x] 完成 WP-3：Replay 合同测试矩阵
 - [x] 完成 WP-4：Workflow->Providers 门禁补齐
 - [ ] 完成 WP-5：生产化后端与压测闭环
 
 ## 16. 当前执行快照（2026-02-23）
-- 已完成：R-ES-01、R-ES-02、R-ES-04、R-ES-05、R-ES-06、R-RM-01、R-RM-02、R-RM-03、R-RM-04、R-WF-01、R-WF-02、R-GOV-01
-- 部分完成：R-ES-03
-- 当前主阻塞：Replay 合同测试矩阵、生产 EventStore 后端与压测闭环
+- 已完成：R-ES-01、R-ES-02、R-ES-03、R-ES-04、R-ES-05、R-ES-06、R-RM-01、R-RM-02、R-RM-03、R-RM-04、R-WF-01、R-WF-02、R-GOV-01
+- 部分完成：无
+- 当前主阻塞：生产 EventStore 后端与压测闭环
 
 ## 17. 变更纪律
 1. 删除优先，不做兼容壳。

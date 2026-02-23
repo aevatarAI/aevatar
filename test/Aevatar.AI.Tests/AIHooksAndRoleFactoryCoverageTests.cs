@@ -8,6 +8,7 @@ using Aevatar.AI.Core.Routing;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Hooks;
+using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -95,6 +96,7 @@ public class AIHooksAndRoleFactoryCoverageTests
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
         services.AddSingleton<IEventModuleFactory, StubEventModuleFactory>();
+        services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
         await using var provider = services.BuildServiceProvider();
 
         var agent = CreateRoleAgent(provider);
@@ -124,6 +126,7 @@ public class AIHooksAndRoleFactoryCoverageTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
+        services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
         await using var provider = services.BuildServiceProvider();
 
         var cfg = new RoleYamlConfig
@@ -217,5 +220,8 @@ public class AIHooksAndRoleFactoryCoverageTests
             provider.GetServices<IAgentRunMiddleware>(),
             provider.GetServices<IToolCallMiddleware>(),
             provider.GetServices<ILLMCallMiddleware>(),
-            provider.GetServices<IAgentToolSource>());
+            provider.GetServices<IAgentToolSource>())
+        {
+            Services = provider,
+        };
 }

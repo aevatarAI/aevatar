@@ -315,6 +315,34 @@ if [ -n "${reducer_test_coverage_violations}" ]; then
   exit 1
 fi
 
+stateful_replay_contract_requirements=(
+  "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
+  "ProjectionOwnershipCoordinatorGAgent:test/Aevatar.CQRS.Projection.Core.Tests/ProjectionOwnershipAndSessionHubTests.cs"
+  "RoleGAgent:test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs"
+)
+
+for requirement in "${stateful_replay_contract_requirements[@]}"; do
+  actor_name="${requirement%%:*}"
+  contract_file="${requirement#*:}"
+
+  if [ ! -f "${contract_file}" ]; then
+    echo "Missing replay contract test file for ${actor_name}: ${contract_file}"
+    exit 1
+  fi
+
+  if ! rg -n "\\b${actor_name}\\b" "${contract_file}" >/dev/null; then
+    echo "${contract_file}"
+    echo "Replay contract test file must reference actor ${actor_name}."
+    exit 1
+  fi
+
+  if ! rg -n "Persist.*Event|Replay|Reactivate|ActivateAsync|DeactivateAsync" "${contract_file}" >/dev/null; then
+    echo "${contract_file}"
+    echo "Replay contract test file for ${actor_name} must assert persisted-event replay semantics."
+    exit 1
+  fi
+done
+
 echo "Running projection route-mapping guard..."
 bash tools/ci/projection_route_mapping_guard.sh
 
