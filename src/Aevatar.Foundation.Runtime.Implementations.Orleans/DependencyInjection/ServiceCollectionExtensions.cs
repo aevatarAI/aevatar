@@ -22,8 +22,9 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
-
-        services.TryAddSingleton(typeof(IStateStore<>), typeof(InMemoryStateStore<>));
+        services.RemoveAll(typeof(IStateStore<>));
+        services.TryAddSingleton<IRuntimeActorStateBindingAccessor, AsyncLocalRuntimeActorStateBindingAccessor>();
+        services.TryAddTransient(typeof(IStateStore<>), typeof(RuntimeActorGrainStateStore<>));
         services.TryAddSingleton<IEventStore, InMemoryEventStore>();
         services.TryAddSingleton<IAgentManifestStore, InMemoryManifestStore>();
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();

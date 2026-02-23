@@ -6,6 +6,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.Topology;
 using FluentAssertions;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans;
 using Orleans.Runtime;
@@ -341,7 +342,7 @@ public sealed class OrleansDistributedCoverageTests
     {
         var state = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
         var stateProxy = (RuntimeActorPersistentStateProxy)(object)state;
-        var grain = new RuntimeActorGrain(state);
+        var grain = new RuntimeActorGrain(state, new AsyncLocalRuntimeActorStateBindingAccessor());
 
         (await grain.IsInitializedAsync()).Should().BeFalse();
         stateProxy.State.AgentTypeName = "Known.Type";
@@ -364,11 +365,15 @@ public sealed class OrleansDistributedCoverageTests
         await grain.ClearParentAsync();
 
         stateProxy.State.AgentId = "actor-1";
+        stateProxy.State.AgentStateTypeName = typeof(EventEnvelope).FullName;
+        stateProxy.State.AgentStateSnapshot = new EventEnvelope { Id = "snapshot" }.ToByteArray();
         await grain.PurgeAsync();
         stateProxy.State.AgentId.Should().BeEmpty();
         stateProxy.State.AgentTypeName.Should().BeNull();
         stateProxy.State.ParentId.Should().BeNull();
         stateProxy.State.Children.Should().BeEmpty();
+        stateProxy.State.AgentStateTypeName.Should().BeNull();
+        stateProxy.State.AgentStateSnapshot.Should().BeNull();
         stateProxy.WriteCount.Should().BeGreaterThan(0);
     }
 
@@ -376,7 +381,7 @@ public sealed class OrleansDistributedCoverageTests
     public async Task RuntimeActorGrain_ShouldCoverExceptionalBranches()
     {
         var state = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
-        var grain = new RuntimeActorGrain(state);
+        var grain = new RuntimeActorGrain(state, new AsyncLocalRuntimeActorStateBindingAccessor());
 
         var envelopeAct = () => grain.HandleEnvelopeAsync(new byte[] { 1, 2, 3 });
         await envelopeAct.Should().ThrowAsync<InvalidOperationException>()
