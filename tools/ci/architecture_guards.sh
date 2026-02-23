@@ -92,6 +92,152 @@ if rg -n "StateStore\.LoadAsync|StateStore\.SaveAsync" src/Aevatar.Foundation.Co
   exit 1
 fi
 
+set +e
+state_direct_mutation_report="$(
+  rg --files -0 src -g '*.cs' -g '!*.g.cs' \
+    | xargs -0 awk '
+function trim(value)
+{
+  gsub(/^[[:space:]]+/, "", value);
+  gsub(/[[:space:]]+$/, "", value);
+  return value;
+}
+
+function normalize_base(value)
+{
+  value = trim(value);
+  sub(/<.*/, "", value);
+  sub(/^.*\./, "", value);
+  gsub(/[[:space:]]+/, "", value);
+  return value;
+}
+
+function register_base(class_name, base_clause, parts, first_base)
+{
+  if (class_name == "")
+    return;
+
+  split(base_clause, parts, ",");
+  first_base = normalize_base(parts[1]);
+  if (first_base != "")
+    class_base[class_name] = first_base;
+
+  pending_class[FILENAME] = "";
+}
+
+{
+  line = $0;
+
+  if (pending_class[FILENAME] != "")
+  {
+    if (line ~ /^[[:space:]]*:/)
+    {
+      base_clause = line;
+      sub(/^[[:space:]]*:[[:space:]]*/, "", base_clause);
+      sub(/\{.*/, "", base_clause);
+      register_base(pending_class[FILENAME], base_clause);
+    }
+    else if (line ~ /\{/)
+    {
+      pending_class[FILENAME] = "";
+    }
+  }
+
+  if (match(line, /[[:space:]]class[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/))
+  {
+    class_decl = substr(line, RSTART, RLENGTH);
+    sub(/^.*class[[:space:]]+/, "", class_decl);
+    class_name = class_decl;
+    file_class[FILENAME SUBSEP class_name] = 1;
+
+    tail = substr(line, RSTART + RLENGTH);
+    if (tail ~ /:/)
+    {
+      base_clause = tail;
+      sub(/^.*:[[:space:]]*/, "", base_clause);
+      sub(/\{.*/, "", base_clause);
+      register_base(class_name, base_clause);
+    }
+    else if (tail !~ /\{/)
+    {
+      pending_class[FILENAME] = class_name;
+    }
+    else
+    {
+      pending_class[FILENAME] = "";
+    }
+  }
+
+  if (line ~ /^[[:space:]]*\/\//)
+    next;
+
+  if (line ~ /(^|[[:space:](;])(this\.)?State\.[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(\+\+|--|[+*%\/-]?=)/)
+  {
+    state_mutation[FILENAME] = state_mutation[FILENAME] sprintf("%s:%d:%s\n", FILENAME, FNR, line);
+  }
+}
+
+END {
+  stateful["GAgentBase"] = 1;
+  changed = 1;
+  while (changed)
+  {
+    changed = 0;
+    for (class_name in class_base)
+    {
+      base_name = class_base[class_name];
+      if ((base_name in stateful) && !(class_name in stateful))
+      {
+        stateful[class_name] = 1;
+        changed = 1;
+      }
+    }
+  }
+
+  violations = "";
+  for (file in state_mutation)
+  {
+    is_stateful_file = 0;
+    for (key in file_class)
+    {
+      split(key, tokens, SUBSEP);
+      if (tokens[1] != file)
+        continue;
+
+      declared_class = tokens[2];
+      if (declared_class in stateful)
+      {
+        is_stateful_file = 1;
+        break;
+      }
+    }
+
+    if (is_stateful_file)
+      violations = violations "\n" file "\n" state_mutation[file];
+  }
+
+  if (violations != "")
+  {
+    printf "%s", violations;
+    printf "Stateful GAgent implementations must not mutate State directly. Emit domain events and apply state in TransitionState/appliers.\n";
+    exit 1;
+  }
+}
+' 
+)"
+state_direct_mutation_status=$?
+set -e
+
+if [ "${state_direct_mutation_status}" -ne 0 ] && [ -z "${state_direct_mutation_report}" ]; then
+  echo "State direct mutation guard execution failed."
+  exit "${state_direct_mutation_status}"
+fi
+
+if [ -n "${state_direct_mutation_report}" ]; then
+  echo "${state_direct_mutation_report}"
+  exit 1
+fi
+
 if rg -n "IEventSourcingBehavior<>\\)\\.MakeGenericType|EventSourcingBehavior<>\\)\\.MakeGenericType|GetProperty\\(\"EventSourcing\"\\)|GetProperty\\(\"StateStore\"\\)" \
   src/Aevatar.Foundation.Runtime \
   src/Aevatar.Foundation.Runtime.Implementations.Orleans

@@ -77,6 +77,7 @@
 ### R-ES-05 状态转换可组合
 - `event -> state` 转换必须支持模块化拆分，避免在单个 Agent 中膨胀式 `switch`。
 - 支持 `IStateEventApplier<TState>` 组合式 apply，顺序由 `Order` 控制。
+- CI 必须禁止 `GAgentBase<TState>` 全继承链（含间接继承）子类直接修改 `State.xxx`，强制通过领域事件 + apply 路径变更状态。
 
 ### R-RM-01 Provider 解耦业务
 - Provider 项目不得引用 Workflow/AI 业务读模型类型。

@@ -77,6 +77,7 @@ public async Task Handle(IncrementRequested evt)
 2. 在核心路径恢复 `ConfirmDerivedEventsAsync` / `IDomainEventDeriver` 旧模型。
 3. 在 `GAgentBase<TState>` 恢复 `StateStore.LoadAsync/SaveAsync` 事实通道。
 4. 在 Runtime 恢复反射注入 ES（`MakeGenericType` / `GetProperty("EventSourcing")` / `GetProperty("StateStore")`）。
+5. 在任何继承链路（含间接继承）上的 `GAgentBase<TState>` 子类中直接写 `State.xxx`（`= / += / ++ / --`）。
 
 ## 9. 验证命令
 - `dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj --nologo`
