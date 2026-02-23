@@ -14,11 +14,13 @@
   - `WorkflowProjectionSinkFailurePolicy`（sink 异常策略）
   - `WorkflowProjectionReadModelUpdater`（read model 元信息更新）
   - `WorkflowProjectionQueryReader`（query 映射读取）
+  - `WorkflowReadModelSelectionPlanner`（统一 read model provider 归一化、mode 校验与 capability 选择参数生成）
 - 领域上下文：`IWorkflowExecutionProjectionContextFactory`、`WorkflowExecutionProjectionContext`
 - 实时输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
 - 领域投影实现：reducers、projectors、read model（不包含 Provider Store 实现）
 - 领域 DI 组合：`AddWorkflowExecutionProjectionCQRS(...)`
 - Provider 能力校验：启动期由 `WorkflowReadModelStartupValidationHostedService` 预校验，运行时选择阶段继续按 `ProjectionReadModelCapabilityValidator` 校验
+- ReadModel 选择规则统一：DI store 解析与 Startup validation 均复用 `WorkflowReadModelSelectionPlanner`，避免双处规则漂移
 
 本项目依赖：
 
@@ -78,9 +80,6 @@ FAQ：
   - 实现 `IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>`
   - 在 Host/Extensions 侧注册（例如 `Aevatar.Workflow.Extensions.Hosting.AddWorkflowProjectionReadModelProviders(...)`）
   - 通过 `WorkflowExecutionProjection:ReadModelProvider` 或 `Projection:ReadModel:Provider` 选择 Provider
-- 直接替换 Store（仅测试/临时场景）：
-  - 调用 `AddWorkflowExecutionProjectionReadModelStore<TStore>()` 直接覆盖 `IProjectionReadModelStore<WorkflowExecutionReport, string>`
-  - 该方式会绕过 Provider 选择与能力校验链路，不建议用于生产装配
 
 ## Provider 配置
 

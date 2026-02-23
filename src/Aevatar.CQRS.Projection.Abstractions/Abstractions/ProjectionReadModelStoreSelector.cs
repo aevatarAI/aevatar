@@ -5,7 +5,8 @@ public static class ProjectionReadModelStoreSelector
     public static IProjectionReadModelStoreRegistration<TReadModel, TKey> Select<TReadModel, TKey>(
         IEnumerable<IProjectionReadModelStoreRegistration<TReadModel, TKey>> registrations,
         ProjectionReadModelStoreSelectionOptions selectionOptions,
-        ProjectionReadModelRequirements requirements)
+        ProjectionReadModelRequirements requirements,
+        IProjectionReadModelCapabilityValidator? capabilityValidator = null)
         where TReadModel : class
     {
         ArgumentNullException.ThrowIfNull(registrations);
@@ -13,14 +14,21 @@ public static class ProjectionReadModelStoreSelector
         ArgumentNullException.ThrowIfNull(requirements);
 
         var candidates = registrations.ToList();
-        if (candidates.Count == 0)
-            throw new InvalidOperationException(
-                $"No read-model provider registrations found for '{typeof(TReadModel).FullName}'.");
-
         var requestedProviderName = selectionOptions.RequestedProviderName?.Trim() ?? "";
+        if (candidates.Count == 0)
+        {
+            throw new ProjectionProviderSelectionException(
+                typeof(TReadModel),
+                requestedProviderName,
+                [],
+                "No provider registrations were found.");
+        }
+
         var selected = ResolveRegistration(candidates, requestedProviderName);
 
-        var violations = ProjectionReadModelCapabilityValidator.Validate(requirements, selected.Capabilities);
+        var violations = capabilityValidator == null
+            ? ProjectionReadModelCapabilityValidator.Validate(requirements, selected.Capabilities)
+            : capabilityValidator.Validate(requirements, selected.Capabilities);
         if (violations.Count > 0 && selectionOptions.FailOnUnsupportedCapabilities)
         {
             throw new ProjectionReadModelCapabilityValidationException(
@@ -43,9 +51,11 @@ public static class ProjectionReadModelStoreSelector
             if (registrations.Count == 1)
                 return registrations[0];
 
-            throw new InvalidOperationException(
-                $"Multiple providers are registered for '{typeof(TReadModel).FullName}', but no explicit provider was requested. " +
-                $"Available: {string.Join(", ", registrations.Select(x => x.ProviderName))}.");
+            throw new ProjectionProviderSelectionException(
+                typeof(TReadModel),
+                requestedProviderName,
+                registrations.Select(x => x.ProviderName).ToList(),
+                "Multiple providers are registered but no explicit provider was requested.");
         }
 
         var matched = registrations
@@ -57,8 +67,10 @@ public static class ProjectionReadModelStoreSelector
         if (matched != null)
             return matched;
 
-        throw new InvalidOperationException(
-            $"Requested provider '{requestedProviderName}' is not registered for '{typeof(TReadModel).FullName}'. " +
-            $"Available: {string.Join(", ", registrations.Select(x => x.ProviderName))}.");
+        throw new ProjectionProviderSelectionException(
+            typeof(TReadModel),
+            requestedProviderName,
+            registrations.Select(x => x.ProviderName).ToList(),
+            "Requested provider is not registered.");
     }
 }

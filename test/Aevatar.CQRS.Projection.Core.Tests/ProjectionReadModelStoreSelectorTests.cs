@@ -34,8 +34,8 @@ public class ProjectionReadModelStoreSelectorTests
             new ProjectionReadModelStoreSelectionOptions(),
             new ProjectionReadModelRequirements());
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Multiple providers are registered*");
+        act.Should().Throw<ProjectionProviderSelectionException>()
+            .Where(ex => ex.Reason.Contains("Multiple providers are registered", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -54,8 +54,8 @@ public class ProjectionReadModelStoreSelectorTests
             },
             new ProjectionReadModelRequirements());
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Requested provider*is not registered*");
+        act.Should().Throw<ProjectionProviderSelectionException>()
+            .Where(ex => ex.Reason.Contains("Requested provider is not registered", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -27,73 +27,43 @@ public sealed class ProjectionReadModelProviderSelector
         ArgumentNullException.ThrowIfNull(selectionOptions);
         ArgumentNullException.ThrowIfNull(requirements);
 
-        if (registrations.Count == 0)
+        try
         {
-            throw new ProjectionProviderSelectionException(
-                typeof(TReadModel),
-                selectionOptions.RequestedProviderName?.Trim() ?? "",
-                [],
-                "No provider registrations were found.");
+            var selected = ProjectionReadModelStoreSelector.Select(
+                registrations,
+                selectionOptions,
+                requirements,
+                _capabilityValidator);
+            _logger.LogInformation(
+                "Projection provider selected. readModel={ReadModel} provider={Provider} failOnUnsupportedCapabilities={FailOnUnsupportedCapabilities}",
+                typeof(TReadModel).FullName,
+                selected.ProviderName,
+                selectionOptions.FailOnUnsupportedCapabilities);
+            return selected;
         }
-
-        var requestedProvider = selectionOptions.RequestedProviderName?.Trim() ?? "";
-        var selected = ResolveRegistration(registrations, requestedProvider);
-        var violations = _capabilityValidator.Validate(requirements, selected.Capabilities);
-        if (violations.Count > 0 && selectionOptions.FailOnUnsupportedCapabilities)
+        catch (ProjectionReadModelCapabilityValidationException ex)
         {
             _logger.LogError(
                 "Projection provider capability validation failed. readModel={ReadModel} provider={Provider} requiredCapabilities={RequiredCapabilities} actualCapabilities={ActualCapabilities} violations={Violations}",
                 typeof(TReadModel).FullName,
-                selected.ProviderName,
-                FormatRequirements(requirements),
-                FormatCapabilities(selected.Capabilities),
-                string.Join("; ", violations));
-            throw new ProjectionReadModelCapabilityValidationException(
-                typeof(TReadModel),
-                requirements,
-                selected.Capabilities,
-                violations);
+                ex.Capabilities.ProviderName,
+                FormatRequirements(ex.Requirements),
+                FormatCapabilities(ex.Capabilities),
+                string.Join("; ", ex.Violations));
+            throw;
         }
-
-        _logger.LogInformation(
-            "Projection provider selected. readModel={ReadModel} provider={Provider} failOnUnsupportedCapabilities={FailOnUnsupportedCapabilities}",
-            typeof(TReadModel).FullName,
-            selected.ProviderName,
-            selectionOptions.FailOnUnsupportedCapabilities);
-        return selected;
-    }
-
-    private static IProjectionReadModelStoreRegistration<TReadModel, TKey> ResolveRegistration<TReadModel, TKey>(
-        IReadOnlyList<IProjectionReadModelStoreRegistration<TReadModel, TKey>> registrations,
-        string requestedProvider)
-        where TReadModel : class
-    {
-        if (requestedProvider.Length == 0)
+        catch (ProjectionProviderSelectionException ex)
         {
-            if (registrations.Count == 1)
-                return registrations[0];
-
-            throw new ProjectionProviderSelectionException(
-                typeof(TReadModel),
+            var requestedProvider = ex.RequestedProviderName.Length == 0 ? "<unspecified>" : ex.RequestedProviderName;
+            var availableProviders = ex.AvailableProviders.Count == 0 ? "<none>" : string.Join(", ", ex.AvailableProviders);
+            _logger.LogError(
+                "Projection provider selection failed. readModel={ReadModel} requestedProvider={RequestedProvider} availableProviders={AvailableProviders} reason={Reason}",
+                typeof(TReadModel).FullName,
                 requestedProvider,
-                registrations.Select(x => x.ProviderName).ToList(),
-                "Multiple providers are registered but no explicit provider was requested.");
+                availableProviders,
+                ex.Reason);
+            throw;
         }
-
-        var matched = registrations
-            .FirstOrDefault(x => string.Equals(
-                x.ProviderName,
-                requestedProvider,
-                StringComparison.OrdinalIgnoreCase));
-
-        if (matched != null)
-            return matched;
-
-        throw new ProjectionProviderSelectionException(
-            typeof(TReadModel),
-            requestedProvider,
-            registrations.Select(x => x.ProviderName).ToList(),
-            "Requested provider is not registered.");
     }
 
     private static string FormatRequirements(ProjectionReadModelRequirements requirements)

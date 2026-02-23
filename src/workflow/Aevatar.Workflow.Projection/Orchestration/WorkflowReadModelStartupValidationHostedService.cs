@@ -11,7 +11,7 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly WorkflowExecutionProjectionOptions _options;
-    private readonly IProjectionReadModelBindingResolver _bindingResolver;
+    private readonly IWorkflowReadModelSelectionPlanner _selectionPlanner;
     private readonly IProjectionReadModelProviderRegistry _providerRegistry;
     private readonly IProjectionReadModelProviderSelector _providerSelector;
     private readonly ILogger<WorkflowReadModelStartupValidationHostedService> _logger;
@@ -19,14 +19,14 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
     public WorkflowReadModelStartupValidationHostedService(
         IServiceProvider serviceProvider,
         WorkflowExecutionProjectionOptions options,
-        IProjectionReadModelBindingResolver bindingResolver,
+        IWorkflowReadModelSelectionPlanner selectionPlanner,
         IProjectionReadModelProviderRegistry providerRegistry,
         IProjectionReadModelProviderSelector providerSelector,
         ILogger<WorkflowReadModelStartupValidationHostedService>? logger = null)
     {
         _serviceProvider = serviceProvider;
         _options = options;
-        _bindingResolver = bindingResolver;
+        _selectionPlanner = selectionPlanner;
         _providerRegistry = providerRegistry;
         _providerSelector = providerSelector;
         _logger = logger ?? NullLogger<WorkflowReadModelStartupValidationHostedService>.Instance;
@@ -38,17 +38,10 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
         if (!_options.Enabled || !_options.ValidateReadModelProviderOnStartup)
             return Task.CompletedTask;
 
-        EnsureReadModelModeSupported();
-
-        var requirements = _bindingResolver.Resolve(_options.ReadModelBindings, typeof(WorkflowExecutionReport));
-        var selectionOptions = new ProjectionReadModelStoreSelectionOptions
-        {
-            RequestedProviderName = NormalizeProviderName(_options.ReadModelProvider),
-            FailOnUnsupportedCapabilities = _options.FailOnUnsupportedCapabilities,
-        };
+        var selectionPlan = _selectionPlanner.Build(_options);
 
         var registrations = _providerRegistry.GetRegistrations<WorkflowExecutionReport, string>(_serviceProvider);
-        var selected = _providerSelector.Select(registrations, selectionOptions, requirements);
+        var selected = _providerSelector.Select(registrations, selectionPlan.SelectionOptions, selectionPlan.Requirements);
         _logger.LogInformation(
             "Workflow read-model provider startup validation passed. readModelType={ReadModelType} provider={Provider}",
             typeof(WorkflowExecutionReport).FullName,
@@ -60,23 +53,5 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.CompletedTask;
-    }
-
-    private void EnsureReadModelModeSupported()
-    {
-        if (_options.ReadModelMode != ProjectionReadModelMode.StateOnly)
-            return;
-
-        throw new InvalidOperationException(
-            "Workflow projection does not support Projection:ReadModel:Mode=StateOnly. " +
-            "Use CustomReadModel or DefaultReadModel.");
-    }
-
-    private static string NormalizeProviderName(string providerName)
-    {
-        if (string.IsNullOrWhiteSpace(providerName))
-            return ProjectionReadModelProviderNames.InMemory;
-
-        return providerName.Trim();
     }
 }

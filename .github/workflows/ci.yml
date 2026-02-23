@@ -48,7 +48,11 @@ jobs:
               - 'docker-compose.projection-providers.yml'
               - 'src/Aevatar.CQRS.Projection.*/**'
               - 'src/Aevatar.CQRS.Projection.Core/**'
+              - 'src/workflow/Aevatar.Workflow.Projection/**'
+              - 'src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/**'
+              - 'src/workflow/Aevatar.Workflow.Infrastructure/DependencyInjection/WorkflowCapabilityServiceCollectionExtensions.cs'
               - 'test/Aevatar.CQRS.Projection.Core.Tests/**'
+              - 'test/Aevatar.Workflow.Host.Api.Tests/**'
               - 'tools/ci/projection_provider_e2e_smoke.sh'
               - '.github/workflows/ci.yml'
             kafka_runtime:

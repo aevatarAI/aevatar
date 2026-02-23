@@ -36,6 +36,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
         services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
         services.AddProjectionReadModelRuntime();
+        services.TryAddSingleton<IWorkflowReadModelSelectionPlanner, WorkflowReadModelSelectionPlanner>();
         RegisterWorkflowReadModelStoreSelector(services);
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
@@ -98,16 +99,6 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>
-    /// Replaces the default read-model store implementation.
-    /// </summary>
-    public static IServiceCollection AddWorkflowExecutionProjectionReadModelStore<TStore>(this IServiceCollection services)
-        where TStore : class, IProjectionReadModelStore<WorkflowExecutionReport, string>
-    {
-        services.Replace(ServiceDescriptor.Singleton<IProjectionReadModelStore<WorkflowExecutionReport, string>, TStore>());
-        return services;
-    }
-
     private static void RegisterFromAssembly(IServiceCollection services, Assembly assembly)
     {
         ProjectionAssemblyRegistration.RegisterProjectionExtensionsFromAssembly(
@@ -124,39 +115,15 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IProjectionReadModelStore<WorkflowExecutionReport, string>>(sp =>
         {
             var options = sp.GetRequiredService<WorkflowExecutionProjectionOptions>();
-            EnsureReadModelModeSupported(options);
-            var bindingResolver = sp.GetRequiredService<IProjectionReadModelBindingResolver>();
+            var selectionPlanner = sp.GetRequiredService<IWorkflowReadModelSelectionPlanner>();
             var storeFactory = sp.GetRequiredService<IProjectionReadModelStoreFactory>();
-            var requirements = bindingResolver.Resolve(options.ReadModelBindings, typeof(WorkflowExecutionReport));
-            var selectionOptions = new ProjectionReadModelStoreSelectionOptions
-            {
-                RequestedProviderName = NormalizeProviderName(options.ReadModelProvider),
-                FailOnUnsupportedCapabilities = options.FailOnUnsupportedCapabilities,
-            };
+            var selectionPlan = selectionPlanner.Build(options);
 
             return storeFactory.Create<WorkflowExecutionReport, string>(
                 sp,
-                selectionOptions,
-                requirements);
+                selectionPlan.SelectionOptions,
+                selectionPlan.Requirements);
         }));
-    }
-
-    private static string NormalizeProviderName(string providerName)
-    {
-        if (string.IsNullOrWhiteSpace(providerName))
-            return ProjectionReadModelProviderNames.InMemory;
-
-        return providerName.Trim();
-    }
-
-    private static void EnsureReadModelModeSupported(WorkflowExecutionProjectionOptions options)
-    {
-        if (options.ReadModelMode != ProjectionReadModelMode.StateOnly)
-            return;
-
-        throw new InvalidOperationException(
-            "Workflow projection does not support Projection:ReadModel:Mode=StateOnly. " +
-            "Use CustomReadModel or DefaultReadModel.");
     }
 
     private sealed class PassthroughEventDeduplicator : IEventDeduplicator
