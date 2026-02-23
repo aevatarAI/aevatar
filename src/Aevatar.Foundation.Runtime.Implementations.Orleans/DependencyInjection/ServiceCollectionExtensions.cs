@@ -3,6 +3,7 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.DependencyInjection;
+using Aevatar.Foundation.Core.EventSourcing;
 using Orleans.Hosting;
 using Orleans.Streams;
 
@@ -22,9 +23,12 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
+        services.TryAddSingleton<EventSourcingRuntimeOptions>();
         services.RemoveAll(typeof(IStateStore<>));
+        services.RemoveAll(typeof(IEventSourcingSnapshotStore<>));
         services.TryAddSingleton<IRuntimeActorStateBindingAccessor, AsyncLocalRuntimeActorStateBindingAccessor>();
         services.TryAddTransient(typeof(IStateStore<>), typeof(RuntimeActorGrainStateStore<>));
+        services.TryAddTransient(typeof(IEventSourcingSnapshotStore<>), typeof(RuntimeActorGrainEventSourcingSnapshotStore<>));
         services.TryAddSingleton<IEventStore, InMemoryEventStore>();
         services.TryAddSingleton<IAgentManifestStore, InMemoryManifestStore>();
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();

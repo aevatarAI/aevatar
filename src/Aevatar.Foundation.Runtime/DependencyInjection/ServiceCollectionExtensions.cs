@@ -9,6 +9,7 @@ using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Routing;
@@ -31,7 +32,8 @@ public static class ServiceCollectionExtensions
     /// <returns>Service collection for fluent chaining.</returns>
     public static IServiceCollection AddAevatarRuntime(
         this IServiceCollection services,
-        Action<InMemoryStreamOptions>? configureStreams = null)
+        Action<InMemoryStreamOptions>? configureStreams = null,
+        Action<EventSourcingRuntimeOptions>? configureEventSourcing = null)
     {
         // Streaming
         var streamOptions = new InMemoryStreamOptions();
@@ -57,7 +59,12 @@ public static class ServiceCollectionExtensions
                 sp.GetService<ILogger<LocalActorRuntime>>()));
 
         // Persistence
+        var eventSourcingOptions = new EventSourcingRuntimeOptions();
+        configureEventSourcing?.Invoke(eventSourcingOptions);
+        services.Replace(ServiceDescriptor.Singleton(eventSourcingOptions));
+
         services.TryAddSingleton(typeof(IStateStore<>), typeof(InMemoryStateStore<>));
+        services.TryAddSingleton(typeof(IEventSourcingSnapshotStore<>), typeof(InMemoryEventSourcingSnapshotStore<>));
         services.TryAddSingleton<IEventStore, InMemoryEventStore>();
         services.TryAddSingleton<IAgentManifestStore, InMemoryManifestStore>();
 
@@ -91,6 +98,7 @@ public static class ServiceCollectionExtensions
         configure?.Invoke(options);
         services.Replace(ServiceDescriptor.Singleton(options));
         services.Replace(ServiceDescriptor.Singleton<IEventStore, FileEventStore>());
+        services.Replace(ServiceDescriptor.Singleton(typeof(IEventSourcingSnapshotStore<>), typeof(FileEventSourcingSnapshotStore<>)));
         return services;
     }
 }

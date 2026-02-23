@@ -160,6 +160,35 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
+    public async Task PersistSnapshotAsync_WhenCompactionEnabled_ShouldDeleteHistoricalEvents_AndKeepReplayWorking()
+    {
+        var store = new InMemoryEventStore();
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<CounterState>();
+        var behavior = new CounterEventSourcingBehavior(
+            store,
+            "agent-snapshot-compact",
+            snapshotStore: snapshotStore,
+            snapshotStrategy: new IntervalSnapshotStrategy(1),
+            enableEventCompaction: true,
+            retainedEventsAfterSnapshot: 0);
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 4 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 6 });
+        await behavior.ConfirmEventsAsync();
+        await behavior.PersistSnapshotAsync(new CounterState { Count = 10, Name = "snapshot" });
+
+        var version = await store.GetVersionAsync("agent-snapshot-compact");
+        var events = await store.GetEventsAsync("agent-snapshot-compact");
+        version.ShouldBe(2);
+        events.ShouldBeEmpty();
+
+        var replayed = await behavior.ReplayAsync("agent-snapshot-compact");
+        replayed.ShouldNotBeNull();
+        replayed!.Count.ShouldBe(10);
+        behavior.CurrentVersion.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task ReplayAsync_WhenSnapshotExists_ShouldReplayOnlyDeltaEvents()
     {
         var store = new InMemoryEventStore();
@@ -215,8 +244,16 @@ public class EventSourcingBehaviorTests
             IEventStore eventStore,
             string agentId,
             IEventSourcingSnapshotStore<CounterState>? snapshotStore = null,
-            ISnapshotStrategy? snapshotStrategy = null)
-            : base(eventStore, agentId, snapshotStore, snapshotStrategy) { }
+            ISnapshotStrategy? snapshotStrategy = null,
+            bool enableEventCompaction = false,
+            int retainedEventsAfterSnapshot = 0)
+            : base(
+                eventStore,
+                agentId,
+                snapshotStore,
+                snapshotStrategy,
+                enableEventCompaction: enableEventCompaction,
+                retainedEventsAfterSnapshot: retainedEventsAfterSnapshot) { }
 
         public override CounterState TransitionState(CounterState current, IMessage evt)
             => StateTransitionMatcher

@@ -447,6 +447,7 @@ internal sealed class StringSessionEventCodec : IProjectionSessionEventCodec<str
 internal sealed class TestInMemoryEventStore : IEventStore
 {
     private readonly Dictionary<string, List<StateEvent>> _streams = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _versions = new(StringComparer.Ordinal);
     private readonly object _sync = new();
 
     public Task<long> AppendAsync(
@@ -462,9 +463,10 @@ internal sealed class TestInMemoryEventStore : IEventStore
             {
                 stream = [];
                 _streams[agentId] = stream;
+                _versions[agentId] = 0;
             }
 
-            var currentVersion = stream.Count == 0 ? 0 : stream[^1].Version;
+            var currentVersion = _versions.GetValueOrDefault(agentId);
             if (currentVersion != expectedVersion)
             {
                 throw new InvalidOperationException(
@@ -473,7 +475,8 @@ internal sealed class TestInMemoryEventStore : IEventStore
 
             var appended = events.ToList();
             stream.AddRange(appended.Select(x => x.Clone()));
-            var latest = stream.Count == 0 ? 0 : stream[^1].Version;
+            var latest = appended.Count == 0 ? currentVersion : appended[^1].Version;
+            _versions[agentId] = latest;
             return Task.FromResult(latest);
         }
     }
@@ -501,10 +504,24 @@ internal sealed class TestInMemoryEventStore : IEventStore
         ct.ThrowIfCancellationRequested();
         lock (_sync)
         {
-            if (!_streams.TryGetValue(agentId, out var stream) || stream.Count == 0)
+            return Task.FromResult(_versions.GetValueOrDefault(agentId));
+        }
+    }
+
+    public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (toVersion <= 0)
+            return Task.FromResult(0L);
+
+        lock (_sync)
+        {
+            if (!_streams.TryGetValue(agentId, out var stream))
                 return Task.FromResult(0L);
 
-            return Task.FromResult(stream[^1].Version);
+            var before = stream.Count;
+            stream.RemoveAll(x => x.Version <= toVersion);
+            return Task.FromResult((long)(before - stream.Count));
         }
     }
 }

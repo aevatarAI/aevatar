@@ -13,6 +13,16 @@ namespace Aevatar.Foundation.Runtime.Persistence;
 /// </summary>
 public sealed class FileEventStore : IEventStore
 {
+    private const int StreamFormatMagic = 0x53464541; // AEFS
+    private const int StreamFormatVersion = 1;
+
+    private sealed class EventStreamState
+    {
+        public long CurrentVersion { get; set; }
+
+        public List<StateEvent> Events { get; } = [];
+    }
+
     private readonly string _rootDirectory;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _agentLocks = new(StringComparer.Ordinal);
     private readonly ILogger<FileEventStore> _logger;
@@ -53,17 +63,18 @@ public sealed class FileEventStore : IEventStore
         try
         {
             var stream = ReadStream(agentId, ct);
-            var currentVersion = stream.Count == 0 ? 0 : stream[^1].Version;
+            var currentVersion = stream.CurrentVersion;
             if (currentVersion != expectedVersion)
             {
                 throw new InvalidOperationException(
                     $"Optimistic concurrency conflict: expected {expectedVersion}, actual {currentVersion}");
             }
 
-            stream.AddRange(pendingEvents);
+            stream.Events.AddRange(pendingEvents);
+            stream.CurrentVersion = pendingEvents[^1].Version;
             WriteStream(agentId, stream, ct);
 
-            var latestVersion = stream[^1].Version;
+            var latestVersion = stream.CurrentVersion;
             _logger.LogDebug(
                 "File event-store append completed. agentId={AgentId} appended={Count} version={Version}",
                 agentId,
@@ -92,8 +103,8 @@ public sealed class FileEventStore : IEventStore
         {
             var stream = ReadStream(agentId, ct);
             var filtered = fromVersion.HasValue
-                ? stream.Where(x => x.Version > fromVersion.Value)
-                : stream;
+                ? stream.Events.Where(x => x.Version > fromVersion.Value)
+                : stream.Events.AsEnumerable();
             return filtered.Select(CloneEvent).ToList();
         }
         finally
@@ -113,7 +124,7 @@ public sealed class FileEventStore : IEventStore
         try
         {
             var stream = ReadStream(agentId, ct);
-            return stream.Count == 0 ? 0 : stream[^1].Version;
+            return stream.CurrentVersion;
         }
         finally
         {
@@ -121,15 +132,97 @@ public sealed class FileEventStore : IEventStore
         }
     }
 
-    private List<StateEvent> ReadStream(string agentId, CancellationToken ct)
+    public async Task<long> DeleteEventsUpToAsync(
+        string agentId,
+        long toVersion,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+        ct.ThrowIfCancellationRequested();
+        if (toVersion <= 0)
+            return 0;
+
+        var gate = _agentLocks.GetOrAdd(agentId, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+
+        try
+        {
+            var stream = ReadStream(agentId, ct);
+            var before = stream.Events.Count;
+            stream.Events.RemoveAll(x => x.Version <= toVersion);
+            var removed = before - stream.Events.Count;
+            if (removed > 0)
+                WriteStream(agentId, stream, ct);
+            return removed;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private EventStreamState ReadStream(string agentId, CancellationToken ct)
     {
         var path = GetStreamPath(agentId);
         if (!File.Exists(path))
-            return [];
+            return new EventStreamState();
 
-        var result = new List<StateEvent>();
+        var result = new EventStreamState();
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
+        if (stream.Length == 0)
+            return result;
+
+        var firstToken = reader.ReadInt32();
+        if (firstToken == StreamFormatMagic)
+        {
+            if (stream.Length < sizeof(int) + sizeof(int) + sizeof(long) + sizeof(int))
+            {
+                throw new InvalidOperationException(
+                    $"Corrupted event stream for agent '{agentId}': invalid header.");
+            }
+
+            var formatVersion = reader.ReadInt32();
+            if (formatVersion != StreamFormatVersion)
+            {
+                throw new InvalidOperationException(
+                    $"Unsupported event stream format version {formatVersion} for agent '{agentId}'.");
+            }
+
+            result.CurrentVersion = reader.ReadInt64();
+            var count = reader.ReadInt32();
+            if (count < 0)
+            {
+                throw new InvalidOperationException(
+                    $"Corrupted event stream for agent '{agentId}': invalid event count {count}.");
+            }
+
+            for (var i = 0; i < count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var payloadLength = reader.ReadInt32();
+                if (payloadLength <= 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Corrupted event stream for agent '{agentId}': invalid payload length {payloadLength}.");
+                }
+
+                var payload = reader.ReadBytes(payloadLength);
+                if (payload.Length != payloadLength)
+                {
+                    throw new InvalidOperationException(
+                        $"Corrupted event stream for agent '{agentId}': truncated payload.");
+                }
+
+                result.Events.Add(StateEvent.Parser.ParseFrom(payload));
+            }
+
+            return result;
+        }
+
+        // Legacy format fallback: [length][event][length][event]...
+        stream.Position = 0;
+        reader.BaseStream.Position = 0;
 
         while (stream.Position < stream.Length)
         {
@@ -148,13 +241,14 @@ public sealed class FileEventStore : IEventStore
                     $"Corrupted event stream for agent '{agentId}': truncated payload.");
             }
 
-            result.Add(StateEvent.Parser.ParseFrom(payload));
+            result.Events.Add(StateEvent.Parser.ParseFrom(payload));
         }
 
+        result.CurrentVersion = result.Events.Count == 0 ? 0 : result.Events[^1].Version;
         return result;
     }
 
-    private void WriteStream(string agentId, IReadOnlyList<StateEvent> stream, CancellationToken ct)
+    private void WriteStream(string agentId, EventStreamState stream, CancellationToken ct)
     {
         var path = GetStreamPath(agentId);
         var tempPath = path + ".tmp";
@@ -162,7 +256,12 @@ public sealed class FileEventStore : IEventStore
         using (var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
         using (var writer = new BinaryWriter(fileStream, Encoding.UTF8, leaveOpen: false))
         {
-            foreach (var evt in stream)
+            writer.Write(StreamFormatMagic);
+            writer.Write(StreamFormatVersion);
+            writer.Write(stream.CurrentVersion);
+            writer.Write(stream.Events.Count);
+
+            foreach (var evt in stream.Events)
             {
                 ct.ThrowIfCancellationRequested();
                 var payload = evt.ToByteArray();

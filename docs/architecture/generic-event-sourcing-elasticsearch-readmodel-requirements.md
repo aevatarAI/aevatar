@@ -37,6 +37,10 @@
 6. `ConfirmDerivedEventsAsync` / `IDomainEventDeriver` / `EventSourcingAutoPersistenceOptions` 已从主链路移除。
 7. 运行期通过 `PersistDomainEventAsync` / `PersistDomainEventsAsync` 执行“持久化 + 顺序 apply”；Replay 主要用于激活恢复。
 8. `TransitionState` 可由 Agent override 或 `IStateEventApplier<TState>` 组合实现。
+9. 默认启用自动快照与事件流裁剪：
+   - 快照：`EventSourcingRuntimeOptions.SnapshotInterval`
+   - 裁剪：快照成功后调用 `IEventStore.DeleteEventsUpToAsync(...)`
+   - 保留窗口：`RetainedEventsAfterSnapshot`
 
 ### 3.2 Provider Runtime
 - 抽象：`src/Aevatar.CQRS.Projection.Abstractions`
@@ -130,7 +134,7 @@
 ### P4（待执行）性能与生产化增强
 1. 为持久化 `IEventStore` 提供生产落地方案与压测基线（已落地本地持久化基线：`FileEventStore`，生产级后端仍待接入）。
 2. 补齐 Elasticsearch/Neo4j 端到端集成脚本与回归套件（已落地基础 smoke + env-gated e2e，后续补 CI 常态化接入与更高负载回归）。
-3. 细化快照策略与回放窗口控制。
+3. 细化快照策略与回放窗口控制（已落地自动快照 + 裁剪基础能力，后续补压测驱动的阈值治理）。
 
 ## 6. 验收标准（DoD）
 1. 有状态 Actor 恢复路径全部来自 Replay，不存在 `StateStore.Load/Save` 事实回路。

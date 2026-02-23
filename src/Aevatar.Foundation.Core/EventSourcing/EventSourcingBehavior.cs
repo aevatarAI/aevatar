@@ -22,6 +22,8 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
     private readonly IEventStore _eventStore;
     private readonly IEventSourcingSnapshotStore<TState>? _snapshotStore;
     private readonly ISnapshotStrategy _snapshotStrategy;
+    private readonly bool _enableEventCompaction;
+    private readonly int _retainedEventsAfterSnapshot;
     private readonly ILogger<EventSourcingBehavior<TState>> _logger;
     private readonly List<IMessage> _pending = [];
     private readonly string _agentId;
@@ -32,12 +34,16 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         string agentId,
         IEventSourcingSnapshotStore<TState>? snapshotStore = null,
         ISnapshotStrategy? snapshotStrategy = null,
-        ILogger<EventSourcingBehavior<TState>>? logger = null)
+        ILogger<EventSourcingBehavior<TState>>? logger = null,
+        bool enableEventCompaction = false,
+        int retainedEventsAfterSnapshot = 0)
     {
         _eventStore = eventStore;
         _agentId = agentId;
         _snapshotStore = snapshotStore;
         _snapshotStrategy = snapshotStrategy ?? NeverSnapshotStrategy.Instance;
+        _enableEventCompaction = enableEventCompaction;
+        _retainedEventsAfterSnapshot = Math.Max(0, retainedEventsAfterSnapshot);
         _logger = logger ?? NullLogger<EventSourcingBehavior<TState>>.Instance;
     }
 
@@ -117,6 +123,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                 _agentId,
                 new EventSourcingSnapshot<TState>(currentState.Clone(), _currentVersion),
                 ct);
+            await TryCompactEventsAsync(ct);
         }
         catch (Exception ex)
         {
@@ -195,5 +202,41 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         return eventTypes.Length == 0 ? "<none>" : string.Join(",", eventTypes);
+    }
+
+    private async Task TryCompactEventsAsync(CancellationToken ct)
+    {
+        if (!_enableEventCompaction)
+            return;
+
+        var compactToVersion = _currentVersion - _retainedEventsAfterSnapshot;
+        if (compactToVersion <= 0)
+            return;
+
+        try
+        {
+            var deleted = await _eventStore.DeleteEventsUpToAsync(_agentId, compactToVersion, ct);
+            if (deleted <= 0)
+                return;
+
+            _logger.LogInformation(
+                "Event sourcing compaction completed. agentId={AgentId} compactToVersion={CompactToVersion} deletedEvents={DeletedEvents} retainedRecentEvents={RetainedRecentEvents} result={Result}",
+                _agentId,
+                compactToVersion,
+                deleted,
+                _retainedEventsAfterSnapshot,
+                "ok");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Event sourcing compaction failed and will be ignored. agentId={AgentId} compactToVersion={CompactToVersion} retainedRecentEvents={RetainedRecentEvents} result={Result} errorType={ErrorType}",
+                _agentId,
+                compactToVersion,
+                _retainedEventsAfterSnapshot,
+                "ignored",
+                ex.GetType().Name);
+        }
     }
 }

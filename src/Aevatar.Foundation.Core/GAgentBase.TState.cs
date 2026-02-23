@@ -124,7 +124,22 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
 
         if (Services?.GetService(typeof(IEventStore)) is IEventStore eventStore)
         {
-            EventSourcing = new AgentBackedEventSourcingBehavior(eventStore, Id, this);
+            var options = Services.GetService<EventSourcingRuntimeOptions>() ?? new EventSourcingRuntimeOptions();
+            var snapshotStore = options.EnableSnapshots
+                ? Services.GetService<IEventSourcingSnapshotStore<TState>>()
+                : null;
+            ISnapshotStrategy snapshotStrategy = options.EnableSnapshots && snapshotStore != null
+                ? new IntervalSnapshotStrategy(options.SnapshotInterval)
+                : NeverSnapshotStrategy.Instance;
+
+            EventSourcing = new AgentBackedEventSourcingBehavior(
+                eventStore,
+                Id,
+                this,
+                snapshotStore,
+                snapshotStrategy,
+                options.EnableEventCompaction,
+                options.RetainedEventsAfterSnapshot);
             return EventSourcing;
         }
 
@@ -159,8 +174,18 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
         public AgentBackedEventSourcingBehavior(
             IEventStore eventStore,
             string agentId,
-            GAgentBase<TState> owner)
-            : base(eventStore, agentId)
+            GAgentBase<TState> owner,
+            IEventSourcingSnapshotStore<TState>? snapshotStore,
+            ISnapshotStrategy snapshotStrategy,
+            bool enableEventCompaction,
+            int retainedEventsAfterSnapshot)
+            : base(
+                eventStore,
+                agentId,
+                snapshotStore,
+                snapshotStrategy,
+                enableEventCompaction: enableEventCompaction,
+                retainedEventsAfterSnapshot: retainedEventsAfterSnapshot)
         {
             _owner = owner;
         }

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core.EventSourcing;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 
@@ -18,8 +19,10 @@ public class RuntimeEventStoreRegistrationTests
 
             using var provider = services.BuildServiceProvider();
             var eventStore = provider.GetRequiredService<IEventStore>();
+            var snapshotStore = provider.GetRequiredService<IEventSourcingSnapshotStore<CounterState>>();
 
             eventStore.ShouldBeOfType<FileEventStore>();
+            snapshotStore.ShouldBeOfType<FileEventSourcingSnapshotStore<CounterState>>();
         }
         finally
         {

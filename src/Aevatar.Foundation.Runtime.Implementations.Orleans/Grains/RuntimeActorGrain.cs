@@ -16,6 +16,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private IEnvelopePropagationPolicy _propagationPolicy =
         new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
+    private IRuntimeActorStateBindingAccessor? _stateBindingAccessor;
     private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
     private IAsyncStream<EventEnvelope>? _selfStream;
     private StreamSubscriptionHandle<EventEnvelope>? _selfStreamHandle;
@@ -31,6 +32,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _deduplicator = ServiceProvider.GetService<IEventDeduplicator>();
         _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>() ?? _propagationPolicy;
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
+        _stateBindingAccessor = ServiceProvider.GetService<IRuntimeActorStateBindingAccessor>();
 
         var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
         _logger = loggerFactory?.CreateLogger<RuntimeActorGrain>() ?? NullLogger<RuntimeActorGrain>.Instance;
@@ -51,6 +53,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         if (_agent != null)
         {
+            using var stateBinding = _stateBindingAccessor?.Bind(_state);
             await _agent.DeactivateAsync(cancellationToken);
             _agent = null;
         }
@@ -118,6 +121,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 return;
         }
 
+        using var stateBinding = _stateBindingAccessor?.Bind(_state);
         await _agent.HandleEventAsync(envelope);
     }
 
@@ -198,6 +202,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _state.State.Children.Clear();
         _state.State.AgentStateTypeName = null;
         _state.State.AgentStateSnapshot = null;
+        _state.State.AgentStateSnapshotVersion = 0;
         await _state.WriteStateAsync();
     }
 
@@ -212,6 +217,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         try
         {
+            using var stateBinding = _stateBindingAccessor?.Bind(_state);
             var agent = CreateAgentInstance(agentType);
             InjectDependencies(agent, this.GetPrimaryKeyString());
             await agent.ActivateAsync(ct);

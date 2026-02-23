@@ -11,6 +11,7 @@
 3. 领域事件必须由开发者显式构建并持久化，不允许在线自动反推事件。
 4. 有状态 Actor 激活必须 Replay；停用必须 flush pending events。
 5. ES 行为构造走静态泛型路径，不走 Runtime 反射注入。
+6. 默认启用自动快照（可配置），并在快照成功后按版本裁剪历史事件流（可配置）。
 
 ## 3. 当前代码事实（权威路径）
 - ES 行为契约：`src/Aevatar.Foundation.Core/EventSourcing/IEventSourcingBehavior.cs`
@@ -38,6 +39,7 @@
   - `ConfirmEventsAsync`
   - `PersistSnapshotAsync`
 - 不再调用 `StateStore.SaveAsync` 写事实态。
+- 快照保存成功后，会调用 `IEventStore.DeleteEventsUpToAsync(...)` 自动清理历史事件（保留窗口可配置）。
 
 ### 4.3 Fail-Fast 条件
 - 未预设 `EventSourcing` 且容器中无 `IEventStore`：激活失败（`InvalidOperationException`）。
@@ -63,16 +65,25 @@ public async Task Handle(IncrementRequested evt)
 
 ## 6. DI 与容器约定
 - `AddAevatarRuntime()` 默认注册 `IEventStore -> InMemoryEventStore`（开发/测试）。
+- `AddAevatarRuntime()` 默认注册 `IEventSourcingSnapshotStore<TState> -> InMemoryEventSourcingSnapshotStore<TState>`。
 - 可通过 `AddFileEventStore(...)` 将 `IEventStore` 切换为本地持久化实现：`src/Aevatar.Foundation.Runtime/Persistence/FileEventStore.cs`。
+- 调用 `AddFileEventStore(...)` 时，`IEventSourcingSnapshotStore<TState>` 会切换为 `FileEventSourcingSnapshotStore<TState>`，支持快照与事件裁剪后的持久化恢复。
 - 生产环境应替换为持久化实现（Redis/DB/日志存储等）。
 - 如需自定义 ES 行为，可直接为 Agent 预设 `EventSourcing`，但必须保持相同语义契约。
 - 如需解耦 Agent 里的 `TransitionState` 逻辑，可注册多个 `IStateEventApplier<TState>`，按 `Order` 升序匹配应用。
 - Agent 侧推荐使用 `StateTransitionMatcher.Match(...).On<TEvent>(...).OrCurrent()`，避免重复 `Any + switch` 样板代码。
+- 可通过 `ActorRuntime:EventSourcing:*` 调整自动快照与裁剪策略：
+  - `EnableSnapshots`（默认 `true`）
+  - `SnapshotInterval`（默认 `200`）
+  - `EnableEventCompaction`（默认 `true`）
+  - `RetainedEventsAfterSnapshot`（默认 `0`）
 
 ## 7. 快照语义
 1. 快照仅用于减少回放开销。
 2. 快照写入失败不得影响已提交事件事实。
 3. 恢复顺序：先快照，再从快照版本之后回放事件增量。
+4. 事件裁剪只在“快照写入成功”后触发，避免清理后无快照可恢复。
+5. 裁剪后事件流版本号必须保持单调递增，后续 append 继续基于最新版本并发控制。
 
 ## 8. 明确禁止项
 1. 把 `TState` 本体当事件写入 `EventStore`。
@@ -84,4 +95,5 @@ public async Task Handle(IncrementRequested evt)
 ## 9. 验证命令
 - `dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj --nologo`
 - `dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj --nologo`
+- `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo`
 - `bash tools/ci/architecture_guards.sh`
