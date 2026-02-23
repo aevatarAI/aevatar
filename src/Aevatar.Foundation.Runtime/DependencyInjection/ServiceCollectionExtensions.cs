@@ -65,6 +65,7 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton(typeof(IStateStore<>), typeof(InMemoryStateStore<>));
         services.TryAddSingleton(typeof(IEventSourcingSnapshotStore<>), typeof(InMemoryEventSourcingSnapshotStore<>));
+        services.TryAddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         services.TryAddSingleton<IEventStore, InMemoryEventStore>();
         services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
         services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();

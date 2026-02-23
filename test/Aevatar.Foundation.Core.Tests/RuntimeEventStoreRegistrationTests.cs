@@ -20,9 +20,11 @@ public class RuntimeEventStoreRegistrationTests
             using var provider = services.BuildServiceProvider();
             var eventStore = provider.GetRequiredService<IEventStore>();
             var snapshotStore = provider.GetRequiredService<IEventSourcingSnapshotStore<CounterState>>();
+            var behaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<CounterState>>();
 
             eventStore.ShouldBeOfType<FileEventStore>();
             snapshotStore.ShouldBeOfType<FileEventSourcingSnapshotStore<CounterState>>();
+            behaviorFactory.ShouldBeOfType<DefaultEventSourcingBehaviorFactory<CounterState>>();
         }
         finally
         {

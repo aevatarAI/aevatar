@@ -3,7 +3,6 @@
 // State + mandatory EventSourcing + OnStateChanged Hook
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,7 +13,7 @@ namespace Aevatar.Foundation.Core;
 /// Stateful GAgent base class with Protobuf state and mandatory Event Sourcing lifecycle.
 /// </summary>
 /// <typeparam name="TState">Protobuf-generated state type.</typeparam>
-public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
+public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSourcingFactoryBinding
     where TState : class, IMessage<TState>, new()
 {
     private TState _state = new();
@@ -30,6 +29,9 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
 
     /// <summary>Event Sourcing behavior injected by runtime; required for state recovery and commit.</summary>
     public IEventSourcingBehavior<TState>? EventSourcing { get; set; }
+
+    /// <summary>Factory used to create per-agent event sourcing behavior when not explicitly injected.</summary>
+    public IEventSourcingBehaviorFactory<TState>? EventSourcingBehaviorFactory { get; set; }
 
     /// <summary>Activates agent, replays events to restore state, then calls OnActivateAsync.</summary>
     public override async Task ActivateAsync(CancellationToken ct = default)
@@ -122,32 +124,24 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
         if (EventSourcing != null)
             return EventSourcing;
 
-        if (Services?.GetService(typeof(IEventStore)) is IEventStore eventStore)
+        if (EventSourcingBehaviorFactory != null)
         {
-            var options = Services.GetService<EventSourcingRuntimeOptions>() ?? new EventSourcingRuntimeOptions();
-            var snapshotStore = options.EnableSnapshots
-                ? Services.GetService<IEventSourcingSnapshotStore<TState>>()
-                : null;
-            var compactionScheduler = Services.GetService<IEventStoreCompactionScheduler>();
-            ISnapshotStrategy snapshotStrategy = options.EnableSnapshots && snapshotStore != null
-                ? new IntervalSnapshotStrategy(options.SnapshotInterval)
-                : NeverSnapshotStrategy.Instance;
-
-            EventSourcing = new AgentBackedEventSourcingBehavior(
-                eventStore,
-                Id,
-                this,
-                snapshotStore,
-                snapshotStrategy,
-                options.EnableEventCompaction,
-                options.RetainedEventsAfterSnapshot,
-                compactionScheduler);
+            EventSourcing = EventSourcingBehaviorFactory.Create(Id, TransitionState);
             return EventSourcing;
         }
 
         throw new InvalidOperationException(
-            $"Stateful agent '{GetType().FullName}' requires '{typeof(IEventSourcingBehavior<TState>).FullName}' " +
-            $"for actor '{Id}'.");
+            $"Stateful agent '{GetType().FullName}' requires either '{typeof(IEventSourcingBehavior<TState>).FullName}' " +
+            $"or explicitly bound '{typeof(IEventSourcingBehaviorFactory<TState>).FullName}' for actor '{Id}'.");
+    }
+
+    void IEventSourcingFactoryBinding.BindEventSourcingFactory(IServiceProvider services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        if (EventSourcing != null)
+            return;
+
+        EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<TState>>();
     }
 
     private IReadOnlyList<IStateEventApplier<TState>> ResolveStateEventAppliers()
@@ -169,32 +163,4 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
         return _appliers;
     }
 
-    private sealed class AgentBackedEventSourcingBehavior : EventSourcingBehavior<TState>
-    {
-        private readonly GAgentBase<TState> _owner;
-
-        public AgentBackedEventSourcingBehavior(
-            IEventStore eventStore,
-            string agentId,
-            GAgentBase<TState> owner,
-            IEventSourcingSnapshotStore<TState>? snapshotStore,
-            ISnapshotStrategy snapshotStrategy,
-            bool enableEventCompaction,
-            int retainedEventsAfterSnapshot,
-            IEventStoreCompactionScheduler? compactionScheduler)
-            : base(
-                eventStore,
-                agentId,
-                snapshotStore,
-                snapshotStrategy,
-                enableEventCompaction: enableEventCompaction,
-                retainedEventsAfterSnapshot: retainedEventsAfterSnapshot,
-                compactionScheduler: compactionScheduler)
-        {
-            _owner = owner;
-        }
-
-        public override TState TransitionState(TState current, IMessage evt) =>
-            _owner.TransitionState(current, evt);
-    }
 }

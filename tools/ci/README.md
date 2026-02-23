@@ -11,6 +11,7 @@ This directory keeps CI gate scripts and smoke tests.
 - `tools/ci/solution_split_test_guards.sh`: split test guard.
 - `tools/ci/projection_route_mapping_guard.sh`: projection reducer routing static guard.
 - `tools/ci/restore_and_build.sh`: shared restore/build entry used by CI jobs.
+- `tools/ci/event_sourcing_regression.sh`: EventSourcing regression entry (core tests + Orleans/Garnet + architecture guards).
 
 ## Integration/Smoke Scripts
 
@@ -37,9 +38,9 @@ This directory keeps CI gate scripts and smoke tests.
   - Job `kafka-transport-integration`
     - Starts Kafka and runs the distributed runtime integration test.
     - Triggered on runtime integration related changes, `main/dev` pushes, or manual dispatch.
-  - Job `orleans-garnet-persistence-integration`
-    - Runs `tools/ci/orleans_garnet_persistence_smoke.sh`.
-    - Triggered on runtime integration related changes, `main/dev` pushes, or manual dispatch.
+  - Job `event-sourcing-regression`
+    - Runs `tools/ci/event_sourcing_regression.sh`.
+    - Triggered on EventSourcing/runtime related changes, `main/dev` pushes, or manual dispatch.
   - Job `coverage-quality`
     - Runs restore/build + `tools/ci/coverage_quality_guard.sh`.
     - Triggered on `main/dev` pushes, nightly schedule, or manual dispatch.

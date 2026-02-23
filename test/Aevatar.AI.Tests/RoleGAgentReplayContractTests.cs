@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -16,6 +17,8 @@ public class RoleGAgentReplayContractTests
         var store = new InMemoryEventStoreForTests();
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(store)
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
 
         var agent1 = CreateAgent(services, "role-replay-contract");
@@ -45,6 +48,8 @@ public class RoleGAgentReplayContractTests
         var store = new InMemoryEventStoreForTests();
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(store)
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
 
         var agent1 = CreateAgent(services, "role-factory-replay");
@@ -71,6 +76,7 @@ public class RoleGAgentReplayContractTests
         var agent = new RoleGAgent
         {
             Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
         };
         AssignActorId(agent, actorId);
         return agent;

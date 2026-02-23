@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Hooks.BuiltIn;
@@ -9,6 +10,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -97,6 +99,8 @@ public class AIHooksAndRoleFactoryCoverageTests
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
         services.AddSingleton<IEventModuleFactory, StubEventModuleFactory>();
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         await using var provider = services.BuildServiceProvider();
 
         var agent = CreateRoleAgent(provider);
@@ -127,6 +131,8 @@ public class AIHooksAndRoleFactoryCoverageTests
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         await using var provider = services.BuildServiceProvider();
 
         var cfg = new RoleYamlConfig
@@ -223,5 +229,6 @@ public class AIHooksAndRoleFactoryCoverageTests
             provider.GetServices<IAgentToolSource>())
         {
             Services = provider,
+            EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
         };
 }

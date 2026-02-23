@@ -446,6 +446,8 @@ public class StateEventApplierIntegrationTests
         var store = new InMemoryEventStore();
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(store)
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .AddSingleton<IStateEventApplier<CounterState>, CounterIncrementApplier>()
             .AddSingleton<IStateEventApplier<CounterState>, CounterDecrementApplier>()
             .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>())
@@ -454,6 +456,7 @@ public class StateEventApplierIntegrationTests
         var agent1 = new ApplierBackedCounterAgent
         {
             Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<CounterState>>(),
         };
         agent1.SetId("applier-agent");
         await agent1.ActivateAsync();
@@ -465,6 +468,7 @@ public class StateEventApplierIntegrationTests
         var agent2 = new ApplierBackedCounterAgent
         {
             Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<CounterState>>(),
         };
         agent2.SetId("applier-agent");
         await agent2.ActivateAsync();

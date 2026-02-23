@@ -6,6 +6,7 @@ using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Deduplication;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -550,6 +551,8 @@ public class WorkflowExecutionProjectionServiceTests
         var runtimeServices = new ServiceCollection();
         runtimeServices.AddSingleton<IAgentManifestStore, InMemoryManifestStore>();
         runtimeServices.AddSingleton<IEventStore, InMemoryEventStore>();
+        runtimeServices.AddSingleton<EventSourcingRuntimeOptions>();
+        runtimeServices.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         var runtimeProvider = runtimeServices.BuildServiceProvider();
         var runtime = new LocalActorRuntime(
             streams,

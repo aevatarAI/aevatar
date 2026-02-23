@@ -9,6 +9,7 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Propagation;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -159,5 +160,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         gab.Logger = logger;
         gab.Services = _services;
         gab.ManifestStore = _services.GetService<IAgentManifestStore>();
+        if (gab is IEventSourcingFactoryBinding statefulBinding)
+            statefulBinding.BindEventSourcingFactory(_services);
     }
 }

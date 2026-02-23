@@ -97,6 +97,13 @@ if rg -n "public\s+IStateStore<" src/Aevatar.Foundation.Core/GAgentBase.TState.c
   exit 1
 fi
 
+if rg -n "GetService\(typeof\(IEventStore\)\)|GetService<EventSourcingRuntimeOptions>|GetService<IEventSourcingSnapshotStore<|GetService<IEventSourcingBehaviorFactory<|new\s+AgentBackedEventSourcingBehavior|EventSourcingBehaviorFactory\s*\?\?=" \
+  src/Aevatar.Foundation.Core/GAgentBase.TState.cs
+then
+  echo "GAgentBase<TState> must not compose EventSourcing behavior via Service Locator internals. Use IEventSourcingBehaviorFactory<TState>."
+  exit 1
+fi
+
 set +e
 state_direct_mutation_report="$(
   rg --files -0 src -g '*.cs' -g '!*.g.cs' \
@@ -253,6 +260,25 @@ fi
 
 if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
   echo "Found string-based event type matching."
+  exit 1
+fi
+
+transition_override_without_matcher=""
+while IFS= read -r transition_file; do
+  [ -z "${transition_file}" ] && continue
+
+  if ! rg -n "StateTransitionMatcher" "${transition_file}" >/dev/null; then
+    transition_override_without_matcher="${transition_override_without_matcher}${transition_file}\n"
+  fi
+done < <(rg -l "override\\s+[^\\n]*TransitionState\\(" \
+  src \
+  -g '*.cs' \
+  -g '!*.g.cs' \
+  -g '!src/Aevatar.Foundation.Core/EventSourcing/DefaultEventSourcingBehaviorFactory.cs' || true)
+
+if [ -n "${transition_override_without_matcher}" ]; then
+  printf '%b' "${transition_override_without_matcher}"
+  echo "Stateful TransitionState overrides in src must use StateTransitionMatcher for Any-safe replay semantics."
   exit 1
 fi
 

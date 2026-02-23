@@ -23,6 +23,7 @@ jobs:
       core_code: ${{ steps.filter.outputs.core_code }}
       projection_provider: ${{ steps.filter.outputs.projection_provider }}
       kafka_runtime: ${{ steps.filter.outputs.kafka_runtime }}
+      event_sourcing: ${{ steps.filter.outputs.event_sourcing }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,6 +55,17 @@ jobs:
               - 'docker-compose.yml'
               - 'src/Aevatar.Foundation.Runtime*/**'
               - 'test/Aevatar.Foundation.Runtime.Hosting.Tests/**'
+              - '.github/workflows/ci.yml'
+            event_sourcing:
+              - 'src/Aevatar.Foundation.Core/**'
+              - 'src/Aevatar.Foundation.Runtime/**'
+              - 'src/Aevatar.Foundation.Runtime.Implementations.Orleans/**'
+              - 'src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/**'
+              - 'test/Aevatar.Foundation.Core.Tests/**'
+              - 'test/Aevatar.Foundation.Runtime.Hosting.Tests/**'
+              - 'tools/ci/event_sourcing_regression.sh'
+              - 'tools/ci/orleans_garnet_persistence_smoke.sh'
+              - 'tools/ci/architecture_guards.sh'
               - '.github/workflows/ci.yml'
 
   fast-gates:
@@ -193,25 +205,27 @@ jobs:
         if: always()
         run: docker compose down --volumes --remove-orphans
 
-  orleans-garnet-persistence-integration:
+  event-sourcing-regression:
     if: |
       github.event_name != 'schedule' && (
         github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-        needs.changes.outputs.kafka_runtime == 'true'
+        needs.changes.outputs.event_sourcing == 'true'
       )
     needs:
       - changes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - name: Prepare Runner
         uses: ./.github/actions/prepare-runner
+        with:
+          install-ripgrep: "true"
 
-      - name: Orleans Garnet Persistence Smoke Test
-        run: bash tools/ci/orleans_garnet_persistence_smoke.sh
+      - name: EventSourcing Regression
+        run: bash tools/ci/event_sourcing_regression.sh
 
   coverage-quality:
     if: |

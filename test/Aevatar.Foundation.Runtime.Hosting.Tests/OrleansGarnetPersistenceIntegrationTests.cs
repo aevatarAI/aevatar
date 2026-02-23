@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
@@ -219,14 +220,12 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
             PersistDomainEventAsync(new StringValue { Value = "activated" }, ct);
 
         protected override Int32Value TransitionState(Int32Value current, IMessage evt)
-        {
-            if (evt is Any any && any.Is(StringValue.Descriptor))
-                evt = any.Unpack<StringValue>();
-
-            return evt is StringValue { Value: "activated" }
-                ? new Int32Value { Value = current.Value + 1 }
-                : current;
-        }
+            => StateTransitionMatcher
+                .Match(current, evt)
+                .On<StringValue>((state, payload) => payload.Value == "activated"
+                    ? new Int32Value { Value = state.Value + 1 }
+                    : state)
+                .OrCurrent();
 
         public override Task<string> GetDescriptionAsync() =>
             Task.FromResult($"activation-count:{State.Value}");

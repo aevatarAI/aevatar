@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
@@ -240,8 +241,12 @@ public class WorkflowGAgentCoverageTests
         {
             Services = new ServiceCollection()
                 .AddSingleton(eventStore)
+                .AddSingleton<EventSourcingRuntimeOptions>()
+                .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
                 .BuildServiceProvider(),
         };
+        agent.EventSourcingBehaviorFactory =
+            agent.Services.GetRequiredService<IEventSourcingBehaviorFactory<WorkflowState>>();
         return agent;
     }
 

@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using FluentAssertions;
 using Google.Protobuf;
@@ -141,13 +142,23 @@ public class ProjectionOwnershipCoordinatorGAgentTests
             services.AddSingleton(eventStore);
         else
             services.AddSingleton<IEventStore, TestInMemoryEventStore>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         return services.BuildServiceProvider();
     }
+
+    private static ProjectionOwnershipCoordinatorGAgent CreateStatefulAgent(IServiceProvider services) =>
+        new()
+        {
+            Services = services,
+            EventSourcingBehaviorFactory =
+                services.GetRequiredService<IEventSourcingBehaviorFactory<ProjectionOwnershipCoordinatorState>>(),
+        };
 
     [Fact]
     public async Task HandleAcquireAsync_ShouldActivateOwnershipState()
     {
-        var agent = new ProjectionOwnershipCoordinatorGAgent { Services = CreateStatefulAgentServices() };
+        var agent = CreateStatefulAgent(CreateStatefulAgentServices());
 
         await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
         {
@@ -164,7 +175,7 @@ public class ProjectionOwnershipCoordinatorGAgentTests
     [Fact]
     public async Task HandleAcquireAsync_ShouldThrow_WhenOwnershipAlreadyActive()
     {
-        var agent = new ProjectionOwnershipCoordinatorGAgent { Services = CreateStatefulAgentServices() };
+        var agent = CreateStatefulAgent(CreateStatefulAgentServices());
         await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
         {
             ScopeId = "scope-1",
@@ -183,7 +194,7 @@ public class ProjectionOwnershipCoordinatorGAgentTests
     [Fact]
     public async Task HandleReleaseAsync_ShouldDeactivate_WhenScopeAndSessionMatch()
     {
-        var agent = new ProjectionOwnershipCoordinatorGAgent { Services = CreateStatefulAgentServices() };
+        var agent = CreateStatefulAgent(CreateStatefulAgentServices());
         await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
         {
             ScopeId = "scope-1",
@@ -203,7 +214,7 @@ public class ProjectionOwnershipCoordinatorGAgentTests
     [Fact]
     public async Task HandleReleaseAsync_ShouldThrow_WhenScopeDoesNotMatch()
     {
-        var agent = new ProjectionOwnershipCoordinatorGAgent { Services = CreateStatefulAgentServices() };
+        var agent = CreateStatefulAgent(CreateStatefulAgentServices());
         await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
         {
             ScopeId = "scope-1",
@@ -225,7 +236,7 @@ public class ProjectionOwnershipCoordinatorGAgentTests
         var store = new TestInMemoryEventStore();
         var services = CreateStatefulAgentServices(store);
 
-        var agent1 = new ProjectionOwnershipCoordinatorGAgent { Services = services };
+        var agent1 = CreateStatefulAgent(services);
         await agent1.ActivateAsync();
         await agent1.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
         {
@@ -244,7 +255,7 @@ public class ProjectionOwnershipCoordinatorGAgentTests
         persisted.Should().Contain(x => x.EventType.Contains(nameof(ProjectionOwnershipAcquireEvent), StringComparison.Ordinal));
         persisted.Should().Contain(x => x.EventType.Contains(nameof(ProjectionOwnershipReleaseEvent), StringComparison.Ordinal));
 
-        var agent2 = new ProjectionOwnershipCoordinatorGAgent { Services = services };
+        var agent2 = CreateStatefulAgent(services);
         await agent2.ActivateAsync();
 
         agent2.State.Active.Should().BeFalse();
