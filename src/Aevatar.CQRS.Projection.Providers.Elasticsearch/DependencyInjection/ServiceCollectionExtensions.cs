@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 
@@ -33,7 +34,8 @@ public static class ServiceCollectionExtensions
                     indexScope,
                     keySelector,
                     keyFormatter,
-                    providerName)));
+                    providerName,
+                    provider.GetService<ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>>())));
 
         return services;
     }

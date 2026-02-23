@@ -1,15 +1,16 @@
 // ─────────────────────────────────────────────────────────────
 // GAgentBase<TState> - stateful base class for GAgent.
-// State + StateStore + OnStateChanged Hook
+// State + mandatory EventSourcing + OnStateChanged Hook
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 
 namespace Aevatar.Foundation.Core;
 
 /// <summary>
-/// Stateful GAgent base class with Protobuf state storage, StateStore persistence, and lifecycle hooks.
+/// Stateful GAgent base class with Protobuf state and mandatory Event Sourcing lifecycle.
 /// </summary>
 /// <typeparam name="TState">Protobuf-generated state type.</typeparam>
 public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
@@ -27,25 +28,27 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
     /// <summary>State persistence store injected by runtime.</summary>
     public IStateStore<TState>? StateStore { get; set; }
 
-    /// <summary>Activates agent, restores state from StateStore, then calls OnActivateAsync.</summary>
+    /// <summary>Event Sourcing behavior injected by runtime; required for state recovery and commit.</summary>
+    public IEventSourcingBehavior<TState>? EventSourcing { get; set; }
+
+    /// <summary>Activates agent, replays events to restore state, then calls OnActivateAsync.</summary>
     public override async Task ActivateAsync(CancellationToken ct = default)
     {
         await base.ActivateAsync(ct); // Restore modules
         using var guard = StateGuard.BeginWriteScope();
-        if (StateStore != null)
-        {
-            var loaded = await StateStore.LoadAsync(Id, ct);
-            if (loaded != null) _state = loaded;
-        }
+        var eventSourcing = EnsureEventSourcingConfigured();
+        var replayed = await eventSourcing.ReplayAsync(Id, ct);
+        _state = replayed ?? new TState();
         await OnActivateAsync(ct);
     }
 
-    /// <summary>Deactivates agent, calls OnDeactivateAsync, and persists state.</summary>
+    /// <summary>Deactivates agent, flushes pending events, and optionally persists snapshot optimization.</summary>
     public override async Task DeactivateAsync(CancellationToken ct = default)
     {
+        var eventSourcing = EnsureEventSourcingConfigured();
         await OnDeactivateAsync(ct);
-        if (StateStore != null)
-            await StateStore.SaveAsync(Id, _state, ct);
+        await eventSourcing.ConfirmEventsAsync(ct);
+        await eventSourcing.PersistSnapshotAsync(_state, ct);
     }
 
     /// <summary>Hook invoked after state changes, useful for CQRS projection.</summary>
@@ -57,4 +60,20 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
 
     /// <summary>Deactivation hook for subclass cleanup.</summary>
     protected virtual Task OnDeactivateAsync(CancellationToken ct) => Task.CompletedTask;
+
+    private IEventSourcingBehavior<TState> EnsureEventSourcingConfigured()
+    {
+        if (EventSourcing != null)
+            return EventSourcing;
+
+        if (Services?.GetService(typeof(IEventStore)) is IEventStore eventStore)
+        {
+            EventSourcing = new EventSourcingBehavior<TState>(eventStore, Id);
+            return EventSourcing;
+        }
+
+        throw new InvalidOperationException(
+            $"Stateful agent '{GetType().FullName}' requires '{typeof(IEventSourcingBehavior<TState>).FullName}' " +
+            $"for actor '{Id}'.");
+    }
 }

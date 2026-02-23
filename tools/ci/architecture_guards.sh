@@ -52,6 +52,54 @@ if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   exit 1
 fi
 
+if [ -f "src/Aevatar.Foundation.Core/EventSourcing/DefaultAutoPersistedStateEventFactory.cs" ]; then
+  echo "DefaultAutoPersistedStateEventFactory is forbidden. EventStore must persist domain events, not snapshot-state events."
+  exit 1
+fi
+
+if [ -f "src/Aevatar.Foundation.Core/EventSourcing/IAutoPersistedStateEventFactory.cs" ]; then
+  echo "IAutoPersistedStateEventFactory is forbidden. Use IDomainEventDeriver<TState> for semantic event derivation."
+  exit 1
+fi
+
+if [ -f "src/Aevatar.Foundation.Core/EventSourcing/EventSourcingAutoPersistenceOptions.cs" ]; then
+  echo "EventSourcingAutoPersistenceOptions is forbidden. Stateful actors must emit explicit domain events."
+  exit 1
+fi
+
+if [ -f "src/Aevatar.Foundation.Core/EventSourcing/IDomainEventDeriver.cs" ]; then
+  echo "IDomainEventDeriver is forbidden on runtime path. Domain events must be produced explicitly by command handlers."
+  exit 1
+fi
+
+if rg -n "ConfirmStateAsync\(" src/Aevatar.Foundation.Core/EventSourcing; then
+  echo "ConfirmStateAsync is forbidden."
+  exit 1
+fi
+
+if rg -n "ConfirmDerivedEventsAsync\(" src/Aevatar.Foundation.Core/EventSourcing; then
+  echo "ConfirmDerivedEventsAsync is forbidden. Domain events must be raised explicitly via RaiseEvent + ConfirmEventsAsync."
+  exit 1
+fi
+
+if rg -n "TryUnpack<TState>|Unpack<TState>" src/Aevatar.Foundation.Core/EventSourcing/EventSourcingBehavior.cs; then
+  echo "EventSourcingBehavior must not unpack TState snapshots from persisted events."
+  exit 1
+fi
+
+if rg -n "StateStore\.LoadAsync|StateStore\.SaveAsync" src/Aevatar.Foundation.Core/GAgentBase.TState.cs; then
+  echo "GAgentBase<TState> must not use StateStore as the fact source. Recovery must come from EventStore replay."
+  exit 1
+fi
+
+if rg -n "IEventSourcingBehavior<>\\)\\.MakeGenericType|EventSourcingBehavior<>\\)\\.MakeGenericType|GetProperty\\(\"EventSourcing\"\\)|GetProperty\\(\"StateStore\"\\)" \
+  src/Aevatar.Foundation.Runtime \
+  src/Aevatar.Foundation.Runtime.Implementations.Orleans
+then
+  echo "Runtime must not use reflection-based stateful ES binding. Use static generic construction in GAgentBase<TState>."
+  exit 1
+fi
+
 if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
   echo "Found string-based event type matching."
   exit 1

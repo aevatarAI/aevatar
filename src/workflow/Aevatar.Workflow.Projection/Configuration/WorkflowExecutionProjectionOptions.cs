@@ -56,4 +56,10 @@ public sealed class WorkflowExecutionProjectionOptions
     /// Optional read-model binding requirements (ReadModelName -> IndexKind).
     /// </summary>
     public Dictionary<string, string> ReadModelBindings { get; }
+
+    /// <summary>
+    /// Read-model runtime mode.
+    /// Workflow keeps CustomReadModel as default; StateOnly is rejected during DI composition.
+    /// </summary>
+    public ProjectionReadModelMode ReadModelMode { get; set; } = ProjectionReadModelMode.CustomReadModel;
 }

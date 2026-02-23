@@ -1,6 +1,7 @@
 // ─── Event Sourcing (IEventSourcingBehavior / EventSourcingBehavior / SnapshotStrategy) tests ───
 
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -35,6 +36,17 @@ public class EventSourcingBehaviorTests
         behavior.CurrentVersion.ShouldBe(0);
         var events = await store.GetEventsAsync("agent-1");
         events.Count.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task ConfirmEventsAsync_WhenStateSnapshotEventRaised_ShouldFailFast()
+    {
+        var (_, behavior) = Create();
+        behavior.RaiseEvent(new CounterState { Count = 1, Name = "snapshot" });
+
+        Func<Task> act = async () => await behavior.ConfirmEventsAsync();
+
+        await act.ShouldThrowAsync<InvalidOperationException>();
     }
 
     [Fact]
@@ -106,6 +118,84 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
+    public async Task PersistSnapshotAsync_WhenSnapshotStrategyMatches_ShouldPersistSnapshot()
+    {
+        var store = new InMemoryEventStore();
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<CounterState>();
+        var behavior = new CounterEventSourcingBehavior(
+            store,
+            "agent-snapshot",
+            snapshotStore: snapshotStore,
+            snapshotStrategy: new IntervalSnapshotStrategy(1));
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 9 });
+        await behavior.ConfirmEventsAsync();
+        await behavior.PersistSnapshotAsync(new CounterState { Count = 9, Name = "snapshot" });
+
+        var snapshot = await snapshotStore.LoadAsync("agent-snapshot");
+        snapshot.ShouldNotBeNull();
+        snapshot!.Version.ShouldBe(1);
+        snapshot.State.Count.ShouldBe(9);
+    }
+
+    [Fact]
+    public async Task PersistSnapshotAsync_WhenSnapshotSaveFails_ShouldNotThrowAndShouldKeepCommittedEvents()
+    {
+        var store = new InMemoryEventStore();
+        var snapshotStore = new ThrowingSnapshotStore<CounterState>();
+        var behavior = new CounterEventSourcingBehavior(
+            store,
+            "agent-snapshot-fail",
+            snapshotStore: snapshotStore,
+            snapshotStrategy: new IntervalSnapshotStrategy(1));
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 3 });
+        await behavior.ConfirmEventsAsync();
+
+        await behavior.PersistSnapshotAsync(new CounterState { Count = 3, Name = "snapshot-fail" });
+
+        behavior.CurrentVersion.ShouldBe(1);
+        var events = await store.GetEventsAsync("agent-snapshot-fail");
+        events.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ReplayAsync_WhenSnapshotExists_ShouldReplayOnlyDeltaEvents()
+    {
+        var store = new InMemoryEventStore();
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<CounterState>();
+        await snapshotStore.SaveAsync(
+            "agent-replay-with-snapshot",
+            new EventSourcingSnapshot<CounterState>(
+                new CounterState { Count = 10, Name = "snap" },
+                2));
+
+        await store.AppendAsync(
+            "agent-replay-with-snapshot",
+            [new StateEvent
+            {
+                EventId = "e-3",
+                Timestamp = TimestampHelper.Now(),
+                Version = 3,
+                EventType = typeof(IncrementEvent).FullName ?? nameof(IncrementEvent),
+                EventData = Any.Pack(new IncrementEvent { Amount = 4 }),
+                AgentId = "agent-replay-with-snapshot",
+            }],
+            expectedVersion: 0);
+
+        var behavior = new CounterEventSourcingBehavior(
+            store,
+            "agent-replay-with-snapshot",
+            snapshotStore: snapshotStore);
+
+        var replayed = await behavior.ReplayAsync("agent-replay-with-snapshot");
+
+        replayed.ShouldNotBeNull();
+        replayed!.Count.ShouldBe(14);
+        behavior.CurrentVersion.ShouldBe(3);
+    }
+
+    [Fact]
     public async Task DefaultTransitionState_ReturnsCurrentUnchanged()
     {
         var store = new InMemoryEventStore();
@@ -121,8 +211,12 @@ public class EventSourcingBehaviorTests
     /// <summary>Test behavior that applies IncrementEvent/DecrementEvent to CounterState.</summary>
     internal sealed class CounterEventSourcingBehavior : EventSourcingBehavior<CounterState>
     {
-        public CounterEventSourcingBehavior(IEventStore eventStore, string agentId)
-            : base(eventStore, agentId) { }
+        public CounterEventSourcingBehavior(
+            IEventStore eventStore,
+            string agentId,
+            IEventSourcingSnapshotStore<CounterState>? snapshotStore = null,
+            ISnapshotStrategy? snapshotStrategy = null)
+            : base(eventStore, agentId, snapshotStore, snapshotStrategy) { }
 
         public override CounterState TransitionState(CounterState current, IMessage evt)
         {
@@ -131,7 +225,46 @@ public class EventSourcingBehaviorTests
                 return new CounterState { Count = current.Count + inc.Amount, Name = current.Name };
             if (any.TryUnpack<DecrementEvent>(out var dec))
                 return new CounterState { Count = current.Count - dec.Amount, Name = current.Name };
-            return current;
+            return base.TransitionState(current, evt);
+        }
+    }
+
+    private sealed class InMemoryEventSourcingSnapshotStore<TState> : IEventSourcingSnapshotStore<TState>
+        where TState : class
+    {
+        private readonly Dictionary<string, EventSourcingSnapshot<TState>> _snapshots = new(StringComparer.Ordinal);
+
+        public Task<EventSourcingSnapshot<TState>?> LoadAsync(string agentId, CancellationToken ct = default)
+        {
+            _ = ct;
+            _snapshots.TryGetValue(agentId, out var snapshot);
+            return Task.FromResult(snapshot);
+        }
+
+        public Task SaveAsync(string agentId, EventSourcingSnapshot<TState> snapshot, CancellationToken ct = default)
+        {
+            _ = ct;
+            _snapshots[agentId] = snapshot;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingSnapshotStore<TState> : IEventSourcingSnapshotStore<TState>
+        where TState : class
+    {
+        public Task<EventSourcingSnapshot<TState>?> LoadAsync(string agentId, CancellationToken ct = default)
+        {
+            _ = agentId;
+            _ = ct;
+            return Task.FromResult<EventSourcingSnapshot<TState>?>(null);
+        }
+
+        public Task SaveAsync(string agentId, EventSourcingSnapshot<TState> snapshot, CancellationToken ct = default)
+        {
+            _ = agentId;
+            _ = snapshot;
+            _ = ct;
+            throw new InvalidOperationException("snapshot-store-failure");
         }
     }
 }
@@ -139,57 +272,24 @@ public class EventSourcingBehaviorTests
 /// <summary>Event Sourcing agent: state restored from event replay on activate, handlers RaiseEvent + ConfirmEventsAsync.</summary>
 public class EventSourcingCounterAgent : GAgentBase<CounterState>
 {
-    /// <summary>Injected by test or runtime; when set, activate replays from store and handlers persist via ES.</summary>
-    public IEventSourcingBehavior<CounterState>? EventSourcing { get; set; }
-
-    protected override async Task OnActivateAsync(CancellationToken ct)
-    {
-        if (EventSourcing != null)
-        {
-            var replayed = await EventSourcing.ReplayAsync(Id, ct);
-            if (replayed != null)
-                State = replayed;
-        }
-    }
-
-    protected override async Task OnDeactivateAsync(CancellationToken ct)
-    {
-        if (EventSourcing != null)
-            await EventSourcing.ConfirmEventsAsync(ct);
-    }
-
     [EventHandler]
     public async Task HandleIncrement(IncrementEvent evt)
     {
-        if (EventSourcing != null)
-        {
-            EventSourcing.RaiseEvent(evt);
-            await EventSourcing.ConfirmEventsAsync();
-            var replayed = await EventSourcing.ReplayAsync(Id);
-            if (replayed != null)
-                State = replayed;
-        }
-        else
-        {
-            State = new CounterState { Count = State.Count + evt.Amount, Name = State.Name };
-        }
+        EventSourcing!.RaiseEvent(evt);
+        await EventSourcing.ConfirmEventsAsync();
+        var replayed = await EventSourcing.ReplayAsync(Id);
+        if (replayed != null)
+            State = replayed;
     }
 
     [EventHandler(Priority = 10)]
     public async Task HandleDecrement(DecrementEvent evt)
     {
-        if (EventSourcing != null)
-        {
-            EventSourcing.RaiseEvent(evt);
-            await EventSourcing.ConfirmEventsAsync();
-            var replayed = await EventSourcing.ReplayAsync(Id);
-            if (replayed != null)
-                State = replayed;
-        }
-        else
-        {
-            State = new CounterState { Count = State.Count - evt.Amount, Name = State.Name };
-        }
+        EventSourcing!.RaiseEvent(evt);
+        await EventSourcing.ConfirmEventsAsync();
+        var replayed = await EventSourcing.ReplayAsync(Id);
+        if (replayed != null)
+            State = replayed;
     }
 }
 
@@ -277,17 +377,13 @@ public class EventSourcingAgentTests
     }
 
     [Fact]
-    public async Task EventSourcingAgent_WithoutBehavior_WorksInMemoryOnly()
+    public async Task EventSourcingAgent_WithoutBehavior_ShouldFailFastOnActivate()
     {
         var agent = new EventSourcingCounterAgent { EventSourcing = null };
         agent.SetId("agent-null-es");
         WireAgent(agent);
-        await agent.ActivateAsync();
-
-        await agent.HandleEventAsync(TestHelper.Envelope(new IncrementEvent { Amount = 7 }));
-        agent.State.Count.ShouldBe(7);
-        await agent.HandleEventAsync(TestHelper.Envelope(new DecrementEvent { Amount = 2 }));
-        agent.State.Count.ShouldBe(5);
+        var act = () => agent.ActivateAsync();
+        await act.ShouldThrowAsync<InvalidOperationException>();
     }
 }
 

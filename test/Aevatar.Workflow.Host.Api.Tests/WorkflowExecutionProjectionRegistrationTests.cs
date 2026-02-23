@@ -4,6 +4,9 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
+using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.Neo4j.Stores;
 using Aevatar.AI.Projection.Reducers;
 using Aevatar.Workflow.Extensions.AIProjection;
 using Aevatar.Workflow.Projection;
@@ -51,6 +54,24 @@ public class WorkflowExecutionProjectionRegistrationTests
         var metadata = store.Should().BeAssignableTo<IProjectionReadModelStoreProviderMetadata>().Subject;
         metadata.ProviderCapabilities.SupportsIndexing.Should().BeTrue();
         metadata.ProviderCapabilities.IndexKinds.Should().Contain(ProjectionReadModelIndexKind.Document);
+    }
+
+    [Fact]
+    public async Task AddWorkflowExecutionProjectionCQRS_WhenNeo4jConfigured_ShouldResolveNeo4jStore()
+    {
+        var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
+        RegisterNeo4jProvider(services);
+        services.AddWorkflowExecutionProjectionCQRS(options =>
+            options.ReadModelProvider = ProjectionReadModelProviderNames.Neo4j);
+
+        await using var provider = services.BuildServiceProvider();
+        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+
+        store.Should().BeOfType<Neo4jProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        var metadata = store.Should().BeAssignableTo<IProjectionReadModelStoreProviderMetadata>().Subject;
+        metadata.ProviderCapabilities.SupportsIndexing.Should().BeTrue();
+        metadata.ProviderCapabilities.IndexKinds.Should().Contain(ProjectionReadModelIndexKind.Graph);
     }
 
     [Fact]
@@ -103,6 +124,24 @@ public class WorkflowExecutionProjectionRegistrationTests
         Action act = () => provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
 
         act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void AddWorkflowExecutionProjectionCQRS_WhenStateOnlyModeConfigured_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
+        services.AddWorkflowExecutionProjectionCQRS(options =>
+        {
+            options.ReadModelMode = ProjectionReadModelMode.StateOnly;
+            options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory;
+        });
+
+        using var provider = services.BuildServiceProvider();
+        Action act = () => provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*does not support*StateOnly*");
     }
 
     [Fact]
@@ -321,6 +360,21 @@ public class WorkflowExecutionProjectionRegistrationTests
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
             listSortSelector: report => report.StartedAt);
+    }
+
+    private static void RegisterNeo4jProvider(IServiceCollection services)
+    {
+        services.AddNeo4jReadModelStoreRegistration<WorkflowExecutionReport, string>(
+            optionsFactory: _ => new Neo4jProjectionReadModelStoreOptions
+            {
+                Uri = "bolt://localhost:7687",
+                Username = "neo4j",
+                Password = "test",
+                AutoCreateConstraints = false,
+            },
+            scope: "workflow-execution-reports",
+            keySelector: report => report.RootActorId,
+            keyFormatter: key => key);
     }
 
     public sealed class CustomChatRequestReducer : WorkflowExecutionEventReducerBase<ChatRequestEvent>

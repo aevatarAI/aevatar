@@ -10,8 +10,9 @@
 - 读模型存储：`IProjectionReadModelStore<,>`
 - Provider 能力建模：`ProjectionReadModelProviderCapabilities`、`IProjectionReadModelStoreProviderMetadata`
 - 能力校验：`ProjectionReadModelRequirements`、`ProjectionReadModelCapabilityValidator`
-- Provider 注册与选择：`IProjectionReadModelStoreRegistration<,>`、`DelegateProjectionReadModelStoreRegistration<,>`、`ProjectionReadModelStoreSelector`
-- Provider 运行配置：`ProjectionReadModelRuntimeOptions`
+- Provider 注册与选择契约：`IProjectionReadModelStoreRegistration<,>`、`DelegateProjectionReadModelStoreRegistration<,>`
+- Provider Runtime 契约：`IProjectionReadModelProviderRegistry`、`IProjectionReadModelProviderSelector`、`IProjectionReadModelBindingResolver`、`IProjectionReadModelStoreFactory`
+- Provider 运行配置：`ProjectionReadModelRuntimeOptions`、`ProjectionReadModelMode`
 - 运行时策略：`IProjectionRuntimeOptions`、`IProjectionClock`
 - 流订阅复用：`IActorStreamSubscriptionHub<TMessage>`
 - 投影上下文：`IProjectionContext`

@@ -549,6 +549,7 @@ public class WorkflowExecutionProjectionServiceTests
         // Use a dedicated local actor runtime for projection coordinator actors.
         var runtimeServices = new ServiceCollection();
         runtimeServices.AddSingleton<IAgentManifestStore, InMemoryManifestStore>();
+        runtimeServices.AddSingleton<IEventStore, InMemoryEventStore>();
         var runtimeProvider = runtimeServices.BuildServiceProvider();
         var runtime = new LocalActorRuntime(
             streams,

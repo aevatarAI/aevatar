@@ -3,6 +3,8 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
@@ -19,6 +21,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
     private readonly int _listTakeMax;
     private readonly bool _autoCreateIndex;
     private readonly string _listSortField;
+    private readonly ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>> _logger;
     private readonly SemaphoreSlim _indexInitializationLock = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -31,7 +34,8 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         string indexScope,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
-        string providerName = ProjectionReadModelProviderNames.Elasticsearch)
+        string providerName = ProjectionReadModelProviderNames.Elasticsearch,
+        ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(keySelector);
@@ -60,6 +64,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _listSortField = options.ListSortField?.Trim() ?? "";
+        _logger = logger ?? NullLogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>.Instance;
         ProviderCapabilities = BuildCapabilities(providerName);
     }
 
@@ -147,12 +152,39 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
 
         var keyValue = ResolveReadModelKey(readModel);
         var payload = JsonSerializer.Serialize(readModel, _jsonOptions);
-        using var request = new HttpRequestMessage(HttpMethod.Put, $"{_indexName}/_doc/{Uri.EscapeDataString(keyValue)}")
+        var startedAt = DateTimeOffset.UtcNow;
+        try
         {
-            Content = new StringContent(payload, Encoding.UTF8, "application/json"),
-        };
-        using var response = await _httpClient.SendAsync(request, ct);
-        await EnsureSuccessAsync(response, "upsert", ct);
+            using var request = new HttpRequestMessage(HttpMethod.Put, $"{_indexName}/_doc/{Uri.EscapeDataString(keyValue)}")
+            {
+                Content = new StringContent(payload, Encoding.UTF8, "application/json"),
+            };
+            using var response = await _httpClient.SendAsync(request, ct);
+            await EnsureSuccessAsync(response, "upsert", ct);
+
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogInformation(
+                "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
+                ProviderCapabilities.ProviderName,
+                typeof(TReadModel).FullName,
+                keyValue,
+                elapsedMs,
+                "ok");
+        }
+        catch (Exception ex)
+        {
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogError(
+                ex,
+                "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
+                ProviderCapabilities.ProviderName,
+                typeof(TReadModel).FullName,
+                keyValue,
+                elapsedMs,
+                "failed",
+                ex.GetType().Name);
+            throw;
+        }
     }
 
     private string ResolveReadModelKey(TReadModel readModel)

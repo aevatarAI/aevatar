@@ -5,6 +5,7 @@
 - 不依赖任何业务域 read model。
 - 通过 `IProjectionReadModelStoreRegistration<TReadModel, TKey>` 与上层模块解耦集成。
 - 能力声明：`Document` 索引、alias、schema validation。
+- 写入路径输出结构化日志：`provider/readModelType/key/elapsedMs/result/errorType`。
 
 ## DI 注册
 

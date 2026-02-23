@@ -11,7 +11,6 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
     private readonly IPersistentState<RuntimeActorGrainState> _state;
-    private readonly IRuntimeActorStateBindingAccessor _stateBindingAccessor;
     private IAgent? _agent;
     private IEventDeduplicator? _deduplicator;
     private IEnvelopePropagationPolicy _propagationPolicy =
@@ -22,12 +21,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private StreamSubscriptionHandle<EventEnvelope>? _selfStreamHandle;
 
     public RuntimeActorGrain(
-        [PersistentState("agent", OrleansRuntimeConstants.GrainStateStorageName)]
-        IPersistentState<RuntimeActorGrainState> state,
-        IRuntimeActorStateBindingAccessor stateBindingAccessor)
+        [PersistentState("agent", OrleansRuntimeConstants.GrainStateStorageName)] IPersistentState<RuntimeActorGrainState> state)
     {
         _state = state;
-        _stateBindingAccessor = stateBindingAccessor;
     }
 
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
@@ -270,28 +266,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
         gAgent.ManifestStore = ServiceProvider.GetService<IAgentManifestStore>();
-
-        InjectStateStore(agent);
-    }
-
-    private void InjectStateStore(IAgent agent)
-    {
-        var type = agent.GetType();
-        while (type != null)
-        {
-            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(GAgentBase<>))
-            {
-                var stateType = type.GetGenericArguments()[0];
-                var stateStoreType = typeof(IStateStore<>).MakeGenericType(stateType);
-                using var binding = _stateBindingAccessor.Bind(_state);
-                var stateStore = ServiceProvider.GetService(stateStoreType);
-                if (stateStore != null)
-                    type.GetProperty("StateStore")?.SetValue(agent, stateStore);
-                break;
-            }
-
-            type = type.BaseType;
-        }
     }
 
     private async Task SubscribeSelfStreamAsync()

@@ -11,6 +11,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Abstractions\Aevatar.CQRS.Projection.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Runtime\Aevatar.CQRS.Projection.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.StateMirror\Aevatar.CQRS.Projection.StateMirror.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>

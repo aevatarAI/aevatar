@@ -3,6 +3,8 @@ using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
+using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
@@ -42,6 +44,16 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             indexScope: "workflow-execution-reports",
             keySelector: report => report.RootActorId,
             keyFormatter: key => key);
+        services.AddNeo4jReadModelStoreRegistration<WorkflowExecutionReport, string>(
+            optionsFactory: _ =>
+            {
+                var providerOptions = new Neo4jProjectionReadModelStoreOptions();
+                configuration.GetSection("Projection:ReadModel:Providers:Neo4j").Bind(providerOptions);
+                return providerOptions;
+            },
+            scope: "workflow-execution-reports",
+            keySelector: report => report.RootActorId,
+            keyFormatter: key => key);
         services.AddWorkflowExecutionAGUIAdapter();
         services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
         services.AddWorkflowApplication();
@@ -67,6 +79,7 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         if (!string.IsNullOrWhiteSpace(readModelOptions.Provider))
             options.ReadModelProvider = readModelOptions.Provider.Trim();
 
+        options.ReadModelMode = readModelOptions.Mode;
         options.FailOnUnsupportedCapabilities = readModelOptions.FailOnUnsupportedCapabilities;
         options.ReadModelBindings.Clear();
         foreach (var item in readModelOptions.Bindings)

@@ -4,6 +4,7 @@ using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Foundation.Abstractions.Deduplication;
+using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
@@ -33,6 +34,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
         services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
+        services.AddProjectionReadModelRuntime();
         RegisterWorkflowReadModelStoreSelector(services);
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
@@ -120,68 +122,21 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IProjectionReadModelStore<WorkflowExecutionReport, string>>(sp =>
         {
             var options = sp.GetRequiredService<WorkflowExecutionProjectionOptions>();
-            var requirements = ResolveReadModelRequirements(options, typeof(WorkflowExecutionReport));
+            EnsureReadModelModeSupported(options);
+            var bindingResolver = sp.GetRequiredService<IProjectionReadModelBindingResolver>();
+            var storeFactory = sp.GetRequiredService<IProjectionReadModelStoreFactory>();
+            var requirements = bindingResolver.Resolve(options.ReadModelBindings, typeof(WorkflowExecutionReport));
             var selectionOptions = new ProjectionReadModelStoreSelectionOptions
             {
                 RequestedProviderName = NormalizeProviderName(options.ReadModelProvider),
                 FailOnUnsupportedCapabilities = options.FailOnUnsupportedCapabilities,
             };
 
-            var registration = ProjectionReadModelStoreSelector.Select(
-                sp.GetServices<IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>>(),
+            return storeFactory.Create<WorkflowExecutionReport, string>(
+                sp,
                 selectionOptions,
                 requirements);
-
-            return registration.Create(sp);
         }));
-    }
-
-    private static ProjectionReadModelRequirements ResolveReadModelRequirements(
-        WorkflowExecutionProjectionOptions options,
-        Type readModelType)
-    {
-        if (!TryResolveIndexKindBinding(options.ReadModelBindings, readModelType, out var requiredKind))
-            return new ProjectionReadModelRequirements();
-
-        return new ProjectionReadModelRequirements(
-            requiresIndexing: true,
-            requiredIndexKinds: [requiredKind]);
-    }
-
-    private static bool TryResolveIndexKindBinding(
-        IReadOnlyDictionary<string, string> readModelBindings,
-        Type readModelType,
-        out ProjectionReadModelIndexKind requiredKind)
-    {
-        requiredKind = ProjectionReadModelIndexKind.None;
-        if (readModelBindings.Count == 0)
-            return false;
-
-        if (!TryGetBinding(readModelBindings, readModelType.Name, out var configuredIndexKind) &&
-            !TryGetBinding(readModelBindings, readModelType.FullName ?? "", out configuredIndexKind))
-            return false;
-
-        if (!Enum.TryParse<ProjectionReadModelIndexKind>(configuredIndexKind, true, out requiredKind) ||
-            requiredKind == ProjectionReadModelIndexKind.None)
-        {
-            throw new InvalidOperationException(
-                $"Invalid ReadModelBindings value '{configuredIndexKind}' for '{readModelType.FullName}'. " +
-                $"Allowed values: {ProjectionReadModelIndexKind.Document}, {ProjectionReadModelIndexKind.Graph}.");
-        }
-
-        return true;
-    }
-
-    private static bool TryGetBinding(
-        IReadOnlyDictionary<string, string> readModelBindings,
-        string key,
-        out string value)
-    {
-        if (key.Length > 0 && readModelBindings.TryGetValue(key, out value!))
-            return true;
-
-        value = "";
-        return false;
     }
 
     private static string NormalizeProviderName(string providerName)
@@ -190,6 +145,16 @@ public static class ServiceCollectionExtensions
             return ProjectionReadModelProviderNames.InMemory;
 
         return providerName.Trim();
+    }
+
+    private static void EnsureReadModelModeSupported(WorkflowExecutionProjectionOptions options)
+    {
+        if (options.ReadModelMode != ProjectionReadModelMode.StateOnly)
+            return;
+
+        throw new InvalidOperationException(
+            "Workflow projection does not support Projection:ReadModel:Mode=StateOnly. " +
+            "Use CustomReadModel or DefaultReadModel.");
     }
 
     private sealed class PassthroughEventDeduplicator : IEventDeduplicator
