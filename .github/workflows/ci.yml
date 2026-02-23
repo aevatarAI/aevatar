@@ -83,10 +83,10 @@ jobs:
         run: bash tools/ci/test_stability_guards.sh
 
   split-test-guards:
-    if: github.event_name != 'schedule' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.core_code == 'true')
-    needs:
-      - changes
-      - fast-gates
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
     runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:

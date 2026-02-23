@@ -30,6 +30,7 @@ This directory keeps CI gate scripts and smoke tests.
     - Runs static architecture and test-stability guards.
   - Job `split-test-guards` (matrix)
     - Runs `dotnet test` for each split solution filter (`foundation/ai/cqrs/workflow/hosting/distributed`).
+    - Triggered on `main/dev` pushes, nightly schedule, or manual dispatch.
   - Job `projection-provider-e2e`
     - Runs `tools/ci/projection_provider_e2e_smoke.sh`.
     - Triggered on projection-provider related changes, `main/dev` pushes, or manual dispatch.
