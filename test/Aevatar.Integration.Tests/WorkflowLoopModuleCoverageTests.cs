@@ -107,13 +107,21 @@ public sealed class WorkflowLoopModuleCoverageTests
         var module = new WorkflowLoopModule();
         module.SetWorkflow(BuildWorkflow(new StepDefinition { Id = "s1", Type = "llm_call" }));
         var ctx = CreateContext();
+        const string runId = "run-already-running";
 
-        await module.HandleAsync(Envelope(new StartWorkflowEvent { Input = "first" }), ctx, CancellationToken.None);
-        await module.HandleAsync(Envelope(new StartWorkflowEvent { Input = "second" }), ctx, CancellationToken.None);
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "first" }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "second" }),
+            ctx,
+            CancellationToken.None);
 
         var completed = ctx.Published.Select(x => x.evt).OfType<WorkflowCompletedEvent>().Single();
         completed.Success.Should().BeFalse();
-        completed.Error.Should().Contain("already running");
+        completed.RunId.Should().Be(runId);
+        completed.Error.Should().Contain("already active");
     }
 
     [Fact]
