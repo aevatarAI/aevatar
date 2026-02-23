@@ -10,7 +10,7 @@
 | OpenTelemetry GenAI Conventions | HIGH | 4 | 1 | AI.Core / Foundation.Runtime |
 | Human-in-the-Loop | MEDIUM | 3 | 5 | Workflow.Core / Projection / AGUI |
 | Tool Approval Mechanism | MEDIUM | 1 | 1 | AI.Abstractions |
-| Orchestration Patterns | LOW | 5 | 0 | Foundation.Core |
+| Orchestration Patterns (Converged) | LOW | 0 | 0 | Workflow.Core |
 | Expression Language | LOW | 1 | 1 | Workflow.Core |
 
 ---
@@ -174,24 +174,22 @@ public enum ToolApprovalMode
 
 ---
 
-## 5. Reusable Multi-Agent Orchestration Patterns
+## 5. Reusable Multi-Agent Orchestration Patterns (Converged to Workflow)
 
 ### 问题
-MAF 将 5 种编排模式打包为可复用组件。Aevatar 通过 Workflow 模块实现类似能力，但与 YAML 引擎紧耦合，无法在无 YAML 场景下程序化使用。
+MAF 将多种编排模式打包为可复用组件。Aevatar 同时存在 Foundation 编排模式与 workflow 模块能力，造成能力重叠与维护分叉。
 
 ### 方案
-抽取 4 种编排模式为 `Aevatar.Foundation.Core.Orchestration` 命名空间下的一等公民：
+收敛为单一主链路：**不再维护 `Aevatar.Foundation.Core.Orchestration` 独立模式库，编排能力统一由 workflow 模块提供**。
 
-| 模式 | 类名 | 行为 |
+| 原 Foundation 模式 | Workflow 等价能力 | 位置 |
 |------|------|------|
-| Sequential | `SequentialOrchestration` | 链式：A → B → C |
-| Concurrent | `ConcurrentOrchestration` | 并行扇出 + 合并 |
-| Vote | `VoteOrchestration` | 并行执行 + 投票选最佳 |
-| Handoff | `HandoffOrchestration` | 动态 Agent 控制转移 |
+| Sequential | 线性步骤推进 | `WorkflowLoopModule` |
+| Concurrent | 并行扇出 + 聚合 | `ParallelFanOutModule` |
+| Vote | 并行后共识选择 | `VoteConsensusModule` |
+| Handoff | 条件/多分支路由 + 步骤推进 | `ConditionalModule` / `SwitchModule` |
 
-所有模式基于 `IOrchestration<TInput, TOutput>` 接口，接受 `Func<string, string, CancellationToken, Task<string>>` 作为 Agent 执行委托，与具体 Agent 实现解耦。
-
-### 新增文件
+### 清理文件
 - `src/Aevatar.Foundation.Core/Orchestration/IOrchestration.cs`
 - `src/Aevatar.Foundation.Core/Orchestration/SequentialOrchestration.cs`
 - `src/Aevatar.Foundation.Core/Orchestration/ConcurrentOrchestration.cs`

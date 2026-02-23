@@ -60,6 +60,12 @@ src/
 - `RunManager`/`RunContextScope`：latest-wins 运行管理与作用域传播
 - `AsyncLocalAgentContext`：上下文在调用链中的注入与提取
 
+### 编排能力边界
+
+- Framework 只保留通用运行时能力（事件、状态、上下文、管线、路由）。
+- 业务编排能力统一收敛到 workflow 主链路（`Aevatar.Workflow.Core` 的模块与 YAML）。
+- 需要顺序/并行/投票/分支等流程控制时，优先通过 workflow 模块组合实现，不在 Foundation 复刻第二套机制。
+
 ### 统一事件 Pipeline
 
 Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：

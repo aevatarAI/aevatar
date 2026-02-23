@@ -91,6 +91,28 @@ YAML 里 `type: parallel` 会经工厂解析到 `ParallelFanOutModule`。
 | **数据** | `transform` | `TransformModule` | 纯函数变换（count/take/join/split/distinct 等） |
 | | `retrieve_facts` | `RetrieveFactsModule` | 按关键词检索事实片段 |
 
+### 从 Foundation Orchestration 迁移
+
+`Aevatar.Foundation.Core/Orchestration` 已移除，原能力统一收敛到 workflow 模块：
+
+| 原类 | 推荐替代 |
+|------|------|
+| `SequentialOrchestration` | 线性 `steps`（由 `WorkflowLoopModule` 推进） |
+| `ConcurrentOrchestration` | `type: parallel`（`ParallelFanOutModule`） |
+| `VoteOrchestration` | `parallel + vote`（`VoteConsensusModule`） |
+| `HandoffOrchestration` | `type: conditional` / `type: switch` + 分支推进 |
+
+最小迁移示例（并行 + 投票）：
+
+```yaml
+steps:
+  - id: parallel_analysis
+    type: parallel
+    parameters:
+      workers: "agent_a,agent_b,agent_c"
+      vote_step_type: "vote"
+```
+
 ---
 
 ## 四、运行链路（从请求到结果）
