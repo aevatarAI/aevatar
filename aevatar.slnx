@@ -19,6 +19,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src\Aevatar.Foundation.Runtime.Hosting\Aevatar.Foundation.Runtime.Hosting.csproj" />
+    <Project Path="src\Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet\Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans/Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.csproj" />

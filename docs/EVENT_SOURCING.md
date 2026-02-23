@@ -26,6 +26,7 @@
 - Runtime 停用钩子分发实现：`src/Aevatar.Foundation.Runtime/Actor/ActorDeactivationHookDispatcher.cs`
 - Runtime 默认裁剪钩子：`src/Aevatar.Foundation.Runtime/Actor/EventStoreCompactionDeactivationHook.cs`
 - 本地持久化 EventStore：`src/Aevatar.Foundation.Runtime/Persistence/FileEventStore.cs`
+- 生产持久化 EventStore（Garnet）：`src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/GarnetEventStore.cs`
 - Local Runtime 注入边界：`src/Aevatar.Foundation.Runtime/Actor/LocalActorRuntime.cs`
 - Orleans Runtime 注入边界：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs`
 - 防回退门禁：`tools/ci/architecture_guards.sh`
@@ -76,7 +77,8 @@ public async Task Handle(IncrementRequested evt)
 - `AddAevatarRuntime()` 默认注册 `IActorDeactivationHookDispatcher -> ActorDeactivationHookDispatcher`（支持多 hook 顺序分发）。
 - 可通过 `AddFileEventStore(...)` 将 `IEventStore` 切换为本地持久化实现：`src/Aevatar.Foundation.Runtime/Persistence/FileEventStore.cs`。
 - 调用 `AddFileEventStore(...)` 时，`IEventSourcingSnapshotStore<TState>` 会切换为 `FileEventSourcingSnapshotStore<TState>`，支持快照与事件裁剪后的持久化恢复。
-- 生产环境应替换为持久化实现（Redis/DB/日志存储等）。
+- 可通过 `AddGarnetEventStore(...)` 使用生产持久化实现：`src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/DependencyInjection/ServiceCollectionExtensions.cs`。
+- Orleans runtime 当 `PersistenceBackend=Garnet` 时，会自动装配 `IEventStore -> GarnetEventStore`（连接串复用 `GarnetConnectionString`），不再回退 `InMemoryEventStore`。
 - 如需自定义 ES 行为，可直接为 Agent 预设 `EventSourcing`，但必须保持相同语义契约。
 - 如需解耦 Agent 里的 `TransitionState` 逻辑，可注册多个 `IStateEventApplier<TState>`，按 `Order` 升序匹配应用。
 - Agent 侧推荐使用 `StateTransitionMatcher.Match(...).On<TEvent>(...).OrCurrent()`，避免重复 `Any + switch` 样板代码。

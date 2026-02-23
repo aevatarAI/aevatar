@@ -71,6 +71,7 @@ flowchart LR
 - Stream Forward/Topology 的权威状态仍在 Orleans Grain（`IStreamTopologyGrain`），非中间层进程内事实态。
 - 该版本不改业务层编排逻辑，仅替换 runtime 与传输实现。
 - Orleans grain state 与 Stream `PubSubStore` 持久化可按配置切换到 Garnet。
+- 当 `ActorRuntime:OrleansPersistenceBackend=Garnet` 时，`IEventStore` 也会自动切换到 `GarnetEventStore`，与 Actor 持久化后端保持一致。
 - `Localhost` 模式使用 `UseLocalhostClustering`，适合本机多进程开发。
 - `Development` 模式使用 `UseDevelopmentClustering + ConfigureEndpoints`，可通过主节点实现多机测试集群。
 - 生产跨主机集群建议替换为持久化 Membership Provider。

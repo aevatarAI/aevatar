@@ -10,6 +10,7 @@
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
+    <ProjectReference Include="..\Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet\Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
   </ItemGroup>
   <ItemGroup>

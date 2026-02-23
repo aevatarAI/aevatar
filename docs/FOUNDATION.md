@@ -94,7 +94,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 口径说明：
 
 - `InMemory*` 组件仅用于开发/测试环境，不作为生产容量治理对象。
-- 生产环境应替换为 Redis/持久化实现，并在生产实现上评估内存增长与容量风险。
+- 生产环境应使用持久化实现（仓库已提供 `Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet`），并在生产实现上评估内存增长与容量风险。
 
 ### 分布式目标态（生产）
 

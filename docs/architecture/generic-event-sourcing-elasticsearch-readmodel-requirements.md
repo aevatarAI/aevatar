@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 - 状态：Active
-- 版本：v3.1
+- 版本：v3.2
 - 日期：2026-02-23
 - 适用范围：`src/`、`test/`、`tools/ci/`、`docs/architecture/`
 - 文档定位：唯一重构执行蓝图（需求、现状、差距、任务包、验收、门禁）
@@ -145,9 +145,14 @@
 
 ## 8. 差距详解
 
-### 8.1 Gap-P（生产化）EventStore 生产后端与压测基线未闭环
-- 当前 `IEventStore` 仍以 InMemory/File 为主。
-- 尚未建立容量压测与参数治理基线（快照间隔、保留事件数、压缩频率）。
+### 8.1 Gap-P（生产化）压测基线与常态化 smoke 未闭环
+- 已完成：
+  1. 生产级 `IEventStore` 后端已落地为 Garnet：`src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/GarnetEventStore.cs`。
+  2. Orleans runtime 在 `PersistenceBackend=Garnet` 时自动绑定 `GarnetEventStore`，不再回退 `InMemoryEventStore`。
+  3. Garnet EventStore 集成测试已补齐（环境变量门控）：`test/Aevatar.Foundation.Runtime.Hosting.Tests/GarnetEventStoreIntegrationTests.cs`。
+- 仍待完成：
+  1. 快照与事件裁剪参数压测基线（吞吐、恢复时延、数据增长曲线）。
+  2. provider e2e smoke 的 nightly 常态化接入与告警治理。
 
 ## 9. 目标架构
 
@@ -246,12 +251,12 @@ flowchart LR
   1. 守卫脚本更新。
   2. 对应守卫测试或 CI 验证记录。
 
-### WP-5：生产化增强（优先级 P2）
+### WP-5：生产化增强（优先级 P2，部分完成）
 - 目标：压实容量与稳定性。
 - 内容：
-  1. 引入生产级 `IEventStore` 后端（当前本地实现为 InMemory/File，生产需独立持久化方案）。
-  2. 建立快照与压缩参数压测基线：吞吐、恢复时延、磁盘增长曲线。
-  3. 将 provider e2e smoke 接入常态 CI（至少 nightly）。
+  1. [x] 引入生产级 `IEventStore` 后端：Garnet（独立模块 + Orleans 自动装配）。
+  2. [ ] 建立快照与压缩参数压测基线：吞吐、恢复时延、磁盘增长曲线。
+  3. [ ] 将 provider e2e smoke 接入常态 CI（至少 nightly）。
 - 说明：此工作包不影响 P0/P1 的架构闭环，可并行推进。
 
 ## 11. 里程碑与依赖
@@ -262,7 +267,7 @@ flowchart LR
 | M2 | 2026-02-27 | M1 | WP-2 完成，启动期 fail-fast 生效 |
 | M3 | 2026-03-01 | M1 | WP-3 完成，合同测试矩阵落地 |
 | M4 | 2026-03-02 | M1 | WP-4 完成，门禁补齐 |
-| M5 | 2026-03-06 | M2+M3+M4 | WP-5 初版（压测+生产后端方案） |
+| M5 | 2026-03-06 | M2+M3+M4 | WP-5 余项闭环（压测+nightly smoke） |
 
 ## 12. 验证矩阵（需求 -> 命令 -> 通过标准）
 
@@ -298,12 +303,12 @@ flowchart LR
 - [x] 完成 WP-2：启动期全量能力校验
 - [x] 完成 WP-3：Replay 合同测试矩阵
 - [x] 完成 WP-4：Workflow->Providers 门禁补齐
-- [ ] 完成 WP-5：生产化后端与压测闭环
+- [ ] 完成 WP-5：压测基线与 nightly smoke 闭环
 
 ## 16. 当前执行快照（2026-02-23）
 - 已完成：R-ES-01、R-ES-02、R-ES-03、R-ES-04、R-ES-05、R-ES-06、R-RM-01、R-RM-02、R-RM-03、R-RM-04、R-WF-01、R-WF-02、R-GOV-01
-- 部分完成：无
-- 当前主阻塞：生产 EventStore 后端与压测闭环
+- 部分完成：WP-5-1（Garnet EventStore 生产后端 + Orleans 自动装配 + 集成测试）
+- 当前主阻塞：压测基线与 nightly smoke 尚未接入
 
 ## 17. 变更纪律
 1. 删除优先，不做兼容壳。

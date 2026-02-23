@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.DependencyInjection;
@@ -30,7 +31,18 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IRuntimeActorStateBindingAccessor, AsyncLocalRuntimeActorStateBindingAccessor>();
         services.TryAddTransient(typeof(IStateStore<>), typeof(RuntimeActorGrainStateStore<>));
         services.TryAddTransient(typeof(IEventSourcingSnapshotStore<>), typeof(RuntimeActorGrainEventSourcingSnapshotStore<>));
-        services.TryAddSingleton<IEventStore, InMemoryEventStore>();
+        if (IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet))
+        {
+            services.AddGarnetEventStore(garnetOptions =>
+            {
+                garnetOptions.ConnectionString = options.GarnetConnectionString;
+            });
+        }
+        else
+        {
+            services.TryAddSingleton<IEventStore, InMemoryEventStore>();
+        }
+
         services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
         services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
