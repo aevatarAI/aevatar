@@ -193,6 +193,26 @@ jobs:
         if: always()
         run: docker compose down --volumes --remove-orphans
 
+  orleans-garnet-persistence-integration:
+    if: |
+      github.event_name != 'schedule' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+        needs.changes.outputs.kafka_runtime == 'true'
+      )
+    needs:
+      - changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Orleans Garnet Persistence Smoke Test
+        run: bash tools/ci/orleans_garnet_persistence_smoke.sh
+
   coverage-quality:
     if: |
       github.event_name == 'workflow_dispatch' ||

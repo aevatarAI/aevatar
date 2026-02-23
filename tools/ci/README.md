@@ -36,6 +36,9 @@ This directory keeps CI gate scripts and smoke tests.
   - Job `kafka-transport-integration`
     - Starts Kafka and runs the distributed runtime integration test.
     - Triggered on runtime integration related changes, `main/dev` pushes, or manual dispatch.
+  - Job `orleans-garnet-persistence-integration`
+    - Runs `tools/ci/orleans_garnet_persistence_smoke.sh`.
+    - Triggered on runtime integration related changes, `main/dev` pushes, or manual dispatch.
   - Job `coverage-quality`
     - Runs restore/build + `tools/ci/coverage_quality_guard.sh`.
     - Triggered on `main/dev` pushes, nightly schedule, or manual dispatch.
