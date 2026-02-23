@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 
@@ -13,6 +15,7 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
     private readonly Func<TKey, string> _keyFormatter;
     private readonly Func<TReadModel, object?>? _listSortSelector;
     private readonly int _listTakeMax;
+    private readonly ILogger<InMemoryProjectionReadModelStore<TReadModel, TKey>> _logger;
     private readonly JsonSerializerOptions _jsonOptions = new();
 
     public InMemoryProjectionReadModelStore(
@@ -20,13 +23,15 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
         Func<TKey, string>? keyFormatter = null,
         Func<TReadModel, object?>? listSortSelector = null,
         int listTakeMax = 200,
-        string providerName = ProjectionReadModelProviderNames.InMemory)
+        string providerName = ProjectionReadModelProviderNames.InMemory,
+        ILogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(keySelector);
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _listSortSelector = listSortSelector;
         _listTakeMax = listTakeMax > 0 ? listTakeMax : 200;
+        _logger = logger ?? NullLogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>.Instance;
         ProviderCapabilities = new ProjectionReadModelProviderCapabilities(
             providerName,
             supportsIndexing: false);
@@ -39,11 +44,38 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
         ArgumentNullException.ThrowIfNull(readModel);
         ct.ThrowIfCancellationRequested();
 
-        var key = ResolveReadModelKey(readModel);
-        lock (_gate)
-            _itemsByKey[key] = Clone(readModel);
+        var key = "";
+        var startedAt = DateTimeOffset.UtcNow;
+        try
+        {
+            key = ResolveReadModelKey(readModel);
+            lock (_gate)
+                _itemsByKey[key] = Clone(readModel);
 
-        return Task.CompletedTask;
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogInformation(
+                "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
+                ProviderCapabilities.ProviderName,
+                typeof(TReadModel).FullName,
+                key,
+                elapsedMs,
+                "ok");
+            return Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogError(
+                ex,
+                "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
+                ProviderCapabilities.ProviderName,
+                typeof(TReadModel).FullName,
+                key,
+                elapsedMs,
+                "failed",
+                ex.GetType().Name);
+            throw;
+        }
     }
 
     public Task MutateAsync(TKey key, Action<TReadModel> mutate, CancellationToken ct = default)
@@ -51,17 +83,43 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
         ArgumentNullException.ThrowIfNull(mutate);
         ct.ThrowIfCancellationRequested();
 
-        lock (_gate)
+        var keyValue = FormatKey(key);
+        var startedAt = DateTimeOffset.UtcNow;
+        try
         {
-            var keyValue = FormatKey(key);
-            if (!_itemsByKey.TryGetValue(keyValue, out var existing))
-                throw new InvalidOperationException(
-                    $"ReadModel '{typeof(TReadModel).FullName}' with key '{keyValue}' was not found.");
+            lock (_gate)
+            {
+                if (!_itemsByKey.TryGetValue(keyValue, out var existing))
+                    throw new InvalidOperationException(
+                        $"ReadModel '{typeof(TReadModel).FullName}' with key '{keyValue}' was not found.");
 
-            mutate(existing);
+                mutate(existing);
+            }
+
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogInformation(
+                "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
+                ProviderCapabilities.ProviderName,
+                typeof(TReadModel).FullName,
+                keyValue,
+                elapsedMs,
+                "ok");
+            return Task.CompletedTask;
         }
-
-        return Task.CompletedTask;
+        catch (Exception ex)
+        {
+            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+            _logger.LogError(
+                ex,
+                "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
+                ProviderCapabilities.ProviderName,
+                typeof(TReadModel).FullName,
+                keyValue,
+                elapsedMs,
+                "failed",
+                ex.GetType().Name);
+            throw;
+        }
     }
 
     public Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)

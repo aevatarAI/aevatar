@@ -100,16 +100,7 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
         }
         catch (Exception ex)
         {
-            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
-            _logger.LogError(
-                ex,
-                "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
-                ProviderCapabilities.ProviderName,
-                typeof(TReadModel).FullName,
-                key,
-                elapsedMs,
-                "failed",
-                ex.GetType().Name);
+            LogWriteFailure(key, startedAt, ex);
             throw;
         }
     }
@@ -119,11 +110,27 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
         ArgumentNullException.ThrowIfNull(mutate);
         ct.ThrowIfCancellationRequested();
 
+        var keyValue = FormatKey(key);
+        var startedAt = DateTimeOffset.UtcNow;
         var existing = await GetAsync(key, ct);
         if (existing == null)
-            throw new InvalidOperationException($"ReadModel '{typeof(TReadModel).FullName}' with key '{FormatKey(key)}' was not found.");
+        {
+            var notFound = new InvalidOperationException(
+                $"ReadModel '{typeof(TReadModel).FullName}' with key '{keyValue}' was not found.");
+            LogWriteFailure(keyValue, startedAt, notFound);
+            throw notFound;
+        }
 
-        mutate(existing);
+        try
+        {
+            mutate(existing);
+        }
+        catch (Exception ex)
+        {
+            LogWriteFailure(keyValue, startedAt, ex);
+            throw;
+        }
+
         await UpsertAsync(existing, ct);
     }
 
@@ -255,6 +262,23 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
     }
 
     private string FormatKey(TKey key) => _keyFormatter(key)?.Trim() ?? "";
+
+    private void LogWriteFailure(
+        string key,
+        DateTimeOffset startedAt,
+        Exception ex)
+    {
+        var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+        _logger.LogError(
+            ex,
+            "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
+            ProviderCapabilities.ProviderName,
+            typeof(TReadModel).FullName,
+            key,
+            elapsedMs,
+            "failed",
+            ex.GetType().Name);
+    }
 
     private TReadModel? Deserialize(string payload)
     {

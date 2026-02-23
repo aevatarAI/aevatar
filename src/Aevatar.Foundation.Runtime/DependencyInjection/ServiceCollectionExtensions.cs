@@ -77,4 +77,20 @@ public static class ServiceCollectionExtensions
 
         return services;
     }
+
+    /// <summary>
+    /// Replaces <see cref="IEventStore"/> with file-backed persistence.
+    /// </summary>
+    public static IServiceCollection AddFileEventStore(
+        this IServiceCollection services,
+        Action<FileEventStoreOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        var options = new FileEventStoreOptions();
+        configure?.Invoke(options);
+        services.Replace(ServiceDescriptor.Singleton(options));
+        services.Replace(ServiceDescriptor.Singleton<IEventStore, FileEventStore>());
+        return services;
+    }
 }

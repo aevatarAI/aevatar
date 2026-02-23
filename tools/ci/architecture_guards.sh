@@ -92,6 +92,11 @@ if rg -n "StateStore\.LoadAsync|StateStore\.SaveAsync" src/Aevatar.Foundation.Co
   exit 1
 fi
 
+if rg -n "public\s+IStateStore<" src/Aevatar.Foundation.Core/GAgentBase.TState.cs; then
+  echo "GAgentBase<TState> must not expose IStateStore property. Recovery/writes must go through EventStore semantics."
+  exit 1
+fi
+
 set +e
 state_direct_mutation_report="$(
   rg --files -0 src -g '*.cs' -g '!*.g.cs' \
@@ -523,6 +528,59 @@ if [ -n "${implementation_ref_violations}" ]; then
   echo "Only Runtime.Hosting may reference Runtime.Implementations.* directly."
   exit 1
 fi
+
+projection_provider_business_dependency_hits="$(
+  rg -n "Aevatar\.(Workflow|AI)\..*\.csproj" \
+    src/Aevatar.CQRS.Projection.Providers.InMemory \
+    src/Aevatar.CQRS.Projection.Providers.Elasticsearch \
+    src/Aevatar.CQRS.Projection.Providers.Neo4j \
+    -g '*.csproj' || true
+)"
+
+if [ -n "${projection_provider_business_dependency_hits}" ]; then
+  echo "${projection_provider_business_dependency_hits}"
+  echo "Projection provider projects must remain business-agnostic. Workflow/AI project references are forbidden."
+  exit 1
+fi
+
+projection_provider_business_using_hits="$(
+  rg -n "using\s+Aevatar\.(Workflow|AI)\." \
+    src/Aevatar.CQRS.Projection.Providers.InMemory \
+    src/Aevatar.CQRS.Projection.Providers.Elasticsearch \
+    src/Aevatar.CQRS.Projection.Providers.Neo4j \
+    -g '*.cs' || true
+)"
+
+if [ -n "${projection_provider_business_using_hits}" ]; then
+  echo "${projection_provider_business_using_hits}"
+  echo "Projection provider source files must not reference Workflow/AI namespaces."
+  exit 1
+fi
+
+projection_provider_store_files=(
+  "src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionReadModelStore.cs"
+  "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionReadModelStore.cs"
+  "src/Aevatar.CQRS.Projection.Providers.Neo4j/Stores/Neo4jProjectionReadModelStore.cs"
+)
+
+for provider_store_file in "${projection_provider_store_files[@]}"; do
+  if [ ! -f "${provider_store_file}" ]; then
+    echo "Missing provider store file: ${provider_store_file}"
+    exit 1
+  fi
+
+  if ! rg -F "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}" "${provider_store_file}" >/dev/null; then
+    echo "${provider_store_file}"
+    echo "Provider write path must emit structured success log with provider/readModelType/key/elapsedMs/result."
+    exit 1
+  fi
+
+  if ! rg -F "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}" "${provider_store_file}" >/dev/null; then
+    echo "${provider_store_file}"
+    echo "Provider write path must emit structured failure log with provider/readModelType/key/elapsedMs/result/errorType."
+    exit 1
+  fi
+done
 
 command_side_readmodel_violations="$(
   rg -n "IProjectionReadModelStore<|ReadModelStore" \

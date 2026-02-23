@@ -28,9 +28,6 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>
         protected set { StateGuard.EnsureWritable(); _state = value; }
     }
 
-    /// <summary>State persistence store reserved for snapshot optimization.</summary>
-    public IStateStore<TState>? StateStore { get; set; }
-
     /// <summary>Event Sourcing behavior injected by runtime; required for state recovery and commit.</summary>
     public IEventSourcingBehavior<TState>? EventSourcing { get; set; }
 

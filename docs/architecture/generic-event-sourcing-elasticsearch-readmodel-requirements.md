@@ -23,6 +23,7 @@
 - Typed 状态转换基类：`src/Aevatar.Foundation.Core/EventSourcing/StateEventApplierBase.cs`
 - 状态匹配器：`src/Aevatar.Foundation.Core/EventSourcing/StateTransitionMatcher.cs`
 - 生命周期：`src/Aevatar.Foundation.Core/GAgentBase.TState.cs`
+- 本地持久化 EventStore 基线：`src/Aevatar.Foundation.Runtime/Persistence/FileEventStore.cs`
 - 运行时注入边界：
   - `src/Aevatar.Foundation.Runtime/Actor/LocalActorRuntime.cs`
   - `src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs`
@@ -30,11 +31,12 @@
 当前语义：
 1. `ActivateAsync` 强制 Replay 恢复状态。
 2. `DeactivateAsync` 强制 `ConfirmEventsAsync + PersistSnapshotAsync`。
-3. 未设置 `EventSourcing` 时，`GAgentBase<TState>` 在泛型上下文内用 `IEventStore` 静态构造 `AgentBackedEventSourcingBehavior`（继承 `EventSourcingBehavior<TState>`）。
-4. 缺失 `IEventStore` 时 fail-fast。
-5. `ConfirmDerivedEventsAsync` / `IDomainEventDeriver` / `EventSourcingAutoPersistenceOptions` 已从主链路移除。
-6. 运行期通过 `PersistDomainEventAsync` / `PersistDomainEventsAsync` 执行“持久化 + 顺序 apply”；Replay 主要用于激活恢复。
-7. `TransitionState` 可由 Agent override 或 `IStateEventApplier<TState>` 组合实现。
+3. `GAgentBase<TState>` 不再暴露 `StateStore` 事实通道。
+4. 未设置 `EventSourcing` 时，`GAgentBase<TState>` 在泛型上下文内用 `IEventStore` 静态构造 `AgentBackedEventSourcingBehavior`（继承 `EventSourcingBehavior<TState>`）。
+5. 缺失 `IEventStore` 时 fail-fast。
+6. `ConfirmDerivedEventsAsync` / `IDomainEventDeriver` / `EventSourcingAutoPersistenceOptions` 已从主链路移除。
+7. 运行期通过 `PersistDomainEventAsync` / `PersistDomainEventsAsync` 执行“持久化 + 顺序 apply”；Replay 主要用于激活恢复。
+8. `TransitionState` 可由 Agent override 或 `IStateEventApplier<TState>` 组合实现。
 
 ### 3.2 Provider Runtime
 - 抽象：`src/Aevatar.CQRS.Projection.Abstractions`
@@ -50,6 +52,10 @@
 2. Store 由 `ProviderRegistry + ProviderSelector + BindingResolver + StoreFactory` 统一创建。
 3. 多 Provider 并存时必须显式指定 provider；否则选择失败。
 4. 能力不匹配默认 fail-fast（`FailOnUnsupportedCapabilities=true`）。
+5. InMemory / Elasticsearch / Neo4j 写路径均输出统一结构化日志：`provider/readModelType/key/elapsedMs/result/errorType`。
+6. Provider 端到端回归支持环境变量门控集成测试与一键 smoke 脚本：
+   - `test/Aevatar.CQRS.Projection.Core.Tests/ProjectionProviderE2EIntegrationTests.cs`
+   - `tools/ci/projection_provider_e2e_smoke.sh`
 
 ### 3.3 Workflow 接入
 - 组合入口：`src/workflow/Aevatar.Workflow.Infrastructure/DependencyInjection/WorkflowCapabilityServiceCollectionExtensions.cs`
@@ -122,8 +128,8 @@
 4. 统一配置示例与错误合同说明（启动失败与能力不匹配）。
 
 ### P4（待执行）性能与生产化增强
-1. 为持久化 `IEventStore` 提供生产落地方案与压测基线。
-2. 补齐 Elasticsearch/Neo4j 端到端集成脚本与回归套件。
+1. 为持久化 `IEventStore` 提供生产落地方案与压测基线（已落地本地持久化基线：`FileEventStore`，生产级后端仍待接入）。
+2. 补齐 Elasticsearch/Neo4j 端到端集成脚本与回归套件（已落地基础 smoke + env-gated e2e，后续补 CI 常态化接入与更高负载回归）。
 3. 细化快照策略与回放窗口控制。
 
 ## 6. 验收标准（DoD）
@@ -136,8 +142,10 @@
 ## 7. 验证命令
 - `dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj --nologo`
 - `dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj --nologo`
+- `dotnet test test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj --nologo`
 - `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --nologo`
 - `bash tools/ci/architecture_guards.sh`
+- `bash tools/ci/projection_provider_e2e_smoke.sh`
 
 ## 8. 变更原则
 1. 删除优先于兼容。

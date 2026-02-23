@@ -7,7 +7,7 @@
 
 ## 2. 当前强制语义
 1. `EventStore` 是唯一业务事实源。
-2. `StateStore` 只能用于快照优化，不是业务真相。
+2. `GAgentBase<TState>` 不提供 `StateStore` 事实通道；恢复仅允许来自 EventStore Replay。
 3. 领域事件必须由开发者显式构建并持久化，不允许在线自动反推事件。
 4. 有状态 Actor 激活必须 Replay；停用必须 flush pending events。
 5. ES 行为构造走静态泛型路径，不走 Runtime 反射注入。
@@ -19,6 +19,7 @@
 - Typed applier 基类：`src/Aevatar.Foundation.Core/EventSourcing/StateEventApplierBase.cs`
 - 状态事件匹配器：`src/Aevatar.Foundation.Core/EventSourcing/StateTransitionMatcher.cs`
 - 有状态生命周期：`src/Aevatar.Foundation.Core/GAgentBase.TState.cs`
+- 本地持久化 EventStore：`src/Aevatar.Foundation.Runtime/Persistence/FileEventStore.cs`
 - Local Runtime 注入边界：`src/Aevatar.Foundation.Runtime/Actor/LocalActorRuntime.cs`
 - Orleans Runtime 注入边界：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs`
 - 防回退门禁：`tools/ci/architecture_guards.sh`
@@ -62,6 +63,7 @@ public async Task Handle(IncrementRequested evt)
 
 ## 6. DI 与容器约定
 - `AddAevatarRuntime()` 默认注册 `IEventStore -> InMemoryEventStore`（开发/测试）。
+- 可通过 `AddFileEventStore(...)` 将 `IEventStore` 切换为本地持久化实现：`src/Aevatar.Foundation.Runtime/Persistence/FileEventStore.cs`。
 - 生产环境应替换为持久化实现（Redis/DB/日志存储等）。
 - 如需自定义 ES 行为，可直接为 Agent 预设 `EventSourcing`，但必须保持相同语义契约。
 - 如需解耦 Agent 里的 `TransitionState` 逻辑，可注册多个 `IStateEventApplier<TState>`，按 `Order` 升序匹配应用。

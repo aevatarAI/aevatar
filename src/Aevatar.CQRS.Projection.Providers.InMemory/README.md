@@ -5,6 +5,7 @@
 - 不依赖业务域模型。
 - 支持按 keySelector 注册任意 `IProjectionReadModelStore<TReadModel, TKey>`。
 - 默认能力：非索引型（`SupportsIndexing=false`）。
+- 写入路径输出结构化日志：`provider/readModelType/key/elapsedMs/result/errorType`。
 
 ## DI 注册
 

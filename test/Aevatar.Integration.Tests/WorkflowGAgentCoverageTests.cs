@@ -151,6 +151,42 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task ConfigureAndCompletionEvents_ShouldPersistAndReplayAfterReactivate()
+    {
+        var sharedEventStore = new InMemoryEventStore();
+
+        var agent1 = CreateAgent(eventStore: sharedEventStore);
+        await agent1.ActivateAsync();
+        await agent1.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_replay");
+        await agent1.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            WorkflowName = "wf_replay",
+            Success = true,
+            Output = "ok",
+        });
+        await agent1.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            WorkflowName = "wf_replay",
+            Success = false,
+            Error = "err",
+        });
+        await agent1.DeactivateAsync();
+
+        var persisted = await sharedEventStore.GetEventsAsync(agent1.Id);
+        persisted.Should().HaveCount(3);
+        persisted.Should().Contain(x => x.EventType.Contains(nameof(ConfigureWorkflowEvent), StringComparison.Ordinal));
+        persisted.Count(x => x.EventType.Contains(nameof(WorkflowCompletedEvent), StringComparison.Ordinal)).Should().Be(2);
+
+        var agent2 = CreateAgent(eventStore: sharedEventStore);
+        await agent2.ActivateAsync();
+
+        agent2.State.Compiled.Should().BeTrue();
+        agent2.State.TotalExecutions.Should().Be(2);
+        agent2.State.SuccessfulExecutions.Should().Be(1);
+        agent2.State.FailedExecutions.Should().Be(1);
+    }
+
+    [Fact]
     public async Task ConfigureWorkflow_ShouldInstallAndConfigureModules()
     {
         var factory = new RecordingEventModuleFactory();

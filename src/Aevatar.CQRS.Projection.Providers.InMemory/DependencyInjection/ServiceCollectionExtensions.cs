@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 
@@ -20,12 +21,13 @@ public static class ServiceCollectionExtensions
             new DelegateProjectionReadModelStoreRegistration<TReadModel, TKey>(
                 providerName,
                 new ProjectionReadModelProviderCapabilities(providerName, supportsIndexing: false),
-                _ => new InMemoryProjectionReadModelStore<TReadModel, TKey>(
+                provider => new InMemoryProjectionReadModelStore<TReadModel, TKey>(
                     keySelector,
                     keyFormatter,
                     listSortSelector,
                     listTakeMax,
-                    providerName)));
+                    providerName,
+                    provider.GetService<ILogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>>())));
 
         return services;
     }

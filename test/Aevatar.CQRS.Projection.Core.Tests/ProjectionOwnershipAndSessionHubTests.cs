@@ -134,10 +134,13 @@ public class ActorProjectionOwnershipCoordinatorTests
 
 public class ProjectionOwnershipCoordinatorGAgentTests
 {
-    private static IServiceProvider CreateStatefulAgentServices()
+    private static IServiceProvider CreateStatefulAgentServices(IEventStore? eventStore = null)
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IEventStore, TestInMemoryEventStore>();
+        if (eventStore != null)
+            services.AddSingleton(eventStore);
+        else
+            services.AddSingleton<IEventStore, TestInMemoryEventStore>();
         return services.BuildServiceProvider();
     }
 
@@ -214,6 +217,39 @@ public class ProjectionOwnershipCoordinatorGAgentTests
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task AcquireRelease_ShouldPersistEvents_AndReplayStateAfterReactivate()
+    {
+        var store = new TestInMemoryEventStore();
+        var services = CreateStatefulAgentServices(store);
+
+        var agent1 = new ProjectionOwnershipCoordinatorGAgent { Services = services };
+        await agent1.ActivateAsync();
+        await agent1.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
+        {
+            ScopeId = "scope-replay",
+            SessionId = "session-replay",
+        });
+        await agent1.HandleReleaseAsync(new ProjectionOwnershipReleaseEvent
+        {
+            ScopeId = "scope-replay",
+            SessionId = "session-replay",
+        });
+        await agent1.DeactivateAsync();
+
+        var persisted = await store.GetEventsAsync(agent1.Id);
+        persisted.Should().HaveCount(2);
+        persisted.Should().Contain(x => x.EventType.Contains(nameof(ProjectionOwnershipAcquireEvent), StringComparison.Ordinal));
+        persisted.Should().Contain(x => x.EventType.Contains(nameof(ProjectionOwnershipReleaseEvent), StringComparison.Ordinal));
+
+        var agent2 = new ProjectionOwnershipCoordinatorGAgent { Services = services };
+        await agent2.ActivateAsync();
+
+        agent2.State.Active.Should().BeFalse();
+        agent2.State.ScopeId.Should().Be("scope-replay");
+        agent2.State.SessionId.Should().BeEmpty();
     }
 }
 
