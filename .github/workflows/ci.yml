@@ -64,18 +64,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
         with:
-          global-json-file: global.json
-          cache: true
-
-      - name: Ensure ripgrep
-        run: |
-          if ! command -v rg >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y ripgrep
-          fi
+          setup-dotnet: "false"
+          cache-nuget: "false"
+          install-ripgrep: "true"
 
       - name: Architecture Guards (full-scan + projection route mapping)
         env:
@@ -108,11 +102,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-          cache: true
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
 
       - name: Run split test guard (${{ matrix.solution_filter }})
         run: |
@@ -137,18 +128,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
         with:
-          global-json-file: global.json
-          cache: true
-
-      - name: Ensure ripgrep
-        run: |
-          if ! command -v rg >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y ripgrep
-          fi
+          install-ripgrep: "true"
 
       - name: Projection Provider E2E Smoke Test
         run: bash tools/ci/projection_provider_e2e_smoke.sh
@@ -167,17 +150,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-          cache: true
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
 
-      - name: Restore
-        run: dotnet restore aevatar.slnx --nologo
-
-      - name: Build
-        run: dotnet build aevatar.slnx --nologo --no-restore --tl:off -m:1 -p:UseSharedCompilation=false -p:NuGetAudit=false
+      - name: Restore and Build
+        run: bash tools/ci/restore_and_build.sh
 
       - name: Start Kafka for Distributed Integration Test
         run: docker compose up -d kafka
@@ -226,17 +203,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-          cache: true
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
 
-      - name: Restore
-        run: dotnet restore aevatar.slnx --nologo
-
-      - name: Build
-        run: dotnet build aevatar.slnx --nologo --no-restore --tl:off -m:1 -p:UseSharedCompilation=false -p:NuGetAudit=false
+      - name: Restore and Build
+        run: bash tools/ci/restore_and_build.sh
 
       - name: Coverage Quality Guard
         env:
@@ -254,10 +225,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
 
       - name: 3-Node Distributed Smoke Test
         run: bash tools/ci/distributed_3node_smoke.sh

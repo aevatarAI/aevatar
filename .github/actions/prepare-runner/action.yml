@@ -1,0 +1,41 @@
+name: Prepare Runner
+description: Setup .NET SDK, cache NuGet packages, and optionally install ripgrep.
+inputs:
+  setup-dotnet:
+    description: Whether to install .NET SDK from global.json.
+    required: false
+    default: "true"
+  cache-nuget:
+    description: Whether to cache ~/.nuget/packages.
+    required: false
+    default: "true"
+  install-ripgrep:
+    description: Whether to install ripgrep when missing.
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Setup .NET
+      if: ${{ inputs.setup-dotnet == 'true' }}
+      uses: actions/setup-dotnet@v4
+      with:
+        global-json-file: global.json
+
+    - name: Cache NuGet Packages
+      if: ${{ inputs.cache-nuget == 'true' }}
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('global.json', 'Directory.Build.props', 'Directory.Packages.props', '**/*.csproj', '**/*.props', '**/*.targets') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Ensure ripgrep
+      if: ${{ inputs.install-ripgrep == 'true' }}
+      shell: bash
+      run: |
+        if ! command -v rg >/dev/null 2>&1; then
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+        fi

@@ -10,6 +10,7 @@ This directory keeps CI gate scripts and smoke tests.
 - `tools/ci/solution_split_guards.sh`: split build guard.
 - `tools/ci/solution_split_test_guards.sh`: split test guard.
 - `tools/ci/projection_route_mapping_guard.sh`: projection reducer routing static guard.
+- `tools/ci/restore_and_build.sh`: shared restore/build entry used by CI jobs.
 
 ## Integration/Smoke Scripts
 
@@ -21,6 +22,8 @@ This directory keeps CI gate scripts and smoke tests.
 ## Workflow Mapping
 
 - `.github/workflows/ci.yml`
+  - Shared runner preparation is centralized in local action:
+    - `.github/actions/prepare-runner/action.yml` (`setup-dotnet` + NuGet cache + optional `ripgrep` install)
   - Job `changes`
     - Uses path filters to detect whether projection-provider or Kafka-runtime integration jobs must run.
   - Job `fast-gates`
