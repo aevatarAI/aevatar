@@ -6,6 +6,11 @@ namespace Aevatar.Workflow.Projection.Configuration;
 public sealed class WorkflowExecutionProjectionOptions
     : IProjectionRuntimeOptions
 {
+    public WorkflowExecutionProjectionOptions()
+    {
+        ReadModelBindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// Enables projection pipeline registration.
     /// </summary>
@@ -36,4 +41,19 @@ public sealed class WorkflowExecutionProjectionOptions
     /// Extra grace wait before force-finalize when completion status is timeout.
     /// </summary>
     public int RunProjectionFinalizeGraceTimeoutMs { get; set; } = 1500;
+
+    /// <summary>
+    /// Read-model store provider name, e.g. InMemory/Elasticsearch.
+    /// </summary>
+    public string ReadModelProvider { get; set; } = ProjectionReadModelProviderNames.InMemory;
+
+    /// <summary>
+    /// Whether unsupported provider capabilities should fail fast during startup registration.
+    /// </summary>
+    public bool FailOnUnsupportedCapabilities { get; set; } = true;
+
+    /// <summary>
+    /// Optional read-model binding requirements (ReadModelName -> IndexKind).
+    /// </summary>
+    public Dictionary<string, string> ReadModelBindings { get; }
 }

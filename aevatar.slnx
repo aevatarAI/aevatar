@@ -38,6 +38,8 @@
     <Project Path="src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <Project Path="src\Aevatar.CQRS.Projection.Abstractions\Aevatar.CQRS.Projection.Abstractions.csproj" />
     <Project Path="src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
+    <Project Path="src\Aevatar.CQRS.Projection.Providers.Elasticsearch\Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
+    <Project Path="src\Aevatar.CQRS.Projection.Providers.InMemory\Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
     <Project Path="src\Aevatar.Foundation.Projection\Aevatar.Foundation.Projection.csproj" />
     <Project Path="src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <Project Path="src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />

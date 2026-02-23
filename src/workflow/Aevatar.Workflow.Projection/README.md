@@ -16,8 +16,9 @@
   - `WorkflowProjectionQueryReader`（query 映射读取）
 - 领域上下文：`IWorkflowExecutionProjectionContextFactory`、`WorkflowExecutionProjectionContext`
 - 实时输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
-- 领域投影实现：reducers、projectors、read model store
+- 领域投影实现：reducers、projectors、read model（不包含 Provider Store 实现）
 - 领域 DI 组合：`AddWorkflowExecutionProjectionCQRS(...)`
+- Provider 能力校验：基于 `ProjectionReadModelCapabilityValidator` 在装配期校验 `ReadModelBindings` 与 Provider 能力匹配
 
 本项目依赖：
 
@@ -73,9 +74,29 @@ FAQ：
 - 新增 projector：
   - 实现 `IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>`
   - 在 DI 中注册
-- 替换存储：
-  - 实现 `IProjectionReadModelStore<WorkflowExecutionReport, string>`
-  - 使用自定义实现替换默认内存存储
+- 扩展 ReadModel Provider（推荐）：
+  - 实现 `IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>`
+  - 在 Infrastructure 侧注册（例如 `AddInMemoryReadModelStoreRegistration` / `AddElasticsearchReadModelStoreRegistration`）
+  - 通过 `WorkflowExecutionProjection:ReadModelProvider` 或 `Projection:ReadModel:Provider` 选择 Provider
+- 直接替换 Store（仅测试/临时场景）：
+  - 调用 `AddWorkflowExecutionProjectionReadModelStore<TStore>()` 直接覆盖 `IProjectionReadModelStore<WorkflowExecutionReport, string>`
+  - 该方式会绕过 Provider 选择与能力校验链路，不建议用于生产装配
+
+## Provider 配置
+
+- `WorkflowExecutionProjection:ReadModelProvider`：`InMemory`（默认）/`Elasticsearch`
+- `WorkflowExecutionProjection:FailOnUnsupportedCapabilities`：能力不匹配时是否 fail-fast（默认 `true`）
+- `WorkflowExecutionProjection:ReadModelBindings`：ReadModel -> IndexKind 约束（如 `WorkflowExecutionReport: Document`）
+- 推荐统一配置入口：`Projection:ReadModel:*`（由 Infrastructure 映射到 Workflow 投影选项）
+- `Projection:ReadModel:Provider`：全局默认 Provider（当前由 `WorkflowCapabilityServiceCollectionExtensions` 覆盖到模块选项）
+- `Projection:ReadModel:FailOnUnsupportedCapabilities`：全局 fail-fast 策略
+- `Projection:ReadModel:Bindings:*`：全局 ReadModel -> IndexKind 约束
+- `Projection:ReadModel:Providers:Elasticsearch:Endpoints`：Elasticsearch endpoint 列表
+- `Projection:ReadModel:Providers:Elasticsearch:IndexPrefix`：索引前缀
+- `Projection:ReadModel:Providers:Elasticsearch:RequestTimeoutMs`：请求超时
+- `Projection:ReadModel:Providers:Elasticsearch:ListTakeMax`：`ListAsync` 上限
+- `Projection:ReadModel:Providers:Elasticsearch:AutoCreateIndex`：是否自动建索引
+- `Projection:ReadModel:Providers:Elasticsearch:Username/Password`：可选基础认证
 - 扩展 run 输出协议：
   - 保持 `WorkflowRunEvent` 不变，新增 presentation adapter 进行协议映射
   - 不改 Application 用例编排代码

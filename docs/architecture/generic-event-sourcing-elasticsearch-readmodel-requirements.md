@@ -1,340 +1,312 @@
-# Generic Event Sourcing + Index-Capable ReadModel 需求文档（Document/Graph 双索引抽象）
+# Generic Event Sourcing + Provider-Based ReadModel 需求文档（基线对齐版）
 
 ## 1. 文档元信息
-- 状态：Draft
-- 目标版本：v1
+- 状态：In Progress（Revised）
+- 目标版本：v1（对齐当前仓库基线后可实施）
 - 适用仓库：`aevatar`
-- 编写日期：2026-02-22
-- 本次更新：去具体后端绑定，改为 ReadModel Provider 能力模型
+- 首稿日期：2026-02-22
+- 本次修订：2026-02-23
+- 修订目的：将需求与当前代码/门禁/测试基线对齐，消除实现冲突
 
-## 2. 背景与问题
-当前仓库已具备：
-- 基础 Event Sourcing 抽象：`IEventStore`、`EventSourcingBehavior<TState>`
-- 有状态 Agent 抽象：`GAgentBase<TState>` + `IStateStore<TState>`
-- 投影读模型抽象：`IProjectionReadModelStore<TReadModel, TKey>`
-- InMemory 默认实现
+## 2. 当前仓库基线（截至 2026-02-23）
+当前已具备能力：
+- Event Sourcing 抽象：`IEventStore`、`IEventSourcingBehavior<TState>`、`EventSourcingBehavior<TState>`。
+- 状态快照抽象：`IStateStore<TState>`，默认 InMemory 实现。
+- 统一 Projection Pipeline：`ProjectionLifecycleService -> ProjectionSubscriptionRegistry -> ProjectionDispatcher -> ProjectionCoordinator`。
+- 统一读模型存储契约：`IProjectionReadModelStore<TReadModel, TKey>`（`Upsert/Mutate/Get/List`）。
+- Provider 能力模型与校验：`ProjectionReadModelProviderCapabilities`、`ProjectionReadModelRequirements`、`ProjectionReadModelCapabilityValidator`。
+- Provider 选择与注册抽象：`IProjectionReadModelStoreRegistration<,>`、`ProjectionReadModelStoreSelector`。
+- 通用 Provider 项目已落地：`Aevatar.CQRS.Projection.Providers.InMemory`、`Aevatar.CQRS.Projection.Providers.Elasticsearch`。
+- Workflow 读侧完整链路：`WorkflowExecutionProjectionService` + Activation/Release/Lease/QueryReader/SinkForwarder 组件化编排。
+- Workflow 读侧已切换 Provider 选择链路；Provider 注册在 Infrastructure 完成（InMemory + Elasticsearch）。
+- CQRS 与 AGUI 共用同一输入事件流（不同 projector 分支输出）。
+- 通用命令执行壳与 Capability Host 装配机制已存在。
+- 架构门禁与稳定性门禁已生效（`architecture_guards`、`projection_route_mapping_guard`、`test_stability_guards`）。
+- 分布式 3 节点一致性集成测试与 smoke 脚本已接入 CI。
 
-当前缺口：
-- 缺少“默认 State -> ReadModel”镜像能力，开发者需要手写大量投影胶水。
-- ReadModel 存储语义与具体后端边界不清晰，容易把架构绑定到 Elasticsearch。
-- 缺少“ReadModel 元数据 -> 索引能力”统一模型，无法做后端能力匹配。
-- 缺少对两类索引形态的统一抽象：Document Index（Elasticsearch-like）与 Graph Index（Neo4j-like）。
-- `EventEnvelope` 与 EventStore 持久化事件边界不清晰。
-- persisted event 手写成本高，影响 Event Sourcing 落地。
+当前未具备能力：
+- Graph Provider（Neo4j-like）适配器落地。
+- “State -> Default ReadModel” 的通用镜像层。
+- 自动生成 Persisted State Event 的统一框架管道（当前为显式 `RaiseEvent/ConfirmEventsAsync`）。
+- `Neo4j.Driver` 仅在集中版本文件声明，业务项目尚未引用并落地实现。
 
-## 3. 目标
-1. Event Sourcing 与 Snapshot 语义保持不变。
-2. 默认提供 State -> ReadModel 镜像投影（开发者无感接入），且 ReadModel 对开发者可选。
-3. ReadModel 存储采用 Provider 抽象，不绑定具体后端。
-4. ReadModel 元数据可描述“索引诉求”；仅索引能力后端可承接。
-5. 同时支持两类索引 Provider：Document Index 与 Graph Index。
-6. Elasticsearch 与 Neo4j 作为首批适配器，而不是架构绑定点。
-7. EventStore 默认存储状态语义事件，由框架自动生成。
-8. `EventEnvelope` 仅用于运行时处理与传播，不作为 EventStore 权威事件模型。
-9. CQRS 各层采用“通用壳 + 领域插件”模式：`Application/Infrastructure/Host` 可通用，`Domain` 保持领域语义。
+### 2.1 基线证据（关键代码位置）
+| 主题 | 现状结论 | 证据 |
+|---|---|---|
+| Projection 关闭语义 | Workflow 命令入口 fail-fast，返回 `ProjectionDisabled` | `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunContextFactory.cs`；`test/Aevatar.Workflow.Application.Tests/WorkflowRunOrchestrationComponentTests.cs` |
+| Query 关闭语义 | 关闭时应用层返回 `null/[]`，API 侧表现为 `404/200` | `src/workflow/Aevatar.Workflow.Application/Queries/WorkflowExecutionQueryApplicationService.cs`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatQueryEndpoints.cs` |
+| ReadModel Store 契约 | 仅 `Upsert/Mutate/Get/List` 四类操作 | `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/IProjectionReadModelStore.cs` |
+| Provider 选择与装配 | Workflow 通过 Provider 注册 + Selector 选择 ReadModel Store | `src/workflow/Aevatar.Workflow.Projection/DependencyInjection/ServiceCollectionExtensions.cs`；`src/workflow/Aevatar.Workflow.Infrastructure/DependencyInjection/WorkflowCapabilityServiceCollectionExtensions.cs` |
+| Persisted Event 模型 | `StateEvent` 无 `metadata` 字段 | `src/Aevatar.Foundation.Abstractions/agent_messages.proto` |
+| ES 写入模式 | 仍是显式 `RaiseEvent/ConfirmEventsAsync` | `src/Aevatar.Foundation.Core/EventSourcing/EventSourcingBehavior.cs`；`docs/EVENT_SOURCING.md` |
+| 运行时注入 | Runtime 注入 `StateStore`，未统一注入 ES 行为 | `src/Aevatar.Foundation.Runtime/Actor/LocalActorRuntime.cs` |
+| Capability Host | 已有 capability 注册/映射防重复机制 | `src/Aevatar.Hosting/AevatarCapabilityHostExtensions.cs` |
+| 分布式一致性基线 | 已有 3 节点集成测试 + smoke 脚本 | `test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedClusterConsistencyIntegrationTests.cs`；`tools/ci/distributed_3node_smoke.sh` |
+| 架构约束自动化 | 路由精确匹配、禁止中间层 ID 映射事实态、lease/session 约束 | `tools/ci/architecture_guards.sh`；`tools/ci/projection_route_mapping_guard.sh` |
 
-## 4. 非目标
-- 不在本期引入新的业务编排模型。
-- 不在本期实现跨存储分布式事务。
-- 不在本期实现所有后端 Provider（先完成 InMemory + Elasticsearch + Neo4j）。
-- 不在本期定义完整 ILM/冷热分层策略（仅保留扩展位）。
-- 不在本期把领域不变量抽象成通用模板（领域规则仍由业务模块定义）。
+## 3. 问题定义
+在当前基线上，仍有以下缺口：
+- Provider 能力模型与选择链路已落地，但跨业务域统一治理（Registry/策略化选择/观测）仍不完整。
+- Document Provider 已可用，但生产级增强（异常分级、索引策略细化、观测字段收口）仍需补齐。
+- EventEnvelope 与 Persisted State Event 的边界在文档层仍需统一口径，避免误用。
+- 目标中包含的 `StateOnly`、Graph Index、自动 Persisted Event 与当前运行语义存在冲突，需要分期。
 
-## 5. 架构约束（强制）
+## 4. 目标与分期
+
+### 4.1 总体目标
+1. 保持单一主链路：`Command -> Event -> Projection -> ReadModel`。
+2. 在不破坏现有 Workflow 语义的前提下，引入 Provider 能力抽象与启动期校验。
+3. v1 先交付 Document Index Provider（Elasticsearch-like）落地能力。
+4. Graph Index（Neo4j-like）进入 vNext，先沉淀抽象，不在 v1 强制交付完整能力。
+5. Event Sourcing 继续保持兼容，自动化增强采用显式分期与开关。
+
+### 4.2 分期策略
+- P0（当前文档阶段）：基线对齐、冲突消解、DoD 可执行化。
+- P1（v1）：Provider 能力模型 + 启动期校验 + Document Index Provider 适配。
+- P2（vNext）：Graph Index Provider 与通用 StateMirror/StateOnly 能力扩展。
+
+### 4.3 v1 落地边界（结合现有代码）
+- v1 以 Workflow 读侧为唯一落地点：`WorkflowExecutionReport` 先完成 Provider 化。
+- 不在 v1 引入新的“全局第二投影框架”，而是复用现有 `AddWorkflowExecutionProjectionCQRS` 与 Provider 注册/选择链路。
+- v1 不改写命令执行主链路，不变更 `WorkflowRunContextFactory` 的 Projection fail-fast 语义。
+- v1 不改 Query API 合同，只保证替换存储后语义一致。
+
+## 5. 非目标（v1）
+- 不引入第二套 CQRS/Projection 主链路。
+- 不破坏现有 Workflow 命令入口“投影关闭即 fail-fast”行为。
+- 不在 v1 完成 Graph 查询 DSL、路径优化执行器。
+- 不在 v1 引入跨存储分布式事务。
+- 不在 v1 改造所有 Event Sourcing 调用为全自动模式。
+
+## 6. 架构与治理约束（强制）
 - 严格分层：`Domain / Application / Infrastructure / Host`。
-- 统一投影链路：默认镜像与自定义投影都必须走同一 Projection Pipeline。
-- 读写分离：`Command -> Event`、`Query -> ReadModel`。
-- 中间层不得以进程内映射充当跨节点事实源。
-- 上层依赖抽象：业务代码不得依赖具体后端 SDK（如 Elasticsearch Client）。
-- Provider 能力校验必须在启动期执行，避免运行期隐式降级。
-- 分层通用化边界：`Application/Infrastructure/Host` 提供通用框架能力；`Domain` 仅通过契约插件接入，禁止把领域语义硬编码进通用层。
+- Host 仅做协议适配与能力装配，不承载业务编排。
+- CQRS 与 AGUI 必须共用统一 Projection Pipeline，禁止双轨。
+- 中间层禁止进程内 actor/run/session 事实态映射。
+- 投影生命周期必须基于 lease/session 显式句柄，不允许 `actorId -> context` 反查。
+- Event type 路由必须基于 `TypeUrl` 派生 + 精确键匹配（`TryGetValue`），禁止字符串模糊匹配。
+- 能力不匹配在启动期 fail-fast（默认策略），不得运行期隐式降级。
+- 所有变更必须通过既有门禁与测试。
 
-## 6. 术语
-- `State`：`GAgentBase<TState>` 领域状态，由 `IStateStore<TState>` 持久化快照。
-- `ReadModel`：查询视图模型。
-- `Runtime Envelope`：运行时消息载体（`EventEnvelope`）。
-- `Persisted State Event`：EventStore 中的状态语义事件。
-- `ReadModel Provider`：`IProjectionReadModelStore<TReadModel, TKey>` 的具体后端实现。
-- `Index-Capable Provider`：声明支持索引建模能力（mapping/settings/alias）的 Provider。
-- `Document Index Provider`：面向文档索引模型（索引、mapping、alias）。
-- `Graph Index Provider`：面向图索引模型（节点、关系、约束、路径查询优化）。
+## 7. 关键决策（本版定稿）
 
-## 7. 方案总览
+### D1 `StateOnly` 语义（Workflow 现状）
+- 在当前 Workflow 能力中，`ProjectionDisabled` 会阻断命令执行（现有行为保持）。
+- 因此 v1 不将 Workflow 场景纳入 `StateOnly` 支持范围；`StateOnly` 进入通用内核 vNext 议题。
 
-### 7.1 默认主链路
-`Agent State` -> `StateMirrorProjection` -> `IProjectionReadModelStore<TReadModel, TKey>` -> `ReadModel Provider`
+### D2 Query API 合同兼容
+- v1 不改现有查询端点对外合同（现有 `null/[]/404/200` 语义维持）。
+- 若后续引入统一“能力不可用”错误模型，需单独版本化并提供迁移说明。
 
-补充：
-- 同一 `State` 可以扇出到多个 `ReadModel`（一对多）。
-- 每个 `State/ReadModel` 绑定由一个“最终写入 owner projector”负责落库。
+### D3 Event Sourcing 保持兼容
+- v1 继续支持显式 `RaiseEvent/ConfirmEventsAsync` 路径。
+- 自动 Persisted Event 仅作为扩展能力进入 P2，不作为 v1 合并前置条件。
 
-### 7.2 Provider 能力闸门
-- ReadModel 元数据声明索引诉求（如主键、字段类型、索引别名）。
-- Provider 声明能力（如 `SupportsIndexing`、`IndexKind`、`SupportsAliases`）。
-- 启动期进行“ReadModel 诉求 vs Provider 能力”匹配：
-  - 匹配成功：注册并运行。
-  - 不匹配：按策略 fail-fast（默认）或显式禁用该 ReadModel。
+### D4 Persisted Event 权威模型
+- `EventEnvelope` 仅用于运行时传播/投影输入。
+- EventStore 权威回放源是 `StateEvent`（Persisted State Event）。
 
-路由规则补充：
-- `IndexKind` 对 ReadModel 是可选项（`Auto/None`）。
-- 当仅有一个索引型 Provider 可用时，可不标记 `IndexKind`，走默认路由。
-- 当存在多个候选 Provider 时，必须通过 `IndexKind` 或显式绑定配置完成消歧，否则启动 fail-fast。
+### D5 Graph 能力分期
+- v1：仅保留 Graph 抽象扩展位，不要求完整 Neo4j 读写/查询能力。
+- vNext：Graph Provider 以单独 RFC + 里程碑方式落地。
 
-### 7.2.1 索引类型统一抽象
-- `IndexKind=Document`：用于 Elasticsearch-like 后端。
-- `IndexKind=Graph`：用于 Neo4j-like 后端。
-- 统一抽象层负责：
-  - 元数据标准化（ReadModel Index Profile）
-  - 能力协商与注册校验
-  - 将通用 ReadModel 变更翻译为后端特定写操作
-
-### 7.3 开发者体验目标
-- 最小路径：仅定义 `State`（可不定义 `ReadModel`）。
-- 默认路径：不定义 `ReadModel` 时，框架可提供默认读视图（Default ReadModel）。
-- 进阶路径：定义自定义 `ReadModel` 并可替换 `IStateToReadModelProjector<TState, TReadModel>`。
-- 运维路径：通过元数据驱动索引初始化（仅限索引型 Provider）。
-
-### 7.4 EventEnvelope 与 EventStore 边界
-- 运行时仍以 `EventEnvelope` 处理与分发。
-- EventStore 权威事件必须是 `Persisted State Event`。
-- 原始 `EventEnvelope` 可选旁路落库用于审计，但不参与回放权威语义。
-
-### 7.5 全层通用化模型（Generic CQRS Kernel）
-- `Domain`：定义业务状态、业务命令、业务查询、领域规则（不可被框架语义吞并）。
-- `Application`：提供通用 Command/Query 编排管道（校验、幂等、权限、审计、事务边界、投影触发）。
-- `Infrastructure`：提供可替换存储与索引 Provider（EventStore/StateStore/ReadModelStore）。
-- `Host`：提供统一模块装配、能力协商、配置绑定、健康检查。
-- 领域模块仅需注册 handler/projector/readmodel 契约，即可接入通用内核。
-
-ReadModel 可选模式：
-- `State-only`：仅写侧或最小查询场景，不要求开发者定义 ReadModel。
-- `Default ReadModel`：框架基于 State 生成默认读视图。
-- `Custom ReadModel`：开发者定义专用查询模型与投影逻辑。
+### D6 v1 实施落点
+- v1 的 Provider 化仅要求在 Workflow Projection 模块闭环，不强制外溢到所有业务域。
+- 先确保“现有测试与门禁全绿 + 行为不回归”，再考虑通用化抽象下沉。
 
 ## 8. 范围（Scope）
 
-### 8.1 In Scope
-- Provider 抽象下的通用 ReadModel Store 语义。
-- 默认 State 镜像投影（可替换）。
-- ReadModel 元数据模型与能力匹配规则。
-- Elasticsearch 适配器（Document Index Provider）实现。
-- Neo4j 适配器（Graph Index Provider）实现。
-- 通用 Application Service 管道抽象（Command/Query 通用壳）。
-- 通用 Host 模块装配抽象（模块注册与能力协商）。
-- DI 扩展：Provider 切换、默认镜像器注册、自定义覆盖。
-- Workflow Projection 接入。
-- 单元、集成、分布式一致化测试。
+### 8.1 In Scope（v1）
+- 定义 ReadModel Provider 能力模型与协商机制。
+- 启动期执行 “ReadModel 要求 vs Provider 能力” 校验。
+- 保持 `IProjectionReadModelStore<TReadModel, TKey>` 兼容，不破坏现有 Workflow 读侧。
+- 提供 Document Index Provider（Elasticsearch-like）适配器。
+- Workflow `WorkflowExecutionReport` 可切换到 Document Provider 承接。
+- 通过 `IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>` 注册 Provider，不新增平行投影链路。
+- 配置模型与 DI 扩展补齐（保留与现有 `WorkflowExecutionProjection:*` 兼容）。
+- 补齐单元/集成/门禁验证。
 
-### 8.2 Out of Scope
-- 全量后端 Provider 一次性交付。
-- Elasticsearch 生产运维平台自动化。
+### 8.2 Out of Scope（v1）
+- Graph Provider 的完整查询与关系建模能力。
+- 通用 `StateMirrorProjection` 自动覆盖所有 `GAgentBase<TState>` 类型。
+- 全量业务模块一次性迁移到新 Provider。
+- 生产 ILM/冷热分层自动化。
+- 新建独立“全局 ReadModel Infrastructure 大一统项目”并强制迁移全仓库。
 
-## 9. 功能需求（Functional Requirements）
+## 9. 功能需求（FR）
 
-### FR-1 Event Sourcing 抽象
-- append-only + `expectedVersion` 并发校验 + `fromVersion` 回放查询。
-- 事件记录结构包含：`streamId`、`eventId`、`eventType`、`eventData`、`version`、`timestamp`、`metadata`。
+### FR-1 Event Sourcing 抽象保持兼容
+- 保持 `IEventStore` 追加、版本并发校验、按版本回放语义。
+- 保持 `IStateStore<TState>` 快照通道语义不变。
 
-### FR-2 Persisted State Event 模型约束
-- EventStore 权威事件必须只表达状态变更语义。
-- 不得耦合运行时路由字段（例如 `Direction`、转发链）。
-- 原始 envelope 不作为回放权威源。
+### FR-2 Persisted State Event 与 Envelope 边界
+- Persisted 回放源仅为 `StateEvent`。
+- `EventEnvelope` 中运行时路由/传播字段不得进入回放权威语义。
 
-### FR-3 自动状态事件生成（开发者无感）
-- 框架在统一处理管道内自动生成 `Persisted State Event`。
-- 一次处理结束后基于 State 变更检测决定是否 append。
-- 无状态变化不得产生冗余事件。
-- 支持 `Snapshot` / `Delta` 策略扩展。
+### FR-3 StateEvent 结构约束（v1）
+- v1 继续使用现有 `StateEvent` 字段模型：
+  `event_id/timestamp/version/event_type/event_data/agent_id`。
+- 若需 `metadata` 字段，作为 vNext 的 proto 升级任务，不阻塞 v1。
 
-### FR-4 有状态 Agent 与 Snapshot
-- `GAgentBase<TState>` 继续通过 `IStateStore<TState>` 完成 Load/Save。
-- 启用 Event Sourcing 不改变 `IStateStore<TState>` 作为快照通道的语义。
-
-### FR-5 通用 ReadModel Store（Provider 模式）
-- 兼容 `IProjectionReadModelStore<TReadModel, TKey>`：
+### FR-4 ReadModel Store 兼容约束
+- `IProjectionReadModelStore<TReadModel, TKey>` 契约保持兼容：
   - `UpsertAsync`
   - `MutateAsync`
   - `GetAsync`
   - `ListAsync`
-- API 语义不绑定具体后端。
+- 既有 Workflow 读侧代码无需修改业务语义即可接入新 Provider。
+- v1 不在该接口上新增 Graph 专有方法，避免破坏现有实现与测试基线。
 
-### FR-6 Provider 能力声明与匹配
-- 定义 Provider 能力抽象（至少包含）：
+### FR-5 Provider 能力声明模型
+- 新增能力抽象（至少包含）：
   - `SupportsIndexing`
-  - `IndexKind`（`Document` / `Graph`）
+  - `IndexKinds`（支持集合，至少可表达 `Document`）
   - `SupportsAliases`
   - `SupportsSchemaValidation`
-- ReadModel 注册时执行能力匹配。
-- 对声明索引诉求的 ReadModel，必须由 `SupportsIndexing=true` 的 Provider 承接。
-- 当 ReadModel 显式声明 `IndexKind` 时，Provider 必须类型匹配。
-- 当 ReadModel 未声明 `IndexKind` 时，允许自动路由；若候选 Provider 不唯一则必须显式消歧。
+- 能力模型可由 Store 实现直接声明，或由独立能力描述器声明。
+- 无论采用哪种声明方式，都不得破坏现有 Store 接口二进制兼容性。
 
-### FR-7 默认 State 镜像投影
-- 提供默认 `IStateToReadModelProjector<TState, TReadModel>`：
-  - 默认策略：同名字段映射 + 可配置忽略字段。
-  - 字段不匹配可由映射配置或自定义 projector 覆盖。
-- 当开发者未定义 `ReadModel` 时，允许落到框架默认读视图（Default ReadModel）。
+### FR-6 启动期能力校验
+- ReadModel 注册/装配阶段执行能力匹配。
+- 默认策略：不匹配 fail-fast。
+- 必须输出结构化错误，包含 readModel/provider/requiredCapabilities。
+- 能力校验应接入现有 Workflow Projection DI 装配流程，而不是额外旁路启动器。
 
-### FR-7.1 ReadModel 可选化
-- 开发者不定义 `ReadModel` 时系统必须可运行（至少支持 `State-only` 模式）。
-- 可通过配置选择：`State-only` / `Default ReadModel` / `Custom ReadModel`。
-- 在 `State-only` 模式下，若调用依赖 ReadModel 的查询端点，应返回明确错误或能力不可用响应（按统一错误模型）。
+### FR-7 Workflow Provider 可替换承接
+- `WorkflowExecutionReport` 的存储后端支持通过 Provider 注册在 DI 中替换。
+- 切换 Provider 后，Query 结果语义与字段口径保持一致。
 
-### FR-8 自定义投影替换机制
-- 允许业务侧通过 DI 替换默认镜像器。
-- 同一 `State/ReadModel` 绑定仅允许一个“最终写入 owner projector”。
-- owner projector 内部允许组合多个 reducer/applier/module 协同完成映射与聚合。
-- `State -> ReadModel` 为一对多：一个 State 可以对应多个 ReadModel，但每个 ReadModel 绑定仍必须只有一个最终写入 owner。
-- 优先级：显式业务注册 > 默认注册。
+### FR-8 Document Index Provider（v1 必做）
+- 实现 Elasticsearch-like Provider：
+  - 支持 `Upsert/Mutate/Get/List` 等价语义。
+  - 支持索引命名环境隔离（如 prefix）。
+  - 支持可配置索引初始化策略（create if missing）。
 
-### FR-9 ReadModel 元数据驱动索引（能力感知）
-- ReadModel 元数据可声明：
-  - 通用：索引名/前缀、主键字段、版本、标签
-  - Document Profile：字段 mapping（keyword/text/date/numeric/...）、settings、alias
-  - Graph Profile：节点标签、关系类型、关系方向、唯一约束字段、可选索引提示
-- 仅索引型 Provider 执行 metadata 建索引逻辑。
-- 非索引型 Provider 遇到索引诉求时按策略 fail-fast（默认）。
-- `IndexKind` 未声明时，可由 Provider 能力自动推断；推断不唯一时必须显式绑定。
+### FR-9 `StateOnly` 约束说明（v1）
+- Workflow 能力 v1 保持现有行为：Projection 关闭时返回 `ProjectionDisabled`。
+- `StateOnly/DefaultReadModel/CustomReadModel` 通用模式进入 vNext RFC，不在 v1 作为可验收项。
 
-### FR-10 双索引适配器实现
-- 必须提供 Document Index 适配器（Elasticsearch-like）。
-- 必须提供 Graph Index 适配器（Neo4j-like）。
-- 两者都必须遵循统一抽象层，不得在业务层分叉接口。
-- 双适配器是平台能力要求，不代表每个 ReadModel 都必须显式标记 `Document/Graph`。
+### FR-10 Event Sourcing 自动化分期
+- v1 不强制实现“统一管道自动生成 Persisted Event”。
+- 如实现实验能力，必须开关控制且默认关闭，不改变现有显式路径行为。
 
-### FR-11 Workflow Projection 接入
-- `WorkflowExecutionReport` 可由 Provider 切换承接。
-- 不改变上层 Query API 合同。
+### FR-11 可观测性
+- Provider 写入路径至少记录：
+  `provider/readModelType/key(state id)/elapsedMs/result/errorType`。
+- 启动期能力校验失败日志必须可定位到具体 ReadModel 与缺失能力。
 
-### FR-12 一致化验证
-- 在 3 节点脚本中加入跨节点一致性测试并纳入 CI。
+### FR-12 分布式一致化验证
+- 保持并复用现有 3 节点一致性验证链路与脚本接入。
+- 新增 Provider 后，不得破坏现有 distributed smoke 稳定性。
 
-### FR-13 通用 Application Service 层
-- 提供通用 `ICommandApplicationService` / `IQueryApplicationService` 编排入口。
-- 通用应用层必须支持：校验、幂等、防重、审计、错误模型统一。
-- 业务侧仅实现领域 handler/mapper/spec，不重复实现管道横切逻辑。
+### FR-13 复用现有通用壳能力
+- Command 侧复用现有 `ICommandExecutionService<...>` 抽象，不新增平行命令执行框架。
+- Host 侧复用既有 capability 注册机制，不新增第二套 capability 映射容器。
 
-### FR-14 通用 Host 装配层
-- 提供模块化注册机制，支持按模块装配：
-  - 领域命令/查询 handler
-  - 投影 projector/reducer
-  - Provider 适配器
-- 启动期执行统一能力协商与配置有效性校验。
-
-## 10. 非功能需求（Non-Functional Requirements）
+## 10. 非功能需求（NFR）
 
 ### NFR-1 一致性
-- 读模型允许最终一致；同节点写后读在可配置窗口内收敛。
-- EventStore 单流版本单调递增。
+- EventStore 单流版本必须单调递增。
+- ReadModel 允许最终一致，但需在测试中可稳定判定收敛/失败。
 
 ### NFR-2 性能
-- Event append 与批量事件数量线性相关。
-- `ListAsync` 必须有硬上限。
+- `ListAsync` 必须强制硬上限（Provider 侧可配置上限）。
+- Provider 写入路径延迟应可观测（至少日志维度可统计）。
 
-### NFR-3 可观测性
-- 结构化日志至少包含：`provider`、`readModelType`、`documentId`、`stateVersion`、`elapsedMs`、`exceptionType`。
-- 索引型 Provider 额外记录：`index`、`alias`。
-- Graph Index Provider 额外记录：`nodeLabel`、`relationshipType`、`constraint`.
+### NFR-3 可运维性
+- Provider 配置支持 `appsettings` + 环境变量覆盖。
+- 能力不匹配在启动期直接失败，不允许运行中静默降级。
 
-### NFR-4 可运维性
-- Provider 配置支持 `appsettings` + 环境变量。
-- 索引型 Provider 的索引命名必须可环境隔离。
+### NFR-4 安全
+- 日志不得输出明文凭据。
+- 凭据通过配置系统注入，支持环境变量替换。
 
-### NFR-5 安全
-- 日志不得输出凭据。
-- 保留认证/TLS 参数透传位。
+### NFR-5 门禁兼容性
+- 新增实现不得触发现有 `architecture_guards`、`projection_route_mapping_guard`、`test_stability_guards` 违规。
+- 新增测试不得引入未授权轮询等待；必要例外必须进入 allowlist 并给出理由。
 
 ## 11. 配置需求
 
-### 11.1 Event Sourcing
-- `EventSourcing:Provider`
-- `EventSourcing:Snapshot:*`
-- `EventSourcing:PersistedEvent:Mode`（`Snapshot` / `Delta`）
-- `EventSourcing:PersistedEvent:AutoGenerate`（默认 `true`）
+### 11.1 当前有效配置（已存在）
+- `ActorRuntime:Provider`（`InMemory/MassTransit/Orleans`）
+- `WorkflowExecutionProjection:Enabled`
+- `WorkflowExecutionProjection:EnableActorQueryEndpoints`
+- `WorkflowExecutionProjection:EnableRunReportArtifacts`
+- `WorkflowExecutionProjection:RunProjectionCompletionWaitTimeoutMs`
+- `WorkflowExecutionProjection:RunProjectionFinalizeGraceTimeoutMs`
 
-### 11.2 ReadModel Provider
-- `Projection:ReadModel:Provider`（示例：`InMemory` / `Elasticsearch` / future）
-- `Projection:ReadModel:IndexKind`（可选：`Auto` / `Document` / `Graph`）
-- `Projection:ReadModel:Mode`（`StateOnly` / `DefaultReadModel` / `CustomReadModel`）
-- `Projection:ReadModel:DefaultMode`（`MirrorState` / `CustomProjector`，仅在非 `StateOnly` 下生效）
+### 11.2 v1 新增配置（建议）
+- `Projection:ReadModel:Provider`（`InMemory/Elasticsearch`）
 - `Projection:ReadModel:FailOnUnsupportedCapabilities`（默认 `true`）
-- `Projection:ReadModel:Bindings:*`（可选，ReadModel 到 Provider 的显式绑定）
+- `Projection:ReadModel:Bindings:*`（可选，ReadModel -> Provider 显式绑定）
+- `WorkflowExecutionProjection:ReadModelProvider` / `FailOnUnsupportedCapabilities` / `ReadModelBindings` 保留为模块内覆盖位（可选）
 
-### 11.3 Provider 专属配置（示例）
+### 11.3 Document Provider 示例配置
 - `Projection:ReadModel:Providers:Elasticsearch:Endpoints`
 - `Projection:ReadModel:Providers:Elasticsearch:IndexPrefix`
 - `Projection:ReadModel:Providers:Elasticsearch:RequestTimeoutMs`
 - `Projection:ReadModel:Providers:Elasticsearch:ListTakeMax`
 - `Projection:ReadModel:Providers:Elasticsearch:AutoCreateIndex`
-- `Projection:ReadModel:Providers:Neo4j:Uri`
-- `Projection:ReadModel:Providers:Neo4j:Database`
-- `Projection:ReadModel:Providers:Neo4j:Username`
-- `Projection:ReadModel:Providers:Neo4j:Password`
-- `Projection:ReadModel:Providers:Neo4j:AutoCreateConstraints`
+- `Projection:ReadModel:Providers:Elasticsearch:Username`
+- `Projection:ReadModel:Providers:Elasticsearch:Password`
 
-### 11.4 ReadModel Metadata
-- `Projection:ReadModel:Metadata:StrictMode`
-- `Projection:ReadModel:Metadata:ApplyAliases`
+### 11.4 预留（vNext）
+- `Projection:ReadModel:Providers:Neo4j:*`
+- `Projection:ReadModel:Mode`（`StateOnly/DefaultReadModel/CustomReadModel`）
 
 ## 12. 验收标准（DoD）
 
 ### 12.1 单元测试
-- 自动状态事件生成：变更检测、无变更不写、版本单调。
-- EventEnvelope 边界：路由字段不进入权威 persisted event。
-- Provider 能力匹配：支持/不支持索引能力的注册行为。
-- Provider 类型匹配：`Document` 元数据不能落到 `Graph` Provider，反之亦然。
-- 自动路由：单候选可自动承接，多候选未消歧必须 fail-fast。
-- 默认镜像器映射与自定义覆盖优先级。
-- Elasticsearch Provider 的 Upsert/Mutate/Get/List 与索引初始化。
-- Neo4j Provider 的节点/关系写入与约束初始化。
-- 通用 Application Service 管道：横切逻辑顺序与异常语义一致。
-- Host 装配：模块注册冲突与能力协商失败路径覆盖。
-- ReadModel 可选模式：`StateOnly`/`DefaultReadModel`/`CustomReadModel` 行为与能力边界覆盖。
+- Provider 能力声明与匹配（成功/失败/冲突路径）。
+- 启动期 fail-fast 错误语义。
+- Document Provider 的 `Upsert/Mutate/Get/List` 契约一致性。
+- Workflow 切换 Provider 后 Query 结果语义保持一致。
+- `ProjectionDisabled` 行为保持兼容（Workflow v1）。
+- 覆盖 Provider 注册与选择链路：`IProjectionReadModelStoreRegistration<,>` + `ProjectionReadModelStoreSelector`。
 
 ### 12.2 集成测试
-- Docker Elasticsearch 下验证索引型 ReadModel 的端到端写读。
-- Docker Neo4j 下验证图模型 ReadModel 的端到端写读。
-- 验证切换 Provider 后 Query 语义一致。
-- 验证 `StateOnly` 模式下读取端点返回统一“能力不可用”语义。
+- Docker Elasticsearch 下验证 Workflow ReadModel 端到端写读。
+- Provider 切换前后，关键 Query API 返回语义一致。
 
 ### 12.3 分布式一致化测试
-- 3 节点下 `workflows/agents` 查询跨节点一致。
-- 测试纳入 CI 且可稳定判定失败。
+- 保持并通过现有 3 节点一致性脚本链路。
+- 测试稳定性门禁通过，不新增未授权轮询等待。
 
-### 12.4 合规门槛
-- `build/test` 全通过。
-- 架构 guard 与稳定性 guard 全通过。
-- 文档、配置示例、能力矩阵同步。
+### 12.4 合规门槛（必须全绿）
+- `dotnet build aevatar.slnx --nologo`
+- `dotnet test aevatar.slnx --nologo`
+- `bash tools/ci/architecture_guards.sh`
+- `bash tools/ci/projection_route_mapping_guard.sh`
+- `bash tools/ci/test_stability_guards.sh`
+- `bash tools/ci/solution_split_test_guards.sh`
 
-## 13. 与现状对比
-| 维度 | 现状 | 目标 |
+## 13. 与原稿差异（本次修订）
+| 维度 | 原稿 | 本版 |
 |---|---|---|
-| 后端绑定 | 容易向 Elasticsearch 语义靠拢 | Provider 抽象，不绑定具体后端 |
-| 索引类型 | 仅文档索引思维 | Document/Graph 双索引统一抽象 |
-| EventStore 事件语义 | 易混用 runtime envelope | 仅持久化状态语义事件 |
-| Persisted Event 开发成本 | 业务手写为主 | 框架自动生成 |
-| Application Service | 业务层重复实现横切逻辑 | 通用管道壳 + 领域 handler 插件 |
-| Host 装配 | 模块能力协商分散 | 统一模块装配与能力校验 |
-| ReadModel 定义要求 | 默认倾向开发者显式定义 | ReadModel 可选（StateOnly/Default/Custom） |
-| 默认读模型构建 | 业务手写 reducer/projector | 默认提供 State 镜像投影 |
-| 索引能力 | 无统一能力闸门 | ReadModel 元数据 + Provider 能力匹配 |
+| `StateOnly` | v1 必做 | 与当前 Workflow 冲突，改为 vNext |
+| Graph Provider | v1 必做 | 改为 vNext（v1 仅保留扩展位） |
+| Persisted Event 自动化 | v1 强要求 | 改为分期，v1 保持兼容 |
+| 配置模型 | 以 `Projection:ReadModel:*` 为主 | 先兼容现有 `WorkflowExecutionProjection:*`，渐进演进 |
+| DoD | 泛化描述 | 对齐现有 CI 门禁与可执行命令 |
 
 ## 14. 风险与缓解
-- 风险：能力不匹配导致运行时失败。
-  - 缓解：启动期 fail-fast + 能力矩阵校验。
-- 风险：默认镜像不足以覆盖复杂业务。
-  - 缓解：保持自定义 projector 可替换。
-- 风险：索引 mapping 演进兼容问题。
-  - 缓解：版本化索引 + alias 切换策略（后续扩展）。
+- 风险：Provider 能力模型设计不当导致后续扩展困难。  
+  缓解：v1 先覆盖 Document 必需能力，Graph 通过独立 RFC 引入。
+- 风险：切换后端导致 Query 语义漂移。  
+  缓解：契约测试 + 端到端对照测试。
+- 风险：过早推进自动 Persisted Event 改动写侧行为。  
+  缓解：v1 保持显式路径，自动化能力仅实验开关。
 
-## 15. 里程碑建议
-1. M1：Provider 能力抽象 + 默认镜像抽象。
-2. M2：Document/Graph 元数据模型 + 能力匹配实现。
-3. M3：Elasticsearch + Neo4j 双适配器与测试覆盖。
-4. M4：Workflow 接入、3 节点一致化与 CI 收口。
+## 15. 待确认项（Open Questions）
+- `ReadModelBindings` 的优先级规则（显式绑定 vs 默认路由）最终口径。
+- Graph RFC 的启动条件（抽象稳定性、测试基线、运维要求）。
+- 多业务域接入时，Provider 默认路由策略是否需要支持“按 ReadModel 类型自动选择”。
 
-## 16. 待确认项（Open Questions）
-- 不支持索引能力时是否允许“显式降级”为无索引模式，还是一律 fail-fast？
-- Provider 能力最小集合是否需要扩展到 `SupportsPartialUpdate`？
-- ReadModel 元数据版本升级策略如何定义（兼容/阻断）？
-- 同一 ReadModel 是否允许同时落 Document + Graph（双写），还是要求单一承接方？
+## 16. 需求-实现映射（v1）
+| 需求主题 | 优先改动位置 | 复用现有扩展点 | 说明 |
+|---|---|---|---|
+| Provider 能力声明与校验 | `src/Aevatar.CQRS.Projection.Abstractions/Abstractions` + `src/workflow/Aevatar.Workflow.Projection/DependencyInjection` | `AddWorkflowExecutionProjectionCQRS` | 通过 Selector + CapabilityValidator 在装配期做匹配与 fail-fast |
+| Document Provider Store | `src/Aevatar.CQRS.Projection.Providers.Elasticsearch` | `IProjectionReadModelStoreRegistration<,>` | 通用 ES Provider，不绑定 Workflow 业务域 |
+| Query 语义回归保障 | `src/workflow/Aevatar.Workflow.Projection/Orchestration` | `IWorkflowExecutionProjectionPort` | 不改 `null/[]/404/200` 现有合同 |
+| 配置绑定扩展 | `src/workflow/Aevatar.Workflow.Infrastructure/DependencyInjection` | `WorkflowExecutionProjection` + `Projection:ReadModel` 配置节 | 新增统一 Provider 配置并保持模块级覆盖位 |
+| 测试与门禁收口 | `test/Aevatar.Workflow.Host.Api.Tests`、`test/Aevatar.Workflow.Application.Tests`、`tools/ci` | 现有 CI 脚本链路 | 先增量覆盖，再跑全量门禁 |

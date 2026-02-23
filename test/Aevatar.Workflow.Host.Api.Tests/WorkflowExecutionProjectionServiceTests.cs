@@ -3,6 +3,7 @@ using Aevatar.AI.Projection.Appliers;
 using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Runtime.Actors;
@@ -19,7 +20,6 @@ using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Reducers;
-using Aevatar.Workflow.Projection.Stores;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -597,7 +597,7 @@ public class WorkflowExecutionProjectionServiceTests
         IProjectionOwnershipCoordinator ownershipCoordinator,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle)
     {
-        var store = new InMemoryWorkflowExecutionReadModelStore();
+        var store = CreateStore();
         var clock = new SystemProjectionClock();
         var runEventHub = new NoOpWorkflowRunEventHub();
         var mapper = new WorkflowExecutionReadModelMapper();
@@ -649,6 +649,11 @@ public class WorkflowExecutionProjectionServiceTests
             [new AIToolResultProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
         new WorkflowCompletedEventReducer(),
     ];
+
+    private static InMemoryProjectionReadModelStore<WorkflowExecutionReport, string> CreateStore() => new(
+        keySelector: report => report.RootActorId,
+        keyFormatter: key => key,
+        listSortSelector: report => report.StartedAt);
 
     private static EventEnvelope Wrap(IMessage evt, string publisherId = "root") => new()
     {
@@ -704,7 +709,7 @@ public class WorkflowExecutionProjectionServiceTests
     private sealed class ObservableWorkflowExecutionReadModelStore
         : IProjectionReadModelStore<WorkflowExecutionReport, string>
     {
-        private readonly InMemoryWorkflowExecutionReadModelStore _inner = new();
+        private readonly InMemoryProjectionReadModelStore<WorkflowExecutionReport, string> _inner = CreateStore();
         private readonly object _gate = new();
         private readonly List<StoreWaiter> _waiters = [];
 

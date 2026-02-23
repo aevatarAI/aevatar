@@ -1,4 +1,9 @@
 using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.AI.Projection.Reducers;
 using Aevatar.Workflow.Extensions.AIProjection;
 using Aevatar.Workflow.Projection;
@@ -16,9 +21,95 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public class WorkflowExecutionProjectionRegistrationTests
 {
     [Fact]
+    public void AddWorkflowExecutionProjectionCQRS_ShouldUseInMemoryProviderByDefault()
+    {
+        var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
+        services.AddWorkflowExecutionProjectionCQRS();
+
+        using var provider = services.BuildServiceProvider();
+        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+
+        store.Should().BeOfType<InMemoryProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        var metadata = store.Should().BeAssignableTo<IProjectionReadModelStoreProviderMetadata>().Subject;
+        metadata.ProviderCapabilities.ProviderName.Should().Be(ProjectionReadModelProviderNames.InMemory);
+    }
+
+    [Fact]
+    public void AddWorkflowExecutionProjectionCQRS_WhenElasticsearchConfigured_ShouldResolveElasticsearchStore()
+    {
+        var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
+        RegisterElasticsearchProvider(services);
+        services.AddWorkflowExecutionProjectionCQRS(options =>
+            options.ReadModelProvider = ProjectionReadModelProviderNames.Elasticsearch);
+
+        using var provider = services.BuildServiceProvider();
+        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+
+        store.Should().BeOfType<ElasticsearchProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        var metadata = store.Should().BeAssignableTo<IProjectionReadModelStoreProviderMetadata>().Subject;
+        metadata.ProviderCapabilities.SupportsIndexing.Should().BeTrue();
+        metadata.ProviderCapabilities.IndexKinds.Should().Contain(ProjectionReadModelIndexKind.Document);
+    }
+
+    [Fact]
+    public void AddWorkflowExecutionProjectionCQRS_WhenProviderUnsupported_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
+        services.AddWorkflowExecutionProjectionCQRS(options =>
+            options.ReadModelProvider = "UnknownProvider");
+        using var provider = services.BuildServiceProvider();
+
+        Action act = () => provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Requested provider*is not registered*");
+    }
+
+    [Fact]
+    public void AddWorkflowExecutionProjectionCQRS_WhenBindingRequiresUnsupportedCapabilities_ShouldFailFast()
+    {
+        var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
+        services.AddWorkflowExecutionProjectionCQRS(options =>
+        {
+            options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory;
+            options.ReadModelBindings[nameof(WorkflowExecutionReport)] = ProjectionReadModelIndexKind.Document.ToString();
+            options.FailOnUnsupportedCapabilities = true;
+        });
+        using var provider = services.BuildServiceProvider();
+
+        Action act = () => provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+
+        act.Should().Throw<ProjectionReadModelCapabilityValidationException>()
+            .Where(ex => ex.ReadModelType == typeof(WorkflowExecutionReport));
+    }
+
+    [Fact]
+    public void AddWorkflowExecutionProjectionCQRS_WhenFailFastDisabled_ShouldAllowUnsupportedCapabilities()
+    {
+        var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
+        services.AddWorkflowExecutionProjectionCQRS(options =>
+        {
+            options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory;
+            options.ReadModelBindings[nameof(WorkflowExecutionReport)] = ProjectionReadModelIndexKind.Document.ToString();
+            options.FailOnUnsupportedCapabilities = false;
+        });
+        using var provider = services.BuildServiceProvider();
+
+        Action act = () => provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
     public async Task AddWorkflowExecutionProjectionReducer_ShouldSupportExternalReducer()
     {
         var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
         services.AddWorkflowExecutionProjectionCQRS();
         services.AddWorkflowExecutionProjectionReducer<CustomChatRequestReducer>();
 
@@ -49,6 +140,7 @@ public class WorkflowExecutionProjectionRegistrationTests
     public async Task AddWorkflowExecutionProjectionExtensionsFromAssembly_ShouldAutoRegisterReducer()
     {
         var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
         services.AddWorkflowExecutionProjectionCQRS();
         services.AddWorkflowExecutionProjectionExtensionsFromAssembly(typeof(CustomChatRequestReducer).Assembly);
 
@@ -79,6 +171,7 @@ public class WorkflowExecutionProjectionRegistrationTests
     public void AddWorkflowExecutionProjectionCQRS_MultipleCalls_ShouldUseLastOptions()
     {
         var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
         services.AddWorkflowExecutionProjectionCQRS(options => options.Enabled = true);
         services.AddWorkflowExecutionProjectionCQRS(options => options.Enabled = false);
 
@@ -93,9 +186,27 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
+    public void AddWorkflowExecutionProjectionCQRS_MultipleCalls_ShouldUseLastProvider()
+    {
+        var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
+        RegisterElasticsearchProvider(services);
+        services.AddWorkflowExecutionProjectionCQRS(options =>
+            options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory);
+        services.AddWorkflowExecutionProjectionCQRS(options =>
+            options.ReadModelProvider = ProjectionReadModelProviderNames.Elasticsearch);
+
+        using var provider = services.BuildServiceProvider();
+        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+
+        store.Should().BeOfType<ElasticsearchProjectionReadModelStore<WorkflowExecutionReport, string>>();
+    }
+
+    [Fact]
     public void AddWorkflowExecutionProjectionCQRS_ShouldExposeGenericProjectionAbstractions()
     {
         var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
         services.AddWorkflowExecutionProjectionCQRS();
 
         using var provider = services.BuildServiceProvider();
@@ -114,6 +225,7 @@ public class WorkflowExecutionProjectionRegistrationTests
     public void AddWorkflowExecutionProjectionCQRS_WithAIExtensions_ShouldRegisterDefaultAIReducers()
     {
         var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
         services.AddWorkflowExecutionProjectionCQRS();
         services.AddWorkflowAIProjectionExtensions();
 
@@ -144,6 +256,7 @@ public class WorkflowExecutionProjectionRegistrationTests
     public async Task AddWorkflowExecutionProjectionCQRS_WithAIExtensions_ShouldProjectAIEventsWithoutWorkflowApplier()
     {
         var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
         services.AddWorkflowExecutionProjectionCQRS();
         services.AddWorkflowAIProjectionExtensions();
 
@@ -187,6 +300,28 @@ public class WorkflowExecutionProjectionRegistrationTests
         PublisherId = publisherId,
         Direction = EventDirection.Down,
     };
+
+    private static void RegisterElasticsearchProvider(IServiceCollection services)
+    {
+        services.AddElasticsearchReadModelStoreRegistration<WorkflowExecutionReport, string>(
+            optionsFactory: _ => new ElasticsearchProjectionReadModelStoreOptions
+            {
+                Endpoints = ["http://localhost:9200"],
+                IndexPrefix = "aevatar-test",
+                AutoCreateIndex = false,
+            },
+            indexScope: "workflow-execution-reports",
+            keySelector: report => report.RootActorId,
+            keyFormatter: key => key);
+    }
+
+    private static void RegisterInMemoryProvider(IServiceCollection services)
+    {
+        services.AddInMemoryReadModelStoreRegistration<WorkflowExecutionReport, string>(
+            keySelector: report => report.RootActorId,
+            keyFormatter: key => key,
+            listSortSelector: report => report.StartedAt);
+    }
 
     public sealed class CustomChatRequestReducer : WorkflowExecutionEventReducerBase<ChatRequestEvent>
     {

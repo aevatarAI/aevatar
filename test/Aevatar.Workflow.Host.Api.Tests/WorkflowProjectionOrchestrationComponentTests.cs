@@ -1,9 +1,9 @@
 using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Workflow.Projection.Stores;
 using FluentAssertions;
 using System.Runtime.CompilerServices;
 
@@ -79,7 +79,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     {
         var startedAt = new DateTimeOffset(2026, 2, 21, 12, 0, 0, TimeSpan.Zero);
         var stoppedAt = startedAt.AddMinutes(3);
-        var store = new InMemoryWorkflowExecutionReadModelStore();
+        var store = CreateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
             RootActorId = "actor-2",
@@ -123,7 +123,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     [Fact]
     public async Task QueryReader_ShouldMapSnapshotsAndSortTimeline()
     {
-        var store = new InMemoryWorkflowExecutionReadModelStore();
+        var store = CreateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
             RootActorId = "actor-3",
@@ -327,6 +327,11 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("sink failed");
         policy.Calls.Should().ContainSingle();
     }
+
+    private static InMemoryProjectionReadModelStore<WorkflowExecutionReport, string> CreateStore() => new(
+        keySelector: report => report.RootActorId,
+        keyFormatter: key => key,
+        listSortSelector: report => report.StartedAt);
 
     private static WorkflowExecutionRuntimeLease CreateLease(string actorId, string commandId) => new(
         new WorkflowExecutionProjectionContext

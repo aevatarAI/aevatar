@@ -9,7 +9,6 @@ using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Workflow.Projection.Stores;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;

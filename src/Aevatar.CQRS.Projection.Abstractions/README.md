@@ -8,6 +8,10 @@
 - 扩展抽象：`IProjectionProjector<,>`、`IProjectionEventReducer<,>`
 - 失败回传：`IProjectionDispatchFailureReporter<>`
 - 读模型存储：`IProjectionReadModelStore<,>`
+- Provider 能力建模：`ProjectionReadModelProviderCapabilities`、`IProjectionReadModelStoreProviderMetadata`
+- 能力校验：`ProjectionReadModelRequirements`、`ProjectionReadModelCapabilityValidator`
+- Provider 注册与选择：`IProjectionReadModelStoreRegistration<,>`、`DelegateProjectionReadModelStoreRegistration<,>`、`ProjectionReadModelStoreSelector`
+- Provider 运行配置：`ProjectionReadModelRuntimeOptions`
 - 运行时策略：`IProjectionRuntimeOptions`、`IProjectionClock`
 - 流订阅复用：`IActorStreamSubscriptionHub<TMessage>`
 - 投影上下文：`IProjectionContext`
