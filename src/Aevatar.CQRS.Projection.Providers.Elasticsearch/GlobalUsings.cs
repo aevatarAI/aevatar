@@ -1,1 +1,1 @@
-global using Aevatar.CQRS.Projection.Abstractions;
+global using Aevatar.CQRS.Projection.Stores.Abstractions;

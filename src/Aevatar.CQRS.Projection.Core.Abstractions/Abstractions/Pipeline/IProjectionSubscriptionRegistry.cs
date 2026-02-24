@@ -1,4 +1,4 @@
-namespace Aevatar.CQRS.Projection.Abstractions;
+namespace Aevatar.CQRS.Projection.Core.Abstractions;
 
 /// <summary>
 /// Generic registry for actor-level projection subscription lifecycle.

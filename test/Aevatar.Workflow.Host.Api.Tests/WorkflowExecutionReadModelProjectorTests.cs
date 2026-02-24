@@ -1,6 +1,6 @@
 using Aevatar.AI.Projection.Reducers;
 using Aevatar.AI.Projection.Appliers;
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.Foundation.Abstractions.Deduplication;

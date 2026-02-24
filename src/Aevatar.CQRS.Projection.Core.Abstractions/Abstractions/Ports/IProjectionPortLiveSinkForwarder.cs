@@ -1,4 +1,4 @@
-namespace Aevatar.CQRS.Projection.Abstractions;
+namespace Aevatar.CQRS.Projection.Core.Abstractions;
 
 /// <summary>
 /// Generic forwarder contract for projection runtime events to external sinks.

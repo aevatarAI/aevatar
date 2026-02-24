@@ -1,4 +1,4 @@
-namespace Aevatar.CQRS.Projection.Abstractions;
+namespace Aevatar.CQRS.Projection.Core.Abstractions;
 
 /// <summary>
 /// Projection context that carries its stream subscription lease.

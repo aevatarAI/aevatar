@@ -1,5 +1,5 @@
 using Aevatar.Demos.CaseProjection.Configuration;
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using System.Collections.Concurrent;
 
 namespace Aevatar.Demos.CaseProjection.Orchestration;

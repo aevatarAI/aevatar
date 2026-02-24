@@ -1,4 +1,4 @@
-namespace Aevatar.CQRS.Projection.Abstractions;
+namespace Aevatar.CQRS.Projection.Core.Abstractions;
 
 /// <summary>
 /// Publishes and subscribes projection session events by scope/session key.

@@ -2,7 +2,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Application.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;

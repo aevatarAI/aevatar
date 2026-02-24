@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;

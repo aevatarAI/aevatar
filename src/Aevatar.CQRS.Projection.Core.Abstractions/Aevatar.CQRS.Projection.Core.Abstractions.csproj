@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>Aevatar.CQRS.Projection.Core.Abstractions</AssemblyName>
-    <RootNamespace>Aevatar.CQRS.Projection.Abstractions</RootNamespace>
+    <RootNamespace>Aevatar.CQRS.Projection.Core.Abstractions</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />

@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;

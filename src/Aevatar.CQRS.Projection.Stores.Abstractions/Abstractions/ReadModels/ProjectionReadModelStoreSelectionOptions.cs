@@ -1,4 +1,4 @@
-namespace Aevatar.CQRS.Projection.Abstractions;
+namespace Aevatar.CQRS.Projection.Stores.Abstractions;
 
 public sealed class ProjectionReadModelStoreSelectionOptions
 {

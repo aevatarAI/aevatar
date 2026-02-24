@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;

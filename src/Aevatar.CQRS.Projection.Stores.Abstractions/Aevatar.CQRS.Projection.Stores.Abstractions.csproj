@@ -4,6 +4,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>Aevatar.CQRS.Projection.Stores.Abstractions</AssemblyName>
-    <RootNamespace>Aevatar.CQRS.Projection.Abstractions</RootNamespace>
+    <RootNamespace>Aevatar.CQRS.Projection.Stores.Abstractions</RootNamespace>
   </PropertyGroup>
 </Project>
