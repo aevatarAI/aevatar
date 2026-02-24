@@ -7,55 +7,60 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public class ProjectionReadModelStoreSelectorTests
 {
     [Fact]
-    public void GraphStoreFactory_WhenRequestedProviderMatched_ShouldCreateRequestedProviderStore()
+    public async Task ProjectionGraphStoreFanout_ShouldFanoutWritesAndUsePrimaryQueryStore()
     {
+        var primaryStore = new NamedGraphStore("primary");
+        var replicaStore = new NamedGraphStore("replica");
         var services = new ServiceCollection();
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "inmemory",
-                _ => new NamedGraphStore("inmemory")));
+                "primary",
+                _ => primaryStore));
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "neo4j",
-                _ => new NamedGraphStore("neo4j")));
+                "replica",
+                _ => replicaStore));
 
         using var serviceProvider = services.BuildServiceProvider();
-        var factory = new ProjectionGraphStoreFactory();
+        var fanout = new ProjectionGraphStoreFanout(
+            serviceProvider.GetServices<IProjectionStoreRegistration<IProjectionGraphStore>>(),
+            serviceProvider);
 
-        var selected = factory.Create(serviceProvider, "Neo4J");
-        var typed = selected.Should().BeOfType<NamedGraphStore>().Subject;
-        typed.ProviderName.Should().Be("neo4j");
+        await fanout.UpsertNodeAsync(new ProjectionGraphNode
+        {
+            Scope = "projection-scope",
+            NodeId = "node-1",
+            NodeType = "Actor",
+            Properties = new Dictionary<string, string>(),
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        var edges = await fanout.GetNeighborsAsync(new ProjectionGraphQuery
+        {
+            Scope = "projection-scope",
+            RootNodeId = "node-1",
+            Direction = ProjectionGraphDirection.Both,
+            EdgeTypes = [],
+            Depth = 1,
+            Take = 10,
+        });
+
+        primaryStore.UpsertNodeCount.Should().Be(1);
+        replicaStore.UpsertNodeCount.Should().Be(1);
+        edges.Should().HaveCount(1);
+        edges[0].EdgeType.Should().Be("primary");
     }
 
     [Fact]
-    public void GraphStoreFactory_WhenRequestedProviderMissing_ShouldThrow()
-    {
-        var services = new ServiceCollection();
-        services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
-            new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "inmemory",
-                _ => new NamedGraphStore("inmemory")));
-
-        using var serviceProvider = services.BuildServiceProvider();
-        var factory = new ProjectionGraphStoreFactory();
-
-        Action act = () => factory.Create(serviceProvider, "elasticsearch");
-
-        act.Should().Throw<ProjectionProviderSelectionException>()
-            .Where(ex => ex.Reason.Contains("Requested relation store provider is not registered", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void GraphStoreFactory_WhenNoProviderRegistered_ShouldThrow()
+    public void ProjectionGraphStoreFanout_WhenNoRegistrations_ShouldThrow()
     {
         var services = new ServiceCollection();
         using var serviceProvider = services.BuildServiceProvider();
-        var factory = new ProjectionGraphStoreFactory();
 
-        Action act = () => factory.Create(serviceProvider, ProjectionProviderNames.InMemory);
+        Action act = () => new ProjectionGraphStoreFanout([], serviceProvider);
 
-        act.Should().Throw<ProjectionProviderSelectionException>()
-            .Where(ex => ex.Reason.Contains("No relation store provider registrations", StringComparison.Ordinal));
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*No graph projection store providers are registered*");
     }
 
     private sealed class NamedGraphStore : IProjectionGraphStore
@@ -67,16 +72,51 @@ public class ProjectionReadModelStoreSelectorTests
 
         public string ProviderName { get; }
 
-        public Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default) => Task.CompletedTask;
+        public int UpsertNodeCount { get; private set; }
 
-        public Task UpsertEdgeAsync(ProjectionGraphEdge edge, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default)
+        {
+            _ = node;
+            UpsertNodeCount++;
+            return Task.CompletedTask;
+        }
 
-        public Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UpsertEdgeAsync(ProjectionGraphEdge edge, CancellationToken ct = default)
+        {
+            _ = edge;
+            return Task.CompletedTask;
+        }
 
-        public Task<IReadOnlyList<ProjectionGraphEdge>> GetNeighborsAsync(ProjectionGraphQuery query, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ProjectionGraphEdge>>([]);
+        public Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default)
+        {
+            _ = scope;
+            _ = edgeId;
+            return Task.CompletedTask;
+        }
 
-        public Task<ProjectionGraphSubgraph> GetSubgraphAsync(ProjectionGraphQuery query, CancellationToken ct = default) =>
-            Task.FromResult(new ProjectionGraphSubgraph());
+        public Task<IReadOnlyList<ProjectionGraphEdge>> GetNeighborsAsync(ProjectionGraphQuery query, CancellationToken ct = default)
+        {
+            _ = query;
+            IReadOnlyList<ProjectionGraphEdge> result =
+            [
+                new ProjectionGraphEdge
+                {
+                    Scope = "projection-scope",
+                    EdgeId = "edge-1",
+                    EdgeType = ProviderName,
+                    FromNodeId = "node-1",
+                    ToNodeId = "node-2",
+                    Properties = new Dictionary<string, string>(),
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                },
+            ];
+            return Task.FromResult(result);
+        }
+
+        public Task<ProjectionGraphSubgraph> GetSubgraphAsync(ProjectionGraphQuery query, CancellationToken ct = default)
+        {
+            _ = query;
+            return Task.FromResult(new ProjectionGraphSubgraph());
+        }
     }
 }

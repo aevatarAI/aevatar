@@ -8,8 +8,8 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddProjectionReadModelRuntime(this IServiceCollection services)
     {
-        services.TryAddSingleton<IProjectionDocumentStoreFactory, ProjectionDocumentStoreFactory>();
-        services.TryAddSingleton<IProjectionGraphStoreFactory, ProjectionGraphStoreFactory>();
+        services.TryAddSingleton(typeof(IDocumentProjectionStore<,>), typeof(ProjectionDocumentStoreFanout<,>));
+        services.TryAddSingleton<IProjectionGraphStore, ProjectionGraphStoreFanout>();
         services.TryAddSingleton(typeof(IProjectionGraphMaterializer<>), typeof(ProjectionGraphMaterializer<>));
         services.TryAddSingleton(typeof(IProjectionMaterializationRouter<,>), typeof(ProjectionMaterializationRouter<,>));
         services.TryAddSingleton<IProjectionDocumentMetadataResolver, ProjectionDocumentMetadataResolver>();

@@ -18,19 +18,19 @@
   - `WorkflowProjectionSinkFailurePolicy`（sink 异常策略）
   - `WorkflowProjectionReadModelUpdater`（read model 元信息更新）
   - `WorkflowProjectionQueryReader`（query 映射读取）
-  - Store 选择采用显式 providerName（Document/Graph 分离）
+  - Store Fan-out：Document/Graph 分别一对多广播（无 providerName 单选）
 - 领域上下文：`IWorkflowExecutionProjectionContextFactory`、`WorkflowExecutionProjectionContext`
 - 实时输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
 - 领域投影实现：reducers、projectors、read model（不包含 Provider Store 实现）
 - 领域 DI 组合：`AddWorkflowExecutionProjectionCQRS(...)`
 - Provider 启动校验：由 `WorkflowReadModelStartupValidationHostedService` 执行 Document/Graph 两条独立 fail-fast 校验
-- ReadModel 选择规则：DI store 解析与 Startup validation 统一复用 Document/Graph runtime options（`ProjectionDocumentRuntimeOptions`、`ProjectionGraphRuntimeOptions`）
+- ReadModel 存储解析规则：运行时通过 `ProjectionDocumentStoreFanout<,>` / `ProjectionGraphStoreFanout` 聚合已注册 Provider
 
 本项目依赖：
 
 - `Aevatar.CQRS.Projection.Core.Abstractions`（投影管线/端口抽象）
 - `Aevatar.CQRS.Projection.Stores.Abstractions`（Document/Graph 存储契约）
-- `Aevatar.CQRS.Projection.Runtime.Abstractions`（Provider 选择与 materialization 编排契约）
+- `Aevatar.CQRS.Projection.Runtime.Abstractions`（Store 注册与 materialization 编排契约）
 - `Aevatar.CQRS.Projection.Core`（通用生命周期/订阅/协调实现）
 - `Aevatar.Foundation.Projection`（最小 read model 基类与读侧能力接口）
 - `Aevatar.Workflow.Extensions.AIProjection`（可选扩展：组合 `Aevatar.AI.Projection` 的通用 reducer/applier）
@@ -90,14 +90,17 @@ FAQ：
 
 ## Provider 配置
 
-- Provider 选择统一配置入口：
-  - `Projection:Document:Provider`：`InMemory`（默认）/`Elasticsearch`
-  - `Projection:Graph:Provider`：`InMemory`（默认）/`Neo4j`
-- `Projection:Policies:DenyInMemoryGraphFactStore`：禁用 InMemory graph 作为事实源（生产建议开启）
+- 不再支持 `Projection:Document:Provider` / `Projection:Graph:Provider` 单选模型。
+- 使用一对多启用开关模型：
+  - `Projection:Document:Providers:InMemory:Enabled`
+  - `Projection:Document:Providers:Elasticsearch:Enabled`
+  - `Projection:Graph:Providers:InMemory:Enabled`
+  - `Projection:Graph:Providers:Neo4j:Enabled`
 - 文档 Provider 配置：
-  - `Projection:Document:Providers:Elasticsearch:*`
+  - `Projection:Document:Providers:Elasticsearch:*`（至少配置 `Endpoints`）
 - 图 Provider 配置：
-  - `Projection:Graph:Providers:Neo4j:*`
+  - `Projection:Graph:Providers:Neo4j:*`（至少配置 `Uri`）
+- `Projection:Policies:DenyInMemoryGraphFactStore`：禁用 InMemory graph 作为事实源（生产建议开启）
 - `WorkflowExecutionProjection:ValidateDocumentProviderOnStartup`：启动阶段预校验 document provider（默认 `true`）
 - `WorkflowExecutionProjection:ValidateGraphProviderOnStartup`：启动阶段预校验 graph provider（默认 `true`）
 - 图查询参数：

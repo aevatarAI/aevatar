@@ -1,16 +1,13 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
-using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
-using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.DependencyInjection;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -26,12 +23,12 @@ public class WorkflowExecutionProjectionRegistrationTests
         await using var provider = services.BuildServiceProvider();
         Func<Task> act = () => StartHostedServicesAsync(provider);
 
-        await act.Should().ThrowAsync<ProjectionProviderSelectionException>()
-            .WithMessage("*No document store provider registrations were found*");
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*No document projection store providers are registered*");
     }
 
     [Fact]
-    public async Task AddWorkflowExecutionProjectionCQRS_ShouldResolveInMemoryDocumentAndGraphStores()
+    public async Task AddWorkflowExecutionProjectionCQRS_ShouldResolveFanoutStores()
     {
         var services = new ServiceCollection();
         RegisterInMemoryProviders(services);
@@ -39,14 +36,12 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         await using var provider = services.BuildServiceProvider();
         var documentStore = provider.GetRequiredService<IDocumentProjectionStore<WorkflowExecutionReport, string>>();
-        var readModelStore = provider.GetRequiredService<IDocumentProjectionStore<WorkflowExecutionReport, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
         var graphStore = provider.GetRequiredService<IProjectionGraphMaterializer<WorkflowExecutionReport>>();
         var router = provider.GetRequiredService<IProjectionMaterializationRouter<WorkflowExecutionReport, string>>();
 
-        documentStore.Should().BeOfType<InMemoryProjectionReadModelStore<WorkflowExecutionReport, string>>();
-        readModelStore.Should().BeOfType<InMemoryProjectionReadModelStore<WorkflowExecutionReport, string>>();
-        relationStore.Should().BeOfType<InMemoryProjectionGraphStore>();
+        documentStore.Should().BeOfType<ProjectionDocumentStoreFanout<WorkflowExecutionReport, string>>();
+        relationStore.Should().BeOfType<ProjectionGraphStoreFanout>();
         graphStore.Should().BeOfType<ProjectionGraphMaterializer<WorkflowExecutionReport>>();
         router.Should().NotBeNull();
 
@@ -55,41 +50,17 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void AddWorkflowExecutionProjectionCQRS_WhenDocumentElasticsearchAndGraphInMemoryConfigured_ShouldResolveSplitProviders()
-    {
-        var services = new ServiceCollection();
-        RegisterInMemoryProviders(services);
-        RegisterElasticsearchDocumentProvider(services);
-        ConfigureStoreSelectionOptions(
-            services,
-            documentProvider: ProjectionProviderNames.Elasticsearch,
-            graphProvider: ProjectionProviderNames.InMemory);
-        services.AddWorkflowExecutionProjectionCQRS();
-
-        using var provider = services.BuildServiceProvider();
-        var readModelStore = provider.GetRequiredService<IDocumentProjectionStore<WorkflowExecutionReport, string>>();
-        var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
-
-        readModelStore.Should().BeOfType<ElasticsearchProjectionReadModelStore<WorkflowExecutionReport, string>>();
-        relationStore.Should().BeOfType<InMemoryProjectionGraphStore>();
-    }
-
-    [Fact]
     public void AddWorkflowExecutionProjectionCQRS_WhenGraphProviderMissing_ShouldThrowOnGraphStoreResolution()
     {
         var services = new ServiceCollection();
         RegisterElasticsearchDocumentProvider(services);
-        ConfigureStoreSelectionOptions(
-            services,
-            documentProvider: ProjectionProviderNames.Elasticsearch,
-            graphProvider: ProjectionProviderNames.Elasticsearch);
         services.AddWorkflowExecutionProjectionCQRS();
 
         using var provider = services.BuildServiceProvider();
         Action act = () => provider.GetRequiredService<IProjectionGraphStore>();
 
-        act.Should().Throw<ProjectionProviderSelectionException>()
-            .WithMessage("*No relation store provider registrations were found*");
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*No graph projection store providers are registered*");
     }
 
     private static void RegisterInMemoryProviders(IServiceCollection services)
@@ -109,33 +80,13 @@ public class WorkflowExecutionProjectionRegistrationTests
             {
                 Endpoints = ["http://localhost:9200"],
             },
-            indexScopeFactory: sp =>
+            metadataFactory: sp =>
             {
                 var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
-                return metadataResolver.Resolve<WorkflowExecutionReport>().IndexName;
+                return metadataResolver.Resolve<WorkflowExecutionReport>();
             },
             keySelector: report => report.RootActorId,
             keyFormatter: key => key);
-    }
-
-    private static void ConfigureStoreSelectionOptions(
-        IServiceCollection services,
-        string documentProvider,
-        string graphProvider)
-    {
-        var documentOptions = new ProjectionDocumentRuntimeOptions
-        {
-            ProviderName = documentProvider,
-            FailFastOnStartup = true,
-        };
-        var graphOptions = new ProjectionGraphRuntimeOptions
-        {
-            ProviderName = graphProvider,
-            FailFastOnStartup = true,
-        };
-
-        services.Replace(ServiceDescriptor.Singleton(documentOptions));
-        services.Replace(ServiceDescriptor.Singleton(graphOptions));
     }
 
     private static async Task StartHostedServicesAsync(IServiceProvider provider)

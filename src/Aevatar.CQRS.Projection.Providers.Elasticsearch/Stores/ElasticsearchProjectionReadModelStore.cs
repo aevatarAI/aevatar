@@ -13,6 +13,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
       IDisposable
     where TReadModel : class
 {
+    private const string ProviderName = "Elasticsearch";
     private const string DefaultListPrimarySortField = "CreatedAt";
     private const string DefaultListTiebreakSortField = "_id";
 
@@ -25,7 +26,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
     private readonly string _listSortField;
     private readonly ElasticsearchMissingIndexBehavior _missingIndexBehavior;
     private readonly int _mutateMaxRetryCount;
-    private readonly string _providerName;
+    private readonly DocumentIndexMetadata _indexMetadata;
     private readonly ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>> _logger;
     private readonly SemaphoreSlim _indexInitializationLock = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -36,10 +37,9 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
 
     public ElasticsearchProjectionReadModelStore(
         ElasticsearchProjectionReadModelStoreOptions options,
-        string indexScope,
+        DocumentIndexMetadata indexMetadata,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
-        string providerName = ProjectionProviderNames.Elasticsearch,
         ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>? logger = null,
         HttpMessageHandler? httpMessageHandler = null)
     {
@@ -60,18 +60,16 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
         }
 
-        var normalizedScope = NormalizeToken(indexScope);
+        var normalizedMetadata = NormalizeMetadata(indexMetadata);
+        var normalizedScope = NormalizeToken(normalizedMetadata.IndexName);
         if (normalizedScope.Length == 0)
             normalizedScope = "readmodel";
-
         _indexName = BuildIndexName(options.IndexPrefix, normalizedScope);
         _listTakeMax = options.ListTakeMax > 0 ? options.ListTakeMax : 200;
         _autoCreateIndex = options.AutoCreateIndex;
         _missingIndexBehavior = options.MissingIndexBehavior;
         _mutateMaxRetryCount = Math.Clamp(options.MutateMaxRetryCount, 0, 20);
-        _providerName = string.IsNullOrWhiteSpace(providerName)
-            ? ProjectionProviderNames.Elasticsearch
-            : providerName.Trim();
+        _indexMetadata = normalizedMetadata with { IndexName = _indexName };
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _listSortField = options.ListSortField?.Trim() ?? "";
@@ -127,8 +125,8 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
             {
                 _logger.LogWarning(
                     ex,
-                    "Projection read-model optimistic concurrency conflict. provider={Provider} readModelType={ReadModelType} key={Key} attempt={Attempt}/{MaxAttempts}",
-                    _providerName,
+                "Projection read-model optimistic concurrency conflict. provider={Provider} readModelType={ReadModelType} key={Key} attempt={Attempt}/{MaxAttempts}",
+                    ProviderName,
                     typeof(TReadModel).FullName,
                     keyValue,
                     attempt + 1,
@@ -283,7 +281,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
             var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
             _logger.LogInformation(
                 "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
-                _providerName,
+                ProviderName,
                 typeof(TReadModel).FullName,
                 keyValue,
                 elapsedMs,
@@ -319,7 +317,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
 
         _logger.LogWarning(
             "Projection read-model index is missing. provider={Provider} readModelType={ReadModelType} index={Index} operation={Operation} behavior={Behavior}",
-            _providerName,
+            ProviderName,
             typeof(TReadModel).FullName,
             _indexName,
             operation,
@@ -349,7 +347,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         _logger.LogError(
             ex,
             "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
-            _providerName,
+            ProviderName,
             typeof(TReadModel).FullName,
             keyValue,
             elapsedMs,
@@ -456,9 +454,10 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
             if (_indexInitialized)
                 return;
 
+            var payload = BuildIndexInitializationPayload();
             using var request = new HttpRequestMessage(HttpMethod.Put, _indexName)
             {
-                Content = new StringContent("{\"mappings\":{\"dynamic\":true}}", Encoding.UTF8, "application/json"),
+                Content = new StringContent(payload, Encoding.UTF8, "application/json"),
             };
             using var response = await _httpClient.SendAsync(request, ct);
             if (response.IsSuccessStatusCode)
@@ -467,20 +466,88 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
                 return;
             }
 
-            var payload = await response.Content.ReadAsStringAsync(ct);
+            var responsePayload = await response.Content.ReadAsStringAsync(ct);
             if (response.StatusCode == HttpStatusCode.BadRequest &&
-                payload.Contains("resource_already_exists_exception", StringComparison.OrdinalIgnoreCase))
+                responsePayload.Contains("resource_already_exists_exception", StringComparison.OrdinalIgnoreCase))
             {
                 _indexInitialized = true;
                 return;
             }
 
             throw new InvalidOperationException(
-                $"Elasticsearch index initialization failed for '{_indexName}': {(int)response.StatusCode} {response.ReasonPhrase}. body={payload}");
+                $"Elasticsearch index initialization failed for '{_indexName}': {(int)response.StatusCode} {response.ReasonPhrase}. body={responsePayload}");
         }
         finally
         {
             _indexInitializationLock.Release();
+        }
+    }
+
+    private string BuildIndexInitializationPayload()
+    {
+        object mappings = new { dynamic = true };
+        if (!string.IsNullOrWhiteSpace(_indexMetadata.MappingJson))
+            mappings = ParseJsonObject(_indexMetadata.MappingJson, "DocumentIndexMetadata.MappingJson");
+
+        var root = new Dictionary<string, object?>
+        {
+            ["mappings"] = mappings,
+        };
+
+        if (_indexMetadata.Settings.Count > 0)
+            root["settings"] = _indexMetadata.Settings;
+        if (_indexMetadata.Aliases.Count > 0)
+            root["aliases"] = BuildAliasPayload(_indexMetadata.Aliases);
+
+        return JsonSerializer.Serialize(root, _jsonOptions);
+    }
+
+    private static DocumentIndexMetadata NormalizeMetadata(DocumentIndexMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        return new DocumentIndexMetadata(
+            metadata.IndexName?.Trim() ?? "",
+            metadata.MappingJson?.Trim() ?? "{}",
+            new Dictionary<string, string>(metadata.Settings, StringComparer.Ordinal),
+            new Dictionary<string, string>(metadata.Aliases, StringComparer.Ordinal));
+    }
+
+    private static IReadOnlyDictionary<string, object> BuildAliasPayload(
+        IReadOnlyDictionary<string, string> aliases)
+    {
+        var payload = new Dictionary<string, object>(StringComparer.Ordinal);
+        foreach (var alias in aliases)
+        {
+            var aliasName = alias.Key?.Trim() ?? "";
+            if (aliasName.Length == 0)
+                continue;
+
+            var aliasConfig = alias.Value?.Trim() ?? "";
+            payload[aliasName] = aliasConfig.Length == 0
+                ? new Dictionary<string, object>(StringComparer.Ordinal)
+                : ParseJsonObject(aliasConfig, $"DocumentIndexMetadata.Aliases['{aliasName}']");
+        }
+
+        return payload;
+    }
+
+    private static object ParseJsonObject(string payload, string context)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(payload);
+            if (json.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidOperationException(
+                    $"{context} must be a JSON object. actualKind={json.RootElement.ValueKind}");
+            }
+
+            return JsonSerializer.Deserialize<Dictionary<string, object?>>(
+                json.RootElement.GetRawText()) ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        {
+            throw new InvalidOperationException($"{context} is invalid JSON object: {ex.Message}", ex);
         }
     }
 

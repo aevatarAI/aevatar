@@ -10,6 +10,7 @@ public sealed class Neo4jProjectionGraphStore
     : IProjectionGraphStore,
       IAsyncDisposable
 {
+    private const string ProviderName = "Neo4j";
     private readonly IDriver _driver;
     private readonly string _scope;
     private readonly string _database;
@@ -17,7 +18,6 @@ public sealed class Neo4jProjectionGraphStore
     private readonly string _edgeType;
     private readonly bool _autoCreateConstraints;
     private readonly int _maxTraversalDepth;
-    private readonly string _providerName;
     private readonly ILogger<Neo4jProjectionGraphStore> _logger;
     private readonly SemaphoreSlim _schemaLock = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -29,7 +29,6 @@ public sealed class Neo4jProjectionGraphStore
     public Neo4jProjectionGraphStore(
         Neo4jProjectionGraphStoreOptions options,
         string scope,
-        string providerName = ProjectionProviderNames.Neo4j,
         ILogger<Neo4jProjectionGraphStore>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -41,9 +40,6 @@ public sealed class Neo4jProjectionGraphStore
         _edgeType = NormalizeLabel(options.EdgeType, "PROJECTION_REL");
         _autoCreateConstraints = options.AutoCreateConstraints;
         _maxTraversalDepth = Math.Clamp(options.MaxTraversalDepth, 1, 8);
-        _providerName = string.IsNullOrWhiteSpace(providerName)
-            ? ProjectionProviderNames.Neo4j
-            : providerName.Trim();
         _logger = logger ?? NullLogger<Neo4jProjectionGraphStore>.Instance;
 
         var auth = string.IsNullOrWhiteSpace(options.Username)
@@ -479,7 +475,7 @@ public sealed class Neo4jProjectionGraphStore
             _logger.LogWarning(
                 ex,
                 "Failed to deserialize graph edge properties payload. provider={Provider} scope={Scope}",
-                _providerName,
+                ProviderName,
                 _scope);
             return new Dictionary<string, string>(StringComparer.Ordinal);
         }

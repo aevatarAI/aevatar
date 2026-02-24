@@ -11,34 +11,31 @@ public static class ServiceCollectionExtensions
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
         Func<TReadModel, object?>? listSortSelector = null,
-        int listTakeMax = 200,
-        string providerName = ProjectionProviderNames.InMemory)
+        int listTakeMax = 200)
         where TReadModel : class
     {
         ArgumentNullException.ThrowIfNull(keySelector);
 
         services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>(
             new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>(
-                providerName,
+                "InMemory",
                 provider => new InMemoryProjectionReadModelStore<TReadModel, TKey>(
                     keySelector,
                     keyFormatter,
                     listSortSelector,
                     listTakeMax,
-                    providerName,
                     provider.GetService<ILogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>>())));
 
         return services;
     }
 
     public static IServiceCollection AddInMemoryGraphStoreRegistration(
-        this IServiceCollection services,
-        string providerName = ProjectionProviderNames.InMemory)
+        this IServiceCollection services)
     {
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                providerName,
-                _ => new InMemoryProjectionGraphStore(providerName)));
+                "InMemory",
+                _ => new InMemoryProjectionGraphStore()));
 
         return services;
     }

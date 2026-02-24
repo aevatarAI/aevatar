@@ -20,7 +20,11 @@ public sealed class ProjectionProviderE2EIntegrationTests
         var indexScope = "projection-provider-e2e-" + Guid.NewGuid().ToString("N");
         using var store = new ElasticsearchProjectionReadModelStore<ProviderStoreSmokeReadModel, string>(
             options,
-            indexScope,
+            new DocumentIndexMetadata(
+                IndexName: indexScope,
+                MappingJson: "{}",
+                Settings: new Dictionary<string, string>(),
+                Aliases: new Dictionary<string, string>()),
             model => model.Id);
 
         var readModel = new ProviderStoreSmokeReadModel

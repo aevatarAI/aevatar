@@ -10,25 +10,23 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddElasticsearchDocumentStoreRegistration<TReadModel, TKey>(
         this IServiceCollection services,
         Func<IServiceProvider, ElasticsearchProjectionReadModelStoreOptions> optionsFactory,
-        Func<IServiceProvider, string> indexScopeFactory,
+        Func<IServiceProvider, DocumentIndexMetadata> metadataFactory,
         Func<TReadModel, TKey> keySelector,
-        Func<TKey, string>? keyFormatter = null,
-        string providerName = ProjectionProviderNames.Elasticsearch)
+        Func<TKey, string>? keyFormatter = null)
         where TReadModel : class
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
-        ArgumentNullException.ThrowIfNull(indexScopeFactory);
+        ArgumentNullException.ThrowIfNull(metadataFactory);
         ArgumentNullException.ThrowIfNull(keySelector);
 
         services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>(
             new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>(
-                providerName,
+                "Elasticsearch",
                 provider => new ElasticsearchProjectionReadModelStore<TReadModel, TKey>(
                     optionsFactory(provider),
-                    indexScopeFactory(provider),
+                    metadataFactory(provider),
                     keySelector,
                     keyFormatter,
-                    providerName,
                     provider.GetService<ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>>())));
 
         return services;

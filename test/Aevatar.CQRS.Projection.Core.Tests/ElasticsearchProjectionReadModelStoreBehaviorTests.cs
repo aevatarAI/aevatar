@@ -117,7 +117,11 @@ public sealed class ElasticsearchProjectionReadModelStoreBehaviorTests
         options.Endpoints = ["http://localhost:9200"];
         return new ElasticsearchProjectionReadModelStore<StoreReadModel, string>(
             options,
-            "workflow-execution-reports",
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                MappingJson: "{}",
+                Settings: new Dictionary<string, string>(),
+                Aliases: new Dictionary<string, string>()),
             keySelector: model => model.Id,
             keyFormatter: key => key,
             httpMessageHandler: handler);

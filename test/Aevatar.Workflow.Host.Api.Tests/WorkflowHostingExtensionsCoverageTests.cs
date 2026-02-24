@@ -2,7 +2,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
-using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Application.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
@@ -45,10 +44,11 @@ public class WorkflowHostingExtensionsCoverageTests
 
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunRequestExecutor)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(IDocumentProjectionStore<WorkflowExecutionReport, string>)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IDocumentProjectionStore<,>)).Should().BeTrue();
 
         await using var provider = builder.Services.BuildServiceProvider();
         provider.GetService<ILLMProviderFactory>().Should().NotBeNull();
+        provider.GetService<IDocumentProjectionStore<WorkflowExecutionReport, string>>().Should().NotBeNull();
 
         var toolSources = provider.GetServices<IAgentToolSource>().ToList();
         toolSources.Should().NotContain(x => x is MCPAgentToolSource);
@@ -97,15 +97,18 @@ public class WorkflowHostingExtensionsCoverageTests
     }
 
     [Fact]
-    public void AddWorkflowProjectionReadModelProviders_WhenProvidersAreConfigured_ShouldRegisterConfiguredCombinationOnly()
+    public void AddWorkflowProjectionReadModelProviders_WhenDurableProvidersEnabled_ShouldRegisterDurableCombinationOnly()
     {
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Projection:Document:Provider"] = ProjectionProviderNames.Elasticsearch,
-                ["Projection:Graph:Provider"] = ProjectionProviderNames.InMemory,
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
                 ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Uri"] = "bolt://localhost:7687",
             })
             .Build();
 
@@ -117,58 +120,26 @@ public class WorkflowHostingExtensionsCoverageTests
         var relationRegistrations = services
             .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionGraphStore>))
             .ToList();
-        var documentRuntimeOptionRegistrations = services
-            .Where(x => x.ServiceType == typeof(ProjectionDocumentRuntimeOptions))
-            .ToList();
-        var graphRuntimeOptionRegistrations = services
-            .Where(x => x.ServiceType == typeof(ProjectionGraphRuntimeOptions))
-            .ToList();
 
         providerRegistrations.Should().HaveCount(1);
         relationRegistrations.Should().HaveCount(1);
-        documentRuntimeOptionRegistrations.Should().HaveCount(1);
-        graphRuntimeOptionRegistrations.Should().HaveCount(1);
-
-        using var provider = services.BuildServiceProvider();
-        var documentOptions = provider.GetRequiredService<ProjectionDocumentRuntimeOptions>();
-        var graphOptions = provider.GetRequiredService<ProjectionGraphRuntimeOptions>();
-        documentOptions.ProviderName.Should().Be(ProjectionProviderNames.Elasticsearch);
-        graphOptions.ProviderName.Should().Be(ProjectionProviderNames.InMemory);
     }
 
     [Fact]
-    public void AddWorkflowProjectionReadModelProviders_WhenProviderConfiguredUnknown_ShouldThrow()
+    public void AddWorkflowProjectionReadModelProviders_WhenLegacyProviderConfigured_ShouldThrow()
     {
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Projection:Document:Provider"] = "UnknownProvider",
+                ["Projection:Document:Provider"] = "InMemory",
             })
             .Build();
 
         Action act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Unsupported projection provider*");
-    }
-
-    [Fact]
-    public void AddWorkflowProjectionReadModelProviders_WhenDocumentProviderConfiguredAsNeo4j_ShouldThrow()
-    {
-        var services = new ServiceCollection();
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Projection:Document:Provider"] = ProjectionProviderNames.Neo4j,
-                ["Projection:Graph:Provider"] = ProjectionProviderNames.Neo4j,
-            })
-            .Build();
-
-        Action act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
-
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Neo4j cannot be used as document provider*");
+            .WithMessage("*Legacy provider single-selection options are no longer supported*");
     }
 
     [Fact]
@@ -178,9 +149,6 @@ public class WorkflowHostingExtensionsCoverageTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Projection:Document:Provider"] = ProjectionProviderNames.Elasticsearch,
-                ["Projection:Graph:Provider"] = ProjectionProviderNames.InMemory,
-                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
                 ["Projection:Policies:DenyInMemoryGraphFactStore"] = "true",
             })
             .Build();

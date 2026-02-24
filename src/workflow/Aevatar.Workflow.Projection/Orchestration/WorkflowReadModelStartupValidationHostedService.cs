@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.ReadModels;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -11,27 +12,15 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly WorkflowExecutionProjectionOptions _options;
-    private readonly ProjectionDocumentRuntimeOptions _documentRuntimeOptions;
-    private readonly ProjectionGraphRuntimeOptions _graphRuntimeOptions;
-    private readonly IProjectionDocumentStoreFactory _documentStoreFactory;
-    private readonly IProjectionGraphStoreFactory _graphStoreFactory;
     private readonly ILogger<WorkflowReadModelStartupValidationHostedService> _logger;
 
     public WorkflowReadModelStartupValidationHostedService(
         IServiceProvider serviceProvider,
         WorkflowExecutionProjectionOptions options,
-        ProjectionDocumentRuntimeOptions documentRuntimeOptions,
-        ProjectionGraphRuntimeOptions graphRuntimeOptions,
-        IProjectionDocumentStoreFactory documentStoreFactory,
-        IProjectionGraphStoreFactory graphStoreFactory,
         ILogger<WorkflowReadModelStartupValidationHostedService>? logger = null)
     {
         _serviceProvider = serviceProvider;
         _options = options;
-        _documentRuntimeOptions = documentRuntimeOptions;
-        _graphRuntimeOptions = graphRuntimeOptions;
-        _documentStoreFactory = documentStoreFactory;
-        _graphStoreFactory = graphStoreFactory;
         _logger = logger ?? NullLogger<WorkflowReadModelStartupValidationHostedService>.Instance;
     }
 
@@ -41,26 +30,20 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
         if (!_options.Enabled)
             return Task.CompletedTask;
 
-        if (_options.ValidateDocumentProviderOnStartup && _documentRuntimeOptions.FailFastOnStartup)
+        if (_options.ValidateDocumentProviderOnStartup)
         {
-            _documentStoreFactory.Create<WorkflowExecutionReport, string>(
-                _serviceProvider,
-                _documentRuntimeOptions.ProviderName);
+            _ = _serviceProvider.GetRequiredService<IDocumentProjectionStore<WorkflowExecutionReport, string>>();
             _logger.LogInformation(
-                "Workflow read-model provider startup validation passed. readModelType={ReadModelType} provider={Provider}",
-                typeof(WorkflowExecutionReport).FullName,
-                _documentRuntimeOptions.ProviderName);
+                "Workflow read-model document startup validation passed. readModelType={ReadModelType}",
+                typeof(WorkflowExecutionReport).FullName);
         }
 
-        if (_options.ValidateGraphProviderOnStartup && _graphRuntimeOptions.FailFastOnStartup)
+        if (_options.ValidateGraphProviderOnStartup)
         {
-            _graphStoreFactory.Create(
-                _serviceProvider,
-                _graphRuntimeOptions.ProviderName);
+            _ = _serviceProvider.GetRequiredService<IProjectionGraphStore>();
             _logger.LogInformation(
-                "Workflow graph provider startup validation passed. graphType={GraphType} provider={Provider}",
-                typeof(ProjectionGraphNode).FullName,
-                _graphRuntimeOptions.ProviderName);
+                "Workflow read-model graph startup validation passed. graphType={GraphType}",
+                typeof(ProjectionGraphNode).FullName);
         }
         return Task.CompletedTask;
     }

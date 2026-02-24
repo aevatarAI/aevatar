@@ -10,10 +10,8 @@ public sealed class InMemoryProjectionGraphStore
     private readonly Dictionary<string, ProjectionGraphEdge> _edges = new(StringComparer.Ordinal);
     private readonly JsonSerializerOptions _jsonOptions = new();
 
-    public InMemoryProjectionGraphStore(
-        string providerName = ProjectionProviderNames.InMemory)
+    public InMemoryProjectionGraphStore()
     {
-        _ = providerName;
     }
 
     public Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default)

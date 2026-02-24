@@ -7,7 +7,6 @@ using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
-using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
@@ -37,14 +36,9 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
-        services.TryAddSingleton<ProjectionDocumentRuntimeOptions>();
-        services.TryAddSingleton<ProjectionGraphRuntimeOptions>();
         services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>, WorkflowExecutionReportDocumentMetadataProvider>();
-        RegisterWorkflowDocumentStoreSelector(services);
-        RegisterWorkflowGraphStoreSelector(services);
-        RegisterWorkflowMaterializationRouter(services);
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
@@ -120,38 +114,6 @@ public static class ServiceCollectionExtensions
             WorkflowExecutionProjectorContract,
             ProjectionReducerContract,
             ProjectionProjectorContract);
-    }
-
-    private static void RegisterWorkflowDocumentStoreSelector(IServiceCollection services)
-    {
-        services.Replace(ServiceDescriptor.Singleton<IDocumentProjectionStore<WorkflowExecutionReport, string>>(sp =>
-        {
-            var storeFactory = sp.GetRequiredService<IProjectionDocumentStoreFactory>();
-            var runtimeOptions = sp.GetRequiredService<ProjectionDocumentRuntimeOptions>();
-            return storeFactory.Create<WorkflowExecutionReport, string>(
-                sp,
-                runtimeOptions.ProviderName);
-        }));
-    }
-
-    private static void RegisterWorkflowGraphStoreSelector(IServiceCollection services)
-    {
-        services.Replace(ServiceDescriptor.Singleton<IProjectionGraphStore>(sp =>
-        {
-            var graphStoreFactory = sp.GetRequiredService<IProjectionGraphStoreFactory>();
-            var runtimeOptions = sp.GetRequiredService<ProjectionGraphRuntimeOptions>();
-            return graphStoreFactory.Create(
-                sp,
-                runtimeOptions.ProviderName);
-        }));
-    }
-
-    private static void RegisterWorkflowMaterializationRouter(IServiceCollection services)
-    {
-        services.Replace(ServiceDescriptor.Singleton<IProjectionMaterializationRouter<WorkflowExecutionReport, string>>(sp =>
-            new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
-                sp.GetRequiredService<IDocumentProjectionStore<WorkflowExecutionReport, string>>(),
-                sp.GetRequiredService<IProjectionGraphMaterializer<WorkflowExecutionReport>>())));
     }
 
     private sealed class PassthroughEventDeduplicator : IEventDeduplicator
