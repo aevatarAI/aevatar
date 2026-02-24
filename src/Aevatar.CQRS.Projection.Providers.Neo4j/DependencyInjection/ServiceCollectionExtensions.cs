@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 
-public static class ServiceCollectionExtensions
+public static class Neo4jProjectionServiceCollectionExtensions
 {
     public static IServiceCollection AddNeo4jGraphProjectionStore(
         this IServiceCollection services,

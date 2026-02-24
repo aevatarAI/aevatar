@@ -104,6 +104,18 @@ public class ProjectionStoreDispatcherTests
     }
 
     [Fact]
+    public void Ctor_WhenNoConfiguredBindings_ShouldIncludeAvailabilityReason()
+    {
+        var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel, string>();
+
+        Action act = () => new ProjectionStoreDispatcher<TestReadModel, string>(
+            [unconfiguredDocumentBinding]);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Document projection store service is not registered*");
+    }
+
+    [Fact]
     public void Ctor_WhenMultipleQueryableBindings_ShouldThrow()
     {
         Action act = () => new ProjectionStoreDispatcher<TestReadModel, string>(
@@ -111,6 +123,15 @@ public class ProjectionStoreDispatcherTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*At most one queryable projection store binding is allowed*");
+    }
+
+    [Fact]
+    public void ProjectionDocumentBinding_WhenStoreMissing_ShouldExposeAvailabilityReason()
+    {
+        var binding = new ProjectionDocumentStoreBinding<TestReadModel, string>();
+
+        binding.IsConfigured.Should().BeFalse();
+        binding.AvailabilityReason.Should().Contain("not registered");
     }
 
     [Fact]

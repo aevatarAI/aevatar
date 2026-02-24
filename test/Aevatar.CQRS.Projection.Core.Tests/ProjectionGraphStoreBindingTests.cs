@@ -201,6 +201,15 @@ public class ProjectionGraphStoreBindingTests
         rootNeighbors.Should().BeEmpty();
     }
 
+    [Fact]
+    public void AvailabilityReason_WhenReadModelIsNotGraphReadModel_ShouldExplainWhySkipped()
+    {
+        var binding = new ProjectionGraphStoreBinding<NonGraphReadModel, string>(new RecordingGraphStore());
+
+        binding.IsConfigured.Should().BeFalse();
+        binding.AvailabilityReason.Should().Contain("does not implement");
+    }
+
     private static string BuildOwnerId(string id) => $"{typeof(TestGraphReadModel).FullName}:{id}";
 
     private static ProjectionGraphNode Node(string nodeId)
@@ -238,6 +247,11 @@ public class ProjectionGraphStoreBindingTests
         public IReadOnlyList<ProjectionGraphNode> GraphNodes { get; init; } = [];
 
         public IReadOnlyList<ProjectionGraphEdge> GraphEdges { get; init; } = [];
+    }
+
+    private sealed class NonGraphReadModel : IProjectionReadModel
+    {
+        public string Id { get; init; } = "";
     }
 
     private sealed class RecordingGraphStore : IProjectionGraphStore

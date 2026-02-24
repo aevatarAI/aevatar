@@ -31,8 +31,12 @@ public sealed partial class Neo4jProjectionGraphStore
     {
         ArgumentNullException.ThrowIfNull(options);
         _database = options.Database?.Trim() ?? "";
-        _nodeLabel = NormalizeLabel(options.NodeLabel, "ProjectionGraphNode");
-        _edgeType = NormalizeLabel(options.EdgeType, "PROJECTION_REL");
+        _nodeLabel = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeLabel(
+            options.NodeLabel,
+            "ProjectionGraphNode");
+        _edgeType = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeLabel(
+            options.EdgeType,
+            "PROJECTION_REL");
         _autoCreateConstraints = options.AutoCreateConstraints;
         _maxTraversalDepth = Math.Clamp(options.MaxTraversalDepth, 1, 8);
         _logger = logger ?? NullLogger<Neo4jProjectionGraphStore>.Instance;
@@ -49,24 +53,19 @@ public sealed partial class Neo4jProjectionGraphStore
         ArgumentNullException.ThrowIfNull(node);
         ct.ThrowIfCancellationRequested();
 
-        var scope = NormalizeToken(node.Scope);
-        var nodeId = NormalizeToken(node.NodeId);
+        var scope = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(node.Scope);
+        var nodeId = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(node.NodeId);
         if (scope.Length == 0 || nodeId.Length == 0)
             throw new InvalidOperationException("Graph node requires non-empty scope and nodeId.");
 
-        var nodeType = NormalizeToken(node.NodeType);
+        var nodeType = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(node.NodeType);
         if (nodeType.Length == 0)
             nodeType = "Unknown";
-        var updatedAtEpochMs = NormalizeTimestamp(node.UpdatedAt);
+        var updatedAtEpochMs = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeTimestamp(node.UpdatedAt);
         var propertiesJson = SerializeProperties(node.Properties);
-        var projectionManaged = ResolveProjectionManaged(node.Properties);
-        var projectionOwnerId = ResolveProjectionOwnerId(node.Properties);
-        var cypher = $"MERGE (n:{_nodeLabel} {{scope: $scope, nodeId: $nodeId}}) " +
-                     "SET n.nodeType = $nodeType, " +
-                     "n.propertiesJson = $propertiesJson, " +
-                     "n.updatedAtEpochMs = $updatedAtEpochMs, " +
-                     "n.projectionManaged = $projectionManaged, " +
-                     "n.projectionOwnerId = CASE WHEN $projectionOwnerId = '' THEN null ELSE $projectionOwnerId END";
+        var projectionManaged = Neo4jProjectionGraphStoreNormalizationSupport.ResolveProjectionManaged(node.Properties);
+        var projectionOwnerId = Neo4jProjectionGraphStoreNormalizationSupport.ResolveProjectionOwnerId(node.Properties);
+        var cypher = Neo4jProjectionGraphStoreCypherSupport.BuildUpsertNodeCypher(_nodeLabel);
         var parameters = new Dictionary<string, object?>
         {
             ["scope"] = scope,
@@ -87,30 +86,21 @@ public sealed partial class Neo4jProjectionGraphStore
         ArgumentNullException.ThrowIfNull(edge);
         ct.ThrowIfCancellationRequested();
 
-        var scope = NormalizeToken(edge.Scope);
-        var edgeId = NormalizeToken(edge.EdgeId);
-        var fromNodeId = NormalizeToken(edge.FromNodeId);
-        var toNodeId = NormalizeToken(edge.ToNodeId);
-        var relationType = NormalizeToken(edge.EdgeType);
+        var scope = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(edge.Scope);
+        var edgeId = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(edge.EdgeId);
+        var fromNodeId = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(edge.FromNodeId);
+        var toNodeId = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(edge.ToNodeId);
+        var relationType = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(edge.EdgeType);
         if (scope.Length == 0 || edgeId.Length == 0 || fromNodeId.Length == 0 || toNodeId.Length == 0 || relationType.Length == 0)
         {
             throw new InvalidOperationException("Graph edge requires non-empty scope/edgeId/fromNodeId/toNodeId/relationType.");
         }
 
-        var updatedAtEpochMs = NormalizeTimestamp(edge.UpdatedAt);
+        var updatedAtEpochMs = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeTimestamp(edge.UpdatedAt);
         var propertiesJson = SerializeProperties(edge.Properties);
-        var projectionManaged = ResolveProjectionManaged(edge.Properties);
-        var projectionOwnerId = ResolveProjectionOwnerId(edge.Properties);
-        var cypher = $"MERGE (from:{_nodeLabel} {{scope: $scope, nodeId: $fromNodeId}}) " +
-                     "ON CREATE SET from.nodeType = 'Unknown', from.propertiesJson = '{}', from.updatedAtEpochMs = $updatedAtEpochMs " +
-                     $"MERGE (to:{_nodeLabel} {{scope: $scope, nodeId: $toNodeId}}) " +
-                     "ON CREATE SET to.nodeType = 'Unknown', to.propertiesJson = '{}', to.updatedAtEpochMs = $updatedAtEpochMs " +
-                     $"MERGE (from)-[r:{_edgeType} {{scope: $scope, edgeId: $edgeId}}]->(to) " +
-                     "SET r.relationType = $relationType, " +
-                     "r.propertiesJson = $propertiesJson, " +
-                     "r.updatedAtEpochMs = $updatedAtEpochMs, " +
-                     "r.projectionManaged = $projectionManaged, " +
-                     "r.projectionOwnerId = CASE WHEN $projectionOwnerId = '' THEN null ELSE $projectionOwnerId END";
+        var projectionManaged = Neo4jProjectionGraphStoreNormalizationSupport.ResolveProjectionManaged(edge.Properties);
+        var projectionOwnerId = Neo4jProjectionGraphStoreNormalizationSupport.ResolveProjectionOwnerId(edge.Properties);
+        var cypher = Neo4jProjectionGraphStoreCypherSupport.BuildUpsertEdgeCypher(_nodeLabel, _edgeType);
         var parameters = new Dictionary<string, object?>
         {
             ["scope"] = scope,
@@ -131,14 +121,13 @@ public sealed partial class Neo4jProjectionGraphStore
     public async Task DeleteNodeAsync(string scope, string nodeId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        var scopeValue = NormalizeToken(scope);
-        var nodeIdValue = NormalizeToken(nodeId);
+        var scopeValue = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(scope);
+        var nodeIdValue = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(nodeId);
         if (scopeValue.Length == 0 || nodeIdValue.Length == 0)
             return;
 
         await EnsureSchemaAsync(ct);
-        var cypher = $"MATCH (n:{_nodeLabel} {{scope: $scope, nodeId: $nodeId}}) " +
-                     "WHERE NOT (n)-[]-() DELETE n";
+        var cypher = Neo4jProjectionGraphStoreCypherSupport.BuildDeleteNodeCypher(_nodeLabel);
         var parameters = new Dictionary<string, object?>
         {
             ["scope"] = scopeValue,
@@ -150,13 +139,13 @@ public sealed partial class Neo4jProjectionGraphStore
     public async Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        var scopeValue = NormalizeToken(scope);
-        var edgeIdValue = NormalizeToken(edgeId);
+        var scopeValue = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(scope);
+        var edgeIdValue = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(edgeId);
         if (scopeValue.Length == 0 || edgeIdValue.Length == 0)
             return;
 
         await EnsureSchemaAsync(ct);
-        var cypher = $"MATCH ()-[r:{_edgeType} {{scope: $scope, edgeId: $edgeId}}]->() DELETE r";
+        var cypher = Neo4jProjectionGraphStoreCypherSupport.BuildDeleteEdgeCypher(_edgeType);
         var parameters = new Dictionary<string, object?>
         {
             ["scope"] = scopeValue,
@@ -173,22 +162,15 @@ public sealed partial class Neo4jProjectionGraphStore
         CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        var scopeValue = NormalizeToken(scope);
-        var ownerValue = NormalizeToken(ownerId);
+        var scopeValue = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(scope);
+        var ownerValue = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(ownerId);
         if (scopeValue.Length == 0 || ownerValue.Length == 0)
             return [];
 
         await EnsureSchemaAsync(ct);
         var boundedTake = Math.Clamp(take, 1, 50000);
         var boundedSkip = Math.Max(0, skip);
-        var cypher = $"MATCH (n:{_nodeLabel} {{scope: $scope}}) " +
-                     "WHERE coalesce(n.projectionManaged, false) = true " +
-                     "AND n.projectionOwnerId = $ownerId " +
-                     "RETURN n.nodeId AS nodeId, " +
-                     "coalesce(n.nodeType, '') AS nodeType, " +
-                     "coalesce(n.propertiesJson, '{}') AS propertiesJson, " +
-                     "coalesce(n.updatedAtEpochMs, 0) AS updatedAtEpochMs " +
-                     "ORDER BY updatedAtEpochMs DESC SKIP $skip LIMIT $take";
+        var cypher = Neo4jProjectionGraphStoreCypherSupport.BuildListNodesByOwnerCypher(_nodeLabel);
         var parameters = new Dictionary<string, object?>
         {
             ["scope"] = scopeValue,
@@ -201,34 +183,9 @@ public sealed partial class Neo4jProjectionGraphStore
         var nodes = new List<ProjectionGraphNode>(rows.Count);
         foreach (var row in rows)
         {
-            if (!row.TryGetValue("nodeId", out var nodeIdValue))
-                continue;
-
-            var resolvedNodeId = NormalizeToken(nodeIdValue.As<string>());
-            if (resolvedNodeId.Length == 0)
-                continue;
-
-            var nodeType = row.TryGetValue("nodeType", out var nodeTypeValue)
-                ? NormalizeToken(nodeTypeValue.As<string>())
-                : "Unknown";
-            if (nodeType.Length == 0)
-                nodeType = "Unknown";
-
-            var propertiesJson = row.TryGetValue("propertiesJson", out var propertiesJsonValue)
-                ? propertiesJsonValue.As<string>()
-                : "{}";
-            var updatedAtEpochMs = row.TryGetValue("updatedAtEpochMs", out var updatedAtEpochMsValue)
-                ? updatedAtEpochMsValue.As<long>()
-                : 0L;
-
-            nodes.Add(new ProjectionGraphNode
-            {
-                Scope = scopeValue,
-                NodeId = resolvedNodeId,
-                NodeType = nodeType,
-                Properties = DeserializeProperties(propertiesJson),
-                UpdatedAt = FromUnixTimeMilliseconds(updatedAtEpochMs),
-            });
+            var node = Neo4jProjectionGraphStoreRowMapper.MapNode(scopeValue, row, DeserializeProperties);
+            if (node != null)
+                nodes.Add(node);
         }
 
         return nodes;
@@ -242,24 +199,15 @@ public sealed partial class Neo4jProjectionGraphStore
         CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        var scopeValue = NormalizeToken(scope);
-        var ownerValue = NormalizeToken(ownerId);
+        var scopeValue = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(scope);
+        var ownerValue = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(ownerId);
         if (scopeValue.Length == 0 || ownerValue.Length == 0)
             return [];
 
         await EnsureSchemaAsync(ct);
         var boundedTake = Math.Clamp(take, 1, 50000);
         var boundedSkip = Math.Max(0, skip);
-        var cypher = $"MATCH ()-[r:{_edgeType} {{scope: $scope}}]->() " +
-                     "WHERE coalesce(r.projectionManaged, false) = true " +
-                     "AND r.projectionOwnerId = $ownerId " +
-                     "RETURN r.edgeId AS edgeId, " +
-                     "startNode(r).nodeId AS fromNodeId, " +
-                     "endNode(r).nodeId AS toNodeId, " +
-                     "coalesce(r.relationType, '') AS relationType, " +
-                     "coalesce(r.propertiesJson, '{}') AS propertiesJson, " +
-                     "coalesce(r.updatedAtEpochMs, 0) AS updatedAtEpochMs " +
-                     "ORDER BY updatedAtEpochMs DESC SKIP $skip LIMIT $take";
+        var cypher = Neo4jProjectionGraphStoreCypherSupport.BuildListEdgesByOwnerCypher(_edgeType);
         var parameters = new Dictionary<string, object?>
         {
             ["scope"] = scopeValue,
@@ -272,7 +220,7 @@ public sealed partial class Neo4jProjectionGraphStore
         var edges = new List<ProjectionGraphEdge>(rows.Count);
         foreach (var row in rows)
         {
-            var edge = BuildEdgeFromRow(scopeValue, row);
+            var edge = Neo4jProjectionGraphStoreRowMapper.MapEdge(scopeValue, row, DeserializeProperties);
             if (edge != null)
                 edges.Add(edge);
         }
@@ -286,15 +234,18 @@ public sealed partial class Neo4jProjectionGraphStore
     {
         ArgumentNullException.ThrowIfNull(query);
         ct.ThrowIfCancellationRequested();
-        var scope = NormalizeToken(query.Scope);
-        var rootNodeId = NormalizeToken(query.RootNodeId);
+        var scope = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(query.Scope);
+        var rootNodeId = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(query.RootNodeId);
         if (scope.Length == 0 || rootNodeId.Length == 0)
             return [];
 
         await EnsureSchemaAsync(ct);
         var boundedTake = Math.Clamp(query.Take, 1, 5000);
-        var edgeTypes = NormalizeEdgeTypes(query.EdgeTypes);
-        var cypher = BuildNeighborCypher(query.Direction, boundedTake);
+        var edgeTypes = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeEdgeTypes(query.EdgeTypes);
+        var cypher = Neo4jProjectionGraphStoreCypherSupport.BuildNeighborCypher(
+            _nodeLabel,
+            _edgeType,
+            query.Direction);
         var parameters = new Dictionary<string, object?>
         {
             ["scope"] = scope,
@@ -307,7 +258,7 @@ public sealed partial class Neo4jProjectionGraphStore
         var edges = new List<ProjectionGraphEdge>(rows.Count);
         foreach (var row in rows)
         {
-            var edge = BuildEdgeFromRow(scope, row);
+            var edge = Neo4jProjectionGraphStoreRowMapper.MapEdge(scope, row, DeserializeProperties);
             if (edge != null)
                 edges.Add(edge);
         }
@@ -321,16 +272,20 @@ public sealed partial class Neo4jProjectionGraphStore
     {
         ArgumentNullException.ThrowIfNull(query);
         ct.ThrowIfCancellationRequested();
-        var scope = NormalizeToken(query.Scope);
-        var rootNodeId = NormalizeToken(query.RootNodeId);
+        var scope = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(query.Scope);
+        var rootNodeId = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(query.RootNodeId);
         if (scope.Length == 0 || rootNodeId.Length == 0)
             return new ProjectionGraphSubgraph();
 
         await EnsureSchemaAsync(ct);
         var depth = Math.Clamp(query.Depth, 1, _maxTraversalDepth);
         var take = Math.Clamp(query.Take, 1, 5000);
-        var edgeTypes = NormalizeEdgeTypes(query.EdgeTypes);
-        var cypher = BuildSubgraphEdgesCypher(query.Direction, depth);
+        var edgeTypes = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeEdgeTypes(query.EdgeTypes);
+        var cypher = Neo4jProjectionGraphStoreCypherSupport.BuildSubgraphEdgesCypher(
+            _nodeLabel,
+            _edgeType,
+            query.Direction,
+            depth);
         var parameters = new Dictionary<string, object?>
         {
             ["scope"] = scope,
@@ -343,7 +298,7 @@ public sealed partial class Neo4jProjectionGraphStore
         var edges = new List<ProjectionGraphEdge>(rows.Count);
         foreach (var row in rows)
         {
-            var edge = BuildEdgeFromRow(scope, row);
+            var edge = Neo4jProjectionGraphStoreRowMapper.MapEdge(scope, row, DeserializeProperties);
             if (edge != null)
                 edges.Add(edge);
         }
@@ -351,7 +306,7 @@ public sealed partial class Neo4jProjectionGraphStore
         var nodeIds = edges
             .SelectMany(x => new[] { x.FromNodeId, x.ToNodeId })
             .Append(rootNodeId)
-            .Where(x => NormalizeToken(x).Length > 0)
+            .Where(x => Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(x).Length > 0)
             .ToHashSet(StringComparer.Ordinal);
         var nodes = await GetNodesByIdsAsync(scope, nodeIds, ct);
         if (!nodes.Any(x => string.Equals(x.NodeId, rootNodeId, StringComparison.Ordinal)))

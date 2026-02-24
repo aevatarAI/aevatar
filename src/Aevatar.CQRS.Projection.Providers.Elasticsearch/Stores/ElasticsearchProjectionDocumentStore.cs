@@ -14,8 +14,6 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     where TReadModel : class, IProjectionReadModel
 {
     private const string ProviderName = "Elasticsearch";
-    private const string DefaultListPrimarySortField = "CreatedAt";
-    private const string DefaultListTiebreakSortField = "_id";
 
     private readonly HttpClient _httpClient;
     private readonly Func<TReadModel, TKey> _keySelector;
@@ -46,7 +44,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(keySelector);
 
-        var endpoint = ResolvePrimaryEndpoint(options.Endpoints);
+        var endpoint = ElasticsearchProjectionDocumentStoreNamingSupport.ResolvePrimaryEndpoint(options.Endpoints);
         _httpClient = httpMessageHandler == null
             ? new HttpClient()
             : new HttpClient(httpMessageHandler, disposeHandler: true);
@@ -60,11 +58,11 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
         }
 
-        var normalizedMetadata = NormalizeMetadata(indexMetadata);
-        var normalizedScope = NormalizeToken(normalizedMetadata.IndexName);
+        var normalizedMetadata = ElasticsearchProjectionDocumentStoreMetadataSupport.NormalizeMetadata(indexMetadata);
+        var normalizedScope = ElasticsearchProjectionDocumentStoreNamingSupport.NormalizeToken(normalizedMetadata.IndexName);
         if (normalizedScope.Length == 0)
             normalizedScope = "readmodel";
-        _indexName = BuildIndexName(options.IndexPrefix, normalizedScope);
+        _indexName = ElasticsearchProjectionDocumentStoreNamingSupport.BuildIndexName(options.IndexPrefix, normalizedScope);
         _listTakeMax = options.ListTakeMax > 0 ? options.ListTakeMax : 200;
         _autoCreateIndex = options.AutoCreateIndex;
         _missingIndexBehavior = options.MissingIndexBehavior;
@@ -161,7 +159,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             return null;
         }
 
-        await EnsureSuccessAsync(response, "get", ct);
+        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "get", ct);
         var successfulPayload = await response.Content.ReadAsStringAsync(ct);
         using var jsonDoc = JsonDocument.Parse(successfulPayload);
         if (!jsonDoc.RootElement.TryGetProperty("_source", out var sourceNode))
@@ -178,7 +176,12 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_indexName}/_search")
         {
-            Content = new StringContent(BuildListPayloadJson(boundedTake), Encoding.UTF8, "application/json"),
+                Content = new StringContent(
+                    ElasticsearchProjectionDocumentStorePayloadSupport.BuildListPayloadJson(
+                        _listSortField,
+                        boundedTake),
+                    Encoding.UTF8,
+                    "application/json"),
         };
         using var response = await _httpClient.SendAsync(request, ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
@@ -189,7 +192,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             return [];
         }
 
-        await EnsureSuccessAsync(response, "list", ct);
+        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "list", ct);
         var successfulPayload = await response.Content.ReadAsStringAsync(ct);
         using var jsonDoc = JsonDocument.Parse(successfulPayload);
         if (!jsonDoc.RootElement.TryGetProperty("hits", out var hitsNode) ||
@@ -219,12 +222,12 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             var payload = await response.Content.ReadAsStringAsync(ct);
-            if (IsIndexNotFoundPayload(payload))
+            if (ElasticsearchProjectionDocumentStoreHttpSupport.IsIndexNotFoundPayload(payload))
                 throw BuildMissingIndexException("mutate", payload);
             return null;
         }
 
-        await EnsureSuccessAsync(response, "mutate-get", ct);
+        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "mutate-get", ct);
         var successfulPayload = await response.Content.ReadAsStringAsync(ct);
         using var jsonDoc = JsonDocument.Parse(successfulPayload);
         if (!jsonDoc.RootElement.TryGetProperty("_source", out var sourceNode))
@@ -273,10 +276,10 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             {
                 var conflictPayload = await response.Content.ReadAsStringAsync(ct);
                 throw new ElasticsearchOptimisticConcurrencyException(
-                    $"Elasticsearch optimistic concurrency conflict for index '{_indexName}' key '{keyValue}'. body={TruncatePayload(conflictPayload)}");
+                    $"Elasticsearch optimistic concurrency conflict for index '{_indexName}' key '{keyValue}'. body={ElasticsearchProjectionDocumentStoreNamingSupport.TruncatePayload(conflictPayload)}");
             }
 
-            await EnsureSuccessAsync(response, "upsert", ct);
+            await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "upsert", ct);
 
             var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
             _logger.LogInformation(
@@ -309,7 +312,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
 
     private bool TryHandleMissingIndexForRead(string operation, string payload)
     {
-        if (!IsIndexNotFoundPayload(payload))
+        if (!ElasticsearchProjectionDocumentStoreHttpSupport.IsIndexNotFoundPayload(payload))
             return false;
 
         if (_autoCreateIndex || _missingIndexBehavior == ElasticsearchMissingIndexBehavior.Throw)
@@ -330,12 +333,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         return new InvalidOperationException(
             $"Elasticsearch index '{_indexName}' was not found during '{operation}' for read-model '{typeof(TReadModel).FullName}'. " +
             $"Configure index bootstrap or set '{nameof(ElasticsearchProjectionDocumentStoreOptions.AutoCreateIndex)}=true'. " +
-            $"body={TruncatePayload(payload)}");
-    }
-
-    private static bool IsIndexNotFoundPayload(string payload)
-    {
-        return payload.Contains("index_not_found_exception", StringComparison.OrdinalIgnoreCase);
+            $"body={ElasticsearchProjectionDocumentStoreNamingSupport.TruncatePayload(payload)}");
     }
 
     private void LogWriteFailure(

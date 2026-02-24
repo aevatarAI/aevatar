@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 
-public static class ServiceCollectionExtensions
+public static class InMemoryProjectionServiceCollectionExtensions
 {
     public static IServiceCollection AddInMemoryDocumentProjectionStore<TReadModel, TKey>(
         this IServiceCollection services,

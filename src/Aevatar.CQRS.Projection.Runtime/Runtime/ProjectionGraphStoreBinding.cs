@@ -19,6 +19,22 @@ public sealed class ProjectionGraphStoreBinding<TReadModel, TKey>
         _graphStore is not null &&
         typeof(IGraphReadModel).IsAssignableFrom(typeof(TReadModel));
 
+    public string AvailabilityReason
+    {
+        get
+        {
+            if (_graphStore is null)
+                return "Graph projection store service is not registered.";
+
+            if (!typeof(IGraphReadModel).IsAssignableFrom(typeof(TReadModel)))
+            {
+                return $"Read model '{typeof(TReadModel).FullName}' does not implement '{typeof(IGraphReadModel).FullName}'.";
+            }
+
+            return "Graph binding is active.";
+        }
+    }
+
     public string StoreName => IsConfigured ? "Graph" : "Graph(Unconfigured)";
 
     public async Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)

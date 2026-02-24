@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 
-public static class ServiceCollectionExtensions
+public static class ElasticsearchProjectionServiceCollectionExtensions
 {
     public static IServiceCollection AddElasticsearchDocumentProjectionStore<TReadModel, TKey>(
         this IServiceCollection services,

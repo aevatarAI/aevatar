@@ -4,7 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 
-public static class ServiceCollectionExtensions
+public static class ProjectionRuntimeServiceCollectionExtensions
 {
     public static IServiceCollection AddProjectionReadModelRuntime(this IServiceCollection services)
     {

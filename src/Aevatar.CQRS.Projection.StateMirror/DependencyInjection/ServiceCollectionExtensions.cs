@@ -7,7 +7,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.CQRS.Projection.StateMirror.DependencyInjection;
 
-public static class ServiceCollectionExtensions
+public static class StateMirrorServiceCollectionExtensions
 {
     public static IServiceCollection AddJsonStateMirrorProjection<TState, TReadModel>(
         this IServiceCollection services,

@@ -29,6 +29,12 @@ flowchart LR
 - `services.AddJsonStateMirrorReadModelProjector<TState, TReadModel, TKey>(configure?)`
   注册映射器和自定义键类型执行器。
 
+## 边界约束
+
+- `StateMirror` 仅用于 `State -> ReadModel` 的结构镜像与字段重命名/忽略，不承载业务规则。
+- 若映射过程涉及业务语义计算、状态机衍生字段、跨事件聚合，应使用业务专用 mapper/reducer，而不是 `StateMirror`。
+- 可并存策略：默认采用 `StateMirror` 快速落地，出现业务语义时切换到显式业务 mapper。
+
 ## 示例
 
 ```csharp

@@ -25,13 +25,37 @@ public sealed class ProjectionStoreDispatcher<TReadModel, TKey>
         _options = options ?? new ProjectionStoreDispatchOptions();
         _logger = logger ?? NullLogger<ProjectionStoreDispatcher<TReadModel, TKey>>.Instance;
 
-        _bindings = bindings
-            .Where(IsBindingConfigured)
-            .ToList();
+        var configuredBindings = new List<IProjectionStoreBinding<TReadModel, TKey>>();
+        var skippedBindings = new List<SkippedBindingInfo>();
+        foreach (var binding in bindings)
+        {
+            if (binding is IProjectionStoreBindingAvailability availability &&
+                !availability.IsConfigured)
+            {
+                skippedBindings.Add(new SkippedBindingInfo(binding.StoreName, availability.AvailabilityReason));
+                continue;
+            }
+
+            configuredBindings.Add(binding);
+        }
+
+        foreach (var skipped in skippedBindings)
+        {
+            _logger.LogInformation(
+                "Projection binding skipped. readModelType={ReadModelType} store={Store} reason={Reason}",
+                typeof(TReadModel).FullName,
+                skipped.StoreName,
+                skipped.Reason);
+        }
+
+        _bindings = configuredBindings;
         if (_bindings.Count == 0)
         {
+            var skipSummary = skippedBindings.Count == 0
+                ? "none"
+                : string.Join("; ", skippedBindings.Select(x => $"{x.StoreName}: {x.Reason}"));
             throw new InvalidOperationException(
-                $"No configured projection store bindings are registered for read model '{typeof(TReadModel).FullName}'.");
+                $"No configured projection store bindings are registered for read model '{typeof(TReadModel).FullName}'. skippedBindings={skipSummary}");
         }
 
         var queryBindings = _bindings
@@ -204,10 +228,7 @@ public sealed class ProjectionStoreDispatcher<TReadModel, TKey>
                    $"Queryable projection store binding is not configured for read model '{typeof(TReadModel).FullName}'.");
     }
 
-    private static bool IsBindingConfigured(IProjectionStoreBinding<TReadModel, TKey> binding)
-    {
-        return binding is not IProjectionStoreBindingAvailability availability || availability.IsConfigured;
-    }
+    private sealed record SkippedBindingInfo(string StoreName, string Reason);
 
     private sealed class NoOpProjectionStoreDispatchCompensator
         : IProjectionStoreDispatchCompensator<TReadModel, TKey>

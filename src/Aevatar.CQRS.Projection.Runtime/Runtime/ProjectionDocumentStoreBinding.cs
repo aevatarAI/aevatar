@@ -14,6 +14,10 @@ public sealed class ProjectionDocumentStoreBinding<TReadModel, TKey>
 
     public bool IsConfigured => _store is not null;
 
+    public string AvailabilityReason => IsConfigured
+        ? "Document binding is active."
+        : "Document projection store service is not registered.";
+
     public string StoreName => IsConfigured ? "Document" : "Document(Unconfigured)";
 
     public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
