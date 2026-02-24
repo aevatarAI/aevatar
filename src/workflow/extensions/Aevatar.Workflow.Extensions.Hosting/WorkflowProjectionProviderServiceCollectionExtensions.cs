@@ -4,7 +4,6 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
-using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -76,15 +75,12 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         if (enableNeo4jGraph)
         {
             services.AddNeo4jGraphProjectionStore(
-                optionsFactory: _ => BuildNeo4jGraphOptions(configuration),
-                scopeFactory: _ => WorkflowExecutionGraphConstants.Scope);
+                optionsFactory: _ => BuildNeo4jGraphOptions(configuration));
         }
         else
         {
             services.AddInMemoryGraphProjectionStore();
         }
-
-        services.AddSingleton<IProjectionStoreBinding<WorkflowExecutionReport, string>, ProjectionGraphStoreBinding<WorkflowExecutionReport, string>>();
 
         return services;
     }

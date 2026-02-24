@@ -9,16 +9,13 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddNeo4jGraphProjectionStore(
         this IServiceCollection services,
-        Func<IServiceProvider, Neo4jProjectionGraphStoreOptions> optionsFactory,
-        Func<IServiceProvider, string> scopeFactory)
+        Func<IServiceProvider, Neo4jProjectionGraphStoreOptions> optionsFactory)
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
-        ArgumentNullException.ThrowIfNull(scopeFactory);
 
         services.AddSingleton<IProjectionGraphStore>(provider =>
             new Neo4jProjectionGraphStore(
                 optionsFactory(provider),
-                scopeFactory(provider),
                 provider.GetService<ILogger<Neo4jProjectionGraphStore>>()));
 
         return services;

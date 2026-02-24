@@ -78,6 +78,7 @@ public sealed class InMemoryProjectionGraphStore
     public Task<IReadOnlyList<ProjectionGraphNode>> ListNodesByOwnerAsync(
         string scope,
         string ownerId,
+        int skip = 0,
         int take = 5000,
         CancellationToken ct = default)
     {
@@ -88,6 +89,7 @@ public sealed class InMemoryProjectionGraphStore
             return Task.FromResult<IReadOnlyList<ProjectionGraphNode>>([]);
 
         var boundedTake = Math.Clamp(take, 1, 50000);
+        var boundedSkip = Math.Max(0, skip);
         List<ProjectionGraphNode> nodes;
         lock (_gate)
         {
@@ -97,6 +99,7 @@ public sealed class InMemoryProjectionGraphStore
                     x.Properties.TryGetValue(ProjectionGraphManagedPropertyKeys.ManagedOwnerIdKey, out var nodeOwnerId) &&
                     string.Equals(NormalizeToken(nodeOwnerId), ownerValue, StringComparison.Ordinal))
                 .OrderByDescending(x => x.UpdatedAt)
+                .Skip(boundedSkip)
                 .Take(boundedTake)
                 .Select(CloneNode)
                 .ToList();
@@ -108,6 +111,7 @@ public sealed class InMemoryProjectionGraphStore
     public Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(
         string scope,
         string ownerId,
+        int skip = 0,
         int take = 5000,
         CancellationToken ct = default)
     {
@@ -118,6 +122,7 @@ public sealed class InMemoryProjectionGraphStore
             return Task.FromResult<IReadOnlyList<ProjectionGraphEdge>>([]);
 
         var boundedTake = Math.Clamp(take, 1, 50000);
+        var boundedSkip = Math.Max(0, skip);
         List<ProjectionGraphEdge> edges;
         lock (_gate)
         {
@@ -127,6 +132,7 @@ public sealed class InMemoryProjectionGraphStore
                     x.Properties.TryGetValue(ProjectionGraphManagedPropertyKeys.ManagedOwnerIdKey, out var edgeOwnerId) &&
                     string.Equals(NormalizeToken(edgeOwnerId), ownerValue, StringComparison.Ordinal))
                 .OrderByDescending(x => x.UpdatedAt)
+                .Skip(boundedSkip)
                 .Take(boundedTake)
                 .Select(CloneEdge)
                 .ToList();

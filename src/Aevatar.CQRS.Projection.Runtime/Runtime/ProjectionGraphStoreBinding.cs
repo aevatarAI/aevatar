@@ -1,38 +1,48 @@
 namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 
 public sealed class ProjectionGraphStoreBinding<TReadModel, TKey>
-    : IProjectionStoreBinding<TReadModel, TKey>
-    where TReadModel : class, IGraphReadModel
+    : IProjectionStoreBinding<TReadModel, TKey>,
+      IProjectionStoreBindingAvailability
+    where TReadModel : class, IProjectionReadModel
 {
-    private readonly IProjectionGraphStore _graphStore;
+    private const int CleanupPageSize = 1000;
+    private const int CleanupMaxItems = 1_000_000;
 
-    public ProjectionGraphStoreBinding(IProjectionGraphStore graphStore)
+    private readonly IProjectionGraphStore? _graphStore;
+
+    public ProjectionGraphStoreBinding(IProjectionGraphStore? graphStore = null)
     {
         _graphStore = graphStore;
     }
 
-    public string StoreName => "Graph";
+    public bool IsConfigured =>
+        _graphStore is not null &&
+        typeof(IGraphReadModel).IsAssignableFrom(typeof(TReadModel));
+
+    public string StoreName => IsConfigured ? "Graph" : "Graph(Unconfigured)";
 
     public async Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(readModel);
         ct.ThrowIfCancellationRequested();
+        if (_graphStore is null || readModel is not IGraphReadModel graphReadModel)
+            return;
 
-        var scope = NormalizeToken(readModel.GraphScope);
+        var scope = NormalizeToken(graphReadModel.GraphScope);
         if (scope.Length == 0)
         {
             throw new InvalidOperationException(
                 $"Graph scope is required for read model '{typeof(TReadModel).FullName}'.");
         }
 
-        var ownerId = BuildManagedOwnerId(readModel);
-        var normalizedNodes = NormalizeNodes(readModel.GraphNodes, scope, ownerId);
+        var ownerId = BuildManagedOwnerId(graphReadModel);
+        var normalizedNodes = NormalizeNodes(graphReadModel.GraphNodes, scope, ownerId);
         foreach (var node in normalizedNodes)
-            await _graphStore.UpsertNodeAsync(node, ct);
+            await GraphStore.UpsertNodeAsync(node, ct);
 
-        var normalizedEdges = NormalizeEdges(readModel.GraphEdges, scope, ownerId);
+        var normalizedEdges = NormalizeEdges(graphReadModel.GraphEdges, scope, ownerId);
         foreach (var edge in normalizedEdges)
-            await _graphStore.UpsertEdgeAsync(edge, ct);
+            await GraphStore.UpsertEdgeAsync(edge, ct);
 
         var targetNodeIds = normalizedNodes
             .Select(x => x.NodeId)
@@ -41,25 +51,95 @@ public sealed class ProjectionGraphStoreBinding<TReadModel, TKey>
             .Select(x => x.EdgeId)
             .ToHashSet(StringComparer.Ordinal);
 
-        var existingManagedEdges = await _graphStore.ListEdgesByOwnerAsync(scope, ownerId, take: 50000, ct);
-        foreach (var edge in existingManagedEdges.Where(IsManagedEdge))
+        var existingManagedEdges = await ListManagedEdgesByOwnerAsync(scope, ownerId, ct);
+        foreach (var edge in existingManagedEdges)
         {
             if (targetEdgeIds.Contains(edge.EdgeId))
                 continue;
 
-            await _graphStore.DeleteEdgeAsync(scope, edge.EdgeId, ct);
+            await GraphStore.DeleteEdgeAsync(scope, edge.EdgeId, ct);
         }
 
-        var existingManagedNodes = await _graphStore.ListNodesByOwnerAsync(scope, ownerId, take: 50000, ct);
-        foreach (var node in existingManagedNodes.Where(IsManagedNode))
+        var existingManagedNodes = await ListManagedNodesByOwnerAsync(scope, ownerId, ct);
+        foreach (var node in existingManagedNodes)
         {
             if (targetNodeIds.Contains(node.NodeId))
                 continue;
             if (!await CanDeleteNodeAsync(scope, node.NodeId, ct))
                 continue;
 
-            await _graphStore.DeleteNodeAsync(scope, node.NodeId, ct);
+            await GraphStore.DeleteNodeAsync(scope, node.NodeId, ct);
         }
+    }
+
+    private async Task<IReadOnlyList<ProjectionGraphEdge>> ListManagedEdgesByOwnerAsync(
+        string scope,
+        string ownerId,
+        CancellationToken ct)
+    {
+        var result = new List<ProjectionGraphEdge>();
+        var skip = 0;
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            var page = await GraphStore.ListEdgesByOwnerAsync(
+                scope,
+                ownerId,
+                skip: skip,
+                take: CleanupPageSize,
+                ct);
+            if (page.Count == 0)
+                break;
+
+            result.AddRange(page.Where(IsManagedEdge));
+            if (result.Count > CleanupMaxItems)
+            {
+                throw new InvalidOperationException(
+                    $"Graph cleanup exceeded maximum edge scan limit ({CleanupMaxItems}) for read model '{typeof(TReadModel).FullName}'.");
+            }
+
+            if (page.Count < CleanupPageSize)
+                break;
+
+            skip += page.Count;
+        }
+
+        return result;
+    }
+
+    private async Task<IReadOnlyList<ProjectionGraphNode>> ListManagedNodesByOwnerAsync(
+        string scope,
+        string ownerId,
+        CancellationToken ct)
+    {
+        var result = new List<ProjectionGraphNode>();
+        var skip = 0;
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            var page = await GraphStore.ListNodesByOwnerAsync(
+                scope,
+                ownerId,
+                skip: skip,
+                take: CleanupPageSize,
+                ct);
+            if (page.Count == 0)
+                break;
+
+            result.AddRange(page.Where(IsManagedNode));
+            if (result.Count > CleanupMaxItems)
+            {
+                throw new InvalidOperationException(
+                    $"Graph cleanup exceeded maximum node scan limit ({CleanupMaxItems}) for read model '{typeof(TReadModel).FullName}'.");
+            }
+
+            if (page.Count < CleanupPageSize)
+                break;
+
+            skip += page.Count;
+        }
+
+        return result;
     }
 
     private static string BuildManagedOwnerId(IGraphReadModel readModel)
@@ -179,7 +259,7 @@ public sealed class ProjectionGraphStoreBinding<TReadModel, TKey>
         if (nodeId.Length == 0)
             return false;
 
-        var neighbors = await _graphStore.GetNeighborsAsync(
+        var neighbors = await GraphStore.GetNeighborsAsync(
             new ProjectionGraphQuery
             {
                 Scope = scope,
@@ -193,4 +273,9 @@ public sealed class ProjectionGraphStoreBinding<TReadModel, TKey>
     }
 
     private static string NormalizeToken(string? token) => token?.Trim() ?? "";
+
+    private IProjectionGraphStore GraphStore =>
+        _graphStore ??
+        throw new InvalidOperationException(
+            $"Graph projection store is not configured for read model '{typeof(TReadModel).FullName}'.");
 }

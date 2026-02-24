@@ -18,10 +18,11 @@
 - `IProjectionStoreDispatcher<,>` -> `ProjectionStoreDispatcher<,>`
 - `IProjectionQueryableStoreBinding<,>` -> `ProjectionDocumentStoreBinding<,>`
 - `IProjectionStoreBinding<,>`(默认) -> `ProjectionDocumentStoreBinding<,>`
+- `IProjectionStoreBinding<,>`(默认) -> `ProjectionGraphStoreBinding<,>`
 - `IProjectionDocumentMetadataResolver` -> `ProjectionDocumentMetadataResolver`
 
 ## 语义
 
 1. Runtime 负责“一对多 store 分发”，不做 ProviderName 路由。
-2. Document 与 Graph 保持平行；Graph 通过额外 binding 接入。
-3. 查询统一走唯一 queryable binding；写入同时分发到所有 binding。
+2. Document 与 Graph 保持平行；Runtime 默认同时装配两类 binding，按配置自动激活。
+3. queryable binding 为可选（0..1）；存在时提供 `Get/List/Mutate`，写入始终分发到所有已配置 binding。

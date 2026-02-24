@@ -13,12 +13,14 @@ public interface IProjectionGraphStore
     Task<IReadOnlyList<ProjectionGraphNode>> ListNodesByOwnerAsync(
         string scope,
         string ownerId,
+        int skip = 0,
         int take = 5000,
         CancellationToken ct = default);
 
     Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(
         string scope,
         string ownerId,
+        int skip = 0,
         int take = 5000,
         CancellationToken ct = default);
 

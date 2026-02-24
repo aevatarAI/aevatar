@@ -155,6 +155,52 @@ public class ProjectionGraphStoreBindingTests
             .WithMessage("*requires a non-empty Id*");
     }
 
+    [Fact]
+    public async Task UpsertAsync_WhenOwnerGraphLarge_ShouldPageThroughOwnerCleanup()
+    {
+        var store = new RecordingGraphStore();
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store);
+
+        var largeNodes = Enumerable.Range(0, 1205)
+            .Select(i => Node($"n-{i}"))
+            .ToList();
+        var largeEdges = Enumerable.Range(0, 1205)
+            .Select(i => Edge($"e-{i}", "root", $"n-{i}"))
+            .ToList();
+        largeNodes.Insert(0, Node("root"));
+
+        await binding.UpsertAsync(new TestGraphReadModel
+        {
+            Id = "owner-large",
+            GraphScope = "scope-1",
+            GraphNodes = largeNodes,
+            GraphEdges = largeEdges,
+        });
+
+        await binding.UpsertAsync(new TestGraphReadModel
+        {
+            Id = "owner-large",
+            GraphScope = "scope-1",
+            GraphNodes =
+            [
+                Node("root"),
+            ],
+            GraphEdges = [],
+        });
+
+        var rootNeighbors = await store.GetNeighborsAsync(new ProjectionGraphQuery
+        {
+            Scope = "scope-1",
+            RootNodeId = "root",
+            Direction = ProjectionGraphDirection.Both,
+            EdgeTypes = [],
+            Take = 5000,
+        });
+
+        store.ListEdgesByOwnerCallCount.Should().BeGreaterThan(1);
+        rootNeighbors.Should().BeEmpty();
+    }
+
     private static string BuildOwnerId(string id) => $"{typeof(TestGraphReadModel).FullName}:{id}";
 
     private static ProjectionGraphNode Node(string nodeId)
@@ -200,6 +246,8 @@ public class ProjectionGraphStoreBindingTests
         private readonly Dictionary<string, ProjectionGraphNode> _nodes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ProjectionGraphEdge> _edges = new(StringComparer.Ordinal);
 
+        public int ListEdgesByOwnerCallCount { get; private set; }
+
         public Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -235,10 +283,12 @@ public class ProjectionGraphStoreBindingTests
         public Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(
             string scope,
             string ownerId,
+            int skip = 0,
             int take = 5000,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            ListEdgesByOwnerCallCount++;
             var scopeValue = NormalizeToken(scope);
             var ownerValue = NormalizeToken(ownerId);
             if (scopeValue.Length == 0 || ownerValue.Length == 0)
@@ -253,6 +303,7 @@ public class ProjectionGraphStoreBindingTests
                         x.Properties.TryGetValue(ProjectionGraphManagedPropertyKeys.ManagedOwnerIdKey, out var edgeOwnerId) &&
                         string.Equals(NormalizeToken(edgeOwnerId), ownerValue, StringComparison.Ordinal))
                     .OrderByDescending(x => x.UpdatedAt)
+                    .Skip(Math.Max(0, skip))
                     .Take(Math.Clamp(take, 1, 50000))
                     .Select(CloneEdge)
                     .ToList();
@@ -264,6 +315,7 @@ public class ProjectionGraphStoreBindingTests
         public Task<IReadOnlyList<ProjectionGraphNode>> ListNodesByOwnerAsync(
             string scope,
             string ownerId,
+            int skip = 0,
             int take = 5000,
             CancellationToken ct = default)
         {
@@ -282,6 +334,7 @@ public class ProjectionGraphStoreBindingTests
                         x.Properties.TryGetValue(ProjectionGraphManagedPropertyKeys.ManagedOwnerIdKey, out var nodeOwnerId) &&
                         string.Equals(NormalizeToken(nodeOwnerId), ownerValue, StringComparison.Ordinal))
                     .OrderByDescending(x => x.UpdatedAt)
+                    .Skip(Math.Max(0, skip))
                     .Take(Math.Clamp(take, 1, 50000))
                     .Select(CloneNode)
                     .ToList();

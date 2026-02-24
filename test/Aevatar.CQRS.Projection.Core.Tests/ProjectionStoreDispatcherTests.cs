@@ -49,13 +49,58 @@ public class ProjectionStoreDispatcherTests
     }
 
     [Fact]
-    public void Ctor_WhenQueryableBindingMissing_ShouldThrow()
+    public async Task UpsertAsync_WhenQueryableBindingMissing_ShouldWriteWriteOnlyBindings()
     {
-        Action act = () => new ProjectionStoreDispatcher<TestReadModel, string>(
+        var writeOnly = new RecordingBinding("write-only");
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
+            [writeOnly]);
+
+        await dispatcher.UpsertAsync(new TestReadModel
+        {
+            Id = "id-1",
+            Value = "v1",
+        });
+
+        writeOnly.UpsertCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MutateAsync_WhenQueryableBindingMissing_ShouldThrow()
+    {
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
             [new RecordingBinding("write-only")]);
 
+        Func<Task> act = () => dispatcher.MutateAsync("id-1", model => model.Value = "v2");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Queryable projection store binding is not configured*");
+    }
+
+    [Fact]
+    public async Task GetAndList_WhenQueryableBindingMissing_ShouldThrow()
+    {
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
+            [new RecordingBinding("write-only")]);
+
+        Func<Task> getAct = async () => _ = await dispatcher.GetAsync("id-1");
+        Func<Task> listAct = async () => _ = await dispatcher.ListAsync();
+
+        await getAct.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Queryable projection store binding is not configured*");
+        await listAct.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Queryable projection store binding is not configured*");
+    }
+
+    [Fact]
+    public void Ctor_WhenNoConfiguredBindings_ShouldThrow()
+    {
+        var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel, string>();
+
+        Action act = () => new ProjectionStoreDispatcher<TestReadModel, string>(
+            [unconfiguredDocumentBinding]);
+
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Exactly one queryable projection store binding is required*");
+            .WithMessage("*No configured projection store bindings*");
     }
 
     [Fact]
@@ -65,7 +110,57 @@ public class ProjectionStoreDispatcherTests
             [new TestQueryableBinding(), new TestQueryableBinding()]);
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Exactly one queryable projection store binding is required*");
+            .WithMessage("*At most one queryable projection store binding is allowed*");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenBindingFailsInitially_ShouldRetry()
+    {
+        var queryBinding = new TestQueryableBinding();
+        var flakyGraphBinding = new FlakyBinding("graph", failCountBeforeSuccess: 1);
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
+            [queryBinding, flakyGraphBinding],
+            options: new ProjectionStoreDispatchOptions
+            {
+                MaxWriteAttempts = 2,
+            });
+
+        await dispatcher.UpsertAsync(new TestReadModel
+        {
+            Id = "id-1",
+            Value = "v1",
+        });
+
+        flakyGraphBinding.AttemptCount.Should().Be(2);
+        flakyGraphBinding.UpsertCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenBindingFailsAfterRetries_ShouldInvokeCompensator()
+    {
+        var queryBinding = new TestQueryableBinding();
+        var failingBinding = new FlakyBinding("graph", failCountBeforeSuccess: int.MaxValue);
+        var compensator = new RecordingCompensator();
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
+            [queryBinding, failingBinding],
+            compensator: compensator,
+            options: new ProjectionStoreDispatchOptions
+            {
+                MaxWriteAttempts = 2,
+            });
+
+        Func<Task> act = () => dispatcher.UpsertAsync(new TestReadModel
+        {
+            Id = "id-1",
+            Value = "v1",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*after 2 attempt*");
+        compensator.LastContext.Should().NotBeNull();
+        compensator.LastContext!.Operation.Should().Be("upsert");
+        compensator.LastContext.FailedStore.Should().Be("graph");
+        compensator.LastContext.SucceededStores.Should().ContainSingle("document");
     }
 
     private sealed class TestReadModel : IProjectionReadModel
@@ -93,6 +188,54 @@ public class ProjectionStoreDispatcherTests
             ct.ThrowIfCancellationRequested();
             UpsertCount++;
             LastValue = readModel.Value;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FlakyBinding : IProjectionStoreBinding<TestReadModel, string>
+    {
+        private readonly int _failCountBeforeSuccess;
+        private int _remainingFailures;
+
+        public FlakyBinding(string storeName, int failCountBeforeSuccess)
+        {
+            StoreName = storeName;
+            _failCountBeforeSuccess = failCountBeforeSuccess;
+            _remainingFailures = failCountBeforeSuccess;
+        }
+
+        public string StoreName { get; }
+
+        public int AttemptCount { get; private set; }
+
+        public int UpsertCount { get; private set; }
+
+        public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            AttemptCount++;
+            if (_remainingFailures > 0)
+            {
+                _remainingFailures--;
+                throw new InvalidOperationException(
+                    $"Binding '{StoreName}' failed. remainingFailures={_remainingFailures} failCountBeforeSuccess={_failCountBeforeSuccess}");
+            }
+
+            UpsertCount++;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingCompensator : IProjectionStoreDispatchCompensator<TestReadModel, string>
+    {
+        public ProjectionStoreDispatchCompensationContext<TestReadModel, string>? LastContext { get; private set; }
+
+        public Task CompensateAsync(
+            ProjectionStoreDispatchCompensationContext<TestReadModel, string> context,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            LastContext = context;
             return Task.CompletedTask;
         }
     }

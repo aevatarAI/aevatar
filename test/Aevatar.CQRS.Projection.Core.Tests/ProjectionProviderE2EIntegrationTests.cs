@@ -59,7 +59,7 @@ public sealed class ProjectionProviderE2EIntegrationTests
         throw new InvalidOperationException($"Environment variable '{name}' is required.");
     }
 
-    private sealed class ProviderStoreSmokeReadModel
+    private sealed class ProviderStoreSmokeReadModel : IProjectionReadModel
     {
         public string Id { get; set; } = "";
 

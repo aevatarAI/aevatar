@@ -2,7 +2,6 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
-using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.DependencyInjection;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -69,7 +68,6 @@ public class WorkflowExecutionProjectionRegistrationTests
             listSortSelector: report => report.CreatedAt,
             listTakeMax: 200);
         services.AddInMemoryGraphProjectionStore();
-        services.AddSingleton<IProjectionStoreBinding<WorkflowExecutionReport, string>, ProjectionGraphStoreBinding<WorkflowExecutionReport, string>>();
     }
 
     private static void RegisterElasticsearchDocumentProvider(IServiceCollection services)

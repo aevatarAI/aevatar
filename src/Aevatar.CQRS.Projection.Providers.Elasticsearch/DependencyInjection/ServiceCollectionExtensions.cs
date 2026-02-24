@@ -13,7 +13,7 @@ public static class ServiceCollectionExtensions
         Func<IServiceProvider, DocumentIndexMetadata> metadataFactory,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null)
-        where TReadModel : class
+        where TReadModel : class, IProjectionReadModel
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
         ArgumentNullException.ThrowIfNull(metadataFactory);

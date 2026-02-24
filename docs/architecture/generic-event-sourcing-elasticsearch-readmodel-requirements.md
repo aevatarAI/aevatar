@@ -97,7 +97,7 @@
   - `src/Aevatar.CQRS.Projection.Providers.Neo4j`
 - 当前行为：
   1. 一个 ReadModel 可绑定多个 Store（Document + Graph）。
-  2. 必须且仅能有一个 queryable binding（用于 Get/List/Mutate）。
+  2. queryable binding 为可选（0..1）；若存在则用于 Get/List/Mutate。
   3. Provider 写路径日志结构已统一。
 
 ### 6.4 Workflow 接入现状（已完成）

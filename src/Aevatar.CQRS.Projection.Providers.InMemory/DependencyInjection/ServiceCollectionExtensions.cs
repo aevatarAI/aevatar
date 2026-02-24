@@ -12,7 +12,7 @@ public static class ServiceCollectionExtensions
         Func<TKey, string>? keyFormatter = null,
         Func<TReadModel, object?>? listSortSelector = null,
         int listTakeMax = 200)
-        where TReadModel : class
+        where TReadModel : class, IProjectionReadModel
     {
         ArgumentNullException.ThrowIfNull(keySelector);
 

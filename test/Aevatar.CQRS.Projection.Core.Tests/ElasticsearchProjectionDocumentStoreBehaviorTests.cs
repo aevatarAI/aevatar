@@ -238,7 +238,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
 
     private sealed record CapturedRequest(string Method, string PathAndQuery, string Body);
 
-    private sealed class StoreReadModel
+    private sealed class StoreReadModel : IProjectionReadModel
     {
         public string Id { get; set; } = "";
 

@@ -6,7 +6,7 @@ namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 
 public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
     : IProjectionDocumentStore<TReadModel, TKey>
-    where TReadModel : class
+    where TReadModel : class, IProjectionReadModel
 {
     private const string ProviderName = "InMemory";
     private readonly object _gate = new();
