@@ -29,7 +29,7 @@ public class WorkflowExecutionReadModelProjectorTests
         InMemoryProjectionReadModelStore<WorkflowExecutionReport, string> store) =>
         new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
             store,
-            new ProjectionGraphStoreAdapter<WorkflowExecutionReport>(new InMemoryProjectionRelationStore()));
+            new ProjectionGraphMaterializer<WorkflowExecutionReport>(new InMemoryProjectionGraphStore()));
 
     private static IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> BuildReducers() =>
     [

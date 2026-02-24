@@ -6,7 +6,7 @@
 
 - 应用层投影端口实现：
   - `IWorkflowExecutionProjectionLifecyclePort`（`Ensure/Attach/Detach/Release`）
-  - `IWorkflowExecutionProjectionQueryPort`（`Snapshot/Timeline/Relations/Subgraph/GraphEnriched`）
+  - `IWorkflowExecutionProjectionQueryPort`（`Snapshot/Timeline/GraphEdges/GraphSubgraph/GraphEnriched`）
   - 默认实现分别为 `WorkflowExecutionProjectionLifecycleService` 与 `WorkflowExecutionProjectionQueryService`
   - 两个实现分别继承 `ProjectionLifecyclePortServiceBase` / `ProjectionQueryPortServiceBase`，通用端口编排已下沉到 `Aevatar.CQRS.Projection.Core`
 - 编排组件拆分（避免单类过重）：
@@ -23,13 +23,14 @@
 - 实时输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
 - 领域投影实现：reducers、projectors、read model（不包含 Provider Store 实现）
 - 领域 DI 组合：`AddWorkflowExecutionProjectionCQRS(...)`
-- Provider 能力校验：启动期由 `WorkflowReadModelStartupValidationHostedService` 预校验，运行时选择阶段继续按 `ProjectionReadModelCapabilityValidator` 校验
+- Provider 能力校验：启动期由 `WorkflowReadModelStartupValidationHostedService` 预校验，运行时选择阶段继续按 `ProjectionProviderCapabilityValidator` 校验
 - ReadModel 选择规则统一：DI store 解析与 Startup validation 均复用 `IProjectionStoreSelectionPlanner + IProjectionStoreSelectionRuntimeOptions`，避免双处规则漂移
 
 本项目依赖：
 
 - `Aevatar.CQRS.Projection.Core.Abstractions`（投影管线/端口抽象）
-- `Aevatar.CQRS.Projection.Stores.Abstractions`（ReadModel/Relation/选择抽象）
+- `Aevatar.CQRS.Projection.Stores.Abstractions`（Document/Graph 存储契约）
+- `Aevatar.CQRS.Projection.Runtime.Abstractions`（Provider 选择与 materialization 编排契约）
 - `Aevatar.CQRS.Projection.Core`（通用生命周期/订阅/协调实现）
 - `Aevatar.Foundation.Projection`（最小 read model 基类与读侧能力接口）
 - `Aevatar.Workflow.Extensions.AIProjection`（可选扩展：组合 `Aevatar.AI.Projection` 的通用 reducer/applier）
@@ -82,8 +83,8 @@ FAQ：
   - 实现 `IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>`
   - 在 DI 中注册
 - 扩展 ReadModel Provider（推荐）：
-  - 文档存储注册：`IProjectionStoreRegistration<IProjectionReadModelStore<WorkflowExecutionReport, string>>`
-  - 图存储注册：`IProjectionStoreRegistration<IProjectionRelationStore>`
+  - 文档存储注册：`IProjectionStoreRegistration<IDocumentProjectionStore<WorkflowExecutionReport, string>>`
+  - 图存储注册：`IProjectionStoreRegistration<IProjectionGraphStore>`
   - 在 Host/Extensions 侧注册（例如 `Aevatar.Workflow.Extensions.Hosting.AddWorkflowProjectionReadModelProviders(...)`）
   - 通过 `Projection:Document:*` 与 `Projection:Graph:*` 配置选择 Provider
 
@@ -98,12 +99,12 @@ FAQ：
   - `Projection:Document:Providers:Neo4j:*`
 - 图 Provider 配置：
   - `Projection:Graph:Providers:Neo4j:*`
-- `WorkflowExecutionProjection:ValidateReadModelProviderOnStartup`：启动阶段预校验 document provider（默认 `true`）
-- `WorkflowExecutionProjection:ValidateRelationProviderOnStartup`：启动阶段预校验 graph provider（默认 `true`）
-- 关系查询参数：
-  - `/actors/{actorId}/relations` 支持 `direction` 与 `relationTypes`
-  - `/actors/{actorId}/relation-subgraph` 支持 `direction` 与 `relationTypes`
-  - `/actors/{actorId}/graph-enriched` 支持 `direction` 与 `relationTypes`
+- `WorkflowExecutionProjection:ValidateDocumentProviderOnStartup`：启动阶段预校验 document provider（默认 `true`）
+- `WorkflowExecutionProjection:ValidateGraphProviderOnStartup`：启动阶段预校验 graph provider（默认 `true`）
+- 图查询参数：
+  - `/actors/{actorId}/graph-edges` 支持 `direction` 与 `edgeTypes`
+  - `/actors/{actorId}/graph-subgraph` 支持 `direction` 与 `edgeTypes`
+  - `/actors/{actorId}/graph-enriched` 支持 `direction` 与 `edgeTypes`
 - 扩展 run 输出协议：
   - 保持 `WorkflowRunEvent` 不变，新增 presentation adapter 进行协议映射
   - 不改 Application 用例编排代码

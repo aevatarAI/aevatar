@@ -3,7 +3,7 @@ using Aevatar.Workflow.Projection.ReadModels;
 namespace Aevatar.Workflow.Projection.Metadata;
 
 public sealed class WorkflowExecutionReportDocumentMetadataProvider
-    : IReadModelDocumentMetadataProvider<WorkflowExecutionReport>
+    : IProjectionDocumentMetadataProvider<WorkflowExecutionReport>
 {
     public DocumentIndexMetadata Metadata { get; } = new(
         IndexName: "workflow-execution-reports",

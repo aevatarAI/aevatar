@@ -9,8 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
 public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
-    : IProjectionReadModelStore<TReadModel, TKey>,
-      IProjectionStoreProviderMetadata,
+    : IDocumentProjectionStore<TReadModel, TKey>,
       IDisposable
     where TReadModel : class
 {
@@ -39,7 +38,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         string indexScope,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
-        string providerName = ProjectionReadModelProviderNames.Elasticsearch,
+        string providerName = ProjectionProviderNames.Elasticsearch,
         ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>? logger = null,
         HttpMessageHandler? httpMessageHandler = null)
     {
@@ -76,7 +75,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         ProviderCapabilities = BuildCapabilities(providerName);
     }
 
-    public ProjectionReadModelProviderCapabilities ProviderCapabilities { get; }
+    public ProjectionProviderCapabilities ProviderCapabilities { get; }
 
     public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default) =>
         UpsertCoreAsync(readModel, allowCreateIndex: true, ct);
@@ -544,11 +543,11 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         return payload[..maxLength] + "...(truncated)";
     }
 
-    private static ProjectionReadModelProviderCapabilities BuildCapabilities(string providerName) =>
+    private static ProjectionProviderCapabilities BuildCapabilities(string providerName) =>
         new(
             providerName,
             supportsIndexing: true,
-            indexKinds: [ProjectionReadModelIndexKind.Document],
+            indexKinds: [ProjectionIndexKind.Document],
             supportsAliases: false,
             supportsSchemaValidation: false);
 

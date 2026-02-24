@@ -6,43 +6,11 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public class ProjectionReadModelRuntimeTests
 {
     [Fact]
-    public void BindingResolver_ShouldResolveRequirement_ByReadModelFullName()
-    {
-        var resolver = new ProjectionReadModelBindingResolver();
-        var bindingKey = typeof(TestReadModel).FullName!;
-        var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            [bindingKey] = ProjectionReadModelIndexKind.Graph.ToString(),
-        };
-
-        var requirements = resolver.Resolve(bindings, typeof(TestReadModel));
-
-        requirements.RequiresIndexing.Should().BeTrue();
-        requirements.RequiredIndexKinds.Should().ContainSingle()
-            .Which.Should().Be(ProjectionReadModelIndexKind.Graph);
-    }
-
-    [Fact]
-    public void BindingResolver_WhenBindingUsesShortTypeName_ShouldThrow()
-    {
-        var resolver = new ProjectionReadModelBindingResolver();
-        var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            [nameof(TestReadModel)] = ProjectionReadModelIndexKind.Document.ToString(),
-        };
-
-        Action act = () => resolver.Resolve(bindings, typeof(TestReadModel));
-
-        act.Should().Throw<ProjectionReadModelBindingException>()
-            .WithMessage("*must use full type name*");
-    }
-
-    [Fact]
     public void ProviderSelector_WhenFailFastDisabled_ShouldReturnRegistration()
     {
-        var selector = new ProjectionReadModelProviderSelector(
-            new ProjectionReadModelCapabilityValidatorService());
-        var registrations = new List<IProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>>>
+        var selector = new ProjectionDocumentStoreProviderSelector(
+            new ProjectionProviderCapabilityValidatorService());
+        var registrations = new List<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>
         {
             CreateRegistration(
                 "InMemory",
@@ -52,14 +20,14 @@ public class ProjectionReadModelRuntimeTests
 
         var selected = selector.Select(
             registrations,
-            new ProjectionReadModelStoreSelectionOptions
+            new ProjectionStoreSelectionOptions
             {
                 RequestedProviderName = "InMemory",
                 FailOnUnsupportedCapabilities = false,
             },
-            new ProjectionReadModelRequirements(
+            new ProjectionStoreRequirements(
                 requiresIndexing: true,
-                requiredIndexKinds: [ProjectionReadModelIndexKind.Document]));
+                requiredIndexKinds: [ProjectionIndexKind.Document]));
 
         selected.ProviderName.Should().Be("InMemory");
     }
@@ -67,34 +35,34 @@ public class ProjectionReadModelRuntimeTests
     [Fact]
     public void ProviderSelector_WhenMultipleProvidersWithoutRequested_ShouldThrowStructuredException()
     {
-        var selector = new ProjectionReadModelProviderSelector(
-            new ProjectionReadModelCapabilityValidatorService());
-        var registrations = new List<IProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>>>
+        var selector = new ProjectionDocumentStoreProviderSelector(
+            new ProjectionProviderCapabilityValidatorService());
+        var registrations = new List<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>
         {
             CreateRegistration("InMemory", supportsIndexing: false, indexKinds: []),
-            CreateRegistration("Elasticsearch", supportsIndexing: true, indexKinds: [ProjectionReadModelIndexKind.Document]),
+            CreateRegistration("Elasticsearch", supportsIndexing: true, indexKinds: [ProjectionIndexKind.Document]),
         };
 
         Action act = () => selector.Select(
             registrations,
-            new ProjectionReadModelStoreSelectionOptions(),
-            new ProjectionReadModelRequirements());
+            new ProjectionStoreSelectionOptions(),
+            new ProjectionStoreRequirements());
 
         act.Should().Throw<ProjectionProviderSelectionException>()
             .Where(ex => ex.ReadModelType == typeof(TestReadModel));
     }
 
-    private static IProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>> CreateRegistration(
+    private static IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>> CreateRegistration(
         string providerName,
         bool supportsIndexing,
-        IReadOnlyList<ProjectionReadModelIndexKind> indexKinds)
+        IReadOnlyList<ProjectionIndexKind> indexKinds)
     {
-        var capabilities = new ProjectionReadModelProviderCapabilities(
+        var capabilities = new ProjectionProviderCapabilities(
             providerName,
             supportsIndexing,
             indexKinds);
 
-        return new DelegateProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>>(
+        return new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
             providerName,
             capabilities,
             _ => new NoopStore());
@@ -105,7 +73,7 @@ public class ProjectionReadModelRuntimeTests
         public string Id { get; set; } = "";
     }
 
-    private sealed class NoopStore : IProjectionReadModelStore<TestReadModel, string>
+    private sealed class NoopStore : IDocumentProjectionStore<TestReadModel, string>
     {
         public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
         {

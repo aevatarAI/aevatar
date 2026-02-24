@@ -39,15 +39,15 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         await using var provider = services.BuildServiceProvider();
         var documentStore = provider.GetRequiredService<IDocumentProjectionStore<WorkflowExecutionReport, string>>();
-        var readModelStore = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
-        var relationStore = provider.GetRequiredService<IProjectionRelationStore>();
-        var graphStore = provider.GetRequiredService<IGraphProjectionStore<WorkflowExecutionReport>>();
+        var readModelStore = provider.GetRequiredService<IDocumentProjectionStore<WorkflowExecutionReport, string>>();
+        var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
+        var graphStore = provider.GetRequiredService<IProjectionGraphMaterializer<WorkflowExecutionReport>>();
         var router = provider.GetRequiredService<IProjectionMaterializationRouter<WorkflowExecutionReport, string>>();
 
         documentStore.Should().BeOfType<InMemoryProjectionReadModelStore<WorkflowExecutionReport, string>>();
         readModelStore.Should().BeOfType<InMemoryProjectionReadModelStore<WorkflowExecutionReport, string>>();
-        relationStore.Should().BeOfType<InMemoryProjectionRelationStore>();
-        graphStore.Should().BeOfType<ProjectionGraphStoreAdapter<WorkflowExecutionReport>>();
+        relationStore.Should().BeOfType<InMemoryProjectionGraphStore>();
+        graphStore.Should().BeOfType<ProjectionGraphMaterializer<WorkflowExecutionReport>>();
         router.Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
@@ -62,17 +62,17 @@ public class WorkflowExecutionProjectionRegistrationTests
         RegisterElasticsearchDocumentProvider(services);
         ConfigureStoreSelectionOptions(services, options =>
         {
-            options.DocumentProvider = ProjectionReadModelProviderNames.Elasticsearch;
-            options.GraphProvider = ProjectionReadModelProviderNames.InMemory;
+            options.DocumentProvider = ProjectionProviderNames.Elasticsearch;
+            options.GraphProvider = ProjectionProviderNames.InMemory;
         });
         services.AddWorkflowExecutionProjectionCQRS();
 
         using var provider = services.BuildServiceProvider();
-        var readModelStore = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
-        var relationStore = provider.GetRequiredService<IProjectionRelationStore>();
+        var readModelStore = provider.GetRequiredService<IDocumentProjectionStore<WorkflowExecutionReport, string>>();
+        var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
 
         readModelStore.Should().BeOfType<ElasticsearchProjectionReadModelStore<WorkflowExecutionReport, string>>();
-        relationStore.Should().BeOfType<InMemoryProjectionRelationStore>();
+        relationStore.Should().BeOfType<InMemoryProjectionGraphStore>();
     }
 
     [Fact]
@@ -82,13 +82,13 @@ public class WorkflowExecutionProjectionRegistrationTests
         RegisterElasticsearchDocumentProvider(services);
         ConfigureStoreSelectionOptions(services, options =>
         {
-            options.DocumentProvider = ProjectionReadModelProviderNames.Elasticsearch;
-            options.GraphProvider = ProjectionReadModelProviderNames.Elasticsearch;
+            options.DocumentProvider = ProjectionProviderNames.Elasticsearch;
+            options.GraphProvider = ProjectionProviderNames.Elasticsearch;
         });
         services.AddWorkflowExecutionProjectionCQRS();
 
         using var provider = services.BuildServiceProvider();
-        Action act = () => provider.GetRequiredService<IProjectionRelationStore>();
+        Action act = () => provider.GetRequiredService<IProjectionGraphStore>();
 
         act.Should().Throw<ProjectionProviderSelectionException>()
             .WithMessage("*No relation store provider registrations were found*");
@@ -122,13 +122,13 @@ public class WorkflowExecutionProjectionRegistrationTests
 
     private static void ConfigureStoreSelectionOptions(
         IServiceCollection services,
-        Action<ProjectionReadModelRuntimeOptions> configure)
+        Action<ProjectionStoreRuntimeOptions> configure)
     {
-        var options = new ProjectionReadModelRuntimeOptions();
+        var options = new ProjectionStoreRuntimeOptions();
         configure(options);
         services.Replace(ServiceDescriptor.Singleton(options));
         services.Replace(ServiceDescriptor.Singleton<IProjectionStoreSelectionRuntimeOptions>(sp =>
-            sp.GetRequiredService<ProjectionReadModelRuntimeOptions>()));
+            sp.GetRequiredService<ProjectionStoreRuntimeOptions>()));
     }
 
     private static async Task StartHostedServicesAsync(IServiceProvider provider)

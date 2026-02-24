@@ -540,8 +540,8 @@ public class WorkflowExecutionProjectionServiceTests
         var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         store = new ObservableWorkflowExecutionReadModelStore();
         var resolvedClock = clock ?? new SystemProjectionClock();
-        var relationStore = new InMemoryProjectionRelationStore();
-        var graphStore = new ProjectionGraphStoreAdapter<WorkflowExecutionReport>(relationStore);
+        var relationStore = new InMemoryProjectionGraphStore();
+        var graphStore = new ProjectionGraphMaterializer<WorkflowExecutionReport>(relationStore);
         var materializationRouter = new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
             store,
             graphStore);
@@ -589,7 +589,7 @@ public class WorkflowExecutionProjectionServiceTests
         var queryReader = new WorkflowProjectionQueryReader(
             store,
             mapper,
-            graphStore);
+            relationStore);
         var activationService = new WorkflowProjectionActivationService(
             lifecycle,
             resolvedClock,
@@ -621,8 +621,8 @@ public class WorkflowExecutionProjectionServiceTests
     {
         var store = CreateStore();
         var clock = new SystemProjectionClock();
-        var relationStore = new InMemoryProjectionRelationStore();
-        var graphStore = new ProjectionGraphStoreAdapter<WorkflowExecutionReport>(relationStore);
+        var relationStore = new InMemoryProjectionGraphStore();
+        var graphStore = new ProjectionGraphMaterializer<WorkflowExecutionReport>(relationStore);
         var materializationRouter = new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
             store,
             graphStore);
@@ -635,7 +635,7 @@ public class WorkflowExecutionProjectionServiceTests
         var queryReader = new WorkflowProjectionQueryReader(
             store,
             mapper,
-            graphStore);
+            relationStore);
         var activationService = new WorkflowProjectionActivationService(
             lifecycle,
             clock,
@@ -800,32 +800,32 @@ public class WorkflowExecutionProjectionServiceTests
             CancellationToken ct = default)
             => _queryPort.ListActorTimelineAsync(actorId, take, ct);
 
-        public Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
+        public Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(
             string actorId,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
+            WorkflowActorGraphQueryOptions? options = null,
             CancellationToken ct = default)
-            => _queryPort.GetActorRelationsAsync(actorId, take, options, ct);
+            => _queryPort.GetActorGraphEdgesAsync(actorId, take, options, ct);
 
-        public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
             string actorId,
             int depth = 2,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
+            WorkflowActorGraphQueryOptions? options = null,
             CancellationToken ct = default)
-            => _queryPort.GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
+            => _queryPort.GetActorGraphSubgraphAsync(actorId, depth, take, options, ct);
 
         public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
             string actorId,
             int depth = 2,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
+            WorkflowActorGraphQueryOptions? options = null,
             CancellationToken ct = default)
             => _queryPort.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, options, ct);
     }
 
     private sealed class ObservableWorkflowExecutionReadModelStore
-        : IProjectionReadModelStore<WorkflowExecutionReport, string>
+        : IDocumentProjectionStore<WorkflowExecutionReport, string>
     {
         private readonly InMemoryProjectionReadModelStore<WorkflowExecutionReport, string> _inner = CreateStore();
         private readonly object _gate = new();

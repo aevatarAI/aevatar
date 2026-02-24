@@ -358,7 +358,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
         }
 
-        public Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
+        public Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(
             string actorId,
             int take = 200,
             CancellationToken ct = default)
@@ -366,10 +366,10 @@ public sealed class WorkflowRunOrchestrationComponentTests
             _ = actorId;
             _ = take;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<WorkflowActorRelationItem>>([]);
+            return Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
         }
 
-        public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
             string actorId,
             int depth = 2,
             int take = 200,
@@ -378,7 +378,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             _ = depth;
             _ = take;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new WorkflowActorRelationSubgraph
+            return Task.FromResult(new WorkflowActorGraphSubgraph
             {
                 RootNodeId = actorId,
             });

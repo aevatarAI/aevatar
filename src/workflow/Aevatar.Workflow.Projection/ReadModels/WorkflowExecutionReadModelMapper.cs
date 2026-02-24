@@ -39,9 +39,9 @@ public sealed class WorkflowExecutionReadModelMapper
         };
     }
 
-    public WorkflowActorRelationNode ToActorRelationNode(ProjectionRelationNode source)
+    public WorkflowActorGraphNode ToActorGraphNode(ProjectionGraphNode source)
     {
-        return new WorkflowActorRelationNode
+        return new WorkflowActorGraphNode
         {
             NodeId = source.NodeId,
             NodeType = source.NodeType,
@@ -50,28 +50,28 @@ public sealed class WorkflowExecutionReadModelMapper
         };
     }
 
-    public WorkflowActorRelationItem ToActorRelationItem(ProjectionRelationEdge source)
+    public WorkflowActorGraphEdge ToActorGraphEdge(ProjectionGraphEdge source)
     {
-        return new WorkflowActorRelationItem
+        return new WorkflowActorGraphEdge
         {
             EdgeId = source.EdgeId,
             FromNodeId = source.FromNodeId,
             ToNodeId = source.ToNodeId,
-            RelationType = source.RelationType,
+            EdgeType = source.EdgeType,
             UpdatedAt = source.UpdatedAt,
             Properties = new Dictionary<string, string>(source.Properties, StringComparer.Ordinal),
         };
     }
 
-    public WorkflowActorRelationSubgraph ToActorRelationSubgraph(
+    public WorkflowActorGraphSubgraph ToActorGraphSubgraph(
         string rootNodeId,
-        ProjectionRelationSubgraph source)
+        ProjectionGraphSubgraph source)
     {
-        return new WorkflowActorRelationSubgraph
+        return new WorkflowActorGraphSubgraph
         {
             RootNodeId = rootNodeId,
-            Nodes = source.Nodes.Select(ToActorRelationNode).ToList(),
-            Edges = source.Edges.Select(ToActorRelationItem).ToList(),
+            Nodes = source.Nodes.Select(ToActorGraphNode).ToList(),
+            Edges = source.Edges.Select(ToActorGraphEdge).ToList(),
         };
     }
 }

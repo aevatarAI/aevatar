@@ -41,30 +41,30 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
         var selectionPlan = _selectionPlanner.Build(
             _selectionRuntimeOptions,
             typeof(WorkflowExecutionReport),
-            new ProjectionReadModelRequirements());
+            new ProjectionStoreRequirements());
 
-        if (_options.ValidateReadModelProviderOnStartup)
+        if (_options.ValidateDocumentProviderOnStartup)
         {
-            var selectedReadModelProvider = _startupValidator.ValidateReadModelProvider<WorkflowExecutionReport, string>(
+            var selectedDocumentProvider = _startupValidator.ValidateDocumentProvider<WorkflowExecutionReport, string>(
                 _serviceProvider,
-                selectionPlan.ReadModelSelectionOptions,
-                selectionPlan.ReadModelRequirements);
+                selectionPlan.DocumentSelectionOptions,
+                selectionPlan.DocumentRequirements);
             _logger.LogInformation(
                 "Workflow read-model provider startup validation passed. readModelType={ReadModelType} provider={Provider}",
                 typeof(WorkflowExecutionReport).FullName,
-                selectedReadModelProvider.ProviderName);
+                selectedDocumentProvider.ProviderName);
         }
 
-        if (_options.ValidateRelationProviderOnStartup)
+        if (_options.ValidateGraphProviderOnStartup)
         {
-            var selectedRelationProvider = _startupValidator.ValidateRelationProvider(
+            var selectedGraphProvider = _startupValidator.ValidateGraphProvider(
                 _serviceProvider,
-                selectionPlan.RelationSelectionOptions,
-                selectionPlan.RelationRequirements);
+                selectionPlan.GraphSelectionOptions,
+                selectionPlan.GraphRequirements);
             _logger.LogInformation(
-                "Workflow relation provider startup validation passed. relationType={RelationType} provider={Provider}",
-                typeof(ProjectionRelationNode).FullName,
-                selectedRelationProvider.ProviderName);
+                "Workflow graph provider startup validation passed. graphType={GraphType} provider={Provider}",
+                typeof(ProjectionGraphNode).FullName,
+                selectedGraphProvider.ProviderName);
         }
         return Task.CompletedTask;
     }

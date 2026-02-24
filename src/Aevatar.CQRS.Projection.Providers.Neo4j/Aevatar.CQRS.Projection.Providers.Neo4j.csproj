@@ -7,6 +7,7 @@
     <RootNamespace>Aevatar.CQRS.Projection.Providers.Neo4j</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Runtime.Abstractions\Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>

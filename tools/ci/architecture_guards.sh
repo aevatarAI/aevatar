@@ -52,6 +52,16 @@ if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   exit 1
 fi
 
+if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver|ProjectionReadModelBindingException" src test; then
+  echo "BindingResolver-based projection routing is forbidden. Use capability-based Document/Graph routing."
+  exit 1
+fi
+
+if rg -n "Projection:ReadModel:Bindings" src test; then
+  echo "Projection:ReadModel:Bindings is forbidden. Use Projection:Document:* and Projection:Graph:* options."
+  exit 1
+fi
+
 if [ -f "src/Aevatar.Foundation.Core/EventSourcing/DefaultAutoPersistedStateEventFactory.cs" ]; then
   echo "DefaultAutoPersistedStateEventFactory is forbidden. EventStore must persist domain events, not snapshot-state events."
   exit 1

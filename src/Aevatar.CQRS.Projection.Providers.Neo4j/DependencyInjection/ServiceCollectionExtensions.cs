@@ -13,24 +13,24 @@ public static class ServiceCollectionExtensions
         Func<IServiceProvider, string> scopeFactory,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
-        string providerName = ProjectionReadModelProviderNames.Neo4j)
+        string providerName = ProjectionProviderNames.Neo4j)
         where TReadModel : class
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(keySelector);
 
-        services.AddSingleton<IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>>(
-            new DelegateProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>(
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>(
                 providerName,
-                new ProjectionReadModelProviderCapabilities(
+                new ProjectionProviderCapabilities(
                     providerName,
                     supportsIndexing: true,
-                    indexKinds: [ProjectionReadModelIndexKind.Graph],
+                    indexKinds: [ProjectionIndexKind.Graph],
                     supportsAliases: false,
                     supportsSchemaValidation: true,
-                    supportsRelations: true,
-                    supportsRelationTraversal: true),
+                    supportsGraph: true,
+                    supportsGraphTraversal: true),
                 provider => new Neo4jProjectionReadModelStore<TReadModel, TKey>(
                     optionsFactory(provider),
                     scopeFactory(provider),
@@ -44,29 +44,29 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddNeo4jGraphStoreRegistration(
         this IServiceCollection services,
-        Func<IServiceProvider, Neo4jProjectionRelationStoreOptions> optionsFactory,
+        Func<IServiceProvider, Neo4jProjectionGraphStoreOptions> optionsFactory,
         Func<IServiceProvider, string> scopeFactory,
-        string providerName = ProjectionReadModelProviderNames.Neo4j)
+        string providerName = ProjectionProviderNames.Neo4j)
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
         ArgumentNullException.ThrowIfNull(scopeFactory);
 
-        services.AddSingleton<IProjectionStoreRegistration<IProjectionRelationStore>>(
-            new DelegateProjectionStoreRegistration<IProjectionRelationStore>(
+        services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
+            new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
                 providerName,
-                new ProjectionReadModelProviderCapabilities(
+                new ProjectionProviderCapabilities(
                     providerName,
                     supportsIndexing: true,
-                    indexKinds: [ProjectionReadModelIndexKind.Graph],
+                    indexKinds: [ProjectionIndexKind.Graph],
                     supportsAliases: false,
                     supportsSchemaValidation: true,
-                    supportsRelations: true,
-                    supportsRelationTraversal: true),
-                provider => new Neo4jProjectionRelationStore(
+                    supportsGraph: true,
+                    supportsGraphTraversal: true),
+                provider => new Neo4jProjectionGraphStore(
                     optionsFactory(provider),
                     scopeFactory(provider),
                     providerName,
-                    provider.GetService<ILogger<Neo4jProjectionRelationStore>>())));
+                    provider.GetService<ILogger<Neo4jProjectionGraphStore>>())));
 
         return services;
     }

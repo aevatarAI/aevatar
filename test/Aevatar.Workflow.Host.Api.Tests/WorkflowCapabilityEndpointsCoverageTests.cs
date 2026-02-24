@@ -245,20 +245,20 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
 
-        public Task<IReadOnlyList<WorkflowActorRelationItem>> ListActorRelationsAsync(
+        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
             string actorId,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
+            WorkflowActorGraphQueryOptions? options = null,
             CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorRelationItem>>([]);
+            Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
 
-        public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
             string actorId,
             int depth = 2,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
+            WorkflowActorGraphQueryOptions? options = null,
             CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowActorRelationSubgraph
+            Task.FromResult(new WorkflowActorGraphSubgraph
             {
                 RootNodeId = actorId,
             });
@@ -267,7 +267,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             string actorId,
             int depth = 2,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
+            WorkflowActorGraphQueryOptions? options = null,
             CancellationToken ct = default) =>
             Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(null);
     }

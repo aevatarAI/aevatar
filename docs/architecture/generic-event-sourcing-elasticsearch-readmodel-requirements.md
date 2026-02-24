@@ -123,7 +123,7 @@
 - 当前行为：
   1. Host 启动阶段执行 read-model provider 选择 + 能力校验 dry-run。
   2. provider 缺失或能力不匹配可在启动阶段 fail-fast。
-  3. 可通过 `WorkflowExecutionProjection:ValidateReadModelProviderOnStartup` 控制启用（默认开启）。
+  3. 可通过 `WorkflowExecutionProjection:ValidateDocumentProviderOnStartup` 控制启用（默认开启）。
 
 ## 7. 需求分解与状态矩阵
 

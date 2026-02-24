@@ -1,6 +1,6 @@
 # Aevatar.CQRS.Projection.Core.Abstractions
 
-`Aevatar.CQRS.Projection.Core.Abstractions` 只包含投影运行时主链路的通用抽象，不包含任何 ReadModel/Relation provider 选择与存储能力。
+`Aevatar.CQRS.Projection.Core.Abstractions` 只包含投影运行时主链路的通用抽象，不包含任何 ReadModel/Graph provider 选择与存储能力。
 
 ## 目录结构
 

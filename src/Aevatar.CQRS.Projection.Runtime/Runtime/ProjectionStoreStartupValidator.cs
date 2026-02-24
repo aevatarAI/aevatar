@@ -2,27 +2,27 @@ namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 
 public sealed class ProjectionStoreStartupValidator : IProjectionStoreStartupValidator
 {
-    private readonly IProjectionReadModelProviderRegistry _readModelProviderRegistry;
-    private readonly IProjectionReadModelProviderSelector _readModelProviderSelector;
-    private readonly IProjectionRelationStoreProviderRegistry _relationProviderRegistry;
-    private readonly IProjectionRelationStoreProviderSelector _relationProviderSelector;
+    private readonly IProjectionDocumentStoreProviderRegistry _readModelProviderRegistry;
+    private readonly IProjectionDocumentStoreProviderSelector _readModelProviderSelector;
+    private readonly IProjectionGraphStoreProviderRegistry _graphProviderRegistry;
+    private readonly IProjectionGraphStoreProviderSelector _graphProviderSelector;
 
     public ProjectionStoreStartupValidator(
-        IProjectionReadModelProviderRegistry readModelProviderRegistry,
-        IProjectionReadModelProviderSelector readModelProviderSelector,
-        IProjectionRelationStoreProviderRegistry relationProviderRegistry,
-        IProjectionRelationStoreProviderSelector relationProviderSelector)
+        IProjectionDocumentStoreProviderRegistry readModelProviderRegistry,
+        IProjectionDocumentStoreProviderSelector readModelProviderSelector,
+        IProjectionGraphStoreProviderRegistry graphProviderRegistry,
+        IProjectionGraphStoreProviderSelector graphProviderSelector)
     {
         _readModelProviderRegistry = readModelProviderRegistry;
         _readModelProviderSelector = readModelProviderSelector;
-        _relationProviderRegistry = relationProviderRegistry;
-        _relationProviderSelector = relationProviderSelector;
+        _graphProviderRegistry = graphProviderRegistry;
+        _graphProviderSelector = graphProviderSelector;
     }
 
-    public IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>> ValidateReadModelProvider<TReadModel, TKey>(
+    public IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>> ValidateDocumentProvider<TReadModel, TKey>(
         IServiceProvider serviceProvider,
-        ProjectionReadModelStoreSelectionOptions selectionOptions,
-        ProjectionReadModelRequirements requirements)
+        ProjectionStoreSelectionOptions selectionOptions,
+        ProjectionStoreRequirements requirements)
         where TReadModel : class
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
@@ -33,16 +33,16 @@ public sealed class ProjectionStoreStartupValidator : IProjectionStoreStartupVal
         return _readModelProviderSelector.Select(registrations, selectionOptions, requirements);
     }
 
-    public IProjectionStoreRegistration<IProjectionRelationStore> ValidateRelationProvider(
+    public IProjectionStoreRegistration<IProjectionGraphStore> ValidateGraphProvider(
         IServiceProvider serviceProvider,
-        ProjectionReadModelStoreSelectionOptions selectionOptions,
-        ProjectionReadModelRequirements requirements)
+        ProjectionStoreSelectionOptions selectionOptions,
+        ProjectionStoreRequirements requirements)
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
         ArgumentNullException.ThrowIfNull(selectionOptions);
         ArgumentNullException.ThrowIfNull(requirements);
 
-        var registrations = _relationProviderRegistry.GetRegistrations(serviceProvider);
-        return _relationProviderSelector.Select(registrations, selectionOptions, requirements);
+        var registrations = _graphProviderRegistry.GetRegistrations(serviceProvider);
+        return _graphProviderSelector.Select(registrations, selectionOptions, requirements);
     }
 }

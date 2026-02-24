@@ -5,8 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 
 public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
-    : IProjectionReadModelStore<TReadModel, TKey>,
-      IProjectionStoreProviderMetadata
+    : IDocumentProjectionStore<TReadModel, TKey>
     where TReadModel : class
 {
     private readonly object _gate = new();
@@ -23,7 +22,7 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
         Func<TKey, string>? keyFormatter = null,
         Func<TReadModel, object?>? listSortSelector = null,
         int listTakeMax = 200,
-        string providerName = ProjectionReadModelProviderNames.InMemory,
+        string providerName = ProjectionProviderNames.InMemory,
         ILogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(keySelector);
@@ -32,15 +31,15 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
         _listSortSelector = listSortSelector;
         _listTakeMax = listTakeMax > 0 ? listTakeMax : 200;
         _logger = logger ?? NullLogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>.Instance;
-        ProviderCapabilities = new ProjectionReadModelProviderCapabilities(
+        ProviderCapabilities = new ProjectionProviderCapabilities(
             providerName,
             supportsIndexing: true,
-            indexKinds: [ProjectionReadModelIndexKind.Document],
-            supportsRelations: false,
-            supportsRelationTraversal: false);
+            indexKinds: [ProjectionIndexKind.Document],
+            supportsGraph: false,
+            supportsGraphTraversal: false);
     }
 
-    public ProjectionReadModelProviderCapabilities ProviderCapabilities { get; }
+    public ProjectionProviderCapabilities ProviderCapabilities { get; }
 
     public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {

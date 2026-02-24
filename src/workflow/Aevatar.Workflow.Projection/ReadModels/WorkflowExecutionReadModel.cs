@@ -40,7 +40,7 @@ public sealed class WorkflowExecutionReport
 
     public string DocumentScope => "workflow-execution-reports";
 
-    public string GraphScope => WorkflowExecutionRelationConstants.Scope;
+    public string GraphScope => WorkflowExecutionGraphConstants.Scope;
 
     public IReadOnlyList<GraphNodeDescriptor> GraphNodes => BuildGraphNodes();
 
@@ -106,7 +106,7 @@ public sealed class WorkflowExecutionReport
 
         nodes[rootActorId] = new GraphNodeDescriptor(
             rootActorId,
-            WorkflowExecutionRelationConstants.ActorNodeType,
+            WorkflowExecutionGraphConstants.ActorNodeType,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["workflowName"] = WorkflowName ?? "",
@@ -115,7 +115,7 @@ public sealed class WorkflowExecutionReport
 
         nodes[runNodeId] = new GraphNodeDescriptor(
             runNodeId,
-            WorkflowExecutionRelationConstants.RunNodeType,
+            WorkflowExecutionGraphConstants.RunNodeType,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["rootActorId"] = rootActorId,
@@ -130,7 +130,7 @@ public sealed class WorkflowExecutionReport
             var stepNodeId = BuildStepNodeId(rootActorId, CommandId, step.StepId);
             nodes[stepNodeId] = new GraphNodeDescriptor(
                 stepNodeId,
-                WorkflowExecutionRelationConstants.StepNodeType,
+                WorkflowExecutionGraphConstants.StepNodeType,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["rootActorId"] = rootActorId,
@@ -152,7 +152,7 @@ public sealed class WorkflowExecutionReport
             {
                 nodes[parentId] = new GraphNodeDescriptor(
                     parentId,
-                    WorkflowExecutionRelationConstants.ActorNodeType,
+                    WorkflowExecutionGraphConstants.ActorNodeType,
                     new Dictionary<string, string>(StringComparer.Ordinal)
                     {
                         ["workflowName"] = WorkflowName ?? "",
@@ -164,7 +164,7 @@ public sealed class WorkflowExecutionReport
             {
                 nodes[childId] = new GraphNodeDescriptor(
                     childId,
-                    WorkflowExecutionRelationConstants.ActorNodeType,
+                    WorkflowExecutionGraphConstants.ActorNodeType,
                     new Dictionary<string, string>(StringComparer.Ordinal)
                     {
                         ["workflowName"] = WorkflowName ?? "",
@@ -184,7 +184,7 @@ public sealed class WorkflowExecutionReport
         var edges = new Dictionary<string, GraphEdgeDescriptor>(StringComparer.Ordinal);
 
         var ownsEdge = CreateEdge(
-            WorkflowExecutionRelationConstants.RelationOwns,
+            WorkflowExecutionGraphConstants.EdgeTypeOwns,
             rootActorId,
             runNodeId,
             new Dictionary<string, string>(StringComparer.Ordinal),
@@ -195,7 +195,7 @@ public sealed class WorkflowExecutionReport
         {
             var stepNodeId = BuildStepNodeId(rootActorId, CommandId, step.StepId);
             var containsEdge = CreateEdge(
-                WorkflowExecutionRelationConstants.RelationContainsStep,
+                WorkflowExecutionGraphConstants.EdgeTypeContainsStep,
                 runNodeId,
                 stepNodeId,
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -215,7 +215,7 @@ public sealed class WorkflowExecutionReport
                 continue;
 
             var childOfEdge = CreateEdge(
-                WorkflowExecutionRelationConstants.RelationChildOf,
+                WorkflowExecutionGraphConstants.EdgeTypeChildOf,
                 parentId,
                 childId,
                 new Dictionary<string, string>(StringComparer.Ordinal),
@@ -235,11 +235,11 @@ public sealed class WorkflowExecutionReport
     {
         var normalizedFromNodeId = NormalizeToken(fromNodeId);
         var normalizedToNodeId = NormalizeToken(toNodeId);
-        var normalizedRelationType = NormalizeToken(relationType);
-        var edgeId = BuildEdgeId(normalizedRelationType, normalizedFromNodeId, normalizedToNodeId);
+        var normalizedEdgeType = NormalizeToken(relationType);
+        var edgeId = BuildEdgeId(normalizedEdgeType, normalizedFromNodeId, normalizedToNodeId);
         return new GraphEdgeDescriptor(
             edgeId,
-            normalizedRelationType,
+            normalizedEdgeType,
             normalizedFromNodeId,
             normalizedToNodeId,
             new Dictionary<string, string>(properties, StringComparer.Ordinal),

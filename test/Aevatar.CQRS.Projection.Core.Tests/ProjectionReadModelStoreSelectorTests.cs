@@ -2,7 +2,7 @@ using FluentAssertions;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
-public class ProjectionReadModelStoreSelectorTests
+public class ProjectionDocumentStoreSelectorTests
 {
     [Fact]
     public void Select_WhenSingleProviderRegistered_ShouldReturnSingleProvider()
@@ -12,10 +12,10 @@ public class ProjectionReadModelStoreSelectorTests
             CreateRegistration("inmemory", supportsIndexing: false),
         };
 
-        var selected = ProjectionReadModelStoreSelector.Select(
+        var selected = ProjectionDocumentStoreSelector.Select(
             registrations,
-            new ProjectionReadModelStoreSelectionOptions(),
-            new ProjectionReadModelRequirements());
+            new ProjectionStoreSelectionOptions(),
+            new ProjectionStoreRequirements());
 
         selected.ProviderName.Should().Be("inmemory");
     }
@@ -26,13 +26,13 @@ public class ProjectionReadModelStoreSelectorTests
         var registrations = new[]
         {
             CreateRegistration("inmemory", supportsIndexing: false),
-            CreateRegistration("elasticsearch", supportsIndexing: true, indexKinds: [ProjectionReadModelIndexKind.Document]),
+            CreateRegistration("elasticsearch", supportsIndexing: true, indexKinds: [ProjectionIndexKind.Document]),
         };
 
-        Action act = () => ProjectionReadModelStoreSelector.Select(
+        Action act = () => ProjectionDocumentStoreSelector.Select(
             registrations,
-            new ProjectionReadModelStoreSelectionOptions(),
-            new ProjectionReadModelRequirements());
+            new ProjectionStoreSelectionOptions(),
+            new ProjectionStoreRequirements());
 
         act.Should().Throw<ProjectionProviderSelectionException>()
             .Where(ex => ex.Reason.Contains("Multiple providers are registered", StringComparison.Ordinal));
@@ -46,13 +46,13 @@ public class ProjectionReadModelStoreSelectorTests
             CreateRegistration("inmemory", supportsIndexing: false),
         };
 
-        Action act = () => ProjectionReadModelStoreSelector.Select(
+        Action act = () => ProjectionDocumentStoreSelector.Select(
             registrations,
-            new ProjectionReadModelStoreSelectionOptions
+            new ProjectionStoreSelectionOptions
             {
                 RequestedProviderName = "elasticsearch",
             },
-            new ProjectionReadModelRequirements());
+            new ProjectionStoreRequirements());
 
         act.Should().Throw<ProjectionProviderSelectionException>()
             .Where(ex => ex.Reason.Contains("Requested provider is not registered", StringComparison.Ordinal));
@@ -66,18 +66,18 @@ public class ProjectionReadModelStoreSelectorTests
             CreateRegistration("inmemory", supportsIndexing: false),
         };
 
-        Action act = () => ProjectionReadModelStoreSelector.Select(
+        Action act = () => ProjectionDocumentStoreSelector.Select(
             registrations,
-            new ProjectionReadModelStoreSelectionOptions
+            new ProjectionStoreSelectionOptions
             {
                 RequestedProviderName = "inmemory",
                 FailOnUnsupportedCapabilities = true,
             },
-            new ProjectionReadModelRequirements(
+            new ProjectionStoreRequirements(
                 requiresIndexing: true,
-                requiredIndexKinds: [ProjectionReadModelIndexKind.Document]));
+                requiredIndexKinds: [ProjectionIndexKind.Document]));
 
-        act.Should().Throw<ProjectionReadModelCapabilityValidationException>();
+        act.Should().Throw<ProjectionProviderCapabilityValidationException>();
     }
 
     [Fact]
@@ -88,21 +88,21 @@ public class ProjectionReadModelStoreSelectorTests
             CreateRegistration(
                 "neo4j",
                 supportsIndexing: true,
-                indexKinds: [ProjectionReadModelIndexKind.Graph]),
+                indexKinds: [ProjectionIndexKind.Graph]),
         };
 
-        Action act = () => ProjectionReadModelStoreSelector.Select(
+        Action act = () => ProjectionDocumentStoreSelector.Select(
             registrations,
-            new ProjectionReadModelStoreSelectionOptions
+            new ProjectionStoreSelectionOptions
             {
                 RequestedProviderName = "neo4j",
                 FailOnUnsupportedCapabilities = true,
             },
-            new ProjectionReadModelRequirements(
+            new ProjectionStoreRequirements(
                 requiresIndexing: true,
-                requiredIndexKinds: [ProjectionReadModelIndexKind.Document, ProjectionReadModelIndexKind.Graph]));
+                requiredIndexKinds: [ProjectionIndexKind.Document, ProjectionIndexKind.Graph]));
 
-        act.Should().Throw<ProjectionReadModelCapabilityValidationException>()
+        act.Should().Throw<ProjectionProviderCapabilityValidationException>()
             .WithMessage("*not fully supported*");
     }
 
@@ -114,37 +114,37 @@ public class ProjectionReadModelStoreSelectorTests
             CreateRegistration("inmemory", supportsIndexing: false),
         };
 
-        var selected = ProjectionReadModelStoreSelector.Select(
+        var selected = ProjectionDocumentStoreSelector.Select(
             registrations,
-            new ProjectionReadModelStoreSelectionOptions
+            new ProjectionStoreSelectionOptions
             {
                 RequestedProviderName = "inmemory",
                 FailOnUnsupportedCapabilities = false,
             },
-            new ProjectionReadModelRequirements(
+            new ProjectionStoreRequirements(
                 requiresIndexing: true,
-                requiredIndexKinds: [ProjectionReadModelIndexKind.Document]));
+                requiredIndexKinds: [ProjectionIndexKind.Document]));
 
         selected.ProviderName.Should().Be("inmemory");
     }
 
-    private static IProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>> CreateRegistration(
+    private static IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>> CreateRegistration(
         string providerName,
         bool supportsIndexing,
-        IEnumerable<ProjectionReadModelIndexKind>? indexKinds = null)
+        IEnumerable<ProjectionIndexKind>? indexKinds = null)
     {
-        var capabilities = new ProjectionReadModelProviderCapabilities(
+        var capabilities = new ProjectionProviderCapabilities(
             providerName,
             supportsIndexing,
             indexKinds);
 
-        return new DelegateProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>>(
+        return new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
             providerName,
             capabilities,
             _ => new NoopStore());
     }
 
-    private sealed class NoopStore : IProjectionReadModelStore<TestReadModel, string>
+    private sealed class NoopStore : IDocumentProjectionStore<TestReadModel, string>
     {
         public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default) => Task.CompletedTask;
 

@@ -12,20 +12,20 @@ public static class ServiceCollectionExtensions
         Func<TKey, string>? keyFormatter = null,
         Func<TReadModel, object?>? listSortSelector = null,
         int listTakeMax = 200,
-        string providerName = ProjectionReadModelProviderNames.InMemory)
+        string providerName = ProjectionProviderNames.InMemory)
         where TReadModel : class
     {
         ArgumentNullException.ThrowIfNull(keySelector);
 
-        services.AddSingleton<IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>>(
-            new DelegateProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>(
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>(
                 providerName,
-                new ProjectionReadModelProviderCapabilities(
+                new ProjectionProviderCapabilities(
                     providerName,
                     supportsIndexing: true,
-                    indexKinds: [ProjectionReadModelIndexKind.Document],
-                    supportsRelations: false,
-                    supportsRelationTraversal: false),
+                    indexKinds: [ProjectionIndexKind.Document],
+                    supportsGraph: false,
+                    supportsGraphTraversal: false),
                 provider => new InMemoryProjectionReadModelStore<TReadModel, TKey>(
                     keySelector,
                     keyFormatter,
@@ -39,18 +39,18 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddInMemoryGraphStoreRegistration(
         this IServiceCollection services,
-        string providerName = ProjectionReadModelProviderNames.InMemory)
+        string providerName = ProjectionProviderNames.InMemory)
     {
-        services.AddSingleton<IProjectionStoreRegistration<IProjectionRelationStore>>(
-            new DelegateProjectionStoreRegistration<IProjectionRelationStore>(
+        services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
+            new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
                 providerName,
-                new ProjectionReadModelProviderCapabilities(
+                new ProjectionProviderCapabilities(
                     providerName,
                     supportsIndexing: true,
-                    indexKinds: [ProjectionReadModelIndexKind.Graph],
-                    supportsRelations: true,
-                    supportsRelationTraversal: true),
-                _ => new InMemoryProjectionRelationStore(providerName)));
+                    indexKinds: [ProjectionIndexKind.Graph],
+                    supportsGraph: true,
+                    supportsGraphTraversal: true),
+                _ => new InMemoryProjectionGraphStore(providerName)));
 
         return services;
     }

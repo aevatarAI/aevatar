@@ -41,10 +41,10 @@ public sealed class WorkflowExecutionProjectionOptions
     /// <summary>
     /// Whether to pre-validate read-model provider selection and capabilities during host startup.
     /// </summary>
-    public bool ValidateReadModelProviderOnStartup { get; set; } = true;
+    public bool ValidateDocumentProviderOnStartup { get; set; } = true;
 
     /// <summary>
-    /// Whether to pre-validate relation provider selection and capabilities during host startup.
+    /// Whether to pre-validate graph provider selection and capabilities during host startup.
     /// </summary>
-    public bool ValidateRelationProviderOnStartup { get; set; } = true;
+    public bool ValidateGraphProviderOnStartup { get; set; } = true;
 }

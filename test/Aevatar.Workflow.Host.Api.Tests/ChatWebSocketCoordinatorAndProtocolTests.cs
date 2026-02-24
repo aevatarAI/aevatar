@@ -189,18 +189,18 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             return Task.FromResult<WorkflowActorSnapshot?>(Snapshot);
         }
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
-        public Task<IReadOnlyList<WorkflowActorRelationItem>> ListActorRelationsAsync(
+        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
             string actorId,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
-            CancellationToken ct = default) => Task.FromResult<IReadOnlyList<WorkflowActorRelationItem>>([]);
-        public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default) => Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
+        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
             string actorId,
             int depth = 2,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
+            WorkflowActorGraphQueryOptions? options = null,
             CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowActorRelationSubgraph
+            Task.FromResult(new WorkflowActorGraphSubgraph
             {
                 RootNodeId = actorId,
             });
@@ -209,7 +209,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             string actorId,
             int depth = 2,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
+            WorkflowActorGraphQueryOptions? options = null,
             CancellationToken ct = default)
         {
             if (Snapshot == null)
@@ -218,7 +218,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             return Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(new WorkflowActorGraphEnrichedSnapshot
             {
                 Snapshot = Snapshot,
-                Subgraph = new WorkflowActorRelationSubgraph
+                Subgraph = new WorkflowActorGraphSubgraph
                 {
                     RootNodeId = actorId,
                 },

@@ -13,7 +13,7 @@
     - `ProjectionSubscriptionRegistry<TContext>`
     - `ProjectionLifecycleService<TContext, TCompletion>`
     - `ProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, TSink, TEvent>`
-    - `ProjectionQueryPortServiceBase<TSnapshot, TTimelineItem, TRelationItem, TRelationSubgraph>`
+    - `ProjectionQueryPortServiceBase<TSnapshot, TTimelineItem, TGraphEdgeItem, TGraphSubgraph>`
     - `ActorStreamSubscriptionHub<TMessage>`
     - `ProjectionAssemblyRegistration`
     - `SystemProjectionClock`

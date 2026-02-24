@@ -7,8 +7,7 @@ using Neo4j.Driver;
 namespace Aevatar.CQRS.Projection.Providers.Neo4j.Stores;
 
 public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
-    : IProjectionReadModelStore<TReadModel, TKey>,
-      IProjectionStoreProviderMetadata,
+    : IDocumentProjectionStore<TReadModel, TKey>,
       IAsyncDisposable
     where TReadModel : class
 {
@@ -33,7 +32,7 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
         string scope,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
-        string providerName = ProjectionReadModelProviderNames.Neo4j,
+        string providerName = ProjectionProviderNames.Neo4j,
         ILogger<Neo4jProjectionReadModelStore<TReadModel, TKey>>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -55,17 +54,17 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
         _driver = GraphDatabase.Driver(options.Uri, auth, config =>
             config.WithConnectionTimeout(TimeSpan.FromMilliseconds(Math.Max(1000, options.RequestTimeoutMs))));
 
-        ProviderCapabilities = new ProjectionReadModelProviderCapabilities(
+        ProviderCapabilities = new ProjectionProviderCapabilities(
             providerName,
             supportsIndexing: true,
-            indexKinds: [ProjectionReadModelIndexKind.Document, ProjectionReadModelIndexKind.Graph],
+            indexKinds: [ProjectionIndexKind.Document, ProjectionIndexKind.Graph],
             supportsAliases: false,
             supportsSchemaValidation: true,
-            supportsRelations: true,
-            supportsRelationTraversal: true);
+            supportsGraph: true,
+            supportsGraphTraversal: true);
     }
 
-    public ProjectionReadModelProviderCapabilities ProviderCapabilities { get; }
+    public ProjectionProviderCapabilities ProviderCapabilities { get; }
 
     public async Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {

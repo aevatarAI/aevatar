@@ -45,7 +45,7 @@ public class WorkflowHostingExtensionsCoverageTests
 
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunRequestExecutor)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(IProjectionReadModelStore<WorkflowExecutionReport, string>)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IDocumentProjectionStore<WorkflowExecutionReport, string>)).Should().BeTrue();
 
         await using var provider = builder.Services.BuildServiceProvider();
         provider.GetService<ILLMProviderFactory>().Should().NotBeNull();
@@ -66,12 +66,12 @@ public class WorkflowHostingExtensionsCoverageTests
         builder.AddWorkflowCapabilityWithAIDefaults();
 
         var providerRegistrations = builder.Services
-            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionReadModelStore<WorkflowExecutionReport, string>>))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IDocumentProjectionStore<WorkflowExecutionReport, string>>))
             .ToList();
         providerRegistrations.Should().HaveCount(1);
 
         var relationRegistrations = builder.Services
-            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionRelationStore>))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionGraphStore>))
             .ToList();
         relationRegistrations.Should().HaveCount(1);
     }
@@ -86,12 +86,12 @@ public class WorkflowHostingExtensionsCoverageTests
         services.AddWorkflowProjectionReadModelProviders(configuration);
 
         var providerRegistrations = services
-            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionReadModelStore<WorkflowExecutionReport, string>>))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IDocumentProjectionStore<WorkflowExecutionReport, string>>))
             .ToList();
         providerRegistrations.Should().HaveCount(1);
 
         var relationRegistrations = services
-            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionRelationStore>))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionGraphStore>))
             .ToList();
         relationRegistrations.Should().HaveCount(1);
     }
@@ -103,8 +103,8 @@ public class WorkflowHostingExtensionsCoverageTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Projection:Document:Provider"] = ProjectionReadModelProviderNames.Elasticsearch,
-                ["Projection:Graph:Provider"] = ProjectionReadModelProviderNames.InMemory,
+                ["Projection:Document:Provider"] = ProjectionProviderNames.Elasticsearch,
+                ["Projection:Graph:Provider"] = ProjectionProviderNames.InMemory,
                 ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
             })
             .Build();
@@ -112,10 +112,10 @@ public class WorkflowHostingExtensionsCoverageTests
         services.AddWorkflowProjectionReadModelProviders(configuration);
 
         var providerRegistrations = services
-            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionReadModelStore<WorkflowExecutionReport, string>>))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IDocumentProjectionStore<WorkflowExecutionReport, string>>))
             .ToList();
         var relationRegistrations = services
-            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionRelationStore>))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionGraphStore>))
             .ToList();
         var selectionOptionsRegistrations = services
             .Where(x => x.ServiceType == typeof(IProjectionStoreSelectionRuntimeOptions))
@@ -127,8 +127,8 @@ public class WorkflowHostingExtensionsCoverageTests
 
         using var provider = services.BuildServiceProvider();
         var selectionOptions = provider.GetRequiredService<IProjectionStoreSelectionRuntimeOptions>();
-        selectionOptions.DocumentProvider.Should().Be(ProjectionReadModelProviderNames.Elasticsearch);
-        selectionOptions.GraphProvider.Should().Be(ProjectionReadModelProviderNames.InMemory);
+        selectionOptions.DocumentProvider.Should().Be(ProjectionProviderNames.Elasticsearch);
+        selectionOptions.GraphProvider.Should().Be(ProjectionProviderNames.InMemory);
     }
 
     [Fact]
@@ -155,8 +155,8 @@ public class WorkflowHostingExtensionsCoverageTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Projection:Document:Provider"] = ProjectionReadModelProviderNames.Elasticsearch,
-                ["Projection:Graph:Provider"] = ProjectionReadModelProviderNames.InMemory,
+                ["Projection:Document:Provider"] = ProjectionProviderNames.Elasticsearch,
+                ["Projection:Graph:Provider"] = ProjectionProviderNames.InMemory,
                 ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
                 ["Projection:Policies:DenyInMemoryGraphFactStore"] = "true",
             })

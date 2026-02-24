@@ -17,23 +17,23 @@ public interface IWorkflowProjectionQueryReader
         int take = 200,
         CancellationToken ct = default);
 
-    Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
+    Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(
         string actorId,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default);
 
-    Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+    Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
         string actorId,
         int depth = 2,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default);
 
     Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
         string actorId,
         int depth = 2,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default);
 }

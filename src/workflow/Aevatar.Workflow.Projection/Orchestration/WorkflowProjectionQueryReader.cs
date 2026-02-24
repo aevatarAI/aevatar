@@ -6,13 +6,13 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryReader
 {
     private readonly IDocumentProjectionStore<WorkflowExecutionReport, string> _documentStore;
-    private readonly IGraphProjectionStore<WorkflowExecutionReport> _graphStore;
+    private readonly IProjectionGraphStore _graphStore;
     private readonly WorkflowExecutionReadModelMapper _mapper;
 
     public WorkflowProjectionQueryReader(
         IDocumentProjectionStore<WorkflowExecutionReport, string> documentStore,
         WorkflowExecutionReadModelMapper mapper,
-        IGraphProjectionStore<WorkflowExecutionReport> graphStore)
+        IProjectionGraphStore graphStore)
     {
         _documentStore = documentStore;
         _mapper = mapper;
@@ -55,10 +55,10 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
             .ToList();
     }
 
-    public async Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
+    public async Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(
         string actorId,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default)
     {
         var actorIdValue = actorId?.Trim() ?? "";
@@ -66,62 +66,62 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
             return [];
 
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var direction = MapDirection(options?.Direction ?? WorkflowActorRelationDirection.Both);
-        var relationTypes = NormalizeRelationTypes(options?.RelationTypes);
+        var direction = MapDirection(options?.Direction ?? WorkflowActorGraphDirection.Both);
+        var edgeTypes = NormalizeEdgeTypes(options?.EdgeTypes);
         var edges = await _graphStore.GetNeighborsAsync(
-            new ProjectionRelationQuery
+            new ProjectionGraphQuery
             {
-                Scope = WorkflowExecutionRelationConstants.Scope,
+                Scope = WorkflowExecutionGraphConstants.Scope,
                 RootNodeId = actorIdValue,
                 Direction = direction,
-                RelationTypes = relationTypes,
+                EdgeTypes = edgeTypes,
                 Take = boundedTake,
             },
             ct);
-        return edges.Select(_mapper.ToActorRelationItem).ToList();
+        return edges.Select(_mapper.ToActorGraphEdge).ToList();
     }
 
-    public async Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+    public async Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
         string actorId,
         int depth = 2,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default)
     {
         var actorIdValue = actorId?.Trim() ?? "";
         if (actorIdValue.Length == 0)
-            return new WorkflowActorRelationSubgraph();
+            return new WorkflowActorGraphSubgraph();
 
         var boundedDepth = Math.Clamp(depth, 1, 8);
         var boundedTake = Math.Clamp(take, 1, 2000);
-        var direction = MapDirection(options?.Direction ?? WorkflowActorRelationDirection.Both);
-        var relationTypes = NormalizeRelationTypes(options?.RelationTypes);
+        var direction = MapDirection(options?.Direction ?? WorkflowActorGraphDirection.Both);
+        var edgeTypes = NormalizeEdgeTypes(options?.EdgeTypes);
         var subgraph = await _graphStore.GetSubgraphAsync(
-            new ProjectionRelationQuery
+            new ProjectionGraphQuery
             {
-                Scope = WorkflowExecutionRelationConstants.Scope,
+                Scope = WorkflowExecutionGraphConstants.Scope,
                 RootNodeId = actorIdValue,
                 Direction = direction,
-                RelationTypes = relationTypes,
+                EdgeTypes = edgeTypes,
                 Depth = boundedDepth,
                 Take = boundedTake,
             },
             ct);
-        return _mapper.ToActorRelationSubgraph(actorIdValue, subgraph);
+        return _mapper.ToActorGraphSubgraph(actorIdValue, subgraph);
     }
 
     public async Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
         string actorId,
         int depth = 2,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default)
     {
         var snapshot = await GetActorSnapshotAsync(actorId, ct);
         if (snapshot == null)
             return null;
 
-        var subgraph = await GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
+        var subgraph = await GetActorGraphSubgraphAsync(actorId, depth, take, options, ct);
         return new WorkflowActorGraphEnrichedSnapshot
         {
             Snapshot = snapshot,
@@ -129,22 +129,22 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         };
     }
 
-    private static ProjectionRelationDirection MapDirection(WorkflowActorRelationDirection direction)
+    private static ProjectionGraphDirection MapDirection(WorkflowActorGraphDirection direction)
     {
         return direction switch
         {
-            WorkflowActorRelationDirection.Outbound => ProjectionRelationDirection.Outbound,
-            WorkflowActorRelationDirection.Inbound => ProjectionRelationDirection.Inbound,
-            _ => ProjectionRelationDirection.Both,
+            WorkflowActorGraphDirection.Outbound => ProjectionGraphDirection.Outbound,
+            WorkflowActorGraphDirection.Inbound => ProjectionGraphDirection.Inbound,
+            _ => ProjectionGraphDirection.Both,
         };
     }
 
-    private static IReadOnlyList<string> NormalizeRelationTypes(IReadOnlyList<string>? relationTypes)
+    private static IReadOnlyList<string> NormalizeEdgeTypes(IReadOnlyList<string>? edgeTypes)
     {
-        if (relationTypes == null || relationTypes.Count == 0)
+        if (edgeTypes == null || edgeTypes.Count == 0)
             return [];
 
-        return relationTypes
+        return edgeTypes
             .Select(x => x?.Trim() ?? "")
             .Where(x => x.Length > 0)
             .Distinct(StringComparer.Ordinal)

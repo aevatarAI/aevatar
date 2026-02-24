@@ -6,7 +6,7 @@ using Aevatar.Workflow.Projection.Configuration;
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowExecutionProjectionQueryService
-    : ProjectionQueryPortServiceBase<WorkflowActorSnapshot, WorkflowActorTimelineItem, WorkflowActorRelationItem, WorkflowActorRelationSubgraph>,
+    : ProjectionQueryPortServiceBase<WorkflowActorSnapshot, WorkflowActorTimelineItem, WorkflowActorGraphEdge, WorkflowActorGraphSubgraph>,
       IWorkflowExecutionProjectionQueryPort
 {
     private readonly IWorkflowProjectionQueryReader _queryReader;
@@ -37,26 +37,26 @@ public sealed class WorkflowExecutionProjectionQueryService
         CancellationToken ct = default) =>
         ListTimelineAsync(actorId, take, ct);
 
-    public Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
+    public Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(
         string actorId,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default) =>
-        GetRelationsInternalAsync(actorId, take, options, ct);
+        GetGraphEdgesInternalAsync(actorId, take, options, ct);
 
-    public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+    public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
         string actorId,
         int depth = 2,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default) =>
-        GetRelationSubgraphInternalAsync(actorId, depth, take, options, ct);
+        GetGraphSubgraphInternalAsync(actorId, depth, take, options, ct);
 
     public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
         string actorId,
         int depth = 2,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default) =>
         GetGraphEnrichedInternalAsync(actorId, depth, take, options, ct);
 
@@ -76,57 +76,57 @@ public sealed class WorkflowExecutionProjectionQueryService
         CancellationToken ct)
         => _queryReader.ListActorTimelineAsync(entityId, take, ct);
 
-    protected override Task<IReadOnlyList<WorkflowActorRelationItem>> ReadRelationsCoreAsync(
+    protected override Task<IReadOnlyList<WorkflowActorGraphEdge>> ReadGraphEdgesCoreAsync(
         string entityId,
         int take,
         CancellationToken ct)
-        => _queryReader.GetActorRelationsAsync(entityId, take, options: null, ct);
+        => _queryReader.GetActorGraphEdgesAsync(entityId, take, options: null, ct);
 
-    protected override Task<WorkflowActorRelationSubgraph> ReadRelationSubgraphCoreAsync(
+    protected override Task<WorkflowActorGraphSubgraph> ReadGraphSubgraphCoreAsync(
         string entityId,
         int depth,
         int take,
         CancellationToken ct)
-        => _queryReader.GetActorRelationSubgraphAsync(entityId, depth, take, options: null, ct);
+        => _queryReader.GetActorGraphSubgraphAsync(entityId, depth, take, options: null, ct);
 
-    protected override WorkflowActorRelationSubgraph CreateEmptyRelationSubgraph(string entityId)
+    protected override WorkflowActorGraphSubgraph CreateEmptyGraphSubgraph(string entityId)
     {
-        return new WorkflowActorRelationSubgraph
+        return new WorkflowActorGraphSubgraph
         {
             RootNodeId = entityId ?? string.Empty,
         };
     }
 
-    private async Task<IReadOnlyList<WorkflowActorRelationItem>> GetRelationsInternalAsync(
+    private async Task<IReadOnlyList<WorkflowActorGraphEdge>> GetGraphEdgesInternalAsync(
         string actorId,
         int take,
-        WorkflowActorRelationQueryOptions? options,
+        WorkflowActorGraphQueryOptions? options,
         CancellationToken ct)
     {
         if (!QueryEnabledCore || string.IsNullOrWhiteSpace(actorId))
             return [];
 
-        return await _queryReader.GetActorRelationsAsync(actorId, take, options, ct);
+        return await _queryReader.GetActorGraphEdgesAsync(actorId, take, options, ct);
     }
 
-    private async Task<WorkflowActorRelationSubgraph> GetRelationSubgraphInternalAsync(
+    private async Task<WorkflowActorGraphSubgraph> GetGraphSubgraphInternalAsync(
         string actorId,
         int depth,
         int take,
-        WorkflowActorRelationQueryOptions? options,
+        WorkflowActorGraphQueryOptions? options,
         CancellationToken ct)
     {
         if (!QueryEnabledCore || string.IsNullOrWhiteSpace(actorId))
-            return CreateEmptyRelationSubgraph(actorId);
+            return CreateEmptyGraphSubgraph(actorId);
 
-        return await _queryReader.GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
+        return await _queryReader.GetActorGraphSubgraphAsync(actorId, depth, take, options, ct);
     }
 
     private async Task<WorkflowActorGraphEnrichedSnapshot?> GetGraphEnrichedInternalAsync(
         string actorId,
         int depth,
         int take,
-        WorkflowActorRelationQueryOptions? options,
+        WorkflowActorGraphQueryOptions? options,
         CancellationToken ct)
     {
         if (!QueryEnabledCore || string.IsNullOrWhiteSpace(actorId))

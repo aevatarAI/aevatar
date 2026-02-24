@@ -3,7 +3,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Generic query port base that centralizes query enable-gate behavior.
 /// </summary>
-public abstract class ProjectionQueryPortServiceBase<TSnapshot, TTimelineItem, TRelationItem, TRelationSubgraph>
+public abstract class ProjectionQueryPortServiceBase<TSnapshot, TTimelineItem, TGraphEdgeItem, TGraphSubgraph>
 {
     private readonly Func<bool> _queryEnabledAccessor;
 
@@ -45,7 +45,7 @@ public abstract class ProjectionQueryPortServiceBase<TSnapshot, TTimelineItem, T
         return await ReadTimelineCoreAsync(entityId, take, ct);
     }
 
-    protected async Task<IReadOnlyList<TRelationItem>> GetRelationsAsync(
+    protected async Task<IReadOnlyList<TGraphEdgeItem>> GetGraphEdgesAsync(
         string entityId,
         int take = 200,
         CancellationToken ct = default)
@@ -53,19 +53,19 @@ public abstract class ProjectionQueryPortServiceBase<TSnapshot, TTimelineItem, T
         if (!QueryEnabledCore || string.IsNullOrWhiteSpace(entityId))
             return [];
 
-        return await ReadRelationsCoreAsync(entityId, take, ct);
+        return await ReadGraphEdgesCoreAsync(entityId, take, ct);
     }
 
-    protected async Task<TRelationSubgraph> GetRelationSubgraphAsync(
+    protected async Task<TGraphSubgraph> GetGraphSubgraphAsync(
         string entityId,
         int depth = 2,
         int take = 200,
         CancellationToken ct = default)
     {
         if (!QueryEnabledCore || string.IsNullOrWhiteSpace(entityId))
-            return CreateEmptyRelationSubgraph(entityId);
+            return CreateEmptyGraphSubgraph(entityId);
 
-        return await ReadRelationSubgraphCoreAsync(entityId, depth, take, ct);
+        return await ReadGraphSubgraphCoreAsync(entityId, depth, take, ct);
     }
 
     protected abstract Task<TSnapshot?> ReadSnapshotCoreAsync(
@@ -81,16 +81,16 @@ public abstract class ProjectionQueryPortServiceBase<TSnapshot, TTimelineItem, T
         int take,
         CancellationToken ct);
 
-    protected abstract Task<IReadOnlyList<TRelationItem>> ReadRelationsCoreAsync(
+    protected abstract Task<IReadOnlyList<TGraphEdgeItem>> ReadGraphEdgesCoreAsync(
         string entityId,
         int take,
         CancellationToken ct);
 
-    protected abstract Task<TRelationSubgraph> ReadRelationSubgraphCoreAsync(
+    protected abstract Task<TGraphSubgraph> ReadGraphSubgraphCoreAsync(
         string entityId,
         int depth,
         int take,
         CancellationToken ct);
 
-    protected virtual TRelationSubgraph CreateEmptyRelationSubgraph(string entityId) => default!;
+    protected virtual TGraphSubgraph CreateEmptyGraphSubgraph(string entityId) => default!;
 }

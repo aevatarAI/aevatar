@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
@@ -27,17 +28,17 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
         var providerSelection = ResolveProviderSelection(configuration);
         EnforceGraphProviderPolicy(configuration, providerSelection.GraphProvider);
-        var runtimeOptions = new ProjectionReadModelRuntimeOptions
+        var runtimeOptions = new ProjectionStoreRuntimeOptions
         {
             DocumentProvider = providerSelection.DocumentProvider,
             GraphProvider = providerSelection.GraphProvider,
             FailOnUnsupportedCapabilities = true,
-            Mode = ProjectionReadModelMode.CustomReadModel,
+            Mode = ProjectionStoreMode.Custom,
         };
 
         services.Replace(ServiceDescriptor.Singleton(runtimeOptions));
         services.Replace(ServiceDescriptor.Singleton<IProjectionStoreSelectionRuntimeOptions>(sp =>
-            sp.GetRequiredService<ProjectionReadModelRuntimeOptions>()));
+            sp.GetRequiredService<ProjectionStoreRuntimeOptions>()));
 
         RegisterDocumentProvider(services, configuration, providerSelection.DocumentProvider);
         RegisterGraphProvider(services, configuration, providerSelection.GraphProvider);
@@ -49,7 +50,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
     {
         var documentProvider = NormalizeOrDefaultProvider(
             configuration["Projection:Document:Provider"],
-            ProjectionReadModelProviderNames.InMemory,
+            ProjectionProviderNames.InMemory,
             "Projection:Document:Provider");
 
         var graphProvider = NormalizeOrDefaultProvider(
@@ -72,7 +73,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         if ((denyInMemoryGraphProvider || production) &&
             string.Equals(
                 graphProviderName,
-                ProjectionReadModelProviderNames.InMemory,
+                ProjectionProviderNames.InMemory,
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
@@ -113,16 +114,16 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             ? fallbackValue
             : configuredValue.Trim();
 
-        if (string.Equals(candidate, ProjectionReadModelProviderNames.InMemory, StringComparison.OrdinalIgnoreCase))
-            return ProjectionReadModelProviderNames.InMemory;
-        if (string.Equals(candidate, ProjectionReadModelProviderNames.Elasticsearch, StringComparison.OrdinalIgnoreCase))
-            return ProjectionReadModelProviderNames.Elasticsearch;
-        if (string.Equals(candidate, ProjectionReadModelProviderNames.Neo4j, StringComparison.OrdinalIgnoreCase))
-            return ProjectionReadModelProviderNames.Neo4j;
+        if (string.Equals(candidate, ProjectionProviderNames.InMemory, StringComparison.OrdinalIgnoreCase))
+            return ProjectionProviderNames.InMemory;
+        if (string.Equals(candidate, ProjectionProviderNames.Elasticsearch, StringComparison.OrdinalIgnoreCase))
+            return ProjectionProviderNames.Elasticsearch;
+        if (string.Equals(candidate, ProjectionProviderNames.Neo4j, StringComparison.OrdinalIgnoreCase))
+            return ProjectionProviderNames.Neo4j;
 
         throw new InvalidOperationException(
             $"Unsupported projection provider '{candidate}' configured at '{optionPath}'. " +
-            $"Allowed values: {ProjectionReadModelProviderNames.InMemory}, {ProjectionReadModelProviderNames.Elasticsearch}, {ProjectionReadModelProviderNames.Neo4j}.");
+            $"Allowed values: {ProjectionProviderNames.InMemory}, {ProjectionProviderNames.Elasticsearch}, {ProjectionProviderNames.Neo4j}.");
     }
 
     private static void RegisterDocumentProvider(
@@ -132,14 +133,14 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
     {
         switch (providerName)
         {
-            case ProjectionReadModelProviderNames.InMemory:
+            case ProjectionProviderNames.InMemory:
                 services.AddInMemoryDocumentStoreRegistration<WorkflowExecutionReport, string>(
                     keySelector: report => report.RootActorId,
                     keyFormatter: key => key,
                     listSortSelector: report => report.CreatedAt,
                     listTakeMax: 200);
                 break;
-            case ProjectionReadModelProviderNames.Elasticsearch:
+            case ProjectionProviderNames.Elasticsearch:
                 services.AddElasticsearchDocumentStoreRegistration<WorkflowExecutionReport, string>(
                     optionsFactory: _ =>
                     {
@@ -155,7 +156,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                     keySelector: report => report.RootActorId,
                     keyFormatter: key => key);
                 break;
-            case ProjectionReadModelProviderNames.Neo4j:
+            case ProjectionProviderNames.Neo4j:
                 services.AddNeo4jDocumentStoreRegistration<WorkflowExecutionReport, string>(
                     optionsFactory: _ =>
                     {
@@ -183,21 +184,21 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
     {
         switch (providerName)
         {
-            case ProjectionReadModelProviderNames.InMemory:
+            case ProjectionProviderNames.InMemory:
                 services.AddInMemoryGraphStoreRegistration();
                 break;
-            case ProjectionReadModelProviderNames.Elasticsearch:
+            case ProjectionProviderNames.Elasticsearch:
                 throw new InvalidOperationException(
                     "Elasticsearch cannot be used as graph provider. Use InMemory (dev/test) or Neo4j.");
-            case ProjectionReadModelProviderNames.Neo4j:
+            case ProjectionProviderNames.Neo4j:
                 services.AddNeo4jGraphStoreRegistration(
                     optionsFactory: _ =>
                     {
-                        var providerOptions = new Neo4jProjectionRelationStoreOptions();
+                        var providerOptions = new Neo4jProjectionGraphStoreOptions();
                         configuration.GetSection("Projection:Graph:Providers:Neo4j").Bind(providerOptions);
                         return providerOptions;
                     },
-                    scopeFactory: _ => WorkflowExecutionRelationConstants.Scope);
+                    scopeFactory: _ => WorkflowExecutionGraphConstants.Scope);
                 break;
             default:
                 throw new InvalidOperationException($"Unsupported graph provider '{providerName}'.");

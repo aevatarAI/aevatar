@@ -16,7 +16,7 @@ public sealed class ProjectionStoreSelectionPlannerTests
             DocumentProvider = " ",
         };
 
-        Action act = () => _planner.Build(options, typeof(TestReadModel), new ProjectionReadModelRequirements());
+        Action act = () => _planner.Build(options, typeof(TestReadModel), new ProjectionStoreRequirements());
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*read-model provider is required*");
@@ -27,37 +27,37 @@ public sealed class ProjectionStoreSelectionPlannerTests
     {
         var options = new FakeOptions
         {
-            DocumentProvider = ProjectionReadModelProviderNames.Neo4j,
+            DocumentProvider = ProjectionProviderNames.Neo4j,
             GraphProvider = " ",
         };
 
-        var plan = _planner.Build(options, typeof(TestReadModel), new ProjectionReadModelRequirements(
-            requiresRelations: true,
-            requiresRelationTraversal: true));
+        var plan = _planner.Build(options, typeof(TestReadModel), new ProjectionStoreRequirements(
+            requiresGraph: true,
+            requiresGraphTraversal: true));
 
-        plan.ReadModelSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.Neo4j);
-        plan.RelationSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.Neo4j);
+        plan.DocumentSelectionOptions.RequestedProviderName.Should().Be(ProjectionProviderNames.Neo4j);
+        plan.GraphSelectionOptions.RequestedProviderName.Should().Be(ProjectionProviderNames.Neo4j);
     }
 
     [Fact]
-    public void Build_ShouldMergeRelationRequirementsWithReadModelAliasAndSchemaRequirements()
+    public void Build_ShouldMergeGraphRequirementsWithReadModelAliasAndSchemaRequirements()
     {
         var options = new FakeOptions
         {
-            DocumentProvider = ProjectionReadModelProviderNames.Neo4j,
+            DocumentProvider = ProjectionProviderNames.Neo4j,
         };
-        var relationRequirements = new ProjectionReadModelRequirements(
-            requiresRelations: true,
-            requiresRelationTraversal: true,
+        var graphRequirements = new ProjectionStoreRequirements(
+            requiresGraph: true,
+            requiresGraphTraversal: true,
             requiresAliases: false,
             requiresSchemaValidation: false);
 
-        var plan = _planner.Build(options, typeof(TestGraphReadModel), relationRequirements);
+        var plan = _planner.Build(options, typeof(TestGraphReadModel), graphRequirements);
 
-        plan.RelationRequirements.RequiresRelations.Should().BeTrue();
-        plan.RelationRequirements.RequiresRelationTraversal.Should().BeTrue();
-        plan.RelationRequirements.RequiresAliases.Should().BeFalse();
-        plan.RelationRequirements.RequiresSchemaValidation.Should().BeFalse();
+        plan.GraphRequirements.RequiresGraph.Should().BeTrue();
+        plan.GraphRequirements.RequiresGraphTraversal.Should().BeTrue();
+        plan.GraphRequirements.RequiresAliases.Should().BeFalse();
+        plan.GraphRequirements.RequiresSchemaValidation.Should().BeFalse();
     }
 
     [Fact]
@@ -65,11 +65,11 @@ public sealed class ProjectionStoreSelectionPlannerTests
     {
         var options = new FakeOptions
         {
-            DocumentProvider = ProjectionReadModelProviderNames.InMemory,
-            ReadModelMode = ProjectionReadModelMode.StateOnly,
+            DocumentProvider = ProjectionProviderNames.InMemory,
+            StoreMode = ProjectionStoreMode.StateOnly,
         };
 
-        Action act = () => _planner.Build(options, typeof(TestReadModel), new ProjectionReadModelRequirements());
+        Action act = () => _planner.Build(options, typeof(TestReadModel), new ProjectionStoreRequirements());
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*does not support*StateOnly*");
@@ -77,13 +77,13 @@ public sealed class ProjectionStoreSelectionPlannerTests
 
     private sealed class FakeOptions : IProjectionStoreSelectionRuntimeOptions
     {
-        public string DocumentProvider { get; set; } = ProjectionReadModelProviderNames.InMemory;
+        public string DocumentProvider { get; set; } = ProjectionProviderNames.InMemory;
 
         public string GraphProvider { get; set; } = "";
 
         public bool FailOnUnsupportedCapabilities { get; set; } = true;
 
-        public ProjectionReadModelMode ReadModelMode { get; set; } = ProjectionReadModelMode.CustomReadModel;
+        public ProjectionStoreMode StoreMode { get; set; } = ProjectionStoreMode.Custom;
     }
 
     private sealed class TestReadModel;

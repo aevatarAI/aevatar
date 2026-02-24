@@ -34,7 +34,7 @@ public sealed class WorkflowActorTimelineItem
     public Dictionary<string, string> Data { get; set; } = [];
 }
 
-public sealed class WorkflowActorRelationNode
+public sealed class WorkflowActorGraphNode
 {
     public string NodeId { get; set; } = string.Empty;
 
@@ -45,21 +45,21 @@ public sealed class WorkflowActorRelationNode
     public Dictionary<string, string> Properties { get; set; } = [];
 }
 
-public enum WorkflowActorRelationDirection
+public enum WorkflowActorGraphDirection
 {
     Outbound = 0,
     Inbound = 1,
     Both = 2,
 }
 
-public sealed class WorkflowActorRelationQueryOptions
+public sealed class WorkflowActorGraphQueryOptions
 {
-    public WorkflowActorRelationDirection Direction { get; set; } = WorkflowActorRelationDirection.Both;
+    public WorkflowActorGraphDirection Direction { get; set; } = WorkflowActorGraphDirection.Both;
 
-    public IReadOnlyList<string> RelationTypes { get; set; } = [];
+    public IReadOnlyList<string> EdgeTypes { get; set; } = [];
 }
 
-public sealed class WorkflowActorRelationItem
+public sealed class WorkflowActorGraphEdge
 {
     public string EdgeId { get; set; } = string.Empty;
 
@@ -67,27 +67,27 @@ public sealed class WorkflowActorRelationItem
 
     public string ToNodeId { get; set; } = string.Empty;
 
-    public string RelationType { get; set; } = string.Empty;
+    public string EdgeType { get; set; } = string.Empty;
 
     public DateTimeOffset UpdatedAt { get; set; }
 
     public Dictionary<string, string> Properties { get; set; } = [];
 }
 
-public sealed class WorkflowActorRelationSubgraph
+public sealed class WorkflowActorGraphSubgraph
 {
     public string RootNodeId { get; set; } = string.Empty;
 
-    public List<WorkflowActorRelationNode> Nodes { get; set; } = [];
+    public List<WorkflowActorGraphNode> Nodes { get; set; } = [];
 
-    public List<WorkflowActorRelationItem> Edges { get; set; } = [];
+    public List<WorkflowActorGraphEdge> Edges { get; set; } = [];
 }
 
 public sealed class WorkflowActorGraphEnrichedSnapshot
 {
     public WorkflowActorSnapshot Snapshot { get; set; } = new();
 
-    public WorkflowActorRelationSubgraph Subgraph { get; set; } = new();
+    public WorkflowActorGraphSubgraph Subgraph { get; set; } = new();
 }
 
 public sealed record WorkflowTopologyEdge(string Parent, string Child);

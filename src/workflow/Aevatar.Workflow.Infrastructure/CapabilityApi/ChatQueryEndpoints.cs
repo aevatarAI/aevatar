@@ -22,10 +22,10 @@ public static class ChatQueryEndpoints
         group.MapGet("/actors/{actorId}/timeline", ListActorTimeline)
             .Produces(StatusCodes.Status200OK);
 
-        group.MapGet("/actors/{actorId}/relations", ListActorRelations)
+        group.MapGet("/actors/{actorId}/graph-edges", ListActorGraphEdges)
             .Produces(StatusCodes.Status200OK);
 
-        group.MapGet("/actors/{actorId}/relation-subgraph", GetActorRelationSubgraph)
+        group.MapGet("/actors/{actorId}/graph-subgraph", GetActorGraphSubgraph)
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/actors/{actorId}/graph-enriched", GetActorGraphEnrichedSnapshot)
@@ -63,30 +63,30 @@ public static class ChatQueryEndpoints
         return Results.Ok(timeline);
     }
 
-    internal static async Task<IResult> ListActorRelations(
+    internal static async Task<IResult> ListActorGraphEdges(
         string actorId,
         IWorkflowExecutionQueryApplicationService queryService,
         int take = 200,
         string? direction = null,
-        string[]? relationTypes = null,
+        string[]? edgeTypes = null,
         CancellationToken ct = default)
     {
-        var relationOptions = BuildRelationQueryOptions(direction, relationTypes);
-        var relations = await queryService.ListActorRelationsAsync(actorId, take, relationOptions, ct);
-        return Results.Ok(relations);
+        var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
+        var edges = await queryService.ListActorGraphEdgesAsync(actorId, take, graphOptions, ct);
+        return Results.Ok(edges);
     }
 
-    internal static async Task<IResult> GetActorRelationSubgraph(
+    internal static async Task<IResult> GetActorGraphSubgraph(
         string actorId,
         IWorkflowExecutionQueryApplicationService queryService,
         int depth = 2,
         int take = 200,
         string? direction = null,
-        string[]? relationTypes = null,
+        string[]? edgeTypes = null,
         CancellationToken ct = default)
     {
-        var relationOptions = BuildRelationQueryOptions(direction, relationTypes);
-        var subgraph = await queryService.GetActorRelationSubgraphAsync(actorId, depth, take, relationOptions, ct);
+        var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
+        var subgraph = await queryService.GetActorGraphSubgraphAsync(actorId, depth, take, graphOptions, ct);
         return Results.Ok(subgraph);
     }
 
@@ -96,41 +96,41 @@ public static class ChatQueryEndpoints
         int depth = 2,
         int take = 200,
         string? direction = null,
-        string[]? relationTypes = null,
+        string[]? edgeTypes = null,
         CancellationToken ct = default)
     {
-        var relationOptions = BuildRelationQueryOptions(direction, relationTypes);
-        var graphEnriched = await queryService.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, relationOptions, ct);
+        var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
+        var graphEnriched = await queryService.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, graphOptions, ct);
         return graphEnriched == null ? Results.NotFound() : Results.Ok(graphEnriched);
     }
 
-    private static WorkflowActorRelationQueryOptions BuildRelationQueryOptions(
+    private static WorkflowActorGraphQueryOptions BuildGraphQueryOptions(
         string? direction,
-        string[]? relationTypes)
+        string[]? edgeTypes)
     {
-        return new WorkflowActorRelationQueryOptions
+        return new WorkflowActorGraphQueryOptions
         {
             Direction = ParseDirection(direction),
-            RelationTypes = NormalizeRelationTypes(relationTypes),
+            EdgeTypes = NormalizeEdgeTypes(edgeTypes),
         };
     }
 
-    private static WorkflowActorRelationDirection ParseDirection(string? direction)
+    private static WorkflowActorGraphDirection ParseDirection(string? direction)
     {
         if (string.IsNullOrWhiteSpace(direction))
-            return WorkflowActorRelationDirection.Both;
+            return WorkflowActorGraphDirection.Both;
 
-        return Enum.TryParse<WorkflowActorRelationDirection>(direction.Trim(), ignoreCase: true, out var parsed)
+        return Enum.TryParse<WorkflowActorGraphDirection>(direction.Trim(), ignoreCase: true, out var parsed)
             ? parsed
-            : WorkflowActorRelationDirection.Both;
+            : WorkflowActorGraphDirection.Both;
     }
 
-    private static IReadOnlyList<string> NormalizeRelationTypes(IReadOnlyList<string>? relationTypes)
+    private static IReadOnlyList<string> NormalizeEdgeTypes(IReadOnlyList<string>? edgeTypes)
     {
-        if (relationTypes == null || relationTypes.Count == 0)
+        if (edgeTypes == null || edgeTypes.Count == 0)
             return [];
 
-        return relationTypes
+        return edgeTypes
             .Select(x => x?.Trim() ?? "")
             .Where(x => x.Length > 0)
             .Distinct(StringComparer.Ordinal)

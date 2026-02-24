@@ -39,8 +39,8 @@ public class ChatEndpointsInternalTests
         routePatterns.Should().Contain("/api/ws/chat");
         routePatterns.Should().Contain("/api/actors/{actorId}");
         routePatterns.Should().Contain("/api/actors/{actorId}/timeline");
-        routePatterns.Should().Contain("/api/actors/{actorId}/relations");
-        routePatterns.Should().Contain("/api/actors/{actorId}/relation-subgraph");
+        routePatterns.Should().Contain("/api/actors/{actorId}/graph-edges");
+        routePatterns.Should().Contain("/api/actors/{actorId}/graph-subgraph");
     }
 
     [Fact]
@@ -271,27 +271,27 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task ListActorRelations_ShouldReturnRelationItems()
+    public async Task ListActorGraphEdges_ShouldReturnRelationItems()
     {
         var queryService = new FakeQueryService
         {
             ActorQueryEnabledValue = true,
-            RelationsByActorId = new Dictionary<string, IReadOnlyList<WorkflowActorRelationItem>>(StringComparer.Ordinal)
+            RelationsByActorId = new Dictionary<string, IReadOnlyList<WorkflowActorGraphEdge>>(StringComparer.Ordinal)
             {
                 ["actor-1"] =
                 [
-                    new WorkflowActorRelationItem
+                    new WorkflowActorGraphEdge
                     {
                         EdgeId = "edge-1",
                         FromNodeId = "actor-1",
                         ToNodeId = "actor-2",
-                        RelationType = "CHILD_OF",
+                        EdgeType = "CHILD_OF",
                     },
                 ],
             },
         };
 
-        var result = await ChatQueryEndpoints.ListActorRelations("actor-1", queryService, 50, ct: CancellationToken.None);
+        var result = await ChatQueryEndpoints.ListActorGraphEdges("actor-1", queryService, 50, ct: CancellationToken.None);
         var (statusCode, body) = await ExecuteResultAsync(result);
         using var doc = JsonDocument.Parse(body);
 
@@ -301,47 +301,47 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task ListActorRelations_WhenDirectionAndRelationTypesProvided_ShouldForwardQueryOptions()
+    public async Task ListActorGraphEdges_WhenDirectionAndEdgeTypesProvided_ShouldForwardQueryOptions()
     {
         var queryService = new FakeQueryService
         {
             ActorQueryEnabledValue = true,
         };
 
-        var result = await ChatQueryEndpoints.ListActorRelations(
+        var result = await ChatQueryEndpoints.ListActorGraphEdges(
             "actor-1",
             queryService,
             50,
             direction: "Outbound",
-            relationTypes: ["CHILD_OF", "OWNS"],
+            edgeTypes: ["CHILD_OF", "OWNS"],
             ct: CancellationToken.None);
         var (statusCode, _) = await ExecuteResultAsync(result);
 
         statusCode.Should().Be(StatusCodes.Status200OK);
-        queryService.LastRelationQueryOptions.Should().NotBeNull();
-        queryService.LastRelationQueryOptions!.Direction.Should().Be(WorkflowActorRelationDirection.Outbound);
-        queryService.LastRelationQueryOptions.RelationTypes.Should().BeEquivalentTo(["CHILD_OF", "OWNS"]);
+        queryService.LastGraphQueryOptions.Should().NotBeNull();
+        queryService.LastGraphQueryOptions!.Direction.Should().Be(WorkflowActorGraphDirection.Outbound);
+        queryService.LastGraphQueryOptions.EdgeTypes.Should().BeEquivalentTo(["CHILD_OF", "OWNS"]);
     }
 
     [Fact]
-    public async Task GetActorRelationSubgraph_ShouldReturnSubgraph()
+    public async Task GetActorGraphSubgraph_ShouldReturnSubgraph()
     {
         var queryService = new FakeQueryService
         {
             ActorQueryEnabledValue = true,
-            SubgraphByActorId = new Dictionary<string, WorkflowActorRelationSubgraph>(StringComparer.Ordinal)
+            SubgraphByActorId = new Dictionary<string, WorkflowActorGraphSubgraph>(StringComparer.Ordinal)
             {
-                ["actor-1"] = new WorkflowActorRelationSubgraph
+                ["actor-1"] = new WorkflowActorGraphSubgraph
                 {
                     RootNodeId = "actor-1",
                     Nodes =
                     [
-                        new WorkflowActorRelationNode
+                        new WorkflowActorGraphNode
                         {
                             NodeId = "actor-1",
                             NodeType = "Actor",
                         },
-                        new WorkflowActorRelationNode
+                        new WorkflowActorGraphNode
                         {
                             NodeId = "actor-2",
                             NodeType = "Actor",
@@ -349,19 +349,19 @@ public class ChatEndpointsInternalTests
                     ],
                     Edges =
                     [
-                        new WorkflowActorRelationItem
+                        new WorkflowActorGraphEdge
                         {
                             EdgeId = "edge-1",
                             FromNodeId = "actor-1",
                             ToNodeId = "actor-2",
-                            RelationType = "CHILD_OF",
+                            EdgeType = "CHILD_OF",
                         },
                     ],
                 },
             },
         };
 
-        var result = await ChatQueryEndpoints.GetActorRelationSubgraph("actor-1", queryService, 2, 50, ct: CancellationToken.None);
+        var result = await ChatQueryEndpoints.GetActorGraphSubgraph("actor-1", queryService, 2, 50, ct: CancellationToken.None);
         var (statusCode, body) = await ExecuteResultAsync(result);
         using var doc = JsonDocument.Parse(body);
 
@@ -435,9 +435,9 @@ public class ChatEndpointsInternalTests
         public IReadOnlyList<string> Workflows { get; set; } = [];
         public Dictionary<string, WorkflowActorSnapshot> SnapshotByActorId { get; set; } = new(StringComparer.Ordinal);
         public Dictionary<string, IReadOnlyList<WorkflowActorTimelineItem>> TimelineByActorId { get; set; } = new(StringComparer.Ordinal);
-        public Dictionary<string, IReadOnlyList<WorkflowActorRelationItem>> RelationsByActorId { get; set; } = new(StringComparer.Ordinal);
-        public Dictionary<string, WorkflowActorRelationSubgraph> SubgraphByActorId { get; set; } = new(StringComparer.Ordinal);
-        public WorkflowActorRelationQueryOptions? LastRelationQueryOptions { get; private set; }
+        public Dictionary<string, IReadOnlyList<WorkflowActorGraphEdge>> RelationsByActorId { get; set; } = new(StringComparer.Ordinal);
+        public Dictionary<string, WorkflowActorGraphSubgraph> SubgraphByActorId { get; set; } = new(StringComparer.Ordinal);
+        public WorkflowActorGraphQueryOptions? LastGraphQueryOptions { get; private set; }
 
         public bool ActorQueryEnabled => ActorQueryEnabledValue;
 
@@ -460,34 +460,34 @@ public class ChatEndpointsInternalTests
             return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>(items.Take(Math.Max(1, take)).ToList());
         }
 
-        public Task<IReadOnlyList<WorkflowActorRelationItem>> ListActorRelationsAsync(
+        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
             string actorId,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
+            WorkflowActorGraphQueryOptions? options = null,
             CancellationToken ct = default)
         {
-            LastRelationQueryOptions = options;
+            LastGraphQueryOptions = options;
             _ = options;
             if (!RelationsByActorId.TryGetValue(actorId, out var items))
                 items = [];
 
-            return Task.FromResult<IReadOnlyList<WorkflowActorRelationItem>>(items.Take(Math.Max(1, take)).ToList());
+            return Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>(items.Take(Math.Max(1, take)).ToList());
         }
 
-        public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
             string actorId,
             int depth = 2,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
+            WorkflowActorGraphQueryOptions? options = null,
             CancellationToken ct = default)
         {
-            LastRelationQueryOptions = options;
+            LastGraphQueryOptions = options;
             _ = depth;
             _ = take;
             _ = options;
             if (!SubgraphByActorId.TryGetValue(actorId, out var item))
             {
-                item = new WorkflowActorRelationSubgraph
+                item = new WorkflowActorGraphSubgraph
                 {
                     RootNodeId = actorId,
                 };
@@ -500,14 +500,14 @@ public class ChatEndpointsInternalTests
             string actorId,
             int depth = 2,
             int take = 200,
-            WorkflowActorRelationQueryOptions? options = null,
+            WorkflowActorGraphQueryOptions? options = null,
             CancellationToken ct = default)
         {
             var snapshot = await GetActorSnapshotAsync(actorId, ct);
             if (snapshot == null)
                 return null;
 
-            var subgraph = await GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
+            var subgraph = await GetActorGraphSubgraphAsync(actorId, depth, take, options, ct);
             return new WorkflowActorGraphEnrichedSnapshot
             {
                 Snapshot = snapshot,

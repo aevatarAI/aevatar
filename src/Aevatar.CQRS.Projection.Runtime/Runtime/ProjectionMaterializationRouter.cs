@@ -8,18 +8,18 @@ public sealed class ProjectionMaterializationRouter<TReadModel, TKey>
     where TReadModel : class, IProjectionReadModel
 {
     private readonly IDocumentProjectionStore<TReadModel, TKey>? _documentStore;
-    private readonly IGraphProjectionStore<TReadModel>? _graphStore;
+    private readonly IProjectionGraphMaterializer<TReadModel>? _graphMaterializer;
     private readonly ILogger<ProjectionMaterializationRouter<TReadModel, TKey>> _logger;
     private readonly bool _requiresDocumentStore = typeof(IDocumentReadModel).IsAssignableFrom(typeof(TReadModel));
     private readonly bool _requiresGraphStore = typeof(IGraphReadModel).IsAssignableFrom(typeof(TReadModel));
 
     public ProjectionMaterializationRouter(
         IDocumentProjectionStore<TReadModel, TKey>? documentStore = null,
-        IGraphProjectionStore<TReadModel>? graphStore = null,
+        IProjectionGraphMaterializer<TReadModel>? graphMaterializer = null,
         ILogger<ProjectionMaterializationRouter<TReadModel, TKey>>? logger = null)
     {
         _documentStore = documentStore;
-        _graphStore = graphStore;
+        _graphMaterializer = graphMaterializer;
         _logger = logger ?? NullLogger<ProjectionMaterializationRouter<TReadModel, TKey>>.Instance;
     }
 
@@ -33,7 +33,7 @@ public sealed class ProjectionMaterializationRouter<TReadModel, TKey>
             await _documentStore!.UpsertAsync(readModel, ct);
 
         if (_requiresGraphStore)
-            await _graphStore!.UpsertGraphAsync(readModel, ct);
+            await _graphMaterializer!.UpsertGraphAsync(readModel, ct);
     }
 
     public async Task MutateAsync(TKey key, Action<TReadModel> mutate, CancellationToken ct = default)
@@ -59,7 +59,7 @@ public sealed class ProjectionMaterializationRouter<TReadModel, TKey>
             return;
         }
 
-        await _graphStore!.UpsertGraphAsync(updated, ct);
+        await _graphMaterializer!.UpsertGraphAsync(updated, ct);
     }
 
     public Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
@@ -92,10 +92,10 @@ public sealed class ProjectionMaterializationRouter<TReadModel, TKey>
                 $"Document capability is required by read model '{typeof(TReadModel).FullName}', but no document projection store is registered.");
         }
 
-        if (_requiresGraphStore && _graphStore == null)
+        if (_requiresGraphStore && _graphMaterializer == null)
         {
             throw new InvalidOperationException(
-                $"Graph capability is required by read model '{typeof(TReadModel).FullName}', but no graph projection store is registered.");
+                $"Graph capability is required by read model '{typeof(TReadModel).FullName}', but no graph projection materializer is registered.");
         }
     }
 }

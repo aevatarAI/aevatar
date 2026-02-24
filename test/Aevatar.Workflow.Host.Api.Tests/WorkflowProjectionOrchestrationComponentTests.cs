@@ -94,7 +94,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var updater = new WorkflowProjectionReadModelUpdater(
             new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
                 store,
-                new ProjectionGraphStoreAdapter<WorkflowExecutionReport>(new InMemoryProjectionRelationStore())),
+                new ProjectionGraphMaterializer<WorkflowExecutionReport>(new InMemoryProjectionGraphStore())),
             new FixedClock(stoppedAt));
         var context = new WorkflowExecutionProjectionContext
         {
@@ -167,7 +167,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var reader = new WorkflowProjectionQueryReader(
             store,
             new WorkflowExecutionReadModelMapper(),
-            new ProjectionGraphStoreAdapter<WorkflowExecutionReport>(new InMemoryProjectionRelationStore()));
+            new InMemoryProjectionGraphStore());
 
         var snapshot = await reader.GetActorSnapshotAsync("actor-3");
         var timeline = await reader.ListActorTimelineAsync("actor-3", take: 2);

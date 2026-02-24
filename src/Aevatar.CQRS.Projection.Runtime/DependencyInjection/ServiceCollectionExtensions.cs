@@ -8,15 +8,15 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddProjectionReadModelRuntime(this IServiceCollection services)
     {
-        services.TryAddSingleton<IProjectionReadModelCapabilityValidator, ProjectionReadModelCapabilityValidatorService>();
-        services.TryAddSingleton<IProjectionReadModelProviderRegistry, ProjectionReadModelProviderRegistry>();
-        services.TryAddSingleton<IProjectionReadModelProviderSelector, ProjectionReadModelProviderSelector>();
+        services.TryAddSingleton<IProjectionProviderCapabilityValidator, ProjectionProviderCapabilityValidatorService>();
+        services.TryAddSingleton<IProjectionDocumentStoreProviderRegistry, ProjectionDocumentStoreProviderRegistry>();
+        services.TryAddSingleton<IProjectionDocumentStoreProviderSelector, ProjectionDocumentStoreProviderSelector>();
         services.TryAddSingleton<IProjectionStoreSelectionPlanner, ProjectionStoreSelectionPlanner>();
-        services.TryAddSingleton<IProjectionReadModelStoreFactory, ProjectionReadModelStoreFactory>();
-        services.TryAddSingleton<IProjectionRelationStoreProviderRegistry, ProjectionRelationStoreProviderRegistry>();
-        services.TryAddSingleton<IProjectionRelationStoreProviderSelector, ProjectionRelationStoreProviderSelector>();
-        services.TryAddSingleton<IProjectionRelationStoreFactory, ProjectionRelationStoreFactory>();
-        services.TryAddSingleton(typeof(IGraphProjectionStore<>), typeof(ProjectionGraphStoreAdapter<>));
+        services.TryAddSingleton<IProjectionDocumentStoreFactory, ProjectionDocumentStoreFactory>();
+        services.TryAddSingleton<IProjectionGraphStoreProviderRegistry, ProjectionGraphStoreProviderRegistry>();
+        services.TryAddSingleton<IProjectionGraphStoreProviderSelector, ProjectionGraphStoreProviderSelector>();
+        services.TryAddSingleton<IProjectionGraphStoreFactory, ProjectionGraphStoreFactory>();
+        services.TryAddSingleton(typeof(IProjectionGraphMaterializer<>), typeof(ProjectionGraphMaterializer<>));
         services.TryAddSingleton(typeof(IProjectionMaterializationRouter<,>), typeof(ProjectionMaterializationRouter<,>));
         services.TryAddSingleton<IProjectionDocumentMetadataResolver, ProjectionDocumentMetadataResolver>();
         services.TryAddSingleton<IProjectionStoreStartupValidator, ProjectionStoreStartupValidator>();

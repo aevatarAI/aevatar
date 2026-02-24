@@ -5,24 +5,24 @@ public sealed class ProjectionStoreSelectionPlanner : IProjectionStoreSelectionP
     public ProjectionStoreSelectionPlan Build(
         IProjectionStoreSelectionRuntimeOptions options,
         Type readModelType,
-        ProjectionReadModelRequirements relationRequirements)
+        ProjectionStoreRequirements graphRequirements)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(readModelType);
-        ArgumentNullException.ThrowIfNull(relationRequirements);
-        EnsureReadModelModeSupported(options.ReadModelMode);
+        ArgumentNullException.ThrowIfNull(graphRequirements);
+        EnsureStoreModeSupported(options.StoreMode);
 
-        var readModelRequirements = BuildReadModelRequirements(readModelType);
+        var readModelRequirements = BuildDocumentRequirements(readModelType);
         var readModelRequiresGraph = typeof(IGraphReadModel).IsAssignableFrom(readModelType);
         var readModelProvider = NormalizeRequiredProviderName(options.DocumentProvider);
-        var readModelSelectionOptions = new ProjectionReadModelStoreSelectionOptions
+        var readModelSelectionOptions = new ProjectionStoreSelectionOptions
         {
             RequestedProviderName = readModelProvider,
             FailOnUnsupportedCapabilities = options.FailOnUnsupportedCapabilities,
         };
 
-        var mergedRelationRequirements = MergeRelationRequirements(relationRequirements, readModelRequiresGraph);
-        var relationSelectionOptions = new ProjectionReadModelStoreSelectionOptions
+        var mergedGraphRequirements = MergeGraphRequirements(graphRequirements, readModelRequiresGraph);
+        var graphSelectionOptions = new ProjectionStoreSelectionOptions
         {
             RequestedProviderName = NormalizeGraphProviderName(
                 options.GraphProvider,
@@ -33,31 +33,31 @@ public sealed class ProjectionStoreSelectionPlanner : IProjectionStoreSelectionP
         return new ProjectionStoreSelectionPlan(
             readModelRequirements,
             readModelSelectionOptions,
-            mergedRelationRequirements,
-            relationSelectionOptions);
+            mergedGraphRequirements,
+            graphSelectionOptions);
     }
 
-    private static ProjectionReadModelRequirements MergeRelationRequirements(
-        ProjectionReadModelRequirements relationRequirements,
+    private static ProjectionStoreRequirements MergeGraphRequirements(
+        ProjectionStoreRequirements graphRequirements,
         bool readModelRequiresGraph)
     {
-        return new ProjectionReadModelRequirements(
-            requiresIndexing: relationRequirements.RequiresIndexing,
-            requiredIndexKinds: relationRequirements.RequiredIndexKinds,
-            requiresAliases: relationRequirements.RequiresAliases,
-            requiresSchemaValidation: relationRequirements.RequiresSchemaValidation,
-            requiresRelations: relationRequirements.RequiresRelations || readModelRequiresGraph,
-            requiresRelationTraversal: relationRequirements.RequiresRelationTraversal || readModelRequiresGraph);
+        return new ProjectionStoreRequirements(
+            requiresIndexing: graphRequirements.RequiresIndexing,
+            requiredIndexKinds: graphRequirements.RequiredIndexKinds,
+            requiresAliases: graphRequirements.RequiresAliases,
+            requiresSchemaValidation: graphRequirements.RequiresSchemaValidation,
+            requiresGraph: graphRequirements.RequiresGraph || readModelRequiresGraph,
+            requiresGraphTraversal: graphRequirements.RequiresGraphTraversal || readModelRequiresGraph);
     }
 
-    private static ProjectionReadModelRequirements BuildReadModelRequirements(Type readModelType)
+    private static ProjectionStoreRequirements BuildDocumentRequirements(Type readModelType)
     {
-        var requiredIndexKinds = new List<ProjectionReadModelIndexKind>();
+        var requiredIndexKinds = new List<ProjectionIndexKind>();
 
         if (typeof(IDocumentReadModel).IsAssignableFrom(readModelType))
-            requiredIndexKinds.Add(ProjectionReadModelIndexKind.Document);
+            requiredIndexKinds.Add(ProjectionIndexKind.Document);
 
-        return new ProjectionReadModelRequirements(
+        return new ProjectionStoreRequirements(
             requiresIndexing: requiredIndexKinds.Count > 0,
             requiredIndexKinds: requiredIndexKinds);
     }
@@ -83,13 +83,13 @@ public sealed class ProjectionStoreSelectionPlanner : IProjectionStoreSelectionP
         return graphProviderName.Trim();
     }
 
-    private static void EnsureReadModelModeSupported(ProjectionReadModelMode readModelMode)
+    private static void EnsureStoreModeSupported(ProjectionStoreMode readModelMode)
     {
-        if (readModelMode != ProjectionReadModelMode.StateOnly)
+        if (readModelMode != ProjectionStoreMode.StateOnly)
             return;
 
         throw new InvalidOperationException(
             "Projection store selection does not support Projection:Document:Mode=StateOnly. " +
-            "Use CustomReadModel or DefaultReadModel.");
+            "Use Custom or Default.");
     }
 }

@@ -55,39 +55,39 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         return await _projectionPort.ListActorTimelineAsync(actorId, take, ct);
     }
 
-    public async Task<IReadOnlyList<WorkflowActorRelationItem>> ListActorRelationsAsync(
+    public async Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
         string actorId,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default)
     {
         if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
             return [];
 
-        return await _projectionPort.GetActorRelationsAsync(actorId, take, options, ct);
+        return await _projectionPort.GetActorGraphEdgesAsync(actorId, take, options, ct);
     }
 
-    public async Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+    public async Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
         string actorId,
         int depth = 2,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default)
     {
         if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
-            return new WorkflowActorRelationSubgraph
+            return new WorkflowActorGraphSubgraph
             {
                 RootNodeId = actorId ?? string.Empty,
             };
 
-        return await _projectionPort.GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
+        return await _projectionPort.GetActorGraphSubgraphAsync(actorId, depth, take, options, ct);
     }
 
     public async Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
         string actorId,
         int depth = 2,
         int take = 200,
-        WorkflowActorRelationQueryOptions? options = null,
+        WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default)
     {
         if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))

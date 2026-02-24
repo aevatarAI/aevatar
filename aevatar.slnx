@@ -21,6 +21,7 @@
     <Project Path="src\Aevatar.Foundation.Runtime.Hosting\Aevatar.Foundation.Runtime.Hosting.csproj" />
     <Project Path="src\Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet\Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans/Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
+    <Project Path="src/Aevatar.CQRS.Projection.Runtime.Abstractions/Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit/Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit.csproj" />

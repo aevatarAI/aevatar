@@ -13,7 +13,7 @@
 |---|---|---|
 | 架构门禁（含 route mapping） | `bash tools/ci/architecture_guards.sh` | 通过（`Architecture guards passed.`） |
 | 路由映射专项 | `bash tools/ci/projection_route_mapping_guard.sh` | 通过（`Projection route-mapping guard passed.`） |
-| Projection Core 定向测试 | `dotnet test test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj --nologo --filter "FullyQualifiedName~ProjectionReadModelRuntimeTests\|FullyQualifiedName~ProjectionReadModelStoreSelectorTests\|FullyQualifiedName~ProjectionProviderE2EIntegrationTests" -m:1 -p:UseSharedCompilation=false` | 通过（`10 passed / 0 failed / 2 skipped`） |
+| Projection Core 定向测试 | `dotnet test test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj --nologo --filter "FullyQualifiedName~ProjectionReadModelRuntimeTests\|FullyQualifiedName~ProjectionDocumentStoreSelectorTests\|FullyQualifiedName~ProjectionProviderE2EIntegrationTests" -m:1 -p:UseSharedCompilation=false` | 通过（`10 passed / 0 failed / 2 skipped`） |
 | Workflow Projection 定向测试 | `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --nologo --filter "FullyQualifiedName~WorkflowExecutionProjectionRegistrationTests\|FullyQualifiedName~WorkflowExecutionReadModelProjectorTests\|FullyQualifiedName~WorkflowProjectionOrchestrationComponentTests" -m:1 -p:UseSharedCompilation=false` | 通过（`36 passed / 0 failed / 0 skipped`） |
 
 ## 3. 总分与等级
@@ -64,9 +64,9 @@
 
 ## 5. 正向证据（加分项）
 
-1. 统一选择权威入口：Runtime selector 复用抽象层权威 `ProjectionReadModelStoreSelector.Select(...)`。  
+1. 统一选择权威入口：Runtime selector 复用抽象层权威 `ProjectionDocumentStoreSelector.Select(...)`。  
    `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionReadModelProviderSelector.cs:32`  
-   `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionReadModelStoreSelector.cs:5`
+   `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionDocumentStoreSelector.cs:5`
 2. ReadModel/Relation 统一规划：单一 `ProjectionStoreSelectionPlanner` 产出双存储 selection plan。  
    `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreSelectionPlanner.cs:12`  
    `src/workflow/Aevatar.Workflow.Projection/DependencyInjection/ServiceCollectionExtensions.cs:155`
@@ -179,23 +179,23 @@ flowchart LR
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
-    O1["ProjectionReadModelRuntimeOptions"] --> P1["ProjectionStoreSelectionPlanner.Build"]
-    P1 --> P2["ReadModelSelectionOptions"]
+    O1["ProjectionStoreRuntimeOptions"] --> P1["ProjectionStoreSelectionPlanner.Build"]
+    P1 --> P2["DocumentSelectionOptions"]
     P1 --> P3["RelationSelectionOptions"]
     O2["ReadModel Bindings(Type.FullName -> IndexKind)"] --> B1["ProjectionReadModelBindingResolver.Resolve"] --> P1
 
     P2 --> F1["ProjectionReadModelStoreFactory.Create"]
     F1 --> G1["ProviderRegistry.GetRegistrations"]
     G1 --> S1["ProjectionReadModelProviderSelector.Select"]
-    S1 --> X1["ProjectionReadModelStoreSelector.Select(Authority)"]
-    X1 --> C1["ProjectionReadModelCapabilityValidator.EnsureSupported"]
+    S1 --> X1["ProjectionDocumentStoreSelector.Select(Authority)"]
+    X1 --> C1["ProjectionProviderCapabilityValidator.EnsureSupported"]
     C1 --> RM["IProjectionReadModelStore"]
 
     P3 --> F2["ProjectionRelationStoreFactory.Create"]
     F2 --> G2["RelationProviderRegistry.GetRegistrations"]
     G2 --> S2["ProjectionRelationStoreProviderSelector.Select"]
     S2 --> X2["ProjectionStoreSelector.Select(Authority)"]
-    X2 --> C2["ProjectionReadModelCapabilityValidator.EnsureSupported"]
+    X2 --> C2["ProjectionProviderCapabilityValidator.EnsureSupported"]
     C2 --> RS["IProjectionRelationStore"]
 
     RM --> V1["WorkflowExecutionReadModelProjector"]
