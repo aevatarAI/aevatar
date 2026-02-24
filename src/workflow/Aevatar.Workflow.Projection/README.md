@@ -24,7 +24,7 @@
 - 领域投影实现：reducers、projectors、read model（不包含 Provider Store 实现）
 - 领域 DI 组合：`AddWorkflowExecutionProjectionCQRS(...)`
 - Provider 启动校验：由 `WorkflowReadModelStartupValidationHostedService` 执行 Document/Graph 两条独立 fail-fast 校验
-- ReadModel 选择规则：DI store 解析与 Startup validation 统一复用 Document/Graph runtime options（`IProjectionDocumentRuntimeOptions`、`IProjectionGraphRuntimeOptions`）
+- ReadModel 选择规则：DI store 解析与 Startup validation 统一复用 Document/Graph runtime options（`ProjectionDocumentRuntimeOptions`、`ProjectionGraphRuntimeOptions`）
 
 本项目依赖：
 

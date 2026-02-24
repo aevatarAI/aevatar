@@ -1,54 +1,52 @@
 using Aevatar.CQRS.Projection.Runtime.Runtime;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
 public class ProjectionReadModelRuntimeTests
 {
     [Fact]
-    public void DocumentProviderSelector_WhenRequestedProviderMatched_ShouldReturnRegistration()
+    public void DocumentStoreFactory_WhenRequestedProviderMatched_ShouldCreateRequestedProviderStore()
     {
-        var selector = new ProjectionDocumentStoreProviderSelector();
-        var registrations = new List<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>
-        {
-            CreateRegistration("InMemory"),
-            CreateRegistration("Elasticsearch"),
-        };
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
+                "InMemory",
+                _ => new NamedDocumentStore("InMemory")));
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
+                "Elasticsearch",
+                _ => new NamedDocumentStore("Elasticsearch")));
 
-        var selected = selector.Select(
-            registrations,
-            new ProjectionDocumentSelectionOptions
-            {
-                RequestedProviderName = "inmemory",
-            });
+        using var serviceProvider = services.BuildServiceProvider();
+        var factory = new ProjectionDocumentStoreFactory();
 
-        selected.ProviderName.Should().Be("InMemory");
+        var selected = factory.Create<TestReadModel, string>(serviceProvider, "inmemory");
+        var typed = selected.Should().BeOfType<NamedDocumentStore>().Subject;
+        typed.ProviderName.Should().Be("InMemory");
     }
 
     [Fact]
-    public void DocumentProviderSelector_WhenMultipleProvidersWithoutRequested_ShouldThrowStructuredException()
+    public void DocumentStoreFactory_WhenMultipleProvidersWithoutRequested_ShouldThrowStructuredException()
     {
-        var selector = new ProjectionDocumentStoreProviderSelector();
-        var registrations = new List<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>
-        {
-            CreateRegistration("InMemory"),
-            CreateRegistration("Elasticsearch"),
-        };
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
+                "InMemory",
+                _ => new NamedDocumentStore("InMemory")));
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
+                "Elasticsearch",
+                _ => new NamedDocumentStore("Elasticsearch")));
 
-        Action act = () => selector.Select(
-            registrations,
-            new ProjectionDocumentSelectionOptions());
+        using var serviceProvider = services.BuildServiceProvider();
+        var factory = new ProjectionDocumentStoreFactory();
+
+        Action act = () => factory.Create<TestReadModel, string>(serviceProvider);
 
         act.Should().Throw<ProjectionProviderSelectionException>()
             .Where(ex => ex.ReadModelType == typeof(TestReadModel));
-    }
-
-    private static IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>> CreateRegistration(
-        string providerName)
-    {
-        return new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
-            providerName,
-            _ => new NoopStore());
     }
 
     public sealed class TestReadModel
@@ -56,8 +54,15 @@ public class ProjectionReadModelRuntimeTests
         public string Id { get; set; } = "";
     }
 
-    private sealed class NoopStore : IDocumentProjectionStore<TestReadModel, string>
+    private sealed class NamedDocumentStore : IDocumentProjectionStore<TestReadModel, string>
     {
+        public NamedDocumentStore(string providerName)
+        {
+            ProviderName = providerName;
+        }
+
+        public string ProviderName { get; }
+
         public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
         {
             _ = readModel;

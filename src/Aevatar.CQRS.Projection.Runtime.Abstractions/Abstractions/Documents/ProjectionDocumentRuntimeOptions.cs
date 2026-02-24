@@ -1,6 +1,6 @@
 namespace Aevatar.CQRS.Projection.Runtime.Abstractions;
 
-public sealed class ProjectionDocumentRuntimeOptions : IProjectionDocumentRuntimeOptions
+public sealed class ProjectionDocumentRuntimeOptions
 {
     public string ProviderName { get; set; } = ProjectionProviderNames.InMemory;
 

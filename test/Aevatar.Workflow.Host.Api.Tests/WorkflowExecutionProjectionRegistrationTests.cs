@@ -135,11 +135,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         };
 
         services.Replace(ServiceDescriptor.Singleton(documentOptions));
-        services.Replace(ServiceDescriptor.Singleton<IProjectionDocumentRuntimeOptions>(sp =>
-            sp.GetRequiredService<ProjectionDocumentRuntimeOptions>()));
         services.Replace(ServiceDescriptor.Singleton(graphOptions));
-        services.Replace(ServiceDescriptor.Singleton<IProjectionGraphRuntimeOptions>(sp =>
-            sp.GetRequiredService<ProjectionGraphRuntimeOptions>()));
     }
 
     private static async Task StartHostedServicesAsync(IServiceProvider provider)

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -6,30 +7,31 @@ namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 public sealed class ProjectionDocumentStoreFactory
     : IProjectionDocumentStoreFactory
 {
-    private readonly IProjectionDocumentStoreProviderRegistry _providerRegistry;
-    private readonly IProjectionDocumentStoreProviderSelector _providerSelector;
     private readonly ILogger<ProjectionDocumentStoreFactory> _logger;
 
     public ProjectionDocumentStoreFactory(
-        IProjectionDocumentStoreProviderRegistry providerRegistry,
-        IProjectionDocumentStoreProviderSelector providerSelector,
         ILogger<ProjectionDocumentStoreFactory>? logger = null)
     {
-        _providerRegistry = providerRegistry;
-        _providerSelector = providerSelector;
         _logger = logger ?? NullLogger<ProjectionDocumentStoreFactory>.Instance;
     }
 
     public IDocumentProjectionStore<TReadModel, TKey> Create<TReadModel, TKey>(
         IServiceProvider serviceProvider,
-        ProjectionDocumentSelectionOptions selectionOptions)
+        string? requestedProviderName = null)
         where TReadModel : class
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
-        ArgumentNullException.ThrowIfNull(selectionOptions);
 
-        var registrations = _providerRegistry.GetRegistrations<TReadModel, TKey>(serviceProvider);
-        var selected = _providerSelector.Select(registrations, selectionOptions);
+        var registrations = serviceProvider
+            .GetServices<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>()
+            .ToList();
+        var selected = ProjectionStoreRegistrationSelector.Select(
+            registrations,
+            requestedProviderName,
+            typeof(TReadModel),
+            noRegistrationsReason: "No document store provider registrations were found.",
+            multipleRegistrationsReason: "Multiple document store providers are registered but no explicit provider was requested.",
+            providerNotRegisteredReason: "Requested document store provider is not registered.");
 
         var startedAt = DateTimeOffset.UtcNow;
         try

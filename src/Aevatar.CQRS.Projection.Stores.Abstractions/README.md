@@ -11,7 +11,7 @@
 
 - 读模型存储：`IDocumentProjectionStore<,>`
 - 图存储：`IProjectionGraphStore`
-- ReadModel 能力模型：`IProjectionReadModel`、`IDocumentReadModel`、`IGraphReadModel`
+- ReadModel 能力模型：`IProjectionReadModel`、`IDocumentReadModel`（marker）、`IGraphReadModel`
 - 文档索引元数据声明：`DocumentIndexMetadata`、`IProjectionDocumentMetadataProvider<TReadModel>`
 - 图结构描述：`GraphNodeDescriptor`、`GraphEdgeDescriptor`
 

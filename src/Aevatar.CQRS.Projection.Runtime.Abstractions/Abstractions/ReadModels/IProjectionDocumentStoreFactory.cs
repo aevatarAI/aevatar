@@ -4,6 +4,6 @@ public interface IProjectionDocumentStoreFactory
 {
     IDocumentProjectionStore<TReadModel, TKey> Create<TReadModel, TKey>(
         IServiceProvider serviceProvider,
-        ProjectionDocumentSelectionOptions selectionOptions)
+        string? requestedProviderName = null)
         where TReadModel : class;
 }

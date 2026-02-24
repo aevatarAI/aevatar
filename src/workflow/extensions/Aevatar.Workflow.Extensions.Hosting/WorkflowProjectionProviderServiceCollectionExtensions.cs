@@ -40,11 +40,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         };
 
         services.Replace(ServiceDescriptor.Singleton(documentRuntimeOptions));
-        services.Replace(ServiceDescriptor.Singleton<IProjectionDocumentRuntimeOptions>(sp =>
-            sp.GetRequiredService<ProjectionDocumentRuntimeOptions>()));
         services.Replace(ServiceDescriptor.Singleton(graphRuntimeOptions));
-        services.Replace(ServiceDescriptor.Singleton<IProjectionGraphRuntimeOptions>(sp =>
-            sp.GetRequiredService<ProjectionGraphRuntimeOptions>()));
 
         RegisterDocumentProvider(services, configuration, providerSelection.DocumentProvider);
         RegisterGraphProvider(services, configuration, providerSelection.GraphProvider);

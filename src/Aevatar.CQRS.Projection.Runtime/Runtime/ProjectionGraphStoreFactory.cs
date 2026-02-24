@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -5,29 +6,30 @@ namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 
 public sealed class ProjectionGraphStoreFactory : IProjectionGraphStoreFactory
 {
-    private readonly IProjectionGraphStoreProviderRegistry _providerRegistry;
-    private readonly IProjectionGraphStoreProviderSelector _providerSelector;
     private readonly ILogger<ProjectionGraphStoreFactory> _logger;
 
     public ProjectionGraphStoreFactory(
-        IProjectionGraphStoreProviderRegistry providerRegistry,
-        IProjectionGraphStoreProviderSelector providerSelector,
         ILogger<ProjectionGraphStoreFactory>? logger = null)
     {
-        _providerRegistry = providerRegistry;
-        _providerSelector = providerSelector;
         _logger = logger ?? NullLogger<ProjectionGraphStoreFactory>.Instance;
     }
 
     public IProjectionGraphStore Create(
         IServiceProvider serviceProvider,
-        ProjectionGraphSelectionOptions selectionOptions)
+        string? requestedProviderName = null)
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
-        ArgumentNullException.ThrowIfNull(selectionOptions);
 
-        var registrations = _providerRegistry.GetRegistrations(serviceProvider);
-        var selected = _providerSelector.Select(registrations, selectionOptions);
+        var registrations = serviceProvider
+            .GetServices<IProjectionStoreRegistration<IProjectionGraphStore>>()
+            .ToList();
+        var selected = ProjectionStoreRegistrationSelector.Select(
+            registrations,
+            requestedProviderName,
+            typeof(ProjectionGraphNode),
+            noRegistrationsReason: "No relation store provider registrations were found.",
+            multipleRegistrationsReason: "Multiple relation store providers are registered but no explicit provider was requested.",
+            providerNotRegisteredReason: "Requested relation store provider is not registered.");
 
         var startedAt = DateTimeOffset.UtcNow;
         try

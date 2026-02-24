@@ -38,8 +38,6 @@ public sealed class WorkflowExecutionReport
 {
     private const string UnknownToken = "unknown";
 
-    public string DocumentScope => "workflow-execution-reports";
-
     public string GraphScope => WorkflowExecutionGraphConstants.Scope;
 
     public IReadOnlyList<GraphNodeDescriptor> GraphNodes => BuildGraphNodes();

@@ -4,5 +4,5 @@ public interface IProjectionGraphStoreFactory
 {
     IProjectionGraphStore Create(
         IServiceProvider serviceProvider,
-        ProjectionGraphSelectionOptions selectionOptions);
+        string? requestedProviderName = null);
 }

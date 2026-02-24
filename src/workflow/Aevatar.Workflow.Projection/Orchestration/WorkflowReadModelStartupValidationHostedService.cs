@@ -11,27 +11,27 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly WorkflowExecutionProjectionOptions _options;
-    private readonly IProjectionDocumentRuntimeOptions _documentRuntimeOptions;
-    private readonly IProjectionGraphRuntimeOptions _graphRuntimeOptions;
-    private readonly IProjectionDocumentStartupValidator _documentStartupValidator;
-    private readonly IProjectionGraphStartupValidator _graphStartupValidator;
+    private readonly ProjectionDocumentRuntimeOptions _documentRuntimeOptions;
+    private readonly ProjectionGraphRuntimeOptions _graphRuntimeOptions;
+    private readonly IProjectionDocumentStoreFactory _documentStoreFactory;
+    private readonly IProjectionGraphStoreFactory _graphStoreFactory;
     private readonly ILogger<WorkflowReadModelStartupValidationHostedService> _logger;
 
     public WorkflowReadModelStartupValidationHostedService(
         IServiceProvider serviceProvider,
         WorkflowExecutionProjectionOptions options,
-        IProjectionDocumentRuntimeOptions documentRuntimeOptions,
-        IProjectionGraphRuntimeOptions graphRuntimeOptions,
-        IProjectionDocumentStartupValidator documentStartupValidator,
-        IProjectionGraphStartupValidator graphStartupValidator,
+        ProjectionDocumentRuntimeOptions documentRuntimeOptions,
+        ProjectionGraphRuntimeOptions graphRuntimeOptions,
+        IProjectionDocumentStoreFactory documentStoreFactory,
+        IProjectionGraphStoreFactory graphStoreFactory,
         ILogger<WorkflowReadModelStartupValidationHostedService>? logger = null)
     {
         _serviceProvider = serviceProvider;
         _options = options;
         _documentRuntimeOptions = documentRuntimeOptions;
         _graphRuntimeOptions = graphRuntimeOptions;
-        _documentStartupValidator = documentStartupValidator;
-        _graphStartupValidator = graphStartupValidator;
+        _documentStoreFactory = documentStoreFactory;
+        _graphStoreFactory = graphStoreFactory;
         _logger = logger ?? NullLogger<WorkflowReadModelStartupValidationHostedService>.Instance;
     }
 
@@ -43,30 +43,24 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
 
         if (_options.ValidateDocumentProviderOnStartup && _documentRuntimeOptions.FailFastOnStartup)
         {
-            var selectedDocumentProvider = _documentStartupValidator.ValidateProvider<WorkflowExecutionReport, string>(
+            _documentStoreFactory.Create<WorkflowExecutionReport, string>(
                 _serviceProvider,
-                new ProjectionDocumentSelectionOptions
-                {
-                    RequestedProviderName = _documentRuntimeOptions.ProviderName,
-                });
+                _documentRuntimeOptions.ProviderName);
             _logger.LogInformation(
                 "Workflow read-model provider startup validation passed. readModelType={ReadModelType} provider={Provider}",
                 typeof(WorkflowExecutionReport).FullName,
-                selectedDocumentProvider.ProviderName);
+                _documentRuntimeOptions.ProviderName);
         }
 
         if (_options.ValidateGraphProviderOnStartup && _graphRuntimeOptions.FailFastOnStartup)
         {
-            var selectedGraphProvider = _graphStartupValidator.ValidateProvider(
+            _graphStoreFactory.Create(
                 _serviceProvider,
-                new ProjectionGraphSelectionOptions
-                {
-                    RequestedProviderName = _graphRuntimeOptions.ProviderName,
-                });
+                _graphRuntimeOptions.ProviderName);
             _logger.LogInformation(
                 "Workflow graph provider startup validation passed. graphType={GraphType} provider={Provider}",
                 typeof(ProjectionGraphNode).FullName,
-                selectedGraphProvider.ProviderName);
+                _graphRuntimeOptions.ProviderName);
         }
         return Task.CompletedTask;
     }
