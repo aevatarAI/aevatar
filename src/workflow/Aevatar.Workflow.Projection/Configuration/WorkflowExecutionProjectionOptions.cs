@@ -48,6 +48,11 @@ public sealed class WorkflowExecutionProjectionOptions
     public string ReadModelProvider { get; set; } = ProjectionReadModelProviderNames.InMemory;
 
     /// <summary>
+    /// Relation store provider name. Empty means fallback to <see cref="ReadModelProvider"/>.
+    /// </summary>
+    public string RelationProvider { get; set; } = "";
+
+    /// <summary>
     /// Whether unsupported provider capabilities should fail fast during startup registration.
     /// </summary>
     public bool FailOnUnsupportedCapabilities { get; set; } = true;
@@ -56,6 +61,11 @@ public sealed class WorkflowExecutionProjectionOptions
     /// Whether to pre-validate read-model provider selection and capabilities during host startup.
     /// </summary>
     public bool ValidateReadModelProviderOnStartup { get; set; } = true;
+
+    /// <summary>
+    /// Whether to pre-validate relation provider selection and capabilities during host startup.
+    /// </summary>
+    public bool ValidateRelationProviderOnStartup { get; set; } = true;
 
     /// <summary>
     /// Optional read-model binding requirements (ReadModelName -> IndexKind).

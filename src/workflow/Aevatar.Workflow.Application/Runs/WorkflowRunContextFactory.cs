@@ -7,12 +7,12 @@ namespace Aevatar.Workflow.Application.Runs;
 public sealed class WorkflowRunContextFactory : IWorkflowRunContextFactory
 {
     private readonly IWorkflowRunActorResolver _actorResolver;
-    private readonly IWorkflowExecutionProjectionPort _projectionPort;
+    private readonly IWorkflowExecutionProjectionLifecyclePort _projectionPort;
     private readonly ICommandContextPolicy _commandContextPolicy;
 
     public WorkflowRunContextFactory(
         IWorkflowRunActorResolver actorResolver,
-        IWorkflowExecutionProjectionPort projectionPort,
+        IWorkflowExecutionProjectionLifecyclePort projectionPort,
         ICommandContextPolicy commandContextPolicy)
     {
         _actorResolver = actorResolver;

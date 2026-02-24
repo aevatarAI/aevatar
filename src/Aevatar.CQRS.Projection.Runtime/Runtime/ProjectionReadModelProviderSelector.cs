@@ -71,7 +71,9 @@ public sealed class ProjectionReadModelProviderSelector
         return $"requiresIndexing={requirements.RequiresIndexing};" +
                $"requiredIndexKinds=[{string.Join(",", requirements.RequiredIndexKinds)}];" +
                $"requiresAliases={requirements.RequiresAliases};" +
-               $"requiresSchemaValidation={requirements.RequiresSchemaValidation}";
+               $"requiresSchemaValidation={requirements.RequiresSchemaValidation};" +
+               $"requiresRelations={requirements.RequiresRelations};" +
+               $"requiresRelationTraversal={requirements.RequiresRelationTraversal}";
     }
 
     private static string FormatCapabilities(ProjectionReadModelProviderCapabilities capabilities)
@@ -79,6 +81,8 @@ public sealed class ProjectionReadModelProviderSelector
         return $"supportsIndexing={capabilities.SupportsIndexing};" +
                $"indexKinds=[{string.Join(",", capabilities.IndexKinds)}];" +
                $"supportsAliases={capabilities.SupportsAliases};" +
-               $"supportsSchemaValidation={capabilities.SupportsSchemaValidation}";
+               $"supportsSchemaValidation={capabilities.SupportsSchemaValidation};" +
+               $"supportsRelations={capabilities.SupportsRelations};" +
+               $"supportsRelationTraversal={capabilities.SupportsRelationTraversal}";
     }
 }

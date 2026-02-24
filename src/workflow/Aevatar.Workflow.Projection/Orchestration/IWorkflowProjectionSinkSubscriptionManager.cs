@@ -1,19 +1,10 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.CQRS.Projection.Abstractions;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public interface IWorkflowProjectionSinkSubscriptionManager
+    : IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent>
 {
-    Task AttachOrReplaceAsync(
-        WorkflowExecutionRuntimeLease lease,
-        IWorkflowRunEventSink sink,
-        Func<WorkflowRunEvent, ValueTask> handler,
-        CancellationToken ct = default);
-
-    Task DetachAsync(
-        WorkflowExecutionRuntimeLease lease,
-        IWorkflowRunEventSink sink,
-        CancellationToken ct = default);
-
     int GetSubscriptionCount(WorkflowExecutionRuntimeLease lease);
 }

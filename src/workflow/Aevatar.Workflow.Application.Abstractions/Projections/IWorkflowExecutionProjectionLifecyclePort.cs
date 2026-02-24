@@ -1,13 +1,10 @@
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Abstractions.Projections;
 
-public interface IWorkflowExecutionProjectionPort
+public interface IWorkflowExecutionProjectionLifecyclePort
 {
     bool ProjectionEnabled { get; }
-
-    bool EnableActorQueryEndpoints { get; }
 
     Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
         string rootActorId,
@@ -28,18 +25,5 @@ public interface IWorkflowExecutionProjectionPort
 
     Task ReleaseActorProjectionAsync(
         IWorkflowExecutionProjectionLease lease,
-        CancellationToken ct = default);
-
-    Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
-        string actorId,
-        CancellationToken ct = default);
-
-    Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
-        int take = 200,
-        CancellationToken ct = default);
-
-    Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
-        string actorId,
-        int take = 200,
         CancellationToken ct = default);
 }

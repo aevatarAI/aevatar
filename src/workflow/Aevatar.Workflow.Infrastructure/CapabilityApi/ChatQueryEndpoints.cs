@@ -21,6 +21,12 @@ public static class ChatQueryEndpoints
 
         group.MapGet("/actors/{actorId}/timeline", ListActorTimeline)
             .Produces(StatusCodes.Status200OK);
+
+        group.MapGet("/actors/{actorId}/relations", ListActorRelations)
+            .Produces(StatusCodes.Status200OK);
+
+        group.MapGet("/actors/{actorId}/relation-subgraph", GetActorRelationSubgraph)
+            .Produces(StatusCodes.Status200OK);
     }
 
     internal static async Task<IResult> ListAgents(
@@ -51,6 +57,27 @@ public static class ChatQueryEndpoints
     {
         var timeline = await queryService.ListActorTimelineAsync(actorId, take, ct);
         return Results.Ok(timeline);
+    }
+
+    internal static async Task<IResult> ListActorRelations(
+        string actorId,
+        IWorkflowExecutionQueryApplicationService queryService,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        var relations = await queryService.ListActorRelationsAsync(actorId, take, ct);
+        return Results.Ok(relations);
+    }
+
+    internal static async Task<IResult> GetActorRelationSubgraph(
+        string actorId,
+        IWorkflowExecutionQueryApplicationService queryService,
+        int depth = 2,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        var subgraph = await queryService.GetActorRelationSubgraphAsync(actorId, depth, take, ct);
+        return Results.Ok(subgraph);
     }
 
 }

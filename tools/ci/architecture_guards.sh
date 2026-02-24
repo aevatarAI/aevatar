@@ -508,8 +508,8 @@ if rg -n "TryGetContext\(" src; then
   exit 1
 fi
 
-if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs; then
-  echo "WorkflowExecutionProjectionService must not use process-local SemaphoreSlim for projection start arbitration."
+if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionLifecycleService.cs; then
+  echo "WorkflowExecutionProjectionLifecycleService must not use process-local SemaphoreSlim for projection start arbitration."
   exit 1
 fi
 
@@ -518,17 +518,30 @@ if rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Or
   exit 1
 fi
 
-if rg -n "Task\s+AttachLiveSinkAsync\(\s*string\s+actorId|Task\s+DetachLiveSinkAsync\(\s*string\s+actorId|Task\s+ReleaseActorProjectionAsync\(\s*string\s+actorId" \
-  src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionPort.cs
-then
-  echo "Workflow projection port must use lease/session handles instead of actorId context lookup."
+lifecycle_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionLifecyclePort.cs"
+query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionQueryPort.cs"
+
+if [ ! -f "${lifecycle_port}" ] || [ ! -f "${query_port}" ]; then
+  echo "Workflow projection ports must be split into lifecycle/query contracts."
   exit 1
 fi
 
-if ! rg -n "IWorkflowExecutionProjectionLease" \
-  src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionPort.cs >/dev/null
+if rg -n "Task\s+AttachLiveSinkAsync\(\s*string\s+actorId|Task\s+DetachLiveSinkAsync\(\s*string\s+actorId|Task\s+ReleaseActorProjectionAsync\(\s*string\s+actorId" \
+  "${lifecycle_port}"
 then
-  echo "Workflow projection port must depend on IWorkflowExecutionProjectionLease."
+  echo "Workflow projection lifecycle port must use lease/session handles instead of actorId context lookup."
+  exit 1
+fi
+
+if ! rg -n "IWorkflowExecutionProjectionLease" "${lifecycle_port}" >/dev/null; then
+  echo "Workflow projection lifecycle port must depend on IWorkflowExecutionProjectionLease."
+  exit 1
+fi
+
+if rg -n "EnsureActorProjectionAsync|AttachLiveSinkAsync|DetachLiveSinkAsync|ReleaseActorProjectionAsync" \
+  "${query_port}"
+then
+  echo "Workflow projection query port must not include lifecycle operations."
   exit 1
 fi
 

@@ -7,11 +7,11 @@ namespace Aevatar.Workflow.Application.Queries;
 public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
 {
     private readonly IWorkflowDefinitionRegistry _workflowRegistry;
-    private readonly IWorkflowExecutionProjectionPort _projectionPort;
+    private readonly IWorkflowExecutionProjectionQueryPort _projectionPort;
 
     public WorkflowExecutionQueryApplicationService(
         IWorkflowDefinitionRegistry workflowRegistry,
-        IWorkflowExecutionProjectionPort projectionPort)
+        IWorkflowExecutionProjectionQueryPort projectionPort)
     {
         _workflowRegistry = workflowRegistry;
         _projectionPort = projectionPort;
@@ -53,5 +53,31 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
             return [];
 
         return await _projectionPort.ListActorTimelineAsync(actorId, take, ct);
+    }
+
+    public async Task<IReadOnlyList<WorkflowActorRelationItem>> ListActorRelationsAsync(
+        string actorId,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
+            return [];
+
+        return await _projectionPort.GetActorRelationsAsync(actorId, take, ct);
+    }
+
+    public async Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
+            return new WorkflowActorRelationSubgraph
+            {
+                RootNodeId = actorId ?? string.Empty,
+            };
+
+        return await _projectionPort.GetActorRelationSubgraphAsync(actorId, depth, take, ct);
     }
 }

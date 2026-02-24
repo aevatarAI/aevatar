@@ -18,20 +18,47 @@ public sealed class WorkflowReadModelSelectionPlanner : IWorkflowReadModelSelect
         ArgumentNullException.ThrowIfNull(options);
         EnsureReadModelModeSupported(options.ReadModelMode);
 
-        var requirements = _bindingResolver.Resolve(options.ReadModelBindings, typeof(WorkflowExecutionReport));
-        var selectionOptions = new ProjectionReadModelStoreSelectionOptions
+        var readModelRequirements = _bindingResolver.Resolve(options.ReadModelBindings, typeof(WorkflowExecutionReport));
+        var readModelSelectionOptions = new ProjectionReadModelStoreSelectionOptions
         {
             RequestedProviderName = NormalizeProviderName(options.ReadModelProvider),
             FailOnUnsupportedCapabilities = options.FailOnUnsupportedCapabilities,
         };
+        var relationRequirements = BuildRelationRequirements(readModelRequirements);
+        var relationSelectionOptions = new ProjectionReadModelStoreSelectionOptions
+        {
+            RequestedProviderName = NormalizeProviderName(
+                options.RelationProvider,
+                options.ReadModelProvider),
+            FailOnUnsupportedCapabilities = options.FailOnUnsupportedCapabilities,
+        };
 
-        return new WorkflowReadModelSelectionPlan(requirements, selectionOptions);
+        return new WorkflowReadModelSelectionPlan(
+            readModelRequirements,
+            readModelSelectionOptions,
+            relationRequirements,
+            relationSelectionOptions);
     }
 
-    private static string NormalizeProviderName(string providerName)
+    private static ProjectionReadModelRequirements BuildRelationRequirements(
+        ProjectionReadModelRequirements readModelRequirements)
+    {
+        // Workflow relation endpoints depend on relation storage + traversal as first-class capability.
+        return new ProjectionReadModelRequirements(
+            requiresRelations: true,
+            requiresRelationTraversal: true,
+            requiresAliases: readModelRequirements.RequiresAliases,
+            requiresSchemaValidation: readModelRequirements.RequiresSchemaValidation);
+    }
+
+    private static string NormalizeProviderName(string providerName, string fallbackProviderName = "")
     {
         if (string.IsNullOrWhiteSpace(providerName))
-            return ProjectionReadModelProviderNames.InMemory;
+        {
+            if (string.IsNullOrWhiteSpace(fallbackProviderName))
+                return ProjectionReadModelProviderNames.InMemory;
+            return fallbackProviderName.Trim();
+        }
 
         return providerName.Trim();
     }

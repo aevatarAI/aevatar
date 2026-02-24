@@ -131,7 +131,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `Aevatar.Foundation.Projection`：提供读模型最小公共字段（`RootActorId/CommandId/StateVersion/LastEventId`）与通用能力接口（Timeline / RoleReplies）
   - `Aevatar.AI.Projection`：提供 AI 通用事件 reducer（`TextMessage*` / `Tool*`）和 `IProjectionEventApplier<,,>` 扩展模式
 - **WorkflowExecution 业务扩展** 在 `Aevatar.Workflow.Projection`：
-  - `WorkflowExecutionProjectionService` 作为应用端口 facade（仅流程编排）
+  - `WorkflowExecutionProjectionLifecycleService`（生命周期端口）与 `WorkflowExecutionProjectionQueryService`（查询端口）
+  - 两者复用 `Aevatar.CQRS.Projection.Core` 的通用基类：`ProjectionLifecyclePortServiceBase<>` / `ProjectionQueryPortServiceBase<>`
   - `WorkflowProjectionActivationService` 负责 projection 启动与上下文激活
   - `WorkflowProjectionReleaseService` 负责 idle 检测与 stop/release
   - `WorkflowProjectionLeaseManager` 负责 ownership acquire/release

@@ -38,6 +38,7 @@ public static class ServiceCollectionExtensions
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IWorkflowReadModelSelectionPlanner, WorkflowReadModelSelectionPlanner>();
         RegisterWorkflowReadModelStoreSelector(services);
+        RegisterWorkflowRelationStoreSelector(services);
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
@@ -59,7 +60,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowProjectionReadModelUpdater, WorkflowProjectionReadModelUpdater>();
         services.TryAddSingleton<IWorkflowProjectionQueryReader, WorkflowProjectionQueryReader>();
         services.TryAddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        services.TryAddSingleton<IWorkflowExecutionProjectionPort, WorkflowExecutionProjectionService>();
+        services.TryAddSingleton<WorkflowExecutionProjectionLifecycleService>();
+        services.TryAddSingleton<IWorkflowExecutionProjectionLifecyclePort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionProjectionLifecycleService>());
+        services.TryAddSingleton<WorkflowExecutionProjectionQueryService>();
+        services.TryAddSingleton<IWorkflowExecutionProjectionQueryPort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionProjectionQueryService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
         return services;
     }
@@ -121,8 +127,24 @@ public static class ServiceCollectionExtensions
 
             return storeFactory.Create<WorkflowExecutionReport, string>(
                 sp,
-                selectionPlan.SelectionOptions,
-                selectionPlan.Requirements);
+                selectionPlan.ReadModelSelectionOptions,
+                selectionPlan.ReadModelRequirements);
+        }));
+    }
+
+    private static void RegisterWorkflowRelationStoreSelector(IServiceCollection services)
+    {
+        services.Replace(ServiceDescriptor.Singleton<IProjectionRelationStore>(sp =>
+        {
+            var options = sp.GetRequiredService<WorkflowExecutionProjectionOptions>();
+            var selectionPlanner = sp.GetRequiredService<IWorkflowReadModelSelectionPlanner>();
+            var relationStoreFactory = sp.GetRequiredService<IProjectionRelationStoreFactory>();
+            var selectionPlan = selectionPlanner.Build(options);
+
+            return relationStoreFactory.Create(
+                sp,
+                selectionPlan.RelationSelectionOptions,
+                selectionPlan.RelationRequirements);
         }));
     }
 

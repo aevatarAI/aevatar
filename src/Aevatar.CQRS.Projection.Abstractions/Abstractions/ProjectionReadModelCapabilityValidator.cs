@@ -34,6 +34,12 @@ public static class ProjectionReadModelCapabilityValidator
         if (requirements.RequiresSchemaValidation && !capabilities.SupportsSchemaValidation)
             violations.Add("requires schema validation, but provider does not support schema validation");
 
+        if (requirements.RequiresRelations && !capabilities.SupportsRelations)
+            violations.Add("requires relation storage, but provider does not support relations");
+
+        if (requirements.RequiresRelationTraversal && !capabilities.SupportsRelationTraversal)
+            violations.Add("requires relation traversal, but provider does not support relation traversal");
+
         return violations;
     }
 

@@ -1,8 +1,6 @@
+using Aevatar.CQRS.Projection.Abstractions;
+
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public interface IWorkflowProjectionReleaseService
-{
-    Task ReleaseIfIdleAsync(
-        WorkflowExecutionRuntimeLease runtimeLease,
-        CancellationToken ct = default);
-}
+    : IProjectionPortReleaseService<WorkflowExecutionRuntimeLease>;

@@ -60,7 +60,9 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
             supportsIndexing: true,
             indexKinds: [ProjectionReadModelIndexKind.Graph],
             supportsAliases: false,
-            supportsSchemaValidation: true);
+            supportsSchemaValidation: true,
+            supportsRelations: true,
+            supportsRelationTraversal: true);
     }
 
     public ProjectionReadModelProviderCapabilities ProviderCapabilities { get; }

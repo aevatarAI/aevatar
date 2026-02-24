@@ -20,7 +20,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProjectionReadModelStoreRegistration<TReadModel, TKey>>(
             new DelegateProjectionReadModelStoreRegistration<TReadModel, TKey>(
                 providerName,
-                new ProjectionReadModelProviderCapabilities(providerName, supportsIndexing: false),
+                new ProjectionReadModelProviderCapabilities(
+                    providerName,
+                    supportsIndexing: false,
+                    supportsRelations: true,
+                    supportsRelationTraversal: true),
                 provider => new InMemoryProjectionReadModelStore<TReadModel, TKey>(
                     keySelector,
                     keyFormatter,
@@ -28,6 +32,23 @@ public static class ServiceCollectionExtensions
                     listTakeMax,
                     providerName,
                     provider.GetService<ILogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>>())));
+
+        return services;
+    }
+
+    public static IServiceCollection AddInMemoryRelationStoreRegistration(
+        this IServiceCollection services,
+        string providerName = ProjectionReadModelProviderNames.InMemory)
+    {
+        services.AddSingleton<IProjectionRelationStoreRegistration>(
+            new DelegateProjectionRelationStoreRegistration(
+                providerName,
+                new ProjectionReadModelProviderCapabilities(
+                    providerName,
+                    supportsIndexing: false,
+                    supportsRelations: true,
+                    supportsRelationTraversal: true),
+                _ => new InMemoryProjectionRelationStore(providerName)));
 
         return services;
     }

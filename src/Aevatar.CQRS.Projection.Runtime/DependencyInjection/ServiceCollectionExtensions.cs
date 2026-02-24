@@ -13,6 +13,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionReadModelProviderSelector, ProjectionReadModelProviderSelector>();
         services.TryAddSingleton<IProjectionReadModelBindingResolver, ProjectionReadModelBindingResolver>();
         services.TryAddSingleton<IProjectionReadModelStoreFactory, ProjectionReadModelStoreFactory>();
+        services.TryAddSingleton<IProjectionRelationStoreProviderRegistry, ProjectionRelationStoreProviderRegistry>();
+        services.TryAddSingleton<IProjectionRelationStoreProviderSelector, ProjectionRelationStoreProviderSelector>();
+        services.TryAddSingleton<IProjectionRelationStoreFactory, ProjectionRelationStoreFactory>();
+        services.TryAddSingleton<IProjectionStoreStartupValidator, ProjectionStoreStartupValidator>();
         return services;
     }
 }

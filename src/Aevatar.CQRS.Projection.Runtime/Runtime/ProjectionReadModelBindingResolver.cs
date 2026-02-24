@@ -24,7 +24,9 @@ public sealed class ProjectionReadModelBindingResolver : IProjectionReadModelBin
 
         return new ProjectionReadModelRequirements(
             requiresIndexing: true,
-            requiredIndexKinds: [indexKind]);
+            requiredIndexKinds: [indexKind],
+            requiresRelations: indexKind == ProjectionReadModelIndexKind.Graph,
+            requiresRelationTraversal: indexKind == ProjectionReadModelIndexKind.Graph);
     }
 
     private static bool TryGetBinding(

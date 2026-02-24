@@ -55,7 +55,10 @@ flowchart LR
    `WorkflowRunCompletionPolicy`（终态） +  
    `WorkflowRunResourceFinalizer`（清理）。
 2. Projection 端口实现已拆分为：
-   `WorkflowExecutionProjectionService`（facade） +  
+   `WorkflowExecutionProjectionLifecycleService`（生命周期端口） +  
+   `WorkflowExecutionProjectionQueryService`（查询端口） +  
+   `ProjectionLifecyclePortServiceBase<>`（通用基类） +  
+   `ProjectionQueryPortServiceBase<>`（通用基类） +  
    `WorkflowProjectionActivationService`（激活） +  
    `WorkflowProjectionReleaseService`（释放） +  
    `WorkflowProjectionLeaseManager`（ownership） +  

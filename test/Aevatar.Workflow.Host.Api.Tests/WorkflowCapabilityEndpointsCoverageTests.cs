@@ -244,6 +244,22 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
 
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
+
+        public Task<IReadOnlyList<WorkflowActorRelationItem>> ListActorRelationsAsync(
+            string actorId,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorRelationItem>>([]);
+
+        public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowActorRelationSubgraph
+            {
+                RootNodeId = actorId,
+            });
     }
 
     private sealed class FakeWebSocketFeature : IHttpWebSocketFeature

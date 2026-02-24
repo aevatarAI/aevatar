@@ -159,7 +159,10 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
                 RoleReplyCount = 1,
             },
         });
-        var reader = new WorkflowProjectionQueryReader(store, new WorkflowExecutionReadModelMapper());
+        var reader = new WorkflowProjectionQueryReader(
+            store,
+            new WorkflowExecutionReadModelMapper(),
+            new InMemoryProjectionRelationStore());
 
         var snapshot = await reader.GetActorSnapshotAsync("actor-3");
         var timeline = await reader.ListActorTimelineAsync("actor-3", take: 2);

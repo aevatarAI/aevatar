@@ -10,7 +10,9 @@ public sealed class ProjectionReadModelProviderCapabilities
         bool supportsIndexing,
         IEnumerable<ProjectionReadModelIndexKind>? indexKinds = null,
         bool supportsAliases = false,
-        bool supportsSchemaValidation = false)
+        bool supportsSchemaValidation = false,
+        bool supportsRelations = false,
+        bool supportsRelationTraversal = false)
     {
         if (string.IsNullOrWhiteSpace(providerName))
             throw new ArgumentException("Provider name must not be empty.", nameof(providerName));
@@ -19,6 +21,8 @@ public sealed class ProjectionReadModelProviderCapabilities
         SupportsIndexing = supportsIndexing;
         SupportsAliases = supportsAliases;
         SupportsSchemaValidation = supportsSchemaValidation;
+        SupportsRelations = supportsRelations;
+        SupportsRelationTraversal = supportsRelationTraversal;
 
         var normalizedIndexKinds = (indexKinds ?? [])
             .Where(x => x != ProjectionReadModelIndexKind.None)
@@ -43,4 +47,8 @@ public sealed class ProjectionReadModelProviderCapabilities
     public bool SupportsAliases { get; }
 
     public bool SupportsSchemaValidation { get; }
+
+    public bool SupportsRelations { get; }
+
+    public bool SupportsRelationTraversal { get; }
 }

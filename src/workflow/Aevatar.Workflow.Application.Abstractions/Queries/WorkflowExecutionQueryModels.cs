@@ -34,6 +34,41 @@ public sealed class WorkflowActorTimelineItem
     public Dictionary<string, string> Data { get; set; } = [];
 }
 
+public sealed class WorkflowActorRelationNode
+{
+    public string NodeId { get; set; } = string.Empty;
+
+    public string NodeType { get; set; } = string.Empty;
+
+    public DateTimeOffset UpdatedAt { get; set; }
+
+    public Dictionary<string, string> Properties { get; set; } = [];
+}
+
+public sealed class WorkflowActorRelationItem
+{
+    public string EdgeId { get; set; } = string.Empty;
+
+    public string FromNodeId { get; set; } = string.Empty;
+
+    public string ToNodeId { get; set; } = string.Empty;
+
+    public string RelationType { get; set; } = string.Empty;
+
+    public DateTimeOffset UpdatedAt { get; set; }
+
+    public Dictionary<string, string> Properties { get; set; } = [];
+}
+
+public sealed class WorkflowActorRelationSubgraph
+{
+    public string RootNodeId { get; set; } = string.Empty;
+
+    public List<WorkflowActorRelationNode> Nodes { get; set; } = [];
+
+    public List<WorkflowActorRelationItem> Edges { get; set; } = [];
+}
+
 public sealed record WorkflowTopologyEdge(string Parent, string Child);
 
 public enum WorkflowRunProjectionScope

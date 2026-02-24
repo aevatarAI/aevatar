@@ -38,4 +38,40 @@ public sealed class WorkflowExecutionReadModelMapper
             Data = new Dictionary<string, string>(source.Data, StringComparer.Ordinal),
         };
     }
+
+    public WorkflowActorRelationNode ToActorRelationNode(ProjectionRelationNode source)
+    {
+        return new WorkflowActorRelationNode
+        {
+            NodeId = source.NodeId,
+            NodeType = source.NodeType,
+            UpdatedAt = source.UpdatedAt,
+            Properties = new Dictionary<string, string>(source.Properties, StringComparer.Ordinal),
+        };
+    }
+
+    public WorkflowActorRelationItem ToActorRelationItem(ProjectionRelationEdge source)
+    {
+        return new WorkflowActorRelationItem
+        {
+            EdgeId = source.EdgeId,
+            FromNodeId = source.FromNodeId,
+            ToNodeId = source.ToNodeId,
+            RelationType = source.RelationType,
+            UpdatedAt = source.UpdatedAt,
+            Properties = new Dictionary<string, string>(source.Properties, StringComparer.Ordinal),
+        };
+    }
+
+    public WorkflowActorRelationSubgraph ToActorRelationSubgraph(
+        string rootNodeId,
+        ProjectionRelationSubgraph source)
+    {
+        return new WorkflowActorRelationSubgraph
+        {
+            RootNodeId = rootNodeId,
+            Nodes = source.Nodes.Select(ToActorRelationNode).ToList(),
+            Edges = source.Edges.Select(ToActorRelationItem).ToList(),
+        };
+    }
 }

@@ -28,6 +28,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             keyFormatter: key => key,
             listSortSelector: report => report.StartedAt,
             listTakeMax: 200);
+        services.AddInMemoryRelationStoreRegistration();
 
         services.AddElasticsearchReadModelStoreRegistration<WorkflowExecutionReport, string>(
             optionsFactory: _ =>
@@ -39,6 +40,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             indexScope: "workflow-execution-reports",
             keySelector: report => report.RootActorId,
             keyFormatter: key => key);
+        services.AddElasticsearchRelationStoreRegistration();
 
         services.AddNeo4jReadModelStoreRegistration<WorkflowExecutionReport, string>(
             optionsFactory: _ =>
@@ -50,6 +52,14 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             scope: "workflow-execution-reports",
             keySelector: report => report.RootActorId,
             keyFormatter: key => key);
+        services.AddNeo4jRelationStoreRegistration(
+            optionsFactory: _ =>
+            {
+                var providerOptions = new Neo4jProjectionRelationStoreOptions();
+                configuration.GetSection("Projection:ReadModel:Providers:Neo4j").Bind(providerOptions);
+                return providerOptions;
+            },
+            scope: WorkflowExecutionRelationConstants.Scope);
 
         return services;
     }
