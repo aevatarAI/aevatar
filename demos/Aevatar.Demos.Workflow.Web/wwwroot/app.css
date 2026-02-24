@@ -141,22 +141,22 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 
 /* ── Flow + YAML side-by-side ── */
 .flow-yaml-row {
-  display: flex; gap: 16px; min-height: 0;
+  display: flex; gap: 16px; flex-shrink: 0; height: 420px; min-height: 260px;
 }
 .flow-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .yaml-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
-.section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 10px; }
+.section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 10px; flex-shrink: 0; }
 
 .flow-container {
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 24px; overflow: auto; min-height: 120px; flex: 1;
+  padding: 24px; overflow: auto; flex: 1; min-height: 0;
 }
 .flow-container svg { display: block; margin: 0 auto; }
 
 .yaml-source {
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 16px; overflow: auto; min-height: 120px; flex: 1;
+  padding: 16px; overflow: auto; flex: 1; min-height: 0;
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 12px;
   line-height: 1.7; color: var(--text-dim); white-space: pre; tab-size: 2;
   counter-reset: yaml-line;
@@ -194,7 +194,8 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 .edge-label { fill: var(--text-muted); font-size: 10px; font-family: inherit; }
 
 /* ── Details ── */
-.detail-block { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+.details-section { flex-shrink: 0; display: flex; flex-direction: column; gap: 20px; }
+.detail-block { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; flex-shrink: 0; }
 .detail-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 8px; }
 
 .input-area {
@@ -282,6 +283,93 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
   border-radius: var(--radius-sm); background: rgba(99,102,241,0.12);
   color: #a5b4fc; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px;
 }
+
+/* ── Playground ── */
+.pg-body {
+  flex: 1; display: flex; gap: 12px; padding: 12px; overflow: hidden; min-height: 0;
+}
+.pg-chat-panel {
+  width: 320px; min-width: 240px; display: flex; flex-direction: column;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden;
+}
+.pg-chat-header {
+  padding: 10px 14px; font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--text-muted); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.pg-right {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; overflow: hidden;
+}
+.pg-preview-row {
+  display: flex; gap: 12px; flex: 1; min-height: 0;
+}
+.pg-yaml-panel, .pg-graph-panel {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+.pg-yaml-panel .yaml-source, .pg-graph-panel .flow-container {
+  flex: 1; min-height: 0;
+}
+.pg-run-section {
+  flex-shrink: 0; display: flex; flex-direction: column; gap: 8px;
+}
+.pg-run-bar {
+  display: flex; gap: 8px; align-items: flex-end;
+}
+.pg-run-input {
+  flex: 1; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: 8px 10px; font-size: 12px; resize: none; outline: none;
+  font-family: 'SF Mono', 'Fira Code', monospace; line-height: 1.4;
+}
+.pg-run-input:focus { border-color: var(--accent); }
+.pg-exec-block {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.pg-exec-block .log-entries { max-height: 160px; }
+.pg-exec-block .result-pre { max-height: 120px; }
+
+.pg-messages {
+  flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px;
+}
+.pg-input-row {
+  display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--border); flex-shrink: 0;
+}
+.pg-input {
+  flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: 8px 10px; font-size: 13px; resize: none; outline: none;
+  font-family: inherit; line-height: 1.4;
+}
+.pg-input:focus { border-color: var(--accent); }
+.pg-send-btn { flex-shrink: 0; align-self: flex-end; padding: 8px 16px; }
+
+.pg-msg {
+  max-width: 95%; padding: 8px 12px; border-radius: var(--radius); font-size: 13px;
+  line-height: 1.55; word-break: break-word; white-space: pre-wrap;
+}
+.pg-msg.user {
+  align-self: flex-end; background: var(--accent-dim); color: #dbeafe;
+  border-bottom-right-radius: 2px;
+}
+.pg-msg.assistant {
+  align-self: flex-start; background: var(--bg-hover); color: var(--text);
+  border-bottom-left-radius: 2px;
+}
+.pg-msg.assistant .pg-msg-yaml {
+  background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.2);
+  border-radius: var(--radius-sm); padding: 6px 8px; margin: 6px 0 2px;
+  font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px;
+  white-space: pre; overflow-x: auto; color: var(--text-dim); cursor: pointer;
+  max-height: 140px;
+}
+.pg-msg.assistant .pg-msg-yaml:hover { border-color: var(--accent); }
+.pg-msg .pg-typing {
+  display: inline-block; width: 6px; height: 14px; background: var(--accent);
+  animation: blink-cursor 0.7s step-end infinite; vertical-align: text-bottom;
+  margin-left: 1px;
+}
+@keyframes blink-cursor { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+.pg-msg.error { align-self: center; color: var(--state-failed); font-size: 12px; padding: 4px 10px; }
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }

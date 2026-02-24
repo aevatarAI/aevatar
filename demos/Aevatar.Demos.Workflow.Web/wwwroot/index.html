@@ -17,6 +17,7 @@
       <nav class="sidebar-nav">
         <button class="nav-btn active" data-view="workflows">Workflows</button>
         <button class="nav-btn" data-view="primitives">Primitives</button>
+        <button class="nav-btn" data-view="playground">Playground</button>
       </nav>
 
       <div id="llm-status" class="llm-badge"></div>
@@ -112,6 +113,45 @@
               <thead><tr><th>Name</th><th>Description</th><th>Default</th><th>Values</th></tr></thead>
               <tbody></tbody>
             </table>
+          </div>
+        </div>
+      </div>
+      <div id="view-playground" class="view hidden">
+        <div class="pg-body">
+          <div class="pg-chat-panel">
+            <div class="pg-chat-header">Chat</div>
+            <div id="pg-messages" class="pg-messages"></div>
+            <div class="pg-input-row">
+              <textarea id="pg-input" class="pg-input" rows="2" placeholder="Describe your workflow..."></textarea>
+              <button id="pg-send" class="btn btn-primary pg-send-btn">Send</button>
+            </div>
+          </div>
+          <div class="pg-right">
+            <div class="pg-preview-row">
+              <div class="pg-yaml-panel">
+                <div class="section-title">YAML</div>
+                <pre id="pg-yaml" class="yaml-source"></pre>
+              </div>
+              <div class="pg-graph-panel">
+                <div class="section-title">Flow Graph</div>
+                <div id="pg-graph" class="flow-container"></div>
+              </div>
+            </div>
+            <div class="pg-run-section">
+              <div class="pg-run-bar">
+                <textarea id="pg-run-input" class="pg-run-input" rows="1" placeholder="Input for workflow execution..."></textarea>
+                <button id="pg-run-btn" class="btn btn-primary" disabled>Run</button>
+                <button id="pg-run-reset" class="btn btn-secondary hidden">Reset</button>
+              </div>
+              <div id="pg-exec-log" class="pg-exec-block hidden">
+                <div class="detail-label">Execution Log</div>
+                <div id="pg-log-entries" class="log-entries"></div>
+              </div>
+              <div id="pg-result-section" class="pg-exec-block hidden">
+                <div class="detail-label">Result</div>
+                <pre id="pg-result" class="result-pre"></pre>
+              </div>
+            </div>
           </div>
         </div>
       </div>

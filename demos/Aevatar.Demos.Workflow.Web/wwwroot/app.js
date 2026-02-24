@@ -39,11 +39,13 @@
         const view = btn.dataset.view;
         $("#sidebar-workflows").classList.toggle("hidden", view !== "workflows");
         $("#sidebar-primitives").classList.toggle("hidden", view !== "primitives");
-        if (view === "primitives" && !selectedWorkflow) showView("empty");
+        if (view === "playground") showView("playground");
+        else if (view === "primitives" && !selectedWorkflow) showView("empty");
       });
     });
     $("#btn-run").addEventListener("click", runWorkflow);
     $("#btn-reset").addEventListener("click", resetExecution);
+    setupPlayground();
   }
 
   // ── Data Loading ──
@@ -168,6 +170,7 @@
     $("#view-empty").classList.toggle("hidden", name !== "empty");
     $("#view-workflow").classList.toggle("hidden", name !== "workflow");
     $("#view-primitive-detail").classList.toggle("hidden", name !== "primitive");
+    $("#view-playground").classList.toggle("hidden", name !== "playground");
   }
 
   function showPrimitiveDetail(p) {
@@ -203,10 +206,12 @@
   // ── Flow Diagram (SVG) ──
   function renderFlowDiagram() {
     if (!workflowDef) return;
-    const { definition, edges } = workflowDef;
-    const steps = definition.steps;
+    renderFlowInto($("#flow-container"), workflowDef.definition.steps, workflowDef.edges, stepStates);
+  }
+
+  function renderFlowInto(container, steps, edges, states) {
     if (!steps || steps.length === 0) {
-      $("#flow-container").innerHTML = '<p style="color:var(--text-muted)">No steps</p>';
+      container.innerHTML = '<p style="color:var(--text-muted)">No steps</p>';
       return;
     }
 
@@ -269,7 +274,7 @@
       const pos = layout.positions[step.id];
       if (!pos) continue;
       const g = document.createElementNS(ns, "g");
-      g.setAttribute("class", `step-node state-${stepStates[step.id] || "pending"}`);
+      g.setAttribute("class", `step-node state-${(states && states[step.id]) || "pending"}`);
       g.setAttribute("data-step", step.id);
       g.setAttribute("transform", `translate(${pos.x + PAD}, ${pos.y + PAD})`);
 
@@ -305,14 +310,13 @@
         g.appendChild(role);
       }
 
-      // Status indicator
       const status = document.createElementNS(ns, "text");
       status.setAttribute("x", NODE_W - 8);
       status.setAttribute("y", 20);
       status.setAttribute("class", "step-status");
       status.setAttribute("text-anchor", "end");
       status.setAttribute("font-size", "14");
-      const state = stepStates[step.id];
+      const state = states && states[step.id];
       if (state === "completed") status.textContent = "\u2713";
       else if (state === "failed") status.textContent = "\u2717";
       else if (state === "running") status.textContent = "\u25CB";
@@ -331,7 +335,7 @@
         const childPos = layout.positions[child.id];
         if (!childPos) continue;
         const g = document.createElementNS(ns, "g");
-        g.setAttribute("class", `step-node state-${stepStates[child.id] || "pending"}`);
+        g.setAttribute("class", `step-node state-${(states && states[child.id]) || "pending"}`);
         g.setAttribute("data-step", child.id);
         g.setAttribute("transform", `translate(${childPos.x + PAD}, ${childPos.y + PAD})`);
 
@@ -362,8 +366,8 @@
       }
     }
 
-    $("#flow-container").innerHTML = "";
-    $("#flow-container").appendChild(svg);
+    container.innerHTML = "";
+    container.appendChild(svg);
   }
 
   function computeLayout(steps, edges, nodeW, nodeH, gapX, gapY) {
@@ -636,5 +640,323 @@
   function truncate(s, max) {
     if (!s) return "";
     return s.length > max ? s.slice(0, max) + "..." : s;
+  }
+
+  // ══════════════════════════════════════════════
+  // ── Playground ──
+  // ══════════════════════════════════════════════
+
+  let pgMessages = [];
+  let pgStreaming = false;
+  let pgAbort = null;
+  let pgCurrentYaml = "";
+  let pgParsedDef = null;
+  let pgStepStates = {};
+  let pgEventSource = null;
+  let pgRunning = false;
+
+  function setupPlayground() {
+    $("#pg-send").addEventListener("click", () => pgSend());
+    $("#pg-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); pgSend(); }
+    });
+    $("#pg-run-btn").addEventListener("click", pgRunWorkflow);
+    $("#pg-run-reset").addEventListener("click", pgResetRun);
+  }
+
+  async function pgSend() {
+    const input = $("#pg-input");
+    const text = input.value.trim();
+    if (!text || pgStreaming) return;
+
+    input.value = "";
+    pgMessages.push({ role: "user", content: text });
+    pgAddBubble("user", text);
+
+    pgStreaming = true;
+    $("#pg-send").disabled = true;
+    const assistantEl = pgAddBubble("assistant", "");
+    const cursorEl = document.createElement("span");
+    cursorEl.className = "pg-typing";
+    assistantEl.appendChild(cursorEl);
+
+    let fullText = "";
+    pgAbort = new AbortController();
+
+    try {
+      const res = await fetch("/api/playground/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: pgMessages }),
+        signal: pgAbort.signal,
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        pgAddBubble("error", err);
+        pgMessages.pop();
+        pgStreaming = false;
+        $("#pg-send").disabled = false;
+        assistantEl.remove();
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        let nlIdx;
+        while ((nlIdx = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, nlIdx).trim();
+          buf = buf.slice(nlIdx + 1);
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
+          if (payload === "[DONE]") break;
+          try {
+            const obj = JSON.parse(payload);
+            if (obj.delta) {
+              fullText += obj.delta;
+              pgUpdateAssistantBubble(assistantEl, fullText, true);
+            }
+            if (obj.error) {
+              pgAddBubble("error", obj.error);
+            }
+          } catch { }
+        }
+      }
+    } catch (e) {
+      if (e.name !== "AbortError") pgAddBubble("error", e.message);
+    }
+
+    pgUpdateAssistantBubble(assistantEl, fullText, false);
+    if (fullText) {
+      pgMessages.push({ role: "assistant", content: fullText });
+      pgExtractAndRenderYaml(fullText);
+    }
+
+    pgStreaming = false;
+    $("#pg-send").disabled = false;
+  }
+
+  function pgAddBubble(role, text) {
+    const container = $("#pg-messages");
+    const el = document.createElement("div");
+    el.className = `pg-msg ${role}`;
+    if (role === "error") {
+      el.textContent = text;
+    } else if (role === "user") {
+      el.textContent = text;
+    }
+    container.appendChild(el);
+    container.scrollTop = container.scrollHeight;
+    return el;
+  }
+
+  function pgUpdateAssistantBubble(el, text, streaming) {
+    const parts = pgSplitYamlBlocks(text);
+    let html = "";
+    for (const part of parts) {
+      if (part.type === "yaml") {
+        html += `<div class="pg-msg-yaml" data-yaml="${esc(part.content).replace(/"/g, "&quot;")}">${esc(part.content)}</div>`;
+      } else {
+        html += esc(part.content);
+      }
+    }
+    if (streaming) html += '<span class="pg-typing"></span>';
+    el.innerHTML = html;
+
+    el.querySelectorAll(".pg-msg-yaml").forEach((yamlEl) => {
+      yamlEl.addEventListener("click", () => {
+        const yaml = yamlEl.dataset.yaml;
+        pgApplyYaml(yaml);
+      });
+    });
+
+    const container = $("#pg-messages");
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function pgSplitYamlBlocks(text) {
+    const parts = [];
+    const regex = /```(?:ya?ml)?\s*\n([\s\S]*?)```/gi;
+    let last = 0;
+    let m;
+    while ((m = regex.exec(text)) !== null) {
+      if (m.index > last) parts.push({ type: "text", content: text.slice(last, m.index) });
+      parts.push({ type: "yaml", content: m[1].trim() });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) parts.push({ type: "text", content: text.slice(last) });
+    return parts;
+  }
+
+  function pgExtractAndRenderYaml(text) {
+    const regex = /```(?:ya?ml)?\s*\n([\s\S]*?)```/gi;
+    let lastYaml = null;
+    let m;
+    while ((m = regex.exec(text)) !== null) lastYaml = m[1].trim();
+    if (lastYaml) pgApplyYaml(lastYaml);
+  }
+
+  async function pgApplyYaml(yaml) {
+    pgCurrentYaml = yaml;
+    pgResetRun();
+
+    const yamlEl = $("#pg-yaml");
+    yamlEl.innerHTML = yaml.split("\n").map(highlightYamlLine).join("\n");
+
+    try {
+      const res = await fetch("/api/playground/parse", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: yaml,
+      });
+      const data = await res.json();
+      if (data.valid && data.definition?.steps) {
+        pgParsedDef = data;
+        renderFlowInto($("#pg-graph"), data.definition.steps, data.edges, null);
+        $("#pg-run-btn").disabled = false;
+      } else {
+        pgParsedDef = null;
+        $("#pg-run-btn").disabled = true;
+        $("#pg-graph").innerHTML = `<p style="color:var(--state-failed);padding:16px;font-size:12px">${esc(data.error || "Invalid YAML")}</p>`;
+      }
+    } catch (e) {
+      pgParsedDef = null;
+      $("#pg-run-btn").disabled = true;
+      $("#pg-graph").innerHTML = `<p style="color:var(--state-failed);padding:16px;font-size:12px">${esc(e.message)}</p>`;
+    }
+  }
+
+  // ── Playground: Run Workflow ──
+
+  function pgRunWorkflow() {
+    if (!pgCurrentYaml || pgRunning) return;
+    pgResetRun();
+    pgRunning = true;
+    $("#pg-run-btn").disabled = true;
+    $("#pg-run-reset").classList.remove("hidden");
+    $("#pg-exec-log").classList.remove("hidden");
+
+    pgStepStates = {};
+    if (pgParsedDef?.definition?.steps) {
+      for (const s of pgParsedDef.definition.steps) pgStepStates[s.id] = "pending";
+    }
+    renderFlowInto($("#pg-graph"), pgParsedDef?.definition?.steps || [], pgParsedDef?.edges || [], pgStepStates);
+
+    const input = $("#pg-run-input").value || "Hello, world!";
+    const body = JSON.stringify({ yaml: pgCurrentYaml, input });
+
+    fetch("/api/playground/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const err = await res.text();
+        pgAddLog("error", "\u274C Error", err);
+        pgRunning = false;
+        $("#pg-run-btn").disabled = false;
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nlIdx;
+        while ((nlIdx = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, nlIdx).trim();
+          buf = buf.slice(nlIdx + 1);
+          if (!line.startsWith("event: ") && !line.startsWith("data: ")) continue;
+          if (line.startsWith("event: ")) {
+            var currentEvent = line.slice(7);
+            continue;
+          }
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            pgHandleSseEvent(currentEvent, data);
+          } catch { }
+        }
+      }
+      if (!pgRunning) return;
+      pgRunning = false;
+      $("#pg-run-btn").disabled = false;
+    }).catch((e) => {
+      pgAddLog("error", "\u274C Error", e.message);
+      pgRunning = false;
+      $("#pg-run-btn").disabled = false;
+    });
+  }
+
+  function pgHandleSseEvent(eventType, data) {
+    if (eventType === "step.request") {
+      pgStepStates[data.stepId] = "running";
+      pgUpdateGraphNode(data.stepId);
+      pgAddLog("request", `\u25B6 ${data.stepId} (${data.stepType})`, truncate(data.input, 200));
+    } else if (eventType === "step.completed") {
+      pgStepStates[data.stepId] = data.success ? "completed" : "failed";
+      pgUpdateGraphNode(data.stepId);
+      pgAddLog(data.success ? "completed" : "failed",
+        `${data.success ? "\u2713" : "\u2717"} ${data.stepId}`,
+        data.success ? truncate(data.output, 300) : (data.error || "Failed"));
+    } else if (eventType === "llm.response") {
+      pgAddLog("llm", `\uD83E\uDD16 ${data.role}`, truncate(data.content, 400));
+    } else if (eventType === "workflow.completed") {
+      pgAddLog("done", data.success ? "\u2705 Workflow completed" : "\u274C Workflow failed", "");
+      $("#pg-result-section").classList.remove("hidden");
+      const pre = $("#pg-result");
+      pre.textContent = data.success ? data.output : (data.error || "Failed");
+      pre.className = `result-pre ${data.success ? "success" : "failure"}`;
+      pgRunning = false;
+      $("#pg-run-btn").disabled = false;
+    } else if (eventType === "workflow.error") {
+      pgAddLog("error", "\u274C Error", data.error);
+      pgRunning = false;
+      $("#pg-run-btn").disabled = false;
+    }
+  }
+
+  function pgUpdateGraphNode(stepId) {
+    const node = document.querySelector(`#pg-graph .step-node[data-step="${stepId}"]`);
+    if (!node) return;
+    node.setAttribute("class", `step-node state-${pgStepStates[stepId] || "pending"}`);
+    const status = node.querySelector(".step-status");
+    if (status) {
+      const s = pgStepStates[stepId];
+      status.textContent = s === "completed" ? "\u2713" : s === "failed" ? "\u2717" : s === "running" ? "\u25CB" : "";
+    }
+  }
+
+  function pgAddLog(type, title, detail) {
+    const el = document.createElement("div");
+    el.className = `log-entry log-${type}`;
+    const icons = { request: "\u25B6", completed: "\u2713", failed: "\u2717", llm: "\uD83E\uDD16", done: "\u2705", error: "\u274C" };
+    el.innerHTML = `<span class="log-icon">${icons[type] || ""}</span><span class="log-text"><strong>${esc(title)}</strong>${detail ? "<br>" + esc(detail) : ""}</span>`;
+    const container = $("#pg-log-entries");
+    container.appendChild(el);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function pgResetRun() {
+    pgRunning = false;
+    pgStepStates = {};
+    $("#pg-exec-log").classList.add("hidden");
+    $("#pg-result-section").classList.add("hidden");
+    $("#pg-log-entries").innerHTML = "";
+    $("#pg-run-reset").classList.add("hidden");
+    if (pgCurrentYaml && pgParsedDef) {
+      $("#pg-run-btn").disabled = false;
+      renderFlowInto($("#pg-graph"), pgParsedDef.definition.steps, pgParsedDef.edges, null);
+    }
   }
 })();

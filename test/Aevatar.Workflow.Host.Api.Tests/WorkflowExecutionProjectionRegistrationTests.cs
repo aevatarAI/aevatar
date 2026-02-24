@@ -111,6 +111,21 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
+    public void AddWorkflowExecutionProjectionCQRS_ShouldRegisterWorkflowSuspendedReducer()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowExecutionProjectionCQRS();
+
+        using var provider = services.BuildServiceProvider();
+        var reducerTypes = provider
+            .GetServices<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>()
+            .Select(x => x.GetType())
+            .ToList();
+
+        reducerTypes.Should().Contain(typeof(WorkflowSuspendedEventReducer));
+    }
+
+    [Fact]
     public void AddWorkflowExecutionProjectionCQRS_WithAIExtensions_ShouldRegisterDefaultAIReducers()
     {
         var services = new ServiceCollection();

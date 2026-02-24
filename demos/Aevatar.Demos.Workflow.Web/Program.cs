@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.Agents;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.Bootstrap;
@@ -16,6 +18,7 @@ using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http.Json;
+using ChatMessage = Aevatar.AI.Abstractions.LLMProviders.ChatMessage;
 
 var port = 5280;
 var noBrowser = args.Contains("--no-browser");
@@ -609,6 +612,251 @@ static object[] BuildPrimitivesCatalog()
     ];
 }
 
+// POST /api/playground/chat — streaming LLM chat for workflow authoring
+var playgroundSystemPrompt = BuildPlaygroundSystemPrompt();
+app.MapPost("/api/playground/chat", async (HttpContext ctx, CancellationToken ct) =>
+{
+    if (!llmAvailable)
+    {
+        ctx.Response.StatusCode = 400;
+        await ctx.Response.WriteAsync("LLM not configured");
+        return;
+    }
+
+    var body = await JsonSerializer.DeserializeAsync<PlaygroundChatRequest>(ctx.Request.Body, new JsonSerializerOptions
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    }, ct);
+
+    if (body?.Messages is not { Count: > 0 })
+    {
+        ctx.Response.StatusCode = 400;
+        await ctx.Response.WriteAsync("messages required");
+        return;
+    }
+
+    ctx.Response.Headers["Content-Type"] = "text/event-stream";
+    ctx.Response.Headers["Cache-Control"] = "no-cache";
+    ctx.Response.Headers["Connection"] = "keep-alive";
+
+    var factory = ctx.RequestServices.GetRequiredService<ILLMProviderFactory>();
+    var provider = factory.GetDefault();
+
+    var llmMessages = new List<ChatMessage>
+    {
+        ChatMessage.System(playgroundSystemPrompt),
+    };
+    foreach (var m in body.Messages)
+        llmMessages.Add(new ChatMessage { Role = m.Role, Content = m.Content });
+
+    var request = new LLMRequest { Messages = llmMessages, Temperature = 0.3 };
+    var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    try
+    {
+        await foreach (var chunk in provider.ChatStreamAsync(request, ct))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            {
+                var json = JsonSerializer.Serialize(new { delta = chunk.DeltaContent }, jsonOpts);
+                await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
+                await ctx.Response.Body.FlushAsync(ct);
+            }
+        }
+    }
+    catch (OperationCanceledException) { }
+    catch (Exception ex)
+    {
+        var json = JsonSerializer.Serialize(new { error = ex.Message }, jsonOpts);
+        await ctx.Response.WriteAsync($"data: {json}\n\n", CancellationToken.None);
+        await ctx.Response.Body.FlushAsync(CancellationToken.None);
+    }
+
+    await ctx.Response.WriteAsync("data: [DONE]\n\n", CancellationToken.None);
+    await ctx.Response.Body.FlushAsync(CancellationToken.None);
+});
+
+// POST /api/playground/parse — parse YAML and return steps + edges for graph
+app.MapPost("/api/playground/parse", async (HttpContext ctx) =>
+{
+    string yaml;
+    using (var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8))
+        yaml = await reader.ReadToEndAsync();
+
+    if (string.IsNullOrWhiteSpace(yaml))
+    {
+        ctx.Response.StatusCode = 400;
+        await ctx.Response.WriteAsJsonAsync(new { valid = false, error = "Empty YAML" });
+        return;
+    }
+
+    try
+    {
+        var def = parser.Parse(yaml);
+        var steps = def.Steps.Select(s => new
+        {
+            id = s.Id,
+            type = s.Type,
+            targetRole = s.TargetRole,
+            parameters = s.Parameters,
+            next = s.Next,
+            branches = s.Branches,
+            children = s.Children?.Select(c => new { id = c.Id, type = c.Type, targetRole = c.TargetRole }).ToList(),
+        }).ToList();
+        var edges = ComputeEdges(def);
+        var roles = def.Roles.Select(r => new { id = r.Id, name = r.Name, systemPrompt = r.SystemPrompt });
+
+        await ctx.Response.WriteAsJsonAsync(new
+        {
+            valid = true,
+            definition = new { name = def.Name, description = def.Description, roles, steps },
+            edges,
+        });
+    }
+    catch (Exception ex)
+    {
+        await ctx.Response.WriteAsJsonAsync(new { valid = false, error = ex.Message });
+    }
+});
+
+// POST /api/playground/run — run arbitrary YAML workflow via SSE
+app.MapPost("/api/playground/run", async (HttpContext ctx, CancellationToken ct) =>
+{
+    var body = await JsonSerializer.DeserializeAsync<PlaygroundRunRequest>(ctx.Request.Body,
+        new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }, ct);
+
+    if (string.IsNullOrWhiteSpace(body?.Yaml))
+    {
+        ctx.Response.StatusCode = 400;
+        await ctx.Response.WriteAsync("yaml required");
+        return;
+    }
+
+    try { parser.Parse(body.Yaml); }
+    catch (Exception ex)
+    {
+        ctx.Response.StatusCode = 400;
+        await ctx.Response.WriteAsync($"Invalid YAML: {ex.Message}");
+        return;
+    }
+
+    var needsLlm = false;
+    try
+    {
+        var def = parser.Parse(body.Yaml);
+        needsLlm = def.Roles.Count > 0 || def.Steps.Any(s =>
+            s.Type is "llm_call" or "evaluate" or "reflect" or "map_reduce" or "race" or "parallel" or "parallel_fanout");
+    }
+    catch { }
+
+    if (needsLlm && !llmAvailable)
+    {
+        ctx.Response.StatusCode = 400;
+        await ctx.Response.WriteAsync("LLM not configured. Set DEEPSEEK_API_KEY or OPENAI_API_KEY.");
+        return;
+    }
+
+    ctx.Response.Headers["Content-Type"] = "text/event-stream";
+    ctx.Response.Headers["Cache-Control"] = "no-cache";
+    ctx.Response.Headers["Connection"] = "keep-alive";
+
+    var actualInput = body.Input ?? "Hello, world!";
+    var runtime = ctx.RequestServices.GetRequiredService<IActorRuntime>();
+    var streams = ctx.RequestServices.GetRequiredService<IStreamProvider>();
+    var actorId = $"pg-{Guid.NewGuid():N}"[..24];
+
+    var actor = await runtime.CreateAsync<WorkflowGAgent>(actorId);
+    await actor.HandleEventAsync(new EventEnvelope
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+        Payload = Any.Pack(new ConfigureWorkflowEvent { WorkflowYaml = body.Yaml, WorkflowName = "playground" }),
+        PublisherId = "playground",
+        Direction = EventDirection.Self,
+        CorrelationId = Guid.NewGuid().ToString("N"),
+    });
+
+    var tcs = new TaskCompletionSource<bool>();
+    var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    async Task WriteSse(string eventType, object data)
+    {
+        var json = JsonSerializer.Serialize(data, jsonOpts);
+        await ctx.Response.WriteAsync($"event: {eventType}\ndata: {json}\n\n", ct);
+        await ctx.Response.Body.FlushAsync(ct);
+    }
+
+    var stream = streams.GetStream(actor.Id);
+    await using var sub = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
+    {
+        if (envelope.Payload == null) return;
+        try
+        {
+            var payload = envelope.Payload;
+            if (payload.Is(StepRequestEvent.Descriptor))
+            {
+                var evt = payload.Unpack<StepRequestEvent>();
+                await WriteSse("step.request", new { stepId = evt.StepId, stepType = evt.StepType, input = Truncate(evt.Input, 500) });
+            }
+            if (payload.Is(StepCompletedEvent.Descriptor))
+            {
+                var evt = payload.Unpack<StepCompletedEvent>();
+                var meta = new Dictionary<string, string>();
+                foreach (var kv in evt.Metadata) meta[kv.Key] = kv.Value;
+                await WriteSse("step.completed", new
+                {
+                    stepId = evt.StepId, success = evt.Success,
+                    output = Truncate(evt.Output, 1000),
+                    error = string.IsNullOrEmpty(evt.Error) ? null : evt.Error,
+                    metadata = meta.Count > 0 ? meta : null,
+                });
+            }
+            if (payload.Is(TextMessageEndEvent.Descriptor))
+            {
+                var evt = payload.Unpack<TextMessageEndEvent>();
+                var pub = envelope.PublisherId ?? "";
+                if (!string.Equals(pub, actor.Id, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(evt.Content))
+                {
+                    var role = pub.Contains(':') ? pub[(pub.LastIndexOf(':') + 1)..] : pub;
+                    await WriteSse("llm.response", new { role, content = Truncate(evt.Content, 2000) });
+                }
+            }
+            if (payload.Is(WorkflowCompletedEvent.Descriptor))
+            {
+                var evt = payload.Unpack<WorkflowCompletedEvent>();
+                await WriteSse("workflow.completed", new
+                {
+                    success = evt.Success, output = Truncate(evt.Output, 2000),
+                    error = string.IsNullOrEmpty(evt.Error) ? null : evt.Error,
+                });
+                tcs.TrySetResult(evt.Success);
+            }
+        }
+        catch (Exception ex) { tcs.TrySetException(ex); }
+    });
+
+    await actor.HandleEventAsync(new EventEnvelope
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+        Payload = Any.Pack(new ChatRequestEvent { Prompt = actualInput, SessionId = "playground" }),
+        PublisherId = "playground",
+        Direction = EventDirection.Self,
+    });
+
+    try
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromMinutes(2));
+        await tcs.Task.WaitAsync(cts.Token);
+    }
+    catch (OperationCanceledException) { await WriteSse("workflow.error", new { error = "Timeout (2 min)" }); }
+    catch (Exception ex) { await WriteSse("workflow.error", new { error = ex.Message }); }
+
+    await Task.Delay(500, CancellationToken.None);
+    await runtime.DestroyAsync(actor.Id);
+});
+
 app.MapFallbackToFile("index.html");
 
 app.Run();
@@ -680,3 +928,78 @@ static void OpenBrowser(string url)
     }
     catch { }
 }
+
+static string BuildPlaygroundSystemPrompt() => """
+You are an expert Aevatar Workflow YAML author. You help users design workflows by writing valid YAML.
+
+## YAML Schema (snake_case)
+```
+name: string            # required
+description: string     # optional
+roles:                  # optional — LLM persona definitions
+  - id: string          # required (or name)
+    name: string        # required (or id)
+    system_prompt: |    # optional
+      ...
+steps:                  # ordered step list
+  - id: string          # required — unique
+    type: string        # default "llm_call"
+    target_role: string # optional (alias: role)
+    parameters: {}      # Dict<string, string>
+    next: string        # explicit next step id
+    branches: {}        # key → step_id ("_default" for fallback)
+    children: []        # nested sub-steps (recursive)
+    retry: { max_attempts: 3, backoff: "fixed"|"exponential", delay_ms: 1000 }
+    on_error: { strategy: "fail"|"skip"|"fallback", fallback_step: "...", default_output: "..." }
+    timeout_ms: int
+```
+
+## Step Types
+| Type | Category | Purpose |
+|------|----------|---------|
+| transform | data | Text ops: op= identity/uppercase/lowercase/trim/count/count_words/take/take_last/join/split/distinct/reverse_lines; n, separator |
+| assign | data | Set variable: target, value ("$input" = current input) |
+| retrieve_facts | data | Keyword search: query, top_k |
+| cache | data | Cache child step: cache_key, ttl_seconds, child_step_type, child_target_role |
+| guard | control | Validation gate: check= not_empty/json_valid/regex/max_length/contains; on_fail= fail/skip/branch; pattern, max, keyword, branch_target |
+| conditional | control | Binary branch: condition (keyword to search in input) |
+| switch | control | Multi-way branch: branch.{key} in parameters + branches in step definition |
+| while | control | Loop: max_iterations, step (sub-step type) |
+| delay | control | Pause: duration_ms (0–300000) |
+| wait_signal | control | Block: signal_name, timeout_ms |
+| checkpoint | control | Save state: name |
+| llm_call | ai | LLM prompt: prompt_prefix. Requires target_role with system_prompt |
+| tool_call | ai | Invoke tool: tool (name) |
+| evaluate | ai | LLM-as-judge: criteria, scale, threshold, on_below. Requires judge role |
+| reflect | ai | Self-improvement loop: max_rounds (1–10), criteria |
+| foreach | composition | Iterate: delimiter, sub_step_type, sub_target_role |
+| parallel | composition | Fan-out: workers (comma-separated role IDs), parallel_count |
+| race | composition | First-wins: workers, count |
+| map_reduce | composition | Split→map→reduce: delimiter, map_step_type, map_target_role, reduce_step_type, reduce_target_role, reduce_prompt_prefix |
+| workflow_call | composition | Sub-workflow: workflow (name) |
+| vote_consensus | composition | Aggregate votes (no params) |
+| connector_call | integration | External call: connector, operation, retry, timeout_ms, on_error= fail/continue |
+| emit | integration | Publish event: event_type, payload |
+| human_input | human | Wait for input: prompt, variable, timeout, on_timeout |
+| human_approval | human | Wait for approval: prompt, timeout, on_reject |
+
+## Rules
+- All parameter values are strings (even numbers: "3" not 3).
+- type defaults to "llm_call" when omitted.
+- target_role and role are aliases; target_role takes precedence.
+- Steps flow: next → explicit jump; branches → conditional routing; neither → sequential (list order).
+- For switch: both parameters.branch.* AND branches: must be set.
+- Each branch target should have next: pointing to a merge step.
+- "_default" is the reserved fallback branch key.
+
+## Response Format
+- Always wrap workflow YAML in a ```yaml code block.
+- Explain your design choices briefly.
+- If the user's request is ambiguous, ask clarifying questions.
+- Generate complete, valid, parseable YAML.
+""";
+
+sealed record PlaygroundChatMessage(string Role, string Content);
+sealed record PlaygroundChatRequest(List<PlaygroundChatMessage> Messages);
+sealed record PlaygroundRunRequest(string Yaml, string? Input);
+
