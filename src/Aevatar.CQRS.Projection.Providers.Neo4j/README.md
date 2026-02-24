@@ -9,10 +9,9 @@
 
 ## DI 注册
 
-- `AddNeo4jGraphStoreRegistration(..., isPrimaryQueryStore)`
+- `AddNeo4jGraphStoreRegistration(...)`
 
 关键参数：
 
 - `optionsFactory`：绑定 `Projection:Graph:Providers:Neo4j:*` 配置。
 - `scopeFactory`：graph scope 提供器。
-- `isPrimaryQueryStore`：是否作为 Runtime 查询主存储。

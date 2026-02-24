@@ -9,12 +9,11 @@
 
 ## DI 注册
 
-- `AddInMemoryDocumentStoreRegistration<TReadModel, TKey>(..., isPrimaryQueryStore, ...)`
-- `AddInMemoryGraphStoreRegistration(isPrimaryQueryStore)`
+- `AddInMemoryDocumentStoreRegistration<TReadModel, TKey>(...)`
+- `AddInMemoryGraphStoreRegistration()`
 
 关键参数：
 
 - `keySelector/keyFormatter`：ReadModel 主键映射。
-- `isPrimaryQueryStore`：是否作为 Runtime 查询主存储。
 - `listSortSelector`：`ListAsync` 排序字段（可选）。
 - `listTakeMax`：`ListAsync` 硬上限。

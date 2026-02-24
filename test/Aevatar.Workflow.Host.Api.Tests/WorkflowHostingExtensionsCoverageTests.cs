@@ -126,7 +126,7 @@ public class WorkflowHostingExtensionsCoverageTests
     }
 
     [Fact]
-    public void AddWorkflowProjectionReadModelProviders_WhenAllProvidersEnabled_ShouldSelectDurablePrimary()
+    public void AddWorkflowProjectionReadModelProviders_WhenAllProvidersEnabled_ShouldRegisterDurableProvidersFirst()
     {
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder()
@@ -152,20 +152,12 @@ public class WorkflowHostingExtensionsCoverageTests
             .ToList();
 
         documentRegistrations.Should().HaveCount(2);
-        documentRegistrations.Should().ContainSingle(x =>
-            string.Equals(x.ProviderName, "Elasticsearch", StringComparison.Ordinal) &&
-            x.IsPrimaryQueryStore);
-        documentRegistrations.Should().ContainSingle(x =>
-            string.Equals(x.ProviderName, "InMemory", StringComparison.Ordinal) &&
-            !x.IsPrimaryQueryStore);
+        documentRegistrations[0].ProviderName.Should().Be("Elasticsearch");
+        documentRegistrations[1].ProviderName.Should().Be("InMemory");
 
         graphRegistrations.Should().HaveCount(2);
-        graphRegistrations.Should().ContainSingle(x =>
-            string.Equals(x.ProviderName, "Neo4j", StringComparison.Ordinal) &&
-            x.IsPrimaryQueryStore);
-        graphRegistrations.Should().ContainSingle(x =>
-            string.Equals(x.ProviderName, "InMemory", StringComparison.Ordinal) &&
-            !x.IsPrimaryQueryStore);
+        graphRegistrations[0].ProviderName.Should().Be("Neo4j");
+        graphRegistrations[1].ProviderName.Should().Be("InMemory");
     }
 
     [Fact]

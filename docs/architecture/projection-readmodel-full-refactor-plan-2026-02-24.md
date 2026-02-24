@@ -47,11 +47,11 @@ flowchart LR
     Q1["WorkflowProjectionQueryReader"] --> Q2["IDocumentProjectionStore<WorkflowExecutionReport,string>"]
     Q1 --> Q3["IProjectionGraphStore"]
 
-    Q2 --> Q4["ProjectionDocumentStoreFanout (primary read store + fan-out write)"]
-    Q3 --> Q5["ProjectionGraphStoreFanout (primary read store + fan-out write)"]
+    Q2 --> Q4["ProjectionDocumentStoreFanout (first-registered read store + fan-out write)"]
+    Q3 --> Q5["ProjectionGraphStoreFanout (first-registered read store + fan-out write)"]
 
-    Q4 --> Q6["Document Primary Provider"]
-    Q5 --> Q7["Graph Primary Provider"]
+    Q4 --> Q6["Document Query Provider (registration[0])"]
+    Q5 --> Q7["Graph Query Provider (registration[0])"]
 ```
 
 ## 3. Major Structural Changes
@@ -97,23 +97,29 @@ Rules:
 1. Legacy single-select keys (`Projection:Document:Provider`, `Projection:Graph:Provider`) are rejected.
 2. InMemory providers are fallback defaults when durable providers are not enabled.
 3. `Projection:Policies:DenyInMemoryGraphFactStore=true` forbids in-memory graph fact store.
-4. 多 provider 场景显式指定唯一 primary query provider：
-   - Document：优先 `Elasticsearch`，否则 `InMemory`
-   - Graph：优先 `Neo4j`，否则 `InMemory`
+4. 多 provider 查询语义使用“注册顺序即查询顺序”：
+   - query 读取总是走第一个注册 provider
+   - 其余 provider 仅承担 fan-out 写入
+   - Workflow Host 采用“耐久优先”注册顺序（Document: `Elasticsearch -> InMemory`，Graph: `Neo4j -> InMemory`）
 
-## 3.6 Query Primary & Graph Cleanup Hardening
+## 3.6 Query Ordering & Graph Cleanup Hardening
 
-- `IProjectionStoreRegistration<TStore>` 增加 `IsPrimaryQueryStore`。
+- `IProjectionStoreRegistration<TStore>` 收敛为最小契约：`ProviderName + Create(IServiceProvider)`。
 - `ProjectionDocumentStoreFanout` / `ProjectionGraphStoreFanout` 改为：
-  - 多注册必须且仅允许一个 primary；
-  - 单注册允许无 primary（默认该唯一 provider 为 query store）；
-  - 冲突或缺失时 fail-fast。
-- `IProjectionGraphStore` 增加 `ListEdgesByOwnerAsync(scope, ownerId, take)`。
-- `ProjectionGraphMaterializer<TReadModel>` 从锚点子图清理重构为 owner-based 精确清理：
+  - 第一个注册 provider 为 query store；
+  - 其余 provider 自动作为 fan-out 副本；
+  - 无需 `primary` 配置，降低宿主层配置负担。
+- `IProjectionGraphStore` 增加 owner 生命周期接口：
+  - `ListEdgesByOwnerAsync(scope, ownerId, take)`
+  - `ListNodesByOwnerAsync(scope, ownerId, take)`
+  - `DeleteNodeAsync(scope, nodeId)`
+- `ProjectionGraphMaterializer<TReadModel>` 从锚点子图清理重构为 owner-based 精确清理（边+节点）：
   - 写边时注入系统属性：`projectionManaged=true`、`projectionOwnerId=<ReadModelType>:<ReadModelId>`
-  - 清理时按 owner 列举已有边并做差集删除，不再依赖 `Depth/Take` 子图扫描窗口。
+  - 写节点时同样注入系统属性：`projectionManaged=true`、`projectionOwnerId=<ReadModelType>:<ReadModelId>`
+  - 清理时按 owner 列举已有边/节点并做差集删除，不再依赖 `Depth/Take` 子图扫描窗口。
+  - 节点删除前执行邻接检查，仅删除无任何关系边的孤立节点，避免误删跨 owner 共享节点。
 
-## 3.5 Elasticsearch Metadata Behavior
+## 3.7 Elasticsearch Metadata Behavior
 
 `ElasticsearchProjectionReadModelStore` now consumes full `DocumentIndexMetadata`:
 

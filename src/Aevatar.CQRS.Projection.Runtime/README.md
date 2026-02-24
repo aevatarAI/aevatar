@@ -25,6 +25,6 @@
 ## 设计约束
 
 1. 不承载业务 ReadModel 类型。
-2. 不做 providerName 单选，不存在运行时降级逻辑；多 provider 时必须显式且唯一 `IsPrimaryQueryStore=true`。
-3. Document 与 Graph 完全解耦，分别按注册列表一对多分发（写 fan-out，读走 primary）。
+2. 不做 providerName 单选，不存在运行时降级逻辑；多 provider 采用“注册顺序即查询顺序”。
+3. Document 与 Graph 完全解耦，分别按注册列表一对多分发（写 fan-out，读走首注册 provider）。
 4. 仅依赖抽象契约与 DI；具体 Provider 由上层注册。

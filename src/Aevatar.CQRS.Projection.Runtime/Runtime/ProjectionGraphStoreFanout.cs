@@ -29,35 +29,8 @@ public sealed class ProjectionGraphStoreFanout : IProjectionGraphStore
             throw new InvalidOperationException(
                 "No graph projection store providers are registered.");
         }
-
-        var primaryRegistrations = registrationList
-            .Where(x => x.IsPrimaryQueryStore)
-            .ToList();
-        if (primaryRegistrations.Count == 0 && registrationList.Count > 1)
-        {
-            var providers = string.Join(", ", registrationList.Select(x => x.ProviderName));
-            throw new InvalidOperationException(
-                $"Exactly one primary graph projection store provider must be configured. registeredProviders=[{providers}]");
-        }
-
-        if (primaryRegistrations.Count > 1)
-        {
-            var providers = string.Join(", ", primaryRegistrations.Select(x => x.ProviderName));
-            throw new InvalidOperationException(
-                $"Multiple primary graph projection store providers are configured. primaryProviders=[{providers}]");
-        }
-
-        var queryRegistration = primaryRegistrations.Count == 1
-            ? primaryRegistrations[0]
-            : registrationList[0];
-        var queryIndex = registrationList.FindIndex(x => ReferenceEquals(x, queryRegistration));
-        if (queryIndex < 0)
-        {
-            throw new InvalidOperationException("Failed to resolve primary graph projection store provider.");
-        }
-
-        _queryStore = _stores[queryIndex];
-        _queryProviderName = queryRegistration.ProviderName;
+        _queryStore = _stores[0];
+        _queryProviderName = registrationList[0].ProviderName;
 
         _logger.LogInformation(
             "Projection graph fan-out initialized. storeCount={StoreCount} queryProvider={QueryProvider}",
@@ -89,6 +62,15 @@ public sealed class ProjectionGraphStoreFanout : IProjectionGraphStore
         }
     }
 
+    public async Task DeleteNodeAsync(string scope, string nodeId, CancellationToken ct = default)
+    {
+        foreach (var store in _stores)
+        {
+            ct.ThrowIfCancellationRequested();
+            await store.DeleteNodeAsync(scope, nodeId, ct);
+        }
+    }
+
     public async Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default)
     {
         foreach (var store in _stores)
@@ -96,6 +78,15 @@ public sealed class ProjectionGraphStoreFanout : IProjectionGraphStore
             ct.ThrowIfCancellationRequested();
             await store.DeleteEdgeAsync(scope, edgeId, ct);
         }
+    }
+
+    public Task<IReadOnlyList<ProjectionGraphNode>> ListNodesByOwnerAsync(
+        string scope,
+        string ownerId,
+        int take = 5000,
+        CancellationToken ct = default)
+    {
+        return _queryStore.ListNodesByOwnerAsync(scope, ownerId, take, ct);
     }
 
     public Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(

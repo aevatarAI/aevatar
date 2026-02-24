@@ -7,21 +7,19 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public class ProjectionReadModelStoreSelectorTests
 {
     [Fact]
-    public async Task ProjectionGraphStoreFanout_ShouldFanoutWritesAndUsePrimaryQueryStore()
+    public async Task ProjectionGraphStoreFanout_ShouldFanoutWritesAndUseFirstRegisteredQueryStore()
     {
-        var primaryStore = new NamedGraphStore("primary");
-        var replicaStore = new NamedGraphStore("replica");
+        var firstStore = new NamedGraphStore("first");
+        var secondStore = new NamedGraphStore("second");
         var services = new ServiceCollection();
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "replica",
-                false,
-                _ => replicaStore));
+                "first",
+                _ => firstStore));
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "primary",
-                true,
-                _ => primaryStore));
+                "second",
+                _ => secondStore));
 
         using var serviceProvider = services.BuildServiceProvider();
         var fanout = new ProjectionGraphStoreFanout(
@@ -47,58 +45,44 @@ public class ProjectionReadModelStoreSelectorTests
             Take = 10,
         });
 
-        primaryStore.UpsertNodeCount.Should().Be(1);
-        replicaStore.UpsertNodeCount.Should().Be(1);
+        firstStore.UpsertNodeCount.Should().Be(1);
+        secondStore.UpsertNodeCount.Should().Be(1);
         edges.Should().HaveCount(1);
-        edges[0].EdgeType.Should().Be("primary");
+        edges[0].EdgeType.Should().Be("first");
     }
 
     [Fact]
-    public void ProjectionGraphStoreFanout_WhenMultipleRegistrationsAndNoPrimary_ShouldThrow()
+    public async Task ProjectionGraphStoreFanout_ShouldReadFromFirstRegistration_WhenOrderDiffers()
     {
+        var firstStore = new NamedGraphStore("from-first");
+        var secondStore = new NamedGraphStore("from-second");
         var services = new ServiceCollection();
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "replica-1",
-                false,
-                _ => new NamedGraphStore("replica-1")));
+                "first",
+                _ => firstStore));
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "replica-2",
-                false,
-                _ => new NamedGraphStore("replica-2")));
+                "second",
+                _ => secondStore));
 
         using var serviceProvider = services.BuildServiceProvider();
-        Action act = () => new ProjectionGraphStoreFanout(
+        var fanout = new ProjectionGraphStoreFanout(
             serviceProvider.GetServices<IProjectionStoreRegistration<IProjectionGraphStore>>(),
             serviceProvider);
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Exactly one primary graph projection store provider must be configured*");
-    }
+        var edges = await fanout.GetNeighborsAsync(new ProjectionGraphQuery
+        {
+            Scope = "projection-scope",
+            RootNodeId = "node-1",
+            Direction = ProjectionGraphDirection.Both,
+            EdgeTypes = [],
+            Depth = 1,
+            Take = 10,
+        });
 
-    [Fact]
-    public void ProjectionGraphStoreFanout_WhenMultiplePrimaryRegistrations_ShouldThrow()
-    {
-        var services = new ServiceCollection();
-        services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
-            new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "primary-1",
-                true,
-                _ => new NamedGraphStore("primary-1")));
-        services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
-            new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "primary-2",
-                true,
-                _ => new NamedGraphStore("primary-2")));
-
-        using var serviceProvider = services.BuildServiceProvider();
-        Action act = () => new ProjectionGraphStoreFanout(
-            serviceProvider.GetServices<IProjectionStoreRegistration<IProjectionGraphStore>>(),
-            serviceProvider);
-
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Multiple primary graph projection store providers are configured*");
+        edges.Should().ContainSingle();
+        edges[0].EdgeType.Should().Be("from-first");
     }
 
     [Fact]
@@ -137,11 +121,30 @@ public class ProjectionReadModelStoreSelectorTests
             return Task.CompletedTask;
         }
 
+        public Task DeleteNodeAsync(string scope, string nodeId, CancellationToken ct = default)
+        {
+            _ = scope;
+            _ = nodeId;
+            return Task.CompletedTask;
+        }
+
         public Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default)
         {
             _ = scope;
             _ = edgeId;
             return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<ProjectionGraphNode>> ListNodesByOwnerAsync(
+            string scope,
+            string ownerId,
+            int take = 5000,
+            CancellationToken ct = default)
+        {
+            _ = scope;
+            _ = ownerId;
+            _ = take;
+            return Task.FromResult<IReadOnlyList<ProjectionGraphNode>>([]);
         }
 
         public Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(

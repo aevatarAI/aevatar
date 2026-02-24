@@ -11,11 +11,10 @@
 
 ## DI 注册
 
-- `AddElasticsearchDocumentStoreRegistration<TReadModel, TKey>(..., isPrimaryQueryStore, ...)`
+- `AddElasticsearchDocumentStoreRegistration<TReadModel, TKey>(...)`
 
 关键参数：
 
 - `optionsFactory`：绑定 `Projection:Document:Providers:Elasticsearch:*` 配置。
 - `metadataFactory`：通常由 `IProjectionDocumentMetadataResolver` 解析 `IProjectionDocumentMetadataProvider<TReadModel>`。
 - `keySelector/keyFormatter`：ReadModel 主键映射。
-- `isPrimaryQueryStore`：是否作为 Runtime 查询主存储。

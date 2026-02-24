@@ -134,6 +134,111 @@ public class ProjectionGraphMaterializerTests
         owner2Edges.Select(x => x.EdgeId).Should().ContainSingle("edge-owner-2");
     }
 
+    [Fact]
+    public async Task UpsertGraphAsync_ShouldRemoveDisconnectedStaleNodesForSameOwner()
+    {
+        var store = new RecordingGraphStore();
+        var materializer = new ProjectionGraphMaterializer<TestGraphReadModel>(store);
+
+        await materializer.UpsertGraphAsync(new TestGraphReadModel
+        {
+            Id = "owner-1",
+            GraphScope = "scope-1",
+            GraphNodes =
+            [
+                Node("root"),
+                Node("left"),
+                Node("orphan-a"),
+                Node("orphan-b"),
+            ],
+            GraphEdges =
+            [
+                Edge("edge-root", "root", "left"),
+                Edge("edge-orphan", "orphan-a", "orphan-b"),
+            ],
+        });
+
+        await materializer.UpsertGraphAsync(new TestGraphReadModel
+        {
+            Id = "owner-1",
+            GraphScope = "scope-1",
+            GraphNodes =
+            [
+                Node("root"),
+                Node("left"),
+            ],
+            GraphEdges =
+            [
+                Edge("edge-root", "root", "left"),
+            ],
+        });
+
+        var ownerNodes = await store.ListNodesByOwnerAsync("scope-1", BuildOwnerId("owner-1"), take: 20);
+
+        ownerNodes.Select(x => x.NodeId).Should().BeEquivalentTo("root", "left");
+        store.ContainsNode("scope-1", "orphan-a").Should().BeFalse();
+        store.ContainsNode("scope-1", "orphan-b").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task UpsertGraphAsync_ShouldKeepStaleNodeWhenStillReferencedByAnotherOwner()
+    {
+        var store = new RecordingGraphStore();
+        var materializer = new ProjectionGraphMaterializer<TestGraphReadModel>(store);
+
+        await materializer.UpsertGraphAsync(new TestGraphReadModel
+        {
+            Id = "owner-1",
+            GraphScope = "scope-1",
+            GraphNodes =
+            [
+                Node("shared"),
+                Node("owner-1-node"),
+            ],
+            GraphEdges =
+            [
+                Edge("edge-owner-1", "shared", "owner-1-node"),
+            ],
+        });
+
+        await materializer.UpsertGraphAsync(new TestGraphReadModel
+        {
+            Id = "owner-2",
+            GraphScope = "scope-1",
+            GraphNodes =
+            [
+                Node("owner-2-node"),
+            ],
+            GraphEdges =
+            [
+                Edge("edge-owner-2", "shared", "owner-2-node"),
+            ],
+        });
+
+        await materializer.UpsertGraphAsync(new TestGraphReadModel
+        {
+            Id = "owner-1",
+            GraphScope = "scope-1",
+            GraphNodes = [],
+            GraphEdges = [],
+        });
+
+        var sharedNeighbors = await store.GetNeighborsAsync(new ProjectionGraphQuery
+        {
+            Scope = "scope-1",
+            RootNodeId = "shared",
+            Direction = ProjectionGraphDirection.Both,
+            EdgeTypes = [],
+            Take = 20,
+        });
+
+        sharedNeighbors.Select(x => x.EdgeId).Should().ContainSingle("edge-owner-2");
+        store.ContainsNode("scope-1", "shared").Should().BeTrue();
+        store.ContainsNode("scope-1", "owner-1-node").Should().BeFalse();
+    }
+
+    private static string BuildOwnerId(string id) => $"{typeof(TestGraphReadModel).FullName}:{id}";
+
     private static GraphNodeDescriptor Node(string nodeId)
     {
         return new GraphNodeDescriptor(
@@ -187,6 +292,14 @@ public class ProjectionGraphMaterializerTests
             return Task.CompletedTask;
         }
 
+        public Task DeleteNodeAsync(string scope, string nodeId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            lock (_gate)
+                _nodes.Remove(BuildScopedKey(scope, nodeId));
+            return Task.CompletedTask;
+        }
+
         public Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -222,6 +335,35 @@ public class ProjectionGraphMaterializerTests
             }
 
             return Task.FromResult<IReadOnlyList<ProjectionGraphEdge>>(edges);
+        }
+
+        public Task<IReadOnlyList<ProjectionGraphNode>> ListNodesByOwnerAsync(
+            string scope,
+            string ownerId,
+            int take = 5000,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var scopeValue = NormalizeToken(scope);
+            var ownerValue = NormalizeToken(ownerId);
+            if (scopeValue.Length == 0 || ownerValue.Length == 0)
+                return Task.FromResult<IReadOnlyList<ProjectionGraphNode>>([]);
+
+            List<ProjectionGraphNode> nodes;
+            lock (_gate)
+            {
+                nodes = _nodes.Values
+                    .Where(x => string.Equals(x.Scope, scopeValue, StringComparison.Ordinal))
+                    .Where(x =>
+                        x.Properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedOwnerIdKey, out var nodeOwnerId) &&
+                        string.Equals(NormalizeToken(nodeOwnerId), ownerValue, StringComparison.Ordinal))
+                    .OrderByDescending(x => x.UpdatedAt)
+                    .Take(Math.Clamp(take, 1, 50000))
+                    .Select(CloneNode)
+                    .ToList();
+            }
+
+            return Task.FromResult<IReadOnlyList<ProjectionGraphNode>>(nodes);
         }
 
         public Task<IReadOnlyList<ProjectionGraphEdge>> GetNeighborsAsync(
@@ -292,6 +434,12 @@ public class ProjectionGraphMaterializerTests
                 Nodes = nodes,
                 Edges = edges,
             };
+        }
+
+        public bool ContainsNode(string scope, string nodeId)
+        {
+            lock (_gate)
+                return _nodes.ContainsKey(BuildScopedKey(scope, nodeId));
         }
 
         private static bool MatchDirection(ProjectionGraphEdge edge, string rootNodeId, ProjectionGraphDirection direction)

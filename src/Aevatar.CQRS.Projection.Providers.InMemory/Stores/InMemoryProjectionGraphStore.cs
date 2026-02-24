@@ -49,6 +49,19 @@ public sealed class InMemoryProjectionGraphStore
         return Task.CompletedTask;
     }
 
+    public Task DeleteNodeAsync(string scope, string nodeId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var scopeValue = NormalizeToken(scope);
+        var nodeValue = NormalizeToken(nodeId);
+        if (scopeValue.Length == 0 || nodeValue.Length == 0)
+            return Task.CompletedTask;
+
+        lock (_gate)
+            _nodes.Remove(BuildNodeKey(scopeValue, nodeValue));
+        return Task.CompletedTask;
+    }
+
     public Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -60,6 +73,36 @@ public sealed class InMemoryProjectionGraphStore
         lock (_gate)
             _edges.Remove(BuildEdgeKey(scopeValue, edgeValue));
         return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<ProjectionGraphNode>> ListNodesByOwnerAsync(
+        string scope,
+        string ownerId,
+        int take = 5000,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var scopeValue = NormalizeToken(scope);
+        var ownerValue = NormalizeToken(ownerId);
+        if (scopeValue.Length == 0 || ownerValue.Length == 0)
+            return Task.FromResult<IReadOnlyList<ProjectionGraphNode>>([]);
+
+        var boundedTake = Math.Clamp(take, 1, 50000);
+        List<ProjectionGraphNode> nodes;
+        lock (_gate)
+        {
+            nodes = _nodes.Values
+                .Where(x => string.Equals(x.Scope, scopeValue, StringComparison.Ordinal))
+                .Where(x =>
+                    x.Properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedOwnerIdKey, out var nodeOwnerId) &&
+                    string.Equals(NormalizeToken(nodeOwnerId), ownerValue, StringComparison.Ordinal))
+                .OrderByDescending(x => x.UpdatedAt)
+                .Take(boundedTake)
+                .Select(CloneNode)
+                .ToList();
+        }
+
+        return Task.FromResult<IReadOnlyList<ProjectionGraphNode>>(nodes);
     }
 
     public Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(

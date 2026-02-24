@@ -10,8 +10,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddNeo4jGraphStoreRegistration(
         this IServiceCollection services,
         Func<IServiceProvider, Neo4jProjectionGraphStoreOptions> optionsFactory,
-        Func<IServiceProvider, string> scopeFactory,
-        bool isPrimaryQueryStore)
+        Func<IServiceProvider, string> scopeFactory)
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
         ArgumentNullException.ThrowIfNull(scopeFactory);
@@ -19,7 +18,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
                 "Neo4j",
-                isPrimaryQueryStore,
                 provider => new Neo4jProjectionGraphStore(
                     optionsFactory(provider),
                     scopeFactory(provider),

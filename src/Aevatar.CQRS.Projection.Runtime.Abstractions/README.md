@@ -12,9 +12,12 @@
 
 - Store 注册：`IProjectionStoreRegistration<TStore>`
   - `ProviderName`
-  - `IsPrimaryQueryStore`（多 provider 场景下唯一主查询存储）
 - Materialization：`IProjectionMaterializationRouter<TReadModel, TKey>`、`IProjectionGraphMaterializer<TReadModel>`
 - Metadata：`IProjectionDocumentMetadataResolver`
+
+查询语义：
+
+- Fan-out Runtime 以注册顺序选择查询源（第一个注册的 provider 作为 query store，其余作为写入副本）。
 
 ## 约束
 

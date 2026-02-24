@@ -67,11 +67,10 @@ public class WorkflowExecutionProjectionRegistrationTests
     {
         services.AddInMemoryDocumentStoreRegistration<WorkflowExecutionReport, string>(
             keySelector: report => report.RootActorId,
-            isPrimaryQueryStore: true,
             keyFormatter: key => key,
             listSortSelector: report => report.CreatedAt,
             listTakeMax: 200);
-        services.AddInMemoryGraphStoreRegistration(isPrimaryQueryStore: true);
+        services.AddInMemoryGraphStoreRegistration();
     }
 
     private static void RegisterElasticsearchDocumentProvider(IServiceCollection services)
@@ -87,7 +86,6 @@ public class WorkflowExecutionProjectionRegistrationTests
                 return metadataResolver.Resolve<WorkflowExecutionReport>();
             },
             keySelector: report => report.RootActorId,
-            isPrimaryQueryStore: true,
             keyFormatter: key => key);
     }
 

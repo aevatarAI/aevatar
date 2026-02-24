@@ -6,7 +6,6 @@ public sealed class DelegateProjectionStoreRegistration<TStore> : IProjectionSto
 
     public DelegateProjectionStoreRegistration(
         string providerName,
-        bool isPrimaryQueryStore,
         Func<IServiceProvider, TStore> factory)
     {
         if (string.IsNullOrWhiteSpace(providerName))
@@ -14,13 +13,10 @@ public sealed class DelegateProjectionStoreRegistration<TStore> : IProjectionSto
         ArgumentNullException.ThrowIfNull(factory);
 
         ProviderName = providerName.Trim();
-        IsPrimaryQueryStore = isPrimaryQueryStore;
         _factory = factory;
     }
 
     public string ProviderName { get; }
-
-    public bool IsPrimaryQueryStore { get; }
 
     public TStore Create(IServiceProvider serviceProvider)
     {

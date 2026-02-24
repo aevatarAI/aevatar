@@ -64,8 +64,14 @@ public sealed class Neo4jProjectionGraphStore
             nodeType = "Unknown";
         var updatedAtEpochMs = NormalizeTimestamp(node.UpdatedAt);
         var propertiesJson = SerializeProperties(node.Properties);
+        var projectionManaged = ResolveProjectionManaged(node.Properties);
+        var projectionOwnerId = ResolveProjectionOwnerId(node.Properties);
         var cypher = $"MERGE (n:{_nodeLabel} {{scope: $scope, nodeId: $nodeId}}) " +
-                     "SET n.nodeType = $nodeType, n.propertiesJson = $propertiesJson, n.updatedAtEpochMs = $updatedAtEpochMs";
+                     "SET n.nodeType = $nodeType, " +
+                     "n.propertiesJson = $propertiesJson, " +
+                     "n.updatedAtEpochMs = $updatedAtEpochMs, " +
+                     "n.projectionManaged = $projectionManaged, " +
+                     "n.projectionOwnerId = CASE WHEN $projectionOwnerId = '' THEN null ELSE $projectionOwnerId END";
         var parameters = new Dictionary<string, object?>
         {
             ["scope"] = scope,
@@ -73,6 +79,8 @@ public sealed class Neo4jProjectionGraphStore
             ["nodeType"] = nodeType,
             ["propertiesJson"] = propertiesJson,
             ["updatedAtEpochMs"] = updatedAtEpochMs,
+            ["projectionManaged"] = projectionManaged,
+            ["projectionOwnerId"] = projectionOwnerId,
         };
 
         await EnsureSchemaAsync(ct);
@@ -125,6 +133,25 @@ public sealed class Neo4jProjectionGraphStore
         await ExecuteWriteAsync(cypher, parameters, ct);
     }
 
+    public async Task DeleteNodeAsync(string scope, string nodeId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var scopeValue = NormalizeToken(scope);
+        var nodeIdValue = NormalizeToken(nodeId);
+        if (scopeValue.Length == 0 || nodeIdValue.Length == 0)
+            return;
+
+        await EnsureSchemaAsync(ct);
+        var cypher = $"MATCH (n:{_nodeLabel} {{scope: $scope, nodeId: $nodeId}}) " +
+                     "WHERE NOT (n)-[]-() DELETE n";
+        var parameters = new Dictionary<string, object?>
+        {
+            ["scope"] = scopeValue,
+            ["nodeId"] = nodeIdValue,
+        };
+        await ExecuteWriteAsync(cypher, parameters, ct);
+    }
+
     public async Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -141,6 +168,72 @@ public sealed class Neo4jProjectionGraphStore
             ["edgeId"] = edgeIdValue,
         };
         await ExecuteWriteAsync(cypher, parameters, ct);
+    }
+
+    public async Task<IReadOnlyList<ProjectionGraphNode>> ListNodesByOwnerAsync(
+        string scope,
+        string ownerId,
+        int take = 5000,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var scopeValue = NormalizeToken(scope);
+        var ownerValue = NormalizeToken(ownerId);
+        if (scopeValue.Length == 0 || ownerValue.Length == 0)
+            return [];
+
+        await EnsureSchemaAsync(ct);
+        var boundedTake = Math.Clamp(take, 1, 50000);
+        var cypher = $"MATCH (n:{_nodeLabel} {{scope: $scope}}) " +
+                     "WHERE coalesce(n.projectionManaged, false) = true " +
+                     "AND n.projectionOwnerId = $ownerId " +
+                     "RETURN n.nodeId AS nodeId, " +
+                     "coalesce(n.nodeType, '') AS nodeType, " +
+                     "coalesce(n.propertiesJson, '{}') AS propertiesJson, " +
+                     "coalesce(n.updatedAtEpochMs, 0) AS updatedAtEpochMs " +
+                     "ORDER BY updatedAtEpochMs DESC LIMIT $take";
+        var parameters = new Dictionary<string, object?>
+        {
+            ["scope"] = scopeValue,
+            ["ownerId"] = ownerValue,
+            ["take"] = boundedTake,
+        };
+
+        var rows = await ExecuteReadAsync(cypher, parameters, ct);
+        var nodes = new List<ProjectionGraphNode>(rows.Count);
+        foreach (var row in rows)
+        {
+            if (!row.TryGetValue("nodeId", out var nodeIdValue))
+                continue;
+
+            var resolvedNodeId = NormalizeToken(nodeIdValue.As<string>());
+            if (resolvedNodeId.Length == 0)
+                continue;
+
+            var nodeType = row.TryGetValue("nodeType", out var nodeTypeValue)
+                ? NormalizeToken(nodeTypeValue.As<string>())
+                : "Unknown";
+            if (nodeType.Length == 0)
+                nodeType = "Unknown";
+
+            var propertiesJson = row.TryGetValue("propertiesJson", out var propertiesJsonValue)
+                ? propertiesJsonValue.As<string>()
+                : "{}";
+            var updatedAtEpochMs = row.TryGetValue("updatedAtEpochMs", out var updatedAtEpochMsValue)
+                ? updatedAtEpochMsValue.As<long>()
+                : 0L;
+
+            nodes.Add(new ProjectionGraphNode
+            {
+                Scope = scopeValue,
+                NodeId = resolvedNodeId,
+                NodeType = nodeType,
+                Properties = DeserializeProperties(propertiesJson),
+                UpdatedAt = FromUnixTimeMilliseconds(updatedAtEpochMs),
+            });
+        }
+
+        return nodes;
     }
 
     public async Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(

@@ -33,46 +33,9 @@ public sealed class ProjectionDocumentStoreFanout<TReadModel, TKey>
             throw new InvalidOperationException(
                 $"No document projection store providers are registered for read model '{typeof(TReadModel).FullName}'.");
         }
-
-        var primaryRegistrations = registrationList
-            .Where(x => x.IsPrimaryQueryStore)
-            .ToList();
-        if (primaryRegistrations.Count == 0 && registrationList.Count > 1)
-        {
-            var providers = string.Join(", ", registrationList.Select(x => x.ProviderName));
-            throw new InvalidOperationException(
-                $"Exactly one primary document projection store provider must be configured for read model '{typeof(TReadModel).FullName}'. registeredProviders=[{providers}]");
-        }
-
-        if (primaryRegistrations.Count > 1)
-        {
-            var providers = string.Join(", ", primaryRegistrations.Select(x => x.ProviderName));
-            throw new InvalidOperationException(
-                $"Multiple primary document projection store providers are configured for read model '{typeof(TReadModel).FullName}'. primaryProviders=[{providers}]");
-        }
-
-        var queryRegistration = primaryRegistrations.Count == 1
-            ? primaryRegistrations[0]
-            : registrationList[0];
-        var queryIndex = registrationList.FindIndex(x => ReferenceEquals(x, queryRegistration));
-        if (queryIndex < 0)
-        {
-            throw new InvalidOperationException(
-                $"Failed to resolve primary document projection store provider for read model '{typeof(TReadModel).FullName}'.");
-        }
-
-        _queryStore = _stores[queryIndex];
-        _queryProviderName = queryRegistration.ProviderName;
-
-        var replicaStores = new List<IDocumentProjectionStore<TReadModel, TKey>>(_stores.Count);
-        for (var i = 0; i < _stores.Count; i++)
-        {
-            if (i == queryIndex)
-                continue;
-            replicaStores.Add(_stores[i]);
-        }
-
-        _replicaStores = replicaStores;
+        _queryStore = _stores[0];
+        _queryProviderName = registrationList[0].ProviderName;
+        _replicaStores = _stores.Skip(1).ToList();
         _logger.LogInformation(
             "Projection document fan-out initialized. readModelType={ReadModelType} storeCount={StoreCount} queryProvider={QueryProvider}",
             typeof(TReadModel).FullName,

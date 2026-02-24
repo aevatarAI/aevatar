@@ -28,7 +28,7 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
         var ownerResolution = BuildManagedOwnerId(graphReadModel);
         var ownerId = ownerResolution.OwnerId;
 
-        var normalizedNodes = NormalizeNodes(graphReadModel.GraphNodes, scope);
+        var normalizedNodes = NormalizeNodes(graphReadModel.GraphNodes, scope, ownerId);
         foreach (var node in normalizedNodes)
             await _graphStore.UpsertNodeAsync(node, ct);
 
@@ -42,6 +42,10 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
         if (!ownerResolution.CanCleanup)
             return;
 
+        var targetNodeIds = normalizedNodes
+            .Select(x => x.NodeId)
+            .Where(x => x.Length > 0)
+            .ToHashSet(StringComparer.Ordinal);
         var existingManagedEdges = await _graphStore.ListEdgesByOwnerAsync(scope, ownerId, take: 50000, ct);
 
         foreach (var edge in existingManagedEdges.Where(IsManagedEdge))
@@ -51,12 +55,50 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
 
             await _graphStore.DeleteEdgeAsync(scope, edge.EdgeId, ct);
         }
+
+        var existingManagedNodes = await _graphStore.ListNodesByOwnerAsync(scope, ownerId, take: 50000, ct);
+        foreach (var node in existingManagedNodes.Where(IsManagedNode))
+        {
+            if (targetNodeIds.Contains(node.NodeId))
+                continue;
+            if (!await CanDeleteNodeAsync(scope, node.NodeId, ct))
+                continue;
+
+            await _graphStore.DeleteNodeAsync(scope, node.NodeId, ct);
+        }
     }
 
     private static bool IsManagedEdge(ProjectionGraphEdge edge)
     {
         return edge.Properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedMarkerKey, out var markerValue) &&
                string.Equals(markerValue, ProjectionGraphSystemPropertyKeys.ManagedMarkerValue, StringComparison.Ordinal);
+    }
+
+    private static bool IsManagedNode(ProjectionGraphNode node)
+    {
+        return node.Properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedMarkerKey, out var markerValue) &&
+               string.Equals(markerValue, ProjectionGraphSystemPropertyKeys.ManagedMarkerValue, StringComparison.Ordinal);
+    }
+
+    private async Task<bool> CanDeleteNodeAsync(
+        string scope,
+        string nodeId,
+        CancellationToken ct)
+    {
+        if (nodeId.Length == 0)
+            return false;
+
+        var neighbors = await _graphStore.GetNeighborsAsync(
+            new ProjectionGraphQuery
+            {
+                Scope = scope,
+                RootNodeId = nodeId,
+                Direction = ProjectionGraphDirection.Both,
+                EdgeTypes = [],
+                Take = 1,
+            },
+            ct);
+        return neighbors.Count == 0;
     }
 
     private static ManagedOwnerResolution BuildManagedOwnerId(IGraphReadModel readModel)
@@ -91,7 +133,8 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
 
     private static IReadOnlyList<ProjectionGraphNode> NormalizeNodes(
         IReadOnlyList<GraphNodeDescriptor> graphNodes,
-        string scope)
+        string scope,
+        string ownerId)
     {
         if (graphNodes.Count == 0)
             return [];
@@ -107,12 +150,18 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
             if (nodeType.Length == 0)
                 nodeType = "Unknown";
 
+            var properties = new Dictionary<string, string>(graphNode.Properties, StringComparer.Ordinal)
+            {
+                [ProjectionGraphSystemPropertyKeys.ManagedMarkerKey] = ProjectionGraphSystemPropertyKeys.ManagedMarkerValue,
+                [ProjectionGraphSystemPropertyKeys.ManagedOwnerIdKey] = ownerId,
+            };
+
             nodesById[nodeId] = new ProjectionGraphNode
             {
                 Scope = scope,
                 NodeId = nodeId,
                 NodeType = nodeType,
-                Properties = new Dictionary<string, string>(graphNode.Properties, StringComparer.Ordinal),
+                Properties = properties,
                 UpdatedAt = graphNode.UpdatedAt == default ? DateTimeOffset.UtcNow : graphNode.UpdatedAt,
             };
         }
