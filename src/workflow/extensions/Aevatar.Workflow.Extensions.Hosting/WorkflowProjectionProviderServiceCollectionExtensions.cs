@@ -50,14 +50,14 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
     private static ProviderSelection ResolveProviderSelection(IConfiguration configuration)
     {
-        var documentProvider = NormalizeOrDefaultProvider(
+        var documentProvider = NormalizeDocumentProvider(
             configuration["Projection:Document:Provider"],
             ProjectionProviderNames.InMemory,
             "Projection:Document:Provider");
 
-        var graphProvider = NormalizeOrDefaultProvider(
+        var graphProvider = NormalizeGraphProvider(
             configuration["Projection:Graph:Provider"],
-            documentProvider,
+            ProjectionProviderNames.InMemory,
             "Projection:Graph:Provider");
 
         return new ProviderSelection(documentProvider, graphProvider);
@@ -107,7 +107,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         return bool.TryParse(value, out var parsed) && parsed;
     }
 
-    private static string NormalizeOrDefaultProvider(
+    private static string NormalizeDocumentProvider(
         string? configuredValue,
         string fallbackValue,
         string optionPath)
@@ -121,11 +121,40 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         if (string.Equals(candidate, ProjectionProviderNames.Elasticsearch, StringComparison.OrdinalIgnoreCase))
             return ProjectionProviderNames.Elasticsearch;
         if (string.Equals(candidate, ProjectionProviderNames.Neo4j, StringComparison.OrdinalIgnoreCase))
-            return ProjectionProviderNames.Neo4j;
+        {
+            throw new InvalidOperationException(
+                "Neo4j cannot be used as document provider. " +
+                "Use Elasticsearch for document indexing and Neo4j for graph traversal.");
+        }
 
         throw new InvalidOperationException(
             $"Unsupported projection provider '{candidate}' configured at '{optionPath}'. " +
-            $"Allowed values: {ProjectionProviderNames.InMemory}, {ProjectionProviderNames.Elasticsearch}, {ProjectionProviderNames.Neo4j}.");
+            $"Allowed values: {ProjectionProviderNames.InMemory}, {ProjectionProviderNames.Elasticsearch}.");
+    }
+
+    private static string NormalizeGraphProvider(
+        string? configuredValue,
+        string fallbackValue,
+        string optionPath)
+    {
+        var candidate = string.IsNullOrWhiteSpace(configuredValue)
+            ? fallbackValue
+            : configuredValue.Trim();
+
+        if (string.Equals(candidate, ProjectionProviderNames.InMemory, StringComparison.OrdinalIgnoreCase))
+            return ProjectionProviderNames.InMemory;
+        if (string.Equals(candidate, ProjectionProviderNames.Neo4j, StringComparison.OrdinalIgnoreCase))
+            return ProjectionProviderNames.Neo4j;
+        if (string.Equals(candidate, ProjectionProviderNames.Elasticsearch, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Elasticsearch cannot be used as graph provider. " +
+                "Use InMemory (dev/test) or Neo4j.");
+        }
+
+        throw new InvalidOperationException(
+            $"Unsupported projection provider '{candidate}' configured at '{optionPath}'. " +
+            $"Allowed values: {ProjectionProviderNames.InMemory}, {ProjectionProviderNames.Neo4j}.");
     }
 
     private static void RegisterDocumentProvider(
@@ -151,22 +180,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                         return providerOptions;
                     },
                     indexScopeFactory: sp =>
-                    {
-                        var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
-                        return metadataResolver.Resolve<WorkflowExecutionReport>().IndexName;
-                    },
-                    keySelector: report => report.RootActorId,
-                    keyFormatter: key => key);
-                break;
-            case ProjectionProviderNames.Neo4j:
-                services.AddNeo4jDocumentStoreRegistration<WorkflowExecutionReport, string>(
-                    optionsFactory: _ =>
-                    {
-                        var providerOptions = new Neo4jProjectionReadModelStoreOptions();
-                        configuration.GetSection("Projection:Document:Providers:Neo4j").Bind(providerOptions);
-                        return providerOptions;
-                    },
-                    scopeFactory: sp =>
                     {
                         var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
                         return metadataResolver.Resolve<WorkflowExecutionReport>().IndexName;

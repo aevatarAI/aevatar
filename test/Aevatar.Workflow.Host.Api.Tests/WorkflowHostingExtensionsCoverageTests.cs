@@ -154,6 +154,24 @@ public class WorkflowHostingExtensionsCoverageTests
     }
 
     [Fact]
+    public void AddWorkflowProjectionReadModelProviders_WhenDocumentProviderConfiguredAsNeo4j_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Provider"] = ProjectionProviderNames.Neo4j,
+                ["Projection:Graph:Provider"] = ProjectionProviderNames.Neo4j,
+            })
+            .Build();
+
+        Action act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Neo4j cannot be used as document provider*");
+    }
+
+    [Fact]
     public void AddWorkflowProjectionReadModelProviders_WhenPolicyDeniesInMemoryRelationFactStore_ShouldThrow()
     {
         var services = new ServiceCollection();

@@ -659,7 +659,6 @@ fi
 projection_provider_store_files=(
   "src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionReadModelStore.cs"
   "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionReadModelStore.cs"
-  "src/Aevatar.CQRS.Projection.Providers.Neo4j/Stores/Neo4jProjectionReadModelStore.cs"
 )
 
 for provider_store_file in "${projection_provider_store_files[@]}"; do

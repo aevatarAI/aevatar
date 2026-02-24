@@ -1,166 +1,157 @@
-# Projection ReadModel 全量重构实施文档（v10，无兼容，极简抽象）
+# Projection ReadModel 全量重构实施文档（v12，已完成，无兼容）
 
 > 日期：2026-02-24  
-> 范围：`Aevatar.CQRS.Projection.Stores.Abstractions`、`Aevatar.CQRS.Projection.Core.Abstractions`、`Aevatar.CQRS.Projection.Runtime.Abstractions`、`Aevatar.CQRS.Projection.Runtime`、`Aevatar.Workflow.Projection`
+> 范围：`Aevatar.CQRS.Projection.Stores.Abstractions`、`Aevatar.CQRS.Projection.Core.Abstractions`、`Aevatar.CQRS.Projection.Runtime.Abstractions`、`Aevatar.CQRS.Projection.Runtime`、`Aevatar.Workflow.Projection`、`Aevatar.Workflow.Extensions.Hosting`、`Aevatar.CQRS.Projection.Providers.*`
 
-## 1. 结论先行
+## 1. 最终结论
 
-核心关系定义：`ReadModel -> ProjectionTarget` 是标准 `1:N`。
+Workflow Projection 已彻底收敛为单链路 `1:N` 扇出模型，并固定生产职责分工：
 
-当前固定实现 `N=2`：
+1. `Document Target = Elasticsearch`（索引、检索、快照/列表查询）
+2. `Graph Target = Neo4j`（关系、邻居、子图遍历）
 
-1. `DocumentTarget`（`IDocumentProjectionStore<,>`）
-2. `GraphTarget`（`IProjectionGraphStore`）
+同一 `ReadModel`（`WorkflowExecutionReport`）在一次投影中并行写入 `Document + Graph`，不是二选一。
 
-本版最终架构（已落地）：
+## 2. 最终架构图
 
-1. 不保留能力模型（Capabilities/Requirements/Validator）。
-2. 不保留运行时薄封装层（Provider Registry / Provider Selector / Startup Validator）。
-3. Provider 选择逻辑内聚到两个 Factory：
-   - `ProjectionDocumentStoreFactory`
-   - `ProjectionGraphStoreFactory`
-4. Startup fail-fast 直接通过 Factory 触发真实 store 创建校验，不再多一层 validator。
-5. Document metadata 继续保留，且由 `IProjectionDocumentMetadataProvider<TReadModel>`（ReadModel 泛型）提供。
-6. `IDocumentReadModel` 收敛为 marker，删除无效 `DocumentScope` 字段。
-
-## 2. 当前架构（v10）
-
-### 2.1 运行主链路
+### 2.1 写入链路（单链路双写）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    EVT["Event Stream"] --> RED["Reducer/Projector"]
-    RED --> RM["ReadModel(T)"]
-    RM --> ROUTER["IProjectionMaterializationRouter<T,TKey>"]
+    A["Event Stream"] --> B["Reducer / Projector"]
+    B --> C["ReadModel(T)"]
+    C --> D["IProjectionMaterializationRouter<T,TKey>"]
 
-    ROUTER --> DOC_GATE["if T : IDocumentReadModel"]
-    ROUTER --> GRA_GATE["if T : IGraphReadModel"]
+    D --> E["T : IDocumentReadModel ?"]
+    D --> F["T : IGraphReadModel ?"]
 
-    DOC_GATE --> DOC_STORE["IDocumentProjectionStore<T,TKey>"]
-    GRA_GATE --> GRA_MAT["IProjectionGraphMaterializer<T>"]
-    GRA_MAT --> GRA_STORE["IProjectionGraphStore"]
+    E --> G["IDocumentProjectionStore<T,TKey>"]
+    F --> H["IProjectionGraphMaterializer<T>"]
+    H --> I["IProjectionGraphStore"]
+
+    G --> J["Elasticsearch"]
+    I --> K["Neo4j"]
 ```
 
-### 2.2 Provider 选择与启动校验（极简）
+### 2.2 查询链路（索引与遍历并存）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
-    CFG_DOC["ProjectionDocumentRuntimeOptions.ProviderName"] --> DOC_FACTORY["ProjectionDocumentStoreFactory"]
-    CFG_GRA["ProjectionGraphRuntimeOptions.ProviderName"] --> GRA_FACTORY["ProjectionGraphStoreFactory"]
+    A["Query API / Application Service"] --> B["WorkflowExecutionProjectionQueryService"]
 
-    REG_DOC["IProjectionStoreRegistration<IDocumentProjectionStore<,>>[]"] --> DOC_FACTORY
-    REG_GRA["IProjectionStoreRegistration<IProjectionGraphStore>[]"] --> GRA_FACTORY
+    B --> C["Document Query"]
+    B --> D["Graph Query"]
 
-    DOC_FACTORY --> DOC_CREATED["Create Document Store"]
-    GRA_FACTORY --> GRA_CREATED["Create Graph Store"]
+    C --> E["IDocumentProjectionStore"]
+    D --> F["IProjectionGraphStore"]
 
-    STARTUP["WorkflowReadModelStartupValidationHostedService"] --> DOC_FACTORY
-    STARTUP --> GRA_FACTORY
+    E --> G["Elasticsearch"]
+    F --> H["Neo4j"]
 ```
 
-选择规则（统一）：
+### 2.3 Provider 选择与启动校验（极简）
 
-1. 没有注册 provider -> 失败。
-2. 有多个注册但未指定 providerName -> 失败。
-3. 指定 providerName 但未命中 -> 失败。
-4. 命中后创建失败 -> 失败。
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart TB
+    A["ProjectionDocumentRuntimeOptions.ProviderName"] --> C["ProjectionDocumentStoreFactory"]
+    B["ProjectionGraphRuntimeOptions.ProviderName"] --> D["ProjectionGraphStoreFactory"]
 
-## 3. 冗余删除清单（第二轮彻底去层）
+    E["IProjectionStoreRegistration<IDocumentProjectionStore<,>>[]"] --> C
+    F["IProjectionStoreRegistration<IProjectionGraphStore>[]"] --> D
 
-### 3.1 Runtime.Abstractions 删除
+    C --> G["Create Document Store or Fail"]
+    D --> H["Create Graph Store or Fail"]
 
-1. `Abstractions/Documents/IProjectionDocumentRuntimeOptions.cs`
-2. `Abstractions/Documents/IProjectionDocumentStartupValidator.cs`
-3. `Abstractions/Documents/ProjectionDocumentSelectionOptions.cs`
-4. `Abstractions/Graphs/IProjectionGraphRuntimeOptions.cs`
-5. `Abstractions/Graphs/IProjectionGraphStartupValidator.cs`
-6. `Abstractions/Graphs/IProjectionGraphStoreProviderRegistry.cs`
-7. `Abstractions/Graphs/IProjectionGraphStoreProviderSelector.cs`
-8. `Abstractions/Graphs/ProjectionGraphSelectionOptions.cs`
-9. `Abstractions/ReadModels/IProjectionDocumentStoreProviderRegistry.cs`
-10. `Abstractions/ReadModels/IProjectionDocumentStoreProviderSelector.cs`
+    I["WorkflowReadModelStartupValidationHostedService"] --> C
+    I --> D
+```
 
-### 3.2 Runtime 删除
+## 3. 已完成的彻底重构项
 
-1. `Runtime/ProjectionDocumentStoreProviderRegistry.cs`
-2. `Runtime/ProjectionDocumentStoreProviderSelector.cs`
-3. `Runtime/ProjectionDocumentStartupValidator.cs`
-4. `Runtime/ProjectionGraphStoreProviderRegistry.cs`
-5. `Runtime/ProjectionGraphStoreProviderSelector.cs`
-6. `Runtime/ProjectionGraphStartupValidator.cs`
+### 3.1 Runtime 抽象与实现去层
 
-### 3.3 Stores.Abstractions 收敛
+1. 删除能力协商模型（Capabilities/Requirements/Validator）整层。
+2. 删除薄封装中间层（Provider Registry / Provider Selector / Startup Validator）。
+3. Provider 选择逻辑内聚到：
+   - `ProjectionDocumentStoreFactory`
+   - `ProjectionGraphStoreFactory`
+4. 启动校验改为 HostedService 直接调用 Factory 进行真实创建 fail-fast。
 
-1. `IDocumentReadModel` 从带字段接口改为 marker。
-2. 删除 `WorkflowExecutionReport.DocumentScope` 冗余实现。
+### 3.2 ReadModel 抽象收敛
 
-## 4. 保留并强化的核心抽象
+1. `IDocumentReadModel` 收敛为 marker。
+2. 删除 `WorkflowExecutionReport.DocumentScope` 冗余字段。
+3. 保留 `IProjectionDocumentMetadataProvider<TReadModel>` 作为索引 metadata 来源。
 
-1. `IProjectionStoreRegistration<TStore>`：Provider 注册单一契约。
-2. `IProjectionDocumentStoreFactory`：Document provider 选择 + 实例创建。
-3. `IProjectionGraphStoreFactory`：Graph provider 选择 + 实例创建。
-4. `ProjectionProviderSelectionException`：统一 fail-fast 错误模型。
-5. `ProjectionDocumentRuntimeOptions` / `ProjectionGraphRuntimeOptions`：最小配置模型。
+### 3.3 Neo4j Provider 职责收敛（仅 Graph）
 
-## 5. 与项目实际结构的落地映射
+已删除：
 
-### 5.1 Runtime 层
+1. `src/Aevatar.CQRS.Projection.Providers.Neo4j/Stores/Neo4jProjectionReadModelStore.cs`
+2. `src/Aevatar.CQRS.Projection.Providers.Neo4j/Configuration/Neo4jProjectionReadModelStoreOptions.cs`
 
-- `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreRegistrationSelector.cs`
-  - 新增统一选择算法。
-- `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionDocumentStoreFactory.cs`
-  - 直接从 `IServiceProvider.GetServices<IProjectionStoreRegistration<...>>()` 拉注册并选择。
-- `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionGraphStoreFactory.cs`
-  - 同上。
-- `src/Aevatar.CQRS.Projection.Runtime/DependencyInjection/ServiceCollectionExtensions.cs`
-  - 仅注册 Factory / Materializer / Router / MetadataResolver。
+已修改：
 
-### 5.2 Workflow 组装层
+1. `src/Aevatar.CQRS.Projection.Providers.Neo4j/DependencyInjection/ServiceCollectionExtensions.cs`
+   - 删除 `AddNeo4jDocumentStoreRegistration<TReadModel,TKey>(...)`
+   - 仅保留 `AddNeo4jGraphStoreRegistration(...)`
+2. `src/Aevatar.CQRS.Projection.Providers.Neo4j/README.md`
+   - 改为 Graph-only 文档。
 
-- `src/workflow/Aevatar.Workflow.Projection/DependencyInjection/ServiceCollectionExtensions.cs`
-  - 直接注入并使用 `ProjectionDocumentRuntimeOptions` / `ProjectionGraphRuntimeOptions`。
-  - Store 解析直接调用 factory + providerName。
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowReadModelStartupValidationHostedService.cs`
-  - 启动校验改为直接调用 factory `Create(...)`。
-- `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowProjectionProviderServiceCollectionExtensions.cs`
-  - 只注册 concrete options，不再注册 interface 转发。
+### 3.4 Workflow Hosting Provider 矩阵收敛
 
-### 5.3 测试层
+已修改：
 
-- `test/Aevatar.CQRS.Projection.Core.Tests/ProjectionReadModelRuntimeTests.cs`
-  - 改为测试 DocumentFactory 选择行为。
-- `test/Aevatar.CQRS.Projection.Core.Tests/ProjectionReadModelStoreSelectorTests.cs`
-  - 改为测试 GraphFactory 选择行为。
-- `test/Aevatar.Workflow.Host.Api.Tests/*`
-  - 运行时 options 断言切换为 concrete 类型。
+1. `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowProjectionProviderServiceCollectionExtensions.cs`
+   - `Projection:Document:Provider` 只允许 `InMemory | Elasticsearch`
+   - `Projection:Graph:Provider` 只允许 `InMemory | Neo4j`
+   - 删除 Document 分支中的 Neo4j 注册
+   - 明确抛错：`Neo4j cannot be used as document provider`
+2. `src/workflow/Aevatar.Workflow.Projection/README.md`
+   - 删除 `Projection:Document:Providers:Neo4j:*` 相关说明
 
-## 6. 开发者体验结果
+### 3.5 测试与门禁同步
 
-开发者当前只需要关心三件事：
+已修改：
 
-1. 定义 ReadModel（实现 `IDocumentReadModel` / `IGraphReadModel` 或同时实现）。
-2. 注册对应 Provider（Document 与 Graph 各自独立注册）。
-3. 配置 `ProjectionDocumentRuntimeOptions.ProviderName` 与 `ProjectionGraphRuntimeOptions.ProviderName`。
+1. `test/Aevatar.CQRS.Projection.Core.Tests/ProjectionProviderE2EIntegrationTests.cs`
+   - 删除 Neo4j Document Store E2E 场景
+2. `test/Aevatar.Workflow.Host.Api.Tests/WorkflowHostingExtensionsCoverageTests.cs`
+   - 新增断言：`Projection:Document:Provider=Neo4j` 必须抛错
+3. `tools/ci/architecture_guards.sh`
+   - 移除对 `Neo4jProjectionReadModelStore.cs` 必须存在的检查
 
-系统会在：
+## 4. 开发者使用模型（当前标准）
 
-1. 运行时写入阶段自动执行 `1:N` 分发。
-2. 启动阶段通过真实 store 创建做 fail-fast。
+1. 定义 ReadModel：可同时实现 `IDocumentReadModel + IGraphReadModel`。
+2. 注册 Provider：Document 与 Graph 各自注册，互不混用职责。
+3. 配置 Provider：
+   - `Projection:Document:Provider=Elasticsearch`（生产）
+   - `Projection:Graph:Provider=Neo4j`（生产）
 
-## 7. 验收标准（v10）
+系统自动完成：
 
-全部满足即视为“彻底重构完成”：
+1. 单次流程双写（Document + Graph）。
+2. 启动期双链路 fail-fast。
+3. 查询期索引查询与图遍历并存。
 
-1. Runtime 不存在 Provider Registry/Selector/StartupValidator 三类薄层。
-2. Runtime.Abstractions 不存在对应接口与 SelectionOptions 接口模型。
-3. Store 选择只通过 factory + providerName 执行。
-4. Document metadata 与 Graph relation 语义都保留并可运行。
-5. `ReadModel -> Targets` 明确为 `1:N`，当前 `N=2`。
-6. `dotnet build` 与相关测试通过。
+## 5. 验收结果（本次执行）
 
-## 8. 后续可选继续收敛（不影响当前完成态）
+1. `dotnet build aevatar.slnx --nologo`：通过
+2. `dotnet test aevatar.slnx --nologo`：通过
+3. `bash tools/ci/architecture_guards.sh`：通过
+4. `bash tools/ci/projection_route_mapping_guard.sh`：通过
+5. `bash tools/ci/solution_split_guards.sh`：通过
+6. `bash tools/ci/solution_split_test_guards.sh`：通过
+7. `bash tools/ci/test_stability_guards.sh`：通过
 
-1. 若继续极简，可把 `IProjectionDocumentStoreFactory` / `IProjectionGraphStoreFactory` 也收敛为 concrete 注入。
-2. 若继续减少类型数量，可评估 `GraphNodeDescriptor/GraphEdgeDescriptor` 与 `ProjectionGraphNode/ProjectionGraphEdge` 的边界合并。
+## 6. 最终验收标准（全部满足）
+
+1. Workflow 生产路径固定为 `ES(Document) + Neo4j(Graph)`。
+2. Workflow 不再支持 `Projection:Document:Provider=Neo4j`。
+3. Neo4j Provider 仅承载 Graph Store。
+4. Projection Router 双写语义保持不变。
+5. 编译、测试、架构门禁全部通过。

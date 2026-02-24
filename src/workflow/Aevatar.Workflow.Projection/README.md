@@ -91,12 +91,11 @@ FAQ：
 ## Provider 配置
 
 - Provider 选择统一配置入口：
-  - `Projection:Document:Provider`：`InMemory`（默认）/`Elasticsearch`/`Neo4j`
+  - `Projection:Document:Provider`：`InMemory`（默认）/`Elasticsearch`
   - `Projection:Graph:Provider`：`InMemory`（默认）/`Neo4j`
 - `Projection:Policies:DenyInMemoryGraphFactStore`：禁用 InMemory graph 作为事实源（生产建议开启）
 - 文档 Provider 配置：
   - `Projection:Document:Providers:Elasticsearch:*`
-  - `Projection:Document:Providers:Neo4j:*`
 - 图 Provider 配置：
   - `Projection:Graph:Providers:Neo4j:*`
 - `WorkflowExecutionProjection:ValidateDocumentProviderOnStartup`：启动阶段预校验 document provider（默认 `true`）

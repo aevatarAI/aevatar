@@ -7,33 +7,6 @@ namespace Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddNeo4jDocumentStoreRegistration<TReadModel, TKey>(
-        this IServiceCollection services,
-        Func<IServiceProvider, Neo4jProjectionReadModelStoreOptions> optionsFactory,
-        Func<IServiceProvider, string> scopeFactory,
-        Func<TReadModel, TKey> keySelector,
-        Func<TKey, string>? keyFormatter = null,
-        string providerName = ProjectionProviderNames.Neo4j)
-        where TReadModel : class
-    {
-        ArgumentNullException.ThrowIfNull(optionsFactory);
-        ArgumentNullException.ThrowIfNull(scopeFactory);
-        ArgumentNullException.ThrowIfNull(keySelector);
-
-        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>(
-            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>(
-                providerName,
-                provider => new Neo4jProjectionReadModelStore<TReadModel, TKey>(
-                    optionsFactory(provider),
-                    scopeFactory(provider),
-                    keySelector,
-                    keyFormatter,
-                    providerName,
-                    provider.GetService<ILogger<Neo4jProjectionReadModelStore<TReadModel, TKey>>>())));
-
-        return services;
-    }
-
     public static IServiceCollection AddNeo4jGraphStoreRegistration(
         this IServiceCollection services,
         Func<IServiceProvider, Neo4jProjectionGraphStoreOptions> optionsFactory,
