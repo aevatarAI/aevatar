@@ -12,56 +12,54 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
     private readonly IServiceProvider _serviceProvider;
     private readonly WorkflowExecutionProjectionOptions _options;
     private readonly IWorkflowReadModelSelectionPlanner _selectionPlanner;
-    private readonly IProjectionReadModelProviderRegistry _providerRegistry;
-    private readonly IProjectionReadModelProviderSelector _providerSelector;
-    private readonly IProjectionRelationStoreProviderRegistry _relationProviderRegistry;
-    private readonly IProjectionRelationStoreProviderSelector _relationProviderSelector;
+    private readonly IProjectionStoreStartupValidator _startupValidator;
     private readonly ILogger<WorkflowReadModelStartupValidationHostedService> _logger;
 
     public WorkflowReadModelStartupValidationHostedService(
         IServiceProvider serviceProvider,
         WorkflowExecutionProjectionOptions options,
         IWorkflowReadModelSelectionPlanner selectionPlanner,
-        IProjectionReadModelProviderRegistry providerRegistry,
-        IProjectionReadModelProviderSelector providerSelector,
-        IProjectionRelationStoreProviderRegistry relationProviderRegistry,
-        IProjectionRelationStoreProviderSelector relationProviderSelector,
+        IProjectionStoreStartupValidator startupValidator,
         ILogger<WorkflowReadModelStartupValidationHostedService>? logger = null)
     {
         _serviceProvider = serviceProvider;
         _options = options;
         _selectionPlanner = selectionPlanner;
-        _providerRegistry = providerRegistry;
-        _providerSelector = providerSelector;
-        _relationProviderRegistry = relationProviderRegistry;
-        _relationProviderSelector = relationProviderSelector;
+        _startupValidator = startupValidator;
         _logger = logger ?? NullLogger<WorkflowReadModelStartupValidationHostedService>.Instance;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_options.Enabled || !_options.ValidateReadModelProviderOnStartup)
+        if (!_options.Enabled)
             return Task.CompletedTask;
 
         var selectionPlan = _selectionPlanner.Build(_options);
 
-        var registrations = _providerRegistry.GetRegistrations<WorkflowExecutionReport, string>(_serviceProvider);
-        var selected = _providerSelector.Select(registrations, selectionPlan.SelectionOptions, selectionPlan.Requirements);
-        _logger.LogInformation(
-            "Workflow read-model provider startup validation passed. readModelType={ReadModelType} provider={Provider}",
-            typeof(WorkflowExecutionReport).FullName,
-            selected.ProviderName);
+        if (_options.ValidateReadModelProviderOnStartup)
+        {
+            var selectedReadModelProvider = _startupValidator.ValidateReadModelProvider<WorkflowExecutionReport, string>(
+                _serviceProvider,
+                selectionPlan.ReadModelSelectionOptions,
+                selectionPlan.ReadModelRequirements);
+            _logger.LogInformation(
+                "Workflow read-model provider startup validation passed. readModelType={ReadModelType} provider={Provider}",
+                typeof(WorkflowExecutionReport).FullName,
+                selectedReadModelProvider.ProviderName);
+        }
 
-        var relationRegistrations = _relationProviderRegistry.GetRegistrations(_serviceProvider);
-        var selectedRelationProvider = _relationProviderSelector.Select(
-            relationRegistrations,
-            selectionPlan.SelectionOptions,
-            selectionPlan.Requirements);
-        _logger.LogInformation(
-            "Workflow relation provider startup validation passed. relationType={RelationType} provider={Provider}",
-            typeof(ProjectionRelationNode).FullName,
-            selectedRelationProvider.ProviderName);
+        if (_options.ValidateRelationProviderOnStartup)
+        {
+            var selectedRelationProvider = _startupValidator.ValidateRelationProvider(
+                _serviceProvider,
+                selectionPlan.RelationSelectionOptions,
+                selectionPlan.RelationRequirements);
+            _logger.LogInformation(
+                "Workflow relation provider startup validation passed. relationType={RelationType} provider={Provider}",
+                typeof(ProjectionRelationNode).FullName,
+                selectedRelationProvider.ProviderName);
+        }
         return Task.CompletedTask;
     }
 

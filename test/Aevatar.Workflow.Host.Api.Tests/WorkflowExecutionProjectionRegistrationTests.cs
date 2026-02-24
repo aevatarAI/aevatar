@@ -87,7 +87,7 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void AddWorkflowExecutionProjectionCQRS_WhenElasticsearchConfigured_ShouldResolveElasticsearchStore()
+    public void AddWorkflowExecutionProjectionCQRS_WhenElasticsearchConfiguredWithoutRelationProvider_ShouldFailFastOnRelationStore()
     {
         var services = new ServiceCollection();
         RegisterInMemoryProvider(services);
@@ -97,13 +97,34 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         using var provider = services.BuildServiceProvider();
         var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
-        var relationStore = provider.GetRequiredService<IProjectionRelationStore>();
-
         store.Should().BeOfType<ElasticsearchProjectionReadModelStore<WorkflowExecutionReport, string>>();
-        relationStore.Should().BeOfType<ElasticsearchProjectionRelationStore>();
         var metadata = store.Should().BeAssignableTo<IProjectionReadModelStoreProviderMetadata>().Subject;
         metadata.ProviderCapabilities.SupportsIndexing.Should().BeTrue();
         metadata.ProviderCapabilities.IndexKinds.Should().Contain(ProjectionReadModelIndexKind.Document);
+
+        Action act = () => provider.GetRequiredService<IProjectionRelationStore>();
+        act.Should().Throw<ProjectionReadModelCapabilityValidationException>()
+            .Where(ex => ex.ReadModelType == typeof(ProjectionRelationNode));
+    }
+
+    [Fact]
+    public void AddWorkflowExecutionProjectionCQRS_WhenElasticsearchReadModelWithInMemoryRelationConfigured_ShouldResolveSplitProviders()
+    {
+        var services = new ServiceCollection();
+        RegisterInMemoryProvider(services);
+        RegisterElasticsearchProvider(services);
+        services.AddWorkflowExecutionProjectionCQRS(options =>
+        {
+            options.ReadModelProvider = ProjectionReadModelProviderNames.Elasticsearch;
+            options.RelationProvider = ProjectionReadModelProviderNames.InMemory;
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        var relationStore = provider.GetRequiredService<IProjectionRelationStore>();
+
+        store.Should().BeOfType<ElasticsearchProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        relationStore.Should().BeOfType<InMemoryProjectionRelationStore>();
     }
 
     [Fact]

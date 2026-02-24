@@ -4,8 +4,10 @@ using Aevatar.Workflow.Projection.Configuration;
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public readonly record struct WorkflowReadModelSelectionPlan(
-    ProjectionReadModelRequirements Requirements,
-    ProjectionReadModelStoreSelectionOptions SelectionOptions);
+    ProjectionReadModelRequirements ReadModelRequirements,
+    ProjectionReadModelStoreSelectionOptions ReadModelSelectionOptions,
+    ProjectionReadModelRequirements RelationRequirements,
+    ProjectionReadModelStoreSelectionOptions RelationSelectionOptions);
 
 public interface IWorkflowReadModelSelectionPlanner
 {

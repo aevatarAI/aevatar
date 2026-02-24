@@ -23,11 +23,14 @@ public sealed class WorkflowReadModelSelectionPlannerTests
 
         var plan = _planner.Build(options);
 
-        plan.SelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.InMemory);
-        plan.SelectionOptions.FailOnUnsupportedCapabilities.Should().BeFalse();
-        plan.Requirements.RequiresIndexing.Should().BeTrue();
-        plan.Requirements.RequiredIndexKinds.Should().ContainSingle()
+        plan.ReadModelSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.InMemory);
+        plan.ReadModelSelectionOptions.FailOnUnsupportedCapabilities.Should().BeFalse();
+        plan.ReadModelRequirements.RequiresIndexing.Should().BeTrue();
+        plan.ReadModelRequirements.RequiredIndexKinds.Should().ContainSingle()
             .Which.Should().Be(ProjectionReadModelIndexKind.Document);
+        plan.RelationSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.InMemory);
+        plan.RelationRequirements.RequiresRelations.Should().BeTrue();
+        plan.RelationRequirements.RequiresRelationTraversal.Should().BeTrue();
     }
 
     [Fact]
@@ -40,7 +43,23 @@ public sealed class WorkflowReadModelSelectionPlannerTests
 
         var plan = _planner.Build(options);
 
-        plan.SelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.Neo4j);
+        plan.ReadModelSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.Neo4j);
+        plan.RelationSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.Neo4j);
+    }
+
+    [Fact]
+    public void Build_WhenRelationProviderConfigured_ShouldUseRelationProvider()
+    {
+        var options = new WorkflowExecutionProjectionOptions
+        {
+            ReadModelProvider = ProjectionReadModelProviderNames.Elasticsearch,
+            RelationProvider = "  InMemory  ",
+        };
+
+        var plan = _planner.Build(options);
+
+        plan.ReadModelSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.Elasticsearch);
+        plan.RelationSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.InMemory);
     }
 
     [Fact]

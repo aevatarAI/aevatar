@@ -4,7 +4,11 @@
 
 ## 职责边界
 
-- 应用层投影端口实现：`IWorkflowExecutionProjectionPort`（实现类 `WorkflowExecutionProjectionService`）
+- 应用层投影端口实现：
+  - `IWorkflowExecutionProjectionLifecyclePort`（`Ensure/Attach/Detach/Release`）
+  - `IWorkflowExecutionProjectionQueryPort`（`Snapshot/Timeline/Relations/Subgraph`）
+  - 默认实现分别为 `WorkflowExecutionProjectionLifecycleService` 与 `WorkflowExecutionProjectionQueryService`
+  - 两个实现分别继承 `ProjectionLifecyclePortServiceBase` / `ProjectionQueryPortServiceBase`，通用端口编排已下沉到 `Aevatar.CQRS.Projection.Core`
 - 编排组件拆分（避免单类过重）：
   - `WorkflowProjectionActivationService`（projection 启动与上下文激活）
   - `WorkflowProjectionReleaseService`（idle 检测与停止/释放）
@@ -14,7 +18,7 @@
   - `WorkflowProjectionSinkFailurePolicy`（sink 异常策略）
   - `WorkflowProjectionReadModelUpdater`（read model 元信息更新）
   - `WorkflowProjectionQueryReader`（query 映射读取）
-  - `WorkflowReadModelSelectionPlanner`（统一 read model provider 归一化、mode 校验与 capability 选择参数生成）
+  - `WorkflowReadModelSelectionPlanner`（统一 read model/relation provider 归一化、mode 校验与 capability 选择参数生成）
 - 领域上下文：`IWorkflowExecutionProjectionContextFactory`、`WorkflowExecutionProjectionContext`
 - 实时输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
 - 领域投影实现：reducers、projectors、read model（不包含 Provider Store 实现）
@@ -31,7 +35,7 @@
 
 ## 统一运行链路
 
-1. `EnsureActorProjectionAsync` 由 `WorkflowExecutionProjectionService` 转发到 `WorkflowProjectionActivationService`，先通过 `WorkflowProjectionLeaseManager`（底层复用 `Aevatar.CQRS.Projection.Core` ownership coordinator）申请 ownership，再创建 projection 上下文并注册 actor stream 订阅
+1. `EnsureActorProjectionAsync` 由 `WorkflowExecutionProjectionLifecycleService` 转发到 `WorkflowProjectionActivationService`，先通过 `WorkflowProjectionLeaseManager`（底层复用 `Aevatar.CQRS.Projection.Core` ownership coordinator）申请 ownership，再创建 projection 上下文并注册 actor stream 订阅
 2. 每条 `EventEnvelope` 进入统一 coordinator，一对多调用已注册 projector
 3. `WorkflowExecutionReadModelProjector` 驱动 reducers 生成并更新 read model
 4. AI 通用事件通过 `Aevatar.Workflow.Extensions.AIProjection` 扩展接入，扩展内部复用 `Aevatar.AI.Projection` 的默认 applier + reducer，将事件写入 `WorkflowExecutionReport` 的 AI 能力字段，业务层无需重复维护映射代码
@@ -83,12 +87,15 @@ FAQ：
 
 ## Provider 配置
 
-- `WorkflowExecutionProjection:ReadModelProvider`：`InMemory`（默认）/`Elasticsearch`
+- `WorkflowExecutionProjection:ReadModelProvider`：`InMemory`（默认）/`Elasticsearch`/`Neo4j`
+- `WorkflowExecutionProjection:RelationProvider`：关系存储 provider；留空时回退到 `ReadModelProvider`
 - `WorkflowExecutionProjection:FailOnUnsupportedCapabilities`：能力不匹配时是否 fail-fast（默认 `true`）
 - `WorkflowExecutionProjection:ValidateReadModelProviderOnStartup`：是否在 Host 启动阶段预校验 Provider 选择与能力（默认 `true`）
+- `WorkflowExecutionProjection:ValidateRelationProviderOnStartup`：是否在 Host 启动阶段预校验 Relation Provider（默认 `true`）
 - `WorkflowExecutionProjection:ReadModelBindings`：ReadModel -> IndexKind 约束（如 `WorkflowExecutionReport: Document`）
 - 推荐统一配置入口：`Projection:ReadModel:*`（由 Infrastructure 映射到 Workflow 投影选项）
 - `Projection:ReadModel:Provider`：全局默认 Provider（当前由 `WorkflowCapabilityServiceCollectionExtensions` 覆盖到模块选项）
+- `Projection:ReadModel:RelationProvider`：全局默认 Relation Provider（覆盖到模块选项）
 - `Projection:ReadModel:FailOnUnsupportedCapabilities`：全局 fail-fast 策略
 - `Projection:ReadModel:Bindings:*`：全局 ReadModel -> IndexKind 约束
 - `Projection:ReadModel:Providers:Elasticsearch:Endpoints`：Elasticsearch endpoint 列表

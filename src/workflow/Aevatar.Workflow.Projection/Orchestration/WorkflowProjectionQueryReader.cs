@@ -12,11 +12,11 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
     public WorkflowProjectionQueryReader(
         IProjectionReadModelStore<WorkflowExecutionReport, string> store,
         WorkflowExecutionReadModelMapper mapper,
-        IProjectionRelationStore? relationStore = null)
+        IProjectionRelationStore relationStore)
     {
         _store = store;
         _mapper = mapper;
-        _relationStore = relationStore ?? NoopProjectionRelationStore.Instance;
+        _relationStore = relationStore;
     }
 
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
@@ -100,29 +100,5 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
             },
             ct);
         return _mapper.ToActorRelationSubgraph(actorIdValue, subgraph);
-    }
-
-    private sealed class NoopProjectionRelationStore : IProjectionRelationStore
-    {
-        public static NoopProjectionRelationStore Instance { get; } = new();
-
-        public Task UpsertNodeAsync(ProjectionRelationNode node, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task UpsertEdgeAsync(ProjectionRelationEdge edge, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task<IReadOnlyList<ProjectionRelationEdge>> GetNeighborsAsync(
-            ProjectionRelationQuery query,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ProjectionRelationEdge>>([]);
-
-        public Task<ProjectionRelationSubgraph> GetSubgraphAsync(
-            ProjectionRelationQuery query,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ProjectionRelationSubgraph());
     }
 }

@@ -5,6 +5,7 @@
 ## 包含内容
 
 - 生命周期与编排：`IProjectionLifecycleService<,>`、`IProjectionCoordinator<,>`、`IProjectionDispatcher<>`、`IProjectionSubscriptionRegistry<>`
+- 端口抽象：`IProjectionPortActivationService<>`、`IProjectionPortReleaseService<>`、`IProjectionPortSinkSubscriptionManager<,,>`、`IProjectionPortLiveSinkForwarder<,,>`
 - 扩展抽象：`IProjectionProjector<,>`、`IProjectionEventReducer<,>`
 - 失败回传：`IProjectionDispatchFailureReporter<>`
 - 读模型存储：`IProjectionReadModelStore<,>`

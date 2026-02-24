@@ -396,7 +396,9 @@ public class ActorRuntimeWorkflowExecutionTopologyResolverTests
     }
 }
 
-internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
+internal sealed class FakeProjectionService :
+    IWorkflowExecutionProjectionLifecyclePort,
+    IWorkflowExecutionProjectionQueryPort
 {
     public bool ProjectionEnabled { get; set; } = true;
     public bool EnableActorQueryEndpointsValue { get; set; } = true;

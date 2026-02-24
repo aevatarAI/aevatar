@@ -60,7 +60,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowProjectionReadModelUpdater, WorkflowProjectionReadModelUpdater>();
         services.TryAddSingleton<IWorkflowProjectionQueryReader, WorkflowProjectionQueryReader>();
         services.TryAddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        services.TryAddSingleton<IWorkflowExecutionProjectionPort, WorkflowExecutionProjectionService>();
+        services.TryAddSingleton<WorkflowExecutionProjectionLifecycleService>();
+        services.TryAddSingleton<IWorkflowExecutionProjectionLifecyclePort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionProjectionLifecycleService>());
+        services.TryAddSingleton<WorkflowExecutionProjectionQueryService>();
+        services.TryAddSingleton<IWorkflowExecutionProjectionQueryPort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionProjectionQueryService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
         return services;
     }
@@ -122,8 +127,8 @@ public static class ServiceCollectionExtensions
 
             return storeFactory.Create<WorkflowExecutionReport, string>(
                 sp,
-                selectionPlan.SelectionOptions,
-                selectionPlan.Requirements);
+                selectionPlan.ReadModelSelectionOptions,
+                selectionPlan.ReadModelRequirements);
         }));
     }
 
@@ -138,8 +143,8 @@ public static class ServiceCollectionExtensions
 
             return relationStoreFactory.Create(
                 sp,
-                selectionPlan.SelectionOptions,
-                selectionPlan.Requirements);
+                selectionPlan.RelationSelectionOptions,
+                selectionPlan.RelationRequirements);
         }));
     }
 

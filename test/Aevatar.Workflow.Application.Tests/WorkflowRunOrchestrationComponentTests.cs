@@ -277,7 +277,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         }
     }
 
-    private sealed class CapturingProjectionPort : IWorkflowExecutionProjectionPort
+    private sealed class CapturingProjectionPort : IWorkflowExecutionProjectionLifecyclePort
     {
         public bool ProjectionEnabled { get; set; } = true;
         public bool EnableActorQueryEndpoints => false;

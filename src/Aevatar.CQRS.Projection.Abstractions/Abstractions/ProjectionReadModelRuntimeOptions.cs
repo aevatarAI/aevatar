@@ -11,6 +11,8 @@ public sealed class ProjectionReadModelRuntimeOptions
 
     public string Provider { get; set; } = ProjectionReadModelProviderNames.InMemory;
 
+    public string RelationProvider { get; set; } = "";
+
     public bool FailOnUnsupportedCapabilities { get; set; } = true;
 
     public Dictionary<string, string> Bindings { get; }

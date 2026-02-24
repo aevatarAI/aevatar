@@ -4,9 +4,9 @@ namespace Aevatar.Workflow.Application.Runs;
 
 public sealed class WorkflowRunResourceFinalizer : IWorkflowRunResourceFinalizer
 {
-    private readonly IWorkflowExecutionProjectionPort _projectionPort;
+    private readonly IWorkflowExecutionProjectionLifecyclePort _projectionPort;
 
-    public WorkflowRunResourceFinalizer(IWorkflowExecutionProjectionPort projectionPort)
+    public WorkflowRunResourceFinalizer(IWorkflowExecutionProjectionLifecyclePort projectionPort)
     {
         _projectionPort = projectionPort;
     }

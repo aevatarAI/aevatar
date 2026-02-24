@@ -13,6 +13,7 @@ using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
@@ -505,7 +506,7 @@ public class WorkflowExecutionProjectionServiceTests
         await sink.DisposeAsync();
     }
 
-    private static WorkflowExecutionProjectionService CreateService(
+    private static ProjectionPortsHarness CreateService(
         WorkflowExecutionProjectionOptions options,
         out InMemoryStreamProvider streams,
         out ObservableWorkflowExecutionReadModelStore store,
@@ -519,7 +520,7 @@ public class WorkflowExecutionProjectionServiceTests
             clock);
     }
 
-    private static WorkflowExecutionProjectionService CreateService(
+    private static ProjectionPortsHarness CreateService(
         WorkflowExecutionProjectionOptions options,
         out InMemoryStreamProvider streams,
         out ObservableWorkflowExecutionReadModelStore store,
@@ -574,7 +575,10 @@ public class WorkflowExecutionProjectionServiceTests
         var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventStreamHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventStreamHub, resolvedClock);
         var readModelUpdater = new WorkflowProjectionReadModelUpdater(store, resolvedClock);
-        var queryReader = new WorkflowProjectionQueryReader(store, mapper);
+        var queryReader = new WorkflowProjectionQueryReader(
+            store,
+            mapper,
+            new InMemoryProjectionRelationStore());
         var activationService = new WorkflowProjectionActivationService(
             lifecycle,
             resolvedClock,
@@ -588,16 +592,19 @@ public class WorkflowExecutionProjectionServiceTests
             leaseManager);
         var liveSinkForwarder = new WorkflowProjectionLiveSinkForwarder(sinkFailurePolicy);
 
-        return new WorkflowExecutionProjectionService(
+        var lifecyclePort = new WorkflowExecutionProjectionLifecycleService(
             options,
-            queryReader,
             activationService,
             releaseService,
             sinkManager,
             liveSinkForwarder);
+        var queryPort = new WorkflowExecutionProjectionQueryService(
+            options,
+            queryReader);
+        return new ProjectionPortsHarness(lifecyclePort, queryPort);
     }
 
-    private static WorkflowExecutionProjectionService CreateServiceForStartFailure(
+    private static ProjectionPortsHarness CreateServiceForStartFailure(
         IProjectionOwnershipCoordinator ownershipCoordinator,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle)
     {
@@ -609,7 +616,10 @@ public class WorkflowExecutionProjectionServiceTests
         var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventHub, clock);
         var readModelUpdater = new WorkflowProjectionReadModelUpdater(store, clock);
-        var queryReader = new WorkflowProjectionQueryReader(store, mapper);
+        var queryReader = new WorkflowProjectionQueryReader(
+            store,
+            mapper,
+            new InMemoryProjectionRelationStore());
         var activationService = new WorkflowProjectionActivationService(
             lifecycle,
             clock,
@@ -623,17 +633,21 @@ public class WorkflowExecutionProjectionServiceTests
             leaseManager);
         var liveSinkForwarder = new WorkflowProjectionLiveSinkForwarder(sinkFailurePolicy);
 
-        return new WorkflowExecutionProjectionService(
-            new WorkflowExecutionProjectionOptions
-            {
-                Enabled = true,
-                EnableActorQueryEndpoints = true,
-            },
-            queryReader,
+        var options = new WorkflowExecutionProjectionOptions
+        {
+            Enabled = true,
+            EnableActorQueryEndpoints = true,
+        };
+        var lifecyclePort = new WorkflowExecutionProjectionLifecycleService(
+            options,
             activationService,
             releaseService,
             sinkManager,
             liveSinkForwarder);
+        var queryPort = new WorkflowExecutionProjectionQueryService(
+            options,
+            queryReader);
+        return new ProjectionPortsHarness(lifecyclePort, queryPort);
     }
 
     private static IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> BuildReducers() =>
@@ -708,6 +722,80 @@ public class WorkflowExecutionProjectionServiceTests
         }
 
         public DateTimeOffset UtcNow { get; set; }
+    }
+
+    private sealed class ProjectionPortsHarness
+        : IWorkflowExecutionProjectionLifecyclePort,
+          IWorkflowExecutionProjectionQueryPort
+    {
+        private readonly IWorkflowExecutionProjectionLifecyclePort _lifecyclePort;
+        private readonly IWorkflowExecutionProjectionQueryPort _queryPort;
+
+        public ProjectionPortsHarness(
+            IWorkflowExecutionProjectionLifecyclePort lifecyclePort,
+            IWorkflowExecutionProjectionQueryPort queryPort)
+        {
+            _lifecyclePort = lifecyclePort;
+            _queryPort = queryPort;
+        }
+
+        public bool ProjectionEnabled => _lifecyclePort.ProjectionEnabled;
+
+        public bool EnableActorQueryEndpoints => _queryPort.EnableActorQueryEndpoints;
+
+        public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
+            string rootActorId,
+            string workflowName,
+            string input,
+            string commandId,
+            CancellationToken ct = default)
+            => _lifecyclePort.EnsureActorProjectionAsync(rootActorId, workflowName, input, commandId, ct);
+
+        public Task AttachLiveSinkAsync(
+            IWorkflowExecutionProjectionLease lease,
+            IWorkflowRunEventSink sink,
+            CancellationToken ct = default)
+            => _lifecyclePort.AttachLiveSinkAsync(lease, sink, ct);
+
+        public Task DetachLiveSinkAsync(
+            IWorkflowExecutionProjectionLease lease,
+            IWorkflowRunEventSink sink,
+            CancellationToken ct = default)
+            => _lifecyclePort.DetachLiveSinkAsync(lease, sink, ct);
+
+        public Task ReleaseActorProjectionAsync(
+            IWorkflowExecutionProjectionLease lease,
+            CancellationToken ct = default)
+            => _lifecyclePort.ReleaseActorProjectionAsync(lease, ct);
+
+        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
+            string actorId,
+            CancellationToken ct = default)
+            => _queryPort.GetActorSnapshotAsync(actorId, ct);
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
+            int take = 200,
+            CancellationToken ct = default)
+            => _queryPort.ListActorSnapshotsAsync(take, ct);
+
+        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
+            string actorId,
+            int take = 200,
+            CancellationToken ct = default)
+            => _queryPort.ListActorTimelineAsync(actorId, take, ct);
+
+        public Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
+            string actorId,
+            int take = 200,
+            CancellationToken ct = default)
+            => _queryPort.GetActorRelationsAsync(actorId, take, ct);
+
+        public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            CancellationToken ct = default)
+            => _queryPort.GetActorRelationSubgraphAsync(actorId, depth, take, ct);
     }
 
     private sealed class ObservableWorkflowExecutionReadModelStore

@@ -74,7 +74,7 @@ sequenceDiagram
   participant CtxFactory as "WorkflowRunContextFactory"
   participant Engine as "WorkflowRunExecutionEngine"
   participant Resolver as "WorkflowRunActorResolver"
-  participant Port as "IWorkflowExecutionProjectionPort"
+  participant Port as "IWorkflowExecutionProjectionLifecyclePort"
   participant WFAgent as "WorkflowGAgent"
   participant Sink as "WorkflowRunEventChannel"
 
@@ -116,7 +116,7 @@ flowchart LR
   BUS["ProjectionSessionEventHub<WorkflowRunEvent>\nworkflow-run:{actorId}:{commandId}"]
   CH["WorkflowRunEventChannel"]
 
-  QP["WorkflowExecutionProjectionService(IWorkflowExecutionProjectionPort)"]
+  QP["Projection Ports(Lifecycle/Query)"]
   ACT["WorkflowProjectionActivationService"]
   REL["WorkflowProjectionReleaseService"]
   SUB["WorkflowProjectionSinkSubscriptionManager"]
@@ -215,8 +215,8 @@ sequenceDiagram
 - 传入 `actorId` 的 run 请求不允许切换 workflow；workflow 变更必须创建新 actor。
 - `WorkflowGAgent` 子 Actor ID 使用 `"{parentActorId}:{roleId}"` 命名空间，避免跨 workflow 根 Actor 冲突。
 - Actor 事件域不承载 CQRS 命令语义：不在 `EventEnvelope` metadata 与 `StartWorkflowEvent` 中传递 `commandId`。
-- `WorkflowExecutionProjectionService` 以 `ActorId` 为共享投影上下文键，同一 Actor 多次触发共享读模型与事件流。
-- `WorkflowExecutionProjectionService` 仅作为 facade，对外暴露统一端口；具体激活/释放/查询/sink 推送分别委托到 `Activation/Release/QueryReader/LiveSinkForwarder` 组件。
+- `WorkflowExecutionProjectionLifecycleService` 以 `ActorId` 为共享投影上下文键，同一 Actor 多次触发共享投影会话与事件流。
+- `WorkflowExecutionProjectionLifecycleService` 与 `WorkflowExecutionProjectionQueryService` 职责分离：生命周期与查询走独立端口，避免读写边界侵蚀。
 - Application/Projection 编排类受 CI 体量守卫约束（非空行数与依赖数上限），避免职责反弹。
 - Projection 启动并发（`Ensure/Release`）由 `projection:{rootActorId}` 协调 Actor 串行裁决，不依赖进程内 `SemaphoreSlim`。
 - `AttachLiveSink/DetachLiveSink` 通过 `workflow-run:{actorId}:{commandId}` 事件流订阅/退订，不在 `WorkflowExecutionProjectionContext` 维护 sink 事实态。

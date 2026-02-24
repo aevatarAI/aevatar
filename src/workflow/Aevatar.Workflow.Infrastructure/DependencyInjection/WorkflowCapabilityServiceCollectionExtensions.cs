@@ -47,6 +47,8 @@ public static class WorkflowCapabilityServiceCollectionExtensions
 
         if (!string.IsNullOrWhiteSpace(readModelOptions.Provider))
             options.ReadModelProvider = readModelOptions.Provider.Trim();
+        if (!string.IsNullOrWhiteSpace(readModelOptions.RelationProvider))
+            options.RelationProvider = readModelOptions.RelationProvider.Trim();
 
         options.ReadModelMode = readModelOptions.Mode;
         options.FailOnUnsupportedCapabilities = readModelOptions.FailOnUnsupportedCapabilities;

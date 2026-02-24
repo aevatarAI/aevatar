@@ -8,14 +8,10 @@ public sealed class WorkflowExecutionRelationProjector
 {
     private const string UnknownToken = "unknown";
     private readonly IProjectionRelationStore _relationStore;
-    private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _readModelStore;
 
-    public WorkflowExecutionRelationProjector(
-        IProjectionRelationStore relationStore,
-        IProjectionReadModelStore<WorkflowExecutionReport, string> readModelStore)
+    public WorkflowExecutionRelationProjector(IProjectionRelationStore relationStore)
     {
         _relationStore = relationStore;
-        _readModelStore = readModelStore;
     }
 
     public async ValueTask InitializeAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
@@ -37,15 +33,48 @@ public sealed class WorkflowExecutionRelationProjector
             ct);
     }
 
-    public ValueTask ProjectAsync(
+    public async ValueTask ProjectAsync(
         WorkflowExecutionProjectionContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
-        _ = context;
-        _ = envelope;
-        _ = ct;
-        return ValueTask.CompletedTask;
+        var payload = envelope.Payload;
+        if (payload == null)
+            return;
+
+        var runNodeId = BuildRunNodeId(context.RootActorId, context.CommandId);
+        var now = ResolveEventTimestamp(envelope);
+
+        if (payload.Is(StepRequestEvent.Descriptor))
+        {
+            var evt = payload.Unpack<StepRequestEvent>();
+            await UpsertStepRelationAsync(
+                context,
+                runNodeId,
+                evt.StepId,
+                evt.StepType,
+                evt.TargetRole,
+                workerId: "",
+                success: null,
+                now,
+                ct);
+            return;
+        }
+
+        if (payload.Is(StepCompletedEvent.Descriptor))
+        {
+            var evt = payload.Unpack<StepCompletedEvent>();
+            await UpsertStepRelationAsync(
+                context,
+                runNodeId,
+                evt.StepId,
+                stepType: "",
+                targetRole: "",
+                evt.WorkerId,
+                evt.Success,
+                now,
+                ct);
+        }
     }
 
     public async ValueTask CompleteAsync(
@@ -53,8 +82,7 @@ public sealed class WorkflowExecutionRelationProjector
         IReadOnlyList<WorkflowExecutionTopologyEdge> topology,
         CancellationToken ct = default)
     {
-        var report = await _readModelStore.GetAsync(context.RootActorId, ct);
-        var completedAt = report?.EndedAt ?? DateTimeOffset.UtcNow;
+        var completedAt = DateTimeOffset.UtcNow;
         var runNodeId = BuildRunNodeId(context.RootActorId, context.CommandId);
 
         await _relationStore.UpsertNodeAsync(
@@ -79,10 +107,12 @@ public sealed class WorkflowExecutionRelationProjector
 
         foreach (var edge in topology)
         {
-            var parentNodeId = NormalizeToken(edge.Parent);
-            var childNodeId = NormalizeToken(edge.Child);
-            if (parentNodeId.Length == 0 || childNodeId.Length == 0)
+            var rawParentNodeId = edge.Parent?.Trim() ?? "";
+            var rawChildNodeId = edge.Child?.Trim() ?? "";
+            if (rawParentNodeId.Length == 0 || rawChildNodeId.Length == 0)
                 continue;
+            var parentNodeId = NormalizeToken(rawParentNodeId);
+            var childNodeId = NormalizeToken(rawChildNodeId);
 
             await _relationStore.UpsertNodeAsync(
                 BuildActorNode(parentNodeId, context.WorkflowName, completedAt),
@@ -98,33 +128,101 @@ public sealed class WorkflowExecutionRelationProjector
                     completedAt),
                 ct);
         }
+    }
 
-        if (report == null || report.Steps.Count == 0)
+    private async Task UpsertStepRelationAsync(
+        WorkflowExecutionProjectionContext context,
+        string runNodeId,
+        string stepId,
+        string stepType,
+        string targetRole,
+        string workerId,
+        bool? success,
+        DateTimeOffset updatedAt,
+        CancellationToken ct)
+    {
+        var rawStepId = stepId?.Trim() ?? "";
+        if (rawStepId.Length == 0)
             return;
 
-        foreach (var step in report.Steps)
+        var normalizedStepId = NormalizeToken(rawStepId);
+        var stepNodeId = BuildStepNodeId(context.RootActorId, normalizedStepId);
+        var stepTypeValue = stepType?.Trim() ?? "";
+        var targetRoleValue = targetRole?.Trim() ?? "";
+        var workerIdValue = workerId?.Trim() ?? "";
+        var successValue = success;
+        if (stepTypeValue.Length == 0 ||
+            targetRoleValue.Length == 0 ||
+            workerIdValue.Length == 0 ||
+            !successValue.HasValue)
         {
-            var stepId = NormalizeToken(step.StepId);
-            if (stepId.Length == 0)
-                continue;
+            var existingNode = await TryGetNodeAsync(stepNodeId, ct);
+            if (existingNode != null)
+            {
+                if (stepTypeValue.Length == 0 &&
+                    existingNode.Properties.TryGetValue("stepType", out var existingStepType))
+                {
+                    stepTypeValue = existingStepType;
+                }
 
-            var stepNodeId = BuildStepNodeId(context.RootActorId, stepId);
-            var stepUpdatedAt = step.CompletedAt ?? step.RequestedAt ?? completedAt;
-            await _relationStore.UpsertNodeAsync(
-                BuildStepNode(
-                    stepNodeId,
-                    context.RootActorId,
-                    step,
-                    stepUpdatedAt),
-                ct);
-            await _relationStore.UpsertEdgeAsync(
-                BuildEdge(
-                    runNodeId,
-                    stepNodeId,
-                    WorkflowExecutionRelationConstants.RelationContainsStep,
-                    stepUpdatedAt),
-                ct);
+                if (targetRoleValue.Length == 0 &&
+                    existingNode.Properties.TryGetValue("targetRole", out var existingTargetRole))
+                {
+                    targetRoleValue = existingTargetRole;
+                }
+
+                if (workerIdValue.Length == 0 &&
+                    existingNode.Properties.TryGetValue("workerId", out var existingWorkerId))
+                {
+                    workerIdValue = existingWorkerId;
+                }
+
+                if (!successValue.HasValue &&
+                    existingNode.Properties.TryGetValue("success", out var existingSuccess) &&
+                    bool.TryParse(existingSuccess, out var parsedSuccess))
+                {
+                    successValue = parsedSuccess;
+                }
+            }
         }
+
+        await _relationStore.UpsertNodeAsync(
+            BuildStepNode(
+                stepNodeId,
+                context.RootActorId,
+                normalizedStepId,
+                stepTypeValue,
+                targetRoleValue,
+                workerIdValue,
+                successValue,
+                updatedAt),
+            ct);
+        await _relationStore.UpsertEdgeAsync(
+            BuildEdge(
+                runNodeId,
+                stepNodeId,
+                WorkflowExecutionRelationConstants.RelationContainsStep,
+                updatedAt),
+            ct);
+    }
+
+    private async Task<ProjectionRelationNode?> TryGetNodeAsync(
+        string nodeId,
+        CancellationToken ct)
+    {
+        var subgraph = await _relationStore.GetSubgraphAsync(
+            new ProjectionRelationQuery
+            {
+                Scope = WorkflowExecutionRelationConstants.Scope,
+                RootNodeId = nodeId,
+                Direction = ProjectionRelationDirection.Both,
+                Depth = 1,
+                Take = 1,
+            },
+            ct);
+        return subgraph.Nodes.FirstOrDefault(x =>
+            string.Equals(x.NodeId, nodeId, StringComparison.Ordinal) &&
+            x.Properties.Count > 0);
     }
 
     private static ProjectionRelationNode BuildActorNode(
@@ -172,7 +270,11 @@ public sealed class WorkflowExecutionRelationProjector
     private static ProjectionRelationNode BuildStepNode(
         string stepNodeId,
         string rootActorId,
-        WorkflowExecutionStepTrace step,
+        string stepId,
+        string stepType,
+        string targetRole,
+        string workerId,
+        bool? success,
         DateTimeOffset updatedAt)
     {
         return new ProjectionRelationNode
@@ -183,11 +285,11 @@ public sealed class WorkflowExecutionRelationProjector
             Properties = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["rootActorId"] = NormalizeToken(rootActorId),
-                ["stepId"] = NormalizeToken(step.StepId),
-                ["stepType"] = step.StepType ?? "",
-                ["targetRole"] = step.TargetRole ?? "",
-                ["workerId"] = step.WorkerId ?? "",
-                ["success"] = step.Success?.ToString() ?? "",
+                ["stepId"] = NormalizeToken(stepId),
+                ["stepType"] = stepType ?? "",
+                ["targetRole"] = targetRole ?? "",
+                ["workerId"] = workerId ?? "",
+                ["success"] = success?.ToString() ?? "",
             },
             UpdatedAt = updatedAt,
         };
@@ -239,5 +341,17 @@ public sealed class WorkflowExecutionRelationProjector
     {
         var normalized = token?.Trim() ?? "";
         return normalized.Length == 0 ? UnknownToken : normalized;
+    }
+
+    private static DateTimeOffset ResolveEventTimestamp(EventEnvelope envelope)
+    {
+        var ts = envelope.Timestamp;
+        if (ts == null)
+            return DateTimeOffset.UtcNow;
+
+        var dt = ts.ToDateTime();
+        if (dt.Kind != DateTimeKind.Utc)
+            dt = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+        return new DateTimeOffset(dt);
     }
 }
