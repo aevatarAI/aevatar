@@ -76,6 +76,30 @@ flowchart LR
   GRAF --> G2["Graph Provider #2...#N"]
 ```
 
+### 6.1 目标架构图（同层并行，且同类 Provider 仅 1 个）
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  RM["ReadModel(TReadModel)"] --> UD["UnifiedProjectionStoreDispatcher<TReadModel,TKey>"]
+  UD --> W1["StoreBinding #1: DocumentStoreAdapter<TReadModel,TKey>"]
+  UD --> W2["StoreBinding #2: GraphStoreAdapter<TReadModel,TKey>"]
+  UD --> Wn["StoreBinding #N: OtherStoreAdapter<TReadModel,TKey>"]
+
+  M1["ReadModelDocumentMetadata<TReadModel>"] --> W1
+  M2["ReadModelGraphMetadata<TReadModel>"] --> W2
+
+  W1 --> D1["Document Provider(单实例): Elasticsearch"]
+
+  W2 --> G1["Graph Provider(单实例): Neo4j"]
+```
+
+目标语义：
+
+1. `DocumentStore` 与 `GraphStore` 处于同一层抽象（`StoreBinding`），只是在能力类型上不同。
+2. 一对多以 `ReadModel` 为中心，由统一分发器一次性分发到多个 `StoreBinding`。
+3. 每个 `StoreBinding` 仅绑定一个同类 provider（Document 1个、Graph 1个），不再引入 provider 级 fan-out 与“首注册查询源”语义。
+
 ## 7. 冗余问题清单（重排后）
 
 ### P1-1（高）“ReadModel -> 多Store”未被统一抽象表达
@@ -129,7 +153,7 @@ flowchart LR
 | 抽象最小化与去冗余 | 20 | 12 | 双模型、marker+反射、系统键外泄导致冗余偏高。 |
 | 数据模型一致性 | 15 | 10 | Graph descriptor/store model 重复，Neo4j managed 双存。 |
 | Provider 扩展一致性 | 10 | 8 | 注册模式一致，但能力面不对称（metadata、materializer）。 |
-| 测试与治理门禁 | 10 | 9 | fan-out 语义与基础门禁覆盖较好。 |
+| 测试与治理门禁 | 10 | 9 | 关键路由与投影流程门禁覆盖较好。 |
 | 文档一致性 | 5 | 2 | 仍有旧术语未清理。 |
 
 ### 8.2 总分
@@ -142,10 +166,124 @@ flowchart LR
 2. 当前代码**功能上可并行写入**，但**架构形状并不并行**，你的不适感来自真实的结构不对称。
 3. 现状更准确描述是：`ReadModel` 经过“Document链 + Graph链”双分支处理，而不是统一 `Store` 家族的一体化多路分发。
 
-## 10. 后续重构优先级（无兼容性）
+## 10. 实施计划（彻底重构，无兼容性）
 
-1. **P0**：引入统一 Store 抽象与统一分发器，把 `DocumentStore/GraphStore` 收敛为同层实现。
-2. **P0**：删除 Graph 双模型之一，消灭 `ProjectionGraphMaterializer` 的桥接角色。
-3. **P1**：移除 marker + 反射路由，改成显式能力注册或类型化 Store 绑定。
-4. **P1**：将 runtime 生命周期系统键从 `Stores.Abstractions` 下沉到 runtime/provider。
-5. **P1**：补齐文档清理，消除旧术语和旧架构描述。
+### 10.1 约束与完成定义
+
+1. 不保留兼容层，不保留旧接口转发壳。
+2. 同类 Provider 仅 1 个实例：Document 1 个、Graph 1 个。
+3. 删除 fan-out 与“主存储/首注册查询源”语义。
+4. `ReadModel -> N Stores` 由统一分发器一次分发完成，`DocumentStore` 与 `GraphStore` 为同层实现。
+5. 完成定义：旧双主干代码删除，Workflow 投影链路跑通，核心测试与架构门禁通过。
+
+### 10.2 总体实施图（阶段化）
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  P0["Phase 0: 冻结目标与删除范围"] --> P1["Phase 1: 抽象重建(统一Store分发)"]
+  P1 --> P2["Phase 2: Runtime替换(去Fanout/去双路由)"]
+  P2 --> P3["Phase 3: Provider重接入(单实例)"]
+  P3 --> P4["Phase 4: Workflow接入改造"]
+  P4 --> P5["Phase 5: 测试迁移与门禁收敛"]
+  P5 --> P6["Phase 6: 文档清理与最终复评分"]
+```
+
+### 10.3 Phase 0：冻结目标与删除范围
+
+1. 固化目标模型：统一分发器 + 同层 StoreBinding + 同类 Provider 单实例。
+2. 固化删除范围（本次重构必须删除）：
+   - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionDocumentStoreFanout.cs`
+   - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionGraphStoreFanout.cs`
+   - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionMaterializationRouter.cs`
+   - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionGraphMaterializer.cs`
+   - `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Selection/IProjectionMaterializationRouter.cs`
+   - `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Selection/IProjectionGraphMaterializer.cs`
+   - `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Core/IProjectionStoreRegistration.cs`
+   - `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Core/DelegateProjectionStoreRegistration.cs`
+3. 冻结决策：不再接受“恢复 fan-out”或“恢复主存储”回退。
+
+### 10.4 Phase 1：抽象重建（统一 Store 分发）
+
+1. 在 `Aevatar.CQRS.Projection.Stores.Abstractions` 新增统一 StoreBinding 抽象（建议放在 `Abstractions/Stores/`）。
+2. 用统一写入契约替代 `IDocumentProjectionStore` 与 `IProjectionGraphStore` 的分裂入口。
+3. 保留“索引元数据、关系语义”，但改为按 ReadModel 泛型/绑定提供，不再依赖 marker 能力链。
+4. 统一 Graph 模型：删除 `GraphNodeDescriptor/GraphEdgeDescriptor` 与 `ProjectionGraphNode/ProjectionGraphEdge` 的双模型并存状态，只保留一套权威模型。
+5. 将 `ProjectionGraphSystemPropertyKeys` 下沉到 Runtime 或 Provider，抽象层不暴露运行态内部键。
+
+### 10.5 Phase 2：Runtime 替换（去 Fanout/去双路由）
+
+1. 在 `Aevatar.CQRS.Projection.Runtime` 新增统一分发器实现（单入口、一次分发）。
+2. 删除旧双路由注册：
+   - `src/Aevatar.CQRS.Projection.Runtime/DependencyInjection/ServiceCollectionExtensions.cs` 中移除 `ProjectionDocumentStoreFanout/ProjectionGraphStoreFanout/ProjectionMaterializationRouter/ProjectionGraphMaterializer` 注册。
+3. Runtime DI 改为注册：
+   - 统一 Dispatcher
+   - StoreBinding 列表
+   - ReadModel 元数据解析器（若保留）
+4. 禁止运行时 `IsAssignableFrom` 能力判定路径。
+
+### 10.6 Phase 3：Provider 重接入（单实例）
+
+1. `Aevatar.CQRS.Projection.Providers.Elasticsearch` 仅提供 Document 绑定实现，不再提供注册到 fan-out 的适配。
+2. `Aevatar.CQRS.Projection.Providers.Neo4j` 仅提供 Graph 绑定实现，不再提供注册到 fan-out 的适配。
+3. `Aevatar.CQRS.Projection.Providers.InMemory` 保留开发/测试用途实现，但同样走统一 Binding 协议。
+4. 宿主层强约束：同类 provider 只能注册 1 个，多于 1 个直接 fail-fast。
+
+### 10.7 Phase 4：Workflow 接入改造
+
+1. 改造 `src/workflow/Aevatar.Workflow.Projection`：
+   - Projector/Updater 从旧 `IProjectionMaterializationRouter<,>` 切换到统一 dispatcher。
+   - QueryReader 保持读侧语义，但查询端口来自统一 StoreBinding 模型。
+2. 改造 `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowProjectionProviderServiceCollectionExtensions.cs`：
+   - 删除旧 `Add*StoreRegistration` 路径。
+   - 使用“Document 单实例 + Graph 单实例”显式注册。
+   - 发现同类重复注册时抛异常（启动失败）。
+3. `WorkflowExecutionReport` 保留索引、关系语义提供能力，但不再承担 marker 路由职责。
+
+### 10.8 Phase 5：测试迁移与门禁收敛
+
+1. 删除或改写依赖 fan-out/首注册语义的测试：
+   - `test/Aevatar.CQRS.Projection.Core.Tests/ProjectionReadModelRuntimeTests.cs`
+   - `test/Aevatar.CQRS.Projection.Core.Tests/ProjectionReadModelStoreSelectorTests.cs`
+2. 新增统一分发器测试矩阵：
+   - 单 ReadModel 同时写 Document+Graph
+   - 同类 provider 重复注册 fail-fast
+   - Graph/Document 任一写入失败时的错误传播策略
+3. Workflow 侧新增端到端断言：
+   - 一次投影后，ES 可检索，Neo4j 可遍历，且来源同一 ReadModel 版本。
+4. 必跑命令：
+   - `dotnet build aevatar.slnx --nologo`
+   - `dotnet test aevatar.slnx --nologo`
+   - `bash tools/ci/architecture_guards.sh`
+   - `bash tools/ci/projection_route_mapping_guard.sh`
+   - `bash tools/ci/test_stability_guards.sh`
+
+### 10.9 Phase 6：文档清理与最终复评分
+
+1. 清理旧术语：
+   - `IProjectionReadModelStore`
+   - `Projection*Fanout`
+   - `主存储/首注册查询源`
+2. 更新文档：
+   - `src/Aevatar.CQRS.Projection.Stores.Abstractions/README.md`
+   - `src/Aevatar.CQRS.Projection.Runtime/README.md`
+   - `src/workflow/Aevatar.Workflow.Projection/README.md`
+   - `docs/architecture/projection-readmodel-full-refactor-plan-2026-02-24.md`
+3. 复评输出：在 `docs/audit-scorecard/` 新增重构后评分文档，验证目标分数应达到 `>= 90`。
+
+### 10.10 风险与控制
+
+1. 风险：一次性删除旧抽象导致大面积编译错误。  
+控制：按 Phase 提交，每阶段必须 `build + targeted test` 全绿后进入下一阶段。
+2. 风险：Workflow 查询端口在接口切换时出现行为回归。  
+控制：先补端到端基线测试，再替换实现。
+3. 风险：Neo4j 属性模型收敛时丢失 managed 生命周期信息。  
+控制：先定义唯一事实字段，再做一次性数据迁移脚本或重建策略。
+
+### 10.11 里程碑验收清单（必须全部满足）
+
+1. 代码中不存在 `ProjectionDocumentStoreFanout`、`ProjectionGraphStoreFanout`、`ProjectionMaterializationRouter`、`ProjectionGraphMaterializer`。
+2. Runtime 不存在基于 marker 的 `IsAssignableFrom` 路由分支。
+3. 同类 Provider 重复注册时启动即失败（明确错误消息）。
+4. 单次投影可同时落 Document 与 Graph，两边查询结果一致。
+5. 全量测试与门禁命令通过。
