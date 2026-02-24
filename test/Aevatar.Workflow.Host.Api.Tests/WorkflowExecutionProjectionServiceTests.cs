@@ -791,15 +791,17 @@ public class WorkflowExecutionProjectionServiceTests
         public Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
             string actorId,
             int take = 200,
+            WorkflowActorRelationQueryOptions? options = null,
             CancellationToken ct = default)
-            => _queryPort.GetActorRelationsAsync(actorId, take, ct);
+            => _queryPort.GetActorRelationsAsync(actorId, take, options, ct);
 
         public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
             string actorId,
             int depth = 2,
             int take = 200,
+            WorkflowActorRelationQueryOptions? options = null,
             CancellationToken ct = default)
-            => _queryPort.GetActorRelationSubgraphAsync(actorId, depth, take, ct);
+            => _queryPort.GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
     }
 
     private sealed class ObservableWorkflowExecutionReadModelStore

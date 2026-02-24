@@ -146,7 +146,7 @@ public sealed class WorkflowExecutionRelationProjector
             return;
 
         var normalizedStepId = NormalizeToken(rawStepId);
-        var stepNodeId = BuildStepNodeId(context.RootActorId, normalizedStepId);
+        var stepNodeId = BuildStepNodeId(context.RootActorId, context.CommandId, normalizedStepId);
         var stepTypeValue = stepType?.Trim() ?? "";
         var targetRoleValue = targetRole?.Trim() ?? "";
         var workerIdValue = workerId?.Trim() ?? "";
@@ -190,6 +190,7 @@ public sealed class WorkflowExecutionRelationProjector
             BuildStepNode(
                 stepNodeId,
                 context.RootActorId,
+                context.CommandId,
                 normalizedStepId,
                 stepTypeValue,
                 targetRoleValue,
@@ -270,6 +271,7 @@ public sealed class WorkflowExecutionRelationProjector
     private static ProjectionRelationNode BuildStepNode(
         string stepNodeId,
         string rootActorId,
+        string commandId,
         string stepId,
         string stepType,
         string targetRole,
@@ -285,6 +287,7 @@ public sealed class WorkflowExecutionRelationProjector
             Properties = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["rootActorId"] = NormalizeToken(rootActorId),
+                ["commandId"] = NormalizeToken(commandId),
                 ["stepId"] = NormalizeToken(stepId),
                 ["stepType"] = stepType ?? "",
                 ["targetRole"] = targetRole ?? "",
@@ -323,11 +326,12 @@ public sealed class WorkflowExecutionRelationProjector
         return $"run:{normalizedRootActorId}:{normalizedCommandId}";
     }
 
-    private static string BuildStepNodeId(string rootActorId, string stepId)
+    private static string BuildStepNodeId(string rootActorId, string commandId, string stepId)
     {
         var normalizedRootActorId = NormalizeToken(rootActorId);
+        var normalizedCommandId = NormalizeToken(commandId);
         var normalizedStepId = NormalizeToken(stepId);
-        return $"step:{normalizedRootActorId}:{normalizedStepId}";
+        return $"step:{normalizedRootActorId}:{normalizedCommandId}:{normalizedStepId}";
     }
 
     private static string BuildEdgeId(string relationType, string fromNodeId, string toNodeId)

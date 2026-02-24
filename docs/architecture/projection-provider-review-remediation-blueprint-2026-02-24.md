@@ -139,14 +139,15 @@
 - `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowProjectionProviderServiceCollectionExtensions.cs`
 - `src/workflow/Aevatar.Workflow.Infrastructure/DependencyInjection/WorkflowCapabilityServiceCollectionExtensions.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Configuration/WorkflowExecutionProjectionOptions.cs`
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowReadModelSelectionPlanner.cs`
+- `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/ProjectionReadModelRuntimeOptions.cs`
+- `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreSelectionPlanner.cs`
 - `src/workflow/Aevatar.Workflow.Projection/README.md`
 
 改造项：
 
 1. Provider 注册改为按需注册，不再全量注册三套 provider。
-2. 配置缺失与未知 provider 启动即失败。
-3. 移除隐式 provider 默认回退行为（保持配置显式化）。
+2. 未知 provider 启动即失败；缺失 provider 时仅在 Host 组合层应用默认值（`InMemory`）。
+3. Workflow 业务选项移除 provider 语义，统一由 `ProjectionReadModelRuntimeOptions` 承载。
 4. 文档示例统一改为 `FullName` 绑定键。
 
 ## 5. 测试计划（必须新增）

@@ -248,6 +248,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         public Task<IReadOnlyList<WorkflowActorRelationItem>> ListActorRelationsAsync(
             string actorId,
             int take = 200,
+            WorkflowActorRelationQueryOptions? options = null,
             CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<WorkflowActorRelationItem>>([]);
 
@@ -255,6 +256,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             string actorId,
             int depth = 2,
             int take = 200,
+            WorkflowActorRelationQueryOptions? options = null,
             CancellationToken ct = default) =>
             Task.FromResult(new WorkflowActorRelationSubgraph
             {

@@ -475,8 +475,10 @@ internal sealed class FakeProjectionService :
     public Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
         string actorId,
         int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
         CancellationToken ct = default)
     {
+        _ = options;
         _ = ct;
         if (!RelationsByActorId.TryGetValue(actorId, out var relations))
             relations = [];
@@ -488,10 +490,12 @@ internal sealed class FakeProjectionService :
         string actorId,
         int depth = 2,
         int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
         CancellationToken ct = default)
     {
         _ = depth;
         _ = take;
+        _ = options;
         _ = ct;
         if (!SubgraphByActorId.TryGetValue(actorId, out var subgraph))
         {

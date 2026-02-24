@@ -76,6 +76,8 @@ public sealed class WorkflowExecutionRelationProjectorTests
             string.Equals(x.RelationType, WorkflowExecutionRelationConstants.RelationContainsStep, StringComparison.Ordinal));
         var stepNode = subgraph.Nodes.Single(x =>
             string.Equals(x.NodeType, WorkflowExecutionRelationConstants.StepNodeType, StringComparison.Ordinal));
+        stepNode.NodeId.Should().Be("step:root:cmd-1:step-1");
+        stepNode.Properties["commandId"].Should().Be("cmd-1");
         stepNode.Properties["stepType"].Should().Be("llm_call");
         stepNode.Properties["targetRole"].Should().Be("assistant");
         stepNode.Properties["workerId"].Should().Be("assistant-1");

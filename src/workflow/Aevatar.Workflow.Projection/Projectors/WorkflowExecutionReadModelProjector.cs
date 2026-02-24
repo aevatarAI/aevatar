@@ -33,6 +33,7 @@ public sealed class WorkflowExecutionReadModelProjector
     {
         var report = new WorkflowExecutionReport
         {
+            Id = context.RootActorId,
             ReportVersion = "1.0",
             ProjectionScope = WorkflowExecutionProjectionScope.ActorShared,
             TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot,

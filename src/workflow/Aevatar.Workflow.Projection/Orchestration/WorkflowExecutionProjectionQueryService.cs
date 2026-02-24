@@ -40,15 +40,17 @@ public sealed class WorkflowExecutionProjectionQueryService
     public Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
         string actorId,
         int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
         CancellationToken ct = default) =>
-        GetRelationsAsync(actorId, take, ct);
+        GetRelationsInternalAsync(actorId, take, options, ct);
 
     public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
         string actorId,
         int depth = 2,
         int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
         CancellationToken ct = default) =>
-        GetRelationSubgraphAsync(actorId, depth, take, ct);
+        GetRelationSubgraphInternalAsync(actorId, depth, take, options, ct);
 
     protected override Task<WorkflowActorSnapshot?> ReadSnapshotCoreAsync(
         string entityId,
@@ -70,14 +72,14 @@ public sealed class WorkflowExecutionProjectionQueryService
         string entityId,
         int take,
         CancellationToken ct)
-        => _queryReader.GetActorRelationsAsync(entityId, take, ct);
+        => _queryReader.GetActorRelationsAsync(entityId, take, options: null, ct);
 
     protected override Task<WorkflowActorRelationSubgraph> ReadRelationSubgraphCoreAsync(
         string entityId,
         int depth,
         int take,
         CancellationToken ct)
-        => _queryReader.GetActorRelationSubgraphAsync(entityId, depth, take, ct);
+        => _queryReader.GetActorRelationSubgraphAsync(entityId, depth, take, options: null, ct);
 
     protected override WorkflowActorRelationSubgraph CreateEmptyRelationSubgraph(string entityId)
     {
@@ -85,5 +87,30 @@ public sealed class WorkflowExecutionProjectionQueryService
         {
             RootNodeId = entityId ?? string.Empty,
         };
+    }
+
+    private async Task<IReadOnlyList<WorkflowActorRelationItem>> GetRelationsInternalAsync(
+        string actorId,
+        int take,
+        WorkflowActorRelationQueryOptions? options,
+        CancellationToken ct)
+    {
+        if (!QueryEnabledCore || string.IsNullOrWhiteSpace(actorId))
+            return [];
+
+        return await _queryReader.GetActorRelationsAsync(actorId, take, options, ct);
+    }
+
+    private async Task<WorkflowActorRelationSubgraph> GetRelationSubgraphInternalAsync(
+        string actorId,
+        int depth,
+        int take,
+        WorkflowActorRelationQueryOptions? options,
+        CancellationToken ct)
+    {
+        if (!QueryEnabledCore || string.IsNullOrWhiteSpace(actorId))
+            return CreateEmptyRelationSubgraph(actorId);
+
+        return await _queryReader.GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
     }
 }

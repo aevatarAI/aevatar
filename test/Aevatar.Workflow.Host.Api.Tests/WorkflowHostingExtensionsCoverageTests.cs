@@ -117,9 +117,18 @@ public class WorkflowHostingExtensionsCoverageTests
         var relationRegistrations = services
             .Where(x => x.ServiceType == typeof(IProjectionRelationStoreRegistration))
             .ToList();
+        var selectionOptionsRegistrations = services
+            .Where(x => x.ServiceType == typeof(IProjectionStoreSelectionRuntimeOptions))
+            .ToList();
 
         providerRegistrations.Should().HaveCount(1);
         relationRegistrations.Should().HaveCount(1);
+        selectionOptionsRegistrations.Should().HaveCount(1);
+
+        using var provider = services.BuildServiceProvider();
+        var selectionOptions = provider.GetRequiredService<IProjectionStoreSelectionRuntimeOptions>();
+        selectionOptions.ReadModelProvider.Should().Be(ProjectionReadModelProviderNames.Elasticsearch);
+        selectionOptions.RelationProvider.Should().Be(ProjectionReadModelProviderNames.InMemory);
     }
 
     [Fact]
@@ -137,5 +146,25 @@ public class WorkflowHostingExtensionsCoverageTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Unsupported projection provider*");
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_WhenPolicyDeniesInMemoryRelationFactStore_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:ReadModel:Provider"] = ProjectionReadModelProviderNames.Elasticsearch,
+                ["Projection:ReadModel:RelationProvider"] = ProjectionReadModelProviderNames.InMemory,
+                ["Projection:ReadModel:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Policies:DenyInMemoryRelationFactStore"] = "true",
+            })
+            .Build();
+
+        Action act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*InMemory relation provider is not allowed*");
     }
 }

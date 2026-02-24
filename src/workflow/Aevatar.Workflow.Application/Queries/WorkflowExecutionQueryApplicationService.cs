@@ -58,18 +58,20 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
     public async Task<IReadOnlyList<WorkflowActorRelationItem>> ListActorRelationsAsync(
         string actorId,
         int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
         CancellationToken ct = default)
     {
         if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
             return [];
 
-        return await _projectionPort.GetActorRelationsAsync(actorId, take, ct);
+        return await _projectionPort.GetActorRelationsAsync(actorId, take, options, ct);
     }
 
     public async Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
         string actorId,
         int depth = 2,
         int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
         CancellationToken ct = default)
     {
         if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
@@ -78,6 +80,6 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
                 RootNodeId = actorId ?? string.Empty,
             };
 
-        return await _projectionPort.GetActorRelationSubgraphAsync(actorId, depth, take, ct);
+        return await _projectionPort.GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
     }
 }

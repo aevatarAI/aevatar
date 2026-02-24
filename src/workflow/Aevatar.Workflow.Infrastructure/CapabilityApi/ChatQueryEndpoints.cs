@@ -63,9 +63,12 @@ public static class ChatQueryEndpoints
         string actorId,
         IWorkflowExecutionQueryApplicationService queryService,
         int take = 200,
+        string? direction = null,
+        string[]? relationTypes = null,
         CancellationToken ct = default)
     {
-        var relations = await queryService.ListActorRelationsAsync(actorId, take, ct);
+        var relationOptions = BuildRelationQueryOptions(direction, relationTypes);
+        var relations = await queryService.ListActorRelationsAsync(actorId, take, relationOptions, ct);
         return Results.Ok(relations);
     }
 
@@ -74,10 +77,46 @@ public static class ChatQueryEndpoints
         IWorkflowExecutionQueryApplicationService queryService,
         int depth = 2,
         int take = 200,
+        string? direction = null,
+        string[]? relationTypes = null,
         CancellationToken ct = default)
     {
-        var subgraph = await queryService.GetActorRelationSubgraphAsync(actorId, depth, take, ct);
+        var relationOptions = BuildRelationQueryOptions(direction, relationTypes);
+        var subgraph = await queryService.GetActorRelationSubgraphAsync(actorId, depth, take, relationOptions, ct);
         return Results.Ok(subgraph);
+    }
+
+    private static WorkflowActorRelationQueryOptions BuildRelationQueryOptions(
+        string? direction,
+        string[]? relationTypes)
+    {
+        return new WorkflowActorRelationQueryOptions
+        {
+            Direction = ParseDirection(direction),
+            RelationTypes = NormalizeRelationTypes(relationTypes),
+        };
+    }
+
+    private static WorkflowActorRelationDirection ParseDirection(string? direction)
+    {
+        if (string.IsNullOrWhiteSpace(direction))
+            return WorkflowActorRelationDirection.Both;
+
+        return Enum.TryParse<WorkflowActorRelationDirection>(direction.Trim(), ignoreCase: true, out var parsed)
+            ? parsed
+            : WorkflowActorRelationDirection.Both;
+    }
+
+    private static IReadOnlyList<string> NormalizeRelationTypes(IReadOnlyList<string>? relationTypes)
+    {
+        if (relationTypes == null || relationTypes.Count == 0)
+            return [];
+
+        return relationTypes
+            .Select(x => x?.Trim() ?? "")
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 
 }

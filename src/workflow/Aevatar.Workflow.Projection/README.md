@@ -18,13 +18,13 @@
   - `WorkflowProjectionSinkFailurePolicy`（sink 异常策略）
   - `WorkflowProjectionReadModelUpdater`（read model 元信息更新）
   - `WorkflowProjectionQueryReader`（query 映射读取）
-  - `WorkflowReadModelSelectionPlanner`（统一 read model/relation provider 归一化、mode 校验与 capability 选择参数生成）
+  - Store 选择统一由 `IProjectionStoreSelectionPlanner` 执行（Workflow 仅提供 relation 需求，不持有 provider/index kind 决策）
 - 领域上下文：`IWorkflowExecutionProjectionContextFactory`、`WorkflowExecutionProjectionContext`
 - 实时输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
 - 领域投影实现：reducers、projectors、read model（不包含 Provider Store 实现）
 - 领域 DI 组合：`AddWorkflowExecutionProjectionCQRS(...)`
 - Provider 能力校验：启动期由 `WorkflowReadModelStartupValidationHostedService` 预校验，运行时选择阶段继续按 `ProjectionReadModelCapabilityValidator` 校验
-- ReadModel 选择规则统一：DI store 解析与 Startup validation 均复用 `WorkflowReadModelSelectionPlanner`，避免双处规则漂移
+- ReadModel 选择规则统一：DI store 解析与 Startup validation 均复用 `IProjectionStoreSelectionPlanner + IProjectionStoreSelectionRuntimeOptions`，避免双处规则漂移
 
 本项目依赖：
 
@@ -83,21 +83,19 @@ FAQ：
 - 扩展 ReadModel Provider（推荐）：
   - 实现 `IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>`
   - 在 Host/Extensions 侧注册（例如 `Aevatar.Workflow.Extensions.Hosting.AddWorkflowProjectionReadModelProviders(...)`）
-  - 通过 `WorkflowExecutionProjection:ReadModelProvider` 或 `Projection:ReadModel:Provider` 选择 Provider
+  - 通过 `Projection:ReadModel:*` 配置选择 Provider（Workflow 层不再暴露 provider 选择字段）
 
 ## Provider 配置
 
-- `WorkflowExecutionProjection:ReadModelProvider`：`InMemory`（默认）/`Elasticsearch`/`Neo4j`
-- `WorkflowExecutionProjection:RelationProvider`：关系存储 provider；留空时回退到 `ReadModelProvider`
-- `WorkflowExecutionProjection:FailOnUnsupportedCapabilities`：能力不匹配时是否 fail-fast（默认 `true`）
+- Provider 选择统一配置入口：`Projection:ReadModel:*`（绑定到 `ProjectionReadModelRuntimeOptions`）
+- `Projection:ReadModel:Provider`：`InMemory`（默认）/`Elasticsearch`/`Neo4j`
+- `Projection:ReadModel:RelationProvider`：关系 provider；留空时回退到 `Provider`
+- `Projection:ReadModel:FailOnUnsupportedCapabilities`：能力不匹配时是否 fail-fast（默认 `true`）
+- `Projection:ReadModel:Mode`：读模型运行模式（`StateOnly` 会在选择阶段 fail-fast）
+- `Projection:ReadModel:Bindings:*`：ReadModel -> IndexKind 约束（键必须为 `ReadModel` 的 `Type.FullName`，例如 `Aevatar.Workflow.Projection.ReadModels.WorkflowExecutionReport: Document`）
 - `WorkflowExecutionProjection:ValidateReadModelProviderOnStartup`：是否在 Host 启动阶段预校验 Provider 选择与能力（默认 `true`）
 - `WorkflowExecutionProjection:ValidateRelationProviderOnStartup`：是否在 Host 启动阶段预校验 Relation Provider（默认 `true`）
-- `WorkflowExecutionProjection:ReadModelBindings`：ReadModel -> IndexKind 约束（键必须为 `ReadModel` 的 `Type.FullName`，例如 `Aevatar.Workflow.Projection.ReadModels.WorkflowExecutionReport: Document`）
-- 推荐统一配置入口：`Projection:ReadModel:*`（由 Infrastructure 映射到 Workflow 投影选项）
-- `Projection:ReadModel:Provider`：全局默认 Provider（当前由 `WorkflowCapabilityServiceCollectionExtensions` 覆盖到模块选项）
-- `Projection:ReadModel:RelationProvider`：全局默认 Relation Provider（覆盖到模块选项）
-- `Projection:ReadModel:FailOnUnsupportedCapabilities`：全局 fail-fast 策略
-- `Projection:ReadModel:Bindings:*`：全局 ReadModel -> IndexKind 约束
+- `Projection:Policies:DenyInMemoryRelationFactStore`：禁用 InMemory relation 作为事实源（生产建议开启）
 - `Projection:ReadModel:Providers:Elasticsearch:Endpoints`：Elasticsearch endpoint 列表
 - `Projection:ReadModel:Providers:Elasticsearch:IndexPrefix`：索引前缀
 - `Projection:ReadModel:Providers:Elasticsearch:RequestTimeoutMs`：请求超时
@@ -107,6 +105,9 @@ FAQ：
 - `Projection:ReadModel:Providers:Elasticsearch:MissingIndexBehavior`：索引缺失行为（`Throw` / `WarnAndReturnEmpty`，默认 `Throw`）
 - `Projection:ReadModel:Providers:Elasticsearch:MutateMaxRetryCount`：`MutateAsync` OCC 冲突重试次数（默认 `3`）
 - `Projection:ReadModel:Providers:Elasticsearch:Username/Password`：可选基础认证
+- 关系查询参数：
+  - `/actors/{actorId}/relations` 支持 `direction` 与 `relationTypes`
+  - `/actors/{actorId}/relation-subgraph` 支持 `direction` 与 `relationTypes`
 - 扩展 run 输出协议：
   - 保持 `WorkflowRunEvent` 不变，新增 presentation adapter 进行协议映射
   - 不改 Application 用例编排代码

@@ -9,22 +9,31 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedService
 {
+    private static readonly ProjectionReadModelRequirements WorkflowRelationRequirements = new(
+        requiresRelations: true,
+        requiresRelationTraversal: true,
+        requiresAliases: false,
+        requiresSchemaValidation: false);
+
     private readonly IServiceProvider _serviceProvider;
     private readonly WorkflowExecutionProjectionOptions _options;
-    private readonly IWorkflowReadModelSelectionPlanner _selectionPlanner;
+    private readonly IProjectionStoreSelectionPlanner _selectionPlanner;
+    private readonly IProjectionStoreSelectionRuntimeOptions _selectionRuntimeOptions;
     private readonly IProjectionStoreStartupValidator _startupValidator;
     private readonly ILogger<WorkflowReadModelStartupValidationHostedService> _logger;
 
     public WorkflowReadModelStartupValidationHostedService(
         IServiceProvider serviceProvider,
         WorkflowExecutionProjectionOptions options,
-        IWorkflowReadModelSelectionPlanner selectionPlanner,
+        IProjectionStoreSelectionPlanner selectionPlanner,
+        IProjectionStoreSelectionRuntimeOptions selectionRuntimeOptions,
         IProjectionStoreStartupValidator startupValidator,
         ILogger<WorkflowReadModelStartupValidationHostedService>? logger = null)
     {
         _serviceProvider = serviceProvider;
         _options = options;
         _selectionPlanner = selectionPlanner;
+        _selectionRuntimeOptions = selectionRuntimeOptions;
         _startupValidator = startupValidator;
         _logger = logger ?? NullLogger<WorkflowReadModelStartupValidationHostedService>.Instance;
     }
@@ -35,7 +44,10 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
         if (!_options.Enabled)
             return Task.CompletedTask;
 
-        var selectionPlan = _selectionPlanner.Build(_options);
+        var selectionPlan = _selectionPlanner.Build(
+            _selectionRuntimeOptions,
+            typeof(WorkflowExecutionReport),
+            WorkflowRelationRequirements);
 
         if (_options.ValidateReadModelProviderOnStartup)
         {

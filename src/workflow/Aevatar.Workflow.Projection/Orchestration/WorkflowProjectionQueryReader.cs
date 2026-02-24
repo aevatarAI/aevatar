@@ -58,6 +58,7 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
     public async Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
         string actorId,
         int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
         CancellationToken ct = default)
     {
         var actorIdValue = actorId?.Trim() ?? "";
@@ -65,12 +66,15 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
             return [];
 
         var boundedTake = Math.Clamp(take, 1, 1000);
+        var direction = MapDirection(options?.Direction ?? WorkflowActorRelationDirection.Both);
+        var relationTypes = NormalizeRelationTypes(options?.RelationTypes);
         var edges = await _relationStore.GetNeighborsAsync(
             new ProjectionRelationQuery
             {
                 Scope = WorkflowExecutionRelationConstants.Scope,
                 RootNodeId = actorIdValue,
-                Direction = ProjectionRelationDirection.Both,
+                Direction = direction,
+                RelationTypes = relationTypes,
                 Take = boundedTake,
             },
             ct);
@@ -81,6 +85,7 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         string actorId,
         int depth = 2,
         int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
         CancellationToken ct = default)
     {
         var actorIdValue = actorId?.Trim() ?? "";
@@ -89,16 +94,41 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
 
         var boundedDepth = Math.Clamp(depth, 1, 8);
         var boundedTake = Math.Clamp(take, 1, 2000);
+        var direction = MapDirection(options?.Direction ?? WorkflowActorRelationDirection.Both);
+        var relationTypes = NormalizeRelationTypes(options?.RelationTypes);
         var subgraph = await _relationStore.GetSubgraphAsync(
             new ProjectionRelationQuery
             {
                 Scope = WorkflowExecutionRelationConstants.Scope,
                 RootNodeId = actorIdValue,
-                Direction = ProjectionRelationDirection.Both,
+                Direction = direction,
+                RelationTypes = relationTypes,
                 Depth = boundedDepth,
                 Take = boundedTake,
             },
             ct);
         return _mapper.ToActorRelationSubgraph(actorIdValue, subgraph);
+    }
+
+    private static ProjectionRelationDirection MapDirection(WorkflowActorRelationDirection direction)
+    {
+        return direction switch
+        {
+            WorkflowActorRelationDirection.Outbound => ProjectionRelationDirection.Outbound,
+            WorkflowActorRelationDirection.Inbound => ProjectionRelationDirection.Inbound,
+            _ => ProjectionRelationDirection.Both,
+        };
+    }
+
+    private static IReadOnlyList<string> NormalizeRelationTypes(IReadOnlyList<string>? relationTypes)
+    {
+        if (relationTypes == null || relationTypes.Count == 0)
+            return [];
+
+        return relationTypes
+            .Select(x => x?.Trim() ?? "")
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 }

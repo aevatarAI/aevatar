@@ -7,6 +7,7 @@ using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Workflow.Extensions.Hosting;
 
@@ -24,35 +25,84 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
         services.AddSingleton<WorkflowProjectionProviderRegistrationsMarker>();
 
-        var providerSelection = ResolveProviderSelection(configuration);
+        var runtimeOptions = ResolveRuntimeOptions(configuration);
+        var providerSelection = ResolveProviderSelection(runtimeOptions);
+        EnforceRelationProviderPolicy(configuration, providerSelection.RelationProvider);
+
+        services.Replace(ServiceDescriptor.Singleton(runtimeOptions));
+        services.Replace(ServiceDescriptor.Singleton<IProjectionStoreSelectionRuntimeOptions>(sp =>
+            sp.GetRequiredService<ProjectionReadModelRuntimeOptions>()));
+
         RegisterReadModelProvider(services, configuration, providerSelection.ReadModelProvider);
         RegisterRelationProvider(services, configuration, providerSelection.RelationProvider);
 
         return services;
     }
 
-    private static ProviderSelection ResolveProviderSelection(IConfiguration configuration)
+    private static ProjectionReadModelRuntimeOptions ResolveRuntimeOptions(IConfiguration configuration)
     {
-        var workflowReadModelProvider = configuration["WorkflowExecutionProjection:ReadModelProvider"];
-        var workflowRelationProvider = configuration["WorkflowExecutionProjection:RelationProvider"];
-        var globalReadModelProvider = configuration["Projection:ReadModel:Provider"];
-        var globalRelationProvider = configuration["Projection:ReadModel:RelationProvider"];
+        var options = new ProjectionReadModelRuntimeOptions();
+        configuration.GetSection("Projection:ReadModel").Bind(options);
+        return options;
+    }
 
+    private static ProviderSelection ResolveProviderSelection(ProjectionReadModelRuntimeOptions runtimeOptions)
+    {
         var readModelProvider = NormalizeOrDefaultProvider(
-            !string.IsNullOrWhiteSpace(globalReadModelProvider)
-                ? globalReadModelProvider
-                : workflowReadModelProvider,
+            runtimeOptions.Provider,
             ProjectionReadModelProviderNames.InMemory,
             "Projection:ReadModel:Provider");
 
         var relationProvider = NormalizeOrDefaultProvider(
-            !string.IsNullOrWhiteSpace(globalRelationProvider)
-                ? globalRelationProvider
-                : workflowRelationProvider,
+            runtimeOptions.RelationProvider,
             readModelProvider,
             "Projection:ReadModel:RelationProvider");
 
         return new ProviderSelection(readModelProvider, relationProvider);
+    }
+
+    private static void EnforceRelationProviderPolicy(
+        IConfiguration configuration,
+        string relationProviderName)
+    {
+        var denyInMemoryRelationProvider = ParseBool(
+            configuration["Projection:Policies:DenyInMemoryRelationFactStore"]);
+        var environment = ResolveRuntimeEnvironment(configuration["Projection:Policies:Environment"]);
+        var production = IsProductionEnvironment(environment);
+
+        if ((denyInMemoryRelationProvider || production) &&
+            string.Equals(
+                relationProviderName,
+                ProjectionReadModelProviderNames.InMemory,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "InMemory relation provider is not allowed by projection policy. " +
+                "Use a durable relation provider (for example Neo4j) for production/distributed deployments.");
+        }
+    }
+
+    private static string ResolveRuntimeEnvironment(string? configuredEnvironment)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredEnvironment))
+            return configuredEnvironment.Trim();
+
+        var dotnetEnvironment = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        if (!string.IsNullOrWhiteSpace(dotnetEnvironment))
+            return dotnetEnvironment.Trim();
+
+        var aspnetEnvironment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        return aspnetEnvironment?.Trim() ?? "";
+    }
+
+    private static bool IsProductionEnvironment(string environment)
+    {
+        return string.Equals(environment, "Production", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ParseBool(string? value)
+    {
+        return bool.TryParse(value, out var parsed) && parsed;
     }
 
     private static string NormalizeOrDefaultProvider(

@@ -18,6 +18,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -42,12 +43,13 @@ public class WorkflowExecutionProjectionRegistrationTests
     {
         var services = new ServiceCollection();
         RegisterInMemoryProvider(services);
-        services.AddWorkflowExecutionProjectionCQRS(options =>
+        ConfigureStoreSelectionOptions(services, options =>
         {
-            options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory;
-            options.ReadModelBindings[typeof(WorkflowExecutionReport).FullName!] = ProjectionReadModelIndexKind.Document.ToString();
+            options.Provider = ProjectionReadModelProviderNames.InMemory;
+            options.Bindings[typeof(WorkflowExecutionReport).FullName!] = ProjectionReadModelIndexKind.Document.ToString();
             options.FailOnUnsupportedCapabilities = true;
         });
+        services.AddWorkflowExecutionProjectionCQRS();
 
         await using var provider = services.BuildServiceProvider();
         Func<Task> act = () => StartHostedServicesAsync(provider);
@@ -92,8 +94,9 @@ public class WorkflowExecutionProjectionRegistrationTests
         var services = new ServiceCollection();
         RegisterInMemoryProvider(services);
         RegisterElasticsearchProvider(services);
-        services.AddWorkflowExecutionProjectionCQRS(options =>
-            options.ReadModelProvider = ProjectionReadModelProviderNames.Elasticsearch);
+        ConfigureStoreSelectionOptions(services, options =>
+            options.Provider = ProjectionReadModelProviderNames.Elasticsearch);
+        services.AddWorkflowExecutionProjectionCQRS();
 
         using var provider = services.BuildServiceProvider();
         var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
@@ -113,11 +116,12 @@ public class WorkflowExecutionProjectionRegistrationTests
         var services = new ServiceCollection();
         RegisterInMemoryProvider(services);
         RegisterElasticsearchProvider(services);
-        services.AddWorkflowExecutionProjectionCQRS(options =>
+        ConfigureStoreSelectionOptions(services, options =>
         {
-            options.ReadModelProvider = ProjectionReadModelProviderNames.Elasticsearch;
+            options.Provider = ProjectionReadModelProviderNames.Elasticsearch;
             options.RelationProvider = ProjectionReadModelProviderNames.InMemory;
         });
+        services.AddWorkflowExecutionProjectionCQRS();
 
         using var provider = services.BuildServiceProvider();
         var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
@@ -133,8 +137,9 @@ public class WorkflowExecutionProjectionRegistrationTests
         var services = new ServiceCollection();
         RegisterInMemoryProvider(services);
         RegisterNeo4jProvider(services);
-        services.AddWorkflowExecutionProjectionCQRS(options =>
-            options.ReadModelProvider = ProjectionReadModelProviderNames.Neo4j);
+        ConfigureStoreSelectionOptions(services, options =>
+            options.Provider = ProjectionReadModelProviderNames.Neo4j);
+        services.AddWorkflowExecutionProjectionCQRS();
 
         await using var provider = services.BuildServiceProvider();
         var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
@@ -152,8 +157,9 @@ public class WorkflowExecutionProjectionRegistrationTests
     {
         var services = new ServiceCollection();
         RegisterInMemoryProvider(services);
-        services.AddWorkflowExecutionProjectionCQRS(options =>
-            options.ReadModelProvider = "UnknownProvider");
+        ConfigureStoreSelectionOptions(services, options =>
+            options.Provider = "UnknownProvider");
+        services.AddWorkflowExecutionProjectionCQRS();
         using var provider = services.BuildServiceProvider();
 
         Action act = () => provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
@@ -167,12 +173,13 @@ public class WorkflowExecutionProjectionRegistrationTests
     {
         var services = new ServiceCollection();
         RegisterInMemoryProvider(services);
-        services.AddWorkflowExecutionProjectionCQRS(options =>
+        ConfigureStoreSelectionOptions(services, options =>
         {
-            options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory;
-            options.ReadModelBindings[typeof(WorkflowExecutionReport).FullName!] = ProjectionReadModelIndexKind.Document.ToString();
+            options.Provider = ProjectionReadModelProviderNames.InMemory;
+            options.Bindings[typeof(WorkflowExecutionReport).FullName!] = ProjectionReadModelIndexKind.Document.ToString();
             options.FailOnUnsupportedCapabilities = true;
         });
+        services.AddWorkflowExecutionProjectionCQRS();
         using var provider = services.BuildServiceProvider();
 
         Action act = () => provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
@@ -186,12 +193,13 @@ public class WorkflowExecutionProjectionRegistrationTests
     {
         var services = new ServiceCollection();
         RegisterInMemoryProvider(services);
-        services.AddWorkflowExecutionProjectionCQRS(options =>
+        ConfigureStoreSelectionOptions(services, options =>
         {
-            options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory;
-            options.ReadModelBindings[typeof(WorkflowExecutionReport).FullName!] = ProjectionReadModelIndexKind.Document.ToString();
+            options.Provider = ProjectionReadModelProviderNames.InMemory;
+            options.Bindings[typeof(WorkflowExecutionReport).FullName!] = ProjectionReadModelIndexKind.Document.ToString();
             options.FailOnUnsupportedCapabilities = false;
         });
+        services.AddWorkflowExecutionProjectionCQRS();
         using var provider = services.BuildServiceProvider();
 
         Action act = () => provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
@@ -204,11 +212,12 @@ public class WorkflowExecutionProjectionRegistrationTests
     {
         var services = new ServiceCollection();
         RegisterInMemoryProvider(services);
-        services.AddWorkflowExecutionProjectionCQRS(options =>
+        ConfigureStoreSelectionOptions(services, options =>
         {
-            options.ReadModelMode = ProjectionReadModelMode.StateOnly;
-            options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory;
+            options.Mode = ProjectionReadModelMode.StateOnly;
+            options.Provider = ProjectionReadModelProviderNames.InMemory;
         });
+        services.AddWorkflowExecutionProjectionCQRS();
 
         using var provider = services.BuildServiceProvider();
         Action act = () => provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
@@ -303,10 +312,12 @@ public class WorkflowExecutionProjectionRegistrationTests
         var services = new ServiceCollection();
         RegisterInMemoryProvider(services);
         RegisterElasticsearchProvider(services);
-        services.AddWorkflowExecutionProjectionCQRS(options =>
-            options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory);
-        services.AddWorkflowExecutionProjectionCQRS(options =>
-            options.ReadModelProvider = ProjectionReadModelProviderNames.Elasticsearch);
+        ConfigureStoreSelectionOptions(services, options =>
+            options.Provider = ProjectionReadModelProviderNames.InMemory);
+        services.AddWorkflowExecutionProjectionCQRS();
+        ConfigureStoreSelectionOptions(services, options =>
+            options.Provider = ProjectionReadModelProviderNames.Elasticsearch);
+        services.AddWorkflowExecutionProjectionCQRS();
 
         using var provider = services.BuildServiceProvider();
         var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
@@ -459,6 +470,17 @@ public class WorkflowExecutionProjectionRegistrationTests
                 AutoCreateConstraints = false,
             },
             scope: WorkflowExecutionRelationConstants.Scope);
+    }
+
+    private static void ConfigureStoreSelectionOptions(
+        IServiceCollection services,
+        Action<ProjectionReadModelRuntimeOptions> configure)
+    {
+        var options = new ProjectionReadModelRuntimeOptions();
+        configure(options);
+        services.Replace(ServiceDescriptor.Singleton(options));
+        services.Replace(ServiceDescriptor.Singleton<IProjectionStoreSelectionRuntimeOptions>(sp =>
+            sp.GetRequiredService<ProjectionReadModelRuntimeOptions>()));
     }
 
     public sealed class CustomChatRequestReducer : WorkflowExecutionEventReducerBase<ChatRequestEvent>

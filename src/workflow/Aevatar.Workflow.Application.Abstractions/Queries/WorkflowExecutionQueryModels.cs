@@ -45,6 +45,20 @@ public sealed class WorkflowActorRelationNode
     public Dictionary<string, string> Properties { get; set; } = [];
 }
 
+public enum WorkflowActorRelationDirection
+{
+    Outbound = 0,
+    Inbound = 1,
+    Both = 2,
+}
+
+public sealed class WorkflowActorRelationQueryOptions
+{
+    public WorkflowActorRelationDirection Direction { get; set; } = WorkflowActorRelationDirection.Both;
+
+    public IReadOnlyList<string> RelationTypes { get; set; } = [];
+}
+
 public sealed class WorkflowActorRelationItem
 {
     public string EdgeId { get; set; } = string.Empty;

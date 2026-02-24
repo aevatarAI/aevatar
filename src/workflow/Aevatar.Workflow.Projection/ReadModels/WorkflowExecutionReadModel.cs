@@ -32,6 +32,8 @@ public sealed class WorkflowExecutionReport
       IHasProjectionTimeline,
       IHasProjectionRoleReplies
 {
+    public string RootActorId { get; set; } = "";
+    public string CommandId { get; set; } = "";
     public string ReportVersion { get; set; } = "1.0";
     public WorkflowExecutionProjectionScope ProjectionScope { get; set; } = WorkflowExecutionProjectionScope.ActorShared;
     public WorkflowExecutionTopologySource TopologySource { get; set; } = WorkflowExecutionTopologySource.RuntimeSnapshot;

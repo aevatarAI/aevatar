@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -24,6 +25,11 @@ public static class ServiceCollectionExtensions
     private static readonly Type ProjectionProjectorContract = typeof(IProjectionProjector<,>);
     private static readonly Type WorkflowExecutionReducerContract = typeof(IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>);
     private static readonly Type WorkflowExecutionProjectorContract = typeof(IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>);
+    private static readonly ProjectionReadModelRequirements WorkflowRelationRequirements = new(
+        requiresRelations: true,
+        requiresRelationTraversal: true,
+        requiresAliases: false,
+        requiresSchemaValidation: false);
 
     public static IServiceCollection AddWorkflowExecutionProjectionCQRS(
         this IServiceCollection services,
@@ -34,9 +40,11 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
+        services.TryAddSingleton<ProjectionReadModelRuntimeOptions>();
+        services.TryAddSingleton<IProjectionStoreSelectionRuntimeOptions>(sp =>
+            sp.GetRequiredService<ProjectionReadModelRuntimeOptions>());
         services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
         services.AddProjectionReadModelRuntime();
-        services.TryAddSingleton<IWorkflowReadModelSelectionPlanner, WorkflowReadModelSelectionPlanner>();
         RegisterWorkflowReadModelStoreSelector(services);
         RegisterWorkflowRelationStoreSelector(services);
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
@@ -120,10 +128,8 @@ public static class ServiceCollectionExtensions
     {
         services.Replace(ServiceDescriptor.Singleton<IProjectionReadModelStore<WorkflowExecutionReport, string>>(sp =>
         {
-            var options = sp.GetRequiredService<WorkflowExecutionProjectionOptions>();
-            var selectionPlanner = sp.GetRequiredService<IWorkflowReadModelSelectionPlanner>();
             var storeFactory = sp.GetRequiredService<IProjectionReadModelStoreFactory>();
-            var selectionPlan = selectionPlanner.Build(options);
+            var selectionPlan = BuildSelectionPlan(sp);
 
             return storeFactory.Create<WorkflowExecutionReport, string>(
                 sp,
@@ -136,16 +142,24 @@ public static class ServiceCollectionExtensions
     {
         services.Replace(ServiceDescriptor.Singleton<IProjectionRelationStore>(sp =>
         {
-            var options = sp.GetRequiredService<WorkflowExecutionProjectionOptions>();
-            var selectionPlanner = sp.GetRequiredService<IWorkflowReadModelSelectionPlanner>();
             var relationStoreFactory = sp.GetRequiredService<IProjectionRelationStoreFactory>();
-            var selectionPlan = selectionPlanner.Build(options);
+            var selectionPlan = BuildSelectionPlan(sp);
 
             return relationStoreFactory.Create(
                 sp,
                 selectionPlan.RelationSelectionOptions,
                 selectionPlan.RelationRequirements);
         }));
+    }
+
+    private static ProjectionStoreSelectionPlan BuildSelectionPlan(IServiceProvider serviceProvider)
+    {
+        var selectionPlanner = serviceProvider.GetRequiredService<IProjectionStoreSelectionPlanner>();
+        var runtimeOptions = serviceProvider.GetRequiredService<IProjectionStoreSelectionRuntimeOptions>();
+        return selectionPlanner.Build(
+            runtimeOptions,
+            typeof(WorkflowExecutionReport),
+            WorkflowRelationRequirements);
     }
 
     private sealed class PassthroughEventDeduplicator : IEventDeduplicator

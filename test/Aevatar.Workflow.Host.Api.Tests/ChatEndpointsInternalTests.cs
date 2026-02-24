@@ -291,13 +291,36 @@ public class ChatEndpointsInternalTests
             },
         };
 
-        var result = await ChatQueryEndpoints.ListActorRelations("actor-1", queryService, 50, CancellationToken.None);
+        var result = await ChatQueryEndpoints.ListActorRelations("actor-1", queryService, 50, ct: CancellationToken.None);
         var (statusCode, body) = await ExecuteResultAsync(result);
         using var doc = JsonDocument.Parse(body);
 
         statusCode.Should().Be(StatusCodes.Status200OK);
         doc.RootElement.GetArrayLength().Should().Be(1);
         doc.RootElement[0].GetProperty("edgeId").GetString().Should().Be("edge-1");
+    }
+
+    [Fact]
+    public async Task ListActorRelations_WhenDirectionAndRelationTypesProvided_ShouldForwardQueryOptions()
+    {
+        var queryService = new FakeQueryService
+        {
+            ActorQueryEnabledValue = true,
+        };
+
+        var result = await ChatQueryEndpoints.ListActorRelations(
+            "actor-1",
+            queryService,
+            50,
+            direction: "Outbound",
+            relationTypes: ["CHILD_OF", "OWNS"],
+            ct: CancellationToken.None);
+        var (statusCode, _) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        queryService.LastRelationQueryOptions.Should().NotBeNull();
+        queryService.LastRelationQueryOptions!.Direction.Should().Be(WorkflowActorRelationDirection.Outbound);
+        queryService.LastRelationQueryOptions.RelationTypes.Should().BeEquivalentTo(["CHILD_OF", "OWNS"]);
     }
 
     [Fact]
@@ -338,7 +361,7 @@ public class ChatEndpointsInternalTests
             },
         };
 
-        var result = await ChatQueryEndpoints.GetActorRelationSubgraph("actor-1", queryService, 2, 50, CancellationToken.None);
+        var result = await ChatQueryEndpoints.GetActorRelationSubgraph("actor-1", queryService, 2, 50, ct: CancellationToken.None);
         var (statusCode, body) = await ExecuteResultAsync(result);
         using var doc = JsonDocument.Parse(body);
 
@@ -414,6 +437,7 @@ public class ChatEndpointsInternalTests
         public Dictionary<string, IReadOnlyList<WorkflowActorTimelineItem>> TimelineByActorId { get; set; } = new(StringComparer.Ordinal);
         public Dictionary<string, IReadOnlyList<WorkflowActorRelationItem>> RelationsByActorId { get; set; } = new(StringComparer.Ordinal);
         public Dictionary<string, WorkflowActorRelationSubgraph> SubgraphByActorId { get; set; } = new(StringComparer.Ordinal);
+        public WorkflowActorRelationQueryOptions? LastRelationQueryOptions { get; private set; }
 
         public bool ActorQueryEnabled => ActorQueryEnabledValue;
 
@@ -439,8 +463,11 @@ public class ChatEndpointsInternalTests
         public Task<IReadOnlyList<WorkflowActorRelationItem>> ListActorRelationsAsync(
             string actorId,
             int take = 200,
+            WorkflowActorRelationQueryOptions? options = null,
             CancellationToken ct = default)
         {
+            LastRelationQueryOptions = options;
+            _ = options;
             if (!RelationsByActorId.TryGetValue(actorId, out var items))
                 items = [];
 
@@ -451,10 +478,13 @@ public class ChatEndpointsInternalTests
             string actorId,
             int depth = 2,
             int take = 200,
+            WorkflowActorRelationQueryOptions? options = null,
             CancellationToken ct = default)
         {
+            LastRelationQueryOptions = options;
             _ = depth;
             _ = take;
+            _ = options;
             if (!SubgraphByActorId.TryGetValue(actorId, out var item))
             {
                 item = new WorkflowActorRelationSubgraph

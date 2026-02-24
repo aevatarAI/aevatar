@@ -6,10 +6,6 @@ namespace Aevatar.Workflow.Projection.Configuration;
 public sealed class WorkflowExecutionProjectionOptions
     : IProjectionRuntimeOptions
 {
-    public WorkflowExecutionProjectionOptions()
-    {
-        ReadModelBindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-    }
 
     /// <summary>
     /// Enables projection pipeline registration.
@@ -43,21 +39,6 @@ public sealed class WorkflowExecutionProjectionOptions
     public int RunProjectionFinalizeGraceTimeoutMs { get; set; } = 1500;
 
     /// <summary>
-    /// Read-model store provider name, e.g. InMemory/Elasticsearch.
-    /// </summary>
-    public string ReadModelProvider { get; set; } = ProjectionReadModelProviderNames.InMemory;
-
-    /// <summary>
-    /// Relation store provider name. Empty means fallback to <see cref="ReadModelProvider"/>.
-    /// </summary>
-    public string RelationProvider { get; set; } = "";
-
-    /// <summary>
-    /// Whether unsupported provider capabilities should fail fast during startup registration.
-    /// </summary>
-    public bool FailOnUnsupportedCapabilities { get; set; } = true;
-
-    /// <summary>
     /// Whether to pre-validate read-model provider selection and capabilities during host startup.
     /// </summary>
     public bool ValidateReadModelProviderOnStartup { get; set; } = true;
@@ -66,15 +47,4 @@ public sealed class WorkflowExecutionProjectionOptions
     /// Whether to pre-validate relation provider selection and capabilities during host startup.
     /// </summary>
     public bool ValidateRelationProviderOnStartup { get; set; } = true;
-
-    /// <summary>
-    /// Optional read-model binding requirements (ReadModelType.FullName -> IndexKind).
-    /// </summary>
-    public Dictionary<string, string> ReadModelBindings { get; }
-
-    /// <summary>
-    /// Read-model runtime mode.
-    /// Workflow keeps CustomReadModel as default; StateOnly is rejected during DI composition.
-    /// </summary>
-    public ProjectionReadModelMode ReadModelMode { get; set; } = ProjectionReadModelMode.CustomReadModel;
 }
