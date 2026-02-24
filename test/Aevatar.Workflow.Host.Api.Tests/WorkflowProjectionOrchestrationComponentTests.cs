@@ -13,19 +13,6 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowProjectionOrchestrationComponentTests
 {
     [Fact]
-    public async Task LeaseManager_ShouldForwardAcquireAndRelease()
-    {
-        var ownership = new TrackingOwnershipCoordinator();
-        var manager = new WorkflowProjectionLeaseManager(ownership);
-
-        await manager.AcquireAsync("actor-1", "cmd-1");
-        await manager.ReleaseAsync("actor-1", "cmd-1");
-
-        ownership.Acquired.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
-        ownership.Released.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
-    }
-
-    [Fact]
     public async Task ActivationService_ShouldStartProjectionAndReturnRuntimeLease()
     {
         var lifecycle = new RecordingLifecycleService();
@@ -35,7 +22,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             lifecycle,
             new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
             new DefaultWorkflowExecutionProjectionContextFactory(),
-            new WorkflowProjectionLeaseManager(ownership),
+            ownership,
             readModelUpdater);
 
         var lease = await activationService.EnsureAsync(
@@ -60,7 +47,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             new ThrowingLifecycleService(new InvalidOperationException("start failed")),
             new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
             new DefaultWorkflowExecutionProjectionContextFactory(),
-            new WorkflowProjectionLeaseManager(ownership),
+            ownership,
             new RecordingReadModelUpdater());
 
         var act = async () => await activationService.EnsureAsync(
@@ -192,17 +179,17 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
         await manager.AttachOrReplaceAsync(lease, sink, _ => ValueTask.CompletedTask);
         var first = hub.Subscriptions.Should().ContainSingle().Subject;
-        manager.GetSubscriptionCount(lease).Should().Be(1);
+        lease.GetLiveSinkSubscriptionCount().Should().Be(1);
 
         await manager.AttachOrReplaceAsync(lease, sink, _ => ValueTask.CompletedTask);
         hub.Subscriptions.Should().HaveCount(2);
         first.Disposed.Should().BeTrue();
-        manager.GetSubscriptionCount(lease).Should().Be(1);
+        lease.GetLiveSinkSubscriptionCount().Should().Be(1);
 
         var second = hub.Subscriptions[1];
         await manager.DetachAsync(lease, sink);
         second.Disposed.Should().BeTrue();
-        manager.GetSubscriptionCount(lease).Should().Be(0);
+        lease.GetLiveSinkSubscriptionCount().Should().Be(0);
     }
 
     [Fact]
@@ -256,14 +243,12 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     public async Task ReleaseService_WhenNoLiveSink_ShouldStopMarkAndRelease()
     {
         var lifecycle = new RecordingLifecycleService();
-        var sinkManager = new RecordingSinkSubscriptionManager();
         var readModelUpdater = new RecordingReadModelUpdater();
         var ownership = new TrackingOwnershipCoordinator();
         var releaseService = new WorkflowProjectionReleaseService(
             lifecycle,
-            sinkManager,
             readModelUpdater,
-            new WorkflowProjectionLeaseManager(ownership));
+            ownership);
         var lease = CreateLease("actor-release", "cmd-release");
 
         await releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None);
@@ -277,15 +262,16 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     public async Task ReleaseService_WhenLiveSinkExists_ShouldSkipStopAndRelease()
     {
         var lifecycle = new RecordingLifecycleService();
-        var sinkManager = new RecordingSinkSubscriptionManager { SubscriptionCount = 1 };
         var readModelUpdater = new RecordingReadModelUpdater();
         var ownership = new TrackingOwnershipCoordinator();
         var releaseService = new WorkflowProjectionReleaseService(
             lifecycle,
-            sinkManager,
             readModelUpdater,
-            new WorkflowProjectionLeaseManager(ownership));
+            ownership);
         var lease = CreateLease("actor-busy", "cmd-busy");
+        lease.AttachOrReplaceLiveSinkSubscription(
+            new NoopRunEventSink(),
+            new TrackingSubscription());
 
         await releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None);
 
@@ -382,9 +368,9 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         public DateTimeOffset UtcNow { get; }
     }
 
-    private sealed class RecordingSinkSubscriptionManager : IWorkflowProjectionSinkSubscriptionManager
+    private sealed class RecordingSinkSubscriptionManager
+        : IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent>
     {
-        public int SubscriptionCount { get; set; }
         public int DetachCalls { get; private set; }
 
         public Task AttachOrReplaceAsync(
@@ -412,11 +398,6 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             return Task.CompletedTask;
         }
 
-        public int GetSubscriptionCount(WorkflowExecutionRuntimeLease lease)
-        {
-            _ = lease;
-            return SubscriptionCount;
-        }
     }
 
     private sealed class RecordingReadModelUpdater : IWorkflowProjectionReadModelUpdater

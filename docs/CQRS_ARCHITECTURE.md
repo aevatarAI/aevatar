@@ -63,7 +63,7 @@ flowchart LR
    `ProjectionQueryPortServiceBase<>`（通用基类） +  
    `WorkflowProjectionActivationService`（激活） +  
    `WorkflowProjectionReleaseService`（释放） +  
-   `WorkflowProjectionLeaseManager`（ownership） +  
+   `IProjectionOwnershipCoordinator`（ownership） +  
    `WorkflowProjectionSinkSubscriptionManager`（订阅生命周期） +  
    `WorkflowProjectionLiveSinkForwarder`（sink 转发） +  
    `WorkflowProjectionSinkFailurePolicy`（异常策略） +  

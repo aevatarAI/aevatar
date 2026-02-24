@@ -2,7 +2,8 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowProjectionSinkSubscriptionManager : IWorkflowProjectionSinkSubscriptionManager
+public sealed class WorkflowProjectionSinkSubscriptionManager
+    : IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent>
 {
     private readonly IProjectionSessionEventHub<WorkflowRunEvent> _runEventStreamHub;
 
@@ -45,11 +46,5 @@ public sealed class WorkflowProjectionSinkSubscriptionManager : IWorkflowProject
         var streamSubscription = lease.DetachLiveSinkSubscription(sink);
         if (streamSubscription != null)
             await streamSubscription.DisposeAsync();
-    }
-
-    public int GetSubscriptionCount(WorkflowExecutionRuntimeLease lease)
-    {
-        ArgumentNullException.ThrowIfNull(lease);
-        return lease.GetLiveSinkSubscriptionCount();
     }
 }

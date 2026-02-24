@@ -582,7 +582,6 @@ public class WorkflowExecutionProjectionServiceTests
             streams,
             new WorkflowRunEventSessionCodec());
         var mapper = new WorkflowExecutionReadModelMapper();
-        var leaseManager = new WorkflowProjectionLeaseManager(ownershipCoordinator);
         var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventStreamHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventStreamHub, resolvedClock);
         var readModelUpdater = new WorkflowProjectionReadModelUpdater(materializationRouter, resolvedClock);
@@ -594,13 +593,12 @@ public class WorkflowExecutionProjectionServiceTests
             lifecycle,
             resolvedClock,
             new DefaultWorkflowExecutionProjectionContextFactory(),
-            leaseManager,
+            ownershipCoordinator,
             readModelUpdater);
         var releaseService = new WorkflowProjectionReleaseService(
             lifecycle,
-            sinkManager,
             readModelUpdater,
-            leaseManager);
+            ownershipCoordinator);
         var liveSinkForwarder = new WorkflowProjectionLiveSinkForwarder(sinkFailurePolicy);
 
         var lifecyclePort = new WorkflowExecutionProjectionLifecycleService(
@@ -628,7 +626,6 @@ public class WorkflowExecutionProjectionServiceTests
             graphStore);
         var runEventHub = new NoOpWorkflowRunEventHub();
         var mapper = new WorkflowExecutionReadModelMapper();
-        var leaseManager = new WorkflowProjectionLeaseManager(ownershipCoordinator);
         var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventHub, clock);
         var readModelUpdater = new WorkflowProjectionReadModelUpdater(materializationRouter, clock);
@@ -640,13 +637,12 @@ public class WorkflowExecutionProjectionServiceTests
             lifecycle,
             clock,
             new DefaultWorkflowExecutionProjectionContextFactory(),
-            leaseManager,
+            ownershipCoordinator,
             readModelUpdater);
         var releaseService = new WorkflowProjectionReleaseService(
             lifecycle,
-            sinkManager,
             readModelUpdater,
-            leaseManager);
+            ownershipCoordinator);
         var liveSinkForwarder = new WorkflowProjectionLiveSinkForwarder(sinkFailurePolicy);
 
         var options = new WorkflowExecutionProjectionOptions

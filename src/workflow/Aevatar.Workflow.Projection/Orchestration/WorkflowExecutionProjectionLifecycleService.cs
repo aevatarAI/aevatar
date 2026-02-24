@@ -11,10 +11,10 @@ public sealed class WorkflowExecutionProjectionLifecycleService
 {
     public WorkflowExecutionProjectionLifecycleService(
         WorkflowExecutionProjectionOptions options,
-        IWorkflowProjectionActivationService activationService,
-        IWorkflowProjectionReleaseService releaseService,
-        IWorkflowProjectionSinkSubscriptionManager sinkSubscriptionManager,
-        IWorkflowProjectionLiveSinkForwarder liveSinkForwarder)
+        IProjectionPortActivationService<WorkflowExecutionRuntimeLease> activationService,
+        IProjectionPortReleaseService<WorkflowExecutionRuntimeLease> releaseService,
+        IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent> sinkSubscriptionManager,
+        IProjectionPortLiveSinkForwarder<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent> liveSinkForwarder)
         : base(
             () => options.Enabled,
             activationService,

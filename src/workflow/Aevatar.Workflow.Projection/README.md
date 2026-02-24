@@ -12,7 +12,7 @@
 - 编排组件拆分（避免单类过重）：
   - `WorkflowProjectionActivationService`（projection 启动与上下文激活）
   - `WorkflowProjectionReleaseService`（idle 检测与停止/释放）
-  - `WorkflowProjectionLeaseManager`（ownership acquire/release）
+  - `IProjectionOwnershipCoordinator`（ownership acquire/release，由 Core 抽象直接注入）
   - `WorkflowProjectionSinkSubscriptionManager`（live sink attach/detach/replace）
   - `WorkflowProjectionLiveSinkForwarder`（sink 推送与失败策略路由）
   - `WorkflowProjectionSinkFailurePolicy`（sink 异常策略）
@@ -37,7 +37,7 @@
 
 ## 统一运行链路
 
-1. `EnsureActorProjectionAsync` 由 `WorkflowExecutionProjectionLifecycleService` 转发到 `WorkflowProjectionActivationService`，先通过 `WorkflowProjectionLeaseManager`（底层复用 `Aevatar.CQRS.Projection.Core` ownership coordinator）申请 ownership，再创建 projection 上下文并注册 actor stream 订阅
+1. `EnsureActorProjectionAsync` 由 `WorkflowExecutionProjectionLifecycleService` 转发到 `WorkflowProjectionActivationService`，直接通过 `IProjectionOwnershipCoordinator` 申请 ownership，再创建 projection 上下文并注册 actor stream 订阅
 2. 每条 `EventEnvelope` 进入统一 coordinator，一对多调用已注册 projector
 3. `WorkflowExecutionReadModelProjector` 驱动 reducers 生成并更新 read model，并通过 `IProjectionMaterializationRouter` 执行 Document/Graph 单写或双写
 4. AI 通用事件通过 `Aevatar.Workflow.Extensions.AIProjection` 扩展接入，扩展内部复用 `Aevatar.AI.Projection` 的默认 applier + reducer，将事件写入 `WorkflowExecutionReport` 的 AI 能力字段，业务层无需重复维护映射代码
