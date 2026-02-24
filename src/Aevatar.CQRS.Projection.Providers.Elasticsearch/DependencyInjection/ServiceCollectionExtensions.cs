@@ -12,6 +12,7 @@ public static class ServiceCollectionExtensions
         Func<IServiceProvider, ElasticsearchProjectionReadModelStoreOptions> optionsFactory,
         Func<IServiceProvider, DocumentIndexMetadata> metadataFactory,
         Func<TReadModel, TKey> keySelector,
+        bool isPrimaryQueryStore,
         Func<TKey, string>? keyFormatter = null)
         where TReadModel : class
     {
@@ -22,6 +23,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>(
             new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>(
                 "Elasticsearch",
+                isPrimaryQueryStore,
                 provider => new ElasticsearchProjectionReadModelStore<TReadModel, TKey>(
                     optionsFactory(provider),
                     metadataFactory(provider),

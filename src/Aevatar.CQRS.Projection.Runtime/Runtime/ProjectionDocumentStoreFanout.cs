@@ -8,7 +8,9 @@ public sealed class ProjectionDocumentStoreFanout<TReadModel, TKey>
     where TReadModel : class
 {
     private readonly IReadOnlyList<IDocumentProjectionStore<TReadModel, TKey>> _stores;
+    private readonly IReadOnlyList<IDocumentProjectionStore<TReadModel, TKey>> _replicaStores;
     private readonly IDocumentProjectionStore<TReadModel, TKey> _queryStore;
+    private readonly string _queryProviderName;
     private readonly ILogger<ProjectionDocumentStoreFanout<TReadModel, TKey>> _logger;
 
     public ProjectionDocumentStoreFanout(
@@ -20,9 +22,10 @@ public sealed class ProjectionDocumentStoreFanout<TReadModel, TKey>
         ArgumentNullException.ThrowIfNull(serviceProvider);
 
         var registrationList = registrations.ToList();
-        _stores = registrationList
+        var resolvedStores = registrationList
             .Select(x => x.Create(serviceProvider))
             .ToList();
+        _stores = resolvedStores;
         _logger = logger ?? NullLogger<ProjectionDocumentStoreFanout<TReadModel, TKey>>.Instance;
 
         if (_stores.Count == 0)
@@ -31,11 +34,50 @@ public sealed class ProjectionDocumentStoreFanout<TReadModel, TKey>
                 $"No document projection store providers are registered for read model '{typeof(TReadModel).FullName}'.");
         }
 
-        _queryStore = _stores[0];
+        var primaryRegistrations = registrationList
+            .Where(x => x.IsPrimaryQueryStore)
+            .ToList();
+        if (primaryRegistrations.Count == 0 && registrationList.Count > 1)
+        {
+            var providers = string.Join(", ", registrationList.Select(x => x.ProviderName));
+            throw new InvalidOperationException(
+                $"Exactly one primary document projection store provider must be configured for read model '{typeof(TReadModel).FullName}'. registeredProviders=[{providers}]");
+        }
+
+        if (primaryRegistrations.Count > 1)
+        {
+            var providers = string.Join(", ", primaryRegistrations.Select(x => x.ProviderName));
+            throw new InvalidOperationException(
+                $"Multiple primary document projection store providers are configured for read model '{typeof(TReadModel).FullName}'. primaryProviders=[{providers}]");
+        }
+
+        var queryRegistration = primaryRegistrations.Count == 1
+            ? primaryRegistrations[0]
+            : registrationList[0];
+        var queryIndex = registrationList.FindIndex(x => ReferenceEquals(x, queryRegistration));
+        if (queryIndex < 0)
+        {
+            throw new InvalidOperationException(
+                $"Failed to resolve primary document projection store provider for read model '{typeof(TReadModel).FullName}'.");
+        }
+
+        _queryStore = _stores[queryIndex];
+        _queryProviderName = queryRegistration.ProviderName;
+
+        var replicaStores = new List<IDocumentProjectionStore<TReadModel, TKey>>(_stores.Count);
+        for (var i = 0; i < _stores.Count; i++)
+        {
+            if (i == queryIndex)
+                continue;
+            replicaStores.Add(_stores[i]);
+        }
+
+        _replicaStores = replicaStores;
         _logger.LogInformation(
-            "Projection document fan-out initialized. readModelType={ReadModelType} storeCount={StoreCount}",
+            "Projection document fan-out initialized. readModelType={ReadModelType} storeCount={StoreCount} queryProvider={QueryProvider}",
             typeof(TReadModel).FullName,
-            _stores.Count);
+            _stores.Count,
+            _queryProviderName);
     }
 
     public async Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
@@ -56,7 +98,7 @@ public sealed class ProjectionDocumentStoreFanout<TReadModel, TKey>
         ct.ThrowIfCancellationRequested();
 
         await _queryStore.MutateAsync(key, mutate, ct);
-        if (_stores.Count == 1)
+        if (_replicaStores.Count == 0)
             return;
 
         var updated = await _queryStore.GetAsync(key, ct);
@@ -66,7 +108,7 @@ public sealed class ProjectionDocumentStoreFanout<TReadModel, TKey>
                 $"Document fan-out mutate completed but query store returned null for read model '{typeof(TReadModel).FullName}'.");
         }
 
-        foreach (var store in _stores.Skip(1))
+        foreach (var store in _replicaStores)
         {
             ct.ThrowIfCancellationRequested();
             await store.UpsertAsync(updated, ct);

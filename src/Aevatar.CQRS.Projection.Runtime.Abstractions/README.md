@@ -11,6 +11,8 @@
 ## 关键契约
 
 - Store 注册：`IProjectionStoreRegistration<TStore>`
+  - `ProviderName`
+  - `IsPrimaryQueryStore`（多 provider 场景下唯一主查询存储）
 - Materialization：`IProjectionMaterializationRouter<TReadModel, TKey>`、`IProjectionGraphMaterializer<TReadModel>`
 - Metadata：`IProjectionDocumentMetadataResolver`
 

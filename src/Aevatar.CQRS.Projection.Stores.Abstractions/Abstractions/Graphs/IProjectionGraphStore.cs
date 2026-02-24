@@ -8,6 +8,12 @@ public interface IProjectionGraphStore
 
     Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default);
 
+    Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(
+        string scope,
+        string ownerId,
+        int take = 5000,
+        CancellationToken ct = default);
+
     Task<IReadOnlyList<ProjectionGraphEdge>> GetNeighborsAsync(
         ProjectionGraphQuery query,
         CancellationToken ct = default);

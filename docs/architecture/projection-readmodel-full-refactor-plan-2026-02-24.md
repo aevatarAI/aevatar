@@ -97,6 +97,21 @@ Rules:
 1. Legacy single-select keys (`Projection:Document:Provider`, `Projection:Graph:Provider`) are rejected.
 2. InMemory providers are fallback defaults when durable providers are not enabled.
 3. `Projection:Policies:DenyInMemoryGraphFactStore=true` forbids in-memory graph fact store.
+4. 多 provider 场景显式指定唯一 primary query provider：
+   - Document：优先 `Elasticsearch`，否则 `InMemory`
+   - Graph：优先 `Neo4j`，否则 `InMemory`
+
+## 3.6 Query Primary & Graph Cleanup Hardening
+
+- `IProjectionStoreRegistration<TStore>` 增加 `IsPrimaryQueryStore`。
+- `ProjectionDocumentStoreFanout` / `ProjectionGraphStoreFanout` 改为：
+  - 多注册必须且仅允许一个 primary；
+  - 单注册允许无 primary（默认该唯一 provider 为 query store）；
+  - 冲突或缺失时 fail-fast。
+- `IProjectionGraphStore` 增加 `ListEdgesByOwnerAsync(scope, ownerId, take)`。
+- `ProjectionGraphMaterializer<TReadModel>` 从锚点子图清理重构为 owner-based 精确清理：
+  - 写边时注入系统属性：`projectionManaged=true`、`projectionOwnerId=<ReadModelType>:<ReadModelId>`
+  - 清理时按 owner 列举已有边并做差集删除，不再依赖 `Depth/Take` 子图扫描窗口。
 
 ## 3.5 Elasticsearch Metadata Behavior
 

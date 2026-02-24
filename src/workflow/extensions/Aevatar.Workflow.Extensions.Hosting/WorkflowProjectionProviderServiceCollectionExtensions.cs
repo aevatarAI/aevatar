@@ -12,6 +12,10 @@ namespace Aevatar.Workflow.Extensions.Hosting;
 
 public static class WorkflowProjectionProviderServiceCollectionExtensions
 {
+    private const string InMemoryProviderName = "InMemory";
+    private const string ElasticsearchProviderName = "Elasticsearch";
+    private const string Neo4jProviderName = "Neo4j";
+
     public static IServiceCollection AddWorkflowProjectionReadModelProviders(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -34,6 +38,8 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         var enableInMemoryGraph = ResolveOptionalBool(
             configuration["Projection:Graph:Providers:InMemory:Enabled"],
             fallbackValue: !enableNeo4jGraph);
+        var documentPrimaryProvider = ResolveDocumentPrimaryProvider(enableInMemoryDocument, enableElasticsearchDocument);
+        var graphPrimaryProvider = ResolveGraphPrimaryProvider(enableInMemoryGraph, enableNeo4jGraph);
 
         EnforceGraphProviderPolicy(configuration, enableInMemoryGraph);
 
@@ -42,6 +48,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         {
             services.AddInMemoryDocumentStoreRegistration<WorkflowExecutionReport, string>(
                 keySelector: report => report.RootActorId,
+                isPrimaryQueryStore: string.Equals(documentPrimaryProvider, InMemoryProviderName, StringComparison.Ordinal),
                 keyFormatter: key => key,
                 listSortSelector: report => report.CreatedAt,
                 listTakeMax: 200);
@@ -58,6 +65,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                     return metadataResolver.Resolve<WorkflowExecutionReport>();
                 },
                 keySelector: report => report.RootActorId,
+                isPrimaryQueryStore: string.Equals(documentPrimaryProvider, ElasticsearchProviderName, StringComparison.Ordinal),
                 keyFormatter: key => key);
             documentProviderCount++;
         }
@@ -65,7 +73,8 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         var graphProviderCount = 0;
         if (enableInMemoryGraph)
         {
-            services.AddInMemoryGraphStoreRegistration();
+            services.AddInMemoryGraphStoreRegistration(
+                isPrimaryQueryStore: string.Equals(graphPrimaryProvider, InMemoryProviderName, StringComparison.Ordinal));
             graphProviderCount++;
         }
 
@@ -73,7 +82,8 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         {
             services.AddNeo4jGraphStoreRegistration(
                 optionsFactory: _ => BuildNeo4jGraphOptions(configuration),
-                scopeFactory: _ => WorkflowExecutionGraphConstants.Scope);
+                scopeFactory: _ => WorkflowExecutionGraphConstants.Scope,
+                isPrimaryQueryStore: string.Equals(graphPrimaryProvider, Neo4jProviderName, StringComparison.Ordinal));
             graphProviderCount++;
         }
 
@@ -125,6 +135,32 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         var hasUri = (section["Uri"]?.Trim().Length ?? 0) > 0;
 
         return ResolveOptionalBool(explicitEnabled, hasUri);
+    }
+
+    private static string ResolveDocumentPrimaryProvider(
+        bool enableInMemoryDocument,
+        bool enableElasticsearchDocument)
+    {
+        if (enableElasticsearchDocument)
+            return ElasticsearchProviderName;
+
+        if (enableInMemoryDocument)
+            return InMemoryProviderName;
+
+        return "";
+    }
+
+    private static string ResolveGraphPrimaryProvider(
+        bool enableInMemoryGraph,
+        bool enableNeo4jGraph)
+    {
+        if (enableNeo4jGraph)
+            return Neo4jProviderName;
+
+        if (enableInMemoryGraph)
+            return InMemoryProviderName;
+
+        return "";
     }
 
     private static ElasticsearchProjectionReadModelStoreOptions BuildElasticsearchDocumentOptions(

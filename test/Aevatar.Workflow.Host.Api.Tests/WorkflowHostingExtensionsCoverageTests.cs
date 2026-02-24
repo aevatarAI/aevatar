@@ -126,6 +126,49 @@ public class WorkflowHostingExtensionsCoverageTests
     }
 
     [Fact]
+    public void AddWorkflowProjectionReadModelProviders_WhenAllProvidersEnabled_ShouldSelectDurablePrimary()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Uri"] = "bolt://localhost:7687",
+            })
+            .Build();
+
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var documentRegistrations = provider
+            .GetServices<IProjectionStoreRegistration<IDocumentProjectionStore<WorkflowExecutionReport, string>>>()
+            .ToList();
+        var graphRegistrations = provider
+            .GetServices<IProjectionStoreRegistration<IProjectionGraphStore>>()
+            .ToList();
+
+        documentRegistrations.Should().HaveCount(2);
+        documentRegistrations.Should().ContainSingle(x =>
+            string.Equals(x.ProviderName, "Elasticsearch", StringComparison.Ordinal) &&
+            x.IsPrimaryQueryStore);
+        documentRegistrations.Should().ContainSingle(x =>
+            string.Equals(x.ProviderName, "InMemory", StringComparison.Ordinal) &&
+            !x.IsPrimaryQueryStore);
+
+        graphRegistrations.Should().HaveCount(2);
+        graphRegistrations.Should().ContainSingle(x =>
+            string.Equals(x.ProviderName, "Neo4j", StringComparison.Ordinal) &&
+            x.IsPrimaryQueryStore);
+        graphRegistrations.Should().ContainSingle(x =>
+            string.Equals(x.ProviderName, "InMemory", StringComparison.Ordinal) &&
+            !x.IsPrimaryQueryStore);
+    }
+
+    [Fact]
     public void AddWorkflowProjectionReadModelProviders_WhenLegacyProviderConfigured_ShouldThrow()
     {
         var services = new ServiceCollection();

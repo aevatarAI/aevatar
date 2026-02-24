@@ -4,8 +4,6 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
     : IProjectionGraphMaterializer<TReadModel>
     where TReadModel : class
 {
-    private const string ManagedMarkerKey = "projectionManaged";
-    private const string ManagedMarkerValue = "true";
     private readonly IProjectionGraphStore _graphStore;
 
     public ProjectionGraphMaterializer(IProjectionGraphStore graphStore)
@@ -27,34 +25,26 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
                 $"Graph scope is required for read model '{typeof(TReadModel).FullName}'.");
         }
 
+        var ownerResolution = BuildManagedOwnerId(graphReadModel);
+        var ownerId = ownerResolution.OwnerId;
+
         var normalizedNodes = NormalizeNodes(graphReadModel.GraphNodes, scope);
         foreach (var node in normalizedNodes)
             await _graphStore.UpsertNodeAsync(node, ct);
 
-        var normalizedEdges = NormalizeEdges(graphReadModel.GraphEdges, scope);
+        var normalizedEdges = NormalizeEdges(graphReadModel.GraphEdges, scope, ownerId);
         foreach (var edge in normalizedEdges)
             await _graphStore.UpsertEdgeAsync(edge, ct);
-
-        var anchorNodeId = ResolveAnchorNodeId(graphReadModel, normalizedNodes, normalizedEdges);
-        if (anchorNodeId.Length == 0)
-            return;
-
-        var existing = await _graphStore.GetSubgraphAsync(
-            new ProjectionGraphQuery
-            {
-                Scope = scope,
-                RootNodeId = anchorNodeId,
-                Direction = ProjectionGraphDirection.Both,
-                Depth = 8,
-                Take = 5000,
-            },
-            ct);
 
         var targetEdgeIds = normalizedEdges
             .Select(x => x.EdgeId)
             .ToHashSet(StringComparer.Ordinal);
+        if (!ownerResolution.CanCleanup)
+            return;
 
-        foreach (var edge in existing.Edges.Where(IsManagedEdge))
+        var existingManagedEdges = await _graphStore.ListEdgesByOwnerAsync(scope, ownerId, take: 50000, ct);
+
+        foreach (var edge in existingManagedEdges.Where(IsManagedEdge))
         {
             if (targetEdgeIds.Contains(edge.EdgeId))
                 continue;
@@ -63,26 +53,40 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
         }
     }
 
-    private static string ResolveAnchorNodeId(
-        IGraphReadModel readModel,
-        IReadOnlyList<ProjectionGraphNode> nodes,
-        IReadOnlyList<ProjectionGraphEdge> edges)
-    {
-        var firstNodeId = nodes.FirstOrDefault()?.NodeId ?? "";
-        if (firstNodeId.Length > 0)
-            return firstNodeId;
-
-        var readModelId = NormalizeToken(readModel.Id);
-        if (readModelId.Length > 0)
-            return readModelId;
-
-        return edges.FirstOrDefault()?.FromNodeId ?? "";
-    }
-
     private static bool IsManagedEdge(ProjectionGraphEdge edge)
     {
-        return edge.Properties.TryGetValue(ManagedMarkerKey, out var markerValue) &&
-               string.Equals(markerValue, ManagedMarkerValue, StringComparison.Ordinal);
+        return edge.Properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedMarkerKey, out var markerValue) &&
+               string.Equals(markerValue, ProjectionGraphSystemPropertyKeys.ManagedMarkerValue, StringComparison.Ordinal);
+    }
+
+    private static ManagedOwnerResolution BuildManagedOwnerId(IGraphReadModel readModel)
+    {
+        var readModelId = NormalizeToken(readModel.Id);
+        var canCleanup = readModelId.Length > 0;
+        if (readModelId.Length == 0)
+        {
+            readModelId = readModel.GraphNodes
+                .Select(x => NormalizeToken(x.NodeId))
+                .FirstOrDefault(x => x.Length > 0) ?? "";
+            canCleanup = readModelId.Length > 0;
+        }
+
+        if (readModelId.Length == 0)
+        {
+            readModelId = readModel.GraphEdges
+                .Select(x => NormalizeToken(x.FromNodeId))
+                .FirstOrDefault(x => x.Length > 0) ?? "";
+            canCleanup = readModelId.Length > 0;
+        }
+
+        if (readModelId.Length == 0)
+            readModelId = "unknown";
+
+        var readModelType = NormalizeToken(readModel.GetType().FullName);
+        var ownerId = readModelType.Length == 0
+            ? readModelId
+            : $"{readModelType}:{readModelId}";
+        return new ManagedOwnerResolution(ownerId, canCleanup);
     }
 
     private static IReadOnlyList<ProjectionGraphNode> NormalizeNodes(
@@ -118,7 +122,8 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
 
     private static IReadOnlyList<ProjectionGraphEdge> NormalizeEdges(
         IReadOnlyList<GraphEdgeDescriptor> graphEdges,
-        string scope)
+        string scope,
+        string ownerId)
     {
         if (graphEdges.Count == 0)
             return [];
@@ -140,7 +145,8 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
 
             var properties = new Dictionary<string, string>(graphEdge.Properties, StringComparer.Ordinal)
             {
-                [ManagedMarkerKey] = ManagedMarkerValue,
+                [ProjectionGraphSystemPropertyKeys.ManagedMarkerKey] = ProjectionGraphSystemPropertyKeys.ManagedMarkerValue,
+                [ProjectionGraphSystemPropertyKeys.ManagedOwnerIdKey] = ownerId,
             };
 
             edgesById[edgeId] = new ProjectionGraphEdge
@@ -159,4 +165,8 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
     }
 
     private static string NormalizeToken(string? token) => token?.Trim() ?? "";
+
+    private readonly record struct ManagedOwnerResolution(
+        string OwnerId,
+        bool CanCleanup);
 }

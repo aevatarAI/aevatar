@@ -14,12 +14,14 @@ public class ProjectionReadModelStoreSelectorTests
         var services = new ServiceCollection();
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "primary",
-                _ => primaryStore));
+                "replica",
+                false,
+                _ => replicaStore));
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "replica",
-                _ => replicaStore));
+                "primary",
+                true,
+                _ => primaryStore));
 
         using var serviceProvider = services.BuildServiceProvider();
         var fanout = new ProjectionGraphStoreFanout(
@@ -49,6 +51,54 @@ public class ProjectionReadModelStoreSelectorTests
         replicaStore.UpsertNodeCount.Should().Be(1);
         edges.Should().HaveCount(1);
         edges[0].EdgeType.Should().Be("primary");
+    }
+
+    [Fact]
+    public void ProjectionGraphStoreFanout_WhenMultipleRegistrationsAndNoPrimary_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
+            new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
+                "replica-1",
+                false,
+                _ => new NamedGraphStore("replica-1")));
+        services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
+            new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
+                "replica-2",
+                false,
+                _ => new NamedGraphStore("replica-2")));
+
+        using var serviceProvider = services.BuildServiceProvider();
+        Action act = () => new ProjectionGraphStoreFanout(
+            serviceProvider.GetServices<IProjectionStoreRegistration<IProjectionGraphStore>>(),
+            serviceProvider);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Exactly one primary graph projection store provider must be configured*");
+    }
+
+    [Fact]
+    public void ProjectionGraphStoreFanout_WhenMultiplePrimaryRegistrations_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
+            new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
+                "primary-1",
+                true,
+                _ => new NamedGraphStore("primary-1")));
+        services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
+            new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
+                "primary-2",
+                true,
+                _ => new NamedGraphStore("primary-2")));
+
+        using var serviceProvider = services.BuildServiceProvider();
+        Action act = () => new ProjectionGraphStoreFanout(
+            serviceProvider.GetServices<IProjectionStoreRegistration<IProjectionGraphStore>>(),
+            serviceProvider);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Multiple primary graph projection store providers are configured*");
     }
 
     [Fact]
@@ -92,6 +142,18 @@ public class ProjectionReadModelStoreSelectorTests
             _ = scope;
             _ = edgeId;
             return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(
+            string scope,
+            string ownerId,
+            int take = 5000,
+            CancellationToken ct = default)
+        {
+            _ = scope;
+            _ = ownerId;
+            _ = take;
+            return Task.FromResult<IReadOnlyList<ProjectionGraphEdge>>([]);
         }
 
         public Task<IReadOnlyList<ProjectionGraphEdge>> GetNeighborsAsync(ProjectionGraphQuery query, CancellationToken ct = default)

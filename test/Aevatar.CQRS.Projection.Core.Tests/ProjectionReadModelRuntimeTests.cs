@@ -14,12 +14,14 @@ public class ProjectionReadModelRuntimeTests
         var services = new ServiceCollection();
         services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
             new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
-                "primary",
-                _ => primaryStore));
+                "replica",
+                false,
+                _ => replicaStore));
         services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
             new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
-                "replica",
-                _ => replicaStore));
+                "primary",
+                true,
+                _ => primaryStore));
 
         using var serviceProvider = services.BuildServiceProvider();
         var fanout = new ProjectionDocumentStoreFanout<TestReadModel, string>(
@@ -40,6 +42,85 @@ public class ProjectionReadModelRuntimeTests
         var fetched = await fanout.GetAsync("id-1");
         fetched.Should().NotBeNull();
         fetched!.Value.Should().Be("v1");
+    }
+
+    [Fact]
+    public async Task ProjectionDocumentStoreFanout_ShouldReadFromExplicitPrimary_WhenOrderDiffers()
+    {
+        var primaryStore = new NamedDocumentStore("primary");
+        var replicaStore = new NamedDocumentStore("replica");
+        primaryStore.Seed("id-1", "from-primary");
+        replicaStore.Seed("id-1", "from-replica");
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
+                "replica",
+                false,
+                _ => replicaStore));
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
+                "primary",
+                true,
+                _ => primaryStore));
+
+        using var serviceProvider = services.BuildServiceProvider();
+        var fanout = new ProjectionDocumentStoreFanout<TestReadModel, string>(
+            serviceProvider.GetServices<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(),
+            serviceProvider);
+
+        var fetched = await fanout.GetAsync("id-1");
+
+        fetched.Should().NotBeNull();
+        fetched!.Value.Should().Be("from-primary");
+    }
+
+    [Fact]
+    public void ProjectionDocumentStoreFanout_WhenMultipleRegistrationsAndNoPrimary_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
+                "replica-1",
+                false,
+                _ => new NamedDocumentStore("replica-1")));
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
+                "replica-2",
+                false,
+                _ => new NamedDocumentStore("replica-2")));
+
+        using var serviceProvider = services.BuildServiceProvider();
+        Action act = () => new ProjectionDocumentStoreFanout<TestReadModel, string>(
+            serviceProvider.GetServices<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(),
+            serviceProvider);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Exactly one primary document projection store provider must be configured*");
+    }
+
+    [Fact]
+    public void ProjectionDocumentStoreFanout_WhenMultiplePrimaryRegistrations_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
+                "primary-1",
+                true,
+                _ => new NamedDocumentStore("primary-1")));
+        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(
+            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>(
+                "primary-2",
+                true,
+                _ => new NamedDocumentStore("primary-2")));
+
+        using var serviceProvider = services.BuildServiceProvider();
+        Action act = () => new ProjectionDocumentStoreFanout<TestReadModel, string>(
+            serviceProvider.GetServices<IProjectionStoreRegistration<IDocumentProjectionStore<TestReadModel, string>>>(),
+            serviceProvider);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Multiple primary document projection store providers are configured*");
     }
 
     [Fact]
@@ -75,6 +156,15 @@ public class ProjectionReadModelRuntimeTests
         public string ProviderName { get; }
 
         public int UpsertCount { get; private set; }
+
+        public void Seed(string key, string value)
+        {
+            _models[key] = new TestReadModel
+            {
+                Id = key,
+                Value = value,
+            };
+        }
 
         public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
         {

@@ -96,12 +96,18 @@ public sealed class Neo4jProjectionGraphStore
 
         var updatedAtEpochMs = NormalizeTimestamp(edge.UpdatedAt);
         var propertiesJson = SerializeProperties(edge.Properties);
+        var projectionManaged = ResolveProjectionManaged(edge.Properties);
+        var projectionOwnerId = ResolveProjectionOwnerId(edge.Properties);
         var cypher = $"MERGE (from:{_nodeLabel} {{scope: $scope, nodeId: $fromNodeId}}) " +
                      "ON CREATE SET from.nodeType = 'Unknown', from.propertiesJson = '{}', from.updatedAtEpochMs = $updatedAtEpochMs " +
                      $"MERGE (to:{_nodeLabel} {{scope: $scope, nodeId: $toNodeId}}) " +
                      "ON CREATE SET to.nodeType = 'Unknown', to.propertiesJson = '{}', to.updatedAtEpochMs = $updatedAtEpochMs " +
                      $"MERGE (from)-[r:{_edgeType} {{scope: $scope, edgeId: $edgeId}}]->(to) " +
-                     "SET r.relationType = $relationType, r.propertiesJson = $propertiesJson, r.updatedAtEpochMs = $updatedAtEpochMs";
+                     "SET r.relationType = $relationType, " +
+                     "r.propertiesJson = $propertiesJson, " +
+                     "r.updatedAtEpochMs = $updatedAtEpochMs, " +
+                     "r.projectionManaged = $projectionManaged, " +
+                     "r.projectionOwnerId = CASE WHEN $projectionOwnerId = '' THEN null ELSE $projectionOwnerId END";
         var parameters = new Dictionary<string, object?>
         {
             ["scope"] = scope,
@@ -111,6 +117,8 @@ public sealed class Neo4jProjectionGraphStore
             ["relationType"] = relationType,
             ["propertiesJson"] = propertiesJson,
             ["updatedAtEpochMs"] = updatedAtEpochMs,
+            ["projectionManaged"] = projectionManaged,
+            ["projectionOwnerId"] = projectionOwnerId,
         };
 
         await EnsureSchemaAsync(ct);
@@ -133,6 +141,49 @@ public sealed class Neo4jProjectionGraphStore
             ["edgeId"] = edgeIdValue,
         };
         await ExecuteWriteAsync(cypher, parameters, ct);
+    }
+
+    public async Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(
+        string scope,
+        string ownerId,
+        int take = 5000,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var scopeValue = NormalizeToken(scope);
+        var ownerValue = NormalizeToken(ownerId);
+        if (scopeValue.Length == 0 || ownerValue.Length == 0)
+            return [];
+
+        await EnsureSchemaAsync(ct);
+        var boundedTake = Math.Clamp(take, 1, 50000);
+        var cypher = $"MATCH ()-[r:{_edgeType} {{scope: $scope}}]->() " +
+                     "WHERE coalesce(r.projectionManaged, false) = true " +
+                     "AND r.projectionOwnerId = $ownerId " +
+                     "RETURN r.edgeId AS edgeId, " +
+                     "startNode(r).nodeId AS fromNodeId, " +
+                     "endNode(r).nodeId AS toNodeId, " +
+                     "coalesce(r.relationType, '') AS relationType, " +
+                     "coalesce(r.propertiesJson, '{}') AS propertiesJson, " +
+                     "coalesce(r.updatedAtEpochMs, 0) AS updatedAtEpochMs " +
+                     "ORDER BY updatedAtEpochMs DESC LIMIT $take";
+        var parameters = new Dictionary<string, object?>
+        {
+            ["scope"] = scopeValue,
+            ["ownerId"] = ownerValue,
+            ["take"] = boundedTake,
+        };
+
+        var rows = await ExecuteReadAsync(cypher, parameters, ct);
+        var edges = new List<ProjectionGraphEdge>(rows.Count);
+        foreach (var row in rows)
+        {
+            var edge = BuildEdgeFromRow(scopeValue, row);
+            if (edge != null)
+                edges.Add(edge);
+        }
+
+        return edges;
     }
 
     public async Task<IReadOnlyList<ProjectionGraphEdge>> GetNeighborsAsync(
@@ -450,6 +501,26 @@ public sealed class Neo4jProjectionGraphStore
             .Where(x => x.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static bool ResolveProjectionManaged(IReadOnlyDictionary<string, string> properties)
+    {
+        if (!properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedMarkerKey, out var markerValue))
+            return false;
+
+        var normalizedMarker = NormalizeToken(markerValue);
+        return string.Equals(
+            normalizedMarker,
+            ProjectionGraphSystemPropertyKeys.ManagedMarkerValue,
+            StringComparison.Ordinal);
+    }
+
+    private static string ResolveProjectionOwnerId(IReadOnlyDictionary<string, string> properties)
+    {
+        if (!properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedOwnerIdKey, out var ownerId))
+            return "";
+
+        return NormalizeToken(ownerId);
     }
 
     private string SerializeProperties(IReadOnlyDictionary<string, string> properties)

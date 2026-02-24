@@ -62,6 +62,36 @@ public sealed class InMemoryProjectionGraphStore
         return Task.CompletedTask;
     }
 
+    public Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(
+        string scope,
+        string ownerId,
+        int take = 5000,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var scopeValue = NormalizeToken(scope);
+        var ownerValue = NormalizeToken(ownerId);
+        if (scopeValue.Length == 0 || ownerValue.Length == 0)
+            return Task.FromResult<IReadOnlyList<ProjectionGraphEdge>>([]);
+
+        var boundedTake = Math.Clamp(take, 1, 50000);
+        List<ProjectionGraphEdge> edges;
+        lock (_gate)
+        {
+            edges = _edges.Values
+                .Where(x => string.Equals(x.Scope, scopeValue, StringComparison.Ordinal))
+                .Where(x =>
+                    x.Properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedOwnerIdKey, out var edgeOwnerId) &&
+                    string.Equals(NormalizeToken(edgeOwnerId), ownerValue, StringComparison.Ordinal))
+                .OrderByDescending(x => x.UpdatedAt)
+                .Take(boundedTake)
+                .Select(CloneEdge)
+                .ToList();
+        }
+
+        return Task.FromResult<IReadOnlyList<ProjectionGraphEdge>>(edges);
+    }
+
     public Task<IReadOnlyList<ProjectionGraphEdge>> GetNeighborsAsync(
         ProjectionGraphQuery query,
         CancellationToken ct = default)
