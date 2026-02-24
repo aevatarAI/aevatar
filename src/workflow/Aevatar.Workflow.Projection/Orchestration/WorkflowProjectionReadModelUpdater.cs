@@ -24,6 +24,9 @@ public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionRead
         var updatedAt = _clock.UtcNow;
         return _materializationRouter.MutateAsync(actorId, report =>
         {
+            report.Id = actorId;
+            if (string.IsNullOrWhiteSpace(report.RootActorId))
+                report.RootActorId = actorId;
             report.CommandId = context.CommandId;
             report.WorkflowName = context.WorkflowName;
             report.Input = context.Input;
@@ -44,6 +47,9 @@ public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionRead
         var updatedAt = _clock.UtcNow;
         return _materializationRouter.MutateAsync(actorId, report =>
         {
+            report.Id = actorId;
+            if (string.IsNullOrWhiteSpace(report.RootActorId))
+                report.RootActorId = actorId;
             if (report.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
                 report.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
 

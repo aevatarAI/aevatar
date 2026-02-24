@@ -118,17 +118,23 @@ Rules:
   - 写节点时同样注入系统属性：`projectionManaged=true`、`projectionOwnerId=<ReadModelType>:<ReadModelId>`
   - 清理时按 owner 列举已有边/节点并做差集删除，不再依赖 `Depth/Take` 子图扫描窗口。
   - 节点删除前执行邻接检查，仅删除无任何关系边的孤立节点，避免误删跨 owner 共享节点。
+  - graph owner 标识收敛为 `IGraphReadModel.Id`；`Id` 为空直接 fail-fast，禁止 fallback 到节点/边推断。
 
 ## 3.7 Elasticsearch Metadata Behavior
 
 `ElasticsearchProjectionReadModelStore` now consumes full `DocumentIndexMetadata`:
 
 - `IndexName` as logical scope input
-- `MappingJson` as index mappings object
-- `Settings` as index settings object
-- `Aliases` as index alias object
+- `Mappings` as structured mappings object (`IReadOnlyDictionary<string, object?>`)
+- `Settings` as structured settings object (`IReadOnlyDictionary<string, object?>`)
+- `Aliases` as structured aliases object (`IReadOnlyDictionary<string, object?>`)
 
-Index bootstrap now uses metadata payload instead of fixed `{"mappings":{"dynamic":true}}`.
+Index bootstrap now uses structured metadata payload instead of stringified JSON fragments.
+
+## 3.8 Neo4j Subgraph Query Optimization
+
+- `Neo4jProjectionGraphStore.GetSubgraphAsync` 从“逐层逐节点 `GetNeighborsAsync` 循环”重构为单次 Cypher 拉取边（按 `direction/depth/edgeTypes/take`），随后一次节点补全查询。
+- 移除子图遍历的 N+1 风险，降低高出度场景下查询放大。
 
 ## 4. Project-Level Responsibility Split (Post-Refactor)
 

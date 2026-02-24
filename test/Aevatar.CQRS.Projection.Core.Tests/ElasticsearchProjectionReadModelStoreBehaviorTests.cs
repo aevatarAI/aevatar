@@ -110,6 +110,73 @@ public sealed class ElasticsearchProjectionReadModelStoreBehaviorTests
         handler.CapturedRequests[3].Body.Should().Contain("\"Value\":\"v2\"");
     }
 
+    [Fact]
+    public async Task UpsertAsync_WhenMetadataContainsStructuredObjects_ShouldSendStructuredIndexInitializationPayload()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"result":"created"}"""));
+
+        var options = new ElasticsearchProjectionReadModelStoreOptions
+        {
+            AutoCreateIndex = true,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionReadModelStore<StoreReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>
+                {
+                    ["properties"] = new Dictionary<string, object?>
+                    {
+                        ["Value"] = new Dictionary<string, object?>
+                        {
+                            ["type"] = "keyword",
+                        },
+                    },
+                },
+                Settings: new Dictionary<string, object?>
+                {
+                    ["index"] = new Dictionary<string, object?>
+                    {
+                        ["number_of_shards"] = 1,
+                        ["number_of_replicas"] = 0,
+                    },
+                },
+                Aliases: new Dictionary<string, object?>
+                {
+                    ["projection-core-tests-alias"] = new Dictionary<string, object?>
+                    {
+                        ["is_write_index"] = true,
+                    },
+                }),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        await store.UpsertAsync(new StoreReadModel
+        {
+            Id = "actor-1",
+            Value = "v1",
+        });
+
+        handler.CapturedRequests.Should().HaveCount(2);
+        handler.CapturedRequests[0].Method.Should().Be("PUT");
+        handler.CapturedRequests[0].PathAndQuery.Should().NotContain("/_doc/");
+        handler.CapturedRequests[0].Body.Should().Contain("\"mappings\"");
+        handler.CapturedRequests[0].Body.Should().Contain("\"properties\"");
+        handler.CapturedRequests[0].Body.Should().Contain("\"Value\"");
+        handler.CapturedRequests[0].Body.Should().Contain("\"number_of_shards\":1");
+        handler.CapturedRequests[0].Body.Should().Contain("\"projection-core-tests-alias\"");
+        handler.CapturedRequests[0].Body.Should().Contain("\"is_write_index\":true");
+    }
+
     private static ElasticsearchProjectionReadModelStore<StoreReadModel, string> CreateStore(
         ElasticsearchProjectionReadModelStoreOptions options,
         HttpMessageHandler handler)
@@ -119,9 +186,9 @@ public sealed class ElasticsearchProjectionReadModelStoreBehaviorTests
             options,
             new DocumentIndexMetadata(
                 IndexName: "projection-core-tests",
-                MappingJson: "{}",
-                Settings: new Dictionary<string, string>(),
-                Aliases: new Dictionary<string, string>()),
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
             keySelector: model => model.Id,
             keyFormatter: key => key,
             httpMessageHandler: handler);

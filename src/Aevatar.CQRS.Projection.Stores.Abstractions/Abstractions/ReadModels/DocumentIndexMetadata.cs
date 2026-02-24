@@ -2,6 +2,6 @@ namespace Aevatar.CQRS.Projection.Stores.Abstractions;
 
 public sealed record DocumentIndexMetadata(
     string IndexName,
-    string MappingJson,
-    IReadOnlyDictionary<string, string> Settings,
-    IReadOnlyDictionary<string, string> Aliases);
+    IReadOnlyDictionary<string, object?> Mappings,
+    IReadOnlyDictionary<string, object?> Settings,
+    IReadOnlyDictionary<string, object?> Aliases);

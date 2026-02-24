@@ -22,9 +22,9 @@ public sealed class ProjectionProviderE2EIntegrationTests
             options,
             new DocumentIndexMetadata(
                 IndexName: indexScope,
-                MappingJson: "{}",
-                Settings: new Dictionary<string, string>(),
-                Aliases: new Dictionary<string, string>()),
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
             model => model.Id);
 
         var readModel = new ProviderStoreSmokeReadModel

@@ -485,9 +485,12 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
 
     private string BuildIndexInitializationPayload()
     {
-        object mappings = new { dynamic = true };
-        if (!string.IsNullOrWhiteSpace(_indexMetadata.MappingJson))
-            mappings = ParseJsonObject(_indexMetadata.MappingJson, "DocumentIndexMetadata.MappingJson");
+        var mappings = _indexMetadata.Mappings.Count == 0
+            ? new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["dynamic"] = true,
+            }
+            : new Dictionary<string, object?>(_indexMetadata.Mappings, StringComparer.Ordinal);
 
         var root = new Dictionary<string, object?>
         {
@@ -495,9 +498,9 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         };
 
         if (_indexMetadata.Settings.Count > 0)
-            root["settings"] = _indexMetadata.Settings;
+            root["settings"] = new Dictionary<string, object?>(_indexMetadata.Settings, StringComparer.Ordinal);
         if (_indexMetadata.Aliases.Count > 0)
-            root["aliases"] = BuildAliasPayload(_indexMetadata.Aliases);
+            root["aliases"] = new Dictionary<string, object?>(_indexMetadata.Aliases, StringComparer.Ordinal);
 
         return JsonSerializer.Serialize(root, _jsonOptions);
     }
@@ -505,50 +508,130 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
     private static DocumentIndexMetadata NormalizeMetadata(DocumentIndexMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
+        var normalizedMappings = NormalizeObjectMap(metadata.Mappings, "DocumentIndexMetadata.Mappings");
+        var normalizedSettings = NormalizeObjectMap(metadata.Settings, "DocumentIndexMetadata.Settings");
+        var normalizedAliases = NormalizeObjectMap(metadata.Aliases, "DocumentIndexMetadata.Aliases");
         return new DocumentIndexMetadata(
             metadata.IndexName?.Trim() ?? "",
-            metadata.MappingJson?.Trim() ?? "{}",
-            new Dictionary<string, string>(metadata.Settings, StringComparer.Ordinal),
-            new Dictionary<string, string>(metadata.Aliases, StringComparer.Ordinal));
+            normalizedMappings,
+            normalizedSettings,
+            normalizedAliases);
     }
 
-    private static IReadOnlyDictionary<string, object> BuildAliasPayload(
-        IReadOnlyDictionary<string, string> aliases)
+    private static Dictionary<string, object?> NormalizeObjectMap(
+        IReadOnlyDictionary<string, object?> source,
+        string context)
     {
-        var payload = new Dictionary<string, object>(StringComparer.Ordinal);
-        foreach (var alias in aliases)
+        ArgumentNullException.ThrowIfNull(source);
+        var normalized = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var pair in source)
         {
-            var aliasName = alias.Key?.Trim() ?? "";
-            if (aliasName.Length == 0)
-                continue;
+            var key = pair.Key?.Trim() ?? "";
+            if (key.Length == 0)
+                throw new InvalidOperationException($"{context} contains an empty key.");
 
-            var aliasConfig = alias.Value?.Trim() ?? "";
-            payload[aliasName] = aliasConfig.Length == 0
-                ? new Dictionary<string, object>(StringComparer.Ordinal)
-                : ParseJsonObject(aliasConfig, $"DocumentIndexMetadata.Aliases['{aliasName}']");
+            normalized[key] = NormalizeObjectValue(pair.Value, $"{context}['{key}']");
         }
 
-        return payload;
+        return normalized;
     }
 
-    private static object ParseJsonObject(string payload, string context)
+    private static object? NormalizeObjectValue(object? value, string context)
     {
-        try
-        {
-            using var json = JsonDocument.Parse(payload);
-            if (json.RootElement.ValueKind != JsonValueKind.Object)
-            {
-                throw new InvalidOperationException(
-                    $"{context} must be a JSON object. actualKind={json.RootElement.ValueKind}");
-            }
+        if (value == null)
+            return null;
 
-            return JsonSerializer.Deserialize<Dictionary<string, object?>>(
-                json.RootElement.GetRawText()) ?? new Dictionary<string, object?>(StringComparer.Ordinal);
-        }
-        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        if (value is string ||
+            value is bool ||
+            value is byte ||
+            value is sbyte ||
+            value is short ||
+            value is ushort ||
+            value is int ||
+            value is uint ||
+            value is long ||
+            value is ulong ||
+            value is float ||
+            value is double ||
+            value is decimal)
         {
-            throw new InvalidOperationException($"{context} is invalid JSON object: {ex.Message}", ex);
+            return value;
         }
+
+        if (value is JsonElement jsonElement)
+            return NormalizeJsonElement(jsonElement, context);
+
+        if (value is IReadOnlyDictionary<string, object?> readonlyObjectMap)
+            return NormalizeObjectMap(readonlyObjectMap, context);
+
+        if (value is IDictionary<string, object?> mutableObjectMap)
+            return NormalizeObjectMap(
+                new Dictionary<string, object?>(mutableObjectMap, StringComparer.Ordinal),
+                context);
+
+        if (value is IReadOnlyDictionary<string, string> readonlyStringMap)
+        {
+            var converted = readonlyStringMap.ToDictionary(
+                x => x.Key,
+                x => (object?)x.Value,
+                StringComparer.Ordinal);
+            return NormalizeObjectMap(converted, context);
+        }
+
+        if (value is IDictionary<string, string> mutableStringMap)
+        {
+            var converted = mutableStringMap.ToDictionary(
+                x => x.Key,
+                x => (object?)x.Value,
+                StringComparer.Ordinal);
+            return NormalizeObjectMap(converted, context);
+        }
+
+        if (value is IEnumerable<object?> objectSequence)
+            return objectSequence.Select((x, i) => NormalizeObjectValue(x, $"{context}[{i}]")).ToList();
+
+        if (value is IEnumerable<string> stringSequence)
+            return stringSequence.Cast<object?>().ToList();
+
+        throw new InvalidOperationException(
+            $"{context} contains unsupported value type '{value.GetType().FullName}'.");
+    }
+
+    private static object? NormalizeJsonElement(JsonElement element, string context)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Object => element
+                .EnumerateObject()
+                .ToDictionary(
+                    x => x.Name,
+                    x => NormalizeJsonElement(x.Value, $"{context}['{x.Name}']"),
+                    StringComparer.Ordinal),
+            JsonValueKind.Array => element
+                .EnumerateArray()
+                .Select((x, i) => NormalizeJsonElement(x, $"{context}[{i}]"))
+                .ToList(),
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number => NormalizeJsonNumber(element, context),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            JsonValueKind.Undefined => null,
+            _ => throw new InvalidOperationException(
+                $"{context} contains unsupported json value kind '{element.ValueKind}'."),
+        };
+    }
+
+    private static object NormalizeJsonNumber(JsonElement numberElement, string context)
+    {
+        if (numberElement.TryGetInt64(out var int64Value))
+            return int64Value;
+        if (numberElement.TryGetDecimal(out var decimalValue))
+            return decimalValue;
+        if (numberElement.TryGetDouble(out var doubleValue))
+            return doubleValue;
+
+        throw new InvalidOperationException($"{context} contains an invalid JSON number value.");
     }
 
     private static async Task EnsureSuccessAsync(

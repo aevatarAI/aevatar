@@ -25,8 +25,7 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
                 $"Graph scope is required for read model '{typeof(TReadModel).FullName}'.");
         }
 
-        var ownerResolution = BuildManagedOwnerId(graphReadModel);
-        var ownerId = ownerResolution.OwnerId;
+        var ownerId = BuildManagedOwnerId(graphReadModel);
 
         var normalizedNodes = NormalizeNodes(graphReadModel.GraphNodes, scope, ownerId);
         foreach (var node in normalizedNodes)
@@ -39,8 +38,6 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
         var targetEdgeIds = normalizedEdges
             .Select(x => x.EdgeId)
             .ToHashSet(StringComparer.Ordinal);
-        if (!ownerResolution.CanCleanup)
-            return;
 
         var targetNodeIds = normalizedNodes
             .Select(x => x.NodeId)
@@ -101,34 +98,19 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
         return neighbors.Count == 0;
     }
 
-    private static ManagedOwnerResolution BuildManagedOwnerId(IGraphReadModel readModel)
+    private static string BuildManagedOwnerId(IGraphReadModel readModel)
     {
         var readModelId = NormalizeToken(readModel.Id);
-        var canCleanup = readModelId.Length > 0;
         if (readModelId.Length == 0)
         {
-            readModelId = readModel.GraphNodes
-                .Select(x => NormalizeToken(x.NodeId))
-                .FirstOrDefault(x => x.Length > 0) ?? "";
-            canCleanup = readModelId.Length > 0;
+            throw new InvalidOperationException(
+                $"Graph read model '{readModel.GetType().FullName}' requires a non-empty Id for owner lifecycle management.");
         }
-
-        if (readModelId.Length == 0)
-        {
-            readModelId = readModel.GraphEdges
-                .Select(x => NormalizeToken(x.FromNodeId))
-                .FirstOrDefault(x => x.Length > 0) ?? "";
-            canCleanup = readModelId.Length > 0;
-        }
-
-        if (readModelId.Length == 0)
-            readModelId = "unknown";
 
         var readModelType = NormalizeToken(readModel.GetType().FullName);
-        var ownerId = readModelType.Length == 0
+        return readModelType.Length == 0
             ? readModelId
             : $"{readModelType}:{readModelId}";
-        return new ManagedOwnerResolution(ownerId, canCleanup);
     }
 
     private static IReadOnlyList<ProjectionGraphNode> NormalizeNodes(
@@ -215,7 +197,4 @@ public sealed class ProjectionGraphMaterializer<TReadModel>
 
     private static string NormalizeToken(string? token) => token?.Trim() ?? "";
 
-    private readonly record struct ManagedOwnerResolution(
-        string OwnerId,
-        bool CanCleanup);
 }

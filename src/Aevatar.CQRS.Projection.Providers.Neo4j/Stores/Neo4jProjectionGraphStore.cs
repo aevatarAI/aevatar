@@ -325,54 +325,34 @@ public sealed class Neo4jProjectionGraphStore
         if (scope.Length == 0 || rootNodeId.Length == 0)
             return new ProjectionGraphSubgraph();
 
+        await EnsureSchemaAsync(ct);
         var depth = Math.Clamp(query.Depth, 1, _maxTraversalDepth);
         var take = Math.Clamp(query.Take, 1, 5000);
-        var visitedNodeIds = new HashSet<string>(StringComparer.Ordinal) { rootNodeId };
-        var frontier = new HashSet<string>(StringComparer.Ordinal) { rootNodeId };
-        var collectedEdges = new Dictionary<string, ProjectionGraphEdge>(StringComparer.Ordinal);
-
-        for (var currentDepth = 0; currentDepth < depth; currentDepth++)
+        var edgeTypes = NormalizeEdgeTypes(query.EdgeTypes);
+        var cypher = BuildSubgraphEdgesCypher(query.Direction, depth);
+        var parameters = new Dictionary<string, object?>
         {
-            if (frontier.Count == 0 || collectedEdges.Count >= take)
-                break;
+            ["scope"] = scope,
+            ["rootNodeId"] = rootNodeId,
+            ["edgeTypes"] = edgeTypes,
+            ["take"] = take,
+        };
 
-            var nextFrontier = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var nodeId in frontier)
-            {
-                ct.ThrowIfCancellationRequested();
-                var neighbors = await GetNeighborsAsync(
-                    new ProjectionGraphQuery
-                    {
-                        Scope = scope,
-                        RootNodeId = nodeId,
-                        Direction = query.Direction,
-                        EdgeTypes = query.EdgeTypes,
-                        Depth = 1,
-                        Take = take - collectedEdges.Count,
-                    },
-                    ct);
-
-                foreach (var edge in neighbors)
-                {
-                    if (collectedEdges.Count >= take)
-                        break;
-
-                    if (!collectedEdges.ContainsKey(edge.EdgeId))
-                        collectedEdges[edge.EdgeId] = edge;
-
-                    var counterpartNodeId = ResolveCounterpartNodeId(edge, nodeId);
-                    if (counterpartNodeId.Length == 0)
-                        continue;
-
-                    if (visitedNodeIds.Add(counterpartNodeId))
-                        nextFrontier.Add(counterpartNodeId);
-                }
-            }
-
-            frontier = nextFrontier;
+        var rows = await ExecuteReadAsync(cypher, parameters, ct);
+        var edges = new List<ProjectionGraphEdge>(rows.Count);
+        foreach (var row in rows)
+        {
+            var edge = BuildEdgeFromRow(scope, row);
+            if (edge != null)
+                edges.Add(edge);
         }
 
-        var nodes = await GetNodesByIdsAsync(scope, visitedNodeIds, ct);
+        var nodeIds = edges
+            .SelectMany(x => new[] { x.FromNodeId, x.ToNodeId })
+            .Append(rootNodeId)
+            .Where(x => NormalizeToken(x).Length > 0)
+            .ToHashSet(StringComparer.Ordinal);
+        var nodes = await GetNodesByIdsAsync(scope, nodeIds, ct);
         if (!nodes.Any(x => string.Equals(x.NodeId, rootNodeId, StringComparison.Ordinal)))
         {
             nodes.Add(new ProjectionGraphNode
@@ -388,7 +368,7 @@ public sealed class Neo4jProjectionGraphStore
         return new ProjectionGraphSubgraph
         {
             Nodes = nodes,
-            Edges = collectedEdges.Values.ToList(),
+            Edges = edges,
         };
     }
 
@@ -521,6 +501,34 @@ public sealed class Neo4jProjectionGraphStore
         };
     }
 
+    private string BuildSubgraphEdgesCypher(ProjectionGraphDirection direction, int depth)
+    {
+        var boundedDepth = Math.Clamp(depth, 1, _maxTraversalDepth);
+        var pathPattern = direction switch
+        {
+            ProjectionGraphDirection.Outbound =>
+                $"(root)-[:{_edgeType}*1..{boundedDepth}]->()",
+            ProjectionGraphDirection.Inbound =>
+                $"(root)<-[:{_edgeType}*1..{boundedDepth}]-()",
+            _ =>
+                $"(root)-[:{_edgeType}*1..{boundedDepth}]-()",
+        };
+        return $"MATCH (root:{_nodeLabel} {{scope: $scope, nodeId: $rootNodeId}}) " +
+               $"OPTIONAL MATCH p={pathPattern} " +
+               "WHERE p IS NULL OR (" +
+               "all(n IN nodes(p) WHERE coalesce(n.scope, '') = $scope) " +
+               "AND (size($edgeTypes) = 0 OR all(rel IN relationships(p) WHERE rel.relationType IN $edgeTypes))) " +
+               "UNWIND CASE WHEN p IS NULL THEN [] ELSE relationships(p) END AS r " +
+               "WITH DISTINCT r " +
+               "RETURN r.edgeId AS edgeId, " +
+               "startNode(r).nodeId AS fromNodeId, " +
+               "endNode(r).nodeId AS toNodeId, " +
+               "coalesce(r.relationType, '') AS relationType, " +
+               "coalesce(r.propertiesJson, '{}') AS propertiesJson, " +
+               "coalesce(r.updatedAtEpochMs, 0) AS updatedAtEpochMs " +
+               "ORDER BY updatedAtEpochMs DESC LIMIT $take";
+    }
+
     private async Task EnsureSchemaAsync(CancellationToken ct)
     {
         if (!_autoCreateConstraints || _schemaInitialized)
@@ -576,15 +584,6 @@ public sealed class Neo4jProjectionGraphStore
             if (_database.Length > 0)
                 options.WithDatabase(_database);
         });
-    }
-
-    private static string ResolveCounterpartNodeId(ProjectionGraphEdge edge, string nodeId)
-    {
-        if (string.Equals(edge.FromNodeId, nodeId, StringComparison.Ordinal))
-            return edge.ToNodeId;
-        if (string.Equals(edge.ToNodeId, nodeId, StringComparison.Ordinal))
-            return edge.FromNodeId;
-        return "";
     }
 
     private static string[] NormalizeEdgeTypes(IReadOnlyList<string> edgeTypes)

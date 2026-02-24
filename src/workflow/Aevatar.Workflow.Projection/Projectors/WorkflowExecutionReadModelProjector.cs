@@ -71,6 +71,9 @@ public sealed class WorkflowExecutionReadModelProjector
         var now = ResolveEventTimestamp(envelope, _clock.UtcNow);
         await _materializationRouter.MutateAsync(context.RootActorId, report =>
         {
+            report.Id = context.RootActorId;
+            if (string.IsNullOrWhiteSpace(report.RootActorId))
+                report.RootActorId = context.RootActorId;
             var mutated = false;
             foreach (var reducer in reducers)
                 mutated |= reducer.Reduce(report, context, envelope, now);
@@ -91,6 +94,9 @@ public sealed class WorkflowExecutionReadModelProjector
         var completedAt = _clock.UtcNow;
         return new ValueTask(_materializationRouter.MutateAsync(context.RootActorId, report =>
         {
+            report.Id = context.RootActorId;
+            if (string.IsNullOrWhiteSpace(report.RootActorId))
+                report.RootActorId = context.RootActorId;
             report.Topology = topology.Select(x => new WorkflowExecutionTopologyEdge(x.Parent, x.Child)).ToList();
             report.TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot;
             if (report.EndedAt < report.StartedAt)

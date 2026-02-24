@@ -237,6 +237,27 @@ public class ProjectionGraphMaterializerTests
         store.ContainsNode("scope-1", "owner-1-node").Should().BeFalse();
     }
 
+    [Fact]
+    public async Task UpsertGraphAsync_WhenReadModelIdIsEmpty_ShouldThrow()
+    {
+        var store = new RecordingGraphStore();
+        var materializer = new ProjectionGraphMaterializer<TestGraphReadModel>(store);
+
+        Func<Task> act = () => materializer.UpsertGraphAsync(new TestGraphReadModel
+        {
+            Id = "",
+            GraphScope = "scope-1",
+            GraphNodes =
+            [
+                Node("root"),
+            ],
+            GraphEdges = [],
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*requires a non-empty Id*");
+    }
+
     private static string BuildOwnerId(string id) => $"{typeof(TestGraphReadModel).FullName}:{id}";
 
     private static GraphNodeDescriptor Node(string nodeId)
