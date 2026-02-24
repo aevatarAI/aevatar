@@ -14,6 +14,7 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
     private readonly Func<TKey, string> _keyFormatter;
     private readonly Func<TReadModel, object?>? _listSortSelector;
     private readonly int _listTakeMax;
+    private readonly string _providerName;
     private readonly ILogger<InMemoryProjectionReadModelStore<TReadModel, TKey>> _logger;
     private readonly JsonSerializerOptions _jsonOptions = new();
 
@@ -30,16 +31,11 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _listSortSelector = listSortSelector;
         _listTakeMax = listTakeMax > 0 ? listTakeMax : 200;
+        _providerName = string.IsNullOrWhiteSpace(providerName)
+            ? ProjectionProviderNames.InMemory
+            : providerName.Trim();
         _logger = logger ?? NullLogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>.Instance;
-        ProviderCapabilities = new ProjectionProviderCapabilities(
-            providerName,
-            supportsIndexing: true,
-            indexKinds: [ProjectionIndexKind.Document],
-            supportsGraph: false,
-            supportsGraphTraversal: false);
     }
-
-    public ProjectionProviderCapabilities ProviderCapabilities { get; }
 
     public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
@@ -57,7 +53,7 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
             var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
             _logger.LogInformation(
                 "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
-                ProviderCapabilities.ProviderName,
+                _providerName,
                 typeof(TReadModel).FullName,
                 key,
                 elapsedMs,
@@ -70,7 +66,7 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
             _logger.LogError(
                 ex,
                 "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
-                ProviderCapabilities.ProviderName,
+                _providerName,
                 typeof(TReadModel).FullName,
                 key,
                 elapsedMs,
@@ -101,7 +97,7 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
             var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
             _logger.LogInformation(
                 "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
-                ProviderCapabilities.ProviderName,
+                _providerName,
                 typeof(TReadModel).FullName,
                 keyValue,
                 elapsedMs,
@@ -114,7 +110,7 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
             _logger.LogError(
                 ex,
                 "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
-                ProviderCapabilities.ProviderName,
+                _providerName,
                 typeof(TReadModel).FullName,
                 keyValue,
                 elapsedMs,

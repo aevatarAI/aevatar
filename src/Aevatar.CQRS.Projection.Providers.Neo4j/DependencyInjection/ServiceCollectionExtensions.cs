@@ -23,14 +23,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>(
             new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>(
                 providerName,
-                new ProjectionProviderCapabilities(
-                    providerName,
-                    supportsIndexing: true,
-                    indexKinds: [ProjectionIndexKind.Graph],
-                    supportsAliases: false,
-                    supportsSchemaValidation: true,
-                    supportsGraph: true,
-                    supportsGraphTraversal: true),
                 provider => new Neo4jProjectionReadModelStore<TReadModel, TKey>(
                     optionsFactory(provider),
                     scopeFactory(provider),
@@ -54,14 +46,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
                 providerName,
-                new ProjectionProviderCapabilities(
-                    providerName,
-                    supportsIndexing: true,
-                    indexKinds: [ProjectionIndexKind.Graph],
-                    supportsAliases: false,
-                    supportsSchemaValidation: true,
-                    supportsGraph: true,
-                    supportsGraphTraversal: true),
                 provider => new Neo4jProjectionGraphStore(
                     optionsFactory(provider),
                     scopeFactory(provider),

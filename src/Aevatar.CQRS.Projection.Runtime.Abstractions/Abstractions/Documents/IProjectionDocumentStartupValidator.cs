@@ -1,8 +1,8 @@
 namespace Aevatar.CQRS.Projection.Runtime.Abstractions;
 
-public interface IProjectionDocumentStoreFactory
+public interface IProjectionDocumentStartupValidator
 {
-    IDocumentProjectionStore<TReadModel, TKey> Create<TReadModel, TKey>(
+    IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>> ValidateProvider<TReadModel, TKey>(
         IServiceProvider serviceProvider,
         ProjectionDocumentSelectionOptions selectionOptions)
         where TReadModel : class;

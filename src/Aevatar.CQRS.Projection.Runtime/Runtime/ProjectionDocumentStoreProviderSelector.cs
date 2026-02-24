@@ -6,83 +6,78 @@ namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 public sealed class ProjectionDocumentStoreProviderSelector
     : IProjectionDocumentStoreProviderSelector
 {
-    private readonly IProjectionProviderCapabilityValidator _capabilityValidator;
     private readonly ILogger<ProjectionDocumentStoreProviderSelector> _logger;
 
     public ProjectionDocumentStoreProviderSelector(
-        IProjectionProviderCapabilityValidator capabilityValidator,
         ILogger<ProjectionDocumentStoreProviderSelector>? logger = null)
     {
-        _capabilityValidator = capabilityValidator;
         _logger = logger ?? NullLogger<ProjectionDocumentStoreProviderSelector>.Instance;
     }
 
     public IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>> Select<TReadModel, TKey>(
         IReadOnlyList<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>> registrations,
-        ProjectionStoreSelectionOptions selectionOptions,
-        ProjectionStoreRequirements requirements)
+        ProjectionDocumentSelectionOptions selectionOptions)
         where TReadModel : class
     {
         ArgumentNullException.ThrowIfNull(registrations);
         ArgumentNullException.ThrowIfNull(selectionOptions);
-        ArgumentNullException.ThrowIfNull(requirements);
-
-        try
-        {
-            var selected = ProjectionDocumentStoreSelector.Select(
-                registrations,
-                selectionOptions,
-                requirements,
-                _capabilityValidator);
-            _logger.LogInformation(
-                "Projection provider selected. readModel={ReadModel} provider={Provider} failOnUnsupportedCapabilities={FailOnUnsupportedCapabilities}",
-                typeof(TReadModel).FullName,
-                selected.ProviderName,
-                selectionOptions.FailOnUnsupportedCapabilities);
-            return selected;
-        }
-        catch (ProjectionProviderCapabilityValidationException ex)
-        {
-            _logger.LogError(
-                "Projection provider capability validation failed. readModel={ReadModel} provider={Provider} requiredCapabilities={RequiredCapabilities} actualCapabilities={ActualCapabilities} violations={Violations}",
-                typeof(TReadModel).FullName,
-                ex.Capabilities.ProviderName,
-                FormatRequirements(ex.Requirements),
-                FormatCapabilities(ex.Capabilities),
-                string.Join("; ", ex.Violations));
-            throw;
-        }
-        catch (ProjectionProviderSelectionException ex)
-        {
-            var requestedProvider = ex.RequestedProviderName.Length == 0 ? "<unspecified>" : ex.RequestedProviderName;
-            var availableProviders = ex.AvailableProviders.Count == 0 ? "<none>" : string.Join(", ", ex.AvailableProviders);
-            _logger.LogError(
-                "Projection provider selection failed. readModel={ReadModel} requestedProvider={RequestedProvider} availableProviders={AvailableProviders} reason={Reason}",
-                typeof(TReadModel).FullName,
-                requestedProvider,
-                availableProviders,
-                ex.Reason);
-            throw;
-        }
+        var selected = SelectRegistration(
+            registrations,
+            selectionOptions,
+            typeof(TReadModel),
+            "No document store provider registrations were found.",
+            "Multiple document store providers are registered but no explicit provider was requested.",
+            "Requested document store provider is not registered.");
+        _logger.LogInformation(
+            "Projection document provider selected. readModel={ReadModel} provider={Provider}",
+            typeof(TReadModel).FullName,
+            selected.ProviderName);
+        return selected;
     }
 
-    private static string FormatRequirements(ProjectionStoreRequirements requirements)
+    private static IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>> SelectRegistration<TReadModel, TKey>(
+        IReadOnlyList<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>> registrations,
+        ProjectionDocumentSelectionOptions selectionOptions,
+        Type logicalModelType,
+        string noRegistrationsReason,
+        string multipleRegistrationsReason,
+        string providerNotRegisteredReason)
+        where TReadModel : class
     {
-        return $"requiresIndexing={requirements.RequiresIndexing};" +
-               $"requiredIndexKinds=[{string.Join(",", requirements.RequiredIndexKinds)}];" +
-               $"requiresAliases={requirements.RequiresAliases};" +
-               $"requiresSchemaValidation={requirements.RequiresSchemaValidation};" +
-               $"requiresGraph={requirements.RequiresGraph};" +
-               $"requiresGraphTraversal={requirements.RequiresGraphTraversal}";
-    }
+        var requestedProviderName = selectionOptions.RequestedProviderName?.Trim() ?? "";
+        if (registrations.Count == 0)
+        {
+            throw new ProjectionProviderSelectionException(
+                logicalModelType,
+                requestedProviderName,
+                [],
+                noRegistrationsReason);
+        }
 
-    private static string FormatCapabilities(ProjectionProviderCapabilities capabilities)
-    {
-        return $"supportsIndexing={capabilities.SupportsIndexing};" +
-               $"indexKinds=[{string.Join(",", capabilities.IndexKinds)}];" +
-               $"supportsAliases={capabilities.SupportsAliases};" +
-               $"supportsSchemaValidation={capabilities.SupportsSchemaValidation};" +
-               $"supportsGraph={capabilities.SupportsGraph};" +
-               $"supportsGraphTraversal={capabilities.SupportsGraphTraversal}";
+        if (requestedProviderName.Length == 0)
+        {
+            if (registrations.Count == 1)
+                return registrations[0];
+
+            throw new ProjectionProviderSelectionException(
+                logicalModelType,
+                requestedProviderName,
+                registrations.Select(x => x.ProviderName).ToList(),
+                multipleRegistrationsReason);
+        }
+
+        var matched = registrations
+            .FirstOrDefault(x => string.Equals(
+                x.ProviderName,
+                requestedProviderName,
+                StringComparison.OrdinalIgnoreCase));
+        if (matched != null)
+            return matched;
+
+        throw new ProjectionProviderSelectionException(
+            logicalModelType,
+            requestedProviderName,
+            registrations.Select(x => x.ProviderName).ToList(),
+            providerNotRegisteredReason);
     }
 }

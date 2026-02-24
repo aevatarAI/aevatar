@@ -21,15 +21,13 @@ public sealed class ProjectionGraphStoreFactory : IProjectionGraphStoreFactory
 
     public IProjectionGraphStore Create(
         IServiceProvider serviceProvider,
-        ProjectionStoreSelectionOptions selectionOptions,
-        ProjectionStoreRequirements requirements)
+        ProjectionGraphSelectionOptions selectionOptions)
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
         ArgumentNullException.ThrowIfNull(selectionOptions);
-        ArgumentNullException.ThrowIfNull(requirements);
 
         var registrations = _providerRegistry.GetRegistrations(serviceProvider);
-        var selected = _providerSelector.Select(registrations, selectionOptions, requirements);
+        var selected = _providerSelector.Select(registrations, selectionOptions);
 
         var startedAt = DateTimeOffset.UtcNow;
         try

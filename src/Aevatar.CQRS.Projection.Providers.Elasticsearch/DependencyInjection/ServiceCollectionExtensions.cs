@@ -23,12 +23,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>(
             new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>(
                 providerName,
-                new ProjectionProviderCapabilities(
-                    providerName,
-                    supportsIndexing: true,
-                    indexKinds: [ProjectionIndexKind.Document],
-                    supportsAliases: false,
-                    supportsSchemaValidation: false),
                 provider => new ElasticsearchProjectionReadModelStore<TReadModel, TKey>(
                     optionsFactory(provider),
                     indexScopeFactory(provider),

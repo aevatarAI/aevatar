@@ -18,13 +18,13 @@
   - `WorkflowProjectionSinkFailurePolicy`（sink 异常策略）
   - `WorkflowProjectionReadModelUpdater`（read model 元信息更新）
   - `WorkflowProjectionQueryReader`（query 映射读取）
-  - Store 选择统一由 `IProjectionStoreSelectionPlanner` 执行（基于 `IDocumentReadModel/IGraphReadModel` 能力自动决策）
+  - Store 选择采用显式 providerName（Document/Graph 分离）
 - 领域上下文：`IWorkflowExecutionProjectionContextFactory`、`WorkflowExecutionProjectionContext`
 - 实时输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
 - 领域投影实现：reducers、projectors、read model（不包含 Provider Store 实现）
 - 领域 DI 组合：`AddWorkflowExecutionProjectionCQRS(...)`
-- Provider 能力校验：启动期由 `WorkflowReadModelStartupValidationHostedService` 预校验，运行时选择阶段继续按 `ProjectionProviderCapabilityValidator` 校验
-- ReadModel 选择规则统一：DI store 解析与 Startup validation 均复用 `IProjectionStoreSelectionPlanner + IProjectionStoreSelectionRuntimeOptions`，避免双处规则漂移
+- Provider 启动校验：由 `WorkflowReadModelStartupValidationHostedService` 执行 Document/Graph 两条独立 fail-fast 校验
+- ReadModel 选择规则：DI store 解析与 Startup validation 统一复用 Document/Graph runtime options（`IProjectionDocumentRuntimeOptions`、`IProjectionGraphRuntimeOptions`）
 
 本项目依赖：
 

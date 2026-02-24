@@ -28,17 +28,23 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
         var providerSelection = ResolveProviderSelection(configuration);
         EnforceGraphProviderPolicy(configuration, providerSelection.GraphProvider);
-        var runtimeOptions = new ProjectionStoreRuntimeOptions
+        var documentRuntimeOptions = new ProjectionDocumentRuntimeOptions
         {
-            DocumentProvider = providerSelection.DocumentProvider,
-            GraphProvider = providerSelection.GraphProvider,
-            FailOnUnsupportedCapabilities = true,
-            Mode = ProjectionStoreMode.Custom,
+            ProviderName = providerSelection.DocumentProvider,
+            FailFastOnStartup = true,
+        };
+        var graphRuntimeOptions = new ProjectionGraphRuntimeOptions
+        {
+            ProviderName = providerSelection.GraphProvider,
+            FailFastOnStartup = true,
         };
 
-        services.Replace(ServiceDescriptor.Singleton(runtimeOptions));
-        services.Replace(ServiceDescriptor.Singleton<IProjectionStoreSelectionRuntimeOptions>(sp =>
-            sp.GetRequiredService<ProjectionStoreRuntimeOptions>()));
+        services.Replace(ServiceDescriptor.Singleton(documentRuntimeOptions));
+        services.Replace(ServiceDescriptor.Singleton<IProjectionDocumentRuntimeOptions>(sp =>
+            sp.GetRequiredService<ProjectionDocumentRuntimeOptions>()));
+        services.Replace(ServiceDescriptor.Singleton(graphRuntimeOptions));
+        services.Replace(ServiceDescriptor.Singleton<IProjectionGraphRuntimeOptions>(sp =>
+            sp.GetRequiredService<ProjectionGraphRuntimeOptions>()));
 
         RegisterDocumentProvider(services, configuration, providerSelection.DocumentProvider);
         RegisterGraphProvider(services, configuration, providerSelection.GraphProvider);

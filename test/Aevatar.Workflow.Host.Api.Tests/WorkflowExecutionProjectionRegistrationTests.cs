@@ -27,7 +27,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         Func<Task> act = () => StartHostedServicesAsync(provider);
 
         await act.Should().ThrowAsync<ProjectionProviderSelectionException>()
-            .WithMessage("*No provider registrations were found*");
+            .WithMessage("*No document store provider registrations were found*");
     }
 
     [Fact]
@@ -60,11 +60,10 @@ public class WorkflowExecutionProjectionRegistrationTests
         var services = new ServiceCollection();
         RegisterInMemoryProviders(services);
         RegisterElasticsearchDocumentProvider(services);
-        ConfigureStoreSelectionOptions(services, options =>
-        {
-            options.DocumentProvider = ProjectionProviderNames.Elasticsearch;
-            options.GraphProvider = ProjectionProviderNames.InMemory;
-        });
+        ConfigureStoreSelectionOptions(
+            services,
+            documentProvider: ProjectionProviderNames.Elasticsearch,
+            graphProvider: ProjectionProviderNames.InMemory);
         services.AddWorkflowExecutionProjectionCQRS();
 
         using var provider = services.BuildServiceProvider();
@@ -80,11 +79,10 @@ public class WorkflowExecutionProjectionRegistrationTests
     {
         var services = new ServiceCollection();
         RegisterElasticsearchDocumentProvider(services);
-        ConfigureStoreSelectionOptions(services, options =>
-        {
-            options.DocumentProvider = ProjectionProviderNames.Elasticsearch;
-            options.GraphProvider = ProjectionProviderNames.Elasticsearch;
-        });
+        ConfigureStoreSelectionOptions(
+            services,
+            documentProvider: ProjectionProviderNames.Elasticsearch,
+            graphProvider: ProjectionProviderNames.Elasticsearch);
         services.AddWorkflowExecutionProjectionCQRS();
 
         using var provider = services.BuildServiceProvider();
@@ -122,13 +120,26 @@ public class WorkflowExecutionProjectionRegistrationTests
 
     private static void ConfigureStoreSelectionOptions(
         IServiceCollection services,
-        Action<ProjectionStoreRuntimeOptions> configure)
+        string documentProvider,
+        string graphProvider)
     {
-        var options = new ProjectionStoreRuntimeOptions();
-        configure(options);
-        services.Replace(ServiceDescriptor.Singleton(options));
-        services.Replace(ServiceDescriptor.Singleton<IProjectionStoreSelectionRuntimeOptions>(sp =>
-            sp.GetRequiredService<ProjectionStoreRuntimeOptions>()));
+        var documentOptions = new ProjectionDocumentRuntimeOptions
+        {
+            ProviderName = documentProvider,
+            FailFastOnStartup = true,
+        };
+        var graphOptions = new ProjectionGraphRuntimeOptions
+        {
+            ProviderName = graphProvider,
+            FailFastOnStartup = true,
+        };
+
+        services.Replace(ServiceDescriptor.Singleton(documentOptions));
+        services.Replace(ServiceDescriptor.Singleton<IProjectionDocumentRuntimeOptions>(sp =>
+            sp.GetRequiredService<ProjectionDocumentRuntimeOptions>()));
+        services.Replace(ServiceDescriptor.Singleton(graphOptions));
+        services.Replace(ServiceDescriptor.Singleton<IProjectionGraphRuntimeOptions>(sp =>
+            sp.GetRequiredService<ProjectionGraphRuntimeOptions>()));
     }
 
     private static async Task StartHostedServicesAsync(IServiceProvider provider)

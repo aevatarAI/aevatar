@@ -20,12 +20,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>(
             new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>(
                 providerName,
-                new ProjectionProviderCapabilities(
-                    providerName,
-                    supportsIndexing: true,
-                    indexKinds: [ProjectionIndexKind.Document],
-                    supportsGraph: false,
-                    supportsGraphTraversal: false),
                 provider => new InMemoryProjectionReadModelStore<TReadModel, TKey>(
                     keySelector,
                     keyFormatter,
@@ -44,12 +38,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
             new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
                 providerName,
-                new ProjectionProviderCapabilities(
-                    providerName,
-                    supportsIndexing: true,
-                    indexKinds: [ProjectionIndexKind.Graph],
-                    supportsGraph: true,
-                    supportsGraphTraversal: true),
                 _ => new InMemoryProjectionGraphStore(providerName)));
 
         return services;

@@ -4,7 +4,6 @@ public interface IProjectionDocumentStoreProviderSelector
 {
     IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>> Select<TReadModel, TKey>(
         IReadOnlyList<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>> registrations,
-        ProjectionStoreSelectionOptions selectionOptions,
-        ProjectionStoreRequirements requirements)
+        ProjectionDocumentSelectionOptions selectionOptions)
         where TReadModel : class;
 }

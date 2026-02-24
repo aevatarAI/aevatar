@@ -25,6 +25,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
     private readonly string _listSortField;
     private readonly ElasticsearchMissingIndexBehavior _missingIndexBehavior;
     private readonly int _mutateMaxRetryCount;
+    private readonly string _providerName;
     private readonly ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>> _logger;
     private readonly SemaphoreSlim _indexInitializationLock = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -68,14 +69,14 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         _autoCreateIndex = options.AutoCreateIndex;
         _missingIndexBehavior = options.MissingIndexBehavior;
         _mutateMaxRetryCount = Math.Clamp(options.MutateMaxRetryCount, 0, 20);
+        _providerName = string.IsNullOrWhiteSpace(providerName)
+            ? ProjectionProviderNames.Elasticsearch
+            : providerName.Trim();
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _listSortField = options.ListSortField?.Trim() ?? "";
         _logger = logger ?? NullLogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>.Instance;
-        ProviderCapabilities = BuildCapabilities(providerName);
     }
-
-    public ProjectionProviderCapabilities ProviderCapabilities { get; }
 
     public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default) =>
         UpsertCoreAsync(readModel, allowCreateIndex: true, ct);
@@ -127,7 +128,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
                 _logger.LogWarning(
                     ex,
                     "Projection read-model optimistic concurrency conflict. provider={Provider} readModelType={ReadModelType} key={Key} attempt={Attempt}/{MaxAttempts}",
-                    ProviderCapabilities.ProviderName,
+                    _providerName,
                     typeof(TReadModel).FullName,
                     keyValue,
                     attempt + 1,
@@ -282,7 +283,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
             var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
             _logger.LogInformation(
                 "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
-                ProviderCapabilities.ProviderName,
+                _providerName,
                 typeof(TReadModel).FullName,
                 keyValue,
                 elapsedMs,
@@ -318,7 +319,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
 
         _logger.LogWarning(
             "Projection read-model index is missing. provider={Provider} readModelType={ReadModelType} index={Index} operation={Operation} behavior={Behavior}",
-            ProviderCapabilities.ProviderName,
+            _providerName,
             typeof(TReadModel).FullName,
             _indexName,
             operation,
@@ -348,7 +349,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         _logger.LogError(
             ex,
             "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
-            ProviderCapabilities.ProviderName,
+            _providerName,
             typeof(TReadModel).FullName,
             keyValue,
             elapsedMs,
@@ -542,14 +543,6 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
 
         return payload[..maxLength] + "...(truncated)";
     }
-
-    private static ProjectionProviderCapabilities BuildCapabilities(string providerName) =>
-        new(
-            providerName,
-            supportsIndexing: true,
-            indexKinds: [ProjectionIndexKind.Document],
-            supportsAliases: false,
-            supportsSchemaValidation: false);
 
     public void Dispose()
     {

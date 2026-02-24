@@ -9,21 +9,6 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class ElasticsearchProjectionReadModelStoreBehaviorTests
 {
     [Fact]
-    public void ProviderCapabilities_ShouldNotClaimAliasOrSchemaValidationSupport()
-    {
-        using var store = CreateStore(
-            new ElasticsearchProjectionReadModelStoreOptions
-            {
-                AutoCreateIndex = false,
-            },
-            new ScriptedHttpMessageHandler());
-
-        var capabilities = store.ProviderCapabilities;
-        capabilities.SupportsAliases.Should().BeFalse();
-        capabilities.SupportsSchemaValidation.Should().BeFalse();
-    }
-
-    [Fact]
     public async Task GetAsync_WhenIndexMissingAndAutoCreateDisabled_ShouldThrowByDefault()
     {
         var handler = new ScriptedHttpMessageHandler();

@@ -117,18 +117,23 @@ public class WorkflowHostingExtensionsCoverageTests
         var relationRegistrations = services
             .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionGraphStore>))
             .ToList();
-        var selectionOptionsRegistrations = services
-            .Where(x => x.ServiceType == typeof(IProjectionStoreSelectionRuntimeOptions))
+        var documentRuntimeOptionRegistrations = services
+            .Where(x => x.ServiceType == typeof(IProjectionDocumentRuntimeOptions))
+            .ToList();
+        var graphRuntimeOptionRegistrations = services
+            .Where(x => x.ServiceType == typeof(IProjectionGraphRuntimeOptions))
             .ToList();
 
         providerRegistrations.Should().HaveCount(1);
         relationRegistrations.Should().HaveCount(1);
-        selectionOptionsRegistrations.Should().HaveCount(1);
+        documentRuntimeOptionRegistrations.Should().HaveCount(1);
+        graphRuntimeOptionRegistrations.Should().HaveCount(1);
 
         using var provider = services.BuildServiceProvider();
-        var selectionOptions = provider.GetRequiredService<IProjectionStoreSelectionRuntimeOptions>();
-        selectionOptions.DocumentProvider.Should().Be(ProjectionProviderNames.Elasticsearch);
-        selectionOptions.GraphProvider.Should().Be(ProjectionProviderNames.InMemory);
+        var documentOptions = provider.GetRequiredService<IProjectionDocumentRuntimeOptions>();
+        var graphOptions = provider.GetRequiredService<IProjectionGraphRuntimeOptions>();
+        documentOptions.ProviderName.Should().Be(ProjectionProviderNames.Elasticsearch);
+        graphOptions.ProviderName.Should().Be(ProjectionProviderNames.InMemory);
     }
 
     [Fact]

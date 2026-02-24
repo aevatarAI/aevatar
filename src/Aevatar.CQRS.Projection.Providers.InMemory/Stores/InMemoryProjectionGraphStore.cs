@@ -13,15 +13,8 @@ public sealed class InMemoryProjectionGraphStore
     public InMemoryProjectionGraphStore(
         string providerName = ProjectionProviderNames.InMemory)
     {
-        ProviderCapabilities = new ProjectionProviderCapabilities(
-            providerName,
-            supportsIndexing: true,
-            indexKinds: [ProjectionIndexKind.Graph],
-            supportsGraph: true,
-            supportsGraphTraversal: true);
+        _ = providerName;
     }
-
-    public ProjectionProviderCapabilities ProviderCapabilities { get; }
 
     public Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default)
     {

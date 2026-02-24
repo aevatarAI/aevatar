@@ -37,9 +37,12 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
-        services.TryAddSingleton<ProjectionStoreRuntimeOptions>();
-        services.TryAddSingleton<IProjectionStoreSelectionRuntimeOptions>(sp =>
-            sp.GetRequiredService<ProjectionStoreRuntimeOptions>());
+        services.TryAddSingleton<ProjectionDocumentRuntimeOptions>();
+        services.TryAddSingleton<IProjectionDocumentRuntimeOptions>(sp =>
+            sp.GetRequiredService<ProjectionDocumentRuntimeOptions>());
+        services.TryAddSingleton<ProjectionGraphRuntimeOptions>();
+        services.TryAddSingleton<IProjectionGraphRuntimeOptions>(sp =>
+            sp.GetRequiredService<ProjectionGraphRuntimeOptions>());
         services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>, WorkflowExecutionReportDocumentMetadataProvider>();
@@ -128,12 +131,11 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IDocumentProjectionStore<WorkflowExecutionReport, string>>(sp =>
         {
             var storeFactory = sp.GetRequiredService<IProjectionDocumentStoreFactory>();
-            var selectionPlan = BuildSelectionPlan(sp);
+            var selectionOptions = BuildDocumentSelectionOptions(sp);
 
             return storeFactory.Create<WorkflowExecutionReport, string>(
                 sp,
-                selectionPlan.DocumentSelectionOptions,
-                selectionPlan.DocumentRequirements);
+                selectionOptions);
         }));
     }
 
@@ -142,12 +144,11 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IProjectionGraphStore>(sp =>
         {
             var graphStoreFactory = sp.GetRequiredService<IProjectionGraphStoreFactory>();
-            var selectionPlan = BuildSelectionPlan(sp);
+            var selectionOptions = BuildGraphSelectionOptions(sp);
 
             return graphStoreFactory.Create(
                 sp,
-                selectionPlan.GraphSelectionOptions,
-                selectionPlan.GraphRequirements);
+                selectionOptions);
         }));
     }
 
@@ -159,14 +160,22 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IProjectionGraphMaterializer<WorkflowExecutionReport>>())));
     }
 
-    private static ProjectionStoreSelectionPlan BuildSelectionPlan(IServiceProvider serviceProvider)
+    private static ProjectionDocumentSelectionOptions BuildDocumentSelectionOptions(IServiceProvider serviceProvider)
     {
-        var selectionPlanner = serviceProvider.GetRequiredService<IProjectionStoreSelectionPlanner>();
-        var runtimeOptions = serviceProvider.GetRequiredService<IProjectionStoreSelectionRuntimeOptions>();
-        return selectionPlanner.Build(
-            runtimeOptions,
-            typeof(WorkflowExecutionReport),
-            new ProjectionStoreRequirements());
+        var runtimeOptions = serviceProvider.GetRequiredService<IProjectionDocumentRuntimeOptions>();
+        return new ProjectionDocumentSelectionOptions
+        {
+            RequestedProviderName = runtimeOptions.ProviderName,
+        };
+    }
+
+    private static ProjectionGraphSelectionOptions BuildGraphSelectionOptions(IServiceProvider serviceProvider)
+    {
+        var runtimeOptions = serviceProvider.GetRequiredService<IProjectionGraphRuntimeOptions>();
+        return new ProjectionGraphSelectionOptions
+        {
+            RequestedProviderName = runtimeOptions.ProviderName,
+        };
     }
 
     private sealed class PassthroughEventDeduplicator : IEventDeduplicator

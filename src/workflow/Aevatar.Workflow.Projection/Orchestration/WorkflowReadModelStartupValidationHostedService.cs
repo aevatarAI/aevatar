@@ -11,24 +11,27 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly WorkflowExecutionProjectionOptions _options;
-    private readonly IProjectionStoreSelectionPlanner _selectionPlanner;
-    private readonly IProjectionStoreSelectionRuntimeOptions _selectionRuntimeOptions;
-    private readonly IProjectionStoreStartupValidator _startupValidator;
+    private readonly IProjectionDocumentRuntimeOptions _documentRuntimeOptions;
+    private readonly IProjectionGraphRuntimeOptions _graphRuntimeOptions;
+    private readonly IProjectionDocumentStartupValidator _documentStartupValidator;
+    private readonly IProjectionGraphStartupValidator _graphStartupValidator;
     private readonly ILogger<WorkflowReadModelStartupValidationHostedService> _logger;
 
     public WorkflowReadModelStartupValidationHostedService(
         IServiceProvider serviceProvider,
         WorkflowExecutionProjectionOptions options,
-        IProjectionStoreSelectionPlanner selectionPlanner,
-        IProjectionStoreSelectionRuntimeOptions selectionRuntimeOptions,
-        IProjectionStoreStartupValidator startupValidator,
+        IProjectionDocumentRuntimeOptions documentRuntimeOptions,
+        IProjectionGraphRuntimeOptions graphRuntimeOptions,
+        IProjectionDocumentStartupValidator documentStartupValidator,
+        IProjectionGraphStartupValidator graphStartupValidator,
         ILogger<WorkflowReadModelStartupValidationHostedService>? logger = null)
     {
         _serviceProvider = serviceProvider;
         _options = options;
-        _selectionPlanner = selectionPlanner;
-        _selectionRuntimeOptions = selectionRuntimeOptions;
-        _startupValidator = startupValidator;
+        _documentRuntimeOptions = documentRuntimeOptions;
+        _graphRuntimeOptions = graphRuntimeOptions;
+        _documentStartupValidator = documentStartupValidator;
+        _graphStartupValidator = graphStartupValidator;
         _logger = logger ?? NullLogger<WorkflowReadModelStartupValidationHostedService>.Instance;
     }
 
@@ -38,29 +41,28 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
         if (!_options.Enabled)
             return Task.CompletedTask;
 
-        var selectionPlan = _selectionPlanner.Build(
-            _selectionRuntimeOptions,
-            typeof(WorkflowExecutionReport),
-            new ProjectionStoreRequirements());
-
-        if (_options.ValidateDocumentProviderOnStartup)
+        if (_options.ValidateDocumentProviderOnStartup && _documentRuntimeOptions.FailFastOnStartup)
         {
-            var selectedDocumentProvider = _startupValidator.ValidateDocumentProvider<WorkflowExecutionReport, string>(
+            var selectedDocumentProvider = _documentStartupValidator.ValidateProvider<WorkflowExecutionReport, string>(
                 _serviceProvider,
-                selectionPlan.DocumentSelectionOptions,
-                selectionPlan.DocumentRequirements);
+                new ProjectionDocumentSelectionOptions
+                {
+                    RequestedProviderName = _documentRuntimeOptions.ProviderName,
+                });
             _logger.LogInformation(
                 "Workflow read-model provider startup validation passed. readModelType={ReadModelType} provider={Provider}",
                 typeof(WorkflowExecutionReport).FullName,
                 selectedDocumentProvider.ProviderName);
         }
 
-        if (_options.ValidateGraphProviderOnStartup)
+        if (_options.ValidateGraphProviderOnStartup && _graphRuntimeOptions.FailFastOnStartup)
         {
-            var selectedGraphProvider = _startupValidator.ValidateGraphProvider(
+            var selectedGraphProvider = _graphStartupValidator.ValidateProvider(
                 _serviceProvider,
-                selectionPlan.GraphSelectionOptions,
-                selectionPlan.GraphRequirements);
+                new ProjectionGraphSelectionOptions
+                {
+                    RequestedProviderName = _graphRuntimeOptions.ProviderName,
+                });
             _logger.LogInformation(
                 "Workflow graph provider startup validation passed. graphType={GraphType} provider={Provider}",
                 typeof(ProjectionGraphNode).FullName,

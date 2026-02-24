@@ -19,6 +19,7 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
     private readonly int _listTakeMax;
     private readonly string _label;
     private readonly bool _autoCreateConstraints;
+    private readonly string _providerName;
     private readonly ILogger<Neo4jProjectionReadModelStore<TReadModel, TKey>> _logger;
     private readonly SemaphoreSlim _schemaLock = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -44,6 +45,9 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
         _listTakeMax = options.ListTakeMax > 0 ? options.ListTakeMax : 200;
         _label = NormalizeLabel(options.NodeLabel);
         _autoCreateConstraints = options.AutoCreateConstraints;
+        _providerName = string.IsNullOrWhiteSpace(providerName)
+            ? ProjectionProviderNames.Neo4j
+            : providerName.Trim();
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _logger = logger ?? NullLogger<Neo4jProjectionReadModelStore<TReadModel, TKey>>.Instance;
@@ -53,18 +57,7 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
             : AuthTokens.Basic(options.Username.Trim(), options.Password ?? "");
         _driver = GraphDatabase.Driver(options.Uri, auth, config =>
             config.WithConnectionTimeout(TimeSpan.FromMilliseconds(Math.Max(1000, options.RequestTimeoutMs))));
-
-        ProviderCapabilities = new ProjectionProviderCapabilities(
-            providerName,
-            supportsIndexing: true,
-            indexKinds: [ProjectionIndexKind.Document, ProjectionIndexKind.Graph],
-            supportsAliases: false,
-            supportsSchemaValidation: true,
-            supportsGraph: true,
-            supportsGraphTraversal: true);
     }
-
-    public ProjectionProviderCapabilities ProviderCapabilities { get; }
 
     public async Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
@@ -93,7 +86,7 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
             var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
             _logger.LogInformation(
                 "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
-                ProviderCapabilities.ProviderName,
+                _providerName,
                 typeof(TReadModel).FullName,
                 key,
                 elapsedMs,
@@ -273,7 +266,7 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
         _logger.LogError(
             ex,
             "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
-            ProviderCapabilities.ProviderName,
+            _providerName,
             typeof(TReadModel).FullName,
             key,
             elapsedMs,

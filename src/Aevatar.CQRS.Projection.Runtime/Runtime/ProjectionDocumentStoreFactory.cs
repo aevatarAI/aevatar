@@ -22,16 +22,14 @@ public sealed class ProjectionDocumentStoreFactory
 
     public IDocumentProjectionStore<TReadModel, TKey> Create<TReadModel, TKey>(
         IServiceProvider serviceProvider,
-        ProjectionStoreSelectionOptions selectionOptions,
-        ProjectionStoreRequirements requirements)
+        ProjectionDocumentSelectionOptions selectionOptions)
         where TReadModel : class
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
         ArgumentNullException.ThrowIfNull(selectionOptions);
-        ArgumentNullException.ThrowIfNull(requirements);
 
         var registrations = _providerRegistry.GetRegistrations<TReadModel, TKey>(serviceProvider);
-        var selected = _providerSelector.Select(registrations, selectionOptions, requirements);
+        var selected = _providerSelector.Select(registrations, selectionOptions);
 
         var startedAt = DateTimeOffset.UtcNow;
         try
