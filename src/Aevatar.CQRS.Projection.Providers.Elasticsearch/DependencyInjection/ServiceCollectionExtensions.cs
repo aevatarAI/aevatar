@@ -20,8 +20,8 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(indexScope);
         ArgumentNullException.ThrowIfNull(keySelector);
 
-        services.AddSingleton<IProjectionReadModelStoreRegistration<TReadModel, TKey>>(
-            new DelegateProjectionReadModelStoreRegistration<TReadModel, TKey>(
+        services.AddSingleton<IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>>(
+            new DelegateProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>(
                 providerName,
                 new ProjectionReadModelProviderCapabilities(
                     providerName,
@@ -44,8 +44,8 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         string providerName = ProjectionReadModelProviderNames.Elasticsearch)
     {
-        services.AddSingleton<IProjectionRelationStoreRegistration>(
-            new DelegateProjectionRelationStoreRegistration(
+        services.AddSingleton<IProjectionStoreRegistration<IProjectionRelationStore>>(
+            new DelegateProjectionStoreRegistration<IProjectionRelationStore>(
                 providerName,
                 new ProjectionReadModelProviderCapabilities(
                     providerName,

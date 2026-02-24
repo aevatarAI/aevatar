@@ -8,7 +8,7 @@ namespace Aevatar.CQRS.Projection.Providers.Neo4j.Stores;
 
 public sealed class Neo4jProjectionRelationStore
     : IProjectionRelationStore,
-      IProjectionRelationStoreProviderMetadata,
+      IProjectionStoreProviderMetadata,
       IAsyncDisposable
 {
     private readonly IDriver _driver;

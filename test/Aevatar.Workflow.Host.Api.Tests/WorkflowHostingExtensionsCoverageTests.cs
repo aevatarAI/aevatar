@@ -66,12 +66,12 @@ public class WorkflowHostingExtensionsCoverageTests
         builder.AddWorkflowCapabilityWithAIDefaults();
 
         var providerRegistrations = builder.Services
-            .Where(x => x.ServiceType == typeof(IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionReadModelStore<WorkflowExecutionReport, string>>))
             .ToList();
         providerRegistrations.Should().HaveCount(1);
 
         var relationRegistrations = builder.Services
-            .Where(x => x.ServiceType == typeof(IProjectionRelationStoreRegistration))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionRelationStore>))
             .ToList();
         relationRegistrations.Should().HaveCount(1);
     }
@@ -86,12 +86,12 @@ public class WorkflowHostingExtensionsCoverageTests
         services.AddWorkflowProjectionReadModelProviders(configuration);
 
         var providerRegistrations = services
-            .Where(x => x.ServiceType == typeof(IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionReadModelStore<WorkflowExecutionReport, string>>))
             .ToList();
         providerRegistrations.Should().HaveCount(1);
 
         var relationRegistrations = services
-            .Where(x => x.ServiceType == typeof(IProjectionRelationStoreRegistration))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionRelationStore>))
             .ToList();
         relationRegistrations.Should().HaveCount(1);
     }
@@ -112,10 +112,10 @@ public class WorkflowHostingExtensionsCoverageTests
         services.AddWorkflowProjectionReadModelProviders(configuration);
 
         var providerRegistrations = services
-            .Where(x => x.ServiceType == typeof(IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionReadModelStore<WorkflowExecutionReport, string>>))
             .ToList();
         var relationRegistrations = services
-            .Where(x => x.ServiceType == typeof(IProjectionRelationStoreRegistration))
+            .Where(x => x.ServiceType == typeof(IProjectionStoreRegistration<IProjectionRelationStore>))
             .ToList();
         var selectionOptionsRegistrations = services
             .Where(x => x.ServiceType == typeof(IProjectionStoreSelectionRuntimeOptions))

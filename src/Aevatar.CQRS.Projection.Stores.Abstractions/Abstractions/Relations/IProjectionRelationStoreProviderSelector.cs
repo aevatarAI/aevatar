@@ -2,8 +2,8 @@ namespace Aevatar.CQRS.Projection.Abstractions;
 
 public interface IProjectionRelationStoreProviderSelector
 {
-    IProjectionRelationStoreRegistration Select(
-        IReadOnlyList<IProjectionRelationStoreRegistration> registrations,
+    IProjectionStoreRegistration<IProjectionRelationStore> Select(
+        IReadOnlyList<IProjectionStoreRegistration<IProjectionRelationStore>> registrations,
         ProjectionReadModelStoreSelectionOptions selectionOptions,
         ProjectionReadModelRequirements requirements);
 }

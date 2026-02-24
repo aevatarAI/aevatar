@@ -3,7 +3,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>Aevatar.CQRS.Projection.Abstractions</AssemblyName>
+    <AssemblyName>Aevatar.CQRS.Projection.Core.Abstractions</AssemblyName>
     <RootNamespace>Aevatar.CQRS.Projection.Abstractions</RootNamespace>
   </PropertyGroup>
   <ItemGroup>

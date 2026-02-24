@@ -1,6 +1,6 @@
 namespace Aevatar.CQRS.Projection.Abstractions;
 
-public interface IProjectionReadModelStoreProviderMetadata
+public interface IProjectionStoreProviderMetadata
 {
     ProjectionReadModelProviderCapabilities ProviderCapabilities { get; }
 }

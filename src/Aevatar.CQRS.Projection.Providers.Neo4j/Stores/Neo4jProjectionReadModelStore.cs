@@ -8,7 +8,7 @@ namespace Aevatar.CQRS.Projection.Providers.Neo4j.Stores;
 
 public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
     : IProjectionReadModelStore<TReadModel, TKey>,
-      IProjectionReadModelStoreProviderMetadata,
+      IProjectionStoreProviderMetadata,
       IAsyncDisposable
     where TReadModel : class
 {

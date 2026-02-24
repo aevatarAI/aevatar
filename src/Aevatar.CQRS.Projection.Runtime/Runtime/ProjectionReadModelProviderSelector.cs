@@ -17,8 +17,8 @@ public sealed class ProjectionReadModelProviderSelector
         _logger = logger ?? NullLogger<ProjectionReadModelProviderSelector>.Instance;
     }
 
-    public IProjectionReadModelStoreRegistration<TReadModel, TKey> Select<TReadModel, TKey>(
-        IReadOnlyList<IProjectionReadModelStoreRegistration<TReadModel, TKey>> registrations,
+    public IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>> Select<TReadModel, TKey>(
+        IReadOnlyList<IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>> registrations,
         ProjectionReadModelStoreSelectionOptions selectionOptions,
         ProjectionReadModelRequirements requirements)
         where TReadModel : class

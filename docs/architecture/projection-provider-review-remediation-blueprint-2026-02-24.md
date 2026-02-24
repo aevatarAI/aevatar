@@ -18,11 +18,11 @@
 |---|---|---|---|
 | B1 | Blocking | `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/DependencyInjection/ServiceCollectionExtensions.cs:26` + `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionReadModelStore.cs:353` | Elasticsearch 声明 `supportsAliases=true`、`supportsSchemaValidation=true`，但无对应实现。 |
 | B2 | Blocking | `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionReadModelStore.cs:76` + `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionReadModelStore.cs:174` | `MutateAsync` 读改写 + 普通 PUT，缺少 OCC，重放/重试/并发存在覆盖风险。 |
-| B3 | Blocking | `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowProjectionProviderServiceCollectionExtensions.cs:26` + `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/ProjectionReadModelStoreSelector.cs:49` | 同一 ReadModel 同时注册多个 Provider，未显式指定时选择歧义。 |
+| B3 | Blocking | `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowProjectionProviderServiceCollectionExtensions.cs:26` + `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionReadModelStoreSelector.cs:49` | 同一 ReadModel 同时注册多个 Provider，未显式指定时选择歧义。 |
 | M1 | Major | `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionReadModelStore.cs:105` + `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionReadModelStore.cs:127` | `AutoCreateIndex=false` 且索引缺失时被当成无数据，掩盖配置错误。 |
 | M2 | Major | `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionReadModelBindingResolver.cs:43` | 绑定解析 `Type.Name` 优先于 `FullName`，同名类型误绑定风险。 |
 | N1 | Minor | `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionReadModelStore.cs:241` | `ListSortField` 为空时不排序，返回顺序不稳定。 |
-| N2 | Minor | `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/ProjectionReadModelCapabilityValidator.cs:24` | `RequiredIndexKinds` 使用 `Overlaps`（任一匹配），语义偏宽松。 |
+| N2 | Minor | `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionReadModelCapabilityValidator.cs:24` | `RequiredIndexKinds` 使用 `Overlaps`（任一匹配），语义偏宽松。 |
 
 ## 3. 目标架构决策（To-Be）
 
@@ -91,8 +91,8 @@
 
 目标文件：
 
-- `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/ProjectionReadModelCapabilityValidator.cs`
-- `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/ProjectionReadModelRequirements.cs`（如需引入匹配模式）
+- `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionReadModelCapabilityValidator.cs`
+- `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionReadModelRequirements.cs`（如需引入匹配模式）
 
 改造项：
 
@@ -139,7 +139,7 @@
 - `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowProjectionProviderServiceCollectionExtensions.cs`
 - `src/workflow/Aevatar.Workflow.Infrastructure/DependencyInjection/WorkflowCapabilityServiceCollectionExtensions.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Configuration/WorkflowExecutionProjectionOptions.cs`
-- `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/ProjectionReadModelRuntimeOptions.cs`
+- `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionReadModelRuntimeOptions.cs`
 - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreSelectionPlanner.cs`
 - `src/workflow/Aevatar.Workflow.Projection/README.md`
 

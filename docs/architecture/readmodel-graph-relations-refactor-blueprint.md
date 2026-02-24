@@ -71,17 +71,17 @@ flowchart LR
 
 ### 6.1 新增关系契约
 新增文件：
-1. `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/IProjectionRelationStore.cs`
-2. `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/ProjectionRelationNode.cs`
-3. `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/ProjectionRelationEdge.cs`
-4. `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/ProjectionRelationQuery.cs`
-5. `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/ProjectionRelationSubgraph.cs`
-6. `src/Aevatar.CQRS.Projection.Abstractions/Abstractions/ProjectionRelationDirection.cs`
+1. `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/Relations/IProjectionRelationStore.cs`
+2. `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/Relations/ProjectionRelationNode.cs`
+3. `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/Relations/ProjectionRelationEdge.cs`
+4. `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/Relations/ProjectionRelationQuery.cs`
+5. `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/Relations/ProjectionRelationSubgraph.cs`
+6. `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/Relations/ProjectionRelationDirection.cs`
 
 ### 6.2 新增关系 Provider 选择抽象
 新增文件：
-1. `IProjectionRelationStoreRegistration`
-2. `DelegateProjectionRelationStoreRegistration`
+1. `IProjectionStoreRegistration<IProjectionRelationStore>`
+2. `DelegateProjectionStoreRegistration<IProjectionRelationStore>`
 3. `IProjectionRelationStoreProviderRegistry`
 4. `IProjectionRelationStoreProviderSelector`
 5. `IProjectionRelationStoreFactory`

@@ -2,8 +2,8 @@ namespace Aevatar.CQRS.Projection.Abstractions;
 
 public interface IProjectionReadModelProviderSelector
 {
-    IProjectionReadModelStoreRegistration<TReadModel, TKey> Select<TReadModel, TKey>(
-        IReadOnlyList<IProjectionReadModelStoreRegistration<TReadModel, TKey>> registrations,
+    IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>> Select<TReadModel, TKey>(
+        IReadOnlyList<IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>> registrations,
         ProjectionReadModelStoreSelectionOptions selectionOptions,
         ProjectionReadModelRequirements requirements)
         where TReadModel : class;

@@ -3,7 +3,7 @@
 通用 Elasticsearch Document ReadModel Provider。
 
 - 不依赖任何业务域 read model。
-- 通过 `IProjectionReadModelStoreRegistration<TReadModel, TKey>` 与上层模块解耦集成。
+- 通过 `IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>` 与上层模块解耦集成。
 - 能力声明：`Document` 索引（不声明 alias/schema validation 能力）。
 - 写入路径输出结构化日志：`provider/readModelType/key/elapsedMs/result/errorType`。
 - `MutateAsync` 基于 `seq_no/primary_term` 执行 OCC（冲突可重试，超限失败）。

@@ -6,7 +6,7 @@ namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 
 public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
     : IProjectionReadModelStore<TReadModel, TKey>,
-      IProjectionReadModelStoreProviderMetadata
+      IProjectionStoreProviderMetadata
     where TReadModel : class
 {
     private readonly object _gate = new();

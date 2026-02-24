@@ -1,38 +1,47 @@
 namespace Aevatar.CQRS.Projection.Abstractions;
 
-public static class ProjectionReadModelStoreSelector
+public static class ProjectionStoreSelector
 {
-    public static IProjectionReadModelStoreRegistration<TReadModel, TKey> Select<TReadModel, TKey>(
-        IEnumerable<IProjectionReadModelStoreRegistration<TReadModel, TKey>> registrations,
+    public static TRegistration Select<TRegistration>(
+        IEnumerable<TRegistration> registrations,
         ProjectionReadModelStoreSelectionOptions selectionOptions,
         ProjectionReadModelRequirements requirements,
+        Type logicalModelType,
+        string noRegistrationsReason,
+        string multipleRegistrationsReason,
+        string providerNotRegisteredReason,
         IProjectionReadModelCapabilityValidator? capabilityValidator = null)
-        where TReadModel : class
+        where TRegistration : IProjectionStoreRegistration
     {
         ArgumentNullException.ThrowIfNull(registrations);
         ArgumentNullException.ThrowIfNull(selectionOptions);
         ArgumentNullException.ThrowIfNull(requirements);
+        ArgumentNullException.ThrowIfNull(logicalModelType);
 
         var candidates = registrations.ToList();
         var requestedProviderName = selectionOptions.RequestedProviderName?.Trim() ?? "";
         if (candidates.Count == 0)
         {
             throw new ProjectionProviderSelectionException(
-                typeof(TReadModel),
+                logicalModelType,
                 requestedProviderName,
                 [],
-                "No provider registrations were found.");
+                noRegistrationsReason);
         }
 
-        var selected = ResolveRegistration(candidates, requestedProviderName);
-
+        var selected = ResolveRegistration<TRegistration>(
+            candidates,
+            requestedProviderName,
+            logicalModelType,
+            multipleRegistrationsReason,
+            providerNotRegisteredReason);
         var violations = capabilityValidator == null
             ? ProjectionReadModelCapabilityValidator.Validate(requirements, selected.Capabilities)
             : capabilityValidator.Validate(requirements, selected.Capabilities);
         if (violations.Count > 0 && selectionOptions.FailOnUnsupportedCapabilities)
         {
             throw new ProjectionReadModelCapabilityValidationException(
-                typeof(TReadModel),
+                logicalModelType,
                 requirements,
                 selected.Capabilities,
                 violations);
@@ -41,10 +50,13 @@ public static class ProjectionReadModelStoreSelector
         return selected;
     }
 
-    private static IProjectionReadModelStoreRegistration<TReadModel, TKey> ResolveRegistration<TReadModel, TKey>(
-        IReadOnlyList<IProjectionReadModelStoreRegistration<TReadModel, TKey>> registrations,
-        string requestedProviderName)
-        where TReadModel : class
+    private static TRegistration ResolveRegistration<TRegistration>(
+        IReadOnlyList<TRegistration> registrations,
+        string requestedProviderName,
+        Type logicalModelType,
+        string multipleRegistrationsReason,
+        string providerNotRegisteredReason)
+        where TRegistration : IProjectionStoreRegistration
     {
         if (requestedProviderName.Length == 0)
         {
@@ -52,10 +64,10 @@ public static class ProjectionReadModelStoreSelector
                 return registrations[0];
 
             throw new ProjectionProviderSelectionException(
-                typeof(TReadModel),
+                logicalModelType,
                 requestedProviderName,
                 registrations.Select(x => x.ProviderName).ToList(),
-                "Multiple providers are registered but no explicit provider was requested.");
+                multipleRegistrationsReason);
         }
 
         var matched = registrations
@@ -63,14 +75,13 @@ public static class ProjectionReadModelStoreSelector
                 x.ProviderName,
                 requestedProviderName,
                 StringComparison.OrdinalIgnoreCase));
-
         if (matched != null)
             return matched;
 
         throw new ProjectionProviderSelectionException(
-            typeof(TReadModel),
+            logicalModelType,
             requestedProviderName,
             registrations.Select(x => x.ProviderName).ToList(),
-            "Requested provider is not registered.");
+            providerNotRegisteredReason);
     }
 }

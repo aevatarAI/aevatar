@@ -20,8 +20,8 @@ public static class ServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(scope);
         ArgumentNullException.ThrowIfNull(keySelector);
 
-        services.AddSingleton<IProjectionReadModelStoreRegistration<TReadModel, TKey>>(
-            new DelegateProjectionReadModelStoreRegistration<TReadModel, TKey>(
+        services.AddSingleton<IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>>(
+            new DelegateProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>(
                 providerName,
                 new ProjectionReadModelProviderCapabilities(
                     providerName,
@@ -51,8 +51,8 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(optionsFactory);
         ArgumentException.ThrowIfNullOrWhiteSpace(scope);
 
-        services.AddSingleton<IProjectionRelationStoreRegistration>(
-            new DelegateProjectionRelationStoreRegistration(
+        services.AddSingleton<IProjectionStoreRegistration<IProjectionRelationStore>>(
+            new DelegateProjectionStoreRegistration<IProjectionRelationStore>(
                 providerName,
                 new ProjectionReadModelProviderCapabilities(
                     providerName,

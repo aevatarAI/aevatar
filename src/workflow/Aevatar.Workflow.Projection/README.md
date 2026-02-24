@@ -28,7 +28,8 @@
 
 本项目依赖：
 
-- `Aevatar.CQRS.Projection.Abstractions`（通用抽象）
+- `Aevatar.CQRS.Projection.Core.Abstractions`（投影管线/端口抽象）
+- `Aevatar.CQRS.Projection.Stores.Abstractions`（ReadModel/Relation/选择抽象）
 - `Aevatar.CQRS.Projection.Core`（通用生命周期/订阅/协调实现）
 - `Aevatar.Foundation.Projection`（最小 read model 基类与读侧能力接口）
 - `Aevatar.Workflow.Extensions.AIProjection`（可选扩展：组合 `Aevatar.AI.Projection` 的通用 reducer/applier）
@@ -81,7 +82,7 @@ FAQ：
   - 实现 `IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>`
   - 在 DI 中注册
 - 扩展 ReadModel Provider（推荐）：
-  - 实现 `IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>`
+  - 实现 `IProjectionStoreRegistration<IProjectionReadModelStore<WorkflowExecutionReport, string>>`
   - 在 Host/Extensions 侧注册（例如 `Aevatar.Workflow.Extensions.Hosting.AddWorkflowProjectionReadModelProviders(...)`）
   - 通过 `Projection:ReadModel:*` 配置选择 Provider（Workflow 层不再暴露 provider 选择字段）
 

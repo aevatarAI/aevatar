@@ -19,7 +19,7 @@ public sealed class ProjectionStoreStartupValidator : IProjectionStoreStartupVal
         _relationProviderSelector = relationProviderSelector;
     }
 
-    public IProjectionReadModelStoreRegistration<TReadModel, TKey> ValidateReadModelProvider<TReadModel, TKey>(
+    public IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>> ValidateReadModelProvider<TReadModel, TKey>(
         IServiceProvider serviceProvider,
         ProjectionReadModelStoreSelectionOptions selectionOptions,
         ProjectionReadModelRequirements requirements)
@@ -33,7 +33,7 @@ public sealed class ProjectionStoreStartupValidator : IProjectionStoreStartupVal
         return _readModelProviderSelector.Select(registrations, selectionOptions, requirements);
     }
 
-    public IProjectionRelationStoreRegistration ValidateRelationProvider(
+    public IProjectionStoreRegistration<IProjectionRelationStore> ValidateRelationProvider(
         IServiceProvider serviceProvider,
         ProjectionReadModelStoreSelectionOptions selectionOptions,
         ProjectionReadModelRequirements requirements)

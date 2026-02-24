@@ -3,7 +3,7 @@
 通用 Neo4j Graph ReadModel Provider。
 
 - 不依赖任何业务域 read model。
-- 通过 `IProjectionReadModelStoreRegistration<TReadModel, TKey>` 与上层模块解耦集成。
+- 通过 `IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>` 与上层模块解耦集成。
 - 能力声明：`Graph` 索引、schema validation。
 - 基于官方 `Neo4j.Driver` 实现连接与会话管理。
 - 写入路径输出结构化日志：`provider/readModelType/key/elapsedMs/result/errorType`。

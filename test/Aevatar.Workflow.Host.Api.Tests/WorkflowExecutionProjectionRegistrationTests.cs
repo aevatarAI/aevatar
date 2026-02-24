@@ -84,7 +84,7 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         store.Should().BeOfType<InMemoryProjectionReadModelStore<WorkflowExecutionReport, string>>();
         relationStore.Should().BeOfType<InMemoryProjectionRelationStore>();
-        var metadata = store.Should().BeAssignableTo<IProjectionReadModelStoreProviderMetadata>().Subject;
+        var metadata = store.Should().BeAssignableTo<IProjectionStoreProviderMetadata>().Subject;
         metadata.ProviderCapabilities.ProviderName.Should().Be(ProjectionReadModelProviderNames.InMemory);
     }
 
@@ -101,7 +101,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         using var provider = services.BuildServiceProvider();
         var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
         store.Should().BeOfType<ElasticsearchProjectionReadModelStore<WorkflowExecutionReport, string>>();
-        var metadata = store.Should().BeAssignableTo<IProjectionReadModelStoreProviderMetadata>().Subject;
+        var metadata = store.Should().BeAssignableTo<IProjectionStoreProviderMetadata>().Subject;
         metadata.ProviderCapabilities.SupportsIndexing.Should().BeTrue();
         metadata.ProviderCapabilities.IndexKinds.Should().Contain(ProjectionReadModelIndexKind.Document);
 
@@ -147,7 +147,7 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         store.Should().BeOfType<Neo4jProjectionReadModelStore<WorkflowExecutionReport, string>>();
         relationStore.Should().BeOfType<Neo4jProjectionRelationStore>();
-        var metadata = store.Should().BeAssignableTo<IProjectionReadModelStoreProviderMetadata>().Subject;
+        var metadata = store.Should().BeAssignableTo<IProjectionStoreProviderMetadata>().Subject;
         metadata.ProviderCapabilities.SupportsIndexing.Should().BeTrue();
         metadata.ProviderCapabilities.IndexKinds.Should().Contain(ProjectionReadModelIndexKind.Graph);
     }

@@ -4,7 +4,7 @@ namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 
 public sealed class InMemoryProjectionRelationStore
     : IProjectionRelationStore,
-      IProjectionRelationStoreProviderMetadata
+      IProjectionStoreProviderMetadata
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, ProjectionRelationNode> _nodes = new(StringComparer.Ordinal);

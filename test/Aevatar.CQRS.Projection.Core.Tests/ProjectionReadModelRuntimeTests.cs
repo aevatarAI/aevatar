@@ -42,7 +42,7 @@ public class ProjectionReadModelRuntimeTests
     {
         var selector = new ProjectionReadModelProviderSelector(
             new ProjectionReadModelCapabilityValidatorService());
-        var registrations = new List<IProjectionReadModelStoreRegistration<TestReadModel, string>>
+        var registrations = new List<IProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>>>
         {
             CreateRegistration(
                 "InMemory",
@@ -69,7 +69,7 @@ public class ProjectionReadModelRuntimeTests
     {
         var selector = new ProjectionReadModelProviderSelector(
             new ProjectionReadModelCapabilityValidatorService());
-        var registrations = new List<IProjectionReadModelStoreRegistration<TestReadModel, string>>
+        var registrations = new List<IProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>>>
         {
             CreateRegistration("InMemory", supportsIndexing: false, indexKinds: []),
             CreateRegistration("Elasticsearch", supportsIndexing: true, indexKinds: [ProjectionReadModelIndexKind.Document]),
@@ -84,7 +84,7 @@ public class ProjectionReadModelRuntimeTests
             .Where(ex => ex.ReadModelType == typeof(TestReadModel));
     }
 
-    private static IProjectionReadModelStoreRegistration<TestReadModel, string> CreateRegistration(
+    private static IProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>> CreateRegistration(
         string providerName,
         bool supportsIndexing,
         IReadOnlyList<ProjectionReadModelIndexKind> indexKinds)
@@ -94,7 +94,7 @@ public class ProjectionReadModelRuntimeTests
             supportsIndexing,
             indexKinds);
 
-        return new DelegateProjectionReadModelStoreRegistration<TestReadModel, string>(
+        return new DelegateProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>>(
             providerName,
             capabilities,
             _ => new NoopStore());

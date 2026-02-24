@@ -2,7 +2,7 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
 public sealed class ElasticsearchProjectionRelationStore
     : IProjectionRelationStore,
-      IProjectionRelationStoreProviderMetadata
+      IProjectionStoreProviderMetadata
 {
     public ElasticsearchProjectionRelationStore(
         string providerName = ProjectionReadModelProviderNames.Elasticsearch)

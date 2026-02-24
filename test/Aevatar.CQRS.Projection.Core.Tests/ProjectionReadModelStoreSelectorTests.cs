@@ -128,7 +128,7 @@ public class ProjectionReadModelStoreSelectorTests
         selected.ProviderName.Should().Be("inmemory");
     }
 
-    private static IProjectionReadModelStoreRegistration<TestReadModel, string> CreateRegistration(
+    private static IProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>> CreateRegistration(
         string providerName,
         bool supportsIndexing,
         IEnumerable<ProjectionReadModelIndexKind>? indexKinds = null)
@@ -138,7 +138,7 @@ public class ProjectionReadModelStoreSelectorTests
             supportsIndexing,
             indexKinds);
 
-        return new DelegateProjectionReadModelStoreRegistration<TestReadModel, string>(
+        return new DelegateProjectionStoreRegistration<IProjectionReadModelStore<TestReadModel, string>>(
             providerName,
             capabilities,
             _ => new NoopStore());

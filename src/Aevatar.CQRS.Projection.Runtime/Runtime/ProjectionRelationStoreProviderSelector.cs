@@ -17,8 +17,8 @@ public sealed class ProjectionRelationStoreProviderSelector
         _logger = logger ?? NullLogger<ProjectionRelationStoreProviderSelector>.Instance;
     }
 
-    public IProjectionRelationStoreRegistration Select(
-        IReadOnlyList<IProjectionRelationStoreRegistration> registrations,
+    public IProjectionStoreRegistration<IProjectionRelationStore> Select(
+        IReadOnlyList<IProjectionStoreRegistration<IProjectionRelationStore>> registrations,
         ProjectionReadModelStoreSelectionOptions selectionOptions,
         ProjectionReadModelRequirements requirements)
     {
@@ -26,50 +26,15 @@ public sealed class ProjectionRelationStoreProviderSelector
         ArgumentNullException.ThrowIfNull(selectionOptions);
         ArgumentNullException.ThrowIfNull(requirements);
 
-        var requestedProviderName = selectionOptions.RequestedProviderName?.Trim() ?? "";
-        if (registrations.Count == 0)
-        {
-            throw new ProjectionProviderSelectionException(
-                typeof(ProjectionRelationNode),
-                requestedProviderName,
-                [],
-                "No relation store provider registrations were found.");
-        }
-
-        IProjectionRelationStoreRegistration selected;
-        if (requestedProviderName.Length == 0)
-        {
-            if (registrations.Count != 1)
-            {
-                throw new ProjectionProviderSelectionException(
-                    typeof(ProjectionRelationNode),
-                    requestedProviderName,
-                    registrations.Select(x => x.ProviderName).ToList(),
-                    "Multiple relation store providers are registered but no explicit provider was requested.");
-            }
-
-            selected = registrations[0];
-        }
-        else
-        {
-            selected = registrations.FirstOrDefault(x =>
-                    string.Equals(x.ProviderName, requestedProviderName, StringComparison.OrdinalIgnoreCase))
-                ?? throw new ProjectionProviderSelectionException(
-                    typeof(ProjectionRelationNode),
-                    requestedProviderName,
-                    registrations.Select(x => x.ProviderName).ToList(),
-                    "Requested relation store provider is not registered.");
-        }
-
-        var violations = _capabilityValidator.Validate(requirements, selected.Capabilities);
-        if (violations.Count > 0 && selectionOptions.FailOnUnsupportedCapabilities)
-        {
-            throw new ProjectionReadModelCapabilityValidationException(
-                typeof(ProjectionRelationNode),
-                requirements,
-                selected.Capabilities,
-                violations);
-        }
+        var selected = ProjectionStoreSelector.Select<IProjectionStoreRegistration<IProjectionRelationStore>>(
+            registrations,
+            selectionOptions,
+            requirements,
+            typeof(ProjectionRelationNode),
+            noRegistrationsReason: "No relation store provider registrations were found.",
+            multipleRegistrationsReason: "Multiple relation store providers are registered but no explicit provider was requested.",
+            providerNotRegisteredReason: "Requested relation store provider is not registered.",
+            _capabilityValidator);
 
         _logger.LogInformation(
             "Projection relation provider selected. provider={Provider} failOnUnsupportedCapabilities={FailOnUnsupportedCapabilities}",

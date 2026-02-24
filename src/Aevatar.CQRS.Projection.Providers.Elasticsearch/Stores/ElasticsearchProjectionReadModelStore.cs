@@ -10,7 +10,7 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
 public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
     : IProjectionReadModelStore<TReadModel, TKey>,
-      IProjectionReadModelStoreProviderMetadata,
+      IProjectionStoreProviderMetadata,
       IDisposable
     where TReadModel : class
 {
