@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Reducers;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
@@ -20,16 +21,19 @@ public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionRead
         WorkflowExecutionProjectionContext context,
         CancellationToken ct = default)
     {
+        var updatedAt = _clock.UtcNow;
         return _store.MutateAsync(actorId, report =>
         {
             report.CommandId = context.CommandId;
             report.WorkflowName = context.WorkflowName;
             report.Input = context.Input;
+            if (report.CreatedAt == default)
+                report.CreatedAt = context.StartedAt;
             report.StartedAt = context.StartedAt;
             if (report.EndedAt < report.StartedAt)
                 report.EndedAt = report.StartedAt;
 
-            report.DurationMs = Math.Max(0, (report.EndedAt - report.StartedAt).TotalMilliseconds);
+            WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, updatedAt);
         }, ct);
     }
 
@@ -37,15 +41,16 @@ public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionRead
         string actorId,
         CancellationToken ct = default)
     {
+        var updatedAt = _clock.UtcNow;
         return _store.MutateAsync(actorId, report =>
         {
             if (report.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
                 report.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
 
             if (report.EndedAt < report.StartedAt)
-                report.EndedAt = _clock.UtcNow;
+                report.EndedAt = updatedAt;
 
-            report.DurationMs = Math.Max(0, (report.EndedAt - report.StartedAt).TotalMilliseconds);
+            WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, updatedAt);
         }, ct);
     }
 }

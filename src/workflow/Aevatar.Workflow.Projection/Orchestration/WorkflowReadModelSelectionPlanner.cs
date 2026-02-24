@@ -21,15 +21,15 @@ public sealed class WorkflowReadModelSelectionPlanner : IWorkflowReadModelSelect
         var readModelRequirements = _bindingResolver.Resolve(options.ReadModelBindings, typeof(WorkflowExecutionReport));
         var readModelSelectionOptions = new ProjectionReadModelStoreSelectionOptions
         {
-            RequestedProviderName = NormalizeProviderName(options.ReadModelProvider),
+            RequestedProviderName = NormalizeRequiredProviderName(options.ReadModelProvider),
             FailOnUnsupportedCapabilities = options.FailOnUnsupportedCapabilities,
         };
         var relationRequirements = BuildRelationRequirements(readModelRequirements);
         var relationSelectionOptions = new ProjectionReadModelStoreSelectionOptions
         {
-            RequestedProviderName = NormalizeProviderName(
+            RequestedProviderName = NormalizeRelationProviderName(
                 options.RelationProvider,
-                options.ReadModelProvider),
+                readModelSelectionOptions.RequestedProviderName),
             FailOnUnsupportedCapabilities = options.FailOnUnsupportedCapabilities,
         };
 
@@ -51,16 +51,23 @@ public sealed class WorkflowReadModelSelectionPlanner : IWorkflowReadModelSelect
             requiresSchemaValidation: readModelRequirements.RequiresSchemaValidation);
     }
 
-    private static string NormalizeProviderName(string providerName, string fallbackProviderName = "")
+    private static string NormalizeRequiredProviderName(string providerName)
     {
         if (string.IsNullOrWhiteSpace(providerName))
         {
-            if (string.IsNullOrWhiteSpace(fallbackProviderName))
-                return ProjectionReadModelProviderNames.InMemory;
-            return fallbackProviderName.Trim();
+            throw new InvalidOperationException(
+                "WorkflowExecutionProjection:ReadModelProvider is required and cannot be empty.");
         }
 
         return providerName.Trim();
+    }
+
+    private static string NormalizeRelationProviderName(string relationProviderName, string fallbackProviderName)
+    {
+        if (string.IsNullOrWhiteSpace(relationProviderName))
+            return fallbackProviderName;
+
+        return relationProviderName.Trim();
     }
 
     private static void EnsureReadModelModeSupported(ProjectionReadModelMode readModelMode)

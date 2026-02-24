@@ -12,25 +12,17 @@ public sealed class WorkflowReadModelSelectionPlannerTests
     private readonly WorkflowReadModelSelectionPlanner _planner = new(new ProjectionReadModelBindingResolver());
 
     [Fact]
-    public void Build_WhenProviderIsEmpty_ShouldFallbackToInMemoryAndResolveBindings()
+    public void Build_WhenProviderIsEmpty_ShouldThrow()
     {
         var options = new WorkflowExecutionProjectionOptions
         {
             ReadModelProvider = "  ",
-            FailOnUnsupportedCapabilities = false,
         };
-        options.ReadModelBindings[nameof(WorkflowExecutionReport)] = ProjectionReadModelIndexKind.Document.ToString();
 
-        var plan = _planner.Build(options);
+        Action act = () => _planner.Build(options);
 
-        plan.ReadModelSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.InMemory);
-        plan.ReadModelSelectionOptions.FailOnUnsupportedCapabilities.Should().BeFalse();
-        plan.ReadModelRequirements.RequiresIndexing.Should().BeTrue();
-        plan.ReadModelRequirements.RequiredIndexKinds.Should().ContainSingle()
-            .Which.Should().Be(ProjectionReadModelIndexKind.Document);
-        plan.RelationSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.InMemory);
-        plan.RelationRequirements.RequiresRelations.Should().BeTrue();
-        plan.RelationRequirements.RequiresRelationTraversal.Should().BeTrue();
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ReadModelProvider is required*");
     }
 
     [Fact]
@@ -45,6 +37,39 @@ public sealed class WorkflowReadModelSelectionPlannerTests
 
         plan.ReadModelSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.Neo4j);
         plan.RelationSelectionOptions.RequestedProviderName.Should().Be(ProjectionReadModelProviderNames.Neo4j);
+    }
+
+    [Fact]
+    public void Build_ShouldResolveBindingsByReadModelFullName()
+    {
+        var options = new WorkflowExecutionProjectionOptions
+        {
+            ReadModelProvider = ProjectionReadModelProviderNames.InMemory,
+        };
+        options.ReadModelBindings[typeof(WorkflowExecutionReport).FullName!] =
+            ProjectionReadModelIndexKind.Document.ToString();
+
+        var plan = _planner.Build(options);
+
+        plan.ReadModelRequirements.RequiresIndexing.Should().BeTrue();
+        plan.ReadModelRequirements.RequiredIndexKinds.Should().ContainSingle()
+            .Which.Should().Be(ProjectionReadModelIndexKind.Document);
+    }
+
+    [Fact]
+    public void Build_WhenBindingUsesShortTypeName_ShouldThrow()
+    {
+        var options = new WorkflowExecutionProjectionOptions
+        {
+            ReadModelProvider = ProjectionReadModelProviderNames.InMemory,
+        };
+        options.ReadModelBindings[nameof(WorkflowExecutionReport)] =
+            ProjectionReadModelIndexKind.Document.ToString();
+
+        Action act = () => _planner.Build(options);
+
+        act.Should().Throw<ProjectionReadModelBindingException>()
+            .WithMessage("*must use full type name*");
     }
 
     [Fact]

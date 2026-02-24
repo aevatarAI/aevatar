@@ -37,6 +37,8 @@ public sealed class WorkflowExecutionReport
     public WorkflowExecutionTopologySource TopologySource { get; set; } = WorkflowExecutionTopologySource.RuntimeSnapshot;
     public WorkflowExecutionCompletionStatus CompletionStatus { get; set; } = WorkflowExecutionCompletionStatus.Unknown;
     public string WorkflowName { get; set; } = "";
+    public DateTimeOffset StartedAt { get; set; }
+    public DateTimeOffset EndedAt { get; set; }
     public double DurationMs { get; set; }
     public bool? Success { get; set; }
     public string Input { get; set; } = "";

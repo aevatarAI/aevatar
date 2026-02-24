@@ -14,6 +14,9 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
       IDisposable
     where TReadModel : class
 {
+    private const string DefaultListPrimarySortField = "CreatedAt";
+    private const string DefaultListTiebreakSortField = "_id";
+
     private readonly HttpClient _httpClient;
     private readonly Func<TReadModel, TKey> _keySelector;
     private readonly Func<TKey, string> _keyFormatter;
@@ -21,6 +24,8 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
     private readonly int _listTakeMax;
     private readonly bool _autoCreateIndex;
     private readonly string _listSortField;
+    private readonly ElasticsearchMissingIndexBehavior _missingIndexBehavior;
+    private readonly int _mutateMaxRetryCount;
     private readonly ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>> _logger;
     private readonly SemaphoreSlim _indexInitializationLock = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -35,17 +40,18 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
         string providerName = ProjectionReadModelProviderNames.Elasticsearch,
-        ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>? logger = null)
+        ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>? logger = null,
+        HttpMessageHandler? httpMessageHandler = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(keySelector);
 
         var endpoint = ResolvePrimaryEndpoint(options.Endpoints);
-        _httpClient = new HttpClient
-        {
-            BaseAddress = endpoint,
-            Timeout = TimeSpan.FromMilliseconds(Math.Max(500, options.RequestTimeoutMs)),
-        };
+        _httpClient = httpMessageHandler == null
+            ? new HttpClient()
+            : new HttpClient(httpMessageHandler, disposeHandler: true);
+        _httpClient.BaseAddress = endpoint;
+        _httpClient.Timeout = TimeSpan.FromMilliseconds(Math.Max(500, options.RequestTimeoutMs));
 
         if (!string.IsNullOrWhiteSpace(options.Username))
         {
@@ -61,6 +67,8 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         _indexName = BuildIndexName(options.IndexPrefix, normalizedScope);
         _listTakeMax = options.ListTakeMax > 0 ? options.ListTakeMax : 200;
         _autoCreateIndex = options.AutoCreateIndex;
+        _missingIndexBehavior = options.MissingIndexBehavior;
+        _mutateMaxRetryCount = Math.Clamp(options.MutateMaxRetryCount, 0, 20);
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _listSortField = options.ListSortField?.Trim() ?? "";
@@ -79,27 +87,62 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         ct.ThrowIfCancellationRequested();
 
         var keyValue = FormatKey(key);
+        if (keyValue.Length == 0)
+            throw new InvalidOperationException(
+                $"ReadModel '{typeof(TReadModel).FullName}' resolved an empty key for Elasticsearch mutation.");
+
         var startedAt = DateTimeOffset.UtcNow;
-        var existing = await GetAsync(key, ct);
-        if (existing == null)
+        for (var attempt = 0; attempt <= _mutateMaxRetryCount; attempt++)
         {
-            var notFound = new InvalidOperationException(
-                $"ReadModel '{typeof(TReadModel).FullName}' with key '{keyValue}' was not found.");
-            LogWriteFailure(keyValue, startedAt, notFound);
-            throw notFound;
-        }
+            var snapshot = await GetDocumentSnapshotAsync(keyValue, ct);
+            if (snapshot == null)
+            {
+                var notFound = new InvalidOperationException(
+                    $"ReadModel '{typeof(TReadModel).FullName}' with key '{keyValue}' was not found.");
+                LogWriteFailure(keyValue, startedAt, notFound);
+                throw notFound;
+            }
 
-        try
-        {
-            mutate(existing);
-        }
-        catch (Exception ex)
-        {
-            LogWriteFailure(keyValue, startedAt, ex);
-            throw;
-        }
+            try
+            {
+                mutate(snapshot.ReadModel);
+            }
+            catch (Exception ex)
+            {
+                LogWriteFailure(keyValue, startedAt, ex);
+                throw;
+            }
 
-        await UpsertCoreAsync(existing, allowCreateIndex: true, ct);
+            try
+            {
+                await UpsertCoreAsync(
+                    snapshot.ReadModel,
+                    allowCreateIndex: true,
+                    ct,
+                    ifSeqNo: snapshot.SeqNo,
+                    ifPrimaryTerm: snapshot.PrimaryTerm);
+                return;
+            }
+            catch (ElasticsearchOptimisticConcurrencyException ex) when (attempt < _mutateMaxRetryCount)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Projection read-model optimistic concurrency conflict. provider={Provider} readModelType={ReadModelType} key={Key} attempt={Attempt}/{MaxAttempts}",
+                    ProviderCapabilities.ProviderName,
+                    typeof(TReadModel).FullName,
+                    keyValue,
+                    attempt + 1,
+                    _mutateMaxRetryCount + 1);
+            }
+            catch (ElasticsearchOptimisticConcurrencyException ex)
+            {
+                var conflict = new InvalidOperationException(
+                    $"Elasticsearch optimistic concurrency update failed for read-model '{typeof(TReadModel).FullName}' with key '{keyValue}' after {_mutateMaxRetryCount + 1} attempt(s).",
+                    ex);
+                LogWriteFailure(keyValue, startedAt, conflict);
+                throw conflict;
+            }
+        }
     }
 
     public async Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
@@ -113,11 +156,16 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
 
         using var response = await _httpClient.GetAsync($"{_indexName}/_doc/{Uri.EscapeDataString(keyValue)}", ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            var payload = await response.Content.ReadAsStringAsync(ct);
+            if (TryHandleMissingIndexForRead("get", payload))
+                return null;
             return null;
+        }
 
         await EnsureSuccessAsync(response, "get", ct);
-        var payload = await response.Content.ReadAsStringAsync(ct);
-        using var jsonDoc = JsonDocument.Parse(payload);
+        var successfulPayload = await response.Content.ReadAsStringAsync(ct);
+        using var jsonDoc = JsonDocument.Parse(successfulPayload);
         if (!jsonDoc.RootElement.TryGetProperty("_source", out var sourceNode))
             return null;
 
@@ -136,11 +184,16 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         };
         using var response = await _httpClient.SendAsync(request, ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            var payload = await response.Content.ReadAsStringAsync(ct);
+            if (TryHandleMissingIndexForRead("list", payload))
+                return [];
             return [];
+        }
 
         await EnsureSuccessAsync(response, "list", ct);
-        var payload = await response.Content.ReadAsStringAsync(ct);
-        using var jsonDoc = JsonDocument.Parse(payload);
+        var successfulPayload = await response.Content.ReadAsStringAsync(ct);
+        using var jsonDoc = JsonDocument.Parse(successfulPayload);
         if (!jsonDoc.RootElement.TryGetProperty("hits", out var hitsNode) ||
             !hitsNode.TryGetProperty("hits", out var hitItems))
             return [];
@@ -159,7 +212,48 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         return items;
     }
 
-    private async Task UpsertCoreAsync(TReadModel readModel, bool allowCreateIndex, CancellationToken ct)
+    private async Task<ElasticsearchDocumentSnapshot?> GetDocumentSnapshotAsync(string keyValue, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        await EnsureIndexAsync(ct);
+
+        using var response = await _httpClient.GetAsync($"{_indexName}/_doc/{Uri.EscapeDataString(keyValue)}", ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            var payload = await response.Content.ReadAsStringAsync(ct);
+            if (IsIndexNotFoundPayload(payload))
+                throw BuildMissingIndexException("mutate", payload);
+            return null;
+        }
+
+        await EnsureSuccessAsync(response, "mutate-get", ct);
+        var successfulPayload = await response.Content.ReadAsStringAsync(ct);
+        using var jsonDoc = JsonDocument.Parse(successfulPayload);
+        if (!jsonDoc.RootElement.TryGetProperty("_source", out var sourceNode))
+            return null;
+
+        var readModel = DeserializeOrNull(sourceNode.GetRawText());
+        if (readModel == null)
+            return null;
+
+        if (!jsonDoc.RootElement.TryGetProperty("_seq_no", out var seqNoNode) ||
+            !seqNoNode.TryGetInt64(out var seqNo) ||
+            !jsonDoc.RootElement.TryGetProperty("_primary_term", out var primaryTermNode) ||
+            !primaryTermNode.TryGetInt64(out var primaryTerm))
+        {
+            throw new InvalidOperationException(
+                $"Elasticsearch mutate-get response missing optimistic concurrency metadata for index '{_indexName}' key '{keyValue}'.");
+        }
+
+        return new ElasticsearchDocumentSnapshot(readModel, seqNo, primaryTerm);
+    }
+
+    private async Task UpsertCoreAsync(
+        TReadModel readModel,
+        bool allowCreateIndex,
+        CancellationToken ct,
+        long? ifSeqNo = null,
+        long? ifPrimaryTerm = null)
     {
         ArgumentNullException.ThrowIfNull(readModel);
         ct.ThrowIfCancellationRequested();
@@ -171,11 +265,19 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         var startedAt = DateTimeOffset.UtcNow;
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Put, $"{_indexName}/_doc/{Uri.EscapeDataString(keyValue)}")
+            var requestPath = BuildDocumentRequestPath(keyValue, ifSeqNo, ifPrimaryTerm);
+            using var request = new HttpRequestMessage(HttpMethod.Put, requestPath)
             {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json"),
             };
             using var response = await _httpClient.SendAsync(request, ct);
+            if (response.StatusCode == HttpStatusCode.Conflict)
+            {
+                var conflictPayload = await response.Content.ReadAsStringAsync(ct);
+                throw new ElasticsearchOptimisticConcurrencyException(
+                    $"Elasticsearch optimistic concurrency conflict for index '{_indexName}' key '{keyValue}'. body={TruncatePayload(conflictPayload)}");
+            }
+
             await EnsureSuccessAsync(response, "upsert", ct);
 
             var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
@@ -189,9 +291,53 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         }
         catch (Exception ex)
         {
-            LogWriteFailure(keyValue, startedAt, ex);
+            if (ex is not ElasticsearchOptimisticConcurrencyException)
+                LogWriteFailure(keyValue, startedAt, ex);
             throw;
         }
+    }
+
+    private string BuildDocumentRequestPath(string keyValue, long? ifSeqNo, long? ifPrimaryTerm)
+    {
+        var requestPath = $"{_indexName}/_doc/{Uri.EscapeDataString(keyValue)}";
+        if (!ifSeqNo.HasValue && !ifPrimaryTerm.HasValue)
+            return requestPath;
+
+        if (!ifSeqNo.HasValue || !ifPrimaryTerm.HasValue)
+            throw new InvalidOperationException("Elasticsearch optimistic concurrency update requires both seq_no and primary_term.");
+
+        return requestPath + $"?if_seq_no={ifSeqNo.Value}&if_primary_term={ifPrimaryTerm.Value}";
+    }
+
+    private bool TryHandleMissingIndexForRead(string operation, string payload)
+    {
+        if (!IsIndexNotFoundPayload(payload))
+            return false;
+
+        if (_autoCreateIndex || _missingIndexBehavior == ElasticsearchMissingIndexBehavior.Throw)
+            throw BuildMissingIndexException(operation, payload);
+
+        _logger.LogWarning(
+            "Projection read-model index is missing. provider={Provider} readModelType={ReadModelType} index={Index} operation={Operation} behavior={Behavior}",
+            ProviderCapabilities.ProviderName,
+            typeof(TReadModel).FullName,
+            _indexName,
+            operation,
+            _missingIndexBehavior);
+        return true;
+    }
+
+    private InvalidOperationException BuildMissingIndexException(string operation, string payload)
+    {
+        return new InvalidOperationException(
+            $"Elasticsearch index '{_indexName}' was not found during '{operation}' for read-model '{typeof(TReadModel).FullName}'. " +
+            $"Configure index bootstrap or set '{nameof(ElasticsearchProjectionReadModelStoreOptions.AutoCreateIndex)}=true'. " +
+            $"body={TruncatePayload(payload)}");
+    }
+
+    private static bool IsIndexNotFoundPayload(string payload)
+    {
+        return payload.Contains("index_not_found_exception", StringComparison.OrdinalIgnoreCase);
     }
 
     private void LogWriteFailure(
@@ -240,24 +386,63 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
 
     private string BuildListPayloadJson(int size)
     {
-        if (_listSortField.Length == 0)
-            return JsonSerializer.Serialize(new { size, query = new { match_all = new { } } });
+        var sort = _listSortField.Length == 0
+            ? BuildDefaultSortSpec()
+            : BuildConfiguredSortSpec(_listSortField);
 
         return JsonSerializer.Serialize(new
         {
             size,
-            sort = new object[]
-            {
-                new Dictionary<string, object>
-                {
-                    [_listSortField] = new { order = "desc" },
-                },
-            },
+            sort,
             query = new
             {
                 match_all = new { },
             },
         });
+    }
+
+    private static object[] BuildConfiguredSortSpec(string sortField)
+    {
+        return
+        [
+            new Dictionary<string, object>
+            {
+                [sortField] = new Dictionary<string, object>
+                {
+                    ["order"] = "desc",
+                },
+            },
+            new Dictionary<string, object>
+            {
+                [DefaultListTiebreakSortField] = new Dictionary<string, object>
+                {
+                    ["order"] = "desc",
+                },
+            },
+        ];
+    }
+
+    private static object[] BuildDefaultSortSpec()
+    {
+        return
+        [
+            new Dictionary<string, object>
+            {
+                [DefaultListPrimarySortField] = new Dictionary<string, object>
+                {
+                    ["order"] = "desc",
+                    ["missing"] = "_last",
+                    ["unmapped_type"] = "date",
+                },
+            },
+            new Dictionary<string, object>
+            {
+                [DefaultListTiebreakSortField] = new Dictionary<string, object>
+                {
+                    ["order"] = "desc",
+                },
+            },
+        ];
     }
 
     private async Task EnsureIndexAsync(CancellationToken ct)
@@ -350,17 +535,36 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         return new string(chars).Trim('-');
     }
 
+    private static string TruncatePayload(string payload)
+    {
+        const int maxLength = 512;
+        if (payload.Length <= maxLength)
+            return payload;
+
+        return payload[..maxLength] + "...(truncated)";
+    }
+
     private static ProjectionReadModelProviderCapabilities BuildCapabilities(string providerName) =>
         new(
             providerName,
             supportsIndexing: true,
             indexKinds: [ProjectionReadModelIndexKind.Document],
-            supportsAliases: true,
-            supportsSchemaValidation: true);
+            supportsAliases: false,
+            supportsSchemaValidation: false);
 
     public void Dispose()
     {
         _httpClient.Dispose();
         _indexInitializationLock.Dispose();
+    }
+
+    private sealed record ElasticsearchDocumentSnapshot(TReadModel ReadModel, long SeqNo, long PrimaryTerm);
+
+    private sealed class ElasticsearchOptimisticConcurrencyException : InvalidOperationException
+    {
+        public ElasticsearchOptimisticConcurrencyException(string message)
+            : base(message)
+        {
+        }
     }
 }

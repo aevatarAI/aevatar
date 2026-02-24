@@ -27,8 +27,8 @@ public static class ServiceCollectionExtensions
                     providerName,
                     supportsIndexing: true,
                     indexKinds: [ProjectionReadModelIndexKind.Document],
-                    supportsAliases: true,
-                    supportsSchemaValidation: true),
+                    supportsAliases: false,
+                    supportsSchemaValidation: false),
                 provider => new ElasticsearchProjectionReadModelStore<TReadModel, TKey>(
                     optionsFactory(provider),
                     indexScope,
@@ -51,8 +51,8 @@ public static class ServiceCollectionExtensions
                     providerName,
                     supportsIndexing: true,
                     indexKinds: [ProjectionReadModelIndexKind.Document],
-                    supportsAliases: true,
-                    supportsSchemaValidation: true,
+                    supportsAliases: false,
+                    supportsSchemaValidation: false,
                     supportsRelations: false,
                     supportsRelationTraversal: false),
                 _ => new ElasticsearchProjectionRelationStore(providerName)));

@@ -12,6 +12,10 @@ public sealed class ElasticsearchProjectionReadModelStoreOptions
 
     public bool AutoCreateIndex { get; set; } = true;
 
+    public ElasticsearchMissingIndexBehavior MissingIndexBehavior { get; set; } = ElasticsearchMissingIndexBehavior.Throw;
+
+    public int MutateMaxRetryCount { get; set; } = 3;
+
     public string Username { get; set; } = "";
 
     public string Password { get; set; } = "";

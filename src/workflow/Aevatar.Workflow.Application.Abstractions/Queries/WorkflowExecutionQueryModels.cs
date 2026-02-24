@@ -107,6 +107,8 @@ public sealed class WorkflowRunReport
     public string CommandId { get; set; } = string.Empty;
     public long StateVersion { get; set; }
     public string LastEventId { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset EndedAt { get; set; }
     public double DurationMs { get; set; }

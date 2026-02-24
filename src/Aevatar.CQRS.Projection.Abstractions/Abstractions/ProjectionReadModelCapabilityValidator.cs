@@ -21,10 +21,16 @@ public static class ProjectionReadModelCapabilityValidator
                 violations.Add(
                     $"requires index kinds [{string.Join(", ", requirements.RequiredIndexKinds)}], but provider indexing is disabled");
             }
-            else if (!requirements.RequiredIndexKinds.Overlaps(capabilities.IndexKinds))
+            else
             {
-                violations.Add(
-                    $"required index kinds [{string.Join(", ", requirements.RequiredIndexKinds)}] are not supported by provider kinds [{string.Join(", ", capabilities.IndexKinds)}]");
+                var missingKinds = requirements.RequiredIndexKinds
+                    .Where(kind => !capabilities.IndexKinds.Contains(kind))
+                    .ToList();
+                if (missingKinds.Count > 0)
+                {
+                    violations.Add(
+                        $"required index kinds [{string.Join(", ", requirements.RequiredIndexKinds)}] are not fully supported by provider kinds [{string.Join(", ", capabilities.IndexKinds)}]; missing kinds [{string.Join(", ", missingKinds)}]");
+                }
             }
         }
 

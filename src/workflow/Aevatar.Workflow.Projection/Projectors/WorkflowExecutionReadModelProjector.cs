@@ -40,6 +40,8 @@ public sealed class WorkflowExecutionReadModelProjector
             WorkflowName = context.WorkflowName,
             RootActorId = context.RootActorId,
             CommandId = context.CommandId,
+            CreatedAt = context.StartedAt,
+            UpdatedAt = context.StartedAt,
             StartedAt = context.StartedAt,
             EndedAt = context.StartedAt,
             Input = context.Input,
@@ -73,7 +75,7 @@ public sealed class WorkflowExecutionReadModelProjector
                 return;
 
             WorkflowExecutionProjectionMutations.RecordProjectedEvent(report, envelope);
-            WorkflowExecutionProjectionMutations.RefreshDerivedFields(report);
+            WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, now);
         }, ct);
     }
 
@@ -82,15 +84,16 @@ public sealed class WorkflowExecutionReadModelProjector
         IReadOnlyList<WorkflowExecutionTopologyEdge> topology,
         CancellationToken ct = default)
     {
+        var completedAt = DateTimeOffset.UtcNow;
         return new ValueTask(_store.MutateAsync(context.RootActorId, report =>
         {
             report.Topology = topology.Select(x => new WorkflowExecutionTopologyEdge(x.Parent, x.Child)).ToList();
             report.TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot;
             if (report.EndedAt < report.StartedAt)
-                report.EndedAt = DateTimeOffset.UtcNow;
+                report.EndedAt = completedAt;
             if (report.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
                 report.CompletionStatus = WorkflowExecutionCompletionStatus.Completed;
-            WorkflowExecutionProjectionMutations.RefreshDerivedFields(report);
+            WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, completedAt);
         }, ct));
     }
 

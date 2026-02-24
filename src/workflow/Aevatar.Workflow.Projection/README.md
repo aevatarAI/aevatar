@@ -92,7 +92,7 @@ FAQ：
 - `WorkflowExecutionProjection:FailOnUnsupportedCapabilities`：能力不匹配时是否 fail-fast（默认 `true`）
 - `WorkflowExecutionProjection:ValidateReadModelProviderOnStartup`：是否在 Host 启动阶段预校验 Provider 选择与能力（默认 `true`）
 - `WorkflowExecutionProjection:ValidateRelationProviderOnStartup`：是否在 Host 启动阶段预校验 Relation Provider（默认 `true`）
-- `WorkflowExecutionProjection:ReadModelBindings`：ReadModel -> IndexKind 约束（如 `WorkflowExecutionReport: Document`）
+- `WorkflowExecutionProjection:ReadModelBindings`：ReadModel -> IndexKind 约束（键必须为 `ReadModel` 的 `Type.FullName`，例如 `Aevatar.Workflow.Projection.ReadModels.WorkflowExecutionReport: Document`）
 - 推荐统一配置入口：`Projection:ReadModel:*`（由 Infrastructure 映射到 Workflow 投影选项）
 - `Projection:ReadModel:Provider`：全局默认 Provider（当前由 `WorkflowCapabilityServiceCollectionExtensions` 覆盖到模块选项）
 - `Projection:ReadModel:RelationProvider`：全局默认 Relation Provider（覆盖到模块选项）
@@ -102,7 +102,10 @@ FAQ：
 - `Projection:ReadModel:Providers:Elasticsearch:IndexPrefix`：索引前缀
 - `Projection:ReadModel:Providers:Elasticsearch:RequestTimeoutMs`：请求超时
 - `Projection:ReadModel:Providers:Elasticsearch:ListTakeMax`：`ListAsync` 上限
+- `Projection:ReadModel:Providers:Elasticsearch:ListSortField`：可选自定义排序字段；为空时默认 `CreatedAt desc -> _id desc`
 - `Projection:ReadModel:Providers:Elasticsearch:AutoCreateIndex`：是否自动建索引
+- `Projection:ReadModel:Providers:Elasticsearch:MissingIndexBehavior`：索引缺失行为（`Throw` / `WarnAndReturnEmpty`，默认 `Throw`）
+- `Projection:ReadModel:Providers:Elasticsearch:MutateMaxRetryCount`：`MutateAsync` OCC 冲突重试次数（默认 `3`）
 - `Projection:ReadModel:Providers:Elasticsearch:Username/Password`：可选基础认证
 - 扩展 run 输出协议：
   - 保持 `WorkflowRunEvent` 不变，新增 presentation adapter 进行协议映射

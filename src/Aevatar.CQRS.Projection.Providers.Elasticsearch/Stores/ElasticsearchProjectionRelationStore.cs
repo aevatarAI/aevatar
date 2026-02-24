@@ -11,8 +11,8 @@ public sealed class ElasticsearchProjectionRelationStore
             providerName,
             supportsIndexing: true,
             indexKinds: [ProjectionReadModelIndexKind.Document],
-            supportsAliases: true,
-            supportsSchemaValidation: true,
+            supportsAliases: false,
+            supportsSchemaValidation: false,
             supportsRelations: false,
             supportsRelationTraversal: false);
     }

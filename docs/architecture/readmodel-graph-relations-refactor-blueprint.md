@@ -329,3 +329,11 @@ flowchart LR
 ### 17.3 兼容性声明
 1. 本次重构为不兼容变更，已删除 `IWorkflowExecutionProjectionPort`。
 2. 旧接口调用方必须迁移到 Lifecycle/Query 双端口。
+
+## 18. Provider 硬化补充（2026-02-24）
+1. Elasticsearch 能力声明已收敛为真实实现：不再声明 alias/schema validation 能力。
+2. Elasticsearch `MutateAsync` 已引入 `seq_no/primary_term` OCC，冲突路径具备重试与失败语义。
+3. `AutoCreateIndex=false` 且索引缺失默认 fail-fast，支持 `MissingIndexBehavior=WarnAndReturnEmpty` 调试模式。
+4. ReadModel binding 已收敛为 `Type.FullName` 键，短名键直接抛配置异常。
+5. Workflow Host provider 注册改为按配置按需注册，消除多 provider 未指定歧义。
+6. 详见：`docs/architecture/projection-provider-review-remediation-blueprint-2026-02-24.md`。

@@ -108,6 +108,8 @@ public class WorkflowExecutionReadModelProjectorTests
         var report = await store.GetAsync("root");
         report.Should().NotBeNull();
         report!.WorkflowName.Should().Be("direct");
+        report.CreatedAt.Should().Be(context.StartedAt);
+        report.UpdatedAt.Should().BeOnOrAfter(report.CreatedAt);
         report.Success.Should().BeTrue();
         report.FinalOutput.Should().Be("final answer");
         report.Summary.TotalSteps.Should().Be(1);

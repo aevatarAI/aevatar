@@ -42,18 +42,31 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         IConfiguration configuration,
         WorkflowExecutionProjectionOptions options)
     {
+        var readModelSection = configuration.GetSection("Projection:ReadModel");
+        if (!readModelSection.Exists())
+            return;
+
         var readModelOptions = new ProjectionReadModelRuntimeOptions();
-        configuration.GetSection("Projection:ReadModel").Bind(readModelOptions);
+        readModelSection.Bind(readModelOptions);
 
-        if (!string.IsNullOrWhiteSpace(readModelOptions.Provider))
-            options.ReadModelProvider = readModelOptions.Provider.Trim();
-        if (!string.IsNullOrWhiteSpace(readModelOptions.RelationProvider))
-            options.RelationProvider = readModelOptions.RelationProvider.Trim();
+        var configuredProvider = readModelSection["Provider"];
+        if (!string.IsNullOrWhiteSpace(configuredProvider))
+            options.ReadModelProvider = configuredProvider.Trim();
+        var configuredRelationProvider = readModelSection["RelationProvider"];
+        if (!string.IsNullOrWhiteSpace(configuredRelationProvider))
+            options.RelationProvider = configuredRelationProvider.Trim();
 
-        options.ReadModelMode = readModelOptions.Mode;
-        options.FailOnUnsupportedCapabilities = readModelOptions.FailOnUnsupportedCapabilities;
-        options.ReadModelBindings.Clear();
-        foreach (var item in readModelOptions.Bindings)
-            options.ReadModelBindings[item.Key] = item.Value;
+        if (!string.IsNullOrWhiteSpace(readModelSection["Mode"]))
+            options.ReadModelMode = readModelOptions.Mode;
+        if (!string.IsNullOrWhiteSpace(readModelSection["FailOnUnsupportedCapabilities"]))
+            options.FailOnUnsupportedCapabilities = readModelOptions.FailOnUnsupportedCapabilities;
+
+        var bindingsSection = readModelSection.GetSection("Bindings");
+        if (bindingsSection.Exists())
+        {
+            options.ReadModelBindings.Clear();
+            foreach (var item in readModelOptions.Bindings)
+                options.ReadModelBindings[item.Key] = item.Value;
+        }
     }
 }

@@ -68,12 +68,12 @@ public class WorkflowHostingExtensionsCoverageTests
         var providerRegistrations = builder.Services
             .Where(x => x.ServiceType == typeof(IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>))
             .ToList();
-        providerRegistrations.Should().HaveCount(3);
+        providerRegistrations.Should().HaveCount(1);
 
         var relationRegistrations = builder.Services
             .Where(x => x.ServiceType == typeof(IProjectionRelationStoreRegistration))
             .ToList();
-        relationRegistrations.Should().HaveCount(3);
+        relationRegistrations.Should().HaveCount(1);
     }
 
     [Fact]
@@ -88,11 +88,54 @@ public class WorkflowHostingExtensionsCoverageTests
         var providerRegistrations = services
             .Where(x => x.ServiceType == typeof(IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>))
             .ToList();
-        providerRegistrations.Should().HaveCount(3);
+        providerRegistrations.Should().HaveCount(1);
 
         var relationRegistrations = services
             .Where(x => x.ServiceType == typeof(IProjectionRelationStoreRegistration))
             .ToList();
-        relationRegistrations.Should().HaveCount(3);
+        relationRegistrations.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_WhenProvidersAreConfigured_ShouldRegisterConfiguredCombinationOnly()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:ReadModel:Provider"] = ProjectionReadModelProviderNames.Elasticsearch,
+                ["Projection:ReadModel:RelationProvider"] = ProjectionReadModelProviderNames.InMemory,
+                ["Projection:ReadModel:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+            })
+            .Build();
+
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        var providerRegistrations = services
+            .Where(x => x.ServiceType == typeof(IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>))
+            .ToList();
+        var relationRegistrations = services
+            .Where(x => x.ServiceType == typeof(IProjectionRelationStoreRegistration))
+            .ToList();
+
+        providerRegistrations.Should().HaveCount(1);
+        relationRegistrations.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_WhenProviderConfiguredUnknown_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:ReadModel:Provider"] = "UnknownProvider",
+            })
+            .Build();
+
+        Action act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Unsupported projection provider*");
     }
 }

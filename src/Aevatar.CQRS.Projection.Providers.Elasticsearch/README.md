@@ -4,8 +4,11 @@
 
 - 不依赖任何业务域 read model。
 - 通过 `IProjectionReadModelStoreRegistration<TReadModel, TKey>` 与上层模块解耦集成。
-- 能力声明：`Document` 索引、alias、schema validation。
+- 能力声明：`Document` 索引（不声明 alias/schema validation 能力）。
 - 写入路径输出结构化日志：`provider/readModelType/key/elapsedMs/result/errorType`。
+- `MutateAsync` 基于 `seq_no/primary_term` 执行 OCC（冲突可重试，超限失败）。
+- `AutoCreateIndex=false` 时可通过 `MissingIndexBehavior` 控制索引缺失行为（默认抛错）。
+- `ListSortField` 为空时默认按 `CreatedAt desc -> _id desc` 排序，优先按创建时间倒序并保证稳定性。
 
 ## DI 注册
 

@@ -42,17 +42,20 @@ public sealed class ProjectionReadModelBindingResolver : IProjectionReadModelBin
             return false;
         }
 
-        if (readModelBindings.TryGetValue(readModelType.Name, out bindingValue!))
-        {
-            bindingKey = readModelType.Name;
-            return true;
-        }
-
         var fullName = readModelType.FullName ?? "";
         if (fullName.Length > 0 && readModelBindings.TryGetValue(fullName, out bindingValue!))
         {
             bindingKey = fullName;
             return true;
+        }
+
+        if (readModelBindings.TryGetValue(readModelType.Name, out bindingValue!))
+        {
+            throw new ProjectionReadModelBindingException(
+                readModelType,
+                readModelType.Name,
+                bindingValue,
+                $"Binding key must use full type name '{fullName}'.");
         }
 
         bindingKey = "";

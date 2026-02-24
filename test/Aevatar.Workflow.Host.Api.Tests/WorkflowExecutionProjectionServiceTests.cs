@@ -197,6 +197,8 @@ public class WorkflowExecutionProjectionServiceTests
         beforeAttach!.CommandId.Should().Be("cmd-1");
         beforeAttach.WorkflowName.Should().Be("wf");
         beforeAttach.Input.Should().Be("original-input");
+        beforeAttach.CreatedAt.Should().Be(initialStartedAt);
+        beforeAttach.UpdatedAt.Should().Be(initialStartedAt);
         beforeAttach.StartedAt.Should().Be(initialStartedAt);
 
         clock.UtcNow = initialStartedAt.AddMinutes(10);
@@ -208,6 +210,8 @@ public class WorkflowExecutionProjectionServiceTests
         afterAttach!.CommandId.Should().Be("cmd-1");
         afterAttach.WorkflowName.Should().Be("wf");
         afterAttach.Input.Should().Be("original-input");
+        afterAttach.CreatedAt.Should().Be(initialStartedAt);
+        afterAttach.UpdatedAt.Should().Be(initialStartedAt);
         afterAttach.StartedAt.Should().Be(initialStartedAt);
         await service.DetachLiveSinkAsync(lease!, sink);
         await sink.DisposeAsync();

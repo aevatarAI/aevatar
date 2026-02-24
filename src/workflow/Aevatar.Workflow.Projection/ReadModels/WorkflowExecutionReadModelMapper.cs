@@ -13,7 +13,7 @@ public sealed class WorkflowExecutionReadModelMapper
             LastCommandId = source.CommandId,
             StateVersion = source.StateVersion,
             LastEventId = source.LastEventId,
-            LastUpdatedAt = source.EndedAt,
+            LastUpdatedAt = source.UpdatedAt,
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,

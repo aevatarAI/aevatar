@@ -68,7 +68,7 @@ public sealed class WorkflowExecutionProjectionOptions
     public bool ValidateRelationProviderOnStartup { get; set; } = true;
 
     /// <summary>
-    /// Optional read-model binding requirements (ReadModelName -> IndexKind).
+    /// Optional read-model binding requirements (ReadModelType.FullName -> IndexKind).
     /// </summary>
     public Dictionary<string, string> ReadModelBindings { get; }
 

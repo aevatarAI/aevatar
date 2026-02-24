@@ -81,6 +81,32 @@ public class ProjectionReadModelStoreSelectorTests
     }
 
     [Fact]
+    public void Select_WhenRequiredIndexKindsAreNotFullySupported_ShouldThrow()
+    {
+        var registrations = new[]
+        {
+            CreateRegistration(
+                "neo4j",
+                supportsIndexing: true,
+                indexKinds: [ProjectionReadModelIndexKind.Graph]),
+        };
+
+        Action act = () => ProjectionReadModelStoreSelector.Select(
+            registrations,
+            new ProjectionReadModelStoreSelectionOptions
+            {
+                RequestedProviderName = "neo4j",
+                FailOnUnsupportedCapabilities = true,
+            },
+            new ProjectionReadModelRequirements(
+                requiresIndexing: true,
+                requiredIndexKinds: [ProjectionReadModelIndexKind.Document, ProjectionReadModelIndexKind.Graph]));
+
+        act.Should().Throw<ProjectionReadModelCapabilityValidationException>()
+            .WithMessage("*not fully supported*");
+    }
+
+    [Fact]
     public void Select_WhenCapabilitiesUnsupportedAndFailFastDisabled_ShouldReturnProvider()
     {
         var registrations = new[]

@@ -45,6 +45,8 @@ flowchart LR
 3. 未命中 reducer 的事件必须为 no-op。
 4. Workflow 投影生命周期通过 lease/session 句柄管理，不允许 `actorId -> context` 反查。
 5. 同一 `EventEnvelope` 分发到多个 projector 时采用“一对多全分支尝试”语义：单个 projector 失败不阻断其他 projector 执行，最终以聚合异常统一回传。
+6. `Projection:ReadModel:Bindings` 的 key 必须使用 read model `Type.FullName`，禁止短类名绑定。
+7. Host 组合层按配置仅注册所需 provider 组合，不允许无条件并列注册 InMemory/Elasticsearch/Neo4j。
 
 ## 5.1 编排减重落地（2026-02-22）
 

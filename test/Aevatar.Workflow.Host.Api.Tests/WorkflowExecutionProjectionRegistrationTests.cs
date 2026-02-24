@@ -45,7 +45,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         services.AddWorkflowExecutionProjectionCQRS(options =>
         {
             options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory;
-            options.ReadModelBindings[nameof(WorkflowExecutionReport)] = ProjectionReadModelIndexKind.Document.ToString();
+            options.ReadModelBindings[typeof(WorkflowExecutionReport).FullName!] = ProjectionReadModelIndexKind.Document.ToString();
             options.FailOnUnsupportedCapabilities = true;
         });
 
@@ -170,7 +170,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         services.AddWorkflowExecutionProjectionCQRS(options =>
         {
             options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory;
-            options.ReadModelBindings[nameof(WorkflowExecutionReport)] = ProjectionReadModelIndexKind.Document.ToString();
+            options.ReadModelBindings[typeof(WorkflowExecutionReport).FullName!] = ProjectionReadModelIndexKind.Document.ToString();
             options.FailOnUnsupportedCapabilities = true;
         });
         using var provider = services.BuildServiceProvider();
@@ -189,7 +189,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         services.AddWorkflowExecutionProjectionCQRS(options =>
         {
             options.ReadModelProvider = ProjectionReadModelProviderNames.InMemory;
-            options.ReadModelBindings[nameof(WorkflowExecutionReport)] = ProjectionReadModelIndexKind.Document.ToString();
+            options.ReadModelBindings[typeof(WorkflowExecutionReport).FullName!] = ProjectionReadModelIndexKind.Document.ToString();
             options.FailOnUnsupportedCapabilities = false;
         });
         using var provider = services.BuildServiceProvider();

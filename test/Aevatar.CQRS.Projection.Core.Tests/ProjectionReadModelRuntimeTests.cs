@@ -6,12 +6,13 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public class ProjectionReadModelRuntimeTests
 {
     [Fact]
-    public void BindingResolver_ShouldResolveRequirement_ByReadModelName()
+    public void BindingResolver_ShouldResolveRequirement_ByReadModelFullName()
     {
         var resolver = new ProjectionReadModelBindingResolver();
+        var bindingKey = typeof(TestReadModel).FullName!;
         var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            [nameof(TestReadModel)] = ProjectionReadModelIndexKind.Graph.ToString(),
+            [bindingKey] = ProjectionReadModelIndexKind.Graph.ToString(),
         };
 
         var requirements = resolver.Resolve(bindings, typeof(TestReadModel));
@@ -19,6 +20,21 @@ public class ProjectionReadModelRuntimeTests
         requirements.RequiresIndexing.Should().BeTrue();
         requirements.RequiredIndexKinds.Should().ContainSingle()
             .Which.Should().Be(ProjectionReadModelIndexKind.Graph);
+    }
+
+    [Fact]
+    public void BindingResolver_WhenBindingUsesShortTypeName_ShouldThrow()
+    {
+        var resolver = new ProjectionReadModelBindingResolver();
+        var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [nameof(TestReadModel)] = ProjectionReadModelIndexKind.Document.ToString(),
+        };
+
+        Action act = () => resolver.Resolve(bindings, typeof(TestReadModel));
+
+        act.Should().Throw<ProjectionReadModelBindingException>()
+            .WithMessage("*must use full type name*");
     }
 
     [Fact]

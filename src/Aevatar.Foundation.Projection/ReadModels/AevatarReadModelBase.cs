@@ -9,6 +9,6 @@ public abstract class AevatarReadModelBase
     public string CommandId { get; set; } = string.Empty;
     public long StateVersion { get; set; }
     public string LastEventId { get; set; } = string.Empty;
-    public DateTimeOffset StartedAt { get; set; }
-    public DateTimeOffset EndedAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
