@@ -162,6 +162,465 @@ public sealed class WorkflowLoopModuleCoverageTests
         ctx.Published.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task HandleAsync_WhenRetryAllowed_ShouldRedispatchStep()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(new StepDefinition
+        {
+            Id = "s1",
+            Type = "llm_call",
+            Retry = new StepRetryPolicy
+            {
+                MaxAttempts = 3,
+                DelayMs = 0,
+                Backoff = "fixed",
+            },
+        }));
+        var ctx = CreateContext();
+        const string runId = "run-retry-allowed";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = false, Error = "boom-1" }),
+            ctx,
+            CancellationToken.None);
+
+        var retryRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        retryRequest.StepId.Should().Be("s1");
+        retryRequest.RunId.Should().Be(runId);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenRetryExhausted_ShouldPublishFailure()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(new StepDefinition
+        {
+            Id = "s1",
+            Type = "llm_call",
+            Retry = new StepRetryPolicy
+            {
+                MaxAttempts = 3,
+                DelayMs = 0,
+                Backoff = "fixed",
+            },
+        }));
+        var ctx = CreateContext();
+        const string runId = "run-retry-exhausted";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = false, Error = "boom-1" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Select(x => x.evt)
+            .OfType<StepRequestEvent>()
+            .Should()
+            .ContainSingle(req => req.StepId == "s1");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = false, Error = "boom-2" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Select(x => x.evt)
+            .OfType<StepRequestEvent>()
+            .Should()
+            .ContainSingle(req => req.StepId == "s1");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = false, Error = "boom-3" }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Be("boom-3");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenOnErrorSkipWithoutNext_ShouldCompleteSuccess()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(new StepDefinition
+        {
+            Id = "s1",
+            Type = "llm_call",
+            OnError = new StepErrorPolicy
+            {
+                Strategy = "skip",
+                DefaultOutput = "default-skip-output",
+            },
+        }));
+        var ctx = CreateContext();
+        const string runId = "run-onerror-skip-final";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = false, Error = "boom", Output = "ignored" }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("default-skip-output");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenOnErrorSkipWithNext_ShouldDispatchNextStep()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "llm_call",
+                OnError = new StepErrorPolicy
+                {
+                    Strategy = "skip",
+                    DefaultOutput = "skip-next-input",
+                },
+            },
+            new StepDefinition
+            {
+                Id = "s2",
+                Type = "transform",
+            }));
+        var ctx = CreateContext();
+        const string runId = "run-onerror-skip-next";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = false, Error = "boom", Output = "ignored" }),
+            ctx,
+            CancellationToken.None);
+
+        var nextRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        nextRequest.StepId.Should().Be("s2");
+        nextRequest.Input.Should().Be("skip-next-input");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenOnErrorFallbackValid_ShouldDispatchFallbackStep()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "llm_call",
+                OnError = new StepErrorPolicy
+                {
+                    Strategy = "fallback",
+                    FallbackStep = "s2",
+                },
+            },
+            new StepDefinition
+            {
+                Id = "s2",
+                Type = "transform",
+            }));
+        var ctx = CreateContext();
+        const string runId = "run-onerror-fallback";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = false, Error = "boom", Output = "fallback-input" }),
+            ctx,
+            CancellationToken.None);
+
+        var fallbackRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        fallbackRequest.StepId.Should().Be("s2");
+        fallbackRequest.Input.Should().Be("fallback-input");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenOnErrorFallbackMissing_ShouldPublishFailure()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(new StepDefinition
+        {
+            Id = "s1",
+            Type = "llm_call",
+            OnError = new StepErrorPolicy
+            {
+                Strategy = "fallback",
+                FallbackStep = "missing-step",
+            },
+        }));
+        var ctx = CreateContext();
+        const string runId = "run-onerror-fallback-missing";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = false, Error = "boom" }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Be("boom");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenBranchMetadataProvided_ShouldRouteToBranchStep()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "conditional",
+                Branches = new Dictionary<string, string>
+                {
+                    ["yes"] = "s2",
+                    ["_default"] = "s3",
+                },
+            },
+            new StepDefinition { Id = "s2", Type = "transform" },
+            new StepDefinition { Id = "s3", Type = "transform" }));
+        var ctx = CreateContext();
+        const string runId = "run-branch";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = runId,
+                Success = true,
+                Output = "branch-output",
+                Metadata = { ["branch"] = "yes" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var nextRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        nextRequest.StepId.Should().Be("s2");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenTimeoutConfigured_ShouldPublishTimeoutCompletion()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(new StepDefinition
+        {
+            Id = "s1",
+            Type = "llm_call",
+            TimeoutMs = 1,
+        }));
+        var ctx = CreateContext();
+        var timeoutPublished = new TaskCompletionSource<StepCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ctx.OnPublish = (evt, _) =>
+        {
+            if (evt is StepCompletedEvent completed &&
+                completed.StepId == "s1" &&
+                !completed.Success &&
+                completed.Error.Contains("TIMEOUT", StringComparison.Ordinal))
+            {
+                timeoutPublished.TrySetResult(completed);
+            }
+        };
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = "run-timeout", Input = "start" }),
+            ctx,
+            CancellationToken.None);
+
+        var timeoutEvent = await timeoutPublished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        timeoutEvent.Error.Should().Contain("TIMEOUT");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenRetryUsesExponentialDelay_ShouldRetryWithEmptyOutput()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(new StepDefinition
+        {
+            Id = "s1",
+            Type = "llm_call",
+            Retry = new StepRetryPolicy
+            {
+                MaxAttempts = 3,
+                Backoff = "exponential",
+                DelayMs = 1,
+            },
+        }));
+        var ctx = CreateContext();
+        const string runId = "run-retry-exp";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = false, Error = "boom" }),
+            ctx,
+            CancellationToken.None);
+
+        var retry = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        retry.StepId.Should().Be("s1");
+        retry.Input.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenOnErrorStrategyUnsupported_ShouldFailWorkflow()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(new StepDefinition
+        {
+            Id = "s1",
+            Type = "llm_call",
+            OnError = new StepErrorPolicy { Strategy = "unknown" },
+        }));
+        var ctx = CreateContext();
+
+        await module.HandleAsync(Envelope(new StartWorkflowEvent { RunId = "run-unsupported", Input = "start" }), ctx, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = "run-unsupported", Success = false, Error = "boom" }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Be("boom");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenOnErrorFallbackStepIsBlank_ShouldFailWorkflow()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(new StepDefinition
+        {
+            Id = "s1",
+            Type = "llm_call",
+            OnError = new StepErrorPolicy
+            {
+                Strategy = "fallback",
+                FallbackStep = " ",
+            },
+        }));
+        var ctx = CreateContext();
+
+        await module.HandleAsync(Envelope(new StartWorkflowEvent { RunId = "run-fallback-blank", Input = "start" }), ctx, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = "run-fallback-blank", Success = false, Error = "boom" }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Be("boom");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenStepCompletesBeforeTimeout_ShouldCancelPendingTimeout()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "llm_call",
+                TimeoutMs = 2000,
+            },
+            new StepDefinition
+            {
+                Id = "s2",
+                Type = "transform",
+            }));
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = "run-cancel-timeout", Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = "run-cancel-timeout", Success = true, Output = "ok" }),
+            ctx,
+            CancellationToken.None);
+
+        var next = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        next.StepId.Should().Be("s2");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenOnErrorSkipWithoutDefaultAndOutput_ShouldUseEmptyOutput()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(new StepDefinition
+        {
+            Id = "s1",
+            Type = "llm_call",
+            OnError = new StepErrorPolicy
+            {
+                Strategy = "skip",
+                DefaultOutput = null,
+            },
+        }));
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = "run-skip-empty", Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = "run-skip-empty", Success = false, Error = "boom" }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().BeEmpty();
+    }
+
     private static WorkflowDefinition BuildWorkflow(params StepDefinition[] steps)
     {
         return new WorkflowDefinition
@@ -211,6 +670,7 @@ public sealed class WorkflowLoopModuleCoverageTests
         }
 
         public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+        public Action<IMessage, EventDirection>? OnPublish { get; set; }
         public EventEnvelope InboundEnvelope { get; }
         public string AgentId => Agent.Id;
         public IAgent Agent { get; }
@@ -224,6 +684,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             where TEvent : IMessage
         {
             Published.Add((evt, direction));
+            OnPublish?.Invoke(evt, direction);
             return Task.CompletedTask;
         }
     }

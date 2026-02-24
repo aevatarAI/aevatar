@@ -97,15 +97,21 @@
             <h2 id="prim-name"></h2>
             <p id="prim-description"></p>
           </div>
+          <div class="header-actions">
+            <span id="prim-category" class="category-badge"></span>
+          </div>
         </header>
         <div class="main-body">
           <div class="detail-block">
             <div class="detail-label">Aliases</div>
             <div id="prim-aliases" class="tag-list"></div>
           </div>
-          <div class="detail-block">
-            <div class="detail-label">Category</div>
-            <span id="prim-category" class="category-badge"></span>
+          <div id="prim-params-section" class="detail-block hidden">
+            <div class="detail-label">Parameters</div>
+            <table id="prim-params" class="params-table">
+              <thead><tr><th>Name</th><th>Description</th><th>Default</th><th>Values</th></tr></thead>
+              <tbody></tbody>
+            </table>
           </div>
         </div>
       </div>

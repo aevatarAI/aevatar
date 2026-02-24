@@ -178,6 +178,26 @@
     const cat = $("#prim-category");
     cat.textContent = p.category;
     cat.className = `category-badge cat-${p.category}`;
+
+    const section = $("#prim-params-section");
+    const tbody = $("#prim-params tbody");
+    if (p.parameters && p.parameters.length > 0) {
+      section.classList.remove("hidden");
+      tbody.innerHTML = p.parameters.map((pm) => {
+        const vals = pm.values
+          ? pm.values.split(",").map((v) => `<span class="val-chip">${esc(v.trim())}</span>`).join(" ")
+          : "";
+        return `<tr>
+          <td class="param-name">${esc(pm.name)}</td>
+          <td class="param-desc">${esc(pm.description)}</td>
+          <td class="param-default">${pm.default ? esc(pm.default) : ""}</td>
+          <td class="param-values">${vals}</td>
+        </tr>`;
+      }).join("");
+    } else {
+      section.classList.add("hidden");
+      tbody.innerHTML = "";
+    }
   }
 
   // ── Flow Diagram (SVG) ──

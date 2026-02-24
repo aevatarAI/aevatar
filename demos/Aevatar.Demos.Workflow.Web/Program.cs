@@ -372,40 +372,242 @@ app.MapGet("/api/llm/status", () => Results.Json(new
     model = llmAvailable ? modelName : null,
 }));
 
-// GET /api/primitives — module catalog
-app.MapGet("/api/primitives", () =>
+// GET /api/primitives — module catalog with parameter docs
+app.MapGet("/api/primitives", () => Results.Json(BuildPrimitivesCatalog()));
+
+static object[] BuildPrimitivesCatalog()
 {
-    var catalog = new[]
-    {
-        new { name = "transform", aliases = new[] { "transform" }, category = "data", description = "Text transformation: uppercase, lowercase, count words, trim, etc." },
-        new { name = "guard", aliases = new[] { "guard", "assert" }, category = "control", description = "Input validation gate. Fails the step if the check is not met." },
-        new { name = "conditional", aliases = new[] { "conditional" }, category = "control", description = "Binary branching: evaluates a condition and routes to true/false paths." },
-        new { name = "switch", aliases = new[] { "switch" }, category = "control", description = "Multi-way branching: matches input against patterns to select a branch." },
-        new { name = "while", aliases = new[] { "while", "loop" }, category = "control", description = "Loop that repeats child steps while a condition holds." },
-        new { name = "foreach", aliases = new[] { "foreach", "for_each" }, category = "composition", description = "Iterates over a delimited list, executing child steps for each item." },
-        new { name = "parallel", aliases = new[] { "parallel_fanout", "parallel", "fan_out" }, category = "composition", description = "Fan-out: sends input to multiple workers in parallel and merges results." },
-        new { name = "race", aliases = new[] { "race", "select" }, category = "composition", description = "Sends input to multiple workers; returns the first response received." },
-        new { name = "map_reduce", aliases = new[] { "map_reduce", "mapreduce" }, category = "composition", description = "Splits input into chunks, processes in parallel, then reduces results." },
-        new { name = "llm_call", aliases = new[] { "llm_call" }, category = "ai", description = "Sends a prompt to an LLM and returns the response." },
-        new { name = "tool_call", aliases = new[] { "tool_call" }, category = "ai", description = "Invokes a registered tool/function with the given parameters." },
-        new { name = "connector_call", aliases = new[] { "connector_call", "bridge_call" }, category = "integration", description = "Calls an external connector/bridge service." },
-        new { name = "evaluate", aliases = new[] { "evaluate", "judge" }, category = "ai", description = "LLM-as-judge: evaluates content against criteria and returns a score." },
-        new { name = "reflect", aliases = new[] { "reflect" }, category = "ai", description = "Self-reflection loop: generates, critiques, and refines output." },
-        new { name = "assign", aliases = new[] { "assign" }, category = "data", description = "Assigns a value to a named variable in the workflow context." },
-        new { name = "retrieve_facts", aliases = new[] { "retrieve_facts" }, category = "data", description = "Retrieves relevant facts from input text matching a query." },
-        new { name = "cache", aliases = new[] { "cache" }, category = "data", description = "Caches LLM responses to avoid redundant calls." },
-        new { name = "emit", aliases = new[] { "emit", "publish" }, category = "integration", description = "Publishes an event to external listeners." },
-        new { name = "delay", aliases = new[] { "delay", "sleep" }, category = "control", description = "Pauses execution for a specified duration." },
-        new { name = "wait_signal", aliases = new[] { "wait_signal", "wait" }, category = "control", description = "Blocks until an external signal is received." },
-        new { name = "checkpoint", aliases = new[] { "checkpoint" }, category = "control", description = "Saves workflow state for recovery/resume." },
-        new { name = "human_approval", aliases = new[] { "human_approval" }, category = "human", description = "Pauses workflow until a human approves or rejects." },
-        new { name = "human_input", aliases = new[] { "human_input" }, category = "human", description = "Pauses workflow until a human provides input." },
-        new { name = "workflow_call", aliases = new[] { "workflow_call", "sub_workflow" }, category = "composition", description = "Invokes another workflow as a sub-workflow." },
-        new { name = "vote_consensus", aliases = new[] { "vote_consensus", "vote" }, category = "composition", description = "Collects votes from multiple agents and determines consensus." },
-        new { name = "workflow_loop", aliases = new[] { "workflow_loop" }, category = "control", description = "Internal orchestrator that drives step-by-step execution." },
-    };
-    return Results.Json(catalog);
-});
+    object P(string name, string desc, string def = "", string? values = null) =>
+        new { name, description = desc, @default = def, values };
+
+    return
+    [
+        new {
+            name = "transform", aliases = new[] { "transform" }, category = "data",
+            description = "Pure text transformation. Applies an operation to the input and returns the result.",
+            parameters = new object[] {
+                P("op", "Operation to apply", "identity",
+                    "identity, uppercase, lowercase, trim, count, count_words, take, take_last, join, split, distinct, reverse_lines"),
+                P("n", "Number of lines for take/take_last", "5"),
+                P("separator", "Delimiter for join/split", "\\n"),
+            },
+        },
+        new {
+            name = "guard", aliases = new[] { "guard", "assert" }, category = "control",
+            description = "Input validation gate. Runs a check on the input; fails or branches if the check is not met.",
+            parameters = new object[] {
+                P("check", "Validation check to perform", "not_empty",
+                    "not_empty, json_valid, regex, max_length, contains"),
+                P("on_fail", "Action when check fails", "fail", "fail, skip, branch"),
+                P("pattern", "Regex pattern (required when check=regex)"),
+                P("max", "Maximum length (required when check=max_length)"),
+                P("keyword", "Substring to find (required when check=contains)"),
+                P("branch_target", "Step ID to jump to (required when on_fail=branch)"),
+            },
+        },
+        new {
+            name = "conditional", aliases = new[] { "conditional" }, category = "control",
+            description = "Binary branching. Checks if input contains a keyword, sets metadata[\"branch\"] to \"true\" or \"false\".",
+            parameters = new object[] {
+                P("condition", "Keyword to search for in input (case-insensitive contains)", "default"),
+            },
+        },
+        new {
+            name = "switch", aliases = new[] { "switch" }, category = "control",
+            description = "Multi-way branching. Matches input against branch keys using case-insensitive contains, routes to the matched branch target.",
+            parameters = new object[] {
+                P("on", "Value to match against (defaults to step input)"),
+                P("branch.{key}", "Maps a match key to a target step ID. E.g. branch.bug: handle_bug"),
+            },
+        },
+        new {
+            name = "while", aliases = new[] { "while", "loop" }, category = "control",
+            description = "Loop that repeats a sub-step until max iterations. Each iteration passes previous output as input.",
+            parameters = new object[] {
+                P("max_iterations", "Maximum number of loop iterations", "10"),
+                P("step", "Sub-step type to execute each iteration", "llm_call"),
+            },
+        },
+        new {
+            name = "foreach", aliases = new[] { "foreach", "for_each" }, category = "composition",
+            description = "Splits input by delimiter and executes a sub-step for each chunk in parallel. Merges all results.",
+            parameters = new object[] {
+                P("delimiter", "Separator to split input into items", "\\n---\\n"),
+                P("sub_step_type", "Step type to run for each item", "parallel"),
+                P("sub_target_role", "Target role for sub-steps (defaults to step's target_role)"),
+                P("sub_param_{key}", "Additional parameters forwarded to each sub-step"),
+            },
+        },
+        new {
+            name = "parallel", aliases = new[] { "parallel_fanout", "parallel", "fan_out" }, category = "composition",
+            description = "Fan-out: sends the same input to multiple worker roles in parallel, then merges all responses.",
+            parameters = new object[] {
+                P("workers", "Comma-separated list of role IDs to fan out to"),
+                P("parallel_count", "Number of workers if workers not specified", "3"),
+                P("vote_step_type", "Optional follow-up vote/consensus step type"),
+                P("vote_param_{key}", "Parameters forwarded to the vote step"),
+            },
+        },
+        new {
+            name = "race", aliases = new[] { "race", "select" }, category = "composition",
+            description = "Sends input to multiple workers; returns the first response received, discarding the rest.",
+            parameters = new object[] {
+                P("workers", "Comma-separated list of role IDs"),
+                P("count", "Number of workers if workers not specified", "2"),
+            },
+        },
+        new {
+            name = "map_reduce", aliases = new[] { "map_reduce", "mapreduce" }, category = "composition",
+            description = "Splits input into chunks (map phase), processes each in parallel, then reduces all results into one.",
+            parameters = new object[] {
+                P("delimiter", "Separator to split input", "\\n---\\n"),
+                P("map_step_type", "Step type for the map phase", "llm_call"),
+                P("map_target_role", "Target role for map workers"),
+                P("reduce_step_type", "Step type for the reduce phase", "llm_call"),
+                P("reduce_target_role", "Target role for the reducer"),
+                P("reduce_prompt_prefix", "Text prepended to the reduce prompt"),
+            },
+        },
+        new {
+            name = "llm_call", aliases = new[] { "llm_call" }, category = "ai",
+            description = "Sends a prompt to the target role's LLM and returns the response. The role's system_prompt provides persona.",
+            parameters = new object[] {
+                P("prompt_prefix", "Text prepended to the input before sending to LLM"),
+            },
+        },
+        new {
+            name = "tool_call", aliases = new[] { "tool_call" }, category = "ai",
+            description = "Invokes a registered tool/function by name, passing the step input as arguments.",
+            parameters = new object[] {
+                P("tool", "Name of the tool to invoke (required)"),
+            },
+        },
+        new {
+            name = "connector_call", aliases = new[] { "connector_call", "bridge_call" }, category = "integration",
+            description = "Calls an external connector/bridge service. Supports retry, timeout, and graceful degradation.",
+            parameters = new object[] {
+                P("connector", "Connector name to invoke (required)"),
+                P("operation", "Operation/method on the connector"),
+                P("retry", "Number of retry attempts on failure", "0"),
+                P("timeout_ms", "Timeout in milliseconds", "30000"),
+                P("optional", "If true, missing connector is non-fatal", "false", "true, false"),
+                P("on_missing", "Action when connector not found", "fail", "fail, skip"),
+                P("on_error", "Action on connector error", "fail", "fail, continue"),
+            },
+        },
+        new {
+            name = "evaluate", aliases = new[] { "evaluate", "judge" }, category = "ai",
+            description = "LLM-as-judge: sends content to a judge role for scoring on a numeric scale. Supports threshold-based branching.",
+            parameters = new object[] {
+                P("criteria", "Evaluation criteria description", "quality"),
+                P("scale", "Numeric scale for scoring", "1-5"),
+                P("threshold", "Minimum passing score", "3"),
+                P("on_below", "Branch key when score is below threshold"),
+            },
+        },
+        new {
+            name = "reflect", aliases = new[] { "reflect" }, category = "ai",
+            description = "Self-reflection loop: sends content for critique, improves based on feedback, repeats until \"PASS\" or max rounds.",
+            parameters = new object[] {
+                P("max_rounds", "Maximum critique-improve cycles (1\u201310)", "3"),
+                P("criteria", "Criteria for the critique evaluation", "quality and correctness"),
+            },
+        },
+        new {
+            name = "assign", aliases = new[] { "assign" }, category = "data",
+            description = "Assigns a value to a named variable in the workflow context. Use \"$input\" as value to capture the current input.",
+            parameters = new object[] {
+                P("target", "Variable name to assign to"),
+                P("value", "Value to assign (\"$input\" = current step input)"),
+            },
+        },
+        new {
+            name = "retrieve_facts", aliases = new[] { "retrieve_facts" }, category = "data",
+            description = "Searches the input text for lines matching a query using keyword overlap scoring. Returns the top-k most relevant lines.",
+            parameters = new object[] {
+                P("query", "Keywords to search for in the input"),
+                P("top_k", "Number of top results to return", "5"),
+            },
+        },
+        new {
+            name = "cache", aliases = new[] { "cache" }, category = "data",
+            description = "Caches LLM responses by key. On cache hit, returns cached result; on miss, delegates to a child step and caches the output.",
+            parameters = new object[] {
+                P("cache_key", "Cache key (defaults to step input)"),
+                P("ttl_seconds", "Cache time-to-live in seconds (1\u201386400)", "3600"),
+                P("child_step_type", "Step type to execute on cache miss", "llm_call"),
+                P("child_target_role", "Target role for the child step"),
+            },
+        },
+        new {
+            name = "emit", aliases = new[] { "emit", "publish" }, category = "integration",
+            description = "Publishes an event to external listeners (Up + Down direction). The event carries a custom type and payload.",
+            parameters = new object[] {
+                P("event_type", "Custom event type identifier", "custom"),
+                P("payload", "Event payload (defaults to step input)"),
+            },
+        },
+        new {
+            name = "delay", aliases = new[] { "delay", "sleep" }, category = "control",
+            description = "Pauses workflow execution for a specified duration before proceeding to the next step.",
+            parameters = new object[] {
+                P("duration_ms", "Pause duration in milliseconds (0\u2013300000)", "1000"),
+            },
+        },
+        new {
+            name = "wait_signal", aliases = new[] { "wait_signal", "wait" }, category = "control",
+            description = "Blocks execution until an external signal with the matching name is received, or times out.",
+            parameters = new object[] {
+                P("signal_name", "Name of the signal to wait for", "default"),
+                P("prompt", "Message to display while waiting"),
+                P("timeout_ms", "Timeout in milliseconds (0 = no timeout, max 3600000)", "0"),
+            },
+        },
+        new {
+            name = "checkpoint", aliases = new[] { "checkpoint" }, category = "control",
+            description = "Saves workflow state at this point. Can be used for recovery or auditing.",
+            parameters = new object[] {
+                P("name", "Checkpoint label (defaults to step ID)"),
+            },
+        },
+        new {
+            name = "human_approval", aliases = new[] { "human_approval" }, category = "human",
+            description = "Pauses the workflow and waits for a human to approve or reject before continuing.",
+            parameters = new object[] {
+                P("prompt", "Message shown to the human reviewer", "Approve this step?"),
+                P("timeout", "Timeout in seconds", "3600"),
+                P("on_reject", "Action if rejected", "fail", "fail, skip, branch"),
+            },
+        },
+        new {
+            name = "human_input", aliases = new[] { "human_input" }, category = "human",
+            description = "Pauses the workflow and waits for a human to provide freeform text input.",
+            parameters = new object[] {
+                P("prompt", "Message shown to the human", "Please provide input:"),
+                P("variable", "Variable name to store the input", "user_input"),
+                P("timeout", "Timeout in seconds", "1800"),
+                P("on_timeout", "Action on timeout", "fail", "fail, skip"),
+            },
+        },
+        new {
+            name = "workflow_call", aliases = new[] { "workflow_call", "sub_workflow" }, category = "composition",
+            description = "Invokes another workflow definition as a sub-workflow, passing the current input.",
+            parameters = new object[] {
+                P("workflow", "Name of the workflow to invoke (required)"),
+            },
+        },
+        new {
+            name = "vote_consensus", aliases = new[] { "vote_consensus", "vote" }, category = "composition",
+            description = "Collects responses from multiple agents and determines consensus. Typically used after a parallel fan-out.",
+            parameters = Array.Empty<object>(),
+        },
+        new {
+            name = "workflow_loop", aliases = new[] { "workflow_loop" }, category = "control",
+            description = "Internal orchestrator module. Drives step-by-step execution of the workflow definition. Not used directly in YAML.",
+            parameters = Array.Empty<object>(),
+        },
+    ];
+}
 
 app.MapFallbackToFile("index.html");
 

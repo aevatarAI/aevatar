@@ -249,6 +249,40 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 .category-badge.cat-integration { background: rgba(20,184,166,0.15); color: #2dd4bf; }
 .category-badge.cat-human { background: rgba(249,115,22,0.15); color: #fb923c; }
 
+/* ── Parameters Table ── */
+.params-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.params-table th {
+  text-align: left; padding: 6px 10px; border-bottom: 2px solid var(--border);
+  color: var(--text-muted); font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.params-table td {
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  vertical-align: top; line-height: 1.5;
+}
+.params-table tr:last-child td { border-bottom: none; }
+.params-table tr:hover td { background: var(--bg-hover); }
+.params-table .param-name {
+  font-family: 'SF Mono', 'Fira Code', monospace; font-weight: 600;
+  color: #7dd3fc; white-space: nowrap;
+}
+.params-table .param-desc { color: var(--text); }
+.params-table .param-default {
+  font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+  color: #a5d6a7;
+}
+.params-table .param-default:empty::after {
+  content: "\2014"; color: var(--text-muted); font-family: inherit;
+}
+.params-table .param-values { font-size: 12px; }
+.params-table .param-values .val-chip {
+  display: inline-block; padding: 1px 6px; margin: 1px 2px;
+  border-radius: var(--radius-sm); background: rgba(99,102,241,0.12);
+  color: #a5b4fc; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px;
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
