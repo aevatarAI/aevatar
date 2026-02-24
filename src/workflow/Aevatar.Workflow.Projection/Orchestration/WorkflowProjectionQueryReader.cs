@@ -5,12 +5,12 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryReader
 {
-    private readonly IDocumentProjectionStore<WorkflowExecutionReport, string> _documentStore;
+    private readonly IProjectionDocumentStore<WorkflowExecutionReport, string> _documentStore;
     private readonly IProjectionGraphStore _graphStore;
     private readonly WorkflowExecutionReadModelMapper _mapper;
 
     public WorkflowProjectionQueryReader(
-        IDocumentProjectionStore<WorkflowExecutionReport, string> documentStore,
+        IProjectionDocumentStore<WorkflowExecutionReport, string> documentStore,
         WorkflowExecutionReadModelMapper mapper,
         IProjectionGraphStore graphStore)
     {

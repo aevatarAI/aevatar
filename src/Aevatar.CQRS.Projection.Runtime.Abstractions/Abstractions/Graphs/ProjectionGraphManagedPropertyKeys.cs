@@ -1,6 +1,6 @@
-namespace Aevatar.CQRS.Projection.Stores.Abstractions;
+namespace Aevatar.CQRS.Projection.Runtime.Abstractions;
 
-public static class ProjectionGraphSystemPropertyKeys
+public static class ProjectionGraphManagedPropertyKeys
 {
     public const string ManagedMarkerKey = "projectionManaged";
 

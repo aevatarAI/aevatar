@@ -94,7 +94,7 @@ public sealed class InMemoryProjectionGraphStore
             nodes = _nodes.Values
                 .Where(x => string.Equals(x.Scope, scopeValue, StringComparison.Ordinal))
                 .Where(x =>
-                    x.Properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedOwnerIdKey, out var nodeOwnerId) &&
+                    x.Properties.TryGetValue(ProjectionGraphManagedPropertyKeys.ManagedOwnerIdKey, out var nodeOwnerId) &&
                     string.Equals(NormalizeToken(nodeOwnerId), ownerValue, StringComparison.Ordinal))
                 .OrderByDescending(x => x.UpdatedAt)
                 .Take(boundedTake)
@@ -124,7 +124,7 @@ public sealed class InMemoryProjectionGraphStore
             edges = _edges.Values
                 .Where(x => string.Equals(x.Scope, scopeValue, StringComparison.Ordinal))
                 .Where(x =>
-                    x.Properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedOwnerIdKey, out var edgeOwnerId) &&
+                    x.Properties.TryGetValue(ProjectionGraphManagedPropertyKeys.ManagedOwnerIdKey, out var edgeOwnerId) &&
                     string.Equals(NormalizeToken(edgeOwnerId), ownerValue, StringComparison.Ordinal))
                 .OrderByDescending(x => x.UpdatedAt)
                 .Take(boundedTake)

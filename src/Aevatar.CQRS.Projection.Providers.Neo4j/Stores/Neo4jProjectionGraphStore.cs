@@ -597,19 +597,19 @@ public sealed class Neo4jProjectionGraphStore
 
     private static bool ResolveProjectionManaged(IReadOnlyDictionary<string, string> properties)
     {
-        if (!properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedMarkerKey, out var markerValue))
+        if (!properties.TryGetValue(ProjectionGraphManagedPropertyKeys.ManagedMarkerKey, out var markerValue))
             return false;
 
         var normalizedMarker = NormalizeToken(markerValue);
         return string.Equals(
             normalizedMarker,
-            ProjectionGraphSystemPropertyKeys.ManagedMarkerValue,
+            ProjectionGraphManagedPropertyKeys.ManagedMarkerValue,
             StringComparison.Ordinal);
     }
 
     private static string ResolveProjectionOwnerId(IReadOnlyDictionary<string, string> properties)
     {
-        if (!properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedOwnerIdKey, out var ownerId))
+        if (!properties.TryGetValue(ProjectionGraphManagedPropertyKeys.ManagedOwnerIdKey, out var ownerId))
             return "";
 
         return NormalizeToken(ownerId);

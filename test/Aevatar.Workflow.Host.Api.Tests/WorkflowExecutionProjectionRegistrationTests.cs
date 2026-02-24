@@ -24,26 +24,24 @@ public class WorkflowExecutionProjectionRegistrationTests
         Func<Task> act = () => StartHostedServicesAsync(provider);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*No document projection store providers are registered*");
+            .WithMessage("*IProjectionDocumentStore*");
     }
 
     [Fact]
-    public async Task AddWorkflowExecutionProjectionCQRS_ShouldResolveFanoutStores()
+    public async Task AddWorkflowExecutionProjectionCQRS_ShouldResolveDispatcherAndStores()
     {
         var services = new ServiceCollection();
         RegisterInMemoryProviders(services);
         services.AddWorkflowExecutionProjectionCQRS();
 
         await using var provider = services.BuildServiceProvider();
-        var documentStore = provider.GetRequiredService<IDocumentProjectionStore<WorkflowExecutionReport, string>>();
+        var documentStore = provider.GetRequiredService<IProjectionDocumentStore<WorkflowExecutionReport, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
-        var graphStore = provider.GetRequiredService<IProjectionGraphMaterializer<WorkflowExecutionReport>>();
-        var router = provider.GetRequiredService<IProjectionMaterializationRouter<WorkflowExecutionReport, string>>();
+        var dispatcher = provider.GetRequiredService<IProjectionStoreDispatcher<WorkflowExecutionReport, string>>();
 
-        documentStore.Should().BeOfType<ProjectionDocumentStoreFanout<WorkflowExecutionReport, string>>();
-        relationStore.Should().BeOfType<ProjectionGraphStoreFanout>();
-        graphStore.Should().BeOfType<ProjectionGraphMaterializer<WorkflowExecutionReport>>();
-        router.Should().NotBeNull();
+        documentStore.Should().NotBeNull();
+        relationStore.Should().NotBeNull();
+        dispatcher.Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();
@@ -60,23 +58,24 @@ public class WorkflowExecutionProjectionRegistrationTests
         Action act = () => provider.GetRequiredService<IProjectionGraphStore>();
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*No graph projection store providers are registered*");
+            .WithMessage("*IProjectionGraphStore*");
     }
 
     private static void RegisterInMemoryProviders(IServiceCollection services)
     {
-        services.AddInMemoryDocumentStoreRegistration<WorkflowExecutionReport, string>(
+        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
             listSortSelector: report => report.CreatedAt,
             listTakeMax: 200);
-        services.AddInMemoryGraphStoreRegistration();
+        services.AddInMemoryGraphProjectionStore();
+        services.AddSingleton<IProjectionStoreBinding<WorkflowExecutionReport, string>, ProjectionGraphStoreBinding<WorkflowExecutionReport, string>>();
     }
 
     private static void RegisterElasticsearchDocumentProvider(IServiceCollection services)
     {
-        services.AddElasticsearchDocumentStoreRegistration<WorkflowExecutionReport, string>(
-            optionsFactory: _ => new ElasticsearchProjectionReadModelStoreOptions
+        services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
+            optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
             {
                 Endpoints = ["http://localhost:9200"],
             },

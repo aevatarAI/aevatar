@@ -6,7 +6,7 @@ namespace Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddInMemoryDocumentStoreRegistration<TReadModel, TKey>(
+    public static IServiceCollection AddInMemoryDocumentProjectionStore<TReadModel, TKey>(
         this IServiceCollection services,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
@@ -16,26 +16,21 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(keySelector);
 
-        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>(
-            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>(
-                "InMemory",
-                provider => new InMemoryProjectionReadModelStore<TReadModel, TKey>(
-                    keySelector,
-                    keyFormatter,
-                    listSortSelector,
-                    listTakeMax,
-                    provider.GetService<ILogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>>())));
+        services.AddSingleton<IProjectionDocumentStore<TReadModel, TKey>>(provider =>
+            new InMemoryProjectionDocumentStore<TReadModel, TKey>(
+                keySelector,
+                keyFormatter,
+                listSortSelector,
+                listTakeMax,
+                provider.GetService<ILogger<InMemoryProjectionDocumentStore<TReadModel, TKey>>>()));
 
         return services;
     }
 
-    public static IServiceCollection AddInMemoryGraphStoreRegistration(
+    public static IServiceCollection AddInMemoryGraphProjectionStore(
         this IServiceCollection services)
     {
-        services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
-            new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "InMemory",
-                _ => new InMemoryProjectionGraphStore()));
+        services.AddSingleton<IProjectionGraphStore, InMemoryProjectionGraphStore>();
 
         return services;
     }

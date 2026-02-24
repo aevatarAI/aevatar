@@ -1,14 +1,13 @@
 # Aevatar.CQRS.Projection.Runtime
 
-通用 ReadModel Runtime 组装层。
+通用 Projection Runtime 组装层。
 
 ## 职责
 
-- Store Fan-out 组合：
-  - `ProjectionDocumentStoreFanout<TReadModel, TKey>`
-  - `ProjectionGraphStoreFanout`
-- Materialization 路由：`IProjectionMaterializationRouter<TReadModel, TKey>`、`ProjectionGraphMaterializer<TReadModel>`
-- Document metadata 解析：`IProjectionDocumentMetadataResolver`
+- 统一分发：`ProjectionStoreDispatcher<TReadModel, TKey>`
+- Document Binding：`ProjectionDocumentStoreBinding<TReadModel, TKey>`
+- Graph Binding：`ProjectionGraphStoreBinding<TReadModel, TKey>`
+- Document Metadata 解析：`ProjectionDocumentMetadataResolver`
 
 ## DI 入口
 
@@ -16,15 +15,13 @@
 
 默认注册：
 
-- `IDocumentProjectionStore<,>` -> `ProjectionDocumentStoreFanout<,>`
-- `IProjectionGraphStore` -> `ProjectionGraphStoreFanout`
-- `IProjectionGraphMaterializer<>`
-- `IProjectionMaterializationRouter<,>`
-- `IProjectionDocumentMetadataResolver`
+- `IProjectionStoreDispatcher<,>` -> `ProjectionStoreDispatcher<,>`
+- `IProjectionQueryableStoreBinding<,>` -> `ProjectionDocumentStoreBinding<,>`
+- `IProjectionStoreBinding<,>`(默认) -> `ProjectionDocumentStoreBinding<,>`
+- `IProjectionDocumentMetadataResolver` -> `ProjectionDocumentMetadataResolver`
 
-## 设计约束
+## 语义
 
-1. 不承载业务 ReadModel 类型。
-2. 不做 providerName 单选，不存在运行时降级逻辑；多 provider 采用“注册顺序即查询顺序”。
-3. Document 与 Graph 完全解耦，分别按注册列表一对多分发（写 fan-out，读走首注册 provider）。
-4. 仅依赖抽象契约与 DI；具体 Provider 由上层注册。
+1. Runtime 负责“一对多 store 分发”，不做 ProviderName 路由。
+2. Document 与 Graph 保持平行；Graph 通过额外 binding 接入。
+3. 查询统一走唯一 queryable binding；写入同时分发到所有 binding。

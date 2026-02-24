@@ -6,7 +6,7 @@ using FluentAssertions;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
-public sealed class ElasticsearchProjectionReadModelStoreBehaviorTests
+public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
 {
     [Fact]
     public async Task GetAsync_WhenIndexMissingAndAutoCreateDisabled_ShouldThrowByDefault()
@@ -17,7 +17,7 @@ public sealed class ElasticsearchProjectionReadModelStoreBehaviorTests
             """{"error":{"type":"index_not_found_exception"},"status":404}"""));
 
         using var store = CreateStore(
-            new ElasticsearchProjectionReadModelStoreOptions
+            new ElasticsearchProjectionDocumentStoreOptions
             {
                 AutoCreateIndex = false,
             },
@@ -38,7 +38,7 @@ public sealed class ElasticsearchProjectionReadModelStoreBehaviorTests
             """{"error":{"type":"index_not_found_exception"},"status":404}"""));
 
         using var store = CreateStore(
-            new ElasticsearchProjectionReadModelStoreOptions
+            new ElasticsearchProjectionDocumentStoreOptions
             {
                 AutoCreateIndex = false,
                 MissingIndexBehavior = ElasticsearchMissingIndexBehavior.WarnAndReturnEmpty,
@@ -59,7 +59,7 @@ public sealed class ElasticsearchProjectionReadModelStoreBehaviorTests
             """{"hits":{"hits":[]}}"""));
 
         using var store = CreateStore(
-            new ElasticsearchProjectionReadModelStoreOptions
+            new ElasticsearchProjectionDocumentStoreOptions
             {
                 AutoCreateIndex = false,
                 ListSortField = "",
@@ -93,7 +93,7 @@ public sealed class ElasticsearchProjectionReadModelStoreBehaviorTests
             """{"result":"updated"}"""));
 
         using var store = CreateStore(
-            new ElasticsearchProjectionReadModelStoreOptions
+            new ElasticsearchProjectionDocumentStoreOptions
             {
                 AutoCreateIndex = false,
                 MutateMaxRetryCount = 1,
@@ -121,13 +121,13 @@ public sealed class ElasticsearchProjectionReadModelStoreBehaviorTests
             HttpStatusCode.OK,
             """{"result":"created"}"""));
 
-        var options = new ElasticsearchProjectionReadModelStoreOptions
+        var options = new ElasticsearchProjectionDocumentStoreOptions
         {
             AutoCreateIndex = true,
         };
         options.Endpoints = ["http://localhost:9200"];
 
-        using var store = new ElasticsearchProjectionReadModelStore<StoreReadModel, string>(
+        using var store = new ElasticsearchProjectionDocumentStore<StoreReadModel, string>(
             options,
             new DocumentIndexMetadata(
                 IndexName: "projection-core-tests",
@@ -177,12 +177,12 @@ public sealed class ElasticsearchProjectionReadModelStoreBehaviorTests
         handler.CapturedRequests[0].Body.Should().Contain("\"is_write_index\":true");
     }
 
-    private static ElasticsearchProjectionReadModelStore<StoreReadModel, string> CreateStore(
-        ElasticsearchProjectionReadModelStoreOptions options,
+    private static ElasticsearchProjectionDocumentStore<StoreReadModel, string> CreateStore(
+        ElasticsearchProjectionDocumentStoreOptions options,
         HttpMessageHandler handler)
     {
         options.Endpoints = ["http://localhost:9200"];
-        return new ElasticsearchProjectionReadModelStore<StoreReadModel, string>(
+        return new ElasticsearchProjectionDocumentStore<StoreReadModel, string>(
             options,
             new DocumentIndexMetadata(
                 IndexName: "projection-core-tests",

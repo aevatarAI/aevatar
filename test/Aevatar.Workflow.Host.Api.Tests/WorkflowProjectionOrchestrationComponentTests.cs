@@ -78,10 +78,15 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             EndedAt = startedAt.AddMinutes(-6),
             CompletionStatus = WorkflowExecutionCompletionStatus.Running,
         });
+        var relationStore = new InMemoryProjectionGraphStore();
+        var dispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(
+            new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+            {
+                new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
+                new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
+            });
         var updater = new WorkflowProjectionReadModelUpdater(
-            new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
-                store,
-                new ProjectionGraphMaterializer<WorkflowExecutionReport>(new InMemoryProjectionGraphStore())),
+            dispatcher,
             new FixedClock(stoppedAt));
         var context = new WorkflowExecutionProjectionContext
         {
@@ -322,7 +327,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         policy.Calls.Should().ContainSingle();
     }
 
-    private static InMemoryProjectionReadModelStore<WorkflowExecutionReport, string> CreateStore() => new(
+    private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
         listSortSelector: report => report.StartedAt);

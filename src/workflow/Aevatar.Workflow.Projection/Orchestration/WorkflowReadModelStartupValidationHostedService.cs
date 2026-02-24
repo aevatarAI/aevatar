@@ -32,7 +32,7 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
 
         if (_options.ValidateDocumentProviderOnStartup)
         {
-            _ = _serviceProvider.GetRequiredService<IDocumentProjectionStore<WorkflowExecutionReport, string>>();
+            _ = _serviceProvider.GetRequiredService<IProjectionDocumentStore<WorkflowExecutionReport, string>>();
             _logger.LogInformation(
                 "Workflow read-model document startup validation passed. readModelType={ReadModelType}",
                 typeof(WorkflowExecutionReport).FullName);

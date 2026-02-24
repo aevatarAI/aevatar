@@ -4,7 +4,7 @@ public interface IGraphReadModel : IProjectionReadModel
 {
     string GraphScope { get; }
 
-    IReadOnlyList<GraphNodeDescriptor> GraphNodes { get; }
+    IReadOnlyList<ProjectionGraphNode> GraphNodes { get; }
 
-    IReadOnlyList<GraphEdgeDescriptor> GraphEdges { get; }
+    IReadOnlyList<ProjectionGraphEdge> GraphEdges { get; }
 }

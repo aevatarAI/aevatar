@@ -3,15 +3,15 @@ using FluentAssertions;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
-public class ProjectionGraphMaterializerTests
+public class ProjectionGraphStoreBindingTests
 {
     [Fact]
-    public async Task UpsertGraphAsync_ShouldRemoveDisconnectedStaleEdgesForSameOwner()
+    public async Task UpsertAsync_ShouldRemoveDisconnectedStaleEdgesForSameOwner()
     {
         var store = new RecordingGraphStore();
-        var materializer = new ProjectionGraphMaterializer<TestGraphReadModel>(store);
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store);
 
-        await materializer.UpsertGraphAsync(new TestGraphReadModel
+        await binding.UpsertAsync(new TestGraphReadModel
         {
             Id = "owner-1",
             GraphScope = "scope-1",
@@ -29,7 +29,7 @@ public class ProjectionGraphMaterializerTests
             ],
         });
 
-        await materializer.UpsertGraphAsync(new TestGraphReadModel
+        await binding.UpsertAsync(new TestGraphReadModel
         {
             Id = "owner-1",
             GraphScope = "scope-1",
@@ -66,12 +66,12 @@ public class ProjectionGraphMaterializerTests
     }
 
     [Fact]
-    public async Task UpsertGraphAsync_ShouldNotDeleteEdgesOwnedByAnotherReadModel()
+    public async Task UpsertAsync_ShouldNotDeleteEdgesOwnedByAnotherReadModel()
     {
         var store = new RecordingGraphStore();
-        var materializer = new ProjectionGraphMaterializer<TestGraphReadModel>(store);
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store);
 
-        await materializer.UpsertGraphAsync(new TestGraphReadModel
+        await binding.UpsertAsync(new TestGraphReadModel
         {
             Id = "owner-1",
             GraphScope = "scope-1",
@@ -86,7 +86,7 @@ public class ProjectionGraphMaterializerTests
             ],
         });
 
-        await materializer.UpsertGraphAsync(new TestGraphReadModel
+        await binding.UpsertAsync(new TestGraphReadModel
         {
             Id = "owner-2",
             GraphScope = "scope-1",
@@ -101,7 +101,7 @@ public class ProjectionGraphMaterializerTests
             ],
         });
 
-        await materializer.UpsertGraphAsync(new TestGraphReadModel
+        await binding.UpsertAsync(new TestGraphReadModel
         {
             Id = "owner-1",
             GraphScope = "scope-1",
@@ -135,115 +135,12 @@ public class ProjectionGraphMaterializerTests
     }
 
     [Fact]
-    public async Task UpsertGraphAsync_ShouldRemoveDisconnectedStaleNodesForSameOwner()
+    public async Task UpsertAsync_WhenReadModelIdIsEmpty_ShouldThrow()
     {
         var store = new RecordingGraphStore();
-        var materializer = new ProjectionGraphMaterializer<TestGraphReadModel>(store);
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store);
 
-        await materializer.UpsertGraphAsync(new TestGraphReadModel
-        {
-            Id = "owner-1",
-            GraphScope = "scope-1",
-            GraphNodes =
-            [
-                Node("root"),
-                Node("left"),
-                Node("orphan-a"),
-                Node("orphan-b"),
-            ],
-            GraphEdges =
-            [
-                Edge("edge-root", "root", "left"),
-                Edge("edge-orphan", "orphan-a", "orphan-b"),
-            ],
-        });
-
-        await materializer.UpsertGraphAsync(new TestGraphReadModel
-        {
-            Id = "owner-1",
-            GraphScope = "scope-1",
-            GraphNodes =
-            [
-                Node("root"),
-                Node("left"),
-            ],
-            GraphEdges =
-            [
-                Edge("edge-root", "root", "left"),
-            ],
-        });
-
-        var ownerNodes = await store.ListNodesByOwnerAsync("scope-1", BuildOwnerId("owner-1"), take: 20);
-
-        ownerNodes.Select(x => x.NodeId).Should().BeEquivalentTo("root", "left");
-        store.ContainsNode("scope-1", "orphan-a").Should().BeFalse();
-        store.ContainsNode("scope-1", "orphan-b").Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task UpsertGraphAsync_ShouldKeepStaleNodeWhenStillReferencedByAnotherOwner()
-    {
-        var store = new RecordingGraphStore();
-        var materializer = new ProjectionGraphMaterializer<TestGraphReadModel>(store);
-
-        await materializer.UpsertGraphAsync(new TestGraphReadModel
-        {
-            Id = "owner-1",
-            GraphScope = "scope-1",
-            GraphNodes =
-            [
-                Node("shared"),
-                Node("owner-1-node"),
-            ],
-            GraphEdges =
-            [
-                Edge("edge-owner-1", "shared", "owner-1-node"),
-            ],
-        });
-
-        await materializer.UpsertGraphAsync(new TestGraphReadModel
-        {
-            Id = "owner-2",
-            GraphScope = "scope-1",
-            GraphNodes =
-            [
-                Node("owner-2-node"),
-            ],
-            GraphEdges =
-            [
-                Edge("edge-owner-2", "shared", "owner-2-node"),
-            ],
-        });
-
-        await materializer.UpsertGraphAsync(new TestGraphReadModel
-        {
-            Id = "owner-1",
-            GraphScope = "scope-1",
-            GraphNodes = [],
-            GraphEdges = [],
-        });
-
-        var sharedNeighbors = await store.GetNeighborsAsync(new ProjectionGraphQuery
-        {
-            Scope = "scope-1",
-            RootNodeId = "shared",
-            Direction = ProjectionGraphDirection.Both,
-            EdgeTypes = [],
-            Take = 20,
-        });
-
-        sharedNeighbors.Select(x => x.EdgeId).Should().ContainSingle("edge-owner-2");
-        store.ContainsNode("scope-1", "shared").Should().BeTrue();
-        store.ContainsNode("scope-1", "owner-1-node").Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task UpsertGraphAsync_WhenReadModelIdIsEmpty_ShouldThrow()
-    {
-        var store = new RecordingGraphStore();
-        var materializer = new ProjectionGraphMaterializer<TestGraphReadModel>(store);
-
-        Func<Task> act = () => materializer.UpsertGraphAsync(new TestGraphReadModel
+        Func<Task> act = () => binding.UpsertAsync(new TestGraphReadModel
         {
             Id = "",
             GraphScope = "scope-1",
@@ -260,24 +157,30 @@ public class ProjectionGraphMaterializerTests
 
     private static string BuildOwnerId(string id) => $"{typeof(TestGraphReadModel).FullName}:{id}";
 
-    private static GraphNodeDescriptor Node(string nodeId)
+    private static ProjectionGraphNode Node(string nodeId)
     {
-        return new GraphNodeDescriptor(
-            nodeId,
-            "Actor",
-            new Dictionary<string, string>(StringComparer.Ordinal),
-            DateTimeOffset.UtcNow);
+        return new ProjectionGraphNode
+        {
+            Scope = "scope-1",
+            NodeId = nodeId,
+            NodeType = "Actor",
+            Properties = new Dictionary<string, string>(StringComparer.Ordinal),
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
     }
 
-    private static GraphEdgeDescriptor Edge(string edgeId, string fromNodeId, string toNodeId)
+    private static ProjectionGraphEdge Edge(string edgeId, string fromNodeId, string toNodeId)
     {
-        return new GraphEdgeDescriptor(
-            edgeId,
-            "LINK",
-            fromNodeId,
-            toNodeId,
-            new Dictionary<string, string>(StringComparer.Ordinal),
-            DateTimeOffset.UtcNow);
+        return new ProjectionGraphEdge
+        {
+            Scope = "scope-1",
+            EdgeId = edgeId,
+            EdgeType = "LINK",
+            FromNodeId = fromNodeId,
+            ToNodeId = toNodeId,
+            Properties = new Dictionary<string, string>(StringComparer.Ordinal),
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
     }
 
     private sealed class TestGraphReadModel : IGraphReadModel
@@ -286,9 +189,9 @@ public class ProjectionGraphMaterializerTests
 
         public string GraphScope { get; init; } = "";
 
-        public IReadOnlyList<GraphNodeDescriptor> GraphNodes { get; init; } = [];
+        public IReadOnlyList<ProjectionGraphNode> GraphNodes { get; init; } = [];
 
-        public IReadOnlyList<GraphEdgeDescriptor> GraphEdges { get; init; } = [];
+        public IReadOnlyList<ProjectionGraphEdge> GraphEdges { get; init; } = [];
     }
 
     private sealed class RecordingGraphStore : IProjectionGraphStore
@@ -347,7 +250,7 @@ public class ProjectionGraphMaterializerTests
                 edges = _edges.Values
                     .Where(x => string.Equals(x.Scope, scopeValue, StringComparison.Ordinal))
                     .Where(x =>
-                        x.Properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedOwnerIdKey, out var edgeOwnerId) &&
+                        x.Properties.TryGetValue(ProjectionGraphManagedPropertyKeys.ManagedOwnerIdKey, out var edgeOwnerId) &&
                         string.Equals(NormalizeToken(edgeOwnerId), ownerValue, StringComparison.Ordinal))
                     .OrderByDescending(x => x.UpdatedAt)
                     .Take(Math.Clamp(take, 1, 50000))
@@ -376,7 +279,7 @@ public class ProjectionGraphMaterializerTests
                 nodes = _nodes.Values
                     .Where(x => string.Equals(x.Scope, scopeValue, StringComparison.Ordinal))
                     .Where(x =>
-                        x.Properties.TryGetValue(ProjectionGraphSystemPropertyKeys.ManagedOwnerIdKey, out var nodeOwnerId) &&
+                        x.Properties.TryGetValue(ProjectionGraphManagedPropertyKeys.ManagedOwnerIdKey, out var nodeOwnerId) &&
                         string.Equals(NormalizeToken(nodeOwnerId), ownerValue, StringComparison.Ordinal))
                     .OrderByDescending(x => x.UpdatedAt)
                     .Take(Math.Clamp(take, 1, 50000))
@@ -455,12 +358,6 @@ public class ProjectionGraphMaterializerTests
                 Nodes = nodes,
                 Edges = edges,
             };
-        }
-
-        public bool ContainsNode(string scope, string nodeId)
-        {
-            lock (_gate)
-                return _nodes.ContainsKey(BuildScopedKey(scope, nodeId));
         }
 
         private static bool MatchDirection(ProjectionGraphEdge edge, string rootNodeId, ProjectionGraphDirection direction)

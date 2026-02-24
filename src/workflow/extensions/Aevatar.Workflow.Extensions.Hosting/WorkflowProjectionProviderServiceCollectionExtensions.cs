@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -37,10 +38,23 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
         EnforceGraphProviderPolicy(configuration, enableInMemoryGraph);
 
-        var documentProviderCount = 0;
+        var documentProviderCount = (enableElasticsearchDocument ? 1 : 0) + (enableInMemoryDocument ? 1 : 0);
+        if (documentProviderCount != 1)
+        {
+            throw new InvalidOperationException(
+                "Exactly one document projection provider must be enabled. Configure either Projection:Document:Providers:Elasticsearch:Enabled=true or Projection:Document:Providers:InMemory:Enabled=true.");
+        }
+
+        var graphProviderCount = (enableNeo4jGraph ? 1 : 0) + (enableInMemoryGraph ? 1 : 0);
+        if (graphProviderCount != 1)
+        {
+            throw new InvalidOperationException(
+                "Exactly one graph projection provider must be enabled. Configure either Projection:Graph:Providers:Neo4j:Enabled=true or Projection:Graph:Providers:InMemory:Enabled=true.");
+        }
+
         if (enableElasticsearchDocument)
         {
-            services.AddElasticsearchDocumentStoreRegistration<WorkflowExecutionReport, string>(
+            services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
                 metadataFactory: sp =>
                 {
@@ -49,45 +63,28 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                 },
                 keySelector: report => report.RootActorId,
                 keyFormatter: key => key);
-            documentProviderCount++;
         }
-
-        if (enableInMemoryDocument)
+        else
         {
-            services.AddInMemoryDocumentStoreRegistration<WorkflowExecutionReport, string>(
+            services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
                 keySelector: report => report.RootActorId,
                 keyFormatter: key => key,
                 listSortSelector: report => report.CreatedAt,
                 listTakeMax: 200);
-            documentProviderCount++;
         }
 
-        var graphProviderCount = 0;
         if (enableNeo4jGraph)
         {
-            services.AddNeo4jGraphStoreRegistration(
+            services.AddNeo4jGraphProjectionStore(
                 optionsFactory: _ => BuildNeo4jGraphOptions(configuration),
                 scopeFactory: _ => WorkflowExecutionGraphConstants.Scope);
-            graphProviderCount++;
+        }
+        else
+        {
+            services.AddInMemoryGraphProjectionStore();
         }
 
-        if (enableInMemoryGraph)
-        {
-            services.AddInMemoryGraphStoreRegistration();
-            graphProviderCount++;
-        }
-
-        if (documentProviderCount == 0)
-        {
-            throw new InvalidOperationException(
-                "No document projection providers are enabled. Configure Projection:Document:Providers:InMemory:Enabled=true or Projection:Document:Providers:Elasticsearch with Endpoints.");
-        }
-
-        if (graphProviderCount == 0)
-        {
-            throw new InvalidOperationException(
-                "No graph projection providers are enabled. Configure Projection:Graph:Providers:InMemory:Enabled=true or Projection:Graph:Providers:Neo4j with Uri.");
-        }
+        services.AddSingleton<IProjectionStoreBinding<WorkflowExecutionReport, string>, ProjectionGraphStoreBinding<WorkflowExecutionReport, string>>();
 
         return services;
     }
@@ -101,7 +98,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         {
             throw new InvalidOperationException(
                 "Legacy provider single-selection options are no longer supported. " +
-                "Use Projection:Document:Providers:*:Enabled and Projection:Graph:Providers:*:Enabled for one-to-many provider registration.");
+                "Use Projection:Document:Providers:*:Enabled and Projection:Graph:Providers:*:Enabled with exactly one provider enabled per store type.");
         }
     }
 
@@ -127,10 +124,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         return ResolveOptionalBool(explicitEnabled, hasUri);
     }
 
-    private static ElasticsearchProjectionReadModelStoreOptions BuildElasticsearchDocumentOptions(
+    private static ElasticsearchProjectionDocumentStoreOptions BuildElasticsearchDocumentOptions(
         IConfiguration configuration)
     {
-        var options = new ElasticsearchProjectionReadModelStoreOptions();
+        var options = new ElasticsearchProjectionDocumentStoreOptions();
         configuration.GetSection("Projection:Document:Providers:Elasticsearch").Bind(options);
         if (options.Endpoints.Count == 0)
         {

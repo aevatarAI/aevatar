@@ -8,8 +8,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
-public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
-    : IDocumentProjectionStore<TReadModel, TKey>,
+public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
+    : IProjectionDocumentStore<TReadModel, TKey>,
       IDisposable
     where TReadModel : class
 {
@@ -27,7 +27,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
     private readonly ElasticsearchMissingIndexBehavior _missingIndexBehavior;
     private readonly int _mutateMaxRetryCount;
     private readonly DocumentIndexMetadata _indexMetadata;
-    private readonly ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>> _logger;
+    private readonly ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>> _logger;
     private readonly SemaphoreSlim _indexInitializationLock = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -35,12 +35,12 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
     };
     private bool _indexInitialized;
 
-    public ElasticsearchProjectionReadModelStore(
-        ElasticsearchProjectionReadModelStoreOptions options,
+    public ElasticsearchProjectionDocumentStore(
+        ElasticsearchProjectionDocumentStoreOptions options,
         DocumentIndexMetadata indexMetadata,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
-        ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>? logger = null,
+        ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>? logger = null,
         HttpMessageHandler? httpMessageHandler = null)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -73,7 +73,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _listSortField = options.ListSortField?.Trim() ?? "";
-        _logger = logger ?? NullLogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>.Instance;
+        _logger = logger ?? NullLogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>.Instance;
     }
 
     public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default) =>
@@ -329,7 +329,7 @@ public sealed class ElasticsearchProjectionReadModelStore<TReadModel, TKey>
     {
         return new InvalidOperationException(
             $"Elasticsearch index '{_indexName}' was not found during '{operation}' for read-model '{typeof(TReadModel).FullName}'. " +
-            $"Configure index bootstrap or set '{nameof(ElasticsearchProjectionReadModelStoreOptions.AutoCreateIndex)}=true'. " +
+            $"Configure index bootstrap or set '{nameof(ElasticsearchProjectionDocumentStoreOptions.AutoCreateIndex)}=true'. " +
             $"body={TruncatePayload(payload)}");
     }
 

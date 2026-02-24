@@ -514,7 +514,7 @@ public class WorkflowExecutionProjectionServiceTests
     private static ProjectionPortsHarness CreateService(
         WorkflowExecutionProjectionOptions options,
         out InMemoryStreamProvider streams,
-        out ObservableWorkflowExecutionReadModelStore store,
+        out ObservableWorkflowExecutionDocumentStore store,
         IProjectionClock? clock = null)
     {
         return CreateService(
@@ -528,7 +528,7 @@ public class WorkflowExecutionProjectionServiceTests
     private static ProjectionPortsHarness CreateService(
         WorkflowExecutionProjectionOptions options,
         out InMemoryStreamProvider streams,
-        out ObservableWorkflowExecutionReadModelStore store,
+        out ObservableWorkflowExecutionDocumentStore store,
         out IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
         IProjectionClock? clock = null)
     {
@@ -538,15 +538,17 @@ public class WorkflowExecutionProjectionServiceTests
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             forwardingRegistry);
         var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
-        store = new ObservableWorkflowExecutionReadModelStore();
+        store = new ObservableWorkflowExecutionDocumentStore();
         var resolvedClock = clock ?? new SystemProjectionClock();
         var relationStore = new InMemoryProjectionGraphStore();
-        var graphStore = new ProjectionGraphMaterializer<WorkflowExecutionReport>(relationStore);
-        var materializationRouter = new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
-            store,
-            graphStore);
+        var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+        {
+            new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
+            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
+        };
+        var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
         var projector = new WorkflowExecutionReadModelProjector(
-            materializationRouter,
+            storeDispatcher,
             new TestEventDeduplicator(),
             resolvedClock,
             BuildReducers());
@@ -584,7 +586,7 @@ public class WorkflowExecutionProjectionServiceTests
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventStreamHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventStreamHub, resolvedClock);
-        var readModelUpdater = new WorkflowProjectionReadModelUpdater(materializationRouter, resolvedClock);
+        var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, resolvedClock);
         var queryReader = new WorkflowProjectionQueryReader(
             store,
             mapper,
@@ -620,15 +622,17 @@ public class WorkflowExecutionProjectionServiceTests
         var store = CreateStore();
         var clock = new SystemProjectionClock();
         var relationStore = new InMemoryProjectionGraphStore();
-        var graphStore = new ProjectionGraphMaterializer<WorkflowExecutionReport>(relationStore);
-        var materializationRouter = new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
-            store,
-            graphStore);
+        var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+        {
+            new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
+            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
+        };
+        var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
         var runEventHub = new NoOpWorkflowRunEventHub();
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventHub, clock);
-        var readModelUpdater = new WorkflowProjectionReadModelUpdater(materializationRouter, clock);
+        var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, clock);
         var queryReader = new WorkflowProjectionQueryReader(
             store,
             mapper,
@@ -680,7 +684,7 @@ public class WorkflowExecutionProjectionServiceTests
         new WorkflowCompletedEventReducer(),
     ];
 
-    private static InMemoryProjectionReadModelStore<WorkflowExecutionReport, string> CreateStore() => new(
+    private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
         listSortSelector: report => report.StartedAt);
@@ -820,10 +824,10 @@ public class WorkflowExecutionProjectionServiceTests
             => _queryPort.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, options, ct);
     }
 
-    private sealed class ObservableWorkflowExecutionReadModelStore
-        : IDocumentProjectionStore<WorkflowExecutionReport, string>
+    private sealed class ObservableWorkflowExecutionDocumentStore
+        : IProjectionDocumentStore<WorkflowExecutionReport, string>
     {
-        private readonly InMemoryProjectionReadModelStore<WorkflowExecutionReport, string> _inner = CreateStore();
+        private readonly InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> _inner = CreateStore();
         private readonly object _gate = new();
         private readonly List<StoreWaiter> _waiters = [];
 

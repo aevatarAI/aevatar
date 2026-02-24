@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\Aevatar.CQRS.Projection.Runtime.Abstractions\Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\Aevatar.CQRS.Projection.Runtime\Aevatar.CQRS.Projection.Runtime.csproj" />
     <ProjectReference Include="..\..\..\Aevatar.CQRS.Projection.Providers.Elasticsearch\Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
     <ProjectReference Include="..\..\..\Aevatar.CQRS.Projection.Providers.InMemory\Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
     <ProjectReference Include="..\..\..\Aevatar.CQRS.Projection.Providers.Neo4j\Aevatar.CQRS.Projection.Providers.Neo4j.csproj" />

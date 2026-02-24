@@ -1,19 +1,18 @@
 # Aevatar.CQRS.Projection.Providers.InMemory
 
-通用 InMemory Provider（支持 Document/Graph 两类能力）。
+通用 InMemory Provider，提供 Document 与 Graph 两类平行实现。
 
-- 不依赖业务域模型。
-- 支持按 keySelector 注册任意 `IDocumentProjectionStore<TReadModel, TKey>`（Document）。
-- 支持图存储注册（Graph）。
-- 仅用于开发和测试语义，不作为生产事实源。
+## 能力
 
-## DI 注册
+- Document：`InMemoryProjectionDocumentStore<TReadModel, TKey>`
+- Graph：`InMemoryProjectionGraphStore`
 
-- `AddInMemoryDocumentStoreRegistration<TReadModel, TKey>(...)`
-- `AddInMemoryGraphStoreRegistration()`
+## DI
 
-关键参数：
+- `AddInMemoryDocumentProjectionStore<TReadModel, TKey>(...)`
+- `AddInMemoryGraphProjectionStore()`
 
-- `keySelector/keyFormatter`：ReadModel 主键映射。
-- `listSortSelector`：`ListAsync` 排序字段（可选）。
-- `listTakeMax`：`ListAsync` 硬上限。
+## 说明
+
+- 仅用于开发/测试语义。
+- 不作为生产事实源。

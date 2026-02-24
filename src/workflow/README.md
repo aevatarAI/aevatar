@@ -109,7 +109,7 @@ flowchart LR
 
   RM["WorkflowExecutionReadModelProjector"]
   RED["Reducers(Start/Step/TextEnd/Completed)"]
-  STORE["IProjectionReadModelStore(WorkflowExecutionReport)"]
+  STORE["IProjectionStoreDispatcher + IProjectionDocumentStore + IProjectionGraphStore"]
 
   AGP["WorkflowExecutionAGUIEventProjector"]
   MAP["EventEnvelopeToAGUIEventMapper + Handlers"]
@@ -195,7 +195,7 @@ sequenceDiagram
   participant Stream as "Actor Stream(EventEnvelope)"
   participant Dispatcher as "ProjectionDispatcher"
   participant Projector as "WorkflowExecutionReadModelProjector"
-  participant Store as "IProjectionReadModelStore"
+  participant Store as "IProjectionDocumentStore"
   participant Query as "IWorkflowExecutionQueryApplicationService"
   participant Api as "GET /api/actors/{actorId}"
 

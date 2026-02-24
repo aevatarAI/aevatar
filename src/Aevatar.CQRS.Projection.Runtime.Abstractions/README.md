@@ -1,26 +1,23 @@
 # Aevatar.CQRS.Projection.Runtime.Abstractions
 
-`Aevatar.CQRS.Projection.Runtime.Abstractions` 承载 Projection Runtime 的编排契约，不承载任何具体 Provider 实现。
+`Aevatar.CQRS.Projection.Runtime.Abstractions` 定义 Runtime 层的最小编排契约。
 
-## 目录结构
+## 契约清单
 
-- `Abstractions/Core`：Store 注册契约（`IProjectionStoreRegistration<TStore>`）
-- `Abstractions/ReadModels`：Document metadata resolver
-- `Abstractions/Selection`：Materialization 路由与 graph materializer 契约
+- `IProjectionStoreDispatcher<TReadModel, TKey>`
+- `IProjectionStoreBinding<TReadModel, TKey>`
+- `IProjectionQueryableStoreBinding<TReadModel, TKey>`
+- `IProjectionDocumentMetadataResolver`
+- `ProjectionGraphManagedPropertyKeys`
 
-## 关键契约
+## 模型说明
 
-- Store 注册：`IProjectionStoreRegistration<TStore>`
-  - `ProviderName`
-- Materialization：`IProjectionMaterializationRouter<TReadModel, TKey>`、`IProjectionGraphMaterializer<TReadModel>`
-- Metadata：`IProjectionDocumentMetadataResolver`
+1. 一个 ReadModel 可绑定多个 Store（例如 Document + Graph）。
+2. 仅允许一个 `IProjectionQueryableStoreBinding` 作为查询/读取来源。
+3. 其余 binding 作为写入目标参与分发。
 
-查询语义：
+## 边界
 
-- Fan-out Runtime 以注册顺序选择查询源（第一个注册的 provider 作为 query store，其余作为写入副本）。
-
-## 约束
-
-1. 不包含 ProviderName 选择与 RuntimeOptions。
-2. 不包含能力协商模型（Capabilities/Requirements/CapabilityValidator）。
-3. 仅依赖 `Aevatar.CQRS.Projection.Stores.Abstractions`。
+- 不包含具体 Provider 实现。
+- 不包含业务域 ReadModel。
+- 仅依赖 `Aevatar.CQRS.Projection.Stores.Abstractions`。

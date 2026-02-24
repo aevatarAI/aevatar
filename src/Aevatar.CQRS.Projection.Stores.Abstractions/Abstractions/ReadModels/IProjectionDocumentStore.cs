@@ -1,6 +1,6 @@
 namespace Aevatar.CQRS.Projection.Stores.Abstractions;
 
-public interface IDocumentProjectionStore<TReadModel, in TKey>
+public interface IProjectionDocumentStore<TReadModel, in TKey>
     where TReadModel : class
 {
     Task UpsertAsync(TReadModel readModel, CancellationToken ct = default);

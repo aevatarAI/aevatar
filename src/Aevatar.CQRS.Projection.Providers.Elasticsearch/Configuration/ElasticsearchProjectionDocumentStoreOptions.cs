@@ -1,6 +1,6 @@
 namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 
-public sealed class ElasticsearchProjectionReadModelStoreOptions
+public sealed class ElasticsearchProjectionDocumentStoreOptions
 {
     public List<string> Endpoints { get; set; } = [];
 

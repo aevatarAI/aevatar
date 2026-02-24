@@ -7,7 +7,7 @@ namespace Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddNeo4jGraphStoreRegistration(
+    public static IServiceCollection AddNeo4jGraphProjectionStore(
         this IServiceCollection services,
         Func<IServiceProvider, Neo4jProjectionGraphStoreOptions> optionsFactory,
         Func<IServiceProvider, string> scopeFactory)
@@ -15,13 +15,11 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(optionsFactory);
         ArgumentNullException.ThrowIfNull(scopeFactory);
 
-        services.AddSingleton<IProjectionStoreRegistration<IProjectionGraphStore>>(
-            new DelegateProjectionStoreRegistration<IProjectionGraphStore>(
-                "Neo4j",
-                provider => new Neo4jProjectionGraphStore(
-                    optionsFactory(provider),
-                    scopeFactory(provider),
-                    provider.GetService<ILogger<Neo4jProjectionGraphStore>>())));
+        services.AddSingleton<IProjectionGraphStore>(provider =>
+            new Neo4jProjectionGraphStore(
+                optionsFactory(provider),
+                scopeFactory(provider),
+                provider.GetService<ILogger<Neo4jProjectionGraphStore>>()));
 
         return services;
     }

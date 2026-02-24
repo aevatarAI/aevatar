@@ -657,8 +657,8 @@ if [ -n "${projection_provider_business_using_hits}" ]; then
 fi
 
 projection_provider_store_files=(
-  "src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionReadModelStore.cs"
-  "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionReadModelStore.cs"
+  "src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs"
+  "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs"
 )
 
 for provider_store_file in "${projection_provider_store_files[@]}"; do
@@ -681,7 +681,7 @@ for provider_store_file in "${projection_provider_store_files[@]}"; do
 done
 
 command_side_readmodel_violations="$(
-  rg -n "IProjectionReadModelStore<|ReadModelStore" \
+  rg -n "IProjectionDocumentStore<|IProjectionGraphStore|ProjectionDocumentStore|ProjectionGraphStore" \
     src/workflow/Aevatar.Workflow.Application \
     src/workflow/Aevatar.Workflow.Host.Api \
     src/Aevatar.Mainnet.Host.Api \

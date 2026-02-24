@@ -12,7 +12,7 @@ public sealed class ProjectionDocumentMetadataResolver : IProjectionDocumentMeta
     }
 
     public DocumentIndexMetadata Resolve<TReadModel>()
-        where TReadModel : class, IDocumentReadModel
+        where TReadModel : class, IProjectionReadModel
     {
         var provider = _serviceProvider.GetRequiredService<IProjectionDocumentMetadataProvider<TReadModel>>();
         return provider.Metadata;

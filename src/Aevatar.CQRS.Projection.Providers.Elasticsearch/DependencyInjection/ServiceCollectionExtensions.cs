@@ -7,9 +7,9 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddElasticsearchDocumentStoreRegistration<TReadModel, TKey>(
+    public static IServiceCollection AddElasticsearchDocumentProjectionStore<TReadModel, TKey>(
         this IServiceCollection services,
-        Func<IServiceProvider, ElasticsearchProjectionReadModelStoreOptions> optionsFactory,
+        Func<IServiceProvider, ElasticsearchProjectionDocumentStoreOptions> optionsFactory,
         Func<IServiceProvider, DocumentIndexMetadata> metadataFactory,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null)
@@ -19,15 +19,13 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(metadataFactory);
         ArgumentNullException.ThrowIfNull(keySelector);
 
-        services.AddSingleton<IProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>>(
-            new DelegateProjectionStoreRegistration<IDocumentProjectionStore<TReadModel, TKey>>(
-                "Elasticsearch",
-                provider => new ElasticsearchProjectionReadModelStore<TReadModel, TKey>(
-                    optionsFactory(provider),
-                    metadataFactory(provider),
-                    keySelector,
-                    keyFormatter,
-                    provider.GetService<ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>>())));
+        services.AddSingleton<IProjectionDocumentStore<TReadModel, TKey>>(provider =>
+            new ElasticsearchProjectionDocumentStore<TReadModel, TKey>(
+                optionsFactory(provider),
+                metadataFactory(provider),
+                keySelector,
+                keyFormatter,
+                provider.GetService<ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>>()));
 
         return services;
     }

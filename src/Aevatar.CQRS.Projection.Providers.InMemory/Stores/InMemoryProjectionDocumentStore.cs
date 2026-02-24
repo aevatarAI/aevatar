@@ -4,8 +4,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 
-public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
-    : IDocumentProjectionStore<TReadModel, TKey>
+public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
+    : IProjectionDocumentStore<TReadModel, TKey>
     where TReadModel : class
 {
     private const string ProviderName = "InMemory";
@@ -15,22 +15,22 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
     private readonly Func<TKey, string> _keyFormatter;
     private readonly Func<TReadModel, object?>? _listSortSelector;
     private readonly int _listTakeMax;
-    private readonly ILogger<InMemoryProjectionReadModelStore<TReadModel, TKey>> _logger;
+    private readonly ILogger<InMemoryProjectionDocumentStore<TReadModel, TKey>> _logger;
     private readonly JsonSerializerOptions _jsonOptions = new();
 
-    public InMemoryProjectionReadModelStore(
+    public InMemoryProjectionDocumentStore(
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
         Func<TReadModel, object?>? listSortSelector = null,
         int listTakeMax = 200,
-        ILogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>? logger = null)
+        ILogger<InMemoryProjectionDocumentStore<TReadModel, TKey>>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(keySelector);
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _listSortSelector = listSortSelector;
         _listTakeMax = listTakeMax > 0 ? listTakeMax : 200;
-        _logger = logger ?? NullLogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>.Instance;
+        _logger = logger ?? NullLogger<InMemoryProjectionDocumentStore<TReadModel, TKey>>.Instance;
     }
 
     public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)

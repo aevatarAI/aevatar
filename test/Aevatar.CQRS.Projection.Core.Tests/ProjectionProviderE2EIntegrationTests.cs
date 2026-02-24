@@ -10,7 +10,7 @@ public sealed class ProjectionProviderE2EIntegrationTests
     public async Task ElasticsearchStore_ShouldRoundtripUpsertAndMutate()
     {
         var endpoint = GetRequiredEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_ENDPOINT");
-        var options = new ElasticsearchProjectionReadModelStoreOptions
+        var options = new ElasticsearchProjectionDocumentStoreOptions
         {
             Endpoints = [endpoint],
             IndexPrefix = "aevatar-e2e",
@@ -18,7 +18,7 @@ public sealed class ProjectionProviderE2EIntegrationTests
             RequestTimeoutMs = 10000,
         };
         var indexScope = "projection-provider-e2e-" + Guid.NewGuid().ToString("N");
-        using var store = new ElasticsearchProjectionReadModelStore<ProviderStoreSmokeReadModel, string>(
+        using var store = new ElasticsearchProjectionDocumentStore<ProviderStoreSmokeReadModel, string>(
             options,
             new DocumentIndexMetadata(
                 IndexName: indexScope,

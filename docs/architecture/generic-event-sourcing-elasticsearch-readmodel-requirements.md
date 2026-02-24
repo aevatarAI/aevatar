@@ -88,15 +88,16 @@
 
 ### 6.3 Provider Runtime（已落地）
 - 运行时主干：
-  - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionReadModelProviderSelector.cs`
-  - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionReadModelStoreFactory.cs`
+  - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreDispatcher.cs`
+  - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionDocumentStoreBinding.cs`
+  - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionGraphStoreBinding.cs`
 - Provider 项目：
   - `src/Aevatar.CQRS.Projection.Providers.InMemory`
   - `src/Aevatar.CQRS.Projection.Providers.Elasticsearch`
   - `src/Aevatar.CQRS.Projection.Providers.Neo4j`
 - 当前行为：
-  1. 多 Provider 未显式指定时直接失败（确定性路由）。
-  2. 能力不匹配且开启 fail-fast 时抛异常。
+  1. 一个 ReadModel 可绑定多个 Store（Document + Graph）。
+  2. 必须且仅能有一个 queryable binding（用于 Get/List/Mutate）。
   3. Provider 写路径日志结构已统一。
 
 ### 6.4 Workflow 接入现状（已完成）
@@ -182,11 +183,11 @@ flowchart LR
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    P1["Projection Runtime"] --> P2["Provider Registry"]
-    P2 --> P3["Provider Selector"]
-    P3 --> P4["Capability Validator"]
-    P4 --> P5["Store Factory"]
-    P5 --> P6["IProjectionReadModelStore"]
+    P1["Projection Runtime"] --> P2["IProjectionStoreDispatcher<TReadModel,TKey>"]
+    P2 --> P3["ProjectionDocumentStoreBinding"]
+    P2 --> P4["ProjectionGraphStoreBinding"]
+    P3 --> P5["IProjectionDocumentStore<TReadModel,TKey>"]
+    P4 --> P6["IProjectionGraphStore"]
     P1 --> P7["Projector: ReadModel"]
     P1 --> P8["Projector: AGUI"]
 ```
