@@ -38,6 +38,7 @@ public static class ServiceCollectionExtensions
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IWorkflowReadModelSelectionPlanner, WorkflowReadModelSelectionPlanner>();
         RegisterWorkflowReadModelStoreSelector(services);
+        RegisterWorkflowRelationStoreSelector(services);
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
@@ -120,6 +121,22 @@ public static class ServiceCollectionExtensions
             var selectionPlan = selectionPlanner.Build(options);
 
             return storeFactory.Create<WorkflowExecutionReport, string>(
+                sp,
+                selectionPlan.SelectionOptions,
+                selectionPlan.Requirements);
+        }));
+    }
+
+    private static void RegisterWorkflowRelationStoreSelector(IServiceCollection services)
+    {
+        services.Replace(ServiceDescriptor.Singleton<IProjectionRelationStore>(sp =>
+        {
+            var options = sp.GetRequiredService<WorkflowExecutionProjectionOptions>();
+            var selectionPlanner = sp.GetRequiredService<IWorkflowReadModelSelectionPlanner>();
+            var relationStoreFactory = sp.GetRequiredService<IProjectionRelationStoreFactory>();
+            var selectionPlan = selectionPlanner.Build(options);
+
+            return relationStoreFactory.Create(
                 sp,
                 selectionPlan.SelectionOptions,
                 selectionPlan.Requirements);

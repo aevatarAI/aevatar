@@ -69,6 +69,11 @@ public class WorkflowHostingExtensionsCoverageTests
             .Where(x => x.ServiceType == typeof(IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>))
             .ToList();
         providerRegistrations.Should().HaveCount(3);
+
+        var relationRegistrations = builder.Services
+            .Where(x => x.ServiceType == typeof(IProjectionRelationStoreRegistration))
+            .ToList();
+        relationRegistrations.Should().HaveCount(3);
     }
 
     [Fact]
@@ -84,5 +89,10 @@ public class WorkflowHostingExtensionsCoverageTests
             .Where(x => x.ServiceType == typeof(IProjectionReadModelStoreRegistration<WorkflowExecutionReport, string>))
             .ToList();
         providerRegistrations.Should().HaveCount(3);
+
+        var relationRegistrations = services
+            .Where(x => x.ServiceType == typeof(IProjectionRelationStoreRegistration))
+            .ToList();
+        relationRegistrations.Should().HaveCount(3);
     }
 }

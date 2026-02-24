@@ -135,6 +135,34 @@ public sealed class WorkflowExecutionProjectionService : IWorkflowExecutionProje
         return await _queryReader.ListActorTimelineAsync(actorId, take, ct);
     }
 
+    public async Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
+        string actorId,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        if (!EnableActorQueryEndpoints || string.IsNullOrWhiteSpace(actorId))
+            return [];
+
+        return await _queryReader.GetActorRelationsAsync(actorId, take, ct);
+    }
+
+    public async Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        if (!EnableActorQueryEndpoints || string.IsNullOrWhiteSpace(actorId))
+        {
+            return new WorkflowActorRelationSubgraph
+            {
+                RootNodeId = actorId ?? string.Empty,
+            };
+        }
+
+        return await _queryReader.GetActorRelationSubgraphAsync(actorId, depth, take, ct);
+    }
+
     private static WorkflowExecutionRuntimeLease ResolveRuntimeLease(IWorkflowExecutionProjectionLease lease) =>
         lease as WorkflowExecutionRuntimeLease
         ?? throw new InvalidOperationException("Unsupported workflow projection lease implementation.");

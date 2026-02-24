@@ -357,6 +357,32 @@ public sealed class WorkflowRunOrchestrationComponentTests
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
         }
+
+        public Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
+            string actorId,
+            int take = 200,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = take;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<WorkflowActorRelationItem>>([]);
+        }
+
+        public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            CancellationToken ct = default)
+        {
+            _ = depth;
+            _ = take;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new WorkflowActorRelationSubgraph
+            {
+                RootNodeId = actorId,
+            });
+        }
     }
 
     private sealed class ComponentEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>

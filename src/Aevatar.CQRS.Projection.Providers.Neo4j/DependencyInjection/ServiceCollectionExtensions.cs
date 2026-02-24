@@ -28,7 +28,9 @@ public static class ServiceCollectionExtensions
                     supportsIndexing: true,
                     indexKinds: [ProjectionReadModelIndexKind.Graph],
                     supportsAliases: false,
-                    supportsSchemaValidation: true),
+                    supportsSchemaValidation: true,
+                    supportsRelations: true,
+                    supportsRelationTraversal: true),
                 provider => new Neo4jProjectionReadModelStore<TReadModel, TKey>(
                     optionsFactory(provider),
                     scope,
@@ -36,6 +38,35 @@ public static class ServiceCollectionExtensions
                     keyFormatter,
                     providerName,
                     provider.GetService<ILogger<Neo4jProjectionReadModelStore<TReadModel, TKey>>>())));
+
+        return services;
+    }
+
+    public static IServiceCollection AddNeo4jRelationStoreRegistration(
+        this IServiceCollection services,
+        Func<IServiceProvider, Neo4jProjectionRelationStoreOptions> optionsFactory,
+        string scope,
+        string providerName = ProjectionReadModelProviderNames.Neo4j)
+    {
+        ArgumentNullException.ThrowIfNull(optionsFactory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+
+        services.AddSingleton<IProjectionRelationStoreRegistration>(
+            new DelegateProjectionRelationStoreRegistration(
+                providerName,
+                new ProjectionReadModelProviderCapabilities(
+                    providerName,
+                    supportsIndexing: true,
+                    indexKinds: [ProjectionReadModelIndexKind.Graph],
+                    supportsAliases: false,
+                    supportsSchemaValidation: true,
+                    supportsRelations: true,
+                    supportsRelationTraversal: true),
+                provider => new Neo4jProjectionRelationStore(
+                    optionsFactory(provider),
+                    scope,
+                    providerName,
+                    provider.GetService<ILogger<Neo4jProjectionRelationStore>>())));
 
         return services;
     }

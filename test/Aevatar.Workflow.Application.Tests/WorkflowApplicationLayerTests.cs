@@ -292,6 +292,85 @@ public class WorkflowExecutionQueryApplicationServiceTests
         detail.LastCommandId.Should().Be("cmd-1");
         detail.TotalSteps.Should().Be(3);
     }
+
+    [Fact]
+    public async Task ListActorRelationsAsync_ShouldReturnProjectionPortResult()
+    {
+        var relation = new WorkflowActorRelationItem
+        {
+            EdgeId = "edge-1",
+            FromNodeId = "actor-1",
+            ToNodeId = "actor-2",
+            RelationType = "CHILD_OF",
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        var projection = new FakeProjectionService
+        {
+            EnableActorQueryEndpointsValue = true,
+            RelationsByActorId = new Dictionary<string, IReadOnlyList<WorkflowActorRelationItem>>(StringComparer.Ordinal)
+            {
+                ["actor-1"] = [relation],
+            },
+        };
+        var queryService = new WorkflowExecutionQueryApplicationService(
+            new WorkflowDefinitionRegistry(),
+            projection);
+
+        var items = await queryService.ListActorRelationsAsync("actor-1", ct: CancellationToken.None);
+
+        items.Should().ContainSingle();
+        items[0].EdgeId.Should().Be("edge-1");
+        items[0].RelationType.Should().Be("CHILD_OF");
+    }
+
+    [Fact]
+    public async Task GetActorRelationSubgraphAsync_ShouldReturnProjectionPortResult()
+    {
+        var subgraph = new WorkflowActorRelationSubgraph
+        {
+            RootNodeId = "actor-1",
+            Nodes =
+            [
+                new WorkflowActorRelationNode
+                {
+                    NodeId = "actor-1",
+                    NodeType = "Actor",
+                },
+                new WorkflowActorRelationNode
+                {
+                    NodeId = "actor-2",
+                    NodeType = "Actor",
+                },
+            ],
+            Edges =
+            [
+                new WorkflowActorRelationItem
+                {
+                    EdgeId = "edge-1",
+                    FromNodeId = "actor-1",
+                    ToNodeId = "actor-2",
+                    RelationType = "CHILD_OF",
+                },
+            ],
+        };
+        var projection = new FakeProjectionService
+        {
+            EnableActorQueryEndpointsValue = true,
+            SubgraphByActorId = new Dictionary<string, WorkflowActorRelationSubgraph>(StringComparer.Ordinal)
+            {
+                ["actor-1"] = subgraph,
+            },
+        };
+        var queryService = new WorkflowExecutionQueryApplicationService(
+            new WorkflowDefinitionRegistry(),
+            projection);
+
+        var item = await queryService.GetActorRelationSubgraphAsync("actor-1", ct: CancellationToken.None);
+
+        item.RootNodeId.Should().Be("actor-1");
+        item.Nodes.Should().HaveCount(2);
+        item.Edges.Should().ContainSingle(x => x.EdgeId == "edge-1");
+    }
 }
 
 public class ActorRuntimeWorkflowExecutionTopologyResolverTests
@@ -327,6 +406,8 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
     public IWorkflowExecutionProjectionLease? LastLease { get; private set; }
     public Dictionary<string, WorkflowActorSnapshot> SnapshotByActorId { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, IReadOnlyList<WorkflowActorTimelineItem>> TimelineByActorId { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, IReadOnlyList<WorkflowActorRelationItem>> RelationsByActorId { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, WorkflowActorRelationSubgraph> SubgraphByActorId { get; set; } = new(StringComparer.Ordinal);
     public IReadOnlyList<WorkflowActorSnapshot> SnapshotList { get; set; } = [];
 
     public bool EnableActorQueryEndpoints => EnableActorQueryEndpointsValue;
@@ -387,6 +468,38 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
             timeline = [];
 
         return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>(timeline.Take(Math.Max(1, take)).ToList());
+    }
+
+    public Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
+        string actorId,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        _ = ct;
+        if (!RelationsByActorId.TryGetValue(actorId, out var relations))
+            relations = [];
+
+        return Task.FromResult<IReadOnlyList<WorkflowActorRelationItem>>(relations.Take(Math.Max(1, take)).ToList());
+    }
+
+    public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        _ = depth;
+        _ = take;
+        _ = ct;
+        if (!SubgraphByActorId.TryGetValue(actorId, out var subgraph))
+        {
+            subgraph = new WorkflowActorRelationSubgraph
+            {
+                RootNodeId = actorId,
+            };
+        }
+
+        return Task.FromResult(subgraph);
     }
 
     private sealed record FakeProjectionLease(string ActorId, string CommandId) : IWorkflowExecutionProjectionLease;

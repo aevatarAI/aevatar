@@ -39,6 +39,8 @@ public class ChatEndpointsInternalTests
         routePatterns.Should().Contain("/api/ws/chat");
         routePatterns.Should().Contain("/api/actors/{actorId}");
         routePatterns.Should().Contain("/api/actors/{actorId}/timeline");
+        routePatterns.Should().Contain("/api/actors/{actorId}/relations");
+        routePatterns.Should().Contain("/api/actors/{actorId}/relation-subgraph");
     }
 
     [Fact]
@@ -268,6 +270,84 @@ public class ChatEndpointsInternalTests
         doc.RootElement[0].GetProperty("stage").GetString().Should().Be("workflow.start");
     }
 
+    [Fact]
+    public async Task ListActorRelations_ShouldReturnRelationItems()
+    {
+        var queryService = new FakeQueryService
+        {
+            ActorQueryEnabledValue = true,
+            RelationsByActorId = new Dictionary<string, IReadOnlyList<WorkflowActorRelationItem>>(StringComparer.Ordinal)
+            {
+                ["actor-1"] =
+                [
+                    new WorkflowActorRelationItem
+                    {
+                        EdgeId = "edge-1",
+                        FromNodeId = "actor-1",
+                        ToNodeId = "actor-2",
+                        RelationType = "CHILD_OF",
+                    },
+                ],
+            },
+        };
+
+        var result = await ChatQueryEndpoints.ListActorRelations("actor-1", queryService, 50, CancellationToken.None);
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        doc.RootElement.GetArrayLength().Should().Be(1);
+        doc.RootElement[0].GetProperty("edgeId").GetString().Should().Be("edge-1");
+    }
+
+    [Fact]
+    public async Task GetActorRelationSubgraph_ShouldReturnSubgraph()
+    {
+        var queryService = new FakeQueryService
+        {
+            ActorQueryEnabledValue = true,
+            SubgraphByActorId = new Dictionary<string, WorkflowActorRelationSubgraph>(StringComparer.Ordinal)
+            {
+                ["actor-1"] = new WorkflowActorRelationSubgraph
+                {
+                    RootNodeId = "actor-1",
+                    Nodes =
+                    [
+                        new WorkflowActorRelationNode
+                        {
+                            NodeId = "actor-1",
+                            NodeType = "Actor",
+                        },
+                        new WorkflowActorRelationNode
+                        {
+                            NodeId = "actor-2",
+                            NodeType = "Actor",
+                        },
+                    ],
+                    Edges =
+                    [
+                        new WorkflowActorRelationItem
+                        {
+                            EdgeId = "edge-1",
+                            FromNodeId = "actor-1",
+                            ToNodeId = "actor-2",
+                            RelationType = "CHILD_OF",
+                        },
+                    ],
+                },
+            },
+        };
+
+        var result = await ChatQueryEndpoints.GetActorRelationSubgraph("actor-1", queryService, 2, 50, CancellationToken.None);
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        doc.RootElement.GetProperty("rootNodeId").GetString().Should().Be("actor-1");
+        doc.RootElement.GetProperty("nodes").GetArrayLength().Should().Be(2);
+        doc.RootElement.GetProperty("edges").GetArrayLength().Should().Be(1);
+    }
+
     private static DefaultHttpContext CreateHttpContext()
     {
         return new DefaultHttpContext
@@ -332,6 +412,8 @@ public class ChatEndpointsInternalTests
         public IReadOnlyList<string> Workflows { get; set; } = [];
         public Dictionary<string, WorkflowActorSnapshot> SnapshotByActorId { get; set; } = new(StringComparer.Ordinal);
         public Dictionary<string, IReadOnlyList<WorkflowActorTimelineItem>> TimelineByActorId { get; set; } = new(StringComparer.Ordinal);
+        public Dictionary<string, IReadOnlyList<WorkflowActorRelationItem>> RelationsByActorId { get; set; } = new(StringComparer.Ordinal);
+        public Dictionary<string, WorkflowActorRelationSubgraph> SubgraphByActorId { get; set; } = new(StringComparer.Ordinal);
 
         public bool ActorQueryEnabled => ActorQueryEnabledValue;
 
@@ -352,6 +434,36 @@ public class ChatEndpointsInternalTests
                 items = [];
 
             return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>(items.Take(Math.Max(1, take)).ToList());
+        }
+
+        public Task<IReadOnlyList<WorkflowActorRelationItem>> ListActorRelationsAsync(
+            string actorId,
+            int take = 200,
+            CancellationToken ct = default)
+        {
+            if (!RelationsByActorId.TryGetValue(actorId, out var items))
+                items = [];
+
+            return Task.FromResult<IReadOnlyList<WorkflowActorRelationItem>>(items.Take(Math.Max(1, take)).ToList());
+        }
+
+        public Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            CancellationToken ct = default)
+        {
+            _ = depth;
+            _ = take;
+            if (!SubgraphByActorId.TryGetValue(actorId, out var item))
+            {
+                item = new WorkflowActorRelationSubgraph
+                {
+                    RootNodeId = actorId,
+                };
+            }
+
+            return Task.FromResult(item);
         }
     }
 

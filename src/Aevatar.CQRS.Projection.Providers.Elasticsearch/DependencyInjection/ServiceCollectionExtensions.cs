@@ -39,4 +39,24 @@ public static class ServiceCollectionExtensions
 
         return services;
     }
+
+    public static IServiceCollection AddElasticsearchRelationStoreRegistration(
+        this IServiceCollection services,
+        string providerName = ProjectionReadModelProviderNames.Elasticsearch)
+    {
+        services.AddSingleton<IProjectionRelationStoreRegistration>(
+            new DelegateProjectionRelationStoreRegistration(
+                providerName,
+                new ProjectionReadModelProviderCapabilities(
+                    providerName,
+                    supportsIndexing: true,
+                    indexKinds: [ProjectionReadModelIndexKind.Document],
+                    supportsAliases: true,
+                    supportsSchemaValidation: true,
+                    supportsRelations: false,
+                    supportsRelationTraversal: false),
+                _ => new ElasticsearchProjectionRelationStore(providerName)));
+
+        return services;
+    }
 }

@@ -42,4 +42,15 @@ public interface IWorkflowExecutionProjectionPort
         string actorId,
         int take = 200,
         CancellationToken ct = default);
+
+    Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
+        string actorId,
+        int take = 200,
+        CancellationToken ct = default);
+
+    Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        CancellationToken ct = default);
 }

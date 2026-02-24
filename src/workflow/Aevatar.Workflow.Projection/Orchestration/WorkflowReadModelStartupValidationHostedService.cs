@@ -14,6 +14,8 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
     private readonly IWorkflowReadModelSelectionPlanner _selectionPlanner;
     private readonly IProjectionReadModelProviderRegistry _providerRegistry;
     private readonly IProjectionReadModelProviderSelector _providerSelector;
+    private readonly IProjectionRelationStoreProviderRegistry _relationProviderRegistry;
+    private readonly IProjectionRelationStoreProviderSelector _relationProviderSelector;
     private readonly ILogger<WorkflowReadModelStartupValidationHostedService> _logger;
 
     public WorkflowReadModelStartupValidationHostedService(
@@ -22,6 +24,8 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
         IWorkflowReadModelSelectionPlanner selectionPlanner,
         IProjectionReadModelProviderRegistry providerRegistry,
         IProjectionReadModelProviderSelector providerSelector,
+        IProjectionRelationStoreProviderRegistry relationProviderRegistry,
+        IProjectionRelationStoreProviderSelector relationProviderSelector,
         ILogger<WorkflowReadModelStartupValidationHostedService>? logger = null)
     {
         _serviceProvider = serviceProvider;
@@ -29,6 +33,8 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
         _selectionPlanner = selectionPlanner;
         _providerRegistry = providerRegistry;
         _providerSelector = providerSelector;
+        _relationProviderRegistry = relationProviderRegistry;
+        _relationProviderSelector = relationProviderSelector;
         _logger = logger ?? NullLogger<WorkflowReadModelStartupValidationHostedService>.Instance;
     }
 
@@ -46,6 +52,16 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
             "Workflow read-model provider startup validation passed. readModelType={ReadModelType} provider={Provider}",
             typeof(WorkflowExecutionReport).FullName,
             selected.ProviderName);
+
+        var relationRegistrations = _relationProviderRegistry.GetRegistrations(_serviceProvider);
+        var selectedRelationProvider = _relationProviderSelector.Select(
+            relationRegistrations,
+            selectionPlan.SelectionOptions,
+            selectionPlan.Requirements);
+        _logger.LogInformation(
+            "Workflow relation provider startup validation passed. relationType={RelationType} provider={Provider}",
+            typeof(ProjectionRelationNode).FullName,
+            selectedRelationProvider.ProviderName);
         return Task.CompletedTask;
     }
 

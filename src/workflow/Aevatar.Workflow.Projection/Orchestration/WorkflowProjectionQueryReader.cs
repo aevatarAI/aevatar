@@ -6,14 +6,17 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryReader
 {
     private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
+    private readonly IProjectionRelationStore _relationStore;
     private readonly WorkflowExecutionReadModelMapper _mapper;
 
     public WorkflowProjectionQueryReader(
         IProjectionReadModelStore<WorkflowExecutionReport, string> store,
-        WorkflowExecutionReadModelMapper mapper)
+        WorkflowExecutionReadModelMapper mapper,
+        IProjectionRelationStore? relationStore = null)
     {
         _store = store;
         _mapper = mapper;
+        _relationStore = relationStore ?? NoopProjectionRelationStore.Instance;
     }
 
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
@@ -50,5 +53,76 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
             .Take(boundedTake)
             .Select(_mapper.ToActorTimelineItem)
             .ToList();
+    }
+
+    public async Task<IReadOnlyList<WorkflowActorRelationItem>> GetActorRelationsAsync(
+        string actorId,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        var actorIdValue = actorId?.Trim() ?? "";
+        if (actorIdValue.Length == 0)
+            return [];
+
+        var boundedTake = Math.Clamp(take, 1, 1000);
+        var edges = await _relationStore.GetNeighborsAsync(
+            new ProjectionRelationQuery
+            {
+                Scope = WorkflowExecutionRelationConstants.Scope,
+                RootNodeId = actorIdValue,
+                Direction = ProjectionRelationDirection.Both,
+                Take = boundedTake,
+            },
+            ct);
+        return edges.Select(_mapper.ToActorRelationItem).ToList();
+    }
+
+    public async Task<WorkflowActorRelationSubgraph> GetActorRelationSubgraphAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        CancellationToken ct = default)
+    {
+        var actorIdValue = actorId?.Trim() ?? "";
+        if (actorIdValue.Length == 0)
+            return new WorkflowActorRelationSubgraph();
+
+        var boundedDepth = Math.Clamp(depth, 1, 8);
+        var boundedTake = Math.Clamp(take, 1, 2000);
+        var subgraph = await _relationStore.GetSubgraphAsync(
+            new ProjectionRelationQuery
+            {
+                Scope = WorkflowExecutionRelationConstants.Scope,
+                RootNodeId = actorIdValue,
+                Direction = ProjectionRelationDirection.Both,
+                Depth = boundedDepth,
+                Take = boundedTake,
+            },
+            ct);
+        return _mapper.ToActorRelationSubgraph(actorIdValue, subgraph);
+    }
+
+    private sealed class NoopProjectionRelationStore : IProjectionRelationStore
+    {
+        public static NoopProjectionRelationStore Instance { get; } = new();
+
+        public Task UpsertNodeAsync(ProjectionRelationNode node, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task UpsertEdgeAsync(ProjectionRelationEdge edge, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<ProjectionRelationEdge>> GetNeighborsAsync(
+            ProjectionRelationQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ProjectionRelationEdge>>([]);
+
+        public Task<ProjectionRelationSubgraph> GetSubgraphAsync(
+            ProjectionRelationQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ProjectionRelationSubgraph());
     }
 }

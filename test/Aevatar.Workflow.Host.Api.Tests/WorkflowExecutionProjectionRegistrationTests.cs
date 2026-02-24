@@ -78,8 +78,10 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         using var provider = services.BuildServiceProvider();
         var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        var relationStore = provider.GetRequiredService<IProjectionRelationStore>();
 
         store.Should().BeOfType<InMemoryProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        relationStore.Should().BeOfType<InMemoryProjectionRelationStore>();
         var metadata = store.Should().BeAssignableTo<IProjectionReadModelStoreProviderMetadata>().Subject;
         metadata.ProviderCapabilities.ProviderName.Should().Be(ProjectionReadModelProviderNames.InMemory);
     }
@@ -95,8 +97,10 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         using var provider = services.BuildServiceProvider();
         var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        var relationStore = provider.GetRequiredService<IProjectionRelationStore>();
 
         store.Should().BeOfType<ElasticsearchProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        relationStore.Should().BeOfType<ElasticsearchProjectionRelationStore>();
         var metadata = store.Should().BeAssignableTo<IProjectionReadModelStoreProviderMetadata>().Subject;
         metadata.ProviderCapabilities.SupportsIndexing.Should().BeTrue();
         metadata.ProviderCapabilities.IndexKinds.Should().Contain(ProjectionReadModelIndexKind.Document);
@@ -113,8 +117,10 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         await using var provider = services.BuildServiceProvider();
         var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        var relationStore = provider.GetRequiredService<IProjectionRelationStore>();
 
         store.Should().BeOfType<Neo4jProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        relationStore.Should().BeOfType<Neo4jProjectionRelationStore>();
         var metadata = store.Should().BeAssignableTo<IProjectionReadModelStoreProviderMetadata>().Subject;
         metadata.ProviderCapabilities.SupportsIndexing.Should().BeTrue();
         metadata.ProviderCapabilities.IndexKinds.Should().Contain(ProjectionReadModelIndexKind.Graph);
@@ -398,6 +404,7 @@ public class WorkflowExecutionProjectionRegistrationTests
             indexScope: "workflow-execution-reports",
             keySelector: report => report.RootActorId,
             keyFormatter: key => key);
+        services.AddElasticsearchRelationStoreRegistration();
     }
 
     private static void RegisterInMemoryProvider(IServiceCollection services)
@@ -406,6 +413,7 @@ public class WorkflowExecutionProjectionRegistrationTests
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
             listSortSelector: report => report.StartedAt);
+        services.AddInMemoryRelationStoreRegistration();
     }
 
     private static void RegisterNeo4jProvider(IServiceCollection services)
@@ -421,6 +429,15 @@ public class WorkflowExecutionProjectionRegistrationTests
             scope: "workflow-execution-reports",
             keySelector: report => report.RootActorId,
             keyFormatter: key => key);
+        services.AddNeo4jRelationStoreRegistration(
+            optionsFactory: _ => new Neo4jProjectionRelationStoreOptions
+            {
+                Uri = "bolt://localhost:7687",
+                Username = "neo4j",
+                Password = "test",
+                AutoCreateConstraints = false,
+            },
+            scope: WorkflowExecutionRelationConstants.Scope);
     }
 
     public sealed class CustomChatRequestReducer : WorkflowExecutionEventReducerBase<ChatRequestEvent>
