@@ -3,7 +3,6 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
-using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
@@ -26,60 +25,59 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
         services.AddSingleton<WorkflowProjectionProviderRegistrationsMarker>();
 
-        var runtimeOptions = ResolveRuntimeOptions(configuration);
-        var providerSelection = ResolveProviderSelection(runtimeOptions);
-        EnforceRelationProviderPolicy(configuration, providerSelection.RelationProvider);
+        var providerSelection = ResolveProviderSelection(configuration);
+        EnforceGraphProviderPolicy(configuration, providerSelection.GraphProvider);
+        var runtimeOptions = new ProjectionReadModelRuntimeOptions
+        {
+            DocumentProvider = providerSelection.DocumentProvider,
+            GraphProvider = providerSelection.GraphProvider,
+            FailOnUnsupportedCapabilities = true,
+            Mode = ProjectionReadModelMode.CustomReadModel,
+        };
 
         services.Replace(ServiceDescriptor.Singleton(runtimeOptions));
         services.Replace(ServiceDescriptor.Singleton<IProjectionStoreSelectionRuntimeOptions>(sp =>
             sp.GetRequiredService<ProjectionReadModelRuntimeOptions>()));
 
-        RegisterReadModelProvider(services, configuration, providerSelection.ReadModelProvider);
-        RegisterRelationProvider(services, configuration, providerSelection.RelationProvider);
+        RegisterDocumentProvider(services, configuration, providerSelection.DocumentProvider);
+        RegisterGraphProvider(services, configuration, providerSelection.GraphProvider);
 
         return services;
     }
 
-    private static ProjectionReadModelRuntimeOptions ResolveRuntimeOptions(IConfiguration configuration)
+    private static ProviderSelection ResolveProviderSelection(IConfiguration configuration)
     {
-        var options = new ProjectionReadModelRuntimeOptions();
-        configuration.GetSection("Projection:ReadModel").Bind(options);
-        return options;
-    }
-
-    private static ProviderSelection ResolveProviderSelection(ProjectionReadModelRuntimeOptions runtimeOptions)
-    {
-        var readModelProvider = NormalizeOrDefaultProvider(
-            runtimeOptions.Provider,
+        var documentProvider = NormalizeOrDefaultProvider(
+            configuration["Projection:Document:Provider"],
             ProjectionReadModelProviderNames.InMemory,
-            "Projection:ReadModel:Provider");
+            "Projection:Document:Provider");
 
-        var relationProvider = NormalizeOrDefaultProvider(
-            runtimeOptions.RelationProvider,
-            readModelProvider,
-            "Projection:ReadModel:RelationProvider");
+        var graphProvider = NormalizeOrDefaultProvider(
+            configuration["Projection:Graph:Provider"],
+            documentProvider,
+            "Projection:Graph:Provider");
 
-        return new ProviderSelection(readModelProvider, relationProvider);
+        return new ProviderSelection(documentProvider, graphProvider);
     }
 
-    private static void EnforceRelationProviderPolicy(
+    private static void EnforceGraphProviderPolicy(
         IConfiguration configuration,
-        string relationProviderName)
+        string graphProviderName)
     {
-        var denyInMemoryRelationProvider = ParseBool(
-            configuration["Projection:Policies:DenyInMemoryRelationFactStore"]);
+        var denyInMemoryGraphProvider = ParseBool(
+            configuration["Projection:Policies:DenyInMemoryGraphFactStore"]);
         var environment = ResolveRuntimeEnvironment(configuration["Projection:Policies:Environment"]);
         var production = IsProductionEnvironment(environment);
 
-        if ((denyInMemoryRelationProvider || production) &&
+        if ((denyInMemoryGraphProvider || production) &&
             string.Equals(
-                relationProviderName,
+                graphProviderName,
                 ProjectionReadModelProviderNames.InMemory,
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                "InMemory relation provider is not allowed by projection policy. " +
-                "Use a durable relation provider (for example Neo4j) for production/distributed deployments.");
+                "InMemory graph provider is not allowed by projection policy. " +
+                "Use a durable graph provider (for example Neo4j) for production/distributed deployments.");
         }
     }
 
@@ -127,7 +125,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             $"Allowed values: {ProjectionReadModelProviderNames.InMemory}, {ProjectionReadModelProviderNames.Elasticsearch}, {ProjectionReadModelProviderNames.Neo4j}.");
     }
 
-    private static void RegisterReadModelProvider(
+    private static void RegisterDocumentProvider(
         IServiceCollection services,
         IConfiguration configuration,
         string providerName)
@@ -135,42 +133,50 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         switch (providerName)
         {
             case ProjectionReadModelProviderNames.InMemory:
-                services.AddInMemoryReadModelStoreRegistration<WorkflowExecutionReport, string>(
+                services.AddInMemoryDocumentStoreRegistration<WorkflowExecutionReport, string>(
                     keySelector: report => report.RootActorId,
                     keyFormatter: key => key,
                     listSortSelector: report => report.CreatedAt,
                     listTakeMax: 200);
                 break;
             case ProjectionReadModelProviderNames.Elasticsearch:
-                services.AddElasticsearchReadModelStoreRegistration<WorkflowExecutionReport, string>(
+                services.AddElasticsearchDocumentStoreRegistration<WorkflowExecutionReport, string>(
                     optionsFactory: _ =>
                     {
                         var providerOptions = new ElasticsearchProjectionReadModelStoreOptions();
-                        configuration.GetSection("Projection:ReadModel:Providers:Elasticsearch").Bind(providerOptions);
+                        configuration.GetSection("Projection:Document:Providers:Elasticsearch").Bind(providerOptions);
                         return providerOptions;
                     },
-                    indexScope: "workflow-execution-reports",
+                    indexScopeFactory: sp =>
+                    {
+                        var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
+                        return metadataResolver.Resolve<WorkflowExecutionReport>().IndexName;
+                    },
                     keySelector: report => report.RootActorId,
                     keyFormatter: key => key);
                 break;
             case ProjectionReadModelProviderNames.Neo4j:
-                services.AddNeo4jReadModelStoreRegistration<WorkflowExecutionReport, string>(
+                services.AddNeo4jDocumentStoreRegistration<WorkflowExecutionReport, string>(
                     optionsFactory: _ =>
                     {
                         var providerOptions = new Neo4jProjectionReadModelStoreOptions();
-                        configuration.GetSection("Projection:ReadModel:Providers:Neo4j").Bind(providerOptions);
+                        configuration.GetSection("Projection:Document:Providers:Neo4j").Bind(providerOptions);
                         return providerOptions;
                     },
-                    scope: "workflow-execution-reports",
+                    scopeFactory: sp =>
+                    {
+                        var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
+                        return metadataResolver.Resolve<WorkflowExecutionReport>().IndexName;
+                    },
                     keySelector: report => report.RootActorId,
                     keyFormatter: key => key);
                 break;
             default:
-                throw new InvalidOperationException($"Unsupported read-model provider '{providerName}'.");
+                throw new InvalidOperationException($"Unsupported document provider '{providerName}'.");
         }
     }
 
-    private static void RegisterRelationProvider(
+    private static void RegisterGraphProvider(
         IServiceCollection services,
         IConfiguration configuration,
         string providerName)
@@ -178,27 +184,27 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         switch (providerName)
         {
             case ProjectionReadModelProviderNames.InMemory:
-                services.AddInMemoryRelationStoreRegistration();
+                services.AddInMemoryGraphStoreRegistration();
                 break;
             case ProjectionReadModelProviderNames.Elasticsearch:
-                services.AddElasticsearchRelationStoreRegistration();
-                break;
+                throw new InvalidOperationException(
+                    "Elasticsearch cannot be used as graph provider. Use InMemory (dev/test) or Neo4j.");
             case ProjectionReadModelProviderNames.Neo4j:
-                services.AddNeo4jRelationStoreRegistration(
+                services.AddNeo4jGraphStoreRegistration(
                     optionsFactory: _ =>
                     {
                         var providerOptions = new Neo4jProjectionRelationStoreOptions();
-                        configuration.GetSection("Projection:ReadModel:Providers:Neo4j").Bind(providerOptions);
+                        configuration.GetSection("Projection:Graph:Providers:Neo4j").Bind(providerOptions);
                         return providerOptions;
                     },
-                    scope: WorkflowExecutionRelationConstants.Scope);
+                    scopeFactory: _ => WorkflowExecutionRelationConstants.Scope);
                 break;
             default:
-                throw new InvalidOperationException($"Unsupported relation provider '{providerName}'.");
+                throw new InvalidOperationException($"Unsupported graph provider '{providerName}'.");
         }
     }
 
     private sealed class WorkflowProjectionProviderRegistrationsMarker;
 
-    private sealed record ProviderSelection(string ReadModelProvider, string RelationProvider);
+    private sealed record ProviderSelection(string DocumentProvider, string GraphProvider);
 }

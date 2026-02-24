@@ -103,9 +103,9 @@ public class WorkflowHostingExtensionsCoverageTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Projection:ReadModel:Provider"] = ProjectionReadModelProviderNames.Elasticsearch,
-                ["Projection:ReadModel:RelationProvider"] = ProjectionReadModelProviderNames.InMemory,
-                ["Projection:ReadModel:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Document:Provider"] = ProjectionReadModelProviderNames.Elasticsearch,
+                ["Projection:Graph:Provider"] = ProjectionReadModelProviderNames.InMemory,
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
             })
             .Build();
 
@@ -127,8 +127,8 @@ public class WorkflowHostingExtensionsCoverageTests
 
         using var provider = services.BuildServiceProvider();
         var selectionOptions = provider.GetRequiredService<IProjectionStoreSelectionRuntimeOptions>();
-        selectionOptions.ReadModelProvider.Should().Be(ProjectionReadModelProviderNames.Elasticsearch);
-        selectionOptions.RelationProvider.Should().Be(ProjectionReadModelProviderNames.InMemory);
+        selectionOptions.DocumentProvider.Should().Be(ProjectionReadModelProviderNames.Elasticsearch);
+        selectionOptions.GraphProvider.Should().Be(ProjectionReadModelProviderNames.InMemory);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class WorkflowHostingExtensionsCoverageTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Projection:ReadModel:Provider"] = "UnknownProvider",
+                ["Projection:Document:Provider"] = "UnknownProvider",
             })
             .Build();
 
@@ -155,16 +155,16 @@ public class WorkflowHostingExtensionsCoverageTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Projection:ReadModel:Provider"] = ProjectionReadModelProviderNames.Elasticsearch,
-                ["Projection:ReadModel:RelationProvider"] = ProjectionReadModelProviderNames.InMemory,
-                ["Projection:ReadModel:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
-                ["Projection:Policies:DenyInMemoryRelationFactStore"] = "true",
+                ["Projection:Document:Provider"] = ProjectionReadModelProviderNames.Elasticsearch,
+                ["Projection:Graph:Provider"] = ProjectionReadModelProviderNames.InMemory,
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Policies:DenyInMemoryGraphFactStore"] = "true",
             })
             .Build();
 
         Action act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*InMemory relation provider is not allowed*");
+            .WithMessage("*InMemory graph provider is not allowed*");
     }
 }

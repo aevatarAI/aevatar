@@ -10,17 +10,20 @@ namespace Aevatar.Workflow.Projection.Projectors;
 public sealed class WorkflowExecutionReadModelProjector
     : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
 {
-    private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
+    private readonly IProjectionMaterializationRouter<WorkflowExecutionReport, string> _materializationRouter;
     private readonly IEventDeduplicator _deduplicator;
+    private readonly IProjectionClock _clock;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>> _reducersByType;
 
     public WorkflowExecutionReadModelProjector(
-        IProjectionReadModelStore<WorkflowExecutionReport, string> store,
+        IProjectionMaterializationRouter<WorkflowExecutionReport, string> materializationRouter,
         IEventDeduplicator deduplicator,
+        IProjectionClock clock,
         IEnumerable<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> reducers)
     {
-        _store = store;
+        _materializationRouter = materializationRouter;
         _deduplicator = deduplicator;
+        _clock = clock;
         _reducersByType = reducers
             .GroupBy(x => x.EventTypeUrl, StringComparer.Ordinal)
             .ToDictionary(
@@ -48,7 +51,7 @@ public sealed class WorkflowExecutionReadModelProjector
             Input = context.Input,
         };
         report.Summary = new WorkflowExecutionSummary();
-        return new ValueTask(_store.UpsertAsync(report, ct));
+        return new ValueTask(_materializationRouter.UpsertAsync(report, ct));
     }
 
     public async ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
@@ -65,8 +68,8 @@ public sealed class WorkflowExecutionReadModelProjector
                 return;
         }
 
-        var now = ResolveEventTimestamp(envelope);
-        await _store.MutateAsync(context.RootActorId, report =>
+        var now = ResolveEventTimestamp(envelope, _clock.UtcNow);
+        await _materializationRouter.MutateAsync(context.RootActorId, report =>
         {
             var mutated = false;
             foreach (var reducer in reducers)
@@ -85,8 +88,8 @@ public sealed class WorkflowExecutionReadModelProjector
         IReadOnlyList<WorkflowExecutionTopologyEdge> topology,
         CancellationToken ct = default)
     {
-        var completedAt = DateTimeOffset.UtcNow;
-        return new ValueTask(_store.MutateAsync(context.RootActorId, report =>
+        var completedAt = _clock.UtcNow;
+        return new ValueTask(_materializationRouter.MutateAsync(context.RootActorId, report =>
         {
             report.Topology = topology.Select(x => new WorkflowExecutionTopologyEdge(x.Parent, x.Child)).ToList();
             report.TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot;
@@ -98,11 +101,11 @@ public sealed class WorkflowExecutionReadModelProjector
         }, ct));
     }
 
-    private static DateTimeOffset ResolveEventTimestamp(EventEnvelope envelope)
+    private static DateTimeOffset ResolveEventTimestamp(EventEnvelope envelope, DateTimeOffset fallbackUtcNow)
     {
         var ts = envelope.Timestamp;
         if (ts == null)
-            return DateTimeOffset.UtcNow;
+            return fallbackUtcNow;
 
         var dt = ts.ToDateTime();
         if (dt.Kind != DateTimeKind.Utc)

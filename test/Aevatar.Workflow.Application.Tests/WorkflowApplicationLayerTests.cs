@@ -508,6 +508,25 @@ internal sealed class FakeProjectionService :
         return Task.FromResult(subgraph);
     }
 
+    public async Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
+        CancellationToken ct = default)
+    {
+        var snapshot = await GetActorSnapshotAsync(actorId, ct);
+        if (snapshot == null)
+            return null;
+
+        var subgraph = await GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
+        return new WorkflowActorGraphEnrichedSnapshot
+        {
+            Snapshot = snapshot,
+            Subgraph = subgraph,
+        };
+    }
+
     private sealed record FakeProjectionLease(string ActorId, string CommandId) : IWorkflowExecutionProjectionLease;
 }
 

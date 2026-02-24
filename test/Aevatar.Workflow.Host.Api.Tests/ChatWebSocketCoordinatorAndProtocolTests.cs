@@ -204,6 +204,26 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             {
                 RootNodeId = actorId,
             });
+
+        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            WorkflowActorRelationQueryOptions? options = null,
+            CancellationToken ct = default)
+        {
+            if (Snapshot == null)
+                return Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(null);
+
+            return Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(new WorkflowActorGraphEnrichedSnapshot
+            {
+                Snapshot = Snapshot,
+                Subgraph = new WorkflowActorRelationSubgraph
+                {
+                    RootNodeId = actorId,
+                },
+            });
+        }
     }
 
     private sealed class FakeWebSocket : WebSocket

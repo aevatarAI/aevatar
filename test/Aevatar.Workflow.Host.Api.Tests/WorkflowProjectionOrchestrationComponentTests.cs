@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
@@ -90,7 +91,11 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             EndedAt = startedAt.AddMinutes(-6),
             CompletionStatus = WorkflowExecutionCompletionStatus.Running,
         });
-        var updater = new WorkflowProjectionReadModelUpdater(store, new FixedClock(stoppedAt));
+        var updater = new WorkflowProjectionReadModelUpdater(
+            new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
+                store,
+                new ProjectionGraphStoreAdapter<WorkflowExecutionReport>(new InMemoryProjectionRelationStore())),
+            new FixedClock(stoppedAt));
         var context = new WorkflowExecutionProjectionContext
         {
             ProjectionId = "projection-1",
@@ -162,7 +167,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var reader = new WorkflowProjectionQueryReader(
             store,
             new WorkflowExecutionReadModelMapper(),
-            new InMemoryProjectionRelationStore());
+            new ProjectionGraphStoreAdapter<WorkflowExecutionReport>(new InMemoryProjectionRelationStore()));
 
         var snapshot = await reader.GetActorSnapshotAsync("actor-3");
         var timeline = await reader.ListActorTimelineAsync("actor-3", take: 2);

@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -538,9 +539,16 @@ public class WorkflowExecutionProjectionServiceTests
             forwardingRegistry);
         var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         store = new ObservableWorkflowExecutionReadModelStore();
-        var projector = new WorkflowExecutionReadModelProjector(
+        var resolvedClock = clock ?? new SystemProjectionClock();
+        var relationStore = new InMemoryProjectionRelationStore();
+        var graphStore = new ProjectionGraphStoreAdapter<WorkflowExecutionReport>(relationStore);
+        var materializationRouter = new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
             store,
+            graphStore);
+        var projector = new WorkflowExecutionReadModelProjector(
+            materializationRouter,
             new TestEventDeduplicator(),
+            resolvedClock,
             BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>([projector]);
         var dispatcher = new ProjectionDispatcher<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator);
@@ -570,7 +578,6 @@ public class WorkflowExecutionProjectionServiceTests
         var ownershipCoordinator = new ActorProjectionOwnershipCoordinator(
             runtime,
             ownershipTypeVerifier);
-        var resolvedClock = clock ?? new SystemProjectionClock();
         runEventStreamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
             streams,
             new WorkflowRunEventSessionCodec());
@@ -578,11 +585,11 @@ public class WorkflowExecutionProjectionServiceTests
         var leaseManager = new WorkflowProjectionLeaseManager(ownershipCoordinator);
         var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventStreamHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventStreamHub, resolvedClock);
-        var readModelUpdater = new WorkflowProjectionReadModelUpdater(store, resolvedClock);
+        var readModelUpdater = new WorkflowProjectionReadModelUpdater(materializationRouter, resolvedClock);
         var queryReader = new WorkflowProjectionQueryReader(
             store,
             mapper,
-            new InMemoryProjectionRelationStore());
+            graphStore);
         var activationService = new WorkflowProjectionActivationService(
             lifecycle,
             resolvedClock,
@@ -614,16 +621,21 @@ public class WorkflowExecutionProjectionServiceTests
     {
         var store = CreateStore();
         var clock = new SystemProjectionClock();
+        var relationStore = new InMemoryProjectionRelationStore();
+        var graphStore = new ProjectionGraphStoreAdapter<WorkflowExecutionReport>(relationStore);
+        var materializationRouter = new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
+            store,
+            graphStore);
         var runEventHub = new NoOpWorkflowRunEventHub();
         var mapper = new WorkflowExecutionReadModelMapper();
         var leaseManager = new WorkflowProjectionLeaseManager(ownershipCoordinator);
         var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventHub, clock);
-        var readModelUpdater = new WorkflowProjectionReadModelUpdater(store, clock);
+        var readModelUpdater = new WorkflowProjectionReadModelUpdater(materializationRouter, clock);
         var queryReader = new WorkflowProjectionQueryReader(
             store,
             mapper,
-            new InMemoryProjectionRelationStore());
+            graphStore);
         var activationService = new WorkflowProjectionActivationService(
             lifecycle,
             clock,
@@ -802,6 +814,14 @@ public class WorkflowExecutionProjectionServiceTests
             WorkflowActorRelationQueryOptions? options = null,
             CancellationToken ct = default)
             => _queryPort.GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
+
+        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            WorkflowActorRelationQueryOptions? options = null,
+            CancellationToken ct = default)
+            => _queryPort.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, options, ct);
     }
 
     private sealed class ObservableWorkflowExecutionReadModelStore

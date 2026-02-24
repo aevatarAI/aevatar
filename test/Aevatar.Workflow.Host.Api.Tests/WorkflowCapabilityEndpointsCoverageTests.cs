@@ -262,6 +262,14 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             {
                 RootNodeId = actorId,
             });
+
+        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            WorkflowActorRelationQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(null);
     }
 
     private sealed class FakeWebSocketFeature : IHttpWebSocketFeature

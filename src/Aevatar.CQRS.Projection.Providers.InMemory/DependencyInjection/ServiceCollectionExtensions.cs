@@ -6,7 +6,7 @@ namespace Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddInMemoryReadModelStoreRegistration<TReadModel, TKey>(
+    public static IServiceCollection AddInMemoryDocumentStoreRegistration<TReadModel, TKey>(
         this IServiceCollection services,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
@@ -22,9 +22,10 @@ public static class ServiceCollectionExtensions
                 providerName,
                 new ProjectionReadModelProviderCapabilities(
                     providerName,
-                    supportsIndexing: false,
-                    supportsRelations: true,
-                    supportsRelationTraversal: true),
+                    supportsIndexing: true,
+                    indexKinds: [ProjectionReadModelIndexKind.Document],
+                    supportsRelations: false,
+                    supportsRelationTraversal: false),
                 provider => new InMemoryProjectionReadModelStore<TReadModel, TKey>(
                     keySelector,
                     keyFormatter,
@@ -36,7 +37,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddInMemoryRelationStoreRegistration(
+    public static IServiceCollection AddInMemoryGraphStoreRegistration(
         this IServiceCollection services,
         string providerName = ProjectionReadModelProviderNames.InMemory)
     {
@@ -45,7 +46,8 @@ public static class ServiceCollectionExtensions
                 providerName,
                 new ProjectionReadModelProviderCapabilities(
                     providerName,
-                    supportsIndexing: false,
+                    supportsIndexing: true,
+                    indexKinds: [ProjectionReadModelIndexKind.Graph],
                     supportsRelations: true,
                     supportsRelationTraversal: true),
                 _ => new InMemoryProjectionRelationStore(providerName)));

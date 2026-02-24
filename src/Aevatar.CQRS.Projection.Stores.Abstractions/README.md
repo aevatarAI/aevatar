@@ -13,6 +13,9 @@
 
 - 读模型存储：`IProjectionReadModelStore<,>`
 - 关系存储：`IProjectionRelationStore`
+- ReadModel 能力模型：`IProjectionReadModel`、`IDocumentReadModel`、`IGraphReadModel`
+- 双写能力抽象：`IDocumentProjectionStore<,>`、`IGraphProjectionStore<>`、`IProjectionMaterializationRouter<,>`
+- 文档索引元数据抽象：`DocumentIndexMetadata`、`IReadModelDocumentMetadataProvider<TReadModel>`、`IProjectionDocumentMetadataResolver`
 - Provider 能力建模：`ProjectionReadModelProviderCapabilities`、`IProjectionStoreProviderMetadata`
 - 能力校验：`ProjectionReadModelRequirements`、`ProjectionReadModelCapabilityValidator`
 - Provider 注册与选择：`IProjectionStoreRegistration<TStore>`、`DelegateProjectionStoreRegistration<TStore>`

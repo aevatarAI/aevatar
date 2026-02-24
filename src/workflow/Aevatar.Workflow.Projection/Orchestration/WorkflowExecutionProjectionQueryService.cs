@@ -52,6 +52,14 @@ public sealed class WorkflowExecutionProjectionQueryService
         CancellationToken ct = default) =>
         GetRelationSubgraphInternalAsync(actorId, depth, take, options, ct);
 
+    public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
+        CancellationToken ct = default) =>
+        GetGraphEnrichedInternalAsync(actorId, depth, take, options, ct);
+
     protected override Task<WorkflowActorSnapshot?> ReadSnapshotCoreAsync(
         string entityId,
         CancellationToken ct)
@@ -112,5 +120,18 @@ public sealed class WorkflowExecutionProjectionQueryService
             return CreateEmptyRelationSubgraph(actorId);
 
         return await _queryReader.GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
+    }
+
+    private async Task<WorkflowActorGraphEnrichedSnapshot?> GetGraphEnrichedInternalAsync(
+        string actorId,
+        int depth,
+        int take,
+        WorkflowActorRelationQueryOptions? options,
+        CancellationToken ct)
+    {
+        if (!QueryEnabledCore || string.IsNullOrWhiteSpace(actorId))
+            return null;
+
+        return await _queryReader.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, options, ct);
     }
 }

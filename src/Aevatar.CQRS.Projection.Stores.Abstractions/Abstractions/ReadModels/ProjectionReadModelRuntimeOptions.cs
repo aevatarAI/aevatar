@@ -2,28 +2,19 @@ namespace Aevatar.CQRS.Projection.Stores.Abstractions;
 
 public sealed class ProjectionReadModelRuntimeOptions : IProjectionStoreSelectionRuntimeOptions
 {
-    public ProjectionReadModelRuntimeOptions()
-    {
-        Bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-    }
-
     public ProjectionReadModelMode Mode { get; set; } = ProjectionReadModelMode.CustomReadModel;
 
-    public string Provider { get; set; } = ProjectionReadModelProviderNames.InMemory;
+    public string DocumentProvider { get; set; } = ProjectionReadModelProviderNames.InMemory;
 
-    public string RelationProvider { get; set; } = "";
+    public string GraphProvider { get; set; } = ProjectionReadModelProviderNames.InMemory;
 
     public bool FailOnUnsupportedCapabilities { get; set; } = true;
 
-    public Dictionary<string, string> Bindings { get; }
+    string IProjectionStoreSelectionRuntimeOptions.DocumentProvider => DocumentProvider;
 
-    string IProjectionStoreSelectionRuntimeOptions.ReadModelProvider => Provider;
-
-    string IProjectionStoreSelectionRuntimeOptions.RelationProvider => RelationProvider;
+    string IProjectionStoreSelectionRuntimeOptions.GraphProvider => GraphProvider;
 
     bool IProjectionStoreSelectionRuntimeOptions.FailOnUnsupportedCapabilities => FailOnUnsupportedCapabilities;
 
     ProjectionReadModelMode IProjectionStoreSelectionRuntimeOptions.ReadModelMode => Mode;
-
-    IReadOnlyDictionary<string, string> IProjectionStoreSelectionRuntimeOptions.ReadModelBindings => Bindings;
 }

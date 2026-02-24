@@ -16,7 +16,8 @@ public sealed class InMemoryProjectionRelationStore
     {
         ProviderCapabilities = new ProjectionReadModelProviderCapabilities(
             providerName,
-            supportsIndexing: false,
+            supportsIndexing: true,
+            indexKinds: [ProjectionReadModelIndexKind.Graph],
             supportsRelations: true,
             supportsRelationTraversal: true);
     }

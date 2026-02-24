@@ -7,17 +7,17 @@ namespace Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddNeo4jReadModelStoreRegistration<TReadModel, TKey>(
+    public static IServiceCollection AddNeo4jDocumentStoreRegistration<TReadModel, TKey>(
         this IServiceCollection services,
         Func<IServiceProvider, Neo4jProjectionReadModelStoreOptions> optionsFactory,
-        string scope,
+        Func<IServiceProvider, string> scopeFactory,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
         string providerName = ProjectionReadModelProviderNames.Neo4j)
         where TReadModel : class
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+        ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(keySelector);
 
         services.AddSingleton<IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>>(
@@ -33,7 +33,7 @@ public static class ServiceCollectionExtensions
                     supportsRelationTraversal: true),
                 provider => new Neo4jProjectionReadModelStore<TReadModel, TKey>(
                     optionsFactory(provider),
-                    scope,
+                    scopeFactory(provider),
                     keySelector,
                     keyFormatter,
                     providerName,
@@ -42,14 +42,14 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddNeo4jRelationStoreRegistration(
+    public static IServiceCollection AddNeo4jGraphStoreRegistration(
         this IServiceCollection services,
         Func<IServiceProvider, Neo4jProjectionRelationStoreOptions> optionsFactory,
-        string scope,
+        Func<IServiceProvider, string> scopeFactory,
         string providerName = ProjectionReadModelProviderNames.Neo4j)
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+        ArgumentNullException.ThrowIfNull(scopeFactory);
 
         services.AddSingleton<IProjectionStoreRegistration<IProjectionRelationStore>>(
             new DelegateProjectionStoreRegistration<IProjectionRelationStore>(
@@ -64,7 +64,7 @@ public static class ServiceCollectionExtensions
                     supportsRelationTraversal: true),
                 provider => new Neo4jProjectionRelationStore(
                     optionsFactory(provider),
-                    scope,
+                    scopeFactory(provider),
                     providerName,
                     provider.GetService<ILogger<Neo4jProjectionRelationStore>>())));
 

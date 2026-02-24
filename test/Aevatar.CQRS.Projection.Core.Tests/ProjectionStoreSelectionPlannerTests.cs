@@ -6,14 +6,14 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class ProjectionStoreSelectionPlannerTests
 {
     private readonly ProjectionStoreSelectionPlanner _planner =
-        new(new ProjectionReadModelBindingResolver());
+        new();
 
     [Fact]
     public void Build_WhenReadModelProviderIsEmpty_ShouldThrow()
     {
         var options = new FakeOptions
         {
-            ReadModelProvider = " ",
+            DocumentProvider = " ",
         };
 
         Action act = () => _planner.Build(options, typeof(TestReadModel), new ProjectionReadModelRequirements());
@@ -27,8 +27,8 @@ public sealed class ProjectionStoreSelectionPlannerTests
     {
         var options = new FakeOptions
         {
-            ReadModelProvider = ProjectionReadModelProviderNames.Neo4j,
-            RelationProvider = " ",
+            DocumentProvider = ProjectionReadModelProviderNames.Neo4j,
+            GraphProvider = " ",
         };
 
         var plan = _planner.Build(options, typeof(TestReadModel), new ProjectionReadModelRequirements(
@@ -44,16 +44,15 @@ public sealed class ProjectionStoreSelectionPlannerTests
     {
         var options = new FakeOptions
         {
-            ReadModelProvider = ProjectionReadModelProviderNames.Neo4j,
+            DocumentProvider = ProjectionReadModelProviderNames.Neo4j,
         };
-        options.ReadModelBindings[typeof(TestReadModel).FullName!] = ProjectionReadModelIndexKind.Graph.ToString();
         var relationRequirements = new ProjectionReadModelRequirements(
             requiresRelations: true,
             requiresRelationTraversal: true,
             requiresAliases: false,
             requiresSchemaValidation: false);
 
-        var plan = _planner.Build(options, typeof(TestReadModel), relationRequirements);
+        var plan = _planner.Build(options, typeof(TestGraphReadModel), relationRequirements);
 
         plan.RelationRequirements.RequiresRelations.Should().BeTrue();
         plan.RelationRequirements.RequiresRelationTraversal.Should().BeTrue();
@@ -66,7 +65,7 @@ public sealed class ProjectionStoreSelectionPlannerTests
     {
         var options = new FakeOptions
         {
-            ReadModelProvider = ProjectionReadModelProviderNames.InMemory,
+            DocumentProvider = ProjectionReadModelProviderNames.InMemory,
             ReadModelMode = ProjectionReadModelMode.StateOnly,
         };
 
@@ -78,20 +77,25 @@ public sealed class ProjectionStoreSelectionPlannerTests
 
     private sealed class FakeOptions : IProjectionStoreSelectionRuntimeOptions
     {
-        private readonly Dictionary<string, string> _bindings = new(StringComparer.OrdinalIgnoreCase);
+        public string DocumentProvider { get; set; } = ProjectionReadModelProviderNames.InMemory;
 
-        public string ReadModelProvider { get; set; } = ProjectionReadModelProviderNames.InMemory;
-
-        public string RelationProvider { get; set; } = "";
+        public string GraphProvider { get; set; } = "";
 
         public bool FailOnUnsupportedCapabilities { get; set; } = true;
 
         public ProjectionReadModelMode ReadModelMode { get; set; } = ProjectionReadModelMode.CustomReadModel;
-
-        public Dictionary<string, string> ReadModelBindings => _bindings;
-
-        IReadOnlyDictionary<string, string> IProjectionStoreSelectionRuntimeOptions.ReadModelBindings => _bindings;
     }
 
     private sealed class TestReadModel;
+
+    private sealed class TestGraphReadModel : IGraphReadModel
+    {
+        public string Id => "test";
+
+        public string GraphScope => "test";
+
+        public IReadOnlyList<GraphNodeDescriptor> GraphNodes => [];
+
+        public IReadOnlyList<GraphEdgeDescriptor> GraphEdges => [];
+    }
 }

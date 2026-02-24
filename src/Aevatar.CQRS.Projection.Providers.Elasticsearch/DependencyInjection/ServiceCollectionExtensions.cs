@@ -7,17 +7,17 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddElasticsearchReadModelStoreRegistration<TReadModel, TKey>(
+    public static IServiceCollection AddElasticsearchDocumentStoreRegistration<TReadModel, TKey>(
         this IServiceCollection services,
         Func<IServiceProvider, ElasticsearchProjectionReadModelStoreOptions> optionsFactory,
-        string indexScope,
+        Func<IServiceProvider, string> indexScopeFactory,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
         string providerName = ProjectionReadModelProviderNames.Elasticsearch)
         where TReadModel : class
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
-        ArgumentNullException.ThrowIfNull(indexScope);
+        ArgumentNullException.ThrowIfNull(indexScopeFactory);
         ArgumentNullException.ThrowIfNull(keySelector);
 
         services.AddSingleton<IProjectionStoreRegistration<IProjectionReadModelStore<TReadModel, TKey>>>(
@@ -31,31 +31,11 @@ public static class ServiceCollectionExtensions
                     supportsSchemaValidation: false),
                 provider => new ElasticsearchProjectionReadModelStore<TReadModel, TKey>(
                     optionsFactory(provider),
-                    indexScope,
+                    indexScopeFactory(provider),
                     keySelector,
                     keyFormatter,
                     providerName,
                     provider.GetService<ILogger<ElasticsearchProjectionReadModelStore<TReadModel, TKey>>>())));
-
-        return services;
-    }
-
-    public static IServiceCollection AddElasticsearchRelationStoreRegistration(
-        this IServiceCollection services,
-        string providerName = ProjectionReadModelProviderNames.Elasticsearch)
-    {
-        services.AddSingleton<IProjectionStoreRegistration<IProjectionRelationStore>>(
-            new DelegateProjectionStoreRegistration<IProjectionRelationStore>(
-                providerName,
-                new ProjectionReadModelProviderCapabilities(
-                    providerName,
-                    supportsIndexing: true,
-                    indexKinds: [ProjectionReadModelIndexKind.Document],
-                    supportsAliases: false,
-                    supportsSchemaValidation: false,
-                    supportsRelations: false,
-                    supportsRelationTraversal: false),
-                _ => new ElasticsearchProjectionRelationStore(providerName)));
 
         return services;
     }

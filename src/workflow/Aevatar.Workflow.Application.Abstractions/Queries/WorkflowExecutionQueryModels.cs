@@ -83,6 +83,13 @@ public sealed class WorkflowActorRelationSubgraph
     public List<WorkflowActorRelationItem> Edges { get; set; } = [];
 }
 
+public sealed class WorkflowActorGraphEnrichedSnapshot
+{
+    public WorkflowActorSnapshot Snapshot { get; set; } = new();
+
+    public WorkflowActorRelationSubgraph Subgraph { get; set; } = new();
+}
+
 public sealed record WorkflowTopologyEdge(string Parent, string Child);
 
 public enum WorkflowRunProjectionScope

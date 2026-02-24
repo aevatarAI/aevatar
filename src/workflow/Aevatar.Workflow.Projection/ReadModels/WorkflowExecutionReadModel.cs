@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.Foundation.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.ReadModels;
@@ -30,8 +32,20 @@ public enum WorkflowExecutionCompletionStatus
 public sealed class WorkflowExecutionReport
     : AevatarReadModelBase,
       IHasProjectionTimeline,
-      IHasProjectionRoleReplies
+      IHasProjectionRoleReplies,
+      IDocumentReadModel,
+      IGraphReadModel
 {
+    private const string UnknownToken = "unknown";
+
+    public string DocumentScope => "workflow-execution-reports";
+
+    public string GraphScope => WorkflowExecutionRelationConstants.Scope;
+
+    public IReadOnlyList<GraphNodeDescriptor> GraphNodes => BuildGraphNodes();
+
+    public IReadOnlyList<GraphEdgeDescriptor> GraphEdges => BuildGraphEdges();
+
     public string RootActorId { get; set; } = "";
     public string CommandId { get; set; } = "";
     public string ReportVersion { get; set; } = "1.0";
@@ -81,6 +95,183 @@ public sealed class WorkflowExecutionReport
             Content = roleReply.Content,
             ContentLength = roleReply.ContentLength,
         });
+    }
+
+    private IReadOnlyList<GraphNodeDescriptor> BuildGraphNodes()
+    {
+        var updatedAt = UpdatedAt == default ? DateTimeOffset.UtcNow : UpdatedAt;
+        var rootActorId = NormalizeToken(RootActorId);
+        var runNodeId = BuildRunNodeId(rootActorId, CommandId);
+        var nodes = new Dictionary<string, GraphNodeDescriptor>(StringComparer.Ordinal);
+
+        nodes[rootActorId] = new GraphNodeDescriptor(
+            rootActorId,
+            WorkflowExecutionRelationConstants.ActorNodeType,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["workflowName"] = WorkflowName ?? "",
+            },
+            updatedAt);
+
+        nodes[runNodeId] = new GraphNodeDescriptor(
+            runNodeId,
+            WorkflowExecutionRelationConstants.RunNodeType,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["rootActorId"] = rootActorId,
+                ["workflowName"] = WorkflowName ?? "",
+                ["commandId"] = NormalizeToken(CommandId),
+                ["input"] = Input ?? "",
+            },
+            updatedAt);
+
+        foreach (var step in Steps)
+        {
+            var stepNodeId = BuildStepNodeId(rootActorId, CommandId, step.StepId);
+            nodes[stepNodeId] = new GraphNodeDescriptor(
+                stepNodeId,
+                WorkflowExecutionRelationConstants.StepNodeType,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["rootActorId"] = rootActorId,
+                    ["commandId"] = NormalizeToken(CommandId),
+                    ["stepId"] = NormalizeToken(step.StepId),
+                    ["stepType"] = step.StepType ?? "",
+                    ["targetRole"] = step.TargetRole ?? "",
+                    ["workerId"] = step.WorkerId ?? "",
+                    ["success"] = step.Success?.ToString() ?? "",
+                },
+                updatedAt);
+        }
+
+        foreach (var topologyEdge in Topology)
+        {
+            var parentId = NormalizeToken(topologyEdge.Parent);
+            var childId = NormalizeToken(topologyEdge.Child);
+            if (parentId.Length > 0 && !nodes.ContainsKey(parentId))
+            {
+                nodes[parentId] = new GraphNodeDescriptor(
+                    parentId,
+                    WorkflowExecutionRelationConstants.ActorNodeType,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["workflowName"] = WorkflowName ?? "",
+                    },
+                    updatedAt);
+            }
+
+            if (childId.Length > 0 && !nodes.ContainsKey(childId))
+            {
+                nodes[childId] = new GraphNodeDescriptor(
+                    childId,
+                    WorkflowExecutionRelationConstants.ActorNodeType,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["workflowName"] = WorkflowName ?? "",
+                    },
+                    updatedAt);
+            }
+        }
+
+        return nodes.Values.ToList();
+    }
+
+    private IReadOnlyList<GraphEdgeDescriptor> BuildGraphEdges()
+    {
+        var updatedAt = UpdatedAt == default ? DateTimeOffset.UtcNow : UpdatedAt;
+        var rootActorId = NormalizeToken(RootActorId);
+        var runNodeId = BuildRunNodeId(rootActorId, CommandId);
+        var edges = new Dictionary<string, GraphEdgeDescriptor>(StringComparer.Ordinal);
+
+        var ownsEdge = CreateEdge(
+            WorkflowExecutionRelationConstants.RelationOwns,
+            rootActorId,
+            runNodeId,
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            updatedAt);
+        edges[ownsEdge.EdgeId] = ownsEdge;
+
+        foreach (var step in Steps)
+        {
+            var stepNodeId = BuildStepNodeId(rootActorId, CommandId, step.StepId);
+            var containsEdge = CreateEdge(
+                WorkflowExecutionRelationConstants.RelationContainsStep,
+                runNodeId,
+                stepNodeId,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["stepId"] = NormalizeToken(step.StepId),
+                    ["stepType"] = step.StepType ?? "",
+                },
+                updatedAt);
+            edges[containsEdge.EdgeId] = containsEdge;
+        }
+
+        foreach (var topologyEdge in Topology)
+        {
+            var parentId = NormalizeToken(topologyEdge.Parent);
+            var childId = NormalizeToken(topologyEdge.Child);
+            if (parentId.Length == 0 || childId.Length == 0)
+                continue;
+
+            var childOfEdge = CreateEdge(
+                WorkflowExecutionRelationConstants.RelationChildOf,
+                parentId,
+                childId,
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                updatedAt);
+            edges[childOfEdge.EdgeId] = childOfEdge;
+        }
+
+        return edges.Values.ToList();
+    }
+
+    private static GraphEdgeDescriptor CreateEdge(
+        string relationType,
+        string fromNodeId,
+        string toNodeId,
+        IReadOnlyDictionary<string, string> properties,
+        DateTimeOffset updatedAt)
+    {
+        var normalizedFromNodeId = NormalizeToken(fromNodeId);
+        var normalizedToNodeId = NormalizeToken(toNodeId);
+        var normalizedRelationType = NormalizeToken(relationType);
+        var edgeId = BuildEdgeId(normalizedRelationType, normalizedFromNodeId, normalizedToNodeId);
+        return new GraphEdgeDescriptor(
+            edgeId,
+            normalizedRelationType,
+            normalizedFromNodeId,
+            normalizedToNodeId,
+            new Dictionary<string, string>(properties, StringComparer.Ordinal),
+            updatedAt);
+    }
+
+    private static string BuildRunNodeId(string rootActorId, string commandId)
+    {
+        var normalizedRootActorId = NormalizeToken(rootActorId);
+        var normalizedCommandId = NormalizeToken(commandId);
+        return $"run:{normalizedRootActorId}:{normalizedCommandId}";
+    }
+
+    private static string BuildStepNodeId(string rootActorId, string commandId, string stepId)
+    {
+        var normalizedRootActorId = NormalizeToken(rootActorId);
+        var normalizedCommandId = NormalizeToken(commandId);
+        var normalizedStepId = NormalizeToken(stepId);
+        return $"step:{normalizedRootActorId}:{normalizedCommandId}:{normalizedStepId}";
+    }
+
+    private static string BuildEdgeId(string relationType, string fromNodeId, string toNodeId)
+    {
+        var payload = $"{relationType}|{fromNodeId}|{toNodeId}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
+        return $"{relationType}:{Convert.ToHexString(hash.AsSpan(0, 8))}";
+    }
+
+    private static string NormalizeToken(string? token)
+    {
+        var normalized = token?.Trim() ?? "";
+        return normalized.Length == 0 ? UnknownToken : normalized;
     }
 }
 

@@ -5,14 +5,14 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionReadModelUpdater
 {
-    private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
+    private readonly IProjectionMaterializationRouter<WorkflowExecutionReport, string> _materializationRouter;
     private readonly IProjectionClock _clock;
 
     public WorkflowProjectionReadModelUpdater(
-        IProjectionReadModelStore<WorkflowExecutionReport, string> store,
+        IProjectionMaterializationRouter<WorkflowExecutionReport, string> materializationRouter,
         IProjectionClock clock)
     {
-        _store = store;
+        _materializationRouter = materializationRouter;
         _clock = clock;
     }
 
@@ -22,7 +22,7 @@ public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionRead
         CancellationToken ct = default)
     {
         var updatedAt = _clock.UtcNow;
-        return _store.MutateAsync(actorId, report =>
+        return _materializationRouter.MutateAsync(actorId, report =>
         {
             report.CommandId = context.CommandId;
             report.WorkflowName = context.WorkflowName;
@@ -42,7 +42,7 @@ public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionRead
         CancellationToken ct = default)
     {
         var updatedAt = _clock.UtcNow;
-        return _store.MutateAsync(actorId, report =>
+        return _materializationRouter.MutateAsync(actorId, report =>
         {
             if (report.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
                 report.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;

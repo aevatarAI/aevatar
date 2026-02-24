@@ -34,9 +34,10 @@ public sealed class InMemoryProjectionReadModelStore<TReadModel, TKey>
         _logger = logger ?? NullLogger<InMemoryProjectionReadModelStore<TReadModel, TKey>>.Instance;
         ProviderCapabilities = new ProjectionReadModelProviderCapabilities(
             providerName,
-            supportsIndexing: false,
-            supportsRelations: true,
-            supportsRelationTraversal: true);
+            supportsIndexing: true,
+            indexKinds: [ProjectionReadModelIndexKind.Document],
+            supportsRelations: false,
+            supportsRelationTraversal: false);
     }
 
     public ProjectionReadModelProviderCapabilities ProviderCapabilities { get; }

@@ -14,11 +14,11 @@
 
 使用扩展方法：
 
-- `AddElasticsearchReadModelStoreRegistration<TReadModel, TKey>(...)`
+- `AddElasticsearchDocumentStoreRegistration<TReadModel, TKey>(...)`
 
 关键参数：
 
-- `optionsFactory`：绑定 `Projection:ReadModel:Providers:Elasticsearch:*` 配置。
-- `indexScope`：按业务语义隔离索引（会与 `IndexPrefix` 组合）。
+- `optionsFactory`：绑定 `Projection:Document:Providers:Elasticsearch:*` 配置。
+- `indexScopeFactory`：由 `IReadModelDocumentMetadataProvider<TReadModel>` 派生索引名。
 - `keySelector/keyFormatter`：ReadModel 主键映射。
 - `providerName`：默认 `Elasticsearch`（与 `ProjectionReadModelProviderNames.Elasticsearch` 一致）。

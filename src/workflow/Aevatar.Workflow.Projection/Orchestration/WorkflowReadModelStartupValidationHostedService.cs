@@ -9,12 +9,6 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedService
 {
-    private static readonly ProjectionReadModelRequirements WorkflowRelationRequirements = new(
-        requiresRelations: true,
-        requiresRelationTraversal: true,
-        requiresAliases: false,
-        requiresSchemaValidation: false);
-
     private readonly IServiceProvider _serviceProvider;
     private readonly WorkflowExecutionProjectionOptions _options;
     private readonly IProjectionStoreSelectionPlanner _selectionPlanner;
@@ -47,7 +41,7 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
         var selectionPlan = _selectionPlanner.Build(
             _selectionRuntimeOptions,
             typeof(WorkflowExecutionReport),
-            WorkflowRelationRequirements);
+            new ProjectionReadModelRequirements());
 
         if (_options.ValidateReadModelProviderOnStartup)
         {

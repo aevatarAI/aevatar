@@ -58,7 +58,7 @@ public sealed class Neo4jProjectionReadModelStore<TReadModel, TKey>
         ProviderCapabilities = new ProjectionReadModelProviderCapabilities(
             providerName,
             supportsIndexing: true,
-            indexKinds: [ProjectionReadModelIndexKind.Graph],
+            indexKinds: [ProjectionReadModelIndexKind.Document, ProjectionReadModelIndexKind.Graph],
             supportsAliases: false,
             supportsSchemaValidation: true,
             supportsRelations: true,

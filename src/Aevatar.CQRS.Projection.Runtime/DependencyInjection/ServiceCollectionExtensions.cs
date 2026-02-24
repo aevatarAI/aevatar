@@ -11,12 +11,14 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionReadModelCapabilityValidator, ProjectionReadModelCapabilityValidatorService>();
         services.TryAddSingleton<IProjectionReadModelProviderRegistry, ProjectionReadModelProviderRegistry>();
         services.TryAddSingleton<IProjectionReadModelProviderSelector, ProjectionReadModelProviderSelector>();
-        services.TryAddSingleton<IProjectionReadModelBindingResolver, ProjectionReadModelBindingResolver>();
         services.TryAddSingleton<IProjectionStoreSelectionPlanner, ProjectionStoreSelectionPlanner>();
         services.TryAddSingleton<IProjectionReadModelStoreFactory, ProjectionReadModelStoreFactory>();
         services.TryAddSingleton<IProjectionRelationStoreProviderRegistry, ProjectionRelationStoreProviderRegistry>();
         services.TryAddSingleton<IProjectionRelationStoreProviderSelector, ProjectionRelationStoreProviderSelector>();
         services.TryAddSingleton<IProjectionRelationStoreFactory, ProjectionRelationStoreFactory>();
+        services.TryAddSingleton(typeof(IGraphProjectionStore<>), typeof(ProjectionGraphStoreAdapter<>));
+        services.TryAddSingleton(typeof(IProjectionMaterializationRouter<,>), typeof(ProjectionMaterializationRouter<,>));
+        services.TryAddSingleton<IProjectionDocumentMetadataResolver, ProjectionDocumentMetadataResolver>();
         services.TryAddSingleton<IProjectionStoreStartupValidator, ProjectionStoreStartupValidator>();
         return services;
     }

@@ -5,25 +5,25 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryReader
 {
-    private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
-    private readonly IProjectionRelationStore _relationStore;
+    private readonly IDocumentProjectionStore<WorkflowExecutionReport, string> _documentStore;
+    private readonly IGraphProjectionStore<WorkflowExecutionReport> _graphStore;
     private readonly WorkflowExecutionReadModelMapper _mapper;
 
     public WorkflowProjectionQueryReader(
-        IProjectionReadModelStore<WorkflowExecutionReport, string> store,
+        IDocumentProjectionStore<WorkflowExecutionReport, string> documentStore,
         WorkflowExecutionReadModelMapper mapper,
-        IProjectionRelationStore relationStore)
+        IGraphProjectionStore<WorkflowExecutionReport> graphStore)
     {
-        _store = store;
+        _documentStore = documentStore;
         _mapper = mapper;
-        _relationStore = relationStore;
+        _graphStore = graphStore;
     }
 
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
         string actorId,
         CancellationToken ct = default)
     {
-        var report = await _store.GetAsync(actorId, ct);
+        var report = await _documentStore.GetAsync(actorId, ct);
         return report == null ? null : _mapper.ToActorSnapshot(report);
     }
 
@@ -32,7 +32,7 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var reports = await _store.ListAsync(boundedTake, ct);
+        var reports = await _documentStore.ListAsync(boundedTake, ct);
         return reports
             .Select(_mapper.ToActorSnapshot)
             .ToList();
@@ -44,7 +44,7 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var report = await _store.GetAsync(actorId, ct);
+        var report = await _documentStore.GetAsync(actorId, ct);
         if (report == null)
             return [];
 
@@ -68,7 +68,7 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         var boundedTake = Math.Clamp(take, 1, 1000);
         var direction = MapDirection(options?.Direction ?? WorkflowActorRelationDirection.Both);
         var relationTypes = NormalizeRelationTypes(options?.RelationTypes);
-        var edges = await _relationStore.GetNeighborsAsync(
+        var edges = await _graphStore.GetNeighborsAsync(
             new ProjectionRelationQuery
             {
                 Scope = WorkflowExecutionRelationConstants.Scope,
@@ -96,7 +96,7 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         var boundedTake = Math.Clamp(take, 1, 2000);
         var direction = MapDirection(options?.Direction ?? WorkflowActorRelationDirection.Both);
         var relationTypes = NormalizeRelationTypes(options?.RelationTypes);
-        var subgraph = await _relationStore.GetSubgraphAsync(
+        var subgraph = await _graphStore.GetSubgraphAsync(
             new ProjectionRelationQuery
             {
                 Scope = WorkflowExecutionRelationConstants.Scope,
@@ -108,6 +108,25 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
             },
             ct);
         return _mapper.ToActorRelationSubgraph(actorIdValue, subgraph);
+    }
+
+    public async Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
+        CancellationToken ct = default)
+    {
+        var snapshot = await GetActorSnapshotAsync(actorId, ct);
+        if (snapshot == null)
+            return null;
+
+        var subgraph = await GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
+        return new WorkflowActorGraphEnrichedSnapshot
+        {
+            Snapshot = snapshot,
+            Subgraph = subgraph,
+        };
     }
 
     private static ProjectionRelationDirection MapDirection(WorkflowActorRelationDirection direction)

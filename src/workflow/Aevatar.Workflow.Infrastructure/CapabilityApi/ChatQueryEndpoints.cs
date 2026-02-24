@@ -27,6 +27,10 @@ public static class ChatQueryEndpoints
 
         group.MapGet("/actors/{actorId}/relation-subgraph", GetActorRelationSubgraph)
             .Produces(StatusCodes.Status200OK);
+
+        group.MapGet("/actors/{actorId}/graph-enriched", GetActorGraphEnrichedSnapshot)
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
     }
 
     internal static async Task<IResult> ListAgents(
@@ -84,6 +88,20 @@ public static class ChatQueryEndpoints
         var relationOptions = BuildRelationQueryOptions(direction, relationTypes);
         var subgraph = await queryService.GetActorRelationSubgraphAsync(actorId, depth, take, relationOptions, ct);
         return Results.Ok(subgraph);
+    }
+
+    internal static async Task<IResult> GetActorGraphEnrichedSnapshot(
+        string actorId,
+        IWorkflowExecutionQueryApplicationService queryService,
+        int depth = 2,
+        int take = 200,
+        string? direction = null,
+        string[]? relationTypes = null,
+        CancellationToken ct = default)
+    {
+        var relationOptions = BuildRelationQueryOptions(direction, relationTypes);
+        var graphEnriched = await queryService.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, relationOptions, ct);
+        return graphEnriched == null ? Results.NotFound() : Results.Ok(graphEnriched);
     }
 
     private static WorkflowActorRelationQueryOptions BuildRelationQueryOptions(

@@ -3,6 +3,7 @@ using Aevatar.AI.Projection.Appliers;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -24,6 +25,11 @@ public class WorkflowExecutionReadModelProjectorTests
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
         listSortSelector: report => report.StartedAt);
+    private static IProjectionMaterializationRouter<WorkflowExecutionReport, string> CreateRouter(
+        InMemoryProjectionReadModelStore<WorkflowExecutionReport, string> store) =>
+        new ProjectionMaterializationRouter<WorkflowExecutionReport, string>(
+            store,
+            new ProjectionGraphStoreAdapter<WorkflowExecutionReport>(new InMemoryProjectionRelationStore()));
 
     private static IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> BuildReducers() =>
     [
@@ -60,7 +66,11 @@ public class WorkflowExecutionReadModelProjectorTests
     public async Task Projector_ShouldBuildRunReadModel_EndToEnd()
     {
         var store = CreateStore();
-        var projector = new WorkflowExecutionReadModelProjector(store, CreateDeduplicator(), BuildReducers());
+        var projector = new WorkflowExecutionReadModelProjector(
+            CreateRouter(store),
+            CreateDeduplicator(),
+            new SystemProjectionClock(),
+            BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>( [projector]);
 
         var context = new WorkflowExecutionProjectionContext
@@ -124,7 +134,11 @@ public class WorkflowExecutionReadModelProjectorTests
     public async Task Projector_ShouldIgnoreUnknownEvents()
     {
         var store = CreateStore();
-        var projector = new WorkflowExecutionReadModelProjector(store, CreateDeduplicator(), BuildReducers());
+        var projector = new WorkflowExecutionReadModelProjector(
+            CreateRouter(store),
+            CreateDeduplicator(),
+            new SystemProjectionClock(),
+            BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>( [projector]);
 
         var context = new WorkflowExecutionProjectionContext
@@ -154,7 +168,11 @@ public class WorkflowExecutionReadModelProjectorTests
     public async Task Projector_ShouldDeduplicateByEnvelopeId()
     {
         var store = CreateStore();
-        var projector = new WorkflowExecutionReadModelProjector(store, CreateDeduplicator(), BuildReducers());
+        var projector = new WorkflowExecutionReadModelProjector(
+            CreateRouter(store),
+            CreateDeduplicator(),
+            new SystemProjectionClock(),
+            BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>( [projector]);
 
         var context = new WorkflowExecutionProjectionContext
@@ -194,7 +212,11 @@ public class WorkflowExecutionReadModelProjectorTests
         [
             new TextMessageStartProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>([]),
         ];
-        var projector = new WorkflowExecutionReadModelProjector(store, CreateDeduplicator(), reducers);
+        var projector = new WorkflowExecutionReadModelProjector(
+            CreateRouter(store),
+            CreateDeduplicator(),
+            new SystemProjectionClock(),
+            reducers);
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>([projector]);
 
         var context = new WorkflowExecutionProjectionContext
@@ -226,7 +248,11 @@ public class WorkflowExecutionReadModelProjectorTests
     public async Task Projector_ShouldUseEnvelopeTimestamp_WhenProvided()
     {
         var store = CreateStore();
-        var projector = new WorkflowExecutionReadModelProjector(store, CreateDeduplicator(), BuildReducers());
+        var projector = new WorkflowExecutionReadModelProjector(
+            CreateRouter(store),
+            CreateDeduplicator(),
+            new SystemProjectionClock(),
+            BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>( [projector]);
 
         var context = new WorkflowExecutionProjectionContext

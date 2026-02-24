@@ -82,4 +82,17 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
 
         return await _projectionPort.GetActorRelationSubgraphAsync(actorId, depth, take, options, ct);
     }
+
+    public async Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorRelationQueryOptions? options = null,
+        CancellationToken ct = default)
+    {
+        if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
+            return null;
+
+        return await _projectionPort.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, options, ct);
+    }
 }

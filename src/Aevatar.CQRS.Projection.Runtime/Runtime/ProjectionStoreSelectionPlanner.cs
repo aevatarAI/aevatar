@@ -2,13 +2,6 @@ namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 
 public sealed class ProjectionStoreSelectionPlanner : IProjectionStoreSelectionPlanner
 {
-    private readonly IProjectionReadModelBindingResolver _bindingResolver;
-
-    public ProjectionStoreSelectionPlanner(IProjectionReadModelBindingResolver bindingResolver)
-    {
-        _bindingResolver = bindingResolver;
-    }
-
     public ProjectionStoreSelectionPlan Build(
         IProjectionStoreSelectionRuntimeOptions options,
         Type readModelType,
@@ -19,19 +12,20 @@ public sealed class ProjectionStoreSelectionPlanner : IProjectionStoreSelectionP
         ArgumentNullException.ThrowIfNull(relationRequirements);
         EnsureReadModelModeSupported(options.ReadModelMode);
 
-        var readModelRequirements = _bindingResolver.Resolve(options.ReadModelBindings, readModelType);
-        var readModelProvider = NormalizeRequiredProviderName(options.ReadModelProvider);
+        var readModelRequirements = BuildReadModelRequirements(readModelType);
+        var readModelRequiresGraph = typeof(IGraphReadModel).IsAssignableFrom(readModelType);
+        var readModelProvider = NormalizeRequiredProviderName(options.DocumentProvider);
         var readModelSelectionOptions = new ProjectionReadModelStoreSelectionOptions
         {
             RequestedProviderName = readModelProvider,
             FailOnUnsupportedCapabilities = options.FailOnUnsupportedCapabilities,
         };
 
-        var mergedRelationRequirements = MergeRelationRequirements(readModelRequirements, relationRequirements);
+        var mergedRelationRequirements = MergeRelationRequirements(relationRequirements, readModelRequiresGraph);
         var relationSelectionOptions = new ProjectionReadModelStoreSelectionOptions
         {
-            RequestedProviderName = NormalizeRelationProviderName(
-                options.RelationProvider,
+            RequestedProviderName = NormalizeGraphProviderName(
+                options.GraphProvider,
                 readModelProvider),
             FailOnUnsupportedCapabilities = options.FailOnUnsupportedCapabilities,
         };
@@ -44,16 +38,28 @@ public sealed class ProjectionStoreSelectionPlanner : IProjectionStoreSelectionP
     }
 
     private static ProjectionReadModelRequirements MergeRelationRequirements(
-        ProjectionReadModelRequirements readModelRequirements,
-        ProjectionReadModelRequirements relationRequirements)
+        ProjectionReadModelRequirements relationRequirements,
+        bool readModelRequiresGraph)
     {
         return new ProjectionReadModelRequirements(
             requiresIndexing: relationRequirements.RequiresIndexing,
             requiredIndexKinds: relationRequirements.RequiredIndexKinds,
-            requiresAliases: relationRequirements.RequiresAliases || readModelRequirements.RequiresAliases,
-            requiresSchemaValidation: relationRequirements.RequiresSchemaValidation || readModelRequirements.RequiresSchemaValidation,
-            requiresRelations: relationRequirements.RequiresRelations,
-            requiresRelationTraversal: relationRequirements.RequiresRelationTraversal);
+            requiresAliases: relationRequirements.RequiresAliases,
+            requiresSchemaValidation: relationRequirements.RequiresSchemaValidation,
+            requiresRelations: relationRequirements.RequiresRelations || readModelRequiresGraph,
+            requiresRelationTraversal: relationRequirements.RequiresRelationTraversal || readModelRequiresGraph);
+    }
+
+    private static ProjectionReadModelRequirements BuildReadModelRequirements(Type readModelType)
+    {
+        var requiredIndexKinds = new List<ProjectionReadModelIndexKind>();
+
+        if (typeof(IDocumentReadModel).IsAssignableFrom(readModelType))
+            requiredIndexKinds.Add(ProjectionReadModelIndexKind.Document);
+
+        return new ProjectionReadModelRequirements(
+            requiresIndexing: requiredIndexKinds.Count > 0,
+            requiredIndexKinds: requiredIndexKinds);
     }
 
     private static string NormalizeRequiredProviderName(string providerName)
@@ -67,14 +73,14 @@ public sealed class ProjectionStoreSelectionPlanner : IProjectionStoreSelectionP
         return providerName.Trim();
     }
 
-    private static string NormalizeRelationProviderName(
-        string relationProviderName,
+    private static string NormalizeGraphProviderName(
+        string graphProviderName,
         string fallbackProviderName)
     {
-        if (string.IsNullOrWhiteSpace(relationProviderName))
+        if (string.IsNullOrWhiteSpace(graphProviderName))
             return fallbackProviderName;
 
-        return relationProviderName.Trim();
+        return graphProviderName.Trim();
     }
 
     private static void EnsureReadModelModeSupported(ProjectionReadModelMode readModelMode)
@@ -83,7 +89,7 @@ public sealed class ProjectionStoreSelectionPlanner : IProjectionStoreSelectionP
             return;
 
         throw new InvalidOperationException(
-            "Projection store selection does not support Projection:ReadModel:Mode=StateOnly. " +
+            "Projection store selection does not support Projection:Document:Mode=StateOnly. " +
             "Use CustomReadModel or DefaultReadModel.");
     }
 }

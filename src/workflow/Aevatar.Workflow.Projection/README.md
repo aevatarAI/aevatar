@@ -6,7 +6,7 @@
 
 - 应用层投影端口实现：
   - `IWorkflowExecutionProjectionLifecyclePort`（`Ensure/Attach/Detach/Release`）
-  - `IWorkflowExecutionProjectionQueryPort`（`Snapshot/Timeline/Relations/Subgraph`）
+  - `IWorkflowExecutionProjectionQueryPort`（`Snapshot/Timeline/Relations/Subgraph/GraphEnriched`）
   - 默认实现分别为 `WorkflowExecutionProjectionLifecycleService` 与 `WorkflowExecutionProjectionQueryService`
   - 两个实现分别继承 `ProjectionLifecyclePortServiceBase` / `ProjectionQueryPortServiceBase`，通用端口编排已下沉到 `Aevatar.CQRS.Projection.Core`
 - 编排组件拆分（避免单类过重）：
@@ -18,7 +18,7 @@
   - `WorkflowProjectionSinkFailurePolicy`（sink 异常策略）
   - `WorkflowProjectionReadModelUpdater`（read model 元信息更新）
   - `WorkflowProjectionQueryReader`（query 映射读取）
-  - Store 选择统一由 `IProjectionStoreSelectionPlanner` 执行（Workflow 仅提供 relation 需求，不持有 provider/index kind 决策）
+  - Store 选择统一由 `IProjectionStoreSelectionPlanner` 执行（基于 `IDocumentReadModel/IGraphReadModel` 能力自动决策）
 - 领域上下文：`IWorkflowExecutionProjectionContextFactory`、`WorkflowExecutionProjectionContext`
 - 实时输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
 - 领域投影实现：reducers、projectors、read model（不包含 Provider Store 实现）
@@ -38,7 +38,7 @@
 
 1. `EnsureActorProjectionAsync` 由 `WorkflowExecutionProjectionLifecycleService` 转发到 `WorkflowProjectionActivationService`，先通过 `WorkflowProjectionLeaseManager`（底层复用 `Aevatar.CQRS.Projection.Core` ownership coordinator）申请 ownership，再创建 projection 上下文并注册 actor stream 订阅
 2. 每条 `EventEnvelope` 进入统一 coordinator，一对多调用已注册 projector
-3. `WorkflowExecutionReadModelProjector` 驱动 reducers 生成并更新 read model
+3. `WorkflowExecutionReadModelProjector` 驱动 reducers 生成并更新 read model，并通过 `IProjectionMaterializationRouter` 执行 Document/Graph 单写或双写
 4. AI 通用事件通过 `Aevatar.Workflow.Extensions.AIProjection` 扩展接入，扩展内部复用 `Aevatar.AI.Projection` 的默认 applier + reducer，将事件写入 `WorkflowExecutionReport` 的 AI 能力字段，业务层无需重复维护映射代码
 5. AGUI 分支与读模型分支共享同一输入事件流；AGUI projector 将 run 输出发布到 `workflow-run:{actorId}:{commandId}` 事件流
 
@@ -82,33 +82,28 @@ FAQ：
   - 实现 `IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>`
   - 在 DI 中注册
 - 扩展 ReadModel Provider（推荐）：
-  - 实现 `IProjectionStoreRegistration<IProjectionReadModelStore<WorkflowExecutionReport, string>>`
+  - 文档存储注册：`IProjectionStoreRegistration<IProjectionReadModelStore<WorkflowExecutionReport, string>>`
+  - 图存储注册：`IProjectionStoreRegistration<IProjectionRelationStore>`
   - 在 Host/Extensions 侧注册（例如 `Aevatar.Workflow.Extensions.Hosting.AddWorkflowProjectionReadModelProviders(...)`）
-  - 通过 `Projection:ReadModel:*` 配置选择 Provider（Workflow 层不再暴露 provider 选择字段）
+  - 通过 `Projection:Document:*` 与 `Projection:Graph:*` 配置选择 Provider
 
 ## Provider 配置
 
-- Provider 选择统一配置入口：`Projection:ReadModel:*`（绑定到 `ProjectionReadModelRuntimeOptions`）
-- `Projection:ReadModel:Provider`：`InMemory`（默认）/`Elasticsearch`/`Neo4j`
-- `Projection:ReadModel:RelationProvider`：关系 provider；留空时回退到 `Provider`
-- `Projection:ReadModel:FailOnUnsupportedCapabilities`：能力不匹配时是否 fail-fast（默认 `true`）
-- `Projection:ReadModel:Mode`：读模型运行模式（`StateOnly` 会在选择阶段 fail-fast）
-- `Projection:ReadModel:Bindings:*`：ReadModel -> IndexKind 约束（键必须为 `ReadModel` 的 `Type.FullName`，例如 `Aevatar.Workflow.Projection.ReadModels.WorkflowExecutionReport: Document`）
-- `WorkflowExecutionProjection:ValidateReadModelProviderOnStartup`：是否在 Host 启动阶段预校验 Provider 选择与能力（默认 `true`）
-- `WorkflowExecutionProjection:ValidateRelationProviderOnStartup`：是否在 Host 启动阶段预校验 Relation Provider（默认 `true`）
-- `Projection:Policies:DenyInMemoryRelationFactStore`：禁用 InMemory relation 作为事实源（生产建议开启）
-- `Projection:ReadModel:Providers:Elasticsearch:Endpoints`：Elasticsearch endpoint 列表
-- `Projection:ReadModel:Providers:Elasticsearch:IndexPrefix`：索引前缀
-- `Projection:ReadModel:Providers:Elasticsearch:RequestTimeoutMs`：请求超时
-- `Projection:ReadModel:Providers:Elasticsearch:ListTakeMax`：`ListAsync` 上限
-- `Projection:ReadModel:Providers:Elasticsearch:ListSortField`：可选自定义排序字段；为空时默认 `CreatedAt desc -> _id desc`
-- `Projection:ReadModel:Providers:Elasticsearch:AutoCreateIndex`：是否自动建索引
-- `Projection:ReadModel:Providers:Elasticsearch:MissingIndexBehavior`：索引缺失行为（`Throw` / `WarnAndReturnEmpty`，默认 `Throw`）
-- `Projection:ReadModel:Providers:Elasticsearch:MutateMaxRetryCount`：`MutateAsync` OCC 冲突重试次数（默认 `3`）
-- `Projection:ReadModel:Providers:Elasticsearch:Username/Password`：可选基础认证
+- Provider 选择统一配置入口：
+  - `Projection:Document:Provider`：`InMemory`（默认）/`Elasticsearch`/`Neo4j`
+  - `Projection:Graph:Provider`：`InMemory`（默认）/`Neo4j`
+- `Projection:Policies:DenyInMemoryGraphFactStore`：禁用 InMemory graph 作为事实源（生产建议开启）
+- 文档 Provider 配置：
+  - `Projection:Document:Providers:Elasticsearch:*`
+  - `Projection:Document:Providers:Neo4j:*`
+- 图 Provider 配置：
+  - `Projection:Graph:Providers:Neo4j:*`
+- `WorkflowExecutionProjection:ValidateReadModelProviderOnStartup`：启动阶段预校验 document provider（默认 `true`）
+- `WorkflowExecutionProjection:ValidateRelationProviderOnStartup`：启动阶段预校验 graph provider（默认 `true`）
 - 关系查询参数：
   - `/actors/{actorId}/relations` 支持 `direction` 与 `relationTypes`
   - `/actors/{actorId}/relation-subgraph` 支持 `direction` 与 `relationTypes`
+  - `/actors/{actorId}/graph-enriched` 支持 `direction` 与 `relationTypes`
 - 扩展 run 输出协议：
   - 保持 `WorkflowRunEvent` 不变，新增 presentation adapter 进行协议映射
   - 不改 Application 用例编排代码

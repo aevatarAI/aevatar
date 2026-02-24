@@ -6,6 +6,15 @@
 2. 计划已按当前仓库真实结构重写，覆盖到项目/目录/文件级实施方式。
 3. 继续执行“无兼容重构”：删除旧链路，不保留兼容层和回退开关。
 
+### 1.1 已落地实现（2026-02-24）
+
+1. 已新增 capability-first 抽象：`IProjectionReadModel`、`IDocumentReadModel`、`IGraphReadModel`、`IDocumentProjectionStore`、`IGraphProjectionStore`、`IProjectionMaterializationRouter`。
+2. 已落地泛型 metadata 链路：`IReadModelDocumentMetadataProvider<TReadModel>` + `IProjectionDocumentMetadataResolver`。
+3. 已落地 Runtime 双写路由：`ProjectionMaterializationRouter<TReadModel, TKey>` 与 `ProjectionGraphStoreAdapter<TReadModel>`。
+4. 已删除 `WorkflowExecutionRelationProjector`，关系写入改为 `WorkflowExecutionReport` 的 `GraphNodes/GraphEdges` 驱动。
+5. Host 配置已切换为 `Projection:Document:*` / `Projection:Graph:*`，并禁用 Elasticsearch 作为 graph provider。
+6. Workflow Query 已新增 `graph-enriched` 聚合查询与 endpoint：`/actors/{actorId}/graph-enriched`。
+
 ## 2. 目标与边界
 
 1. 目标：开发者只定义 `State -> ReadModel`，并通过 readmodel 能力接口自动决定写入文档库/图库。
@@ -411,4 +420,3 @@ flowchart TB
     P4 --> P5["Phase 5 门禁与文档收口"]
     P5 --> DONE["Build/Test/Guards 全绿"]
 ```
-
