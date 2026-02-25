@@ -13,7 +13,7 @@ public sealed class WorkflowExecutionReadModelMapper
             LastCommandId = source.CommandId,
             StateVersion = source.StateVersion,
             LastEventId = source.LastEventId,
-            LastUpdatedAt = source.EndedAt,
+            LastUpdatedAt = source.UpdatedAt,
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,
@@ -36,6 +36,42 @@ public sealed class WorkflowExecutionReadModelMapper
             StepType = source.StepType,
             EventType = source.EventType,
             Data = new Dictionary<string, string>(source.Data, StringComparer.Ordinal),
+        };
+    }
+
+    public WorkflowActorGraphNode ToActorGraphNode(ProjectionGraphNode source)
+    {
+        return new WorkflowActorGraphNode
+        {
+            NodeId = source.NodeId,
+            NodeType = source.NodeType,
+            UpdatedAt = source.UpdatedAt,
+            Properties = new Dictionary<string, string>(source.Properties, StringComparer.Ordinal),
+        };
+    }
+
+    public WorkflowActorGraphEdge ToActorGraphEdge(ProjectionGraphEdge source)
+    {
+        return new WorkflowActorGraphEdge
+        {
+            EdgeId = source.EdgeId,
+            FromNodeId = source.FromNodeId,
+            ToNodeId = source.ToNodeId,
+            EdgeType = source.EdgeType,
+            UpdatedAt = source.UpdatedAt,
+            Properties = new Dictionary<string, string>(source.Properties, StringComparer.Ordinal),
+        };
+    }
+
+    public WorkflowActorGraphSubgraph ToActorGraphSubgraph(
+        string rootNodeId,
+        ProjectionGraphSubgraph source)
+    {
+        return new WorkflowActorGraphSubgraph
+        {
+            RootNodeId = rootNodeId,
+            Nodes = source.Nodes.Select(ToActorGraphNode).ToList(),
+            Edges = source.Edges.Select(ToActorGraphEdge).ToList(),
         };
     }
 }

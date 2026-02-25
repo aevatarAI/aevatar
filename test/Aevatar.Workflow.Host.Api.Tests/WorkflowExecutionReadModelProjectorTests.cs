@@ -1,14 +1,15 @@
 using Aevatar.AI.Projection.Reducers;
 using Aevatar.AI.Projection.Appliers;
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.Reducers;
-using Aevatar.Workflow.Projection.Stores;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;
@@ -20,6 +21,21 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public class WorkflowExecutionReadModelProjectorTests
 {
     private static IEventDeduplicator CreateDeduplicator() => new TestEventDeduplicator();
+    private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
+        keySelector: report => report.RootActorId,
+        keyFormatter: key => key,
+        listSortSelector: report => report.StartedAt);
+    private static IProjectionStoreDispatcher<WorkflowExecutionReport, string> CreateDispatcher(
+        InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> store)
+    {
+        var graphStore = new InMemoryProjectionGraphStore();
+        var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+        {
+            new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
+            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(graphStore),
+        };
+        return new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
+    }
 
     private static IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> BuildReducers() =>
     [
@@ -55,8 +71,12 @@ public class WorkflowExecutionReadModelProjectorTests
     [Fact]
     public async Task Projector_ShouldBuildRunReadModel_EndToEnd()
     {
-        var store = new InMemoryWorkflowExecutionReadModelStore();
-        var projector = new WorkflowExecutionReadModelProjector(store, CreateDeduplicator(), BuildReducers());
+        var store = CreateStore();
+        var projector = new WorkflowExecutionReadModelProjector(
+            CreateDispatcher(store),
+            CreateDeduplicator(),
+            new SystemProjectionClock(),
+            BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>( [projector]);
 
         var context = new WorkflowExecutionProjectionContext
@@ -104,6 +124,8 @@ public class WorkflowExecutionReadModelProjectorTests
         var report = await store.GetAsync("root");
         report.Should().NotBeNull();
         report!.WorkflowName.Should().Be("direct");
+        report.CreatedAt.Should().Be(context.StartedAt);
+        report.UpdatedAt.Should().BeOnOrAfter(report.CreatedAt);
         report.Success.Should().BeTrue();
         report.FinalOutput.Should().Be("final answer");
         report.Summary.TotalSteps.Should().Be(1);
@@ -117,8 +139,12 @@ public class WorkflowExecutionReadModelProjectorTests
     [Fact]
     public async Task Projector_ShouldIgnoreUnknownEvents()
     {
-        var store = new InMemoryWorkflowExecutionReadModelStore();
-        var projector = new WorkflowExecutionReadModelProjector(store, CreateDeduplicator(), BuildReducers());
+        var store = CreateStore();
+        var projector = new WorkflowExecutionReadModelProjector(
+            CreateDispatcher(store),
+            CreateDeduplicator(),
+            new SystemProjectionClock(),
+            BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>( [projector]);
 
         var context = new WorkflowExecutionProjectionContext
@@ -147,8 +173,12 @@ public class WorkflowExecutionReadModelProjectorTests
     [Fact]
     public async Task Projector_ShouldDeduplicateByEnvelopeId()
     {
-        var store = new InMemoryWorkflowExecutionReadModelStore();
-        var projector = new WorkflowExecutionReadModelProjector(store, CreateDeduplicator(), BuildReducers());
+        var store = CreateStore();
+        var projector = new WorkflowExecutionReadModelProjector(
+            CreateDispatcher(store),
+            CreateDeduplicator(),
+            new SystemProjectionClock(),
+            BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>( [projector]);
 
         var context = new WorkflowExecutionProjectionContext
@@ -183,12 +213,16 @@ public class WorkflowExecutionReadModelProjectorTests
     [Fact]
     public async Task Projector_NoOpReducer_ShouldNotAdvanceStateVersion()
     {
-        var store = new InMemoryWorkflowExecutionReadModelStore();
+        var store = CreateStore();
         IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>[] reducers =
         [
             new TextMessageStartProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>([]),
         ];
-        var projector = new WorkflowExecutionReadModelProjector(store, CreateDeduplicator(), reducers);
+        var projector = new WorkflowExecutionReadModelProjector(
+            CreateDispatcher(store),
+            CreateDeduplicator(),
+            new SystemProjectionClock(),
+            reducers);
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>([projector]);
 
         var context = new WorkflowExecutionProjectionContext
@@ -219,8 +253,12 @@ public class WorkflowExecutionReadModelProjectorTests
     [Fact]
     public async Task Projector_ShouldUseEnvelopeTimestamp_WhenProvided()
     {
-        var store = new InMemoryWorkflowExecutionReadModelStore();
-        var projector = new WorkflowExecutionReadModelProjector(store, CreateDeduplicator(), BuildReducers());
+        var store = CreateStore();
+        var projector = new WorkflowExecutionReadModelProjector(
+            CreateDispatcher(store),
+            CreateDeduplicator(),
+            new SystemProjectionClock(),
+            BuildReducers());
         var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>( [projector]);
 
         var context = new WorkflowExecutionProjectionContext
@@ -252,7 +290,7 @@ public class WorkflowExecutionReadModelProjectorTests
     [Fact]
     public async Task Store_List_ShouldReturnNewestFirst()
     {
-        var store = new InMemoryWorkflowExecutionReadModelStore();
+        var store = CreateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
             WorkflowName = "w",
@@ -279,9 +317,9 @@ public class WorkflowExecutionReadModelProjectorTests
     [Fact]
     public async Task Store_MutateMissingRun_ShouldThrow()
     {
-        var store = new InMemoryWorkflowExecutionReadModelStore();
+        var store = CreateStore();
         Func<Task> act = () => store.MutateAsync("missing", _ => { });
-        await act.Should().ThrowAsync<KeyNotFoundException>();
+        await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
     private sealed class TestEventDeduplicator : IEventDeduplicator

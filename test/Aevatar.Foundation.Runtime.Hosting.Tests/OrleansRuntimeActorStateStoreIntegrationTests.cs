@@ -16,7 +16,7 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class OrleansRuntimeActorStateStoreIntegrationTests
 {
     [Fact]
-    public async Task RuntimeActorGrain_ShouldRestoreStatefulAgentSnapshot_WhenReinitialized()
+    public async Task RuntimeActorGrain_ShouldNotRestoreTransientStateWithoutEvents_WhenReinitialized()
     {
         var actorId = $"actor-{Guid.NewGuid():N}";
         var siloPort = ReserveTcpPort();
@@ -35,7 +35,7 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
             await grain.DeactivateAsync();
 
             (await grain.InitializeAgentAsync(agentType)).Should().BeTrue();
-            (await grain.GetDescriptionAsync()).Should().Be("activation-count:2");
+            (await grain.GetDescriptionAsync()).Should().Be("activation-count:1");
         }
         finally
         {

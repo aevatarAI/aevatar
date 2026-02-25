@@ -2,6 +2,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Orleans.Streams;
 
@@ -11,23 +13,21 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
     private readonly IPersistentState<RuntimeActorGrainState> _state;
-    private readonly IRuntimeActorStateBindingAccessor _stateBindingAccessor;
     private IAgent? _agent;
     private IEventDeduplicator? _deduplicator;
     private IEnvelopePropagationPolicy _propagationPolicy =
         new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
+    private IRuntimeActorStateBindingAccessor? _stateBindingAccessor;
+    private IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
     private IAsyncStream<EventEnvelope>? _selfStream;
     private StreamSubscriptionHandle<EventEnvelope>? _selfStreamHandle;
 
     public RuntimeActorGrain(
-        [PersistentState("agent", OrleansRuntimeConstants.GrainStateStorageName)]
-        IPersistentState<RuntimeActorGrainState> state,
-        IRuntimeActorStateBindingAccessor stateBindingAccessor)
+        [PersistentState("agent", OrleansRuntimeConstants.GrainStateStorageName)] IPersistentState<RuntimeActorGrainState> state)
     {
         _state = state;
-        _stateBindingAccessor = stateBindingAccessor;
     }
 
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
@@ -35,6 +35,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _deduplicator = ServiceProvider.GetService<IEventDeduplicator>();
         _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>() ?? _propagationPolicy;
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
+        _stateBindingAccessor = ServiceProvider.GetService<IRuntimeActorStateBindingAccessor>();
+        _deactivationHookDispatcher = ServiceProvider.GetService<IActorDeactivationHookDispatcher>();
 
         var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
         _logger = loggerFactory?.CreateLogger<RuntimeActorGrain>() ?? NullLogger<RuntimeActorGrain>.Instance;
@@ -55,9 +57,12 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         if (_agent != null)
         {
+            using var stateBinding = _stateBindingAccessor?.Bind(_state);
             await _agent.DeactivateAsync(cancellationToken);
             _agent = null;
         }
+
+        TriggerDeactivationHook();
     }
 
     public async Task<bool> InitializeAgentAsync(string agentTypeName)
@@ -122,6 +127,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 return;
         }
 
+        using var stateBinding = _stateBindingAccessor?.Bind(_state);
         await _agent.HandleEventAsync(envelope);
     }
 
@@ -202,6 +208,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _state.State.Children.Clear();
         _state.State.AgentStateTypeName = null;
         _state.State.AgentStateSnapshot = null;
+        _state.State.AgentStateSnapshotVersion = 0;
         await _state.WriteStateAsync();
     }
 
@@ -216,6 +223,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         try
         {
+            using var stateBinding = _stateBindingAccessor?.Bind(_state);
             var agent = CreateAgentInstance(agentType);
             InjectDependencies(agent, this.GetPrimaryKeyString());
             await agent.ActivateAsync(ct);
@@ -270,28 +278,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
         gAgent.ManifestStore = ServiceProvider.GetService<IAgentManifestStore>();
-
-        InjectStateStore(agent);
-    }
-
-    private void InjectStateStore(IAgent agent)
-    {
-        var type = agent.GetType();
-        while (type != null)
-        {
-            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(GAgentBase<>))
-            {
-                var stateType = type.GetGenericArguments()[0];
-                var stateStoreType = typeof(IStateStore<>).MakeGenericType(stateType);
-                using var binding = _stateBindingAccessor.Bind(_state);
-                var stateStore = ServiceProvider.GetService(stateStoreType);
-                if (stateStore != null)
-                    type.GetProperty("StateStore")?.SetValue(agent, stateStore);
-                break;
-            }
-
-            type = type.BaseType;
-        }
+        if (gAgent is IEventSourcingFactoryBinding statefulBinding)
+            statefulBinding.BindEventSourcingFactory(ServiceProvider);
     }
 
     private async Task SubscribeSelfStreamAsync()
@@ -311,6 +299,14 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     {
         _ = token;
         return HandleEnvelopeAsync(envelope.ToByteArray());
+    }
+
+    private void TriggerDeactivationHook()
+    {
+        if (_deactivationHookDispatcher == null)
+            return;
+
+        _ = _deactivationHookDispatcher.DispatchAsync(this.GetPrimaryKeyString(), CancellationToken.None);
     }
 
 }

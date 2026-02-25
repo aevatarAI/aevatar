@@ -342,7 +342,7 @@ public sealed class OrleansDistributedCoverageTests
     {
         var state = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
         var stateProxy = (RuntimeActorPersistentStateProxy)(object)state;
-        var grain = new RuntimeActorGrain(state, new AsyncLocalRuntimeActorStateBindingAccessor());
+        var grain = new RuntimeActorGrain(state);
 
         (await grain.IsInitializedAsync()).Should().BeFalse();
         stateProxy.State.AgentTypeName = "Known.Type";
@@ -381,7 +381,7 @@ public sealed class OrleansDistributedCoverageTests
     public async Task RuntimeActorGrain_ShouldCoverExceptionalBranches()
     {
         var state = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
-        var grain = new RuntimeActorGrain(state, new AsyncLocalRuntimeActorStateBindingAccessor());
+        var grain = new RuntimeActorGrain(state);
 
         var envelopeAct = () => grain.HandleEnvelopeAsync(new byte[] { 1, 2, 3 });
         await envelopeAct.Should().ThrowAsync<InvalidOperationException>()

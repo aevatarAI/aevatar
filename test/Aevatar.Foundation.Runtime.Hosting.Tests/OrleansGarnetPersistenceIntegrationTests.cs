@@ -2,10 +2,12 @@ using System.Net;
 using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -83,7 +85,7 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
     }
 
     [GarnetIntegrationFact]
-    public async Task StatefulAgentSnapshot_ShouldPersistAcrossSiloRestart_WhenUsingGarnetStorage()
+    public async Task StatefulAgentEventSourcedState_ShouldPersistAcrossSiloRestart_WhenUsingGarnetStorage()
     {
         var garnetConnectionString = RequireGarnetConnectionString();
         var actorId = $"stateful-actor-{Guid.NewGuid():N}";
@@ -214,11 +216,16 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
 
     private sealed class RecordingGarnetStatefulAgent : GAgentBase<Int32Value>
     {
-        protected override Task OnActivateAsync(CancellationToken ct)
-        {
-            State.Value += 1;
-            return Task.CompletedTask;
-        }
+        protected override Task OnActivateAsync(CancellationToken ct) =>
+            PersistDomainEventAsync(new StringValue { Value = "activated" }, ct);
+
+        protected override Int32Value TransitionState(Int32Value current, IMessage evt)
+            => StateTransitionMatcher
+                .Match(current, evt)
+                .On<StringValue>((state, payload) => payload.Value == "activated"
+                    ? new Int32Value { Value = state.Value + 1 }
+                    : state)
+                .OrCurrent();
 
         public override Task<string> GetDescriptionAsync() =>
             Task.FromResult($"activation-count:{State.Value}");

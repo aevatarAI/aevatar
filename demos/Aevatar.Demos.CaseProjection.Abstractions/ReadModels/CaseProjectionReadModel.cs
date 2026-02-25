@@ -1,7 +1,11 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+
 namespace Aevatar.Demos.CaseProjection.Abstractions.ReadModels;
 
-public sealed class CaseProjectionReadModel
+public sealed class CaseProjectionReadModel : IProjectionReadModel
 {
+    public string Id => RunId;
+
     public string ReadModelVersion { get; set; } = "1.0";
     public string RunId { get; set; } = "";
     public string RootActorId { get; set; } = "";

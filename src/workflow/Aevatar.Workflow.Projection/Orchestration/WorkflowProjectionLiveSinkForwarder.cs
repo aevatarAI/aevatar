@@ -2,7 +2,8 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowProjectionLiveSinkForwarder : IWorkflowProjectionLiveSinkForwarder
+public sealed class WorkflowProjectionLiveSinkForwarder
+    : IProjectionPortLiveSinkForwarder<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent>
 {
     private readonly IWorkflowProjectionSinkFailurePolicy _sinkFailurePolicy;
 

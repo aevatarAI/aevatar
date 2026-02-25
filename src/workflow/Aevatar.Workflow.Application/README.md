@@ -22,7 +22,7 @@
 - `WorkflowRunOutputStreamer`
   - 读取 run 事件并映射 `WorkflowOutputFrame`。
 - `WorkflowExecutionQueryApplicationService`
-  - `agents/workflows/runs` 查询门面（经 `IWorkflowExecutionProjectionPort` 读取读侧模型）。
+  - `agents/workflows/runs` 查询门面（经 `IWorkflowExecutionProjectionQueryPort` 读取读侧模型）。
   - `ListAgentsAsync` 仅返回 `WorkflowGAgent`，不扫描暴露非 Workflow actor。
 - `WorkflowDefinitionRegistry`
   - 维护 workflow 名称到 YAML 的内存注册表。

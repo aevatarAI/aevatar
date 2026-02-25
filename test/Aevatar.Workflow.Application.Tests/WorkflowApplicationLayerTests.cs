@@ -292,6 +292,85 @@ public class WorkflowExecutionQueryApplicationServiceTests
         detail.LastCommandId.Should().Be("cmd-1");
         detail.TotalSteps.Should().Be(3);
     }
+
+    [Fact]
+    public async Task ListActorGraphEdgesAsync_ShouldReturnProjectionPortResult()
+    {
+        var relation = new WorkflowActorGraphEdge
+        {
+            EdgeId = "edge-1",
+            FromNodeId = "actor-1",
+            ToNodeId = "actor-2",
+            EdgeType = "CHILD_OF",
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        var projection = new FakeProjectionService
+        {
+            EnableActorQueryEndpointsValue = true,
+            RelationsByActorId = new Dictionary<string, IReadOnlyList<WorkflowActorGraphEdge>>(StringComparer.Ordinal)
+            {
+                ["actor-1"] = [relation],
+            },
+        };
+        var queryService = new WorkflowExecutionQueryApplicationService(
+            new WorkflowDefinitionRegistry(),
+            projection);
+
+        var items = await queryService.ListActorGraphEdgesAsync("actor-1", ct: CancellationToken.None);
+
+        items.Should().ContainSingle();
+        items[0].EdgeId.Should().Be("edge-1");
+        items[0].EdgeType.Should().Be("CHILD_OF");
+    }
+
+    [Fact]
+    public async Task GetActorGraphSubgraphAsync_ShouldReturnProjectionPortResult()
+    {
+        var subgraph = new WorkflowActorGraphSubgraph
+        {
+            RootNodeId = "actor-1",
+            Nodes =
+            [
+                new WorkflowActorGraphNode
+                {
+                    NodeId = "actor-1",
+                    NodeType = "Actor",
+                },
+                new WorkflowActorGraphNode
+                {
+                    NodeId = "actor-2",
+                    NodeType = "Actor",
+                },
+            ],
+            Edges =
+            [
+                new WorkflowActorGraphEdge
+                {
+                    EdgeId = "edge-1",
+                    FromNodeId = "actor-1",
+                    ToNodeId = "actor-2",
+                    EdgeType = "CHILD_OF",
+                },
+            ],
+        };
+        var projection = new FakeProjectionService
+        {
+            EnableActorQueryEndpointsValue = true,
+            SubgraphByActorId = new Dictionary<string, WorkflowActorGraphSubgraph>(StringComparer.Ordinal)
+            {
+                ["actor-1"] = subgraph,
+            },
+        };
+        var queryService = new WorkflowExecutionQueryApplicationService(
+            new WorkflowDefinitionRegistry(),
+            projection);
+
+        var item = await queryService.GetActorGraphSubgraphAsync("actor-1", ct: CancellationToken.None);
+
+        item.RootNodeId.Should().Be("actor-1");
+        item.Nodes.Should().HaveCount(2);
+        item.Edges.Should().ContainSingle(x => x.EdgeId == "edge-1");
+    }
 }
 
 public class ActorRuntimeWorkflowExecutionTopologyResolverTests
@@ -317,7 +396,9 @@ public class ActorRuntimeWorkflowExecutionTopologyResolverTests
     }
 }
 
-internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
+internal sealed class FakeProjectionService :
+    IWorkflowExecutionProjectionLifecyclePort,
+    IWorkflowExecutionProjectionQueryPort
 {
     public bool ProjectionEnabled { get; set; } = true;
     public bool EnableActorQueryEndpointsValue { get; set; } = true;
@@ -327,6 +408,8 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
     public IWorkflowExecutionProjectionLease? LastLease { get; private set; }
     public Dictionary<string, WorkflowActorSnapshot> SnapshotByActorId { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, IReadOnlyList<WorkflowActorTimelineItem>> TimelineByActorId { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, IReadOnlyList<WorkflowActorGraphEdge>> RelationsByActorId { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, WorkflowActorGraphSubgraph> SubgraphByActorId { get; set; } = new(StringComparer.Ordinal);
     public IReadOnlyList<WorkflowActorSnapshot> SnapshotList { get; set; } = [];
 
     public bool EnableActorQueryEndpoints => EnableActorQueryEndpointsValue;
@@ -387,6 +470,61 @@ internal sealed class FakeProjectionService : IWorkflowExecutionProjectionPort
             timeline = [];
 
         return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>(timeline.Take(Math.Max(1, take)).ToList());
+    }
+
+    public Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(
+        string actorId,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default)
+    {
+        _ = options;
+        _ = ct;
+        if (!RelationsByActorId.TryGetValue(actorId, out var relations))
+            relations = [];
+
+        return Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>(relations.Take(Math.Max(1, take)).ToList());
+    }
+
+    public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default)
+    {
+        _ = depth;
+        _ = take;
+        _ = options;
+        _ = ct;
+        if (!SubgraphByActorId.TryGetValue(actorId, out var subgraph))
+        {
+            subgraph = new WorkflowActorGraphSubgraph
+            {
+                RootNodeId = actorId,
+            };
+        }
+
+        return Task.FromResult(subgraph);
+    }
+
+    public async Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default)
+    {
+        var snapshot = await GetActorSnapshotAsync(actorId, ct);
+        if (snapshot == null)
+            return null;
+
+        var subgraph = await GetActorGraphSubgraphAsync(actorId, depth, take, options, ct);
+        return new WorkflowActorGraphEnrichedSnapshot
+        {
+            Snapshot = snapshot,
+            Subgraph = subgraph,
+        };
     }
 
     private sealed record FakeProjectionLease(string ActorId, string CommandId) : IWorkflowExecutionProjectionLease;

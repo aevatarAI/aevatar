@@ -55,6 +55,8 @@ siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
 });
 ```
 
+当持久化后端选择 `Garnet` 时，Event Sourcing 的 `IEventStore` 也会自动切换为 `GarnetEventStore`（不再使用 `InMemoryEventStore`），确保重启后可依赖事件流恢复。
+
 ## MassTransitAdapter 启用方式
 
 当需要 Orleans Stream 通过 MassTransit 传输时，显式启用 MassTransit 适配扩展，并选择 Kafka 作为传输实现：

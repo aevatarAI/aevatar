@@ -17,6 +17,8 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Core;
@@ -65,13 +67,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     [EventHandler]
     public async Task HandleConfigureRoleAgent(ConfigureRoleAgentEvent evt)
     {
-        SetRoleName(evt.RoleName);
+        await PersistDomainEventAsync(evt);
         await ((IRoleAgent)this).ConfigureAsync(new RoleAgentConfig
         {
             ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? "deepseek" : evt.ProviderName,
             Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,
             SystemPrompt = evt.SystemPrompt ?? string.Empty,
-            Temperature = evt.Temperature == 0 ? null : evt.Temperature,
+            Temperature = evt.HasTemperature ? evt.Temperature : null,
             MaxTokens = evt.MaxTokens == 0 ? null : evt.MaxTokens,
             MaxToolRounds = evt.MaxToolRounds <= 0 ? 10 : evt.MaxToolRounds,
             MaxHistoryMessages = evt.MaxHistoryMessages <= 0 ? 100 : evt.MaxHistoryMessages,
@@ -82,6 +84,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     /// <summary>Returns agent description.</summary>
     public override Task<string> GetDescriptionAsync() =>
         Task.FromResult($"RoleGAgent[{RoleName}]:{Id}");
+
+    protected override RoleGAgentState TransitionState(RoleGAgentState current, IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<ConfigureRoleAgentEvent>(ApplyConfigureRoleAgent)
+            .OrCurrent();
+
+    protected override Task OnStateChangedAsync(RoleGAgentState state, CancellationToken ct)
+    {
+        _ = ct;
+        RoleName = state.RoleName ?? string.Empty;
+        return Task.CompletedTask;
+    }
 
     /// <summary>
     /// Handles ChatRequestEvent via streaming LLM call.
@@ -127,5 +142,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             Content = response,
             SessionId = request.SessionId,
         }, EventDirection.Up);
+    }
+
+    private static RoleGAgentState ApplyConfigureRoleAgent(
+        RoleGAgentState current,
+        ConfigureRoleAgentEvent evt)
+    {
+        var next = current.Clone();
+        next.RoleName = evt.RoleName ?? string.Empty;
+        return next;
     }
 }

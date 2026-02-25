@@ -67,6 +67,8 @@ public static class WorkflowExecutionReportWriter
         AppendRow(sb, "TopologySource", report.TopologySource.ToString());
         AppendRow(sb, "Success", report.Success?.ToString() ?? "(unknown)");
         AppendRow(sb, "DurationMs", report.DurationMs.ToString("F2"));
+        AppendRow(sb, "CreatedAt", report.CreatedAt.ToString("O"));
+        AppendRow(sb, "UpdatedAt", report.UpdatedAt.ToString("O"));
         AppendRow(sb, "StartedAt", report.StartedAt.ToString("O"));
         AppendRow(sb, "EndedAt", report.EndedAt.ToString("O"));
         sb.AppendLine("</tbody></table>");

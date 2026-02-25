@@ -1,24 +1,22 @@
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowProjectionReleaseService : IWorkflowProjectionReleaseService
+public sealed class WorkflowProjectionReleaseService : IProjectionPortReleaseService<WorkflowExecutionRuntimeLease>
 {
     private readonly IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> _lifecycle;
-    private readonly IWorkflowProjectionSinkSubscriptionManager _sinkSubscriptionManager;
     private readonly IWorkflowProjectionReadModelUpdater _readModelUpdater;
-    private readonly IWorkflowProjectionLeaseManager _leaseManager;
+    private readonly IProjectionOwnershipCoordinator _ownershipCoordinator;
 
     public WorkflowProjectionReleaseService(
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
-        IWorkflowProjectionSinkSubscriptionManager sinkSubscriptionManager,
         IWorkflowProjectionReadModelUpdater readModelUpdater,
-        IWorkflowProjectionLeaseManager leaseManager)
+        IProjectionOwnershipCoordinator ownershipCoordinator)
     {
         _lifecycle = lifecycle;
-        _sinkSubscriptionManager = sinkSubscriptionManager;
         _readModelUpdater = readModelUpdater;
-        _leaseManager = leaseManager;
+        _ownershipCoordinator = ownershipCoordinator;
     }
 
     public async Task ReleaseIfIdleAsync(
@@ -28,12 +26,12 @@ public sealed class WorkflowProjectionReleaseService : IWorkflowProjectionReleas
         ArgumentNullException.ThrowIfNull(runtimeLease);
         ct.ThrowIfCancellationRequested();
 
-        if (_sinkSubscriptionManager.GetSubscriptionCount(runtimeLease) > 0)
+        if (runtimeLease.GetLiveSinkSubscriptionCount() > 0)
             return;
 
         var context = runtimeLease.Context;
         await _lifecycle.StopAsync(context, ct);
         await _readModelUpdater.MarkStoppedAsync(context.RootActorId, ct);
-        await _leaseManager.ReleaseAsync(context.RootActorId, runtimeLease.CommandId, ct);
+        await _ownershipCoordinator.ReleaseAsync(context.RootActorId, runtimeLease.CommandId, ct);
     }
 }
