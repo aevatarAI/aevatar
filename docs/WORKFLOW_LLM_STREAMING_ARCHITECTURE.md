@@ -82,42 +82,60 @@ flowchart TB
 
 ## 5. 端到端执行链路
 
+<style>
+.seq-wide {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.seq-wide .mermaid svg {
+  display: block;
+  max-width: 100% !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
+}
+</style>
+
 ### 5.1 SSE 路径（`POST /api/chat`）
 
+<div class="seq-wide">
+
 ```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}, "sequence": {"useMaxWidth": false, "actorFontSize": 10, "messageFontSize": 10, "noteFontSize": 10, "actorMargin": 40, "messageMargin": 12, "diagramMarginX": 16, "diagramMarginY": 16, "wrap": true}}}%%
 sequenceDiagram
     participant CL as "Client"
-    participant API as "ChatEndpoints.HandleChat"
-    participant CMD as "ICommandExecutionService"
-    participant APP as "WorkflowChatRunApplicationService"
-    participant CTX as "WorkflowRunContextFactory"
-    participant LIF as "ProjectionLifecyclePort"
-    participant ENG as "WorkflowRunExecutionEngine"
-    participant ACT as "WorkflowGAgent/RoleGAgent"
-    participant LLM as "ILLMProvider.ChatStreamAsync"
-    participant PRJ as "WorkflowExecutionAGUIEventProjector"
-    participant HUB as "ProjectionSessionEventHub"
-    participant SINK as "WorkflowRunEventChannel"
-    participant OUT as "WorkflowRunOutputStreamer"
-    participant SSE as "ChatSseResponseWriter"
+    participant API as "Chat API"
+    participant CMD as "Command Service"
+    participant APP as "App Service"
+    participant CTX as "Context Factory"
+    participant LIF as "Projection Port"
+    participant ENG as "Exec Engine"
+    participant ACT as "Workflow/Role Agent"
+    participant LLM as "LLM Provider"
+    participant PRJ as "AGUI Projector"
+    participant HUB as "Session Hub"
+    participant SINK as "RunEvent Sink"
+    participant OUT as "Output Streamer"
+    participant SSE as "SSE Writer"
 
-    CL->>API: "POST /api/chat {prompt, workflow?, actorId?}"
-    API->>CMD: "ExecuteAsync(request, emitAsync, onStartedAsync)"
+    CL->>API: "POST /api/chat"
+    API->>CMD: "ExecuteAsync(...)"
     CMD->>APP: "ExecuteAsync"
     APP->>CTX: "CreateAsync"
-    CTX->>LIF: "EnsureActorProjectionAsync(actorId, workflow, input, commandId)"
-    CTX->>LIF: "AttachLiveSinkAsync(lease, sink)"
-    APP->>ENG: "ExecuteAsync(runContext, request)"
-    ENG->>ACT: "ProcessEnvelopeAsync(ChatRequestEvent)"
-    ACT->>LLM: "ChatStreamAsync -> ChatStreamChunk*"
-    ACT-->>PRJ: "TextMessageStart/Content*/End (EventEnvelope)"
-    PRJ->>HUB: "PublishAsync(rootActorId, commandId, WorkflowRunEvent)"
+    CTX->>LIF: "Ensure projection"
+    CTX->>LIF: "Attach live sink"
+    APP->>ENG: "ExecuteAsync"
+    ENG->>ACT: "Process ChatRequestEvent"
+    ACT->>LLM: "ChatStreamAsync"
+    ACT-->>PRJ: "TextMessage* events"
+    PRJ->>HUB: "Publish WorkflowRunEvent"
     HUB-->>SINK: "Subscribe handler push"
     ENG->>OUT: "StreamAsync(ReadAllAsync)"
-    OUT->>SSE: "WriteAsync(WorkflowOutputFrame)"
-    SSE-->>CL: "data: {type, delta,...}"
+    OUT->>SSE: "Write WorkflowOutputFrame"
+    SSE-->>CL: "SSE data frames"
 ```
+
+</div>
 
 链路锚点：
 
@@ -130,28 +148,32 @@ sequenceDiagram
 
 ### 5.2 WebSocket 路径（`GET /api/ws/chat`）
 
+<div class="seq-wide">
+
 ```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}, "sequence": {"useMaxWidth": false, "actorFontSize": 10, "messageFontSize": 10, "noteFontSize": 10, "actorMargin": 40, "messageMargin": 12, "diagramMarginX": 16, "diagramMarginY": 16, "wrap": true}}}%%
 sequenceDiagram
     participant CL as "Client"
-    participant API as "HandleChatWebSocket"
-    participant PRS as "ChatWebSocketCommandParser"
-    participant RUN as "ChatWebSocketRunCoordinator"
-    participant CMD as "ICommandExecutionService"
-    participant QRY as "IWorkflowExecutionQueryApplicationService"
-    participant WS as "ChatWebSocketProtocol"
+    participant API as "WS Endpoint"
+    participant PRS as "Command Parser"
+    participant RUN as "Run Coordinator"
+    participant CMD as "Command Service"
+    participant QRY as "Query Service"
+    participant WS as "WS Protocol"
 
-    CL->>API: "GET /api/ws/chat (upgrade)"
-    CL->>WS: "send chat.command"
+    CL->>API: "GET /api/ws/chat"
+    CL->>WS: "chat.command"
     API->>PRS: "TryParse(commandText)"
-    API->>RUN: "ExecuteAsync(socket, command, ...)"
-    RUN->>CMD: "ExecuteAsync(request, emitAsync, onStartedAsync)"
+    API->>RUN: "ExecuteAsync(...)"
+    RUN->>CMD: "ExecuteAsync(...)"
     CMD-->>WS: "command.ack"
     CMD-->>WS: "agui.event *"
     RUN->>QRY: "GetActorSnapshotAsync(actorId)"
     RUN-->>WS: "query.result"
     API-->>WS: "CloseAsync"
 ```
+
+</div>
 
 链路锚点：
 
