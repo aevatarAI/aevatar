@@ -16,6 +16,7 @@ namespace Aevatar.AI.ToolProviders.MCP;
 /// </summary>
 public sealed class MCPClientManager : IAsyncDisposable
 {
+    private readonly object _clientsLock = new();
     private readonly List<McpClient> _clients = [];
     private readonly ILogger _logger;
 
@@ -28,18 +29,51 @@ public sealed class MCPClientManager : IAsyncDisposable
     public async Task<IReadOnlyList<IAgentTool>> ConnectAndDiscoverAsync(
         MCPServerConfig config, CancellationToken ct = default)
     {
-        _logger.LogInformation("连接 MCP Server: {Name} ({Command})", config.Name, config.Command);
+        _logger.LogInformation("连接 MCP Server: {Name} (IsHttp={IsHttp})", config.Name, config.IsHttp);
 
-        // 创建 stdio transport
-        var transport = new StdioClientTransport(new StdioClientTransportOptions
+        IClientTransport transport;
+
+        if (config.IsHttp)
         {
-            Name = config.Name,
-            Command = config.Command,
-            Arguments = [..config.Arguments],
-            EnvironmentVariables = config.Environment.Count == 0
-                ? null
-                : config.Environment.ToDictionary(static kv => kv.Key, static kv => (string?)kv.Value),
-        });
+            var httpClient = new HttpClient();
+            try
+            {
+                // Apply static headers
+                foreach (var (key, value) in config.Headers)
+                    httpClient.DefaultRequestHeaders.TryAddWithoutValidation(key, value);
+
+                // OAuth token fetch if auth configured
+                if (config.Auth is { } auth)
+                {
+                    var token = await FetchClientCredentialsTokenAsync(auth, ct);
+                    httpClient.DefaultRequestHeaders.Authorization =
+                        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+                }
+
+                transport = new HttpClientTransport(new HttpClientTransportOptions
+                {
+                    Name = config.Name,
+                    Endpoint = new Uri(config.Url!),
+                }, httpClient);
+            }
+            catch
+            {
+                httpClient.Dispose();
+                throw;
+            }
+        }
+        else
+        {
+            transport = new StdioClientTransport(new StdioClientTransportOptions
+            {
+                Name = config.Name,
+                Command = config.Command!,
+                Arguments = [..config.Arguments],
+                EnvironmentVariables = config.Environment.Count == 0
+                    ? null
+                    : config.Environment.ToDictionary(static kv => kv.Key, static kv => (string?)kv.Value),
+            });
+        }
 
         var options = new McpClientOptions
         {
@@ -47,7 +81,7 @@ public sealed class MCPClientManager : IAsyncDisposable
         };
 
         var client = await McpClient.CreateAsync(transport, options, cancellationToken: ct);
-        _clients.Add(client);
+        lock (_clientsLock) { _clients.Add(client); }
 
         // 发现工具
         var tools = await client.ListToolsAsync(cancellationToken: ct);
@@ -69,11 +103,47 @@ public sealed class MCPClientManager : IAsyncDisposable
         return adapted;
     }
 
+    private static async Task<string> FetchClientCredentialsTokenAsync(
+        MCPAuthConfig auth, CancellationToken ct)
+    {
+        using var tokenClient = new HttpClient();
+        var form = new Dictionary<string, string>
+        {
+            ["grant_type"] = "client_credentials",
+            ["client_id"] = auth.ClientId,
+            ["client_secret"] = auth.ClientSecret,
+        };
+        if (!string.IsNullOrWhiteSpace(auth.Scope))
+            form["scope"] = auth.Scope;
+
+        using var response = await tokenClient.PostAsync(
+            auth.TokenUrl, new FormUrlEncodedContent(form), ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            var truncated = body.Length > 200 ? body[..200] + "..." : body;
+            throw new InvalidOperationException(
+                $"OAuth token fetch failed ({response.StatusCode}): {truncated}");
+        }
+
+        using var json = await System.Text.Json.JsonDocument.ParseAsync(
+            await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+
+        return json.RootElement.GetProperty("access_token").GetString()
+            ?? throw new InvalidOperationException("OAuth response missing access_token");
+    }
+
     /// <summary>释放所有 MCP 连接。</summary>
     public async ValueTask DisposeAsync()
     {
-        foreach (var client in _clients)
+        List<McpClient> snapshot;
+        lock (_clientsLock)
+        {
+            snapshot = [.._clients];
+            _clients.Clear();
+        }
+        foreach (var client in snapshot)
             await client.DisposeAsync();
-        _clients.Clear();
     }
 }
