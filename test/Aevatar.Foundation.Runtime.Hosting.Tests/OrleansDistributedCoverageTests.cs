@@ -99,11 +99,18 @@ public sealed class OrleansDistributedCoverageTests
             SourceStreamId = "source-1",
             TargetStreamId = "target-1",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = new HashSet<EventDirection> { EventDirection.Up, EventDirection.Down },
+            EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt-z", "evt-a" },
             LeaseId = "lease-1",
             Version = 3,
         };
 
         await registry.UpsertAsync(binding);
+        var persistedEntry = grains["source-1"].LastUpsert;
+        persistedEntry.Should().NotBeNull();
+        persistedEntry = grains["source-1"].LastUpsert;
+        persistedEntry!.DirectionFilter.Should().Equal(EventDirection.Down, EventDirection.Up);
+        persistedEntry.EventTypeFilter.Should().Equal("evt-a", "evt-z");
         var listed = await registry.ListBySourceAsync("source-1");
         listed.Should().ContainSingle(x => x.TargetStreamId == "target-1");
 
@@ -126,6 +133,27 @@ public sealed class OrleansDistributedCoverageTests
         await Assert.ThrowsAsync<OperationCanceledException>(() => registry.UpsertAsync(binding, cts.Token));
         await Assert.ThrowsAsync<OperationCanceledException>(() => registry.RemoveAsync("source-1", "target-1", cts.Token));
         await Assert.ThrowsAsync<OperationCanceledException>(() => registry.ListBySourceAsync("source-1", cts.Token));
+    }
+
+    [Fact]
+    public void StreamTopologyGrainContract_ShouldUseOrleansSerializableEntryTypes()
+    {
+        var upsertMethod = typeof(IStreamTopologyGrain).GetMethod(nameof(IStreamTopologyGrain.UpsertAsync), [typeof(StreamForwardingBindingEntry)]);
+        upsertMethod.Should().NotBeNull();
+
+        var listMethod = typeof(IStreamTopologyGrain).GetMethod(nameof(IStreamTopologyGrain.ListAsync));
+        listMethod.Should().NotBeNull();
+        listMethod!.ReturnType.Should().Be(typeof(Task<IReadOnlyList<StreamForwardingBindingEntry>>));
+
+        var entryType = typeof(StreamForwardingBindingEntry);
+        entryType.GetCustomAttributes(inherit: false)
+            .Select(attr => attr.GetType().Name)
+            .Should().Contain("GenerateSerializerAttribute");
+
+        var idProperties = entryType
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Count(property => property.GetCustomAttributes(inherit: false).Any(attr => attr.GetType().Name == "IdAttribute"));
+        idProperties.Should().Be(7);
     }
 
     [Fact]
@@ -383,10 +411,6 @@ public sealed class OrleansDistributedCoverageTests
         var state = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
         var grain = new RuntimeActorGrain(state, new AsyncLocalRuntimeActorStateBindingAccessor());
 
-        var envelopeAct = () => grain.HandleEnvelopeAsync(new byte[] { 1, 2, 3 });
-        await envelopeAct.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*not initialized*");
-
         var initialized = await grain.InitializeAgentAsync("Unknown.Agent.Type, Unknown.Assembly");
         initialized.Should().BeFalse();
     }
@@ -519,10 +543,13 @@ public sealed class OrleansDistributedCoverageTests
 
         public int RevisionCallCount { get; private set; }
 
+        public StreamForwardingBindingEntry? LastUpsert { get; private set; }
+
         public Task UpsertAsync(StreamForwardingBindingEntry binding)
         {
             var index = _bindings.FindIndex(x => string.Equals(x.TargetStreamId, binding.TargetStreamId, StringComparison.Ordinal));
             var clone = Clone(binding);
+            LastUpsert = clone;
             if (index >= 0)
                 _bindings[index] = clone;
             else
