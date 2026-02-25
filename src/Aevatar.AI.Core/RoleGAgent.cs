@@ -76,7 +76,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             SystemPrompt = evt.SystemPrompt ?? string.Empty,
             Temperature = evt.HasTemperature ? evt.Temperature : null,
             MaxTokens = evt.MaxTokens == 0 ? null : evt.MaxTokens,
-            MaxToolRounds = evt.MaxToolRounds <= 0 ? 10 : evt.MaxToolRounds,
+            MaxToolRounds = evt.MaxToolRounds <= 0 ? 30 : evt.MaxToolRounds,
             MaxHistoryMessages = evt.MaxHistoryMessages <= 0 ? 100 : evt.MaxHistoryMessages,
             StreamBufferCapacity = evt.StreamBufferCapacity <= 0 ? 256 : evt.StreamBufferCapacity,
         });
