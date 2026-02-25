@@ -37,48 +37,28 @@ Aevatar.Workflow.Application/
 
 ## 核心服务
 
-### WorkflowChatRunApplicationService
-
-`IWorkflowChatRunApplicationService` 唯一实现。`ExecuteAsync` 是对外单入口，内部编排：
-
-```
-ExecuteAsync(request, emitAsync)
-  1. CreateRunContextAsync
-     -> WorkflowRunActorResolver: 解析 workflow YAML、创建/复用 WorkflowGAgent
-     -> WorkflowExecutionRunOrchestrator.StartAsync: 启动投影 run
-  2. ProcessEnvelopeAsync (后台)
-     -> WorkflowRunRequestExecutor: 投递 ChatRequestEvent 到 actor
-  3. WorkflowRunOutputStreamer.StreamAsync
-     -> 读 WorkflowRunEventChannel -> 映射 WorkflowOutputFrame -> emitAsync 回调
-  4. FinalizeAsync
-     -> WorkflowExecutionRunOrchestrator: 等待投影收敛、获取拓扑、生成报告
-  5. PersistReportBestEffortAsync
-     -> IWorkflowExecutionReportArtifactSink: 落盘（best-effort）
-  finally:
-     -> 异常时 AbortCoreAsync: rollback + dispose
-```
-
-### WorkflowExecutionRunOrchestrator
-
-投影 run 生命周期：
-- `StartAsync`：通过 `IWorkflowExecutionProjectionPort` 创建 projection session
-- `FinalizeAsync`：等待投影完成信号（含 grace timeout 重试）、读取拓扑、拼装报告
-- `RollbackAsync`：异常时清理 projection session
-
-### WorkflowRunOutputStreamer
-
-从 `IWorkflowRunEventSink` 读取事件流，经 `WorkflowOutputFrameMapper` 映射为 `WorkflowOutputFrame`，遇到 `RUN_FINISHED` 或 `RUN_ERROR` 终止事件时停止。
-
-### WorkflowExecutionQueryApplicationService
-
-查询门面，经 `IWorkflowExecutionProjectionPort` 提供：
-- `ListAgentsAsync`：列出已创建的 workflow actor
-- `ListWorkflowsAsync`：列出已注册 workflow 定义
-- `ListRunsAsync` / `GetRunAsync`：查询 run 历史与详情
-
-### WorkflowDefinitionRegistry
-
-内存注册表，维护 `workflow 名称 -> YAML` 映射。支持内置 `direct` workflow（单步 LLM 问答）。由 `Infrastructure` 层的文件加载器在启动时填充。
+- `WorkflowChatRunApplicationService`
+  - `ExecuteAsync` 单入口：参数校验 + 获取 run context + 委托执行引擎。
+- `WorkflowRunContextFactory`
+  - 负责 actor 解析、command context 构造、projection lease 初始化与 live sink attach。
+- `WorkflowRunExecutionEngine`
+  - 负责请求执行、输出泵送、终态收敛与最终资源回收触发。
+- `WorkflowRunCompletionPolicy`
+  - 负责输出帧终态判定（`RUN_FINISHED` / `RUN_ERROR`）。
+- `WorkflowRunResourceFinalizer`
+  - 负责 `detach/release/complete/dispose` 兜底清理。
+- `WorkflowRunActorResolver`
+  - 无 `actorId` 时创建并绑定 workflow actor。
+  - 有 `actorId` 时仅复用既有 actor，不负责切换 workflow。
+- `WorkflowRunRequestExecutor`
+  - 投递请求事件并处理异常补偿。
+- `WorkflowRunOutputStreamer`
+  - 读取 run 事件并映射 `WorkflowOutputFrame`。
+- `WorkflowExecutionQueryApplicationService`
+  - `agents/workflows/runs` 查询门面（经 `IWorkflowExecutionProjectionQueryPort` 读取读侧模型）。
+  - `ListAgentsAsync` 仅返回 `WorkflowGAgent`，不扫描暴露非 Workflow actor。
+- `WorkflowDefinitionRegistry`
+  - 维护 workflow 名称到 YAML 的内存注册表。
 
 ## 分层约束
 

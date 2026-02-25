@@ -92,7 +92,7 @@ curl -X POST http://localhost:5000/api/chat \
 | Orleans Transport | `ActorRuntime:Provider=Orleans` 默认仍走内置链路；可选 `ActorRuntime:Transport=Kafka` 启用 MassTransit/Kafka 传输插件。 | 生产按部署拓扑启用可插拔 transport，并统一由 stream/queue 层承载跨节点转发。 |
 | Projection 启动并发（Ensure/Release） | 已由 `projection:{rootActorId}` 投影协调 Actor 串行裁决，不再依赖进程内 `SemaphoreSlim`。 | 分布式 Runtime 下继续依赖“同一 actorId 单激活 + 邮箱串行”保证并发互斥。 |
 | LiveSink 绑定（Attach/Detach） | 已通过 `workflow-run:{actorId}:{commandId}` 事件流订阅/退订；不再依赖 `ProjectionContext` 内存 sink 列表。 | 在分布式 stream provider 下天然支持跨节点推送；生产需保障 provider 可用性与顺序语义。 |
-| ReadModel 存储 | Workflow 默认 `InMemoryWorkflowExecutionReadModelStore`，可替换。 | 生产默认切换到持久化读模型存储，实现跨节点一致读。 |
+| ReadModel 存储 | 默认通过 `Aevatar.CQRS.Projection.Providers.InMemory` 注册通用 InMemory Store，可按 Provider 机制替换。 | 生产默认切换到持久化读模型 Provider，实现跨节点一致读。 |
 | 审计评分口径 | 以“当前已落地代码”为准评分。 | 目标态能力上线后，评分按实现结果重新审计。 |
 
 下面这张图概括了「宿主（API + 运行时 + LLM + Connector）」与「Agent 树 + 工作流步骤」的关系。

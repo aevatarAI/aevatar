@@ -20,31 +20,20 @@ Aevatar.Workflow.Infrastructure/
 
 ## 核心组件
 
-### WorkflowDefinitionFileLoader
-
-从配置的目录列表中扫描 `*.yaml` / `*.yml` 文件，读取内容并注册到 `IWorkflowDefinitionRegistry`。文件名（去掉扩展名）作为 workflow 名称。
-
-### WorkflowDefinitionBootstrapHostedService
-
-`IHostedService` 实现。在宿主启动时调用 `WorkflowDefinitionFileLoader` 自动加载所有 workflow 定义。适用于需要开箱即用的部署场景。
-
-### FileSystemWorkflowExecutionReportArtifactSink
-
-`IWorkflowExecutionReportArtifactSink` 实现。接收 `WorkflowRunReport`，调用 `WorkflowExecutionReportWriter` 生成：
-- **JSON 文件**：完整的结构化报告
-- **HTML 文件**：带样式的可视化报告（步骤轨迹、时间线、角色回复、拓扑）
-
-输出路径格式：`{OutputDirectory}/{workflowName}_{runId}_{timestamp}.{json|html}`
-
-### WorkflowExecutionReportWriter
-
-静态工具类，负责：
-- `WriteJsonAsync`：将 `WorkflowRunReport` 序列化为 JSON
-- `WriteHtmlAsync`：生成带内联 CSS 的 HTML 报告页面
-
-### AddWorkflowSubsystem
-
-子系统一键组合入口，按宿主场景装配 `Application + Projection + AGUIAdapter + Infrastructure + workflow 文件源`。
+- `AddWorkflowInfrastructure(...)`
+  - 注册报告工件 sink。
+- `AddWorkflowDefinitionFileSource(...)`
+  - 注册 workflow 文件源与启动加载 HostedService。
+- `AddWorkflowCapability(IServiceCollection, IConfiguration)`
+  - 能力一键组合（Application + Projection + AGUIAdapter + Infrastructure + workflow 文件源）。
+  - 不负责具体 ReadModel Provider 注册（Provider 组合下沉到 Host/Extensions 层）。
+- `AddWorkflowCapability(WebApplicationBuilder)`
+  - Host 侧一行接入 Workflow 能力（服务注册 + 能力端点声明）。
+- `Aevatar.Workflow.Extensions.Hosting.AddWorkflowCapabilityWithAIDefaults(WebApplicationBuilder)`
+  - 在 Host 入口统一装配 Workflow capability + AI features + AI projection extension（推荐用于生产组合入口）。
+  - 默认同时注册 Workflow 读模型 Provider（InMemory/Elasticsearch/Neo4j）。
+- `MapWorkflowCapabilityEndpoints(...)`
+  - 将 Workflow 能力 API 端点挂载到 Host（默认由 `UseAevatarDefaultHost()` 自动调用能力映射链路）。
 
 ## 配置
 

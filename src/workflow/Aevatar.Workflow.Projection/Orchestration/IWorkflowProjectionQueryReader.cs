@@ -16,4 +16,24 @@ public interface IWorkflowProjectionQueryReader
         string actorId,
         int take = 200,
         CancellationToken ct = default);
+
+    Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(
+        string actorId,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default);
+
+    Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default);
+
+    Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default);
 }

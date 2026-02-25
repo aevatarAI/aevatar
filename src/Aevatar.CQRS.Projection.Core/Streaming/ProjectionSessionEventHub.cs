@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Core.Streaming;
 

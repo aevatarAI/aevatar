@@ -23,7 +23,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<CaseProjectionOptions>(sp =>
             sp.GetRequiredService<CaseProjectionOptions>());
         services.TryAddSingleton<InMemoryCaseReadModelStore>();
-        services.TryAddSingleton<IProjectionReadModelStore<CaseProjectionReadModel, string>>(sp =>
+        services.TryAddSingleton<IProjectionDocumentStore<CaseProjectionReadModel, string>>(sp =>
             sp.GetRequiredService<InMemoryCaseReadModelStore>());
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<ICaseProjectionContextFactory, DefaultCaseProjectionContextFactory>();

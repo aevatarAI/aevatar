@@ -9,6 +9,7 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Propagation;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,6 +24,7 @@ public sealed class LocalActorRuntime : IActorRuntime
     private readonly IStreamProvider _streams;
     private readonly IStreamLifecycleManager _streamLifecycleManager;
     private readonly IServiceProvider _services;
+    private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private readonly ILogger<LocalActorRuntime> _logger;
 
     /// <summary>Creates local actor runtime.</summary>
@@ -35,6 +37,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         _streams = streams;
         _services = services;
         _streamLifecycleManager = streamLifecycleManager;
+        _deactivationHookDispatcher = services.GetService<IActorDeactivationHookDispatcher>();
         _logger = logger ?? NullLogger<LocalActorRuntime>.Instance;
     }
 
@@ -56,7 +59,8 @@ public sealed class LocalActorRuntime : IActorRuntime
             actorId,
             router,
             _streams,
-            logger);
+            logger,
+            _deactivationHookDispatcher);
 
         InjectDependencies(agent, publisher, actorId, logger);
 
@@ -156,23 +160,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         gab.Logger = logger;
         gab.Services = _services;
         gab.ManifestStore = _services.GetService<IAgentManifestStore>();
-        InjectStateStore(agent);
-    }
-
-    private void InjectStateStore(IAgent agent)
-    {
-        var type = agent.GetType();
-        while (type != null)
-        {
-            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(GAgentBase<>))
-            {
-                var stateType = type.GetGenericArguments()[0];
-                var storeType = typeof(IStateStore<>).MakeGenericType(stateType);
-                var store = _services.GetService(storeType);
-                if (store != null) type.GetProperty("StateStore")?.SetValue(agent, store);
-                break;
-            }
-            type = type.BaseType;
-        }
+        if (gab is IEventSourcingFactoryBinding statefulBinding)
+            statefulBinding.BindEventSourcingFactory(_services);
     }
 }

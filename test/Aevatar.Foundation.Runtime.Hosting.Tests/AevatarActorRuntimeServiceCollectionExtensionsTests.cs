@@ -1,10 +1,14 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
@@ -222,6 +226,57 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
         options.OrleansPersistenceBackend.Should().Be(AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet);
         options.OrleansGarnetConnectionString.Should().Be("garnet.local:6379,abortConnect=false");
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenProviderIsOrleans_ShouldReplaceOpenGenericIStateStoreWithRuntimeActorStateStore()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+
+        var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IStateStore<>));
+        descriptor.Should().NotBeNull();
+        descriptor!.ImplementationType.Should().Be(typeof(RuntimeActorGrainStateStore<>));
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenOrleansPersistenceBackendIsGarnet_ShouldRegisterGarnetEventStore()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "garnet.local:6379,abortConnect=false",
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+
+        var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IEventStore));
+        descriptor.Should().NotBeNull();
+        descriptor!.ImplementationType.Should().Be(typeof(GarnetEventStore));
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenOrleansPersistenceBackendIsInMemory_ShouldKeepInMemoryEventStore()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendInMemory,
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+
+        var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IEventStore));
+        descriptor.Should().NotBeNull();
+        descriptor!.ImplementationType.Should().Be(typeof(InMemoryEventStore));
     }
 
     [Fact]

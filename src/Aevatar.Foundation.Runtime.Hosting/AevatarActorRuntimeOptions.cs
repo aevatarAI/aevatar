@@ -34,4 +34,12 @@ public sealed class AevatarActorRuntimeOptions
     public string MassTransitKafkaTopicName { get; set; } = "aevatar-foundation-agent-events";
 
     public string MassTransitKafkaConsumerGroup { get; set; } = "aevatar-foundation-kafka-streaming";
+
+    public bool EventSourcingEnableSnapshots { get; set; } = true;
+
+    public int EventSourcingSnapshotInterval { get; set; } = 200;
+
+    public bool EventSourcingEnableEventCompaction { get; set; } = true;
+
+    public int EventSourcingRetainedEventsAfterSnapshot { get; set; } = 0;
 }

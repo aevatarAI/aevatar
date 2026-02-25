@@ -14,4 +14,13 @@ public sealed class RuntimeActorGrainState
 
     [Id(3)]
     public List<string> Children { get; set; } = [];
+
+    [Id(4)]
+    public string? AgentStateTypeName { get; set; }
+
+    [Id(5)]
+    public byte[]? AgentStateSnapshot { get; set; }
+
+    [Id(6)]
+    public long AgentStateSnapshotVersion { get; set; }
 }

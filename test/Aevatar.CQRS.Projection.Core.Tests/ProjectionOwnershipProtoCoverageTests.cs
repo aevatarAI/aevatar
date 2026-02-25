@@ -17,6 +17,7 @@ public sealed class ProjectionOwnershipProtoCoverageTests
             SessionId = "session-1",
             Active = true,
             LastUpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            LeaseTtlMs = 30L * 60 * 1000,
         };
 
         var stateParsed = ProjectionOwnershipCoordinatorState.Parser.ParseFrom(state.ToByteArray());
@@ -37,6 +38,7 @@ public sealed class ProjectionOwnershipProtoCoverageTests
         {
             ScopeId = "scope-1",
             SessionId = "session-1",
+            LeaseTtlMs = 30L * 60 * 1000,
         };
         var acquireParsed = ProjectionOwnershipAcquireEvent.Parser.ParseFrom(acquire.ToByteArray());
         acquireParsed.Should().BeEquivalentTo(acquire);

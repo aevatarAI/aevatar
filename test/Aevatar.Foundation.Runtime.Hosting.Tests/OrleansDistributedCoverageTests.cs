@@ -6,6 +6,7 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.Topology;
 using FluentAssertions;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans;
 using Orleans.Runtime;
@@ -364,11 +365,15 @@ public sealed class OrleansDistributedCoverageTests
         await grain.ClearParentAsync();
 
         stateProxy.State.AgentId = "actor-1";
+        stateProxy.State.AgentStateTypeName = typeof(EventEnvelope).FullName;
+        stateProxy.State.AgentStateSnapshot = new EventEnvelope { Id = "snapshot" }.ToByteArray();
         await grain.PurgeAsync();
         stateProxy.State.AgentId.Should().BeEmpty();
         stateProxy.State.AgentTypeName.Should().BeNull();
         stateProxy.State.ParentId.Should().BeNull();
         stateProxy.State.Children.Should().BeEmpty();
+        stateProxy.State.AgentStateTypeName.Should().BeNull();
+        stateProxy.State.AgentStateSnapshot.Should().BeNull();
         stateProxy.WriteCount.Should().BeGreaterThan(0);
     }
 

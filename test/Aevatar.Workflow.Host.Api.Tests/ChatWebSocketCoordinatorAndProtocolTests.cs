@@ -189,6 +189,41 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             return Task.FromResult<WorkflowActorSnapshot?>(Snapshot);
         }
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
+        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
+            string actorId,
+            int take = 200,
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default) => Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
+        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowActorGraphSubgraph
+            {
+                RootNodeId = actorId,
+            });
+
+        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default)
+        {
+            if (Snapshot == null)
+                return Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(null);
+
+            return Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(new WorkflowActorGraphEnrichedSnapshot
+            {
+                Snapshot = Snapshot,
+                Subgraph = new WorkflowActorGraphSubgraph
+                {
+                    RootNodeId = actorId,
+                },
+            });
+        }
     }
 
     private sealed class FakeWebSocket : WebSocket

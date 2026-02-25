@@ -52,8 +52,243 @@ if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   exit 1
 fi
 
+if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver|ProjectionReadModelBindingException" src test; then
+  echo "BindingResolver-based projection routing is forbidden. Use capability-based Document/Graph routing."
+  exit 1
+fi
+
+if rg -n "Projection:ReadModel:Bindings" src test; then
+  echo "Projection:ReadModel:Bindings is forbidden. Use Projection:Document:* and Projection:Graph:* options."
+  exit 1
+fi
+
+if [ -f "src/Aevatar.Foundation.Core/EventSourcing/DefaultAutoPersistedStateEventFactory.cs" ]; then
+  echo "DefaultAutoPersistedStateEventFactory is forbidden. EventStore must persist domain events, not snapshot-state events."
+  exit 1
+fi
+
+if [ -f "src/Aevatar.Foundation.Core/EventSourcing/IAutoPersistedStateEventFactory.cs" ]; then
+  echo "IAutoPersistedStateEventFactory is forbidden. Use IDomainEventDeriver<TState> for semantic event derivation."
+  exit 1
+fi
+
+if [ -f "src/Aevatar.Foundation.Core/EventSourcing/EventSourcingAutoPersistenceOptions.cs" ]; then
+  echo "EventSourcingAutoPersistenceOptions is forbidden. Stateful actors must emit explicit domain events."
+  exit 1
+fi
+
+if [ -f "src/Aevatar.Foundation.Core/EventSourcing/IDomainEventDeriver.cs" ]; then
+  echo "IDomainEventDeriver is forbidden on runtime path. Domain events must be produced explicitly by command handlers."
+  exit 1
+fi
+
+if rg -n "ConfirmStateAsync\(" src/Aevatar.Foundation.Core/EventSourcing; then
+  echo "ConfirmStateAsync is forbidden."
+  exit 1
+fi
+
+if rg -n "ConfirmDerivedEventsAsync\(" src/Aevatar.Foundation.Core/EventSourcing; then
+  echo "ConfirmDerivedEventsAsync is forbidden. Domain events must be raised explicitly via RaiseEvent + ConfirmEventsAsync."
+  exit 1
+fi
+
+if rg -n "TryUnpack<TState>|Unpack<TState>" src/Aevatar.Foundation.Core/EventSourcing/EventSourcingBehavior.cs; then
+  echo "EventSourcingBehavior must not unpack TState snapshots from persisted events."
+  exit 1
+fi
+
+if rg -n "StateStore\.LoadAsync|StateStore\.SaveAsync" src/Aevatar.Foundation.Core/GAgentBase.TState.cs; then
+  echo "GAgentBase<TState> must not use StateStore as the fact source. Recovery must come from EventStore replay."
+  exit 1
+fi
+
+if rg -n "public\s+IStateStore<" src/Aevatar.Foundation.Core/GAgentBase.TState.cs; then
+  echo "GAgentBase<TState> must not expose IStateStore property. Recovery/writes must go through EventStore semantics."
+  exit 1
+fi
+
+if rg -n "GetService\(typeof\(IEventStore\)\)|GetService<EventSourcingRuntimeOptions>|GetService<IEventSourcingSnapshotStore<|GetService<IEventSourcingBehaviorFactory<|new\s+AgentBackedEventSourcingBehavior|EventSourcingBehaviorFactory\s*\?\?=" \
+  src/Aevatar.Foundation.Core/GAgentBase.TState.cs
+then
+  echo "GAgentBase<TState> must not compose EventSourcing behavior via Service Locator internals. Use IEventSourcingBehaviorFactory<TState>."
+  exit 1
+fi
+
+set +e
+state_direct_mutation_report="$(
+  rg --files -0 src -g '*.cs' -g '!*.g.cs' \
+    | xargs -0 awk '
+function trim(value)
+{
+  gsub(/^[[:space:]]+/, "", value);
+  gsub(/[[:space:]]+$/, "", value);
+  return value;
+}
+
+function normalize_base(value)
+{
+  value = trim(value);
+  sub(/<.*/, "", value);
+  sub(/^.*\./, "", value);
+  gsub(/[[:space:]]+/, "", value);
+  return value;
+}
+
+function register_base(class_name, base_clause, parts, first_base)
+{
+  if (class_name == "")
+    return;
+
+  split(base_clause, parts, ",");
+  first_base = normalize_base(parts[1]);
+  if (first_base != "")
+    class_base[class_name] = first_base;
+
+  pending_class[FILENAME] = "";
+}
+
+{
+  line = $0;
+
+  if (pending_class[FILENAME] != "")
+  {
+    if (line ~ /^[[:space:]]*:/)
+    {
+      base_clause = line;
+      sub(/^[[:space:]]*:[[:space:]]*/, "", base_clause);
+      sub(/\{.*/, "", base_clause);
+      register_base(pending_class[FILENAME], base_clause);
+    }
+    else if (line ~ /\{/)
+    {
+      pending_class[FILENAME] = "";
+    }
+  }
+
+  if (match(line, /[[:space:]]class[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/))
+  {
+    class_decl = substr(line, RSTART, RLENGTH);
+    sub(/^.*class[[:space:]]+/, "", class_decl);
+    class_name = class_decl;
+    file_class[FILENAME SUBSEP class_name] = 1;
+
+    tail = substr(line, RSTART + RLENGTH);
+    if (tail ~ /:/)
+    {
+      base_clause = tail;
+      sub(/^.*:[[:space:]]*/, "", base_clause);
+      sub(/\{.*/, "", base_clause);
+      register_base(class_name, base_clause);
+    }
+    else if (tail !~ /\{/)
+    {
+      pending_class[FILENAME] = class_name;
+    }
+    else
+    {
+      pending_class[FILENAME] = "";
+    }
+  }
+
+  if (line ~ /^[[:space:]]*\/\//)
+    next;
+
+  if (line ~ /(^|[[:space:](;])(this\.)?State\.[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(\+\+|--|[+*%\/-]?=)/)
+  {
+    state_mutation[FILENAME] = state_mutation[FILENAME] sprintf("%s:%d:%s\n", FILENAME, FNR, line);
+  }
+}
+
+END {
+  stateful["GAgentBase"] = 1;
+  changed = 1;
+  while (changed)
+  {
+    changed = 0;
+    for (class_name in class_base)
+    {
+      base_name = class_base[class_name];
+      if ((base_name in stateful) && !(class_name in stateful))
+      {
+        stateful[class_name] = 1;
+        changed = 1;
+      }
+    }
+  }
+
+  violations = "";
+  for (file in state_mutation)
+  {
+    is_stateful_file = 0;
+    for (key in file_class)
+    {
+      split(key, tokens, SUBSEP);
+      if (tokens[1] != file)
+        continue;
+
+      declared_class = tokens[2];
+      if (declared_class in stateful)
+      {
+        is_stateful_file = 1;
+        break;
+      }
+    }
+
+    if (is_stateful_file)
+      violations = violations "\n" file "\n" state_mutation[file];
+  }
+
+  if (violations != "")
+  {
+    printf "%s", violations;
+    printf "Stateful GAgent implementations must not mutate State directly. Emit domain events and apply state in TransitionState/appliers.\n";
+    exit 1;
+  }
+}
+' 
+)"
+state_direct_mutation_status=$?
+set -e
+
+if [ "${state_direct_mutation_status}" -ne 0 ] && [ -z "${state_direct_mutation_report}" ]; then
+  echo "State direct mutation guard execution failed."
+  exit "${state_direct_mutation_status}"
+fi
+
+if [ -n "${state_direct_mutation_report}" ]; then
+  echo "${state_direct_mutation_report}"
+  exit 1
+fi
+
+if rg -n "IEventSourcingBehavior<>\\)\\.MakeGenericType|EventSourcingBehavior<>\\)\\.MakeGenericType|GetProperty\\(\"EventSourcing\"\\)|GetProperty\\(\"StateStore\"\\)" \
+  src/Aevatar.Foundation.Runtime \
+  src/Aevatar.Foundation.Runtime.Implementations.Orleans
+then
+  echo "Runtime must not use reflection-based stateful ES binding. Use static generic construction in GAgentBase<TState>."
+  exit 1
+fi
+
 if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
   echo "Found string-based event type matching."
+  exit 1
+fi
+
+transition_override_without_matcher=""
+while IFS= read -r transition_file; do
+  [ -z "${transition_file}" ] && continue
+
+  if ! rg -n "StateTransitionMatcher" "${transition_file}" >/dev/null; then
+    transition_override_without_matcher="${transition_override_without_matcher}${transition_file}\n"
+  fi
+done < <(rg -l "override\\s+[^\\n]*TransitionState\\(" \
+  src \
+  -g '*.cs' \
+  -g '!*.g.cs' \
+  -g '!src/Aevatar.Foundation.Core/EventSourcing/DefaultEventSourcingBehaviorFactory.cs' || true)
+
+if [ -n "${transition_override_without_matcher}" ]; then
+  printf '%b' "${transition_override_without_matcher}"
+  echo "Stateful TransitionState overrides in src must use StateTransitionMatcher for Any-safe replay semantics."
   exit 1
 fi
 
@@ -115,6 +350,34 @@ if [ -n "${reducer_test_coverage_violations}" ]; then
   echo "Projection reducer coverage guard failed: each non-abstract reducer class must be referenced by tests."
   exit 1
 fi
+
+stateful_replay_contract_requirements=(
+  "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
+  "ProjectionOwnershipCoordinatorGAgent:test/Aevatar.CQRS.Projection.Core.Tests/ProjectionOwnershipAndSessionHubTests.cs"
+  "RoleGAgent:test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs"
+)
+
+for requirement in "${stateful_replay_contract_requirements[@]}"; do
+  actor_name="${requirement%%:*}"
+  contract_file="${requirement#*:}"
+
+  if [ ! -f "${contract_file}" ]; then
+    echo "Missing replay contract test file for ${actor_name}: ${contract_file}"
+    exit 1
+  fi
+
+  if ! rg -n "\\b${actor_name}\\b" "${contract_file}" >/dev/null; then
+    echo "${contract_file}"
+    echo "Replay contract test file must reference actor ${actor_name}."
+    exit 1
+  fi
+
+  if ! rg -n "Persist.*Event|Replay|Reactivate|ActivateAsync|DeactivateAsync" "${contract_file}" >/dev/null; then
+    echo "${contract_file}"
+    echo "Replay contract test file for ${actor_name} must assert persisted-event replay semantics."
+    exit 1
+  fi
+done
 
 echo "Running projection route-mapping guard..."
 bash tools/ci/projection_route_mapping_guard.sh
@@ -189,6 +452,13 @@ if ! rg -n "AddWorkflowCapabilityWithAIDefaults\(" src/workflow/Aevatar.Workflow
   exit 1
 fi
 
+if ! rg -n "AddWorkflowProjectionReadModelProviders\(" \
+  src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowCapabilityHostBuilderExtensions.cs >/dev/null
+then
+  echo "Workflow hosting extension must register read-model providers via AddWorkflowProjectionReadModelProviders()."
+  exit 1
+fi
+
 if [ -f "src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/MakerModuleFactory.cs" ]; then
   echo "Maker extension must use unified module pack model; MakerModuleFactory is forbidden."
   exit 1
@@ -228,13 +498,28 @@ then
   exit 1
 fi
 
+if rg -n "Aevatar\.CQRS\.Projection\.Providers\..*\.csproj" \
+  src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj
+then
+  echo "Workflow.Infrastructure must not reference projection provider implementation projects. Register providers in host/extensions layer."
+  exit 1
+fi
+
+if rg -n "using\s+Aevatar\.CQRS\.Projection\.Providers\." \
+  src/workflow/Aevatar.Workflow.Infrastructure \
+  -g '*.cs'
+then
+  echo "Workflow.Infrastructure source must not reference projection provider namespaces. Register providers in host/extensions layer."
+  exit 1
+fi
+
 if rg -n "TryGetContext\(" src; then
   echo "Projection context reverse lookup is forbidden. Use explicit projection lease/session handles."
   exit 1
 fi
 
-if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs; then
-  echo "WorkflowExecutionProjectionService must not use process-local SemaphoreSlim for projection start arbitration."
+if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionLifecycleService.cs; then
+  echo "WorkflowExecutionProjectionLifecycleService must not use process-local SemaphoreSlim for projection start arbitration."
   exit 1
 fi
 
@@ -243,17 +528,30 @@ if rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Or
   exit 1
 fi
 
-if rg -n "Task\s+AttachLiveSinkAsync\(\s*string\s+actorId|Task\s+DetachLiveSinkAsync\(\s*string\s+actorId|Task\s+ReleaseActorProjectionAsync\(\s*string\s+actorId" \
-  src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionPort.cs
-then
-  echo "Workflow projection port must use lease/session handles instead of actorId context lookup."
+lifecycle_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionLifecyclePort.cs"
+query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionQueryPort.cs"
+
+if [ ! -f "${lifecycle_port}" ] || [ ! -f "${query_port}" ]; then
+  echo "Workflow projection ports must be split into lifecycle/query contracts."
   exit 1
 fi
 
-if ! rg -n "IWorkflowExecutionProjectionLease" \
-  src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionPort.cs >/dev/null
+if rg -n "Task\s+AttachLiveSinkAsync\(\s*string\s+actorId|Task\s+DetachLiveSinkAsync\(\s*string\s+actorId|Task\s+ReleaseActorProjectionAsync\(\s*string\s+actorId" \
+  "${lifecycle_port}"
 then
-  echo "Workflow projection port must depend on IWorkflowExecutionProjectionLease."
+  echo "Workflow projection lifecycle port must use lease/session handles instead of actorId context lookup."
+  exit 1
+fi
+
+if ! rg -n "IWorkflowExecutionProjectionLease" "${lifecycle_port}" >/dev/null; then
+  echo "Workflow projection lifecycle port must depend on IWorkflowExecutionProjectionLease."
+  exit 1
+fi
+
+if rg -n "EnsureActorProjectionAsync|AttachLiveSinkAsync|DetachLiveSinkAsync|ReleaseActorProjectionAsync" \
+  "${query_port}"
+then
+  echo "Workflow projection query port must not include lifecycle operations."
   exit 1
 fi
 
@@ -330,8 +628,60 @@ if [ -n "${implementation_ref_violations}" ]; then
   exit 1
 fi
 
+projection_provider_business_dependency_hits="$(
+  rg -n "Aevatar\.(Workflow|AI)\..*\.csproj" \
+    src/Aevatar.CQRS.Projection.Providers.InMemory \
+    src/Aevatar.CQRS.Projection.Providers.Elasticsearch \
+    src/Aevatar.CQRS.Projection.Providers.Neo4j \
+    -g '*.csproj' || true
+)"
+
+if [ -n "${projection_provider_business_dependency_hits}" ]; then
+  echo "${projection_provider_business_dependency_hits}"
+  echo "Projection provider projects must remain business-agnostic. Workflow/AI project references are forbidden."
+  exit 1
+fi
+
+projection_provider_business_using_hits="$(
+  rg -n "using\s+Aevatar\.(Workflow|AI)\." \
+    src/Aevatar.CQRS.Projection.Providers.InMemory \
+    src/Aevatar.CQRS.Projection.Providers.Elasticsearch \
+    src/Aevatar.CQRS.Projection.Providers.Neo4j \
+    -g '*.cs' || true
+)"
+
+if [ -n "${projection_provider_business_using_hits}" ]; then
+  echo "${projection_provider_business_using_hits}"
+  echo "Projection provider source files must not reference Workflow/AI namespaces."
+  exit 1
+fi
+
+projection_provider_store_files=(
+  "src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs"
+  "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs"
+)
+
+for provider_store_file in "${projection_provider_store_files[@]}"; do
+  if [ ! -f "${provider_store_file}" ]; then
+    echo "Missing provider store file: ${provider_store_file}"
+    exit 1
+  fi
+
+  if ! rg -F "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}" "${provider_store_file}" >/dev/null; then
+    echo "${provider_store_file}"
+    echo "Provider write path must emit structured success log with provider/readModelType/key/elapsedMs/result."
+    exit 1
+  fi
+
+  if ! rg -F "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}" "${provider_store_file}" >/dev/null; then
+    echo "${provider_store_file}"
+    echo "Provider write path must emit structured failure log with provider/readModelType/key/elapsedMs/result/errorType."
+    exit 1
+  fi
+done
+
 command_side_readmodel_violations="$(
-  rg -n "IProjectionReadModelStore<|ReadModelStore" \
+  rg -n "IProjectionDocumentStore<|IProjectionGraphStore|ProjectionDocumentStore|ProjectionGraphStore" \
     src/workflow/Aevatar.Workflow.Application \
     src/workflow/Aevatar.Workflow.Host.Api \
     src/Aevatar.Mainnet.Host.Api \

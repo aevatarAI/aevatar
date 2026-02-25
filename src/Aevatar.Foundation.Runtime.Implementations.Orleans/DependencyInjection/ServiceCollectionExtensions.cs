@@ -1,8 +1,11 @@
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.DependencyInjection;
+using Aevatar.Foundation.Core.EventSourcing;
 using Orleans.Hosting;
 using Orleans.Streams;
 
@@ -22,9 +25,29 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
+        services.TryAddSingleton<EventSourcingRuntimeOptions>();
+        services.RemoveAll(typeof(IStateStore<>));
+        services.RemoveAll(typeof(IEventSourcingSnapshotStore<>));
+        services.RemoveAll(typeof(IEventSourcingBehaviorFactory<>));
+        services.TryAddSingleton<IRuntimeActorStateBindingAccessor, AsyncLocalRuntimeActorStateBindingAccessor>();
+        services.TryAddTransient(typeof(IStateStore<>), typeof(RuntimeActorGrainStateStore<>));
+        services.TryAddTransient(typeof(IEventSourcingSnapshotStore<>), typeof(RuntimeActorGrainEventSourcingSnapshotStore<>));
+        services.TryAddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+        if (IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet))
+        {
+            services.AddGarnetEventStore(garnetOptions =>
+            {
+                garnetOptions.ConnectionString = options.GarnetConnectionString;
+            });
+        }
+        else
+        {
+            services.TryAddSingleton<IEventStore, InMemoryEventStore>();
+        }
 
-        services.TryAddSingleton(typeof(IStateStore<>), typeof(InMemoryStateStore<>));
-        services.TryAddSingleton<IEventStore, InMemoryEventStore>();
+        services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
+        services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
+        services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<IAgentManifestStore, InMemoryManifestStore>();
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
 

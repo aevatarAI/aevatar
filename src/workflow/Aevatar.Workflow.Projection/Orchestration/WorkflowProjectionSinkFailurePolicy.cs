@@ -7,12 +7,12 @@ public sealed class WorkflowProjectionSinkFailurePolicy : IWorkflowProjectionSin
     public const string SinkBackpressureErrorCode = "RUN_SINK_BACKPRESSURE";
     public const string SinkWriteErrorCode = "RUN_SINK_WRITE_FAILED";
 
-    private readonly IWorkflowProjectionSinkSubscriptionManager _sinkSubscriptionManager;
+    private readonly IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent> _sinkSubscriptionManager;
     private readonly IProjectionSessionEventHub<WorkflowRunEvent> _runEventStreamHub;
     private readonly IProjectionClock _clock;
 
     public WorkflowProjectionSinkFailurePolicy(
-        IWorkflowProjectionSinkSubscriptionManager sinkSubscriptionManager,
+        IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent> sinkSubscriptionManager,
         IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
         IProjectionClock clock)
     {
