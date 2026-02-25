@@ -112,7 +112,7 @@ public class ToolCallLoopTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenMaxRoundsReachedWithoutTerminalContent_ShouldReturnNull()
+    public async Task ExecuteAsync_WhenMaxRoundsReached_ShouldMakeFinalCallWithoutToolsAndReturnContent()
     {
         var provider = new QueueLLMProvider(
         [
@@ -128,18 +128,23 @@ public class ToolCallLoopTests
                     },
                 ],
             },
+            new LLMResponse { Content = "summary after tool rounds" },
         ]);
         var tools = new ToolManager();
         tools.Register(new DelegateTool("echo", _ => "{}"));
         var loop = new ToolCallLoop(tools);
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var echoTool = new DelegateTool("echo", _ => "{}");
+        var request = new LLMRequest { Messages = [], Tools = [echoTool] };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
 
-        result.Should().BeNull();
+        result.Should().Be("summary after tool rounds");
         messages.Count(m => m.Role == "assistant" && m.ToolCalls?.Count == 1).Should().Be(1);
         messages.Should().ContainSingle(m => m.Role == "tool");
+        // Final call should have been made without tools
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].Tools.Should().BeNull();
     }
 
     [Fact]

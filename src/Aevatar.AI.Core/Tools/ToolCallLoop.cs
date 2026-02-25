@@ -82,8 +82,8 @@ public sealed class ToolCallLoop
                 return response.Content;
             }
 
-            // 记录 assistant tool_call 消息
-            messages.Add(new ChatMessage { Role = "assistant", ToolCalls = response.ToolCalls });
+            // 记录 assistant tool_call 消息（保留 Content，部分 LLM 会同时返回文本和 tool_call）
+            messages.Add(new ChatMessage { Role = "assistant", Content = response.Content, ToolCalls = response.ToolCalls });
 
             // 执行每个 tool call
             foreach (var call in response.ToolCalls!)
@@ -132,7 +132,19 @@ public sealed class ToolCallLoop
             }
         }
 
-        return messages.LastOrDefault(m => m.Role == "assistant")?.Content;
+        // maxRounds exhausted — tool results from the last round are already in messages.
+        // Make one final LLM call WITHOUT tools so the model must produce a text response.
+        var finalRequest = new LLMRequest
+        {
+            Messages = [..messages], Tools = null,
+            Model = baseRequest.Model, Temperature = baseRequest.Temperature,
+            MaxTokens = baseRequest.MaxTokens,
+        };
+        var finalResponse = await provider.ChatAsync(finalRequest, ct);
+        var finalContent = finalResponse?.Content;
+        if (finalContent != null)
+            messages.Add(ChatMessage.Assistant(finalContent));
+        return finalContent;
     }
 
     private sealed class NullAgentTool(string name) : IAgentTool
