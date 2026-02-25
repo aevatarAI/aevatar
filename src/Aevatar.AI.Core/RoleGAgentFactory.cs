@@ -47,14 +47,17 @@ public static class RoleGAgentFactory
     public static async Task ApplyConfig(RoleGAgent agent, RoleYamlConfig config, IServiceProvider services)
     {
         // ─── 基础配置（事件优先） ───
-        await agent.HandleConfigureRoleAgent(new ConfigureRoleAgentEvent
+        var configureEvent = new ConfigureRoleAgentEvent
         {
             RoleName = config.Name ?? string.Empty,
             SystemPrompt = config.SystemPrompt ?? string.Empty,
             ProviderName = config.Provider ?? "deepseek",
             Model = config.Model ?? string.Empty,
-            Temperature = config.Temperature ?? 0,
-        });
+        };
+        if (config.Temperature.HasValue)
+            configureEvent.Temperature = config.Temperature.Value;
+
+        await agent.HandleConfigureRoleAgent(configureEvent);
 
         // ─── EventModules 创建 ───
         if (string.IsNullOrEmpty(config.Extensions?.EventModules)) return;

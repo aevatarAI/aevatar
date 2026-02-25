@@ -31,12 +31,14 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
         CancellationToken ct = default)
     {
         var coordinatorActor = await ResolveCoordinatorActorAsync(scopeId, ct);
+        var occurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
         var envelope = CreateCoordinatorEnvelope(
             new ProjectionOwnershipAcquireEvent
             {
                 ScopeId = scopeId,
                 SessionId = sessionId,
                 LeaseTtlMs = _options.ResolveLeaseTtlMs(),
+                OccurredAtUtc = occurredAtUtc,
             },
             sessionId);
         await coordinatorActor.HandleEventAsync(envelope, ct);
@@ -48,11 +50,13 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
         CancellationToken ct = default)
     {
         var coordinatorActor = await ResolveCoordinatorActorAsync(scopeId, ct);
+        var occurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
         var envelope = CreateCoordinatorEnvelope(
             new ProjectionOwnershipReleaseEvent
             {
                 ScopeId = scopeId,
                 SessionId = sessionId,
+                OccurredAtUtc = occurredAtUtc,
             },
             sessionId);
         await coordinatorActor.HandleEventAsync(envelope, ct);

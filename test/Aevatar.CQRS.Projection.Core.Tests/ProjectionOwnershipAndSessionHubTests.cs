@@ -32,6 +32,7 @@ public class ActorProjectionOwnershipCoordinatorTests
         evt.ScopeId.Should().Be("scope-1");
         evt.SessionId.Should().Be("session-1");
         evt.LeaseTtlMs.Should().Be(ProjectionOwnershipCoordinatorOptions.DefaultLeaseTtlMs);
+        evt.OccurredAtUtc.Should().NotBeNull();
         envelope.CorrelationId.Should().Be("session-1");
         envelope.Direction.Should().Be(EventDirection.Self);
     }
@@ -76,6 +77,7 @@ public class ActorProjectionOwnershipCoordinatorTests
         var evt = envelope.Payload.Unpack<ProjectionOwnershipReleaseEvent>();
         evt.ScopeId.Should().Be("scope-1");
         evt.SessionId.Should().Be("session-1");
+        evt.OccurredAtUtc.Should().NotBeNull();
     }
 
     [Fact]
@@ -243,6 +245,23 @@ public class ProjectionOwnershipCoordinatorGAgentTests
     }
 
     [Fact]
+    public async Task HandleAcquireAsync_ShouldUseProvidedOccurredAtUtc()
+    {
+        var agent = CreateStatefulAgent(CreateStatefulAgentServices());
+        var occurredAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-2));
+
+        await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
+        {
+            ScopeId = "scope-1",
+            SessionId = "session-1",
+            LeaseTtlMs = 30_000,
+            OccurredAtUtc = occurredAtUtc,
+        });
+
+        agent.State.LastUpdatedAtUtc.Should().BeEquivalentTo(occurredAtUtc);
+    }
+
+    [Fact]
     public async Task HandleAcquireAsync_ShouldAllowTakeover_WhenExistingLeaseExpired()
     {
         var agent = CreateStatefulAgent(CreateStatefulAgentServices());
@@ -336,6 +355,75 @@ public class ProjectionOwnershipCoordinatorGAgentTests
         agent2.State.Active.Should().BeFalse();
         agent2.State.ScopeId.Should().Be("scope-replay");
         agent2.State.SessionId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Replay_ShouldPreserveLeaseTimestamp_AndAllowExpiredTakeover()
+    {
+        var store = new TestInMemoryEventStore();
+        var services = CreateStatefulAgentServices(store);
+        var occurredAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-10));
+
+        var agent1 = CreateStatefulAgent(services);
+        await agent1.ActivateAsync();
+        await agent1.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
+        {
+            ScopeId = "scope-replay-active",
+            SessionId = "session-1",
+            LeaseTtlMs = 1_000,
+            OccurredAtUtc = occurredAtUtc,
+        });
+        await agent1.DeactivateAsync();
+
+        var agent2 = CreateStatefulAgent(services);
+        await agent2.ActivateAsync();
+        agent2.State.Active.Should().BeTrue();
+        agent2.State.ScopeId.Should().Be("scope-replay-active");
+        agent2.State.SessionId.Should().Be("session-1");
+        agent2.State.LastUpdatedAtUtc.Should().BeEquivalentTo(occurredAtUtc);
+
+        await agent2.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
+        {
+            ScopeId = "scope-replay-active",
+            SessionId = "session-2",
+            LeaseTtlMs = 1_000,
+        });
+
+        agent2.State.Active.Should().BeTrue();
+        agent2.State.SessionId.Should().Be("session-2");
+    }
+
+    [Fact]
+    public async Task Replay_ShouldFailFast_WhenAcquireEventMissingOccurredAtUtc()
+    {
+        var store = new TestInMemoryEventStore();
+        var services = CreateStatefulAgentServices(store);
+        var agent = CreateStatefulAgent(services);
+        var agentId = agent.Id;
+        await store.AppendAsync(
+            agentId,
+            [
+                new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = 1,
+                    EventType = ProjectionOwnershipAcquireEvent.Descriptor.FullName,
+                    EventData = Google.Protobuf.WellKnownTypes.Any.Pack(new ProjectionOwnershipAcquireEvent
+                    {
+                        ScopeId = "scope-legacy",
+                        SessionId = "session-legacy",
+                        LeaseTtlMs = 1_000,
+                    }),
+                    AgentId = agentId,
+                },
+            ],
+            expectedVersion: 0,
+            CancellationToken.None);
+
+        Func<Task> act = () => agent.ActivateAsync();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*occurred_at_utc*");
     }
 }
 

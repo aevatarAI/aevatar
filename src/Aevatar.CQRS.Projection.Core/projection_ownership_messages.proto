@@ -16,9 +16,11 @@ message ProjectionOwnershipAcquireEvent {
   string scope_id = 1;
   string session_id = 2;
   int64 lease_ttl_ms = 3;
+  google.protobuf.Timestamp occurred_at_utc = 4;
 }
 
 message ProjectionOwnershipReleaseEvent {
   string scope_id = 1;
   string session_id = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
 }

@@ -71,6 +71,63 @@ public class RoleGAgentReplayContractTests
         agent2.RoleName.Should().Be("assistant");
     }
 
+    [Fact]
+    public async Task RoleGAgentFactory_ShouldPreserveExplicitZeroTemperature()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = new ServiceCollection()
+            .AddSingleton<IEventStore>(store)
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .BuildServiceProvider();
+
+        var agent = CreateAgent(services, "role-factory-temperature-zero");
+        await agent.ActivateAsync();
+        await RoleGAgentFactory.ApplyConfig(agent, new RoleYamlConfig
+        {
+            Name = "assistant",
+            Provider = "mock",
+            SystemPrompt = "system",
+            Temperature = 0,
+        }, services);
+
+        agent.Config.Temperature.Should().Be(0);
+
+        var persisted = await store.GetEventsAsync("role-factory-temperature-zero");
+        persisted.Should().ContainSingle();
+        var evt = persisted.Single().EventData.Unpack<ConfigureRoleAgentEvent>();
+        evt.HasTemperature.Should().BeTrue();
+        evt.Temperature.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RoleGAgentFactory_ShouldKeepTemperatureUnset_WhenYamlTemperatureIsMissing()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = new ServiceCollection()
+            .AddSingleton<IEventStore>(store)
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .BuildServiceProvider();
+
+        var agent = CreateAgent(services, "role-factory-temperature-null");
+        await agent.ActivateAsync();
+        await RoleGAgentFactory.ApplyConfig(agent, new RoleYamlConfig
+        {
+            Name = "assistant",
+            Provider = "mock",
+            SystemPrompt = "system",
+            Temperature = null,
+        }, services);
+
+        agent.Config.Temperature.Should().BeNull();
+
+        var persisted = await store.GetEventsAsync("role-factory-temperature-null");
+        persisted.Should().ContainSingle();
+        var evt = persisted.Single().EventData.Unpack<ConfigureRoleAgentEvent>();
+        evt.HasTemperature.Should().BeFalse();
+    }
+
     private static RoleGAgent CreateAgent(IServiceProvider services, string actorId)
     {
         var agent = new RoleGAgent
