@@ -259,7 +259,11 @@ public sealed class WorkflowCoreModulesCoverageTests
             ctx,
             CancellationToken.None);
         await module.HandleAsync(
-            Envelope(new StepCompletedEvent { StepId = "while-1_iter_1", Success = true, Output = "DONE" }),
+            Envelope(new StepCompletedEvent { StepId = "while-1_iter_1", Success = true, Output = "more" }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "while-1_iter_2", Success = true, Output = "final" }),
             ctx,
             CancellationToken.None);
         await module.HandleAsync(
@@ -268,18 +272,24 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
 
         var deltaEvents = ctx.Published.Skip(countAfterStart).ToList();
-        deltaEvents.Should().HaveCount(2);
+        deltaEvents.Should().HaveCount(3);
 
         var secondDispatch = deltaEvents[0].evt.Should().BeOfType<StepRequestEvent>().Subject;
         secondDispatch.StepId.Should().Be("while-1_iter_1");
-        secondDispatch.StepType.Should().Be("llm_call");
+        secondDispatch.StepType.Should().Be("transform");
         secondDispatch.Input.Should().Be("continue");
-        deltaEvents[0].direction.Should().Be(EventDirection.Down);
+        deltaEvents[0].direction.Should().Be(EventDirection.Self);
 
-        var completed = deltaEvents[1].evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var thirdDispatch = deltaEvents[1].evt.Should().BeOfType<StepRequestEvent>().Subject;
+        thirdDispatch.StepId.Should().Be("while-1_iter_2");
+        thirdDispatch.StepType.Should().Be("transform");
+        thirdDispatch.Input.Should().Be("more");
+        deltaEvents[1].direction.Should().Be(EventDirection.Self);
+
+        var completed = deltaEvents[2].evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.StepId.Should().Be("while-1");
         completed.Success.Should().BeTrue();
-        completed.Output.Should().Be("DONE");
+        completed.Output.Should().Be("final");
     }
 
     [Fact]

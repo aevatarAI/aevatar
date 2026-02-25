@@ -33,6 +33,7 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
     private static readonly IReadOnlyList<IWorkflowModuleConfigurator> ConfiguratorRegistrations =
     [
         new WorkflowLoopModuleConfigurator(),
+        new WhileModuleConfigurator(),
     ];
 
     public string Name => "workflow.core";

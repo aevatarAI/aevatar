@@ -1,11 +1,16 @@
 // ─────────────────────────────────────────────────────────────
 // WhileModule — 循环模块
-// 重复执行子步骤直到条件不满足或达到最大迭代次数
+// 重复执行子步骤序列直到条件不满足或达到最大迭代次数
+//
+// If the step definition has Children, each iteration dispatches
+// them sequentially (e.g. verify → build_dag → next_round).
+// Otherwise falls back to dispatching a single step type.
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -13,10 +18,15 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>循环模块。处理 type=while 的步骤。</summary>
 public sealed class WhileModule : IEventModule
 {
-    private readonly Dictionary<string, int> _iterations = [];
+    private WorkflowDefinition? _workflow;
+    private readonly Dictionary<string, WhileState> _activeLoops = [];
+    private readonly Dictionary<string, string> _pendingChildren = []; // childStepId → whileStepId
 
     public string Name => "while";
     public int Priority => 5;
+
+    /// <summary>设置工作流定义，用于查找步骤的 Children。</summary>
+    public void SetWorkflow(WorkflowDefinition workflow) => _workflow = workflow;
 
     /// <inheritdoc />
     public bool CanHandle(EventEnvelope envelope) =>
@@ -34,64 +44,146 @@ public sealed class WhileModule : IEventModule
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "while") return;
 
-            var maxIterations = int.TryParse(request.Parameters.GetValueOrDefault("max_iterations", "10"), out var max) ? max : 10;
-            _iterations[request.StepId] = 0;
+            var maxIterations = int.TryParse(
+                request.Parameters.GetValueOrDefault("max_iterations", "10"), out var max) ? max : 10;
 
-            ctx.Logger.LogInformation("While 循环 {StepId}: 开始，最大 {Max} 次迭代", request.StepId, maxIterations);
-
-            // 触发子步骤（用 step 参数指定的步骤类型）
-            var subStepType = request.Parameters.GetValueOrDefault("step", "llm_call");
-            await ctx.PublishAsync(new StepRequestEvent
+            // Resolve children from workflow definition
+            var children = ResolveChildren(request.StepId);
+            if (children == null || children.Count == 0)
             {
-                StepId = $"{request.StepId}_iter_0",
-                StepType = subStepType,
+                // Fallback: no children defined — dispatch a single step type per iteration (legacy behavior)
+                var subStepType = request.Parameters.GetValueOrDefault("step", "llm_call");
+                children =
+                [
+                    new StepDefinition
+                    {
+                        Id = "",
+                        Type = subStepType,
+                        TargetRole = request.TargetRole,
+                    },
+                ];
+            }
+
+            var state = new WhileState
+            {
+                MaxIterations = maxIterations,
+                CurrentIteration = 0,
+                CurrentChildIndex = 0,
+                Children = children,
                 Input = request.Input,
-                TargetRole = request.TargetRole,
-            }, EventDirection.Down, ct);
+                FallbackRole = request.TargetRole,
+            };
+            _activeLoops[request.StepId] = state;
+
+            ctx.Logger.LogInformation(
+                "While {StepId}: start, max={Max}, children={Count}",
+                request.StepId, maxIterations, children.Count);
+
+            await DispatchCurrentChild(request.StepId, state, ctx, ct);
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
             var completed = payload.Unpack<StepCompletedEvent>();
 
-            // 找到对应的 while 步骤
-            var whileStepId = GetWhileStepId(completed.StepId);
-            if (whileStepId == null || !_iterations.ContainsKey(whileStepId)) return;
+            // Match this completion to an active while loop's pending child
+            if (!_pendingChildren.TryGetValue(completed.StepId, out var whileStepId)) return;
+            _pendingChildren.Remove(completed.StepId);
 
-            _iterations[whileStepId]++;
-            var iteration = _iterations[whileStepId];
-            var maxIterations = 10; // 简化：从初始请求中获取
+            if (!_activeLoops.TryGetValue(whileStepId, out var state)) return;
 
-            // 检查条件：简化实现——output 中不包含 "DONE" 且未达上限
-            var shouldContinue = !completed.Output.Contains("DONE", StringComparison.OrdinalIgnoreCase) &&
-                                 iteration < maxIterations && completed.Success;
+            // Carry forward output to next child
+            state.Input = completed.Output;
+            state.CurrentChildIndex++;
 
-            if (shouldContinue)
+            if (state.CurrentChildIndex < state.Children.Count)
             {
-                ctx.Logger.LogInformation("While 循环 {StepId}: 迭代 {Iter}", whileStepId, iteration);
-                await ctx.PublishAsync(new StepRequestEvent
-                {
-                    StepId = $"{whileStepId}_iter_{iteration}",
-                    StepType = "llm_call",
-                    Input = completed.Output,
-                }, EventDirection.Down, ct);
+                // More children in this iteration — dispatch next
+                await DispatchCurrentChild(whileStepId, state, ctx, ct);
             }
             else
             {
-                ctx.Logger.LogInformation("While 循环 {StepId}: 完成，共 {Iter} 次迭代", whileStepId, iteration);
-                _iterations.Remove(whileStepId);
-                await ctx.PublishAsync(new StepCompletedEvent
+                // All children in this iteration completed
+                state.CurrentIteration++;
+
+                var shouldContinue = completed.Success &&
+                                     state.CurrentIteration < state.MaxIterations;
+
+                if (shouldContinue)
                 {
-                    StepId = whileStepId,
-                    Success = true,
-                    Output = completed.Output,
-                }, EventDirection.Self, ct);
+                    state.CurrentChildIndex = 0;
+                    ctx.Logger.LogInformation(
+                        "While {StepId}: iteration {Iter} starting",
+                        whileStepId, state.CurrentIteration);
+                    await DispatchCurrentChild(whileStepId, state, ctx, ct);
+                }
+                else
+                {
+                    ctx.Logger.LogInformation(
+                        "While {StepId}: completed after {Iter} iterations",
+                        whileStepId, state.CurrentIteration);
+                    _activeLoops.Remove(whileStepId);
+                    await ctx.PublishAsync(new StepCompletedEvent
+                    {
+                        StepId = whileStepId,
+                        Success = true,
+                        Output = completed.Output,
+                    }, EventDirection.Self, ct);
+                }
             }
         }
     }
 
-    private static string? GetWhileStepId(string subStepId)
+    private List<StepDefinition>? ResolveChildren(string stepId)
     {
-        var idx = subStepId.LastIndexOf("_iter_", StringComparison.Ordinal);
-        return idx > 0 ? subStepId[..idx] : null;
+        if (_workflow == null) return null;
+        var step = _workflow.GetStep(stepId);
+        return step?.Children is { Count: > 0 } ? step.Children : null;
+    }
+
+    private async Task DispatchCurrentChild(
+        string whileStepId, WhileState state, IEventHandlerContext ctx, CancellationToken ct)
+    {
+        var child = state.Children[state.CurrentChildIndex];
+        var childStepId = string.IsNullOrEmpty(child.Id)
+            ? $"{whileStepId}_iter_{state.CurrentIteration}"
+            : $"{whileStepId}_iter_{state.CurrentIteration}_{child.Id}";
+
+        _pendingChildren[childStepId] = whileStepId;
+
+        var req = new StepRequestEvent
+        {
+            StepId = childStepId,
+            StepType = child.Type,
+            Input = state.Input,
+            TargetRole = child.TargetRole ?? state.FallbackRole,
+        };
+        foreach (var (k, v) in child.Parameters)
+            req.Parameters[k] = v;
+
+        // Inject allowed_connectors from role definition
+        if (!string.IsNullOrWhiteSpace(req.TargetRole) && _workflow != null)
+        {
+            var role = _workflow.Roles.FirstOrDefault(
+                r => string.Equals(r.Id, req.TargetRole, StringComparison.OrdinalIgnoreCase));
+            if (role is { Connectors.Count: > 0 })
+                req.Parameters["allowed_connectors"] = string.Join(",", role.Connectors);
+        }
+
+        ctx.Logger.LogInformation(
+            "While {WhileStep}: dispatch child={ChildId} type={Type} role={Role} iter={Iter}/{Max}",
+            whileStepId, childStepId, child.Type, req.TargetRole,
+            state.CurrentIteration, state.MaxIterations);
+
+        await ctx.PublishAsync(req, EventDirection.Self, ct);
+    }
+
+    private sealed class WhileState
+    {
+        public required int MaxIterations { get; init; }
+        public int CurrentIteration { get; set; }
+        public int CurrentChildIndex { get; set; }
+        public required List<StepDefinition> Children { get; init; }
+        public required string Input { get; set; }
+        public required string FallbackRole { get; init; }
     }
 }
