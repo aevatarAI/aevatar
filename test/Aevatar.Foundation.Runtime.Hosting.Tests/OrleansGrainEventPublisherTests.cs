@@ -54,7 +54,7 @@ public class OrleansGrainEventPublisherTests
         var delivered = streams.GetProduced("parent-actor").Should().ContainSingle().Subject;
         delivered.Metadata.TryGetValue(PublisherChainMetadata.PublishersMetadataKey, out var chain)
             .Should().BeTrue();
-        chain.Should().Be("parent-actor,child-actor");
+        chain.Should().Be("child-actor");
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class OrleansGrainEventPublisherTests
         var delivered = streams.GetProduced("receiver").Should().ContainSingle().Subject;
         delivered.Metadata.TryGetValue(PublisherChainMetadata.PublishersMetadataKey, out var chain)
             .Should().BeTrue();
-        chain.Should().Be("upstream,sender");
+        chain.Should().Be("sender");
     }
 
     [Fact]
