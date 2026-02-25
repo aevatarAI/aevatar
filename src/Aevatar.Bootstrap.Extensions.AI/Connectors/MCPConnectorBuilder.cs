@@ -13,18 +13,37 @@ public sealed class MCPConnectorBuilder : IConnectorBuilder
     public bool TryBuild(ConnectorConfigEntry entry, ILogger logger, out IConnector? connector)
     {
         connector = null;
-        if (string.IsNullOrWhiteSpace(entry.MCP.Command))
+        var hasUrl = !string.IsNullOrWhiteSpace(entry.MCP.Url);
+        var hasCommand = !string.IsNullOrWhiteSpace(entry.MCP.Command);
+
+        if (!hasUrl && !hasCommand)
         {
-            logger.LogWarning("Skip connector {Name}: mcp.command is required", entry.Name);
+            logger.LogWarning("Skip connector {Name}: mcp requires either url or command", entry.Name);
             return false;
+        }
+
+        MCPAuthConfig? auth = null;
+        if (entry.MCP.Auth is { } authConfig && !string.IsNullOrWhiteSpace(authConfig.TokenUrl))
+        {
+            auth = new MCPAuthConfig
+            {
+                Type = authConfig.Type,
+                TokenUrl = authConfig.TokenUrl,
+                ClientId = authConfig.ClientId,
+                ClientSecret = authConfig.ClientSecret,
+                Scope = authConfig.Scope,
+            };
         }
 
         var server = new MCPServerConfig
         {
             Name = string.IsNullOrWhiteSpace(entry.MCP.ServerName) ? entry.Name : entry.MCP.ServerName,
-            Command = entry.MCP.Command,
+            Command = hasCommand ? entry.MCP.Command : null,
+            Url = hasUrl ? entry.MCP.Url : null,
             Arguments = entry.MCP.Arguments,
             Environment = entry.MCP.Environment,
+            Headers = entry.MCP.Headers,
+            Auth = auth,
         };
 
         connector = new MCPConnector(

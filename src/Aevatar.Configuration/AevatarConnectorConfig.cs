@@ -48,6 +48,19 @@ public sealed class MCPConnectorConfig
     public string DefaultTool { get; init; } = "";
     public string[] AllowedTools { get; init; } = [];
     public string[] AllowedInputKeys { get; init; } = [];
+    public string Url { get; init; } = "";
+    public Dictionary<string, string> Headers { get; init; } = [];
+    public MCPAuthConnectorConfig? Auth { get; init; }
+}
+
+/// <summary>MCP OAuth connector auth settings.</summary>
+public sealed class MCPAuthConnectorConfig
+{
+    public string Type { get; init; } = "client_credentials";
+    public string TokenUrl { get; init; } = "";
+    public string ClientId { get; init; } = "";
+    public string ClientSecret { get; init; } = "";
+    public string? Scope { get; init; }
 }
 
 /// <summary>
@@ -76,8 +89,9 @@ public static class AevatarConnectorConfig
                 .Where(x => x.Enabled && !string.IsNullOrWhiteSpace(x.Name) && !string.IsNullOrWhiteSpace(x.Type))
                 .ToList();
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Trace.TraceWarning("Failed to load connectors from {0}: {1}", path, ex.Message);
             return [];
         }
     }
@@ -195,6 +209,27 @@ public static class AevatarConnectorConfig
             DefaultTool = ReadString(obj, "defaultTool"),
             AllowedTools = ReadStringArray(obj, "allowedTools"),
             AllowedInputKeys = ReadStringArray(obj, "allowedInputKeys"),
+            Url = ReadString(obj, "url"),
+            Headers = ReadStringMap(obj, "headers"),
+            Auth = ParseMCPAuth(obj),
+        };
+    }
+
+    private static MCPAuthConnectorConfig? ParseMCPAuth(JsonElement obj)
+    {
+        if (!TryGetPropertyIgnoreCase(obj, "auth", out var authNode) || authNode.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var tokenUrl = ReadString(authNode, "tokenUrl");
+        if (string.IsNullOrWhiteSpace(tokenUrl)) return null;
+
+        return new MCPAuthConnectorConfig
+        {
+            Type = ReadString(authNode, "type") is { Length: > 0 } t ? t : "client_credentials",
+            TokenUrl = tokenUrl,
+            ClientId = ReadString(authNode, "clientId"),
+            ClientSecret = ReadString(authNode, "clientSecret"),
+            Scope = ReadString(authNode, "scope") is { Length: > 0 } s ? s : null,
         };
     }
 
@@ -213,10 +248,25 @@ public static class AevatarConnectorConfig
         return false;
     }
 
-    private static string ReadString(JsonElement obj, string name) =>
-        TryGetPropertyIgnoreCase(obj, name, out var val) && val.ValueKind == JsonValueKind.String
-            ? val.GetString() ?? ""
-            : "";
+    private static string ReadString(JsonElement obj, string name)
+    {
+        if (!TryGetPropertyIgnoreCase(obj, name, out var val) || val.ValueKind != JsonValueKind.String)
+            return "";
+        var raw = val.GetString() ?? "";
+        return ExpandEnvironmentPlaceholders(raw);
+    }
+
+    private static string ExpandEnvironmentPlaceholders(string value)
+    {
+        if (string.IsNullOrEmpty(value) || !value.Contains("${"))
+            return value;
+
+        return System.Text.RegularExpressions.Regex.Replace(value, @"\$\{([^}]+)\}", match =>
+        {
+            var varName = match.Groups[1].Value;
+            return Environment.GetEnvironmentVariable(varName) ?? match.Value;
+        });
+    }
 
     private static int ReadInt(JsonElement obj, string name, int fallback)
     {
