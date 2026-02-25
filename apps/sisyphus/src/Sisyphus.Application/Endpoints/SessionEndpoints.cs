@@ -10,7 +10,7 @@ public static class SessionEndpoints
 {
     public static IEndpointRouteBuilder MapSessionEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/v2/sessions").WithTags("Sessions").RequireAuthorization();
+        var group = app.MapGroup("/api/v2/sessions").WithTags("Sessions");
 
         group.MapPost("/", HandleCreateSession)
             .Produces<ResearchSession>(StatusCodes.Status201Created)
