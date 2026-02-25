@@ -151,12 +151,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         {
             options.Tools = [];
             foreach (var tool in request.Tools)
-            {
-                options.Tools.Add(AIFunctionFactory.Create(
-                    (string input) => tool.ExecuteAsync(input),
-                    tool.Name,
-                    tool.Description));
-            }
+                options.Tools.Add(new AgentToolAIFunction(tool));
             hasOptions = true;
         }
 
@@ -209,5 +204,65 @@ public sealed class MEAILLMProvider : ILLMProvider
             Usage = usage,
             FinishReason = response.FinishReason?.ToString(),
         };
+    }
+}
+
+/// <summary>
+/// Wraps an <see cref="IAgentTool"/> as an MEAI <see cref="AIFunction"/>,
+/// preserving the original JSON Schema so the LLM sees the real parameter definitions.
+/// </summary>
+internal sealed class AgentToolAIFunction : AIFunction
+{
+    private readonly IAgentTool _tool;
+    private readonly System.Text.Json.JsonElement _schema;
+
+    public AgentToolAIFunction(IAgentTool tool)
+    {
+        _tool = tool;
+
+        // Build a JSON schema document that wraps the tool's parameter schema
+        // in the standard function-calling envelope: { "description": "...", ... }
+        _schema = BuildFunctionSchema(tool);
+    }
+
+    public override string Name => _tool.Name;
+    public override string Description => _tool.Description;
+    public override System.Text.Json.JsonElement JsonSchema => _schema;
+
+    protected override async ValueTask<object?> InvokeCoreAsync(
+        AIFunctionArguments arguments, CancellationToken cancellationToken)
+    {
+        // Serialize the arguments dictionary back to JSON for the tool
+        var json = arguments.Count > 0
+            ? System.Text.Json.JsonSerializer.Serialize(
+                arguments.ToDictionary(kv => kv.Key, kv => kv.Value))
+            : "{}";
+
+        return await _tool.ExecuteAsync(json, cancellationToken);
+    }
+
+    private static System.Text.Json.JsonElement BuildFunctionSchema(IAgentTool tool)
+    {
+        // If the tool provides a parameters schema, merge it into the function schema.
+        // The MEAI OpenAI adapter expects: { "type": "object", "properties": { ... } }
+        if (!string.IsNullOrWhiteSpace(tool.ParametersSchema))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(tool.ParametersSchema);
+                // If it's already a valid JSON schema object, use it directly.
+                if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    return doc.RootElement.Clone();
+            }
+            catch
+            {
+                // Fall through to default schema
+            }
+        }
+
+        // Fallback: single "input" string parameter
+        using var fallback = System.Text.Json.JsonDocument.Parse(
+            """{"type":"object","properties":{"input":{"type":"string","description":"Tool input as JSON string"}},"required":["input"]}""");
+        return fallback.RootElement.Clone();
     }
 }

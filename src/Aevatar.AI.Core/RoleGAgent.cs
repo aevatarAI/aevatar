@@ -75,7 +75,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             SystemPrompt = evt.SystemPrompt ?? string.Empty,
             Temperature = evt.HasTemperature ? evt.Temperature : null,
             MaxTokens = evt.MaxTokens == 0 ? null : evt.MaxTokens,
-            MaxToolRounds = evt.MaxToolRounds <= 0 ? 10 : evt.MaxToolRounds,
+            MaxToolRounds = evt.MaxToolRounds <= 0 ? 30 : evt.MaxToolRounds,
             MaxHistoryMessages = evt.MaxHistoryMessages <= 0 ? 100 : evt.MaxHistoryMessages,
             StreamBufferCapacity = evt.StreamBufferCapacity <= 0 ? 256 : evt.StreamBufferCapacity,
         });
@@ -99,7 +99,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     }
 
     /// <summary>
-    /// Handles ChatRequestEvent via streaming LLM call.
+    /// Handles ChatRequestEvent via non-streaming LLM call with tool-calling loop.
     /// Publishes AG-UI three-phase events and logs the interaction.
     /// </summary>
     [EventHandler]
@@ -117,19 +117,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             AgentId = Id,
         }, EventDirection.Up);
 
-        // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
-        var fullContent = new StringBuilder();
-        await foreach (var chunk in ChatStreamAsync(request.Prompt))
+        // Use non-streaming ChatAsync so the ToolCallLoop is engaged
+        var response = await ChatAsync(request.Prompt) ?? "";
+
+        // ─── AG-UI: TEXT_MESSAGE_CONTENT ───
+        if (response.Length > 0)
         {
-            fullContent.Append(chunk);
             await PublishAsync(new TextMessageContentEvent
             {
-                Delta = chunk,
+                Delta = response,
                 SessionId = request.SessionId,
             }, EventDirection.Up);
         }
 
-        var response = fullContent.ToString();
         var responsePreview = response.Length > 300
             ? response[..300] + "..."
             : response;
