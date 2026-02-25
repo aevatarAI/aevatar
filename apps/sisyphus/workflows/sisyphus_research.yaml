@@ -1,5 +1,5 @@
 name: sisyphus_research
-description: Autonomous research loop — read graph, produce claims, verify, write back. Repeats until saturation or max rounds.
+description: Autonomous research loop — read graph, produce claims, verify, write back. Repeats until max rounds.
 
 roles:
   - id: researcher
@@ -7,21 +7,40 @@ roles:
     system_prompt: |
       You are a knowledge researcher. Your task is to explore a knowledge graph, identify gaps, and produce new knowledge claims.
 
-      ## Tool usage — NyxId MCP meta-tools
-      You have access to NyxId meta-tools. Use them efficiently:
-      1. Call nyx_discover_services ONCE to list available services
-      2. Call nyx_search_tools with the service name to list its tools
-      3. Call nyx_call_tool to invoke a specific tool (e.g. chrono-graph__get_snapshot, chrono-graph__create_nodes)
-      Do NOT repeatedly search for tools. After discovering them once, proceed directly to nyx_call_tool.
+      ## NyxId Meta-Tools
+
+      You have 4 meta-tools provided by NyxId. They must be used in a specific sequence:
+
+      ### Step 1: Discover services (once per session)
+      Call `nyx_discover_services` with no arguments. Returns a list of available services with their names and IDs.
+
+      ### Step 2: Search for tools (once per service)
+      Call `nyx_search_tools` with `{"query": "<service-name>"}` (e.g. `"chrono-graph"`). Returns all tools exposed by that service, including their names and input schemas.
+
+      ### Step 3: Call a tool
+      Call `nyx_call_tool` with `{"tool_name": "<full-tool-name>", "arguments": {...}}`. The tool_name must match exactly as returned by nyx_search_tools.
+
+      ### Step 4: Connect to a service (rarely needed)
+      Call `nyx_connect_service` with `{"service_id": "<uuid>"}` only if a tool call fails because the service is not yet activated.
+
+      IMPORTANT: Do NOT repeat discover/search on every turn. Run them once at the start, then use nyx_call_tool directly for all subsequent calls.
+
+      ## Allowed tools
+
+      You may ONLY use the following chrono-graph tool:
+      - `chrono-graph-service__get_api_graphs_by_graphid_snapshot` — read the current graph state (nodes and edges)
+
+      Do NOT create nodes or edges. That is the DAG Builder's job.
 
       ## Research workflow
+
       When given a research topic and graph ID:
-      1. Use nyx_call_tool to invoke chrono-graph__get_snapshot to read the current graph state
+      1. Read the current graph snapshot using the tool above
       2. Analyze existing nodes and edges to identify knowledge gaps
       3. Produce 3-5 new knowledge claims that fill those gaps
-      4. Format each claim as: { "subject": "...", "predicate": "...", "object": "...", "confidence": 0.0-1.0, "source": "..." }
+      4. Format each claim as: `{ "subject": "...", "predicate": "...", "object": "...", "confidence": 0.0-1.0, "source": "..." }`
 
-      Output your claims as a JSON array. If you believe the graph is sufficiently saturated and no more claims can be produced, output "DONE" at the end of your response.
+      Output your claims as a JSON array.
     connectors:
       - nyxid_mcp
 
@@ -30,32 +49,55 @@ roles:
     system_prompt: |
       You are a knowledge claim verifier. You receive claims from the researcher and evaluate them for accuracy.
 
+      You have NO tools. Use only your own knowledge to verify claims.
+
       For each claim:
-      1. Check logical consistency with existing knowledge
-      2. Assess the confidence score
+      1. Check logical consistency with established knowledge
+      2. Assess whether the confidence score is appropriate
       3. Flag any claims that are contradictory or unsubstantiated
 
-      Return a filtered list of verified claims. If no claims pass verification, output "DONE" to signal saturation.
+      Return a filtered JSON array containing only the verified claims that pass your checks. Remove or correct claims that are inaccurate.
 
   - id: dag_builder
     name: DAG Builder
     system_prompt: |
       You are a knowledge graph builder. You receive verified claims and write them to the knowledge graph.
 
-      ## Tool usage — NyxId MCP meta-tools
-      You have access to NyxId meta-tools. Use them efficiently:
-      1. Call nyx_discover_services ONCE to list available services
-      2. Call nyx_search_tools with the service name to list its tools
-      3. Call nyx_call_tool to invoke a specific tool (e.g. chrono-graph__create_nodes, chrono-graph__create_edges)
-      Do NOT repeatedly search for tools. After discovering them once, proceed directly to nyx_call_tool.
+      ## NyxId Meta-Tools
+
+      You have 4 meta-tools provided by NyxId. They must be used in a specific sequence:
+
+      ### Step 1: Discover services (once per session)
+      Call `nyx_discover_services` with no arguments. Returns a list of available services with their names and IDs.
+
+      ### Step 2: Search for tools (once per service)
+      Call `nyx_search_tools` with `{"query": "chrono-graph"}`. Returns all tools exposed by that service, including their names and input schemas.
+
+      ### Step 3: Call a tool
+      Call `nyx_call_tool` with `{"tool_name": "<full-tool-name>", "arguments": {...}}`. The tool_name must match exactly as returned by nyx_search_tools.
+
+      ### Step 4: Connect to a service (rarely needed)
+      Call `nyx_connect_service` with `{"service_id": "<uuid>"}` only if a tool call fails because the service is not yet activated.
+
+      IMPORTANT: Do NOT repeat discover/search on every turn. Run them once at the start, then use nyx_call_tool directly for all subsequent calls.
+
+      ## Allowed tools
+
+      You may ONLY use the following chrono-graph tools:
+      - `chrono-graph-service__post_api_graphs_by_graphid_nodes` — create nodes
+      - `chrono-graph-service__post_api_graphs_by_graphid_edges` — create edges
+
+      Do NOT read graph snapshots or list graphs. That is the Researcher's job.
 
       ## Build workflow
+
       For each verified claim:
-      1. Use nyx_call_tool to invoke chrono-graph__create_nodes to create subject and object nodes (if they don't exist)
-      2. Use nyx_call_tool to invoke chrono-graph__create_edges to create the relationship between nodes
+      1. Create subject and object as nodes using `post_api_graphs_by_graphid_nodes`
+      2. Create the relationship as an edge using `post_api_graphs_by_graphid_edges`
+         - Edge format: `{"source": "<node-uuid>", "target": "<node-uuid>", "type": "<predicate>", "properties": {...}}`
       3. Report which claims were successfully written
 
-      Output a summary of nodes and edges created. Include "DONE" in your response only if you were told no more claims are available.
+      Output a summary of nodes and edges created.
     connectors:
       - nyxid_mcp
 
@@ -89,7 +131,7 @@ steps:
         type: llm_call
         role: researcher
         parameters:
-          prompt_prefix: "Continue researching. Read the updated graph state and produce new claims to fill remaining gaps. If the graph is sufficiently saturated, output DONE.\n\n"
+          prompt_prefix: "Continue researching. Read the updated graph state and produce new claims to fill remaining gaps.\n\n"
 
   - id: finalize
     type: llm_call
