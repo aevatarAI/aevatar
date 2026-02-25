@@ -8,7 +8,7 @@
   <!-- Shared Version Variables -->
   <PropertyGroup>
     <!-- .NET 10 platform packages (Extensions / ASP.NET Core / EF Core) -->
-    <MicrosoftExtensionsVersion>10.0.2</MicrosoftExtensionsVersion>
+    <MicrosoftExtensionsVersion>10.0.3</MicrosoftExtensionsVersion>
     <!-- Microsoft Orleans -->
     <OrleansVersion>10.0.1</OrleansVersion>
     <!-- ABP Framework (excludes LeptonXLite Theme & Studio.Client) -->
@@ -26,7 +26,7 @@
     <!-- Proto.Actor -->
     <ProtoActorVersion>1.8.0</ProtoActorVersion>
     <!-- Model Context Protocol -->
-    <McpVersion>0.4.0-preview.3</McpVersion>
+    <McpVersion>1.0.0</McpVersion>
     <!-- GraphQL Client -->
     <GraphQLClientVersion>6.1.0</GraphQLClientVersion>
     <!-- Health Checks UI -->
