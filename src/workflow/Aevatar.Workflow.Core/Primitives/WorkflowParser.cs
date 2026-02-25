@@ -40,6 +40,10 @@ public sealed class WorkflowParser
                 Connectors = r.Connectors ?? [],
             }).ToList(),
             Steps = (raw.Steps ?? []).Select(MapStep).ToList(),
+            Configuration = new WorkflowRuntimeConfiguration
+            {
+                ClosedWorldMode = raw.Configuration?.ClosedWorldMode ?? false,
+            },
         };
     }
 
@@ -68,9 +72,10 @@ public sealed class WorkflowParser
             DefaultOutput = e.DefaultOutput,
         };
 
-    private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } }
+    private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } public RawConfiguration? Configuration { get; set; } }
     private sealed class RawRole { public string? Id { get; set; } public string? Name { get; set; } public string? SystemPrompt { get; set; } public string? Provider { get; set; } public string? Model { get; set; } public string? EventModules { get; set; } public List<string>? Connectors { get; set; } }
     private sealed class RawStep { public string? Id { get; set; } public string? Type { get; set; } public string? TargetRole { get; set; } public string? Role { get; set; } public Dictionary<string, string>? Parameters { get; set; } public string? Next { get; set; } public List<RawStep>? Children { get; set; } public Dictionary<string, string>? Branches { get; set; } public RawRetry? Retry { get; set; } public RawOnError? OnError { get; set; } public int? TimeoutMs { get; set; } }
     private sealed class RawRetry { public int? MaxAttempts { get; set; } public string? Backoff { get; set; } public int? DelayMs { get; set; } }
     private sealed class RawOnError { public string? Strategy { get; set; } public string? FallbackStep { get; set; } public string? DefaultOutput { get; set; } }
+    private sealed class RawConfiguration { public bool? ClosedWorldMode { get; set; } }
 }

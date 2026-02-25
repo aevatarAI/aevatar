@@ -42,7 +42,9 @@ builder.Services.AddAevatarConfig();
 builder.Services.AddAevatarWorkflow();
 builder.Services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
-var yamlDir = ResolveYamlDir();
+var primaryYamlDir = ResolveYamlDir();
+var turingYamlDir = ResolveTuringYamlDir();
+var workflowSources = BuildWorkflowSources(primaryYamlDir, turingYamlDir);
 
 var config = new ConfigurationBuilder()
     .AddAevatarConfig()
@@ -110,11 +112,13 @@ Console.WriteLine("╔═══════════════════�
 Console.WriteLine("║           Workflow Primitives Web UI                    ║");
 Console.WriteLine("╠══════════════════════════════════════════════════════════╣");
 Console.WriteLine($"║  Web UI: {url,-48}║");
-Console.WriteLine($"║  YAML:   {yamlDir,-48}║");
+Console.WriteLine($"║  YAML:   {primaryYamlDir,-48}║");
 Console.WriteLine($"║  LLM:    {(llmAvailable ? $"{providerName}/{modelName}" : "not configured"),-48}║");
 Console.WriteLine("║  Press Ctrl+C to stop                                  ║");
 Console.WriteLine("╚══════════════════════════════════════════════════════════╝");
 Console.WriteLine();
+if (!string.IsNullOrWhiteSpace(turingYamlDir))
+    Console.WriteLine($"[Turing demos] {turingYamlDir}");
 app.Lifetime.ApplicationStarted.Register(() => { if (!noBrowser) OpenBrowser(url); });
 
 app.UseDefaultFiles();
@@ -124,6 +128,13 @@ var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCas
 {
     "01_transform", "02_guard", "03_conditional", "04_switch",
     "05_assign", "06_retrieve_facts", "07_pipeline",
+};
+var turingWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "counter-addition",
+    "minsky-inc-dec-jz",
+    "counter_addition",
+    "minsky_inc_dec_jz",
 };
 
 var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -144,6 +155,10 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
     ["14_evaluate"] = "Write a haiku about programming.",
     ["15_reflect"] = "Write a concise explanation of the CAP theorem suitable for a junior developer.",
     ["16_cache"] = "What is the difference between SQL and NoSQL databases?",
+    ["counter-addition"] = "Run the closed-world two-counter addition demo.",
+    ["minsky-inc-dec-jz"] = "Run the closed-world INC/DEC/JZ transfer demo.",
+    ["counter_addition"] = "Run the closed-world two-counter addition demo.",
+    ["minsky_inc_dec_jz"] = "Run the closed-world INC/DEC/JZ transfer demo.",
 };
 
 var parser = new WorkflowParser();
@@ -151,21 +166,26 @@ var parser = new WorkflowParser();
 // GET /api/workflows — list all workflows
 app.MapGet("/api/workflows", () =>
 {
-    var yamlFiles = Directory.GetFiles(yamlDir, "*.yaml").OrderBy(f => f).ToList();
+    var workflowFiles = DiscoverWorkflowFiles(workflowSources);
     var workflows = new List<object>();
-    foreach (var file in yamlFiles)
+    foreach (var workflowFile in workflowFiles.Values.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
     {
-        var name = Path.GetFileNameWithoutExtension(file);
+        var name = workflowFile.Name;
         try
         {
-            var yaml = File.ReadAllText(file);
+            var yaml = File.ReadAllText(workflowFile.FilePath);
             var def = parser.Parse(yaml);
             var primitives = def.Steps.Select(s => s.Type).Distinct().ToList();
+            var category =
+                string.Equals(workflowFile.SourceKind, "turing", StringComparison.OrdinalIgnoreCase) ||
+                turingWorkflows.Contains(name)
+                    ? "turing"
+                    : deterministicWorkflows.Contains(name) ? "deterministic" : "llm";
             workflows.Add(new
             {
                 name,
                 description = def.Description,
-                category = deterministicWorkflows.Contains(name) ? "deterministic" : "llm",
+                category,
                 primitives,
                 defaultInput = demoInputs.GetValueOrDefault(name, "Hello, world!"),
             });
@@ -188,10 +208,10 @@ app.MapGet("/api/workflows", () =>
 // GET /api/workflows/{name} — workflow definition with edges
 app.MapGet("/api/workflows/{name}", (string name) =>
 {
-    var file = Path.Combine(yamlDir, $"{name}.yaml");
-    if (!File.Exists(file)) return Results.NotFound(new { error = $"Workflow '{name}' not found" });
+    if (!TryResolveWorkflowFile(name, workflowSources, out var workflowFile))
+        return Results.NotFound(new { error = $"Workflow '{name}' not found" });
 
-    var yaml = File.ReadAllText(file);
+    var yaml = File.ReadAllText(workflowFile.FilePath);
     var def = parser.Parse(yaml);
 
     var steps = def.Steps.Select(s => new
@@ -224,15 +244,20 @@ app.MapGet("/api/workflows/{name}", (string name) =>
 // GET /api/workflows/{name}/run — SSE execution endpoint
 app.MapGet("/api/workflows/{name}/run", async (string name, string? input, HttpContext ctx, CancellationToken ct) =>
 {
-    var file = Path.Combine(yamlDir, $"{name}.yaml");
-    if (!File.Exists(file))
+    if (!TryResolveWorkflowFile(name, workflowSources, out var workflowFile))
     {
         ctx.Response.StatusCode = 404;
         await ctx.Response.WriteAsync($"Workflow '{name}' not found");
         return;
     }
 
-    if (!deterministicWorkflows.Contains(name) && !llmAvailable)
+    var workflowCategory =
+        string.Equals(workflowFile.SourceKind, "turing", StringComparison.OrdinalIgnoreCase) ||
+        turingWorkflows.Contains(name)
+            ? "turing"
+            : deterministicWorkflows.Contains(name) ? "deterministic" : "llm";
+
+    if (string.Equals(workflowCategory, "llm", StringComparison.OrdinalIgnoreCase) && !llmAvailable)
     {
         ctx.Response.StatusCode = 400;
         await ctx.Response.WriteAsync("LLM not configured. Set DEEPSEEK_API_KEY or OPENAI_API_KEY.");
@@ -243,7 +268,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, HttpC
     ctx.Response.Headers["Cache-Control"] = "no-cache";
     ctx.Response.Headers["Connection"] = "keep-alive";
 
-    var yaml = File.ReadAllText(file);
+    var yaml = File.ReadAllText(workflowFile.FilePath);
     var actualInput = input ?? demoInputs.GetValueOrDefault(name, "Hello, world!");
 
     var runtime = ctx.RequestServices.GetRequiredService<IActorRuntime>();
@@ -915,6 +940,70 @@ static string ResolveYamlDir()
         $"Cannot find workflow YAML files. Tried:\n  {sibling}\n  {fromBin}\nSet WORKFLOW_YAML_DIR to override.");
 }
 
+static string? ResolveTuringYamlDir()
+{
+    var envDir = Environment.GetEnvironmentVariable("WORKFLOW_TURING_YAML_DIR");
+    if (!string.IsNullOrWhiteSpace(envDir) && Directory.Exists(envDir)) return envDir;
+
+    var projectDir = Directory.GetCurrentDirectory();
+    var repoRelative = Path.GetFullPath(Path.Combine(projectDir, "..", "..", "workflows", "turing-completeness"));
+    if (Directory.Exists(repoRelative)) return repoRelative;
+
+    var fromBin = Path.GetFullPath(Path.Combine(
+        Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) ?? projectDir,
+        "..", "..", "..", "..", "..", "workflows", "turing-completeness"));
+    if (Directory.Exists(fromBin)) return fromBin;
+
+    return null;
+}
+
+static List<WorkflowYamlSource> BuildWorkflowSources(string primaryYamlDir, string? turingYamlDir)
+{
+    var sources = new List<WorkflowYamlSource>
+    {
+        new("default", primaryYamlDir),
+    };
+
+    if (!string.IsNullOrWhiteSpace(turingYamlDir) &&
+        !string.Equals(primaryYamlDir, turingYamlDir, StringComparison.OrdinalIgnoreCase))
+    {
+        sources.Add(new("turing", turingYamlDir));
+    }
+
+    return sources;
+}
+
+static Dictionary<string, WorkflowFileEntry> DiscoverWorkflowFiles(IEnumerable<WorkflowYamlSource> sources)
+{
+    var workflowFiles = new Dictionary<string, WorkflowFileEntry>(StringComparer.OrdinalIgnoreCase);
+    foreach (var source in sources)
+    {
+        if (!Directory.Exists(source.DirectoryPath))
+            continue;
+
+        foreach (var file in Directory.GetFiles(source.DirectoryPath, "*.yaml")
+                     .OrderBy(Path.GetFileNameWithoutExtension, StringComparer.OrdinalIgnoreCase))
+        {
+            var workflowName = Path.GetFileNameWithoutExtension(file);
+            if (workflowFiles.ContainsKey(workflowName))
+                continue;
+
+            workflowFiles[workflowName] = new WorkflowFileEntry(workflowName, file, source.Kind);
+        }
+    }
+
+    return workflowFiles;
+}
+
+static bool TryResolveWorkflowFile(
+    string workflowName,
+    IReadOnlyCollection<WorkflowYamlSource> sources,
+    out WorkflowFileEntry workflowFile)
+{
+    var workflowFiles = DiscoverWorkflowFiles(sources);
+    return workflowFiles.TryGetValue(workflowName, out workflowFile!);
+}
+
 static void OpenBrowser(string url)
 {
     try
@@ -1002,4 +1091,6 @@ steps:                  # ordered step list
 sealed record PlaygroundChatMessage(string Role, string Content);
 sealed record PlaygroundChatRequest(List<PlaygroundChatMessage> Messages);
 sealed record PlaygroundRunRequest(string Yaml, string? Input);
+sealed record WorkflowYamlSource(string Kind, string DirectoryPath);
+sealed record WorkflowFileEntry(string Name, string FilePath, string SourceKind);
 

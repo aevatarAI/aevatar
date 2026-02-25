@@ -31,6 +31,11 @@ public sealed class WorkflowDefinition
     public required List<StepDefinition> Steps { get; init; }
 
     /// <summary>
+    /// 工作流运行配置。
+    /// </summary>
+    public WorkflowRuntimeConfiguration Configuration { get; init; } = new();
+
+    /// <summary>
     /// 入口步骤 ID，即第一个步骤的 ID；若无步骤则为 null。
     /// </summary>
     public string? EntryStepId => Steps.Count > 0 ? Steps[0].Id : null;
@@ -72,6 +77,17 @@ public sealed class WorkflowDefinition
         var idx = Steps.FindIndex(x => x.Id == currentId);
         return idx >= 0 && idx + 1 < Steps.Count ? Steps[idx + 1] : null;
     }
+}
+
+/// <summary>
+/// Workflow-level runtime options.
+/// </summary>
+public sealed class WorkflowRuntimeConfiguration
+{
+    /// <summary>
+    /// When true, only the closed-world primitive subset is allowed.
+    /// </summary>
+    public bool ClosedWorldMode { get; init; }
 }
 
 /// <summary>

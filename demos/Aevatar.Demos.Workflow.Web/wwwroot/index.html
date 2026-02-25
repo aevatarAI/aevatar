@@ -25,6 +25,8 @@
       <div id="sidebar-workflows" class="sidebar-section">
         <div class="section-label">Deterministic</div>
         <ul id="list-deterministic" class="workflow-list"></ul>
+        <div class="section-label">Turing Completeness</div>
+        <ul id="list-turing" class="workflow-list"></ul>
         <div class="section-label">LLM-Powered</div>
         <ul id="list-llm" class="workflow-list"></ul>
       </div>
@@ -72,6 +74,15 @@
             <div id="input-section" class="detail-block">
               <div class="detail-label">Input</div>
               <textarea id="wf-input" class="input-area" rows="3"></textarea>
+            </div>
+
+            <div id="turing-proof" class="detail-block hidden">
+              <div class="detail-label">Turing Completeness Demo</div>
+              <p id="turing-note" class="turing-note"></p>
+              <div class="turing-subtitle">Primitive Basis</div>
+              <div id="turing-primitives" class="tag-list"></div>
+              <div class="turing-subtitle">Machine State (from assign metadata)</div>
+              <div id="turing-state" class="turing-state">Run the workflow to see counters change.</div>
             </div>
 
             <div id="roles-section" class="detail-block hidden">

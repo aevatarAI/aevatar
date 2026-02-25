@@ -6,6 +6,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Expressions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -13,7 +14,8 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>循环模块。处理 type=while 的步骤。</summary>
 public sealed class WhileModule : IEventModule
 {
-    private readonly Dictionary<string, int> _iterations = [];
+    private readonly Dictionary<string, WhileRuntimeState> _states = [];
+    private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
 
     public string Name => "while";
     public int Priority => 5;
@@ -34,23 +36,41 @@ public sealed class WhileModule : IEventModule
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "while") return;
 
-            var maxIterations = int.TryParse(request.Parameters.GetValueOrDefault("max_iterations", "10"), out var max) ? max : 10;
+            var maxIterations = int.TryParse(request.Parameters.GetValueOrDefault("max_iterations", "10"), out var max)
+                ? Math.Clamp(max, 1, 1_000_000)
+                : 10;
             var runId = string.IsNullOrWhiteSpace(request.RunId) ? "default" : request.RunId;
             var whileKey = BuildRunStepKey(runId, request.StepId);
-            _iterations[whileKey] = 0;
-
-            ctx.Logger.LogInformation("While 循环 {StepId}: 开始，最大 {Max} 次迭代", request.StepId, maxIterations);
-
-            // 触发子步骤（用 step 参数指定的步骤类型）
             var subStepType = request.Parameters.GetValueOrDefault("step", "llm_call");
-            await ctx.PublishAsync(new StepRequestEvent
+            var condition = request.Parameters.GetValueOrDefault("condition", "true");
+            if (string.IsNullOrWhiteSpace(condition))
+                condition = "true";
+
+            var subParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, value) in request.Parameters)
             {
-                StepId = $"{request.StepId}_iter_0",
-                StepType = subStepType,
-                RunId = request.RunId,
-                Input = request.Input,
-                TargetRole = request.TargetRole,
-            }, EventDirection.Down, ct);
+                if (key.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase))
+                    subParameters[key["sub_param_".Length..]] = value;
+            }
+
+            var state = new WhileRuntimeState(
+                StepId: request.StepId,
+                RunId: runId,
+                SubStepType: subStepType,
+                SubTargetRole: request.TargetRole,
+                SubParameters: subParameters,
+                Iteration: 0,
+                MaxIterations: maxIterations,
+                ConditionExpression: condition);
+            _states[whileKey] = state;
+
+            ctx.Logger.LogInformation(
+                "While 循环 {StepId}: 开始，max_iterations={Max}, condition={Condition}",
+                request.StepId,
+                maxIterations,
+                condition);
+
+            await DispatchIterationAsync(state, request.Input ?? string.Empty, ctx, ct);
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
@@ -60,38 +80,57 @@ public sealed class WhileModule : IEventModule
             var whileStepId = GetWhileStepId(completed.StepId);
             var runId = string.IsNullOrWhiteSpace(completed.RunId) ? "default" : completed.RunId;
             var whileKey = whileStepId == null ? null : BuildRunStepKey(runId, whileStepId);
-            if (whileStepId == null || whileKey == null || !_iterations.ContainsKey(whileKey)) return;
+            if (whileStepId == null || whileKey == null || !_states.TryGetValue(whileKey, out var state)) return;
 
-            _iterations[whileKey]++;
-            var iteration = _iterations[whileKey];
-            var maxIterations = 10; // 简化：从初始请求中获取
+            if (!completed.Success)
+            {
+                _states.Remove(whileKey);
+                await ctx.PublishAsync(new StepCompletedEvent
+                {
+                    StepId = state.StepId,
+                    RunId = state.RunId,
+                    Success = false,
+                    Error = completed.Error,
+                    Output = completed.Output,
+                }, EventDirection.Self, ct);
+                return;
+            }
 
-            // 检查条件：简化实现——output 中不包含 "DONE" 且未达上限
-            var shouldContinue = !completed.Output.Contains("DONE", StringComparison.OrdinalIgnoreCase) &&
-                                 iteration < maxIterations && completed.Success;
+            var nextIteration = state.Iteration + 1;
+            var shouldContinue = nextIteration < state.MaxIterations &&
+                                 EvaluateCondition(state, completed.Output ?? string.Empty, nextIteration);
 
             if (shouldContinue)
             {
-                ctx.Logger.LogInformation("While 循环 {StepId}: 迭代 {Iter}", whileStepId, iteration);
-                await ctx.PublishAsync(new StepRequestEvent
-                {
-                    StepId = $"{whileStepId}_iter_{iteration}",
-                    StepType = "llm_call",
-                    RunId = completed.RunId,
-                    Input = completed.Output,
-                }, EventDirection.Down, ct);
+                var nextState = state with { Iteration = nextIteration };
+                _states[whileKey] = nextState;
+
+                ctx.Logger.LogInformation("While 循环 {StepId}: 迭代 {Iter}/{Max}",
+                    whileStepId, nextIteration, state.MaxIterations);
+
+                await DispatchIterationAsync(nextState, completed.Output ?? string.Empty, ctx, ct);
             }
             else
             {
-                ctx.Logger.LogInformation("While 循环 {StepId}: 完成，共 {Iter} 次迭代", whileStepId, iteration);
-                _iterations.Remove(whileKey);
-                await ctx.PublishAsync(new StepCompletedEvent
+                _states.Remove(whileKey);
+                ctx.Logger.LogInformation(
+                    "While 循环 {StepId}: 完成，iteration={Iter}/{Max}, condition={Condition}",
+                    whileStepId,
+                    nextIteration,
+                    state.MaxIterations,
+                    state.ConditionExpression);
+
+                var parentCompleted = new StepCompletedEvent
                 {
                     StepId = whileStepId,
-                    RunId = completed.RunId,
+                    RunId = state.RunId,
                     Success = true,
                     Output = completed.Output,
-                }, EventDirection.Self, ct);
+                };
+                parentCompleted.Metadata["while.iterations"] = nextIteration.ToString();
+                parentCompleted.Metadata["while.max_iterations"] = state.MaxIterations.ToString();
+                parentCompleted.Metadata["while.condition"] = state.ConditionExpression;
+                await ctx.PublishAsync(parentCompleted, EventDirection.Self, ct);
             }
         }
     }
@@ -99,8 +138,65 @@ public sealed class WhileModule : IEventModule
     private static string? GetWhileStepId(string subStepId)
     {
         var idx = subStepId.LastIndexOf("_iter_", StringComparison.Ordinal);
-        return idx > 0 ? subStepId[..idx] : null;
+        if (idx <= 0) return null;
+        var suffix = subStepId[(idx + "_iter_".Length)..];
+        return suffix.All(char.IsDigit) ? subStepId[..idx] : null;
     }
 
     private static string BuildRunStepKey(string runId, string stepId) => $"{runId}:{stepId}";
+
+    private bool EvaluateCondition(WhileRuntimeState state, string output, int nextIteration)
+    {
+        var vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["output"] = output,
+            ["input"] = output,
+            ["iteration"] = nextIteration.ToString(),
+            ["max_iterations"] = state.MaxIterations.ToString(),
+        };
+
+        var eval = _expressionEvaluator.EvaluateExpression(state.ConditionExpression, vars);
+        return IsTruthy(eval);
+    }
+
+    private async Task DispatchIterationAsync(
+        WhileRuntimeState state,
+        string input,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var request = new StepRequestEvent
+        {
+            StepId = $"{state.StepId}_iter_{state.Iteration}",
+            StepType = state.SubStepType,
+            RunId = state.RunId,
+            Input = input,
+            TargetRole = state.SubTargetRole,
+        };
+        foreach (var (key, value) in state.SubParameters)
+            request.Parameters[key] = value;
+
+        await ctx.PublishAsync(request, EventDirection.Down, ct);
+    }
+
+    private static bool IsTruthy(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        if (bool.TryParse(value, out var boolValue))
+            return boolValue;
+        if (double.TryParse(value, out var number))
+            return Math.Abs(number) >= 1e-9;
+        return true;
+    }
+
+    private sealed record WhileRuntimeState(
+        string StepId,
+        string RunId,
+        string SubStepType,
+        string SubTargetRole,
+        IReadOnlyDictionary<string, string> SubParameters,
+        int Iteration,
+        int MaxIterations,
+        string ConditionExpression);
 }

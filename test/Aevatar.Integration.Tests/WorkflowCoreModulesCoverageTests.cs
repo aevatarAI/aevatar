@@ -242,6 +242,7 @@ public sealed class WorkflowCoreModulesCoverageTests
                 {
                     ["step"] = "transform",
                     ["max_iterations"] = "3",
+                    ["condition"] = "not(eq(output, 'DONE'))",
                 },
             }),
             ctx,
@@ -272,7 +273,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var secondDispatch = deltaEvents[0].evt.Should().BeOfType<StepRequestEvent>().Subject;
         secondDispatch.StepId.Should().Be("while-1_iter_1");
-        secondDispatch.StepType.Should().Be("llm_call");
+        secondDispatch.StepType.Should().Be("transform");
         secondDispatch.Input.Should().Be("continue");
         deltaEvents[0].direction.Should().Be(EventDirection.Down);
 
@@ -280,6 +281,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         completed.StepId.Should().Be("while-1");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("DONE");
+        completed.Metadata["while.iterations"].Should().Be("2");
     }
 
     [Fact]
@@ -461,6 +463,26 @@ public sealed class WorkflowCoreModulesCoverageTests
         var start = ctx.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
         start.WorkflowName.Should().Be("sub_flow");
         start.Input.Should().Be("payload-2");
+        start.RunId.Should().NotBeNullOrWhiteSpace();
+        start.Parameters["workflow_call.parent_step_id"].Should().Be("wf-2");
+
+        ctx.Published.Clear();
+        await module.HandleAsync(
+            Envelope(new WorkflowCompletedEvent
+            {
+                RunId = start.RunId,
+                Success = true,
+                Output = "child-output",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var parentCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        parentCompletion.StepId.Should().Be("wf-2");
+        parentCompletion.RunId.Should().Be("default");
+        parentCompletion.Success.Should().BeTrue();
+        parentCompletion.Output.Should().Be("child-output");
+        parentCompletion.Metadata["workflow_call.child_run_id"].Should().Be(start.RunId);
     }
 
     [Fact]
@@ -776,9 +798,13 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId, x => x);
         completions["assign-1"].Output.Should().Be("input-value");
+        completions["assign-1"].Metadata["assign.target"].Should().Be("x");
+        completions["assign-1"].Metadata["assign.value"].Should().Be("input-value");
         completions["assign-2"].Output.Should().Be("literal");
         completions["cond-1"].Output.Should().Be("contains KEY text");
+        completions["cond-1"].Metadata["branch"].Should().Be("true");
         completions["cond-2"].Output.Should().Be("other text");
+        completions["cond-2"].Metadata["branch"].Should().Be("false");
         completions["cp-1"].Output.Should().Be("snapshot");
     }
 

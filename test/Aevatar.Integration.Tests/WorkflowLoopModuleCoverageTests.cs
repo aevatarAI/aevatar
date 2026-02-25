@@ -621,6 +621,99 @@ public sealed class WorkflowLoopModuleCoverageTests
         completed.Output.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task HandleAsync_WhenAssignMetadataPresent_ShouldUpdateRunVariables()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "assign",
+            },
+            new StepDefinition
+            {
+                Id = "s2",
+                Type = "conditional",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["condition"] = "${eq(variables.counter, '1')}",
+                },
+                Branches = new Dictionary<string, string>
+                {
+                    ["true"] = "s3",
+                    ["false"] = "s4",
+                },
+            },
+            new StepDefinition { Id = "s3", Type = "transform" },
+            new StepDefinition { Id = "s4", Type = "transform" }));
+        var ctx = CreateContext();
+        const string runId = "run-assign-metadata";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = runId,
+                Success = true,
+                Output = "ignored",
+                Metadata =
+                {
+                    ["assign.target"] = "counter",
+                    ["assign.value"] = "1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var conditionalRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        conditionalRequest.StepId.Should().Be("s2");
+        conditionalRequest.Parameters["condition"].Should().Be("true");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenClosedWorldBlocksStep_ShouldFailWorkflow()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(new WorkflowDefinition
+        {
+            Name = "wf-closed-world",
+            Configuration = new WorkflowRuntimeConfiguration
+            {
+                ClosedWorldMode = true,
+            },
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition { Id = "s1", Type = "llm_call" },
+            ],
+        });
+        var ctx = CreateContext();
+        const string runId = "run-closed-world";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+
+        var blocked = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        blocked.Success.Should().BeFalse();
+        blocked.Error.Should().Contain("closed_world_mode");
+
+        ctx.Published.Clear();
+        await module.HandleAsync(Envelope(blocked), ctx, CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("closed_world_mode");
+    }
+
     private static WorkflowDefinition BuildWorkflow(params StepDefinition[] steps)
     {
         return new WorkflowDefinition

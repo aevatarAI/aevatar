@@ -13,6 +13,34 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class WorkflowLoopModule : IEventModule
 {
+    private static readonly HashSet<string> ClosedWorldBlockedStepTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "llm_call",
+        "tool_call",
+        "connector_call",
+        "bridge_call",
+        "evaluate",
+        "judge",
+        "reflect",
+        "human_input",
+        "human_approval",
+        "wait_signal",
+        "wait",
+        "emit",
+        "publish",
+        "parallel",
+        "parallel_fanout",
+        "fan_out",
+        "race",
+        "select",
+        "map_reduce",
+        "mapreduce",
+        "vote_consensus",
+        "vote",
+        "foreach",
+        "for_each",
+    };
+
     private WorkflowDefinition? _workflow;
     private readonly HashSet<string> _activeRunIds = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, string>> _variablesByRunId = new(StringComparer.Ordinal);
@@ -106,6 +134,15 @@ public sealed class WorkflowLoopModule : IEventModule
 
             if (_variablesByRunId.TryGetValue(runId, out var varsForRun))
             {
+                if (evt.Metadata.TryGetValue("assign.target", out var assignTarget) &&
+                    !string.IsNullOrWhiteSpace(assignTarget))
+                {
+                    var assignValue = evt.Metadata.TryGetValue("assign.value", out var valueFromMetadata)
+                        ? valueFromMetadata
+                        : evt.Output ?? string.Empty;
+                    varsForRun[assignTarget] = assignValue;
+                }
+
                 if (!string.IsNullOrWhiteSpace(evt.StepId))
                     varsForRun[evt.StepId] = evt.Output ?? string.Empty;
                 varsForRun["input"] = evt.Output ?? string.Empty;
@@ -240,6 +277,19 @@ public sealed class WorkflowLoopModule : IEventModule
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
+        if (_workflow?.Configuration.ClosedWorldMode == true &&
+            ClosedWorldBlockedStepTypes.Contains(step.Type))
+        {
+            await ctx.PublishAsync(new StepCompletedEvent
+            {
+                StepId = step.Id,
+                RunId = runId,
+                Success = false,
+                Error = $"step type '{step.Type}' is blocked in closed_world_mode",
+            }, EventDirection.Self, ct);
+            return;
+        }
+
         var inputPreview = input.Length > 200 ? input[..200] + "..." : input;
         ctx.Logger.LogInformation("workflow_loop: dispatch step={StepId} type={Type} role={Role} input=({Len} chars) {Preview}",
             step.Id, step.Type, step.TargetRole ?? "(none)", input.Length, inputPreview);

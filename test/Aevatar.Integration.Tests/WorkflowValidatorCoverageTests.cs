@@ -104,4 +104,83 @@ public class WorkflowValidatorCoverageTests
 
         errors.Should().Contain(e => e.Contains("重复"));
     }
+
+    [Fact]
+    public void Validate_WhenWhileMissingTermination_ShouldReportError()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "loop-1",
+                    Type = "while",
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(wf);
+        errors.Should().Contain(e => e.Contains("while") && e.Contains("condition"));
+    }
+
+    [Fact]
+    public void Validate_WhenClosedWorldModeContainsBlockedPrimitive_ShouldReportError()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Configuration = new WorkflowRuntimeConfiguration
+            {
+                ClosedWorldMode = true,
+            },
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "s1",
+                    Type = "llm_call",
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(wf);
+        errors.Should().Contain(e => e.Contains("closed_world_mode"));
+    }
+
+    [Fact]
+    public void Validate_WhenWorkflowCallTargetIsUnknown_ShouldReportErrorWhenRegistryProvided()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "call-sub",
+                    Type = "workflow_call",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["workflow"] = "sub_flow",
+                    },
+                },
+            ],
+        };
+
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "another_flow" };
+        var errors = WorkflowValidator.Validate(
+            wf,
+            options: new WorkflowValidator.WorkflowValidationOptions
+            {
+                RequireResolvableWorkflowCallTargets = true,
+            },
+            availableWorkflowNames: available);
+
+        errors.Should().Contain(e => e.Contains("sub_flow"));
+    }
 }

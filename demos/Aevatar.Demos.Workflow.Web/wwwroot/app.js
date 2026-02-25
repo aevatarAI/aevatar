@@ -6,8 +6,10 @@
   let primitives = [];
   let llmStatus = { available: false };
   let selectedWorkflow = null;
+  let selectedWorkflowMeta = null;
   let workflowDef = null;
   let stepStates = {};
+  let turingMachineState = {};
   let eventSource = null;
 
   const TYPE_COLORS = {
@@ -76,8 +78,10 @@
   // ── Render: Sidebar ──
   function renderWorkflowList() {
     const detList = $("#list-deterministic");
+    const turingList = $("#list-turing");
     const llmList = $("#list-llm");
     detList.innerHTML = "";
+    turingList.innerHTML = "";
     llmList.innerHTML = "";
 
     for (const wf of workflows) {
@@ -89,7 +93,7 @@
           ${wf.primitives.map((p) => `<span class="prim-dot" style="background:${TYPE_COLORS[p] || "#64748b"}" title="${p}"></span>`).join("")}
         </div>`;
       li.addEventListener("click", () => selectWorkflow(wf.name));
-      (wf.category === "deterministic" ? detList : llmList).appendChild(li);
+      (wf.category === "deterministic" ? detList : wf.category === "turing" ? turingList : llmList).appendChild(li);
     }
   }
 
@@ -125,6 +129,7 @@
   async function selectWorkflow(name) {
     stopExecution();
     selectedWorkflow = name;
+    selectedWorkflowMeta = workflows.find((w) => w.name === name) || null;
 
     $$(".workflow-list li").forEach((li) =>
       li.classList.toggle("active", li.dataset.name === name));
@@ -141,8 +146,9 @@
 
       $("#wf-description").textContent = def.description || "";
 
-      const wf = workflows.find((w) => w.name === name);
-      $("#wf-input").value = wf?.defaultInput || "";
+      $("#wf-input").value = selectedWorkflowMeta?.defaultInput || "";
+      renderTuringDemoPanel(selectedWorkflowMeta);
+      resetTuringMachineState();
 
       if (def.roles && def.roles.length > 0) {
         $("#roles-section").classList.remove("hidden");
@@ -157,11 +163,11 @@
       resetExecution();
       renderFlowDiagram();
 
-      const isDet = wf?.category === "deterministic";
-      $("#btn-run").disabled = !isDet && !llmStatus.available;
+      $("#btn-run").disabled = selectedWorkflowMeta?.category === "llm" && !llmStatus.available;
     } catch (e) {
       console.error("Failed to load workflow", e);
       $("#wf-description").textContent = "Failed to load workflow definition.";
+      renderTuringDemoPanel(null);
     }
   }
 
@@ -507,6 +513,7 @@
     if (!selectedWorkflow || !workflowDef) return;
     stopExecution();
     resetExecution();
+    resetTuringMachineState();
 
     const input = $("#wf-input").value;
     const encodedInput = encodeURIComponent(input);
@@ -538,6 +545,9 @@
       const data = JSON.parse(e.data);
       stepStates[data.stepId] = data.success ? "completed" : "failed";
       updateStepNode(data.stepId);
+      if (isSelectedWorkflowTuring()) {
+        updateTuringMachineState(data.metadata);
+      }
       if (data.success) {
         addLogEntry("completed", `\u2713 ${data.stepId}`, truncate(data.output, 300));
       } else {
@@ -583,15 +593,14 @@
   function resetExecution() {
     stopExecution();
     stepStates = {};
+    resetTuringMachineState();
     $("#exec-log").classList.add("hidden");
     $("#result-section").classList.add("hidden");
     $("#log-entries").innerHTML = "";
     $("#btn-reset").classList.add("hidden");
     $("#btn-run").disabled = false;
 
-    const wf = workflows.find((w) => w.name === selectedWorkflow);
-    const isDet = wf?.category === "deterministic";
-    if (!isDet && !llmStatus.available) {
+    if (selectedWorkflowMeta?.category === "llm" && !llmStatus.available) {
       $("#btn-run").disabled = true;
     }
 
@@ -627,6 +636,71 @@
     const pre = $("#wf-result");
     pre.textContent = data.success ? data.output : (data.error || "Failed");
     pre.className = `result-pre ${data.success ? "success" : "failure"}`;
+  }
+
+  function renderTuringDemoPanel(workflowMeta) {
+    const panel = $("#turing-proof");
+    if (!workflowMeta || workflowMeta.category !== "turing") {
+      panel.classList.add("hidden");
+      return;
+    }
+
+    panel.classList.remove("hidden");
+    $("#turing-note").textContent = getTuringNote(workflowMeta.name);
+    $("#turing-primitives").innerHTML = (workflowMeta.primitives || [])
+      .filter((name) => name && name !== "workflow_loop")
+      .map((name) => `<span class="tag">${esc(name)}</span>`)
+      .join("");
+  }
+
+  function isSelectedWorkflowTuring() {
+    return selectedWorkflowMeta?.category === "turing";
+  }
+
+  function updateTuringMachineState(metadata) {
+    if (!metadata) return;
+    const target = metadata["assign.target"];
+    if (!target) return;
+
+    const value = Object.prototype.hasOwnProperty.call(metadata, "assign.value")
+      ? metadata["assign.value"]
+      : "";
+
+    turingMachineState[target] = value ?? "";
+    renderTuringMachineState();
+  }
+
+  function resetTuringMachineState() {
+    turingMachineState = {};
+    renderTuringMachineState();
+  }
+
+  function renderTuringMachineState() {
+    const stateContainer = $("#turing-state");
+    if (!stateContainer) return;
+
+    const entries = Object.entries(turingMachineState)
+      .sort(([left], [right]) => left.localeCompare(right));
+
+    if (entries.length === 0) {
+      stateContainer.textContent = "Run the workflow to see counters change.";
+      return;
+    }
+
+    stateContainer.innerHTML = entries
+      .map(([key, value]) => `<div class="turing-state-row"><span class="turing-state-key">${esc(key)}</span><code class="turing-state-value">${esc(value)}</code></div>`)
+      .join("");
+  }
+
+  function getTuringNote(workflowName) {
+    if (workflowName === "counter-addition" || workflowName === "counter_addition") {
+      return "Closed-world two-counter addition. The branch-back edge (jz_b -> inc_a -> dec_b -> jz_b) demonstrates conditional jump with mutable memory.";
+    }
+    if (workflowName === "minsky-inc-dec-jz" || workflowName === "minsky_inc_dec_jz") {
+      return "Closed-world INC/DEC/JZ transfer program. It encodes a minimal Minsky-style machine using assign + conditional + branch routing.";
+    }
+
+    return "Closed-world workflow that encodes counter-machine style state transition with primitive modules.";
   }
 
   // ── Helpers ──

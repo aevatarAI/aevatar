@@ -91,6 +91,8 @@ YAML 里 `type: parallel` 会经工厂解析到 `ParallelFanOutModule`。
 | **数据** | `transform` | `TransformModule` | 纯函数变换（count/take/join/split/distinct 等） |
 | | `retrieve_facts` | `RetrieveFactsModule` | 按关键词检索事实片段 |
 
+每个原语的作用、参数和 YAML sample，见 [WORKFLOW_PRIMITIVES.md](./WORKFLOW_PRIMITIVES.md)。
+
 ### 从 Foundation Orchestration 迁移
 
 `Aevatar.Foundation.Core/Orchestration` 已移除，原能力统一收敛到 workflow 模块：

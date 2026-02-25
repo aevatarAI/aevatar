@@ -124,6 +124,25 @@ public class WorkflowExpressionEvaluatorTests
         _eval.Evaluate("${length(empty)}", _vars).Should().Be("0");
     }
 
+    [Fact]
+    public void Add_Sub_Mul_Div_ShouldEvaluateNumericFunctions()
+    {
+        _eval.Evaluate("${add(1, 2, 3)}", _vars).Should().Be("6");
+        _eval.Evaluate("${sub(10, 3, 2)}", _vars).Should().Be("5");
+        _eval.Evaluate("${mul(2, 3, 4)}", _vars).Should().Be("24");
+        _eval.Evaluate("${div(12, 3, 2)}", _vars).Should().Be("2");
+    }
+
+    [Fact]
+    public void Comparisons_ShouldEvaluateEqLtLteGtGte()
+    {
+        _eval.Evaluate("${eq(3, 3)}", _vars).Should().Be("true");
+        _eval.Evaluate("${lt(2, 3)}", _vars).Should().Be("true");
+        _eval.Evaluate("${lte(3, 3)}", _vars).Should().Be("true");
+        _eval.Evaluate("${gt(5, 3)}", _vars).Should().Be("true");
+        _eval.Evaluate("${gte(5, 5)}", _vars).Should().Be("true");
+    }
+
     // ─── Boolean Functions ───
 
     [Fact]
@@ -207,6 +226,7 @@ public class WorkflowExpressionEvaluatorTests
     [InlineData("anything", "yes")]
     [InlineData("false", "no")]
     [InlineData("0", "no")]
+    [InlineData("0.0", "no")]
     [InlineData("", "no")]
     public void Truthiness_FollowsRules(string value, string expected)
     {
