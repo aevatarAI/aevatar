@@ -34,7 +34,7 @@ public sealed class AIAgentConfig
     public int? MaxTokens { get; set; }
 
     /// <summary>单轮 Chat 最大 Tool Calling 轮数。</summary>
-    public int MaxToolRounds { get; set; } = 10;
+    public int MaxToolRounds { get; set; } = 30;
 
     /// <summary>历史消息上限。</summary>
     public int MaxHistoryMessages { get; set; } = 100;
