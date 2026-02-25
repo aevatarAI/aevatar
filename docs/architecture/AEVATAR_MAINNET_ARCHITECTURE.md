@@ -1,6 +1,6 @@
 # Aevatar Mainnet 架构说明
 
-本文档描述 Aevatar Mainnet 作为云端 AI Agents 网络的整体架构，涵盖核心概念、分层设计、工作流编排、连接器体系、投影管线、运行时模式，以及基于 Docker / Kubernetes / Aspire DCP 的运维最佳实践。本文在原有设计基础上增加性能瓶颈评审与重构方案，目标是在不破坏既有分层与语义约束的前提下提升吞吐、降低尾延迟并增强多租户稳定性。
+本文档描述 Aevatar Mainnet 在 `AI Native App + Aevatar SDK + Mainnet + Chrono Platform` 体系中的架构定位，涵盖核心概念、分层设计、工作流编排、连接器体系、投影管线、运行时模式，以及基于 Docker / Kubernetes / Aspire DCP 的运维最佳实践。Mainnet 负责 Agent 承载与 workflow 编排，Chrono Platform 负责承载并编排 storage、notification、search 等能力微服务；AI Native App 开发者通过 Aevatar SDK 连接 Mainnet，注入 `workflow_yaml` 与 `agent_profile`（role agent + connector 配置），从而构建 multi-agent workflow。本文在原有设计基础上增加性能瓶颈评审与重构方案，目标是在不破坏既有分层与语义约束的前提下提升吞吐、降低尾延迟并增强多租户稳定性。
 
 目标读者：平台开发者、DevOps 工程师、AI Native App 构建者。
 
@@ -8,11 +8,16 @@
 
 ## 1. 全局视图
 
-Aevatar Mainnet 是一个运行在云端的 **AI Agents 网络**，具备声明式工作流编排能力。AI Native Apps 基于 Mainnet 构建，每个 App 的终端用户可以通过 App 从 Mainnet 中实例化一组 AI Agents 为自己服务。Agent 通过 Connector（HTTP / CLI / MCP）连接外部微服务，获得数据存储、消息推送等扩展能力。
+Aevatar Mainnet 是一个运行在云端的 **Agent Host + Workflow 编排网络**。AI Native Apps 基于 Mainnet 构建，每个 App 的终端用户可以通过 App 从 Mainnet 中实例化一组 AI Agents 为自己服务。  
+AI Native App 开发者通过 **Aevatar SDK** 接入 Mainnet，在调用时注入 `workflow_yaml`、输入以及 `agent_profile`（role agent + connector 配置），从而快速实现自己的 multi-agent workflow。Mainnet 执行过程中会向 App 回抛 AGUI 事件流（SSE / WebSocket），用于实时展示多 Agent 协作进度和结果。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
+    subgraph developers ["AI Native App Developers"]
+        Dev["App Developer"]
+    end
+
     subgraph users ["终端用户"]
         U1["User A"]
         U2["User B"]
@@ -22,6 +27,10 @@ flowchart TB
     subgraph apps ["AI Native Apps"]
         App1["App Alpha"]
         App2["App Beta"]
+    end
+
+    subgraph sdk ["Aevatar SDK"]
+        SDK["SDK Client (RunFromYaml/Subscribe/Query)"]
     end
 
     subgraph mainnet ["Aevatar Mainnet"]
@@ -42,33 +51,45 @@ flowchart TB
         MC["MCP Connector"]
     end
 
-    subgraph external ["外部微服务"]
-        S1["数据存储服务"]
-        S2["消息推送服务"]
-        S3["搜索 / RAG 服务"]
-        S4["第三方 API"]
+    subgraph chrono ["Chrono Platform (Capability Layer)"]
+        CGW["Chrono Gateway"]
+        CORCH["Chrono Service Orchestrator"]
+        S1["Storage Service"]
+        S2["Notification Service"]
+        S3["Search / RAG Service"]
+        S4["Tool Adapter Service"]
     end
 
+    subgraph external ["第三方外部系统"]
+        TP1["Third-party API"]
+    end
+
+    Dev -->|"集成 SDK + 注入 workflow_yaml/agent_profile"| App1 & App2
     U1 & U2 & U3 --> App1 & App2
-    App1 & App2 -->|"HTTP / WebSocket"| API
+    App1 & App2 -->|"调用 SDK (runFromYaml with agent_profile)"| SDK
+    SDK -->|"HTTP / SSE / WebSocket"| API
     API --> WF
     WF --> RT
     RT --> A1 & A2 & A3
     A1 & A2 & A3 --> HC & CC & MC
-    HC --> S1 & S4
-    CC --> S2
-    MC --> S3 & S4
+    HC & CC & MC --> CGW
+    CGW --> CORCH
+    CORCH --> S1 & S2 & S3 & S4
+    S4 --> TP1
 ```
 
 核心角色：
 
 | 角色 | 说明 |
 |---|---|
+| AI Native App 开发者 | 通过 Aevatar SDK 接入 Mainnet，注入 workflow YAML 与 agent profile（role+connector），构建 multi-agent workflow |
 | 终端用户 | 通过 AI Native App 与 Mainnet 交互，每个用户可拥有独立的 Agent 实例 |
-| AI Native App | 基于 Mainnet API 构建的应用，定义工作流模板、角色和连接器配置 |
-| Aevatar Mainnet | 云端 AI Agents 网络，提供工作流编排、Agent 生命周期管理、事件投影 |
-| Connector | Agent 能力扩展通道，通过 HTTP / CLI / MCP 三种协议连接外部服务 |
-| 外部微服务 | 独立部署的服务（其他仓库），提供存储、推送、搜索等基础能力 |
+| AI Native App | 基于 Aevatar SDK/Mainnet API 构建的应用，定义工作流模板、角色和连接器配置 |
+| Aevatar SDK | App 侧接入层，封装 runFromYaml、agent profile 注入、事件订阅、状态查询与能力目录 |
+| Aevatar Mainnet | Agent Host 与 workflow 编排层，负责 Agent 生命周期管理、事件投影与推送 |
+| Chrono Platform | 能力微服务平台，承载并编排 storage、notification、search、tool adapter 等能力 |
+| Connector | Agent 能力桥接通道，通过 HTTP / CLI / MCP 协议把 Mainnet 工作流连接到 Chrono 能力 |
+| 第三方外部系统 | 由 Chrono Platform 或 Connector 间接访问的外部 API / SaaS / 企业系统 |
 
 ---
 
@@ -184,7 +205,7 @@ block-beta
 
 ## 4. Agent 实例化与生命周期
 
-用户通过 AI Native App 向 Mainnet 发起请求时，系统按如下流程实例化并运行 Agent 集群。
+用户通过 AI Native App + SDK 向 Mainnet 发起 Run 请求时（推荐 `inline-yaml-per-run`，也兼容按 `workflow_name` 引用），系统按如下流程实例化并运行 Agent 集群。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "sequence": {"useMaxWidth": false}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -199,10 +220,11 @@ sequenceDiagram
     participant LLM as "LLM Provider"
 
     User->>App: 发送对话请求
-    App->>API: POST /api/chat (workflow + message)
+    App->>API: POST /api/chat (workflow_yaml + agent_profile + input + run_id?)
     API->>AppSvc: 路由到 WorkflowChatRunApplicationService
+    AppSvc->>AppSvc: 解析 workflow_yaml + agent_profile（可兼容 workflow_name）
     AppSvc->>WFAgent: 创建 / 激活 WorkflowGAgent
-    WFAgent->>WFAgent: 编译 YAML → WorkflowDefinition
+    WFAgent->>WFAgent: ConfigureWorkflow(workflow_yaml) → 编译/校验
     WFAgent->>Role1: 创建子 Actor (analyst)
     WFAgent->>Role2: 创建子 Actor (reviewer)
     WFAgent->>WFAgent: 发布 StartWorkflowEvent
@@ -243,11 +265,12 @@ flowchart TB
 
 生命周期要点：
 
-1. **创建**：Application Service 通过 `IActorRuntime.CreateAsync` 创建 `WorkflowGAgent`
-2. **配置**：`WorkflowGAgent.ConfigureWorkflow(yaml)` 编译 YAML、校验拓扑、创建角色子 Agent 树
-3. **执行**：事件驱动的步骤循环（`WorkflowLoopModule`），每个步骤由对应的 `IEventModule` 处理
-4. **完成**：发布 `WorkflowCompletedEvent`，清理运行态变量和超时计时器
-5. **销毁**：通过 `IActorRuntime.DestroyAsync` 回收 Actor 及其子树
+1. **创建**：Application Service 通过 `IActorRuntime.CreateAsync` 创建 `WorkflowGAgent`（可结合 `run_id` / `workflow_hash` 做复用策略）
+2. **配置**：优先使用请求内 `workflow_yaml` 调用 `WorkflowGAgent.ConfigureWorkflow(yaml)`；兼容按 `workflow_name` 从注册表加载 YAML
+3. **Profile 注入**：Mainnet 解析请求内 `agent_profile`（role agent + connector 配置），并与平台默认配置合并后做策略校验，生成 run 级执行上下文
+4. **执行**：事件驱动的步骤循环（`WorkflowLoopModule`），每个步骤由对应的 `IEventModule` 处理
+5. **完成**：发布 `WorkflowCompletedEvent`，清理运行态变量和超时计时器
+6. **销毁**：通过 `IActorRuntime.DestroyAsync` 回收 Actor 及其子树
 
 ---
 
@@ -256,6 +279,16 @@ flowchart TB
 工作流引擎是 Aevatar Mainnet 的核心编排能力，代码位于 `src/workflow/`。
 
 ### 5.1 YAML 声明式工作流
+
+AI Native App 的编排能力直接来自 SDK 对 Mainnet 的请求能力：将 `workflow_yaml`、`agent_profile` 与输入一起提交后，Mainnet 在运行时实例化并驱动 `WorkflowGAgent`。  
+该模式在交互形态上类似“调用智能合约”：每次调用显式给出“执行逻辑（YAML）+ 输入参数”。
+
+调用模式建议：
+
+| 模式 | 说明 | 适用场景 |
+|---|---|---|
+| Inline YAML（推荐） | 请求内携带 `workflow_yaml` + `agent_profile` + `input`，Mainnet 直接编译并执行 | AI Native App 需要快速迭代流程、并按环境定义 role 与 Chrono 连接策略 |
+| Registry 引用（兼容） | 请求内携带 `workflow_name`，Mainnet 从注册表加载 YAML | 预发布流程、受控版本流程、合规审批流程 |
 
 工作流通过 YAML DSL 定义，包含角色声明和步骤编排：
 
@@ -379,9 +412,10 @@ public sealed class MakerModulePack : IWorkflowModulePack
 
 ---
 
-## 6. Connector 体系
+## 6. Connector 体系（Chrono 能力桥接）
 
-Connector 是 Agent 连接外部世界的统一通道，让 Agent 能够调用外部微服务执行数据存储、消息推送、工具调用等操作。
+Connector 是 Agent 连接能力层的统一通道。默认路径是由 Connector 访问 Chrono Platform，再由 Chrono 编排底层微服务完成数据存储、消息推送、工具调用等操作；该机制在系统职责上类似区块链中的 Oracle 适配层。  
+在 SDK 模式下，AI Native App 开发者可在请求内提交 `agent_profile`（role + connector），让 Mainnet 按 profile 生成 RoleGAgent 配置并将 connector 解析到指定 Chrono service instance（通过策略校验后生效）。
 
 ### 6.1 统一抽象
 
@@ -405,6 +439,8 @@ flowchart TB
 
     subgraph config ["配置"]
         JSON["~/.aevatar/connectors.json"]
+        APROFILE["SDK agent_profile (run-scoped)"]
+        MERGE["AgentProfileResolver + ConnectorConfigResolver"]
         Builder["IConnectorBuilder"]
         Bootstrap["ConnectorBootstrapHostedService"]
     end
@@ -417,6 +453,9 @@ flowchart TB
     IC --> HTTP & CLI & MCP
     JSON --> Bootstrap
     Bootstrap --> Builder
+    APROFILE --> MERGE
+    JSON --> MERGE
+    MERGE --> Builder
     Builder --> HTTP & CLI & MCP
     Builder -->|"注册"| Reg
     YAML --> CCM
@@ -435,9 +474,9 @@ flowchart TB
 | 安全机制 | `allowedMethods`, `allowedPaths`, `allowedInputKeys` | `allowedOperations`, `allowedInputKeys` | `allowedTools`, `allowedInputKeys` |
 | 元数据 | `status_code`, `url`, `duration_ms` | `exit_code`, `command`, `duration_ms` | `server`, `tool`, `duration_ms` |
 
-### 6.3 Agent 与外部微服务的交互模式
+### 6.3 Agent 通过 Chrono Platform 的交互模式
 
-Agent 通过 Connector 调用外部微服务的典型场景：
+Agent 通过 Connector 调用 Chrono 能力服务的典型场景：
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "sequence": {"useMaxWidth": false}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -446,20 +485,69 @@ sequenceDiagram
     participant Module as "ConnectorCallModule"
     participant Registry as "IConnectorRegistry"
     participant HTTP as "HttpConnector"
-    participant ExtSvc as "外部微服务 (数据存储)"
+    participant Chrono as "Chrono Gateway"
+    participant Orchestrator as "Chrono Service Orchestrator"
+    participant Storage as "Chrono Storage Service"
 
     Agent->>Module: StepRequestEvent (connector_call)
     Module->>Module: 校验角色 Connector 白名单
-    Module->>Registry: TryGet("data_api")
+    Module->>Registry: TryGet("chrono_storage")
     Registry-->>Module: HttpConnector 实例
     Module->>HTTP: ExecuteAsync(ConnectorRequest)
-    HTTP->>ExtSvc: POST /v1/store
-    ExtSvc-->>HTTP: 200 OK + response body
+    HTTP->>Chrono: POST /capabilities/storage/write
+    Chrono->>Orchestrator: 解析能力路由 + 编排策略
+    Orchestrator->>Storage: 执行写入
+    Storage-->>Orchestrator: write result
+    Orchestrator-->>Chrono: 标准化能力响应
+    Chrono-->>HTTP: 200 OK + capability payload
     HTTP-->>Module: ConnectorResponse (success)
     Module->>Agent: StepCompletedEvent (含结果 + 元数据)
 ```
 
 内建的弹性策略：`retry`（0-5次）、`timeout_ms`（100ms-300s）、`on_missing`（connector 不存在时 fail / skip）、`on_error`（失败时 fail / continue）。
+
+### 6.4 Chrono Platform 定位（类 Oracle 机制）
+
+Chrono Platform 是 Mainnet 的外部能力承载层：Mainnet 保持 workflow 编排与事件语义主链路，Chrono 负责将异构微服务能力以统一契约提供给 Agent。
+
+| 维度 | Chrono Platform 职责 | 对 Mainnet 的价值 |
+|---|---|---|
+| 能力承载 | 承载 storage、notification、search、tool adapter 等微服务 | Mainnet 无需内置大量可变能力，保持内核精简 |
+| 能力编排 | 将多个底层服务组合成稳定能力端点（含回退/补偿） | Agent 以单次 connector 调用获取复合能力 |
+| 协议与安全 | 统一鉴权、限流、审计、mTLS 与出口治理 | 降低每个 Agent/Workflow 的接入复杂度 |
+| 响应标准化 | 统一结果结构、错误码与可观测元数据 | 便于工作流步骤做重试、降级与投影追踪 |
+
+“类 Oracle”的含义是：Chrono 负责把链外/站外能力可靠带回 Agent 执行上下文；但其信任模型仍是平台治理模型，不等同于去信任共识网络。
+
+### 6.5 SDK 注入 Agent Profile（Role + Connector）
+
+AI Native App 开发者可在 SDK 请求中提交 `agent_profile`。该 profile 同时描述：
+
+- **Role Agent 配置**：角色 ID、system prompt、provider/model、角色可用 connector 列表。
+- **Connector 配置**：connector 到 Chrono service instance 的映射（例如 `chrono-storage-dev`、`chrono-storage-prod`）。
+
+配置合并优先级建议：
+
+1. 请求内 `agent_profile`（run 级）  
+2. App 级 profile 模板（可选）  
+3. 平台默认 role/connector 配置
+
+建议最小字段（`agent_profile`）：
+
+| 字段 | 说明 |
+|---|---|
+| `roles[].id` | 角色标识（与 workflow steps 中 `target_role` 对应） |
+| `roles[].system_prompt/provider/model` | 角色模型与行为配置 |
+| `roles[].connectors` | 角色允许调用的 connector 名单 |
+| `connectors[].name/type` | connector 基础标识（`http` / `cli` / `mcp`） |
+| `connectors[].base_url` | Chrono service instance 地址（开发者可指定） |
+| `connectors[].allowed_methods/allowed_paths` | 方法与路径白名单 |
+
+治理要求：
+
+- Mainnet 必须对请求内 `agent_profile` 执行策略校验（角色白名单、域名白名单、方法/路径白名单、租户隔离策略）。
+- 运行期仅允许在当前 run 的 profile 上下文内生效，不回写全局平台配置。
+- 角色 `connectors` 允许列表仍是最终授权边界，避免工作流绕过角色权限。
 
 ---
 
@@ -829,9 +917,9 @@ Bicep / K8s Manifests (基础设施即代码)
 Azure Container Apps / Kubernetes (生产)
 ```
 
-### 9.4 外部微服务集成最佳实践
+### 9.4 Chrono Platform 集成最佳实践
 
-Agent 通过 Connector 连接其他仓库中的微服务时，建议遵循以下实践：
+Agent 通过 Connector 访问 Chrono Platform 能力层时，建议遵循以下实践：
 
 **1) 配置集中管理**
 
@@ -848,6 +936,12 @@ volumeMounts:
     subPath: connectors.json
 ```
 
+SDK 场景下补充建议：
+
+- App 开发者可通过 SDK 在 run 请求中传入 `agent_profile`（含 role+connector），其中 connector 部分可指定 Chrono service instance。
+- Mainnet 对请求内 `agent_profile` 做策略校验后与平台默认配置合并；不通过校验的配置直接拒绝。
+- 对生产环境建议启用“App 级 profile + run 级 override”双层模型，避免完全自由注入导致治理失控。
+
 **2) 网络拓扑**
 
 ```mermaid
@@ -859,26 +953,28 @@ flowchart LR
         MC["MCPConnector"]
     end
 
-    subgraph svc_ns ["microservices"]
-        DataSvc["数据存储服务"]
-        PushSvc["推送服务"]
-        RAGSvc["RAG 服务"]
+    subgraph chrono_ns ["chrono-platform"]
+        ChronoGW["Chrono Gateway"]
+        DataSvc["Chrono Storage"]
+        PushSvc["Chrono Notification"]
+        RAGSvc["Chrono RAG"]
     end
 
-    subgraph ext ["外部"]
+    subgraph ext ["第三方外部系统"]
         ThirdParty["第三方 API"]
     end
 
     Silo --> HC
     Silo --> MC
-    HC -->|"ClusterIP / Service Mesh"| DataSvc & PushSvc
-    MC -->|"stdio / SSE"| RAGSvc
-    HC -->|"Egress Gateway"| ThirdParty
+    HC -->|"ClusterIP / Service Mesh"| ChronoGW
+    MC -->|"MCP / HTTP Bridge"| ChronoGW
+    ChronoGW --> DataSvc & PushSvc & RAGSvc
+    ChronoGW -->|"Egress Gateway"| ThirdParty
 ```
 
-- 集群内微服务：通过 K8s Service（ClusterIP）直连，或通过 Service Mesh（Istio / Linkerd）实现 mTLS
-- 集群外第三方 API：通过 Egress Gateway 统一出口，便于审计和限速
-- MCP Server：可作为 Sidecar 运行，或部署为独立 Pod
+- Mainnet 到 Chrono：通过 K8s Service（ClusterIP）或 Service Mesh（Istio / Linkerd）建立 mTLS 内网通道。
+- Chrono 到第三方 API：通过 Egress Gateway 统一出口，便于审计、限速与故障隔离。
+- MCP 适配器：优先部署在 Chrono 侧（Sidecar 或独立 Pod），避免 Mainnet 直接耦合异构工具实现。
 
 **3) 弹性与可观测性**
 
@@ -958,7 +1054,7 @@ flowchart TB
 | Kafka 传输 | 分区不足或键分布不均，消费组不均衡 | 消费滞后持续上升，局部分区积压 | `consumer_lag`, `partition_skew_ratio` |
 | Projection 分发 | 单批次过小/过大、无背压水位治理 | 投影队列堆积，读模型更新延迟 | `projection_queue_depth`, `projector_latency_p95` |
 | 实时推送 | 慢消费者拖累广播通道 | WS/SSE 缓冲膨胀、连接抖动 | `sink_buffer_usage`, `ws_slow_consumer_count` |
-| Connector / 外部依赖 | 外部 API 抖动放大到主链路 | `connector_timeout`、重试风暴 | `connector_error_rate`, `connector_duration_p95` |
+| Connector / Chrono 外部依赖 | Chrono 或第三方 API 抖动放大到主链路 | `connector_timeout`、重试风暴 | `connector_error_rate`, `connector_duration_p95` |
 | 状态持久化 | 高峰写放大导致 Garnet 延迟抬升 | Step 完成确认变慢，重试增多 | `redis_cmd_latency_p95`, `state_write_rate` |
 | LLM 调用 | 占 60-75% 延迟预算，无连接池化 / 无流式转发 / 无故障转移 | 首包延迟高、Provider 单点故障导致全链路阻塞 | `llm_call_duration_p95`, `first_token_latency_p95`, `llm_error_rate` |
 | 序列化与大包体 | 大 EventEnvelope / 大模型返回导致拷贝与 GC 压力 | GC Pause 升高，吞吐下降 | `payload_size_p95`, `gc_pause_ms` |
@@ -991,7 +1087,9 @@ flowchart LR
     Client["AI Native App"] --> Ingress["Ingress + Admission Control"]
     Ingress --> API["Mainnet API"]
     API --> WF["WorkflowGAgent / RoleGAgent"]
-    WF --> Connector["Connector / LLM Calls"]
+    WF --> Connector["Connector Calls"]
+    Connector --> Chrono["Chrono Platform Capabilities"]
+    WF --> LLM["LLM Calls"]
     WF --> Events["EventEnvelope Stream"]
 
     Events --> Kafka["Kafka Topic (key=RunId)"]
@@ -1006,6 +1104,8 @@ flowchart LR
     Dispatch --> Obs["Metrics / Tracing / Audit"]
     WF --> Obs
     Connector --> Obs
+    Chrono --> Obs
+    LLM --> Obs
 ```
 
 设计要点：
@@ -1258,7 +1358,7 @@ sequenceDiagram
     participant Orleans as "Orleans Cluster"
     participant Garnet as "Garnet (Grain State)"
     participant Silo2 as "Silo 2 (接管)"
-    participant Loop as "WorkflowLoopModule"
+    participant WfLoop as "WorkflowLoopModule"
 
     Silo1->>Silo1: Silo 崩溃
     Orleans->>Orleans: 检测 Silo 1 不可达
@@ -1266,8 +1366,8 @@ sequenceDiagram
     Silo2->>Garnet: 读取 Grain 持久态
     Garnet-->>Silo2: WorkflowDefinition + CurrentStepId + RunVariables
     Silo2->>Silo2: 重建角色子 Agent 树
-    Silo2->>Loop: 从 CurrentStepId 恢复执行
-    Loop->>Loop: 跳过 CompletedStepIds，继续后续步骤
+    Silo2->>WfLoop: 从 CurrentStepId 恢复执行
+    WfLoop->>WfLoop: 跳过 CompletedStepIds，继续后续步骤
 ```
 
 注意事项：
@@ -1275,6 +1375,211 @@ sequenceDiagram
 - 当前 `checkpoint` 模块不持久化快照；若需要分段恢复，需为 `checkpoint` 增加真实持久化实现并纳入运行态恢复协议。
 - LLM 调用不具备幂等性（相同 prompt 可能返回不同结果）。恢复时如果上一个 `llm_call` 步骤已发出请求但未收到响应，应将该步骤标记为需重试，而非跳过。
 - 投影端通过 `RunId` 关联事件，Silo 故障转移后产出的事件仍会正确归入同一 Run 的投影上下文。
+
+---
+
+## 11. 与区块链网络 + DApp 的对照与 SDK 初步规划
+
+从系统形态上看，Aevatar 更接近“执行网络 + 能力网络 + DApp”的三层组合：`Aevatar Mainnet` 负责 Agent 承载与 workflow 编排，`Chrono Platform` 负责能力微服务供给，`AI Native App` 负责产品化交互。  
+差异在于，Aevatar 的核心目标是 **AI Agent 协作与能力编排**，而不是“无信任价值结算”。
+
+### 11.1 对照结论（可作为沟通口径）
+
+- 对外叙事可类比为：`Aevatar Mainnet ~= Agent Execution Network`，`Chrono Platform ~= Oracle-like Capability Network`，`AI Native App ~= DApp`。
+- 对内实现必须坚持现有主链路：`Command -> Event -> Projection -> Push`，不引入平行执行体系。
+- Mainnet 保持轻量 Agent Host，不承载高变能力细节；能力扩展默认下沉到 Chrono Platform。
+- SDK 的职责是“标准化接入与能力封装”，而不是在客户端重做编排引擎或维护事实状态。
+
+### 11.2 架构映射对照表
+
+| 区块链世界 | Aevatar 世界 | 说明 |
+|---|---|---|
+| Chain / L2 网络 | Aevatar Mainnet（Orleans + CQRS + Projection） | 共享执行底座，承载多应用租户 |
+| DApp 前后端 | AI Native App | 面向终端用户的产品形态 |
+| 钱包账户 / 地址 | Tenant + User + Agent Identity | 这里是业务身份，不是链上账户资产语义 |
+| 交易（Tx） | Command（如启动 workflow run、发送输入） | 写入意图入口，异步产出事件 |
+| 区块确认 / Finality | Actor 串行执行 + 持久化 + 事件可追踪 | 不是拜占庭共识；是工程一致性与可恢复性 |
+| 智能合约 | Workflow YAML + RoleGAgent + EventModule | 业务逻辑的声明式 + 代码化组合 |
+| Oracle / Data Feed | Chrono Platform + Connector | 将外部能力（storage/notification/search/third-party）可靠引入 Agent |
+| 链上日志（Event Log） | Domain Events + EventEnvelope | 统一事件信封，支持关联追踪 |
+| Indexer / The Graph | Projection Pipeline + ReadModel | 一对多投影，支撑 Query 与实时推送 |
+| RPC Provider | Mainnet Host API（HTTP/SSE/WebSocket） | 统一协议入口与订阅出口 |
+| Web3 SDK（ethers / viem） | Aevatar SDK（待规划） | 为 App 开发者提供统一开发体验 |
+
+### 11.3 关键差异与边界（避免误解）
+
+- **信任模型不同**：Aevatar 面向可治理、可观测、可运维的云服务，不以“去信任共识”作为基础前提。
+- **Oracle 类比边界**：Chrono 属于平台治理下的能力层，不是链上去信任预言机网络。
+- **确定性不同**：工作流中含 LLM 调用，天然存在非确定性；应通过幂等键、重试策略、补偿机制治理。
+- **结算语义不同**：Aevatar 当前不内建链上资产结算层；若需计费/结算，应作为独立模块接入。
+- **性能目标不同**：优先首包时延、吞吐与多租户稳定性，而非区块出块时间和链上 gas 最优。
+
+### 11.4 SDK 初步规划（第一版）
+
+SDK 目标：让 AI Native App 以最少样板代码完成“发命令、收事件、查读模型、用能力”四件事，并严格对齐 Mainnet + Chrono 的协同主链路。
+
+**设计原则**
+
+| 原则 | 约束 |
+|---|---|
+| 单一主干 | SDK 只走 `Host API + Projection`，不新增旁路数据通道 |
+| 读写分离 | 写入统一走 Command API；读取统一走 Query/ReadModel API |
+| 事件优先 | 长流程状态以事件与投影为准，不在 SDK 内维护事实态缓存 |
+| 能力分层 | 高变能力通过 Chrono 暴露，SDK 仅做能力目录与调用参数封装 |
+| 配置可注入 | 开发者可通过 SDK 传入 run 级 `agent_profile`（role+connector），指定 Chrono service instance |
+| 可演进 | 协议与能力通过版本协商扩展，避免一次性大而全 |
+
+**建议模块拆分（逻辑包）**
+
+| 模块 | 职责 | 对标 Web3 SDK 习惯 |
+|---|---|---|
+| `sdk-core` | 基础类型、错误模型、重试策略、幂等键、序列化 | 类似 `core/utils` |
+| `sdk-auth` | Tenant/App/User 凭据注入、签名头与鉴权续期 | 类似 `wallet/signer` |
+| `sdk-client` | Command/Query API 封装，统一请求管道 | 类似 `provider/rpc` |
+| `sdk-realtime` | SSE/WebSocket 订阅、断线重连、游标续传 | 类似 `event/listener` |
+| `sdk-workflow` | workflow run 启动参数构建、变量绑定、agent profile 注入 | 类似 `contract/method wrapper` |
+| `sdk-capability` | Chrono 能力目录查询、connector profile 选择、能力调用参数构建 | 类似 `oracle/data adapter` |
+| `sdk-observability` | trace/correlation 透传、指标埋点钩子 | 类似 `debug plugin` |
+
+**MVP 能力边界（建议先做）**
+
+1. 启动与跟踪一次 workflow run（含 `RunId` / `CorrelationId` 回传）。
+2. 通过 SDK 提交 run 级 `agent_profile`，定义 role agent 与 connector 到 Chrono service instance 的映射。
+3. 订阅运行事件流（SSE/WebSocket 二选一即可起步，建议先 SSE）。
+4. 查询 run/read model 当前状态（支持最终一致性提示与轮询退避）。
+5. 提供最小能力目录查询与 connector profile 选择能力（面向 Chrono）。
+6. 提供统一错误码与重试建议（429、超时、网络抖动、幂等冲突）。
+
+**版本节奏（建议）**
+
+- `v0.1`（可用）：`sdk-core + sdk-client + sdk-realtime`，先覆盖对话与工作流主路径。
+- `v0.2`（增强）：补 `sdk-auth`、`sdk-workflow` 与 `sdk-capability`（会话管理、批量 run、能力目录）。
+- `v0.3`（治理）：补 `sdk-observability`、限流自适应与能力探测（feature negotiation）。
+
+**建议首批 SDK 契约（接口层）**
+
+- `IMainnetClient`: `RunFromYamlAsync`、`SendCommandAsync`、`QueryAsync`。
+- `IRunSubscription`: `SubscribeRunEventsAsync(runId)`、`ResumeFromCursorAsync(cursor)`。
+- `IRunQueryService`: `GetRunStatusAsync(runId)`、`GetRunTimelineAsync(runId)`。
+- `ICapabilityCatalog`: `ListCapabilitiesAsync()`、`ResolveConnectorProfileAsync(capabilityId)`。
+- `IAevatarCredentialProvider`: 凭据获取、刷新与失效回调。
+
+**Inline 模式最小请求契约（建议）**
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `workflow_yaml` | 是 | 本次 run 的工作流定义（inline 传入） |
+| `input` | 是 | 用户输入或上游上下文 |
+| `tenant_id` | 是 | 多租户隔离维度 |
+| `app_id` | 是 | AI Native App 维度 |
+| `run_id` | 否 | 调用方自定义 run 标识；不传则由服务端生成 |
+| `idempotency_key` | 否 | 幂等键，用于重试去重 |
+| `agent_profile` | 否（建议） | run 级 agent 配置（role agent + connector）；用于指定角色模型和 Chrono 连接目标 |
+| `agent_profile.merge_mode` | 否 | `merge` / `replace`，控制与平台默认 profile 的合并方式 |
+| `capability_profile` | 否 | 指定 Chrono 能力配置档（如 `default` / `restricted`） |
+| `workflow_name` | 否 | 兼容字段：未提供 `workflow_yaml` 时按注册表查找 |
+
+**Inline 模式最小响应契约（建议）**
+
+| 字段 | 说明 |
+|---|---|
+| `run_id` | 本次运行唯一标识 |
+| `correlation_id` | 跨链路追踪标识（命令、事件、投影统一关联） |
+| `stream_endpoint` | SSE/WS 订阅地址 |
+| `accepted_at` | 服务端受理时间（UTC） |
+| `workflow_hash` | YAML 内容哈希（用于编译缓存与审计） |
+| `resolved_connectors` | 实际生效的 connector 列表（含解析到的 Chrono instance） |
+
+**SDK API 草案（合约调用体验）**
+
+- `runFromYaml(request)`：发起一次 inline YAML run，返回受理结果（`run_id`、`stream_endpoint`）。
+- `withAgentProfile(profile)`：为 run 注入 agent profile（可作为 `runFromYaml` 的参数 builder）。
+- `subscribeRunEvents(runId, options?)`：订阅 run 事件流，支持断线续传。
+- `getRunStatus(runId)`：查询 run 当前状态（running/succeeded/failed）。
+- `getRunTimeline(runId)`：查询步骤级时间线（用于排障与审计）。
+
+> 实施建议：先在一个语言栈做 MVP（建议 TypeScript 或 .NET 二选一），待协议稳定后再扩展第二语言，避免双栈同时演进导致契约漂移。
+
+### 11.5 AI Native App 编排能力来源（Inline YAML 模型）
+
+AI Native App 的编排能力并非“写死在 Mainnet”，而是由 SDK 在每次调用时提交 `workflow_yaml + agent_profile` 触发。  
+Mainnet 的职责是将该 YAML 编译为可执行工作流，并按 `agent_profile` 组装 RoleGAgent 与 connector 解析上下文后驱动 `WorkflowGAgent`。
+
+从 SDK 交互视角，每次 run 的关键交换可简化为“2 类注入 + 1 类回抛”：
+
+| 交互类型 | 字段 | 作用 |
+|---|---|---|
+| 注入（编排） | `workflow_yaml` | 描述多 Agent 如何协作（步骤、分支、控制流） |
+| 注入（画像） | `agent_profile` | 描述 role agent 配置与 connector 连接目标（Chrono 实例） |
+| 回抛（事件） | AGUI Events | Mainnet 通过 AGUI 事件流向 App 回抛执行进度、增量输出与完成态 |
+
+“智能合约式”类比关系：
+
+| Aevatar 元素 | 合约世界类比 | 说明 |
+|---|---|---|
+| `workflow_yaml` | 合约代码载荷 | 每次调用显式携带执行逻辑 |
+| `agent_profile` | 执行画像参数 | 定义 role agent 配置与 connector 的 Chrono 连接目标 |
+| `RunFromYaml` 请求 | 合约调用交易 | 提交输入参数并触发执行 |
+| `WorkflowGAgent` | 合约运行实例 | 在 run 生命周期内维护执行上下文 |
+| `RunId` / `CorrelationId` | 交易哈希 / 回执关联键 | 用于追踪执行进度与结果 |
+| Projection ReadModel | Indexer 视图 | 提供查询与前端展示数据 |
+
+### 11.6 智能合约式调用时序（Inline YAML）
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "sequence": {"useMaxWidth": false}, "themeVariables": {"fontSize": "10px"}}}%%
+sequenceDiagram
+    participant AppSdk as "AI Native App SDK"
+    participant MainnetApi as "Mainnet API"
+    participant AppService as "WorkflowChatRunApplicationService"
+    participant Resolver as "WorkflowRunActorResolver"
+    participant WfAgent as "WorkflowGAgent"
+    participant Chrono as "Chrono Platform"
+    participant Projection as "Projection Pipeline"
+
+    AppSdk->>MainnetApi: CreateRun(workflow_yaml,agent_profile,input,run_id?)
+    MainnetApi->>AppService: ExecuteAsync(request)
+    AppService->>AppService: ValidateYaml + ValidateAgentProfile
+    AppService->>AppService: ComputeWorkflowHash + ResolveAgentProfile
+    AppService->>Resolver: ResolveOrCreateActor(workflow_hash)
+    Resolver->>WfAgent: ConfigureWorkflow(workflow_yaml) + StartRun
+    WfAgent->>Chrono: connector_call (storage/notification/...)
+    Chrono-->>WfAgent: capability response
+    WfAgent->>Projection: EmitDomainEvents
+    Projection-->>AppSdk: StreamRunEvents(SSE/WS)
+```
+
+### 11.7 开发者接入图（SDK 注入 YAML 实现 Multi-Agent Workflow）
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    Dev["AI Native App Developer"] -->|"集成"| Sdk["Aevatar SDK"]
+    Sdk -->|"RunFromYaml(workflow_yaml, agent_profile, input)"| Api["Mainnet API"]
+    Api --> WfAgent["WorkflowGAgent Instance"]
+    WfAgent --> RoleTree["RoleGAgent Tree (Multi-Agent)"]
+    RoleTree --> Chrono["Chrono Capabilities via Connectors"]
+    WfAgent --> Projection["Projection + Event Stream"]
+    Projection --> App["AI Native App"]
+```
+
+开发者视角下，Aevatar SDK 提供四类关键能力：
+
+- **连接主网**：封装 Mainnet API 的请求、鉴权、重试与幂等。
+- **注入编排**：通过 `runFromYaml` 在调用时提交 `workflow_yaml + agent_profile`，触发多 Agent 角色树执行。
+- **画像配置**：开发者可在 SDK 中定义 role agent 与 connector 到 Chrono service instance 的映射（dev/staging/prod）。
+- **消费结果**：通过 `subscribeRunEvents` 与 `getRunStatus/getRunTimeline` 实时消费执行状态与输出。
+
+### 11.8 Inline YAML 风险与治理
+
+| 风险 | 触发场景 | 治理措施 |
+|---|---|---|
+| 恶意或越权步骤 | 提交未授权 `step type` 或 connector | `step type allowlist` + 角色 `connector allowlist` + capability profile |
+| 超大 YAML 包体 | 单请求 YAML 过大导致解析/GC 压力 | 设置 YAML 大小上限与请求体限制 |
+| 恶意 connector 目标地址 | 请求内注入未授权 Chrono/外网地址 | connector endpoint allowlist + egress policy + 租户隔离校验 |
+| 高频重复编译 | 相同 YAML 被频繁提交 | 基于 `workflow_hash` 的编译缓存 |
+| 重试导致重复执行 | 网络抖动触发客户端重放 | `idempotency_key` + `run_id` 幂等去重 |
+| 租户噪音放大 | 单租户高频 run 挤压全局资源 | `tenant_id + app_id` 限流、在途 run 上限、背压降载 |
 
 ---
 
