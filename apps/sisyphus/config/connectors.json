@@ -1,0 +1,26 @@
+{
+  "connectors": {
+    "nyxid_mcp": {
+      "type": "mcp",
+      "enabled": true,
+      "timeoutMs": 60000,
+      "mcp": {
+        "serverName": "nyxid",
+        "url": "${NYXID_MCP_URL}",
+        "auth": {
+          "type": "client_credentials",
+          "tokenUrl": "${NYXID_AUTH_TOKEN_URL}",
+          "clientId": "${NYXID_SA_CLIENT_ID}",
+          "clientSecret": "${NYXID_SA_CLIENT_SECRET}",
+          "scope": "graph:read graph:write"
+        },
+        "allowedTools": [
+          "chrono-graph__get_snapshot",
+          "chrono-graph__create_nodes",
+          "chrono-graph__create_edges",
+          "chrono-graph__query"
+        ]
+      }
+    }
+  }
+}

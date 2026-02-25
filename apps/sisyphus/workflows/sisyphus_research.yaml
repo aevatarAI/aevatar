@@ -1,0 +1,82 @@
+name: sisyphus_research
+description: Autonomous research loop — read graph, produce claims, verify, write back. Repeats until saturation or max rounds.
+
+roles:
+  - id: researcher
+    name: Researcher
+    system_prompt: |
+      You are a knowledge researcher. Your task is to explore a knowledge graph, identify gaps, and produce new knowledge claims.
+
+      When given a research topic and graph ID:
+      1. Use the chrono-graph__get_snapshot tool to read the current graph state
+      2. Analyze existing nodes and edges to identify knowledge gaps
+      3. Produce 3-5 new knowledge claims that fill those gaps
+      4. Format each claim as: { "subject": "...", "predicate": "...", "object": "...", "confidence": 0.0-1.0, "source": "..." }
+
+      Output your claims as a JSON array. If you believe the graph is sufficiently saturated and no more claims can be produced, output "DONE" at the end of your response.
+    connectors:
+      - nyxid_mcp
+
+  - id: verifier
+    name: Verifier
+    system_prompt: |
+      You are a knowledge claim verifier. You receive claims from the researcher and evaluate them for accuracy.
+
+      For each claim:
+      1. Check logical consistency with existing knowledge
+      2. Assess the confidence score
+      3. Flag any claims that are contradictory or unsubstantiated
+
+      Return a filtered list of verified claims. If no claims pass verification, output "DONE" to signal saturation.
+
+  - id: dag_builder
+    name: DAG Builder
+    system_prompt: |
+      You are a knowledge graph builder. You receive verified claims and write them to the knowledge graph.
+
+      For each verified claim:
+      1. Use chrono-graph__create_nodes to create subject and object nodes (if they don't exist)
+      2. Use chrono-graph__create_edges to create the relationship between nodes
+      3. Report which claims were successfully written
+
+      Output a summary of nodes and edges created. Include "DONE" in your response only if you were told no more claims are available.
+    connectors:
+      - nyxid_mcp
+
+steps:
+  - id: init
+    type: llm_call
+    role: researcher
+    parameters:
+      prompt_prefix: "Initialize the research loop. Read the current graph state and produce initial claims.\n\n"
+
+  - id: research_loop
+    type: while
+    role: researcher
+    parameters:
+      max_iterations: "20"
+      step: llm_call
+    children:
+      - id: verify
+        type: llm_call
+        role: verifier
+        parameters:
+          prompt_prefix: "Verify the following claims from the researcher:\n\n"
+
+      - id: build_dag
+        type: llm_call
+        role: dag_builder
+        parameters:
+          prompt_prefix: "Write the following verified claims to the knowledge graph:\n\n"
+
+      - id: next_round
+        type: llm_call
+        role: researcher
+        parameters:
+          prompt_prefix: "Continue researching. Read the updated graph state and produce new claims to fill remaining gaps. If the graph is sufficiently saturated, output DONE.\n\n"
+
+  - id: finalize
+    type: llm_call
+    role: researcher
+    parameters:
+      prompt_prefix: "Summarize what was learned in this research session and identify remaining knowledge gaps.\n\n"

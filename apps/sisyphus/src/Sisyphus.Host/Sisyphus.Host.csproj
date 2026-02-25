@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Sisyphus.Host</AssemblyName>
+    <RootNamespace>Sisyphus.Host</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
+    <ProjectReference Include="..\..\..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Hosting\Aevatar.Workflow.Extensions.Hosting.csproj" />
+    <ProjectReference Include="..\..\..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Maker\Aevatar.Workflow.Extensions.Maker.csproj" />
+    <ProjectReference Include="..\Sisyphus.Application\Sisyphus.Application.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\workflows\**\*.yaml" CopyToOutputDirectory="PreserveNewest" LinkBase="workflows" />
+    <Content Include="..\..\config\**\*.json" CopyToOutputDirectory="PreserveNewest" LinkBase="config" />
+  </ItemGroup>
+</Project>
