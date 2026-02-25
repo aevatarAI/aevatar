@@ -27,7 +27,7 @@ public sealed class OrleansDistributedStreamForwardingRegistry : IStreamForwardi
         ct.ThrowIfCancellationRequested();
 
         var grain = _grainFactory.GetGrain<IStreamTopologyGrain>(binding.SourceStreamId);
-        await grain.UpsertAsync(binding);
+        await grain.UpsertAsync(ToEntry(binding));
         _cache.TryRemove(binding.SourceStreamId, out _);
     }
 
@@ -62,8 +62,8 @@ public sealed class OrleansDistributedStreamForwardingRegistry : IStreamForwardi
             return cached.Bindings;
         }
 
-        var bindings = await grain.ListAsync();
-        var clonedBindings = bindings.Select(CloneBinding).ToArray();
+        var entries = await grain.ListAsync();
+        var clonedBindings = entries.Select(ToBinding).Select(CloneBinding).ToArray();
         _cache[sourceStreamId] = new CacheEntry(clonedBindings, revision, ComputeNextRevisionCheckUtc(now));
         return clonedBindings;
     }
@@ -86,6 +86,30 @@ public sealed class OrleansDistributedStreamForwardingRegistry : IStreamForwardi
             EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
             Version = binding.Version,
             LeaseId = binding.LeaseId,
+        };
+
+    private static StreamForwardingBindingEntry ToEntry(StreamForwardingBinding binding) =>
+        new()
+        {
+            SourceStreamId = binding.SourceStreamId,
+            TargetStreamId = binding.TargetStreamId,
+            ForwardingMode = binding.ForwardingMode,
+            DirectionFilter = binding.DirectionFilter.OrderBy(x => x).ToList(),
+            EventTypeFilter = binding.EventTypeFilter.OrderBy(x => x, StringComparer.Ordinal).ToList(),
+            Version = binding.Version,
+            LeaseId = binding.LeaseId,
+        };
+
+    private static StreamForwardingBinding ToBinding(StreamForwardingBindingEntry entry) =>
+        new()
+        {
+            SourceStreamId = entry.SourceStreamId,
+            TargetStreamId = entry.TargetStreamId,
+            ForwardingMode = entry.ForwardingMode,
+            DirectionFilter = new HashSet<EventDirection>(entry.DirectionFilter),
+            EventTypeFilter = new HashSet<string>(entry.EventTypeFilter, StringComparer.Ordinal),
+            Version = entry.Version,
+            LeaseId = entry.LeaseId,
         };
 
     private sealed record CacheEntry(

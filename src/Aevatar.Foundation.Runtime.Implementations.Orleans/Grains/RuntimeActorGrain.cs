@@ -88,7 +88,22 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     public async Task HandleEnvelopeAsync(byte[] envelopeBytes)
     {
         if (_agent == null)
-            throw new InvalidOperationException("Grain agent is not initialized.");
+        {
+            if (!string.IsNullOrWhiteSpace(_state.State.AgentTypeName))
+            {
+                var initialized = await InitializeAgentInternalAsync(_state.State.AgentTypeName);
+                if (!initialized || _agent == null)
+                {
+                    _logger.LogWarning("Dropping envelope for actor {ActorId}: initialization failed", this.GetPrimaryKeyString());
+                    return;
+                }
+            }
+            else
+            {
+                _logger.LogDebug("Dropping envelope for actor {ActorId}: no agent type configured", this.GetPrimaryKeyString());
+                return;
+            }
+        }
 
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
 
