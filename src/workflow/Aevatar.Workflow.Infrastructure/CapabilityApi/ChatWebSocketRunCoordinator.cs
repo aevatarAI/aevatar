@@ -1,6 +1,5 @@
 using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -11,7 +10,6 @@ internal static class ChatWebSocketRunCoordinator
         WebSocket socket,
         ChatWebSocketCommandEnvelope command,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
-        IWorkflowExecutionQueryApplicationService queryService,
         CancellationToken ct = default)
     {
         var request = new WorkflowChatRunRequest(
@@ -55,7 +53,6 @@ internal static class ChatWebSocketRunCoordinator
 
         var started = executionResult.Started!;
         var finalize = executionResult.FinalizeResult;
-        var snapshot = await queryService.GetActorSnapshotAsync(started.ActorId, ct);
         await ChatWebSocketProtocol.SendAsync(socket, new
         {
             type = "query.result",
@@ -66,7 +63,6 @@ internal static class ChatWebSocketRunCoordinator
                 actorId = started.ActorId,
                 projectionCompletionStatus = finalize?.ProjectionCompletionStatus.ToString(),
                 projectionCompleted = finalize?.ProjectionCompleted ?? false,
-                snapshot,
             },
         }, ct);
     }

@@ -158,7 +158,6 @@ sequenceDiagram
     participant PRS as "Command Parser"
     participant RUN as "Run Coordinator"
     participant CMD as "Command Service"
-    participant QRY as "Query Service"
     participant WS as "WS Protocol"
 
     CL->>API: "GET /api/ws/chat"
@@ -168,7 +167,6 @@ sequenceDiagram
     RUN->>CMD: "ExecuteAsync(...)"
     CMD-->>WS: "command.ack"
     CMD-->>WS: "agui.event *"
-    RUN->>QRY: "GetActorSnapshotAsync(actorId)"
     RUN-->>WS: "query.result"
     API-->>WS: "CloseAsync"
 ```
@@ -180,7 +178,7 @@ sequenceDiagram
 1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:152`
 2. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:22`
 3. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:30`
-4. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:59`
+4. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:52`
 
 ## 6. 统一投影分支与一对多分发
 
@@ -252,7 +250,8 @@ flowchart LR
 | `TextMessageStartEvent` | `RoleGAgent` | 文本消息开始 |
 | `TextMessageContentEvent` | `RoleGAgent` | 文本增量（delta） |
 | `TextMessageEndEvent` | `RoleGAgent` | 文本消息结束（含完整 content） |
-| `ToolCallEvent` / `ToolResultEvent` | `ToolCallModule` | 工具调用与结果 |
+| `ToolCallEvent` | `RoleGAgent`、`ToolCallModule` | 流式工具调用（LLM delta）与模块级工具调用 |
+| `ToolResultEvent` | `ToolCallModule` | 工具执行结果 |
 | `ChatResponseEvent` | `WorkflowGAgent` 等 | 非流式回退路径 |
 
 锚点：
@@ -283,14 +282,14 @@ flowchart LR
 |---|---|---|
 | 文本增量流（delta text） | 已支持 | 主链路能力 |
 | 工具调用结果流 | 已支持 | 通过 AGUI ToolCall 映射进入统一输出 |
-| 状态快照流 | 协议已定义，默认未产出 | 输出模型存在，需明确 producer |
-| 流式 `DeltaToolCall` | 未接入主链路 | `LLMStreamChunk` 有字段但当前未消费 |
+| 状态快照流 | 已支持 | `WorkflowRunExecutionEngine` 在 run 收敛后统一补发 `STATE_SNAPSHOT` 帧 |
+| 流式 `DeltaToolCall` | 已支持 | Provider -> `ChatRuntime` -> `RoleGAgent` 贯通，转为 `ToolCallEvent` |
 | 二进制/多模态流 | 不支持 | WS 协议层只发送 text 帧 |
 
 锚点：
 
 1. `src/Aevatar.AI.Abstractions/LLMProviders/LLMResponse.cs:34`
-2. `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:154`
+2. `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:89`
 3. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:24`
 4. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:44`
 
@@ -330,9 +329,14 @@ flowchart LR
 
 建议改造顺序：
 
-1. 在 `ChatRuntime.ChatStreamAsync` 增加 `DeltaToolCall` 分支处理并生成标准化工具流事件。
-2. 将 WS 协议从“纯 text payload”升级为“类型化消息帧”（文本/二进制/控制消息分离）。
-3. 为 `STATE_SNAPSHOT` 明确生产规则（projector 或 domain 事件来源），避免协议项空转。
+1. 将 WS 协议从“纯 text payload”升级为“类型化消息帧”（文本/二进制/控制消息分离）。
+2. 为多模态 chunk 增加标准事件类型（如 `MEDIA_CHUNK` / `AUDIO_DELTA`），并映射到统一 `WorkflowRunEvent`。
+
+本次重构已完成：
+
+1. `ChatRuntime.ChatStreamAsync` 已接入 `DeltaToolCall` 聚合与透传。
+2. `RoleGAgent` 已把流式工具调用转为 `ToolCallEvent` 发布到上行事件链路。
+3. `WorkflowRunExecutionEngine` 已在 run 收敛后统一发出 `STATE_SNAPSHOT` 输出帧。
 
 ## 11. 验证建议
 

@@ -3,7 +3,6 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -16,15 +15,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     public async Task ExecuteAsync_WhenSuccess_ShouldSendAckEventsAndQueryResult()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
-        var queryService = new FakeQueryService
-        {
-            Snapshot = new WorkflowActorSnapshot
-            {
-                ActorId = "actor-1",
-                WorkflowName = "direct",
-                LastCommandId = "cmd-1",
-            },
-        };
         var service = new FakeCommandExecutionService
         {
             Handler = async (_, emitAsync, onStartedAsync, ct) =>
@@ -52,7 +42,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 AgentId = "actor-1",
             }),
             service,
-            queryService,
             CancellationToken.None);
 
         var types = socket.SentTexts
@@ -62,14 +51,12 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
         service.LastCommand.Should().NotBeNull();
         service.LastCommand!.Prompt.Should().Be("hello");
-        queryService.LastActorId.Should().Be("actor-1");
     }
 
     [Fact]
     public async Task ExecuteAsync_WhenStartFails_ShouldSendCommandErrorOnly()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
-        var queryService = new FakeQueryService();
         var service = new FakeCommandExecutionService
         {
             Handler = (_, _, _, _) => Task.FromResult(
@@ -83,14 +70,12 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             socket,
             new ChatWebSocketCommandEnvelope("req-2", new ChatInput { Prompt = "hello" }),
             service,
-            queryService,
             CancellationToken.None);
 
         socket.SentTexts.Should().ContainSingle();
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
         doc.RootElement.GetProperty("type").GetString().Should().Be("command.error");
         doc.RootElement.GetProperty("code").GetString().Should().Be("WORKFLOW_NOT_FOUND");
-        queryService.LastActorId.Should().BeNull();
     }
 
     [Fact]
@@ -172,57 +157,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         {
             LastCommand = command;
             return Handler(command, emitAsync, onStartedAsync, ct);
-        }
-    }
-
-    private sealed class FakeQueryService : IWorkflowExecutionQueryApplicationService
-    {
-        public WorkflowActorSnapshot? Snapshot { get; init; }
-        public string? LastActorId { get; private set; }
-
-        public bool ActorQueryEnabled => true;
-        public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<WorkflowAgentSummary>>([]);
-        public IReadOnlyList<string> ListWorkflows() => [];
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
-        {
-            LastActorId = actorId;
-            return Task.FromResult<WorkflowActorSnapshot?>(Snapshot);
-        }
-        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
-        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
-            string actorId,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) => Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
-        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
-            string actorId,
-            int depth = 2,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowActorGraphSubgraph
-            {
-                RootNodeId = actorId,
-            });
-
-        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
-            string actorId,
-            int depth = 2,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default)
-        {
-            if (Snapshot == null)
-                return Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(null);
-
-            return Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(new WorkflowActorGraphEnrichedSnapshot
-            {
-                Snapshot = Snapshot,
-                Subgraph = new WorkflowActorGraphSubgraph
-                {
-                    RootNodeId = actorId,
-                },
-            });
         }
     }
 

@@ -214,6 +214,26 @@ public class AIComponentCoverageTests
 
         chunks.Select(x => x.DeltaContent).Should().ContainInOrder("a", "b");
         chunks.Last().IsLast.Should().BeTrue();
+
+        var toolStreamClient = new StubChatClient
+        {
+            OnGetStreamingResponse = static (_, _, _) => StreamWithToolCall(),
+        };
+        var toolStreamProvider = new MEAILLMProvider("meai-tool-stream", toolStreamClient);
+        var toolStreamChunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in toolStreamProvider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "trigger tool" }],
+        }))
+        {
+            toolStreamChunks.Add(chunk);
+        }
+
+        toolStreamChunks.Should().Contain(x => x.DeltaToolCall != null);
+        var streamedToolCall = toolStreamChunks.First(x => x.DeltaToolCall != null).DeltaToolCall!;
+        streamedToolCall.Id.Should().Be("call-stream-1");
+        streamedToolCall.Name.Should().Be("lookup");
+        streamedToolCall.ArgumentsJson.Should().Contain("term");
     }
 
     [Fact]
@@ -468,6 +488,20 @@ public class AIComponentCoverageTests
             yield return new ChatResponseUpdate(ChatRole.Assistant, part);
             await Task.Yield();
         }
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> StreamWithToolCall()
+    {
+        yield return new ChatResponseUpdate(ChatRole.Assistant, "prefix");
+        yield return new ChatResponseUpdate(
+            ChatRole.Assistant,
+            [
+                new FunctionCallContent(
+                    "call-stream-1",
+                    "lookup",
+                    new Dictionary<string, object?> { ["term"] = "aevatar" }),
+            ]);
+        await Task.Yield();
     }
 
     private sealed class StubTool : IAgentTool
