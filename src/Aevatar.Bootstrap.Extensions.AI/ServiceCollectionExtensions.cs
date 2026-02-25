@@ -413,22 +413,37 @@ public static class ServiceCollectionExtensions
 
     private static void RegisterMCPTools(IServiceCollection services)
     {
-        var servers = AevatarMCPConfig.LoadServers();
-        if (servers.Count == 0)
-            return;
+        // Merged server map — connectors.json entries win on name collision.
+        var serverMap = new Dictionary<string, MCPServerConfig>(StringComparer.OrdinalIgnoreCase);
 
+        // 1. Legacy mcp.json (lowest priority).
+        foreach (var entry in AevatarMCPConfig.LoadServers())
+        {
+            serverMap.TryAdd(entry.Name, new MCPServerConfig
+            {
+                Name = entry.Name,
+                Command = entry.Command,
+                Arguments = entry.Args,
+                Environment = entry.Env,
+            });
+        }
+
+        // 2. connectors.json MCP entries (highest priority).
+        foreach (var connector in AevatarConnectorConfig.LoadConnectors())
+        {
+            if (!string.Equals(connector.Type, "mcp", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var server = MCPConnectorBuilder.ToMCPServerConfig(connector);
+            if (server is not null)
+                serverMap[server.Name] = server;
+        }
+
+        // Always register the MCP tool source so MCPAgentToolSource is available.
         services.AddMCPTools(options =>
         {
-            foreach (var server in servers)
-            {
-                options.Servers.Add(new MCPServerConfig
-                {
-                    Name = server.Name,
-                    Command = server.Command,
-                    Arguments = server.Args,
-                    Environment = server.Env,
-                });
-            }
+            foreach (var server in serverMap.Values)
+                options.Servers.Add(server);
         });
     }
 
