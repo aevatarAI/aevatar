@@ -60,19 +60,37 @@ public sealed class OrleansActorRuntimeForwardingTests
     }
 
     [Fact]
-    public async Task LinkAsync_WhenParentIsNotInitialized_ShouldThrow_AndNotMutateTopology()
+    public async Task LinkAsync_WhenChildIsNotInitialized_ShouldThrow_AndNotMutateTopology()
+    {
+        var runtime = CreateRuntime(out var registry, out var grains);
+        await runtime.ExistsAsync("parent");
+        await runtime.ExistsAsync("child");
+        grains["child"].Initialized = false;
+
+        var act = () => runtime.LinkAsync("parent", "child");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Child actor child is not initialized.*");
+        grains["child"].ParentId.Should().BeNull();
+        (await registry.ListBySourceAsync("parent", CancellationToken.None)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LinkAsync_WhenParentIsNotInitialized_ShouldStillLink_AndSkipParentInitializationProbe()
     {
         var runtime = CreateRuntime(out var registry, out var grains);
         await runtime.ExistsAsync("parent");
         await runtime.ExistsAsync("child");
         grains["parent"].Initialized = false;
 
-        var act = () => runtime.LinkAsync("parent", "child");
+        await runtime.LinkAsync("parent", "child");
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Parent actor parent is not initialized.*");
-        grains["child"].ParentId.Should().BeNull();
-        (await registry.ListBySourceAsync("parent", CancellationToken.None)).Should().BeEmpty();
+        grains["parent"].Children.Should().Contain("child");
+        grains["child"].ParentId.Should().Be("parent");
+        grains["parent"].IsInitializedCallCount.Should().Be(1); // only from ExistsAsync above
+        grains["child"].IsInitializedCallCount.Should().Be(2); // ExistsAsync + LinkAsync guard
+        (await registry.ListBySourceAsync("parent", CancellationToken.None))
+            .Should().ContainSingle(x => x.TargetStreamId == "child");
     }
 
     [Fact]
@@ -145,13 +163,19 @@ public sealed class OrleansActorRuntimeForwardingTests
 
         public List<string> Calls { get; } = [];
 
+        public int IsInitializedCallCount { get; private set; }
+
         public Task<bool> InitializeAgentAsync(string agentTypeName)
         {
             _ = agentTypeName;
             return Task.FromResult(true);
         }
 
-        public Task<bool> IsInitializedAsync() => Task.FromResult(Initialized);
+        public Task<bool> IsInitializedAsync()
+        {
+            IsInitializedCallCount++;
+            return Task.FromResult(Initialized);
+        }
 
         public Task HandleEnvelopeAsync(byte[] envelopeBytes)
         {

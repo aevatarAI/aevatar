@@ -51,7 +51,7 @@ public static class RoleGAgentFactory
         {
             RoleName = config.Name ?? string.Empty,
             SystemPrompt = config.SystemPrompt ?? string.Empty,
-            ProviderName = config.Provider ?? "deepseek",
+            ProviderName = config.Provider ?? string.Empty,
             Model = config.Model ?? string.Empty,
         };
         if (config.Temperature.HasValue)
