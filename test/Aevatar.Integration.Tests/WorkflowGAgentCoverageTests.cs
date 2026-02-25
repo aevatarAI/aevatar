@@ -82,7 +82,8 @@ public class WorkflowGAgentCoverageTests
         var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
         roleAgent.RoleName.Should().Be("RoleA");
         roleAgent.LastConfig.Should().NotBeNull();
-        roleAgent.LastConfig!.ProviderName.Should().Be("deepseek");
+        roleAgent.LastConfig!.ProviderName.Should().BeEmpty();
+        roleAgent.LastConfig.Model.Should().BeNull();
         roleAgent.LastConfig.SystemPrompt.Should().Be("helpful role");
 
         var starts = publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().ToList();
@@ -102,6 +103,28 @@ public class WorkflowGAgentCoverageTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*does not implement IRoleAgent*");
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_WhenWorkflowRoleSpecifiesProviderAndModel_ShouldPreserveValues()
+    {
+        var runtime = new RecordingActorRuntime();
+        var resolver = new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
+        var agent = CreateAgent(runtime, resolver);
+        agent.ConfigureWorkflow(
+            BuildValidWorkflowYaml(
+                roleId: "role_cfg",
+                roleName: "RoleCfg",
+                provider: "openai-godgpt-doubao",
+                model: "godgpt-testnet"),
+            "wf_provider_model");
+
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+
+        var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
+        roleAgent.LastConfig.Should().NotBeNull();
+        roleAgent.LastConfig!.ProviderName.Should().Be("openai-godgpt-doubao");
+        roleAgent.LastConfig.Model.Should().Be("godgpt-testnet");
     }
 
     [Fact]
@@ -198,14 +221,21 @@ public class WorkflowGAgentCoverageTests
         return agent;
     }
 
-    private static string BuildValidWorkflowYaml(string roleId, string roleName)
+    private static string BuildValidWorkflowYaml(
+        string roleId,
+        string roleName,
+        string? provider = null,
+        string? model = null)
     {
+        var providerLine = string.IsNullOrWhiteSpace(provider) ? string.Empty : $"\n    provider: \"{provider}\"";
+        var modelLine = string.IsNullOrWhiteSpace(model) ? string.Empty : $"\n    model: \"{model}\"";
         return $$"""
                  name: wf_valid
                  roles:
                    - id: "{{roleId}}"
                      name: "{{roleName}}"
                      system_prompt: "helpful role"
+                     {{providerLine}}{{modelLine}}
                  steps:
                    - id: step_1
                      type: transform
@@ -310,7 +340,7 @@ public class WorkflowGAgentCoverageTests
                 SetRoleName(evt.RoleName);
                 LastConfig = new RoleAgentConfig
                 {
-                    ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? "deepseek" : evt.ProviderName,
+                    ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName,
                     Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,
                     SystemPrompt = evt.SystemPrompt ?? string.Empty,
                 };
