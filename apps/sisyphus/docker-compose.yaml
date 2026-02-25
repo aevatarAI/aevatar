@@ -8,8 +8,7 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ActorRuntime__Provider=Orleans
-      - ActorRuntime__OrleansPersistenceBackend=Garnet
-      - ActorRuntime__OrleansGarnetConnectionString=garnet:6379
+      - ActorRuntime__OrleansPersistenceBackend=InMemory
       # NyxId (Session Manager REST proxy + MCP connector shared credentials)
       - NyxId__BaseUrl=${NYXID_BASE_URL}
       - NyxId__TokenUrl=${NYXID_AUTH_TOKEN_URL}
@@ -21,11 +20,3 @@ services:
       - NYXID_AUTH_TOKEN_URL=${NYXID_AUTH_TOKEN_URL}
       - NYXID_SA_CLIENT_ID=${NYXID_SA_CLIENT_ID}
       - NYXID_SA_CLIENT_SECRET=${NYXID_SA_CLIENT_SECRET}
-    depends_on:
-      - garnet
-
-  garnet:
-    image: ghcr.io/microsoft/garnet:1.0.45
-    command: ["--bind", "0.0.0.0", "--password", "${GARNET_PASSWORD:-}"]
-    ports:
-      - "6379:6379"
