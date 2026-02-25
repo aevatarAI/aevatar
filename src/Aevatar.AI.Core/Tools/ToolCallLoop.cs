@@ -59,8 +59,8 @@ public sealed class ToolCallLoop
                 return response.Content;
             }
 
-            // 记录 assistant tool_call 消息
-            messages.Add(new ChatMessage { Role = "assistant", ToolCalls = response.ToolCalls });
+            // 记录 assistant tool_call 消息（保留 Content，部分 LLM 会同时返回文本和 tool_call）
+            messages.Add(new ChatMessage { Role = "assistant", Content = response.Content, ToolCalls = response.ToolCalls });
 
             // 执行每个 tool call
             foreach (var call in response.ToolCalls!)

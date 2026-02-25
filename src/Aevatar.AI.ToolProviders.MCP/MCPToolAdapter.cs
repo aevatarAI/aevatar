@@ -2,6 +2,7 @@
 // MCPToolAdapter — 将 MCP Tool 适配为 IAgentTool
 // ─────────────────────────────────────────────────────────────
 
+using System.Text;
 using Aevatar.AI.Abstractions.ToolProviders;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -54,13 +55,34 @@ public sealed class MCPToolAdapter : IAgentTool
 
             var result = await _client.CallToolAsync(_mcpToolName, args, cancellationToken: ct);
 
-            return result.Content?.ToString() ?? "";
+            return ExtractText(result.Content);
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "MCP Tool {Name} 执行失败", Name);
             return System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message });
         }
+    }
+
+    /// <summary>
+    /// Extract text from MCP ContentBlock list. Each TextContentBlock's Text is concatenated;
+    /// non-text blocks are represented by their ToString() output.
+    /// </summary>
+    private static string ExtractText(IList<ContentBlock>? content)
+    {
+        if (content == null || content.Count == 0)
+            return "";
+
+        if (content.Count == 1)
+            return content[0].ToString() ?? "";
+
+        var sb = new StringBuilder();
+        foreach (var block in content)
+        {
+            if (sb.Length > 0) sb.Append('\n');
+            sb.Append(block.ToString() ?? "");
+        }
+        return sb.ToString();
     }
 
     /// <summary>
