@@ -12,6 +12,11 @@ internal static class ChatWebSocketRunCoordinator
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
         CancellationToken ct = default)
     {
+        static WebSocketMessageType NormalizeResponseMessageType(WebSocketMessageType type) =>
+            type == WebSocketMessageType.Binary ? WebSocketMessageType.Binary : WebSocketMessageType.Text;
+
+        var responseMessageType = NormalizeResponseMessageType(command.ResponseMessageType);
+
         var request = new WorkflowChatRunRequest(
             command.Input.Prompt,
             command.Input.Workflow,
@@ -24,7 +29,7 @@ internal static class ChatWebSocketRunCoordinator
                 type = "agui.event",
                 requestId = command.RequestId,
                 payload = frame,
-            }, token)),
+            }, token, responseMessageType)),
             onStartedAsync: (started, token) => new ValueTask(ChatWebSocketProtocol.SendAsync(socket, new
             {
                 type = "command.ack",
@@ -35,7 +40,7 @@ internal static class ChatWebSocketRunCoordinator
                     actorId = started.ActorId,
                     workflow = started.WorkflowName,
                 },
-            }, token)),
+            }, token, responseMessageType)),
             ct);
 
         if (executionResult.Error != WorkflowChatRunStartError.None)
@@ -47,7 +52,7 @@ internal static class ChatWebSocketRunCoordinator
                 requestId = command.RequestId,
                 code,
                 message,
-            }, ct);
+            }, ct, responseMessageType);
             return;
         }
 
@@ -64,6 +69,6 @@ internal static class ChatWebSocketRunCoordinator
                 projectionCompletionStatus = finalize?.ProjectionCompletionStatus.ToString(),
                 projectionCompleted = finalize?.ProjectionCompleted ?? false,
             },
-        }, ct);
+        }, ct, responseMessageType);
     }
 }

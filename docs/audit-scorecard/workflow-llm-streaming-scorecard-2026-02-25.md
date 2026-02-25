@@ -1,4 +1,4 @@
-# Workflow LLM 流式链路架构评分卡（2026-02-25，复核版）
+# Workflow LLM 流式链路架构评分卡（2026-02-25，终版复核）
 
 ## 1. 审计范围与方法
 
@@ -25,7 +25,7 @@
 ### 3.1 文本流主链路是统一的（非 API 直连 LLM）
 
 1. Host 入口统一：`/api/chat`（SSE）与 `/api/ws/chat`（WS）都进入同一 `ICommandExecutionService`。  
-证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:16`、`:21`、`:43`、`:182`。
+证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:16`、`:21`、`:43`、`:190`。
 2. 应用层先建立 projection lease，再挂 live sink，按 `commandId` 会话输出。  
 证据：`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunContextFactory.cs:53`、`:62`。
 3. `RoleGAgent` 使用 `ChatStreamAsync`，按三段式发布文本事件：`START -> CONTENT* -> END`。  
@@ -43,8 +43,8 @@
 证据：`src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunEventContracts.cs:13`-`:109`。
 2. AGUI adapter 已支持 ToolCall 事件映射（`ToolCallEvent -> TOOL_CALL_START`，`ToolResultEvent -> TOOL_CALL_END`）。  
 证据：`src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/EventEnvelopeToAGUIEventMapper.cs:281`-`:309`。
-3. WebSocket 传输层是文本协议：非 text 帧被跳过，发送固定 text 帧。  
-证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:24`-`:25`、`:44`。
+3. WebSocket 传输层已升级为类型化帧：支持 `text/binary` 接收与发送；命令解析后按入帧类型回写 `ack/event/error/result`。  
+证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:20`、`:72`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketCommandParser.cs:19`、`:104`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:18`、`:27`。
 
 ### 3.3 测试覆盖现状
 
@@ -52,40 +52,34 @@
 证据：`test/Aevatar.AI.Tests/ChatRuntimeStreamingBufferTests.cs:13`、`:30`。
 2. `WorkflowRunOrchestrationComponentTests` 覆盖 `STATE_SNAPSHOT` 在收敛后统一输出与快照载荷。  
 证据：`test/Aevatar.Workflow.Application.Tests/WorkflowRunOrchestrationComponentTests.cs:88`、`:160`、`:199`。
-3. `ChatWebSocketCoordinatorAndProtocolTests` 覆盖 `command.ack -> agui.event* -> query.result` 顺序与文本帧协议。  
-证据：`test/Aevatar.Workflow.Host.Api.Tests/ChatWebSocketCoordinatorAndProtocolTests.cs:15`、`:50`、`:82`。
-4. `WorkflowCapabilityEndpointsCoverageTests` 覆盖 WS 入口错误分支与运行异常映射。  
-证据：`test/Aevatar.Workflow.Host.Api.Tests/WorkflowCapabilityEndpointsCoverageTests.cs:113`、`:135`、`:159`。
+3. `ChatWebSocketCoordinatorAndProtocolTests` 覆盖 `command.ack -> agui.event* -> query.result` 顺序、`ReceiveAsync` text/binary 读取与双通道发送行为。  
+证据：`test/Aevatar.Workflow.Host.Api.Tests/ChatWebSocketCoordinatorAndProtocolTests.cs:15`、`:82`、`:96`、`:121`。
+4. `WorkflowCapabilityEndpointsCoverageTests` 覆盖 WS 入口错误分支、文本异常映射与二进制命令异常回写。  
+证据：`test/Aevatar.Workflow.Host.Api.Tests/WorkflowCapabilityEndpointsCoverageTests.cs:135`、`:159`、`:189`。
+5. `ChatWebSocketCommandParserTests` 覆盖二进制命令解析与非法 UTF-8 编码错误。  
+证据：`test/Aevatar.Workflow.Host.Api.Tests/ChatWebSocketCommandParserTests.cs:56`、`:72`。
 
 ## 4. 评分结果（100 分制）
 
-**总分：99 / 100（A+）**
+**总分：100 / 100（A+）**
 
 | 维度 | 权重 | 得分 | 说明 |
 |---|---:|---:|---|
 | 分层与依赖反转 | 20 | 20 | Host 仅协议适配，业务执行由 Application/Projection 链路承载。 |
 | CQRS 与统一投影链路 | 20 | 20 | SSE/WS 与 AGUI 共享同一投影输入链路，未出现双轨实现。 |
 | Projection 编排与状态约束 | 20 | 20 | lease/session 分离与会话流键明确，`STATE_SNAPSHOT` 已有统一产出。 |
-| 读写分离与会话语义 | 15 | 14 | commandId 会话语义清晰，`DeltaToolCall` 已贯通；多模态流仍未覆盖。 |
+| 读写分离与会话语义 | 15 | 15 | commandId 会话语义清晰，`DeltaToolCall` 与 WS text/binary 类型化帧均已贯通。 |
 | 命名语义与冗余清理 | 10 | 10 | 事件名、模型名、链路命名一致，语义明确。 |
 | 可验证性（门禁/构建/测试） | 15 | 15 | 架构门禁、分片门禁、`build` 与全量 `test` 均已复跑通过。 |
 
 ## 5. 主要扣分项（按影响度）
 
-### P1
-
-1. 暂无 P1 阻断项。
-
-### P2
-
-1. WebSocket 协议层仅支持文本消息帧，非文本流（如二进制多模态帧）当前不支持。  
-证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:24`-`:25`、`:44`。
+1. 本轮审计范围内无扣分项。
 
 ## 6. 改进建议（优先级）
 
-1. P1：若目标包含多模态流，升级 WS 协议层为“类型化帧”模型（文本/二进制/元信息分轨），避免文本协议成为瓶颈。
-2. P2：补一条“非文本帧输入”到“统一输出帧协议”的 E2E 回归测试，作为多模态演进护栏。
-3. P3：`query.result` 可继续保留为 WS 控制消息；若后续统一控制面，再引入显式控制帧模型。
+1. P2：若进入多模态阶段，新增 `MEDIA_*` 业务事件类型并映射到统一 `WorkflowRunEvent`，避免把媒体语义塞进文本 delta。
+2. P3：可选将 `query.result` 与 `command.ack` 抽象为统一控制帧模型，减少协议分支判断。
 
 ## 7. 非扣分观察项（基线口径）
 

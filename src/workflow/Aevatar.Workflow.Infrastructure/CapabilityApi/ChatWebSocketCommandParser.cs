@@ -1,3 +1,4 @@
+using System.Net.WebSockets;
 using System.Text.Json;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
@@ -5,7 +6,8 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 internal readonly record struct ChatWebSocketCommandEnvelope(
     string RequestId,
-    ChatInput Input);
+    ChatInput Input,
+    WebSocketMessageType ResponseMessageType);
 
 internal readonly record struct ChatWebSocketCommandParseError(
     string Code,
@@ -15,7 +17,39 @@ internal readonly record struct ChatWebSocketCommandParseError(
 internal static class ChatWebSocketCommandParser
 {
     public static bool TryParse(
+        ChatWebSocketInboundFrame? incomingFrame,
+        out ChatWebSocketCommandEnvelope commandEnvelope,
+        out ChatWebSocketCommandParseError parseError)
+    {
+        commandEnvelope = default;
+        parseError = default;
+
+        if (incomingFrame == null)
+        {
+            parseError = new ChatWebSocketCommandParseError(
+                "EMPTY_COMMAND",
+                "Command payload is required.");
+            return false;
+        }
+
+        if (!ChatWebSocketProtocol.TryDecodeUtf8(incomingFrame.Value.Payload, out var rawCommand))
+        {
+            parseError = new ChatWebSocketCommandParseError(
+                "INVALID_COMMAND_ENCODING",
+                "Command payload must be UTF-8 encoded JSON.");
+            return false;
+        }
+
+        return TryParse(
+            rawCommand,
+            ResolveResponseMessageType(incomingFrame.Value.MessageType),
+            out commandEnvelope,
+            out parseError);
+    }
+
+    private static bool TryParse(
         string? rawCommand,
+        WebSocketMessageType responseMessageType,
         out ChatWebSocketCommandEnvelope commandEnvelope,
         out ChatWebSocketCommandParseError parseError)
     {
@@ -61,7 +95,14 @@ internal static class ChatWebSocketCommandParser
             return false;
         }
 
-        commandEnvelope = new ChatWebSocketCommandEnvelope(requestId, command.Payload);
+        commandEnvelope = new ChatWebSocketCommandEnvelope(requestId, command.Payload, responseMessageType);
         return true;
+    }
+
+    private static WebSocketMessageType ResolveResponseMessageType(WebSocketMessageType incomingMessageType)
+    {
+        return incomingMessageType == WebSocketMessageType.Binary
+            ? WebSocketMessageType.Binary
+            : WebSocketMessageType.Text;
     }
 }

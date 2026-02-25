@@ -1,3 +1,4 @@
+using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
@@ -163,11 +164,15 @@ public static class WorkflowCapabilityEndpoints
 
         using var socket = await http.WebSockets.AcceptWebSocketAsync();
         var logger = loggerFactory?.CreateLogger("Aevatar.Workflow.Host.Api.Chat.WebSocket");
+        var responseMessageType = WebSocketMessageType.Text;
 
         try
         {
-            var commandText = await ChatWebSocketProtocol.ReceiveTextAsync(socket, ct);
-            if (!ChatWebSocketCommandParser.TryParse(commandText, out var command, out var parseError))
+            var incomingFrame = await ChatWebSocketProtocol.ReceiveAsync(socket, ct);
+            if (incomingFrame != null && incomingFrame.Value.MessageType == WebSocketMessageType.Binary)
+                responseMessageType = WebSocketMessageType.Binary;
+
+            if (!ChatWebSocketCommandParser.TryParse(incomingFrame, out var command, out var parseError))
             {
                 await ChatWebSocketProtocol.SendAsync(socket, new
                 {
@@ -175,10 +180,13 @@ public static class WorkflowCapabilityEndpoints
                     requestId = parseError.RequestId,
                     code = parseError.Code,
                     message = parseError.Message,
-                }, ct);
+                }, ct, responseMessageType);
                 return;
             }
 
+            responseMessageType = command.ResponseMessageType == WebSocketMessageType.Binary
+                ? WebSocketMessageType.Binary
+                : WebSocketMessageType.Text;
             await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, ct);
         }
         catch (OperationCanceledException)
@@ -194,7 +202,7 @@ public static class WorkflowCapabilityEndpoints
                     type = "command.error",
                     code = "RUN_EXECUTION_FAILED",
                     message = "Failed to execute run.",
-                }, ct);
+                }, ct, responseMessageType);
             }
         }
         finally

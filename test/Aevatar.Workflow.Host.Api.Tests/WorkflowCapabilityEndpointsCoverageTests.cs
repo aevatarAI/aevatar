@@ -185,6 +185,37 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
     }
 
+    [Fact]
+    public async Task HandleChatWebSocket_WhenBinaryExecutionThrows_ShouldSendBinaryRunExecutionFailed()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Binary,
+            Encoding.UTF8.GetBytes("""{"type":"chat.command","requestId":"req-b","payload":{"prompt":"hello"}}"""),
+            true);
+
+        var http = new DefaultHttpContext();
+        http.Features.Set<IHttpWebSocketFeature>(new FakeWebSocketFeature(socket));
+
+        var service = new FakeCommandExecutionService
+        {
+            Handler = (_, _, _, _) => throw new InvalidOperationException("boom"),
+        };
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+
+        await WorkflowCapabilityEndpoints.HandleChatWebSocket(
+            http,
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        socket.SentTexts.Should().BeEmpty();
+        socket.SentBinaries.Should().ContainSingle();
+        using var doc = JsonDocument.Parse(socket.SentBinaries[0]);
+        doc.RootElement.GetProperty("type").GetString().Should().Be("command.error");
+        doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
+    }
+
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
     {
         var http = new DefaultHttpContext
@@ -251,6 +282,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         }
 
         public List<string> SentTexts { get; } = [];
+        public List<byte[]> SentBinaries { get; } = [];
 
         public override WebSocketCloseStatus? CloseStatus => null;
         public override string? CloseStatusDescription => null;
@@ -298,6 +330,12 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         {
             if (messageType == WebSocketMessageType.Text && buffer.Array != null)
                 SentTexts.Add(Encoding.UTF8.GetString(buffer.Array, buffer.Offset, buffer.Count));
+            else if (messageType == WebSocketMessageType.Binary && buffer.Array != null)
+            {
+                var bytes = new byte[buffer.Count];
+                Array.Copy(buffer.Array, buffer.Offset, bytes, 0, buffer.Count);
+                SentBinaries.Add(bytes);
+            }
             return Task.CompletedTask;
         }
     }

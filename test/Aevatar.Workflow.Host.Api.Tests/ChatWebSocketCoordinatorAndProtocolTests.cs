@@ -40,7 +40,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 Prompt = "hello",
                 Workflow = "direct",
                 AgentId = "actor-1",
-            }),
+            }, WebSocketMessageType.Text),
             service,
             CancellationToken.None);
 
@@ -68,7 +68,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
         await ChatWebSocketRunCoordinator.ExecuteAsync(
             socket,
-            new ChatWebSocketCommandEnvelope("req-2", new ChatInput { Prompt = "hello" }),
+            new ChatWebSocketCommandEnvelope("req-2", new ChatInput { Prompt = "hello" }, WebSocketMessageType.Text),
             service,
             CancellationToken.None);
 
@@ -79,34 +79,50 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     }
 
     [Fact]
-    public async Task ReceiveTextAsync_ShouldSkipNonTextAndAssembleChunks()
+    public async Task ReceiveAsync_ShouldAssembleTextChunks()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
-        socket.EnqueueReceive(WebSocketMessageType.Binary, Encoding.UTF8.GetBytes("ignore"), true);
         socket.EnqueueReceive(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("hel"), false);
         socket.EnqueueReceive(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("lo"), true);
 
-        var text = await ChatWebSocketProtocol.ReceiveTextAsync(socket, CancellationToken.None);
+        var frame = await ChatWebSocketProtocol.ReceiveAsync(socket, CancellationToken.None);
 
-        text.Should().Be("hello");
+        frame.Should().NotBeNull();
+        frame!.Value.MessageType.Should().Be(WebSocketMessageType.Text);
+        Encoding.UTF8.GetString(frame.Value.Payload.Span).Should().Be("hello");
     }
 
     [Fact]
-    public async Task ReceiveTextAsync_WhenCloseFrame_ShouldReturnNull()
+    public async Task ReceiveAsync_ShouldReadBinaryMessage()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(WebSocketMessageType.Binary, [0x01, 0x02], false);
+        socket.EnqueueReceive(WebSocketMessageType.Binary, [0x03], true);
+
+        var frame = await ChatWebSocketProtocol.ReceiveAsync(socket, CancellationToken.None);
+
+        frame.Should().NotBeNull();
+        frame!.Value.MessageType.Should().Be(WebSocketMessageType.Binary);
+        frame.Value.Payload.ToArray().Should().Equal([0x01, 0x02, 0x03]);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenCloseFrame_ShouldReturnNull()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
         socket.EnqueueReceive(WebSocketMessageType.Close, [], true);
 
-        var text = await ChatWebSocketProtocol.ReceiveTextAsync(socket, CancellationToken.None);
+        var frame = await ChatWebSocketProtocol.ReceiveAsync(socket, CancellationToken.None);
 
-        text.Should().BeNull();
+        frame.Should().BeNull();
     }
 
     [Fact]
-    public async Task SendAsync_ShouldRespectSocketStateAndUseCamelCase()
+    public async Task SendAsync_ShouldRespectSocketStateAndSupportTextAndBinary()
     {
         var openSocket = new FakeWebSocket(WebSocketState.Open);
         await ChatWebSocketProtocol.SendAsync(openSocket, new { RequestId = "r1", ValueNum = 2 }, CancellationToken.None);
+        await ChatWebSocketProtocol.SendAsync(openSocket, new { RequestId = "r2", ValueNum = 3 }, CancellationToken.None, WebSocketMessageType.Binary);
 
         openSocket.SentTexts.Should().ContainSingle();
         using (var doc = JsonDocument.Parse(openSocket.SentTexts[0]))
@@ -114,10 +130,17 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             doc.RootElement.GetProperty("requestId").GetString().Should().Be("r1");
             doc.RootElement.GetProperty("valueNum").GetInt32().Should().Be(2);
         }
+        openSocket.SentBinaries.Should().ContainSingle();
+        using (var doc = JsonDocument.Parse(openSocket.SentBinaries[0]))
+        {
+            doc.RootElement.GetProperty("requestId").GetString().Should().Be("r2");
+            doc.RootElement.GetProperty("valueNum").GetInt32().Should().Be(3);
+        }
 
         var closedSocket = new FakeWebSocket(WebSocketState.Closed);
         await ChatWebSocketProtocol.SendAsync(closedSocket, new { RequestId = "x" }, CancellationToken.None);
         closedSocket.SentTexts.Should().BeEmpty();
+        closedSocket.SentBinaries.Should().BeEmpty();
     }
 
     [Fact]
@@ -173,6 +196,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         }
 
         public List<string> SentTexts { get; } = [];
+        public List<byte[]> SentBinaries { get; } = [];
         public int CloseCalls { get; private set; }
 
         public override WebSocketCloseStatus? CloseStatus => _closeStatus;
@@ -236,6 +260,12 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             {
                 var text = Encoding.UTF8.GetString(buffer.Array!, buffer.Offset, buffer.Count);
                 SentTexts.Add(text);
+            }
+            else if (messageType == WebSocketMessageType.Binary)
+            {
+                var bytes = new byte[buffer.Count];
+                Array.Copy(buffer.Array!, buffer.Offset, bytes, 0, buffer.Count);
+                SentBinaries.Add(bytes);
             }
 
             return Task.CompletedTask;

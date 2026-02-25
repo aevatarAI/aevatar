@@ -146,7 +146,7 @@ sequenceDiagram
 5. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionAGUIEventProjector.cs:48`
 6. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatSseResponseWriter.cs:45`
 
-### 5.2 WebSocket 路径（`GET /api/ws/chat`）
+### 5.2 WebSocket 路径（`GET /api/ws/chat`，text/binary 类型化帧）
 
 <div class="seq-wide">
 
@@ -161,13 +161,13 @@ sequenceDiagram
     participant WS as "WS Protocol"
 
     CL->>API: "GET /api/ws/chat"
-    CL->>WS: "chat.command"
-    API->>PRS: "TryParse(commandText)"
+    CL->>WS: "chat.command (text or binary)"
+    API->>PRS: "TryParse(frame.payload)"
     API->>RUN: "ExecuteAsync(...)"
     RUN->>CMD: "ExecuteAsync(...)"
-    CMD-->>WS: "command.ack"
-    CMD-->>WS: "agui.event *"
-    RUN-->>WS: "query.result"
+    CMD-->>WS: "command.ack (same frame type)"
+    CMD-->>WS: "agui.event * (same frame type)"
+    RUN-->>WS: "query.result (same frame type)"
     API-->>WS: "CloseAsync"
 ```
 
@@ -176,9 +176,9 @@ sequenceDiagram
 链路锚点：
 
 1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:152`
-2. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:22`
-3. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:30`
-4. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:52`
+2. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:16`
+3. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketCommandParser.cs:20`
+4. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:22`
 
 ## 6. 统一投影分支与一对多分发
 
@@ -284,14 +284,15 @@ flowchart LR
 | 工具调用结果流 | 已支持 | 通过 AGUI ToolCall 映射进入统一输出 |
 | 状态快照流 | 已支持 | `WorkflowRunExecutionEngine` 在 run 收敛后统一补发 `STATE_SNAPSHOT` 帧 |
 | 流式 `DeltaToolCall` | 已支持 | Provider -> `ChatRuntime` -> `RoleGAgent` 贯通，转为 `ToolCallEvent` |
-| 二进制/多模态流 | 不支持 | WS 协议层只发送 text 帧 |
+| WS 二进制命令/事件帧 | 已支持 | `ChatWebSocketProtocol` 支持 text/binary 接收，响应按命令入帧类型回写 |
+| 多模态业务事件（音频/图像/video） | 待扩展 | 统一事件模型尚无 `MEDIA_*` 专用语义事件类型 |
 
 锚点：
 
 1. `src/Aevatar.AI.Abstractions/LLMProviders/LLMResponse.cs:34`
 2. `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:89`
-3. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:24`
-4. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:44`
+3. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:16`
+4. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:27`
 
 ## 9. 失败处理与收敛语义
 
@@ -307,9 +308,9 @@ flowchart LR
 3. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionSinkFailurePolicy.cs:39`
 4. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunResourceFinalizer.cs:25`
 
-## 10. 演进设计：扩展到非文本流
+## 10. 演进设计：扩展到多模态业务流
 
-目标：在不破坏统一投影链路的前提下支持 `tool-call delta` 与多模态帧。
+目标：在不破坏统一投影链路的前提下支持多模态业务事件（在 WS 类型化传输之上）。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -329,14 +330,15 @@ flowchart LR
 
 建议改造顺序：
 
-1. 将 WS 协议从“纯 text payload”升级为“类型化消息帧”（文本/二进制/控制消息分离）。
-2. 为多模态 chunk 增加标准事件类型（如 `MEDIA_CHUNK` / `AUDIO_DELTA`），并映射到统一 `WorkflowRunEvent`。
+1. 为多模态 chunk 增加标准事件类型（如 `MEDIA_CHUNK` / `AUDIO_DELTA`），并映射到统一 `WorkflowRunEvent`。
+2. 按媒体类型定义输出帧契约（metadata + binary payload 引用），避免在 text delta 中混载媒体语义。
 
 本次重构已完成：
 
 1. `ChatRuntime.ChatStreamAsync` 已接入 `DeltaToolCall` 聚合与透传。
 2. `RoleGAgent` 已把流式工具调用转为 `ToolCallEvent` 发布到上行事件链路。
 3. `WorkflowRunExecutionEngine` 已在 run 收敛后统一发出 `STATE_SNAPSHOT` 输出帧。
+4. `ChatWebSocketProtocol`/`ChatWebSocketCommandParser` 已支持 text/binary 类型化帧输入输出，且回包帧类型与命令入帧一致。
 
 ## 11. 验证建议
 
@@ -349,6 +351,6 @@ flowchart LR
 推荐测试关注点：
 
 1. SSE 文本增量顺序、终止帧与错误帧。
-2. WS `command.ack -> agui.event* -> query.result` 顺序稳定性。
+2. WS `command.ack -> agui.event* -> query.result` 顺序稳定性（text/binary 两种帧类型）。
 3. `commandId` 会话隔离（同 actor 多 command 并发）。
 4. sink 背压异常下的 detach 与 run error 遥测。
