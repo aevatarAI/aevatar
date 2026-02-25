@@ -14,6 +14,7 @@ public class ChatWebSocketCommandParserTests
 
         ok.Should().BeFalse();
         error.Code.Should().Be("EMPTY_COMMAND");
+        error.ResponseMessageType.Should().Be(WebSocketMessageType.Text);
     }
 
     [Fact]
@@ -25,6 +26,20 @@ public class ChatWebSocketCommandParserTests
 
         ok.Should().BeFalse();
         error.Code.Should().Be("INVALID_COMMAND");
+    }
+
+    [Fact]
+    public void TryParse_BinaryInvalidShape_ShouldReturnErrorAndKeepBinaryResponseType()
+    {
+        var frame = new ChatWebSocketInboundFrame(
+            WebSocketMessageType.Binary,
+            Encoding.UTF8.GetBytes("""{"type":"unknown","payload":{"prompt":"hi"}}"""));
+
+        var ok = ChatWebSocketCommandParser.TryParse(frame, out _, out var error);
+
+        ok.Should().BeFalse();
+        error.Code.Should().Be("INVALID_COMMAND");
+        error.ResponseMessageType.Should().Be(WebSocketMessageType.Binary);
     }
 
     [Fact]
@@ -79,6 +94,7 @@ public class ChatWebSocketCommandParserTests
 
         ok.Should().BeFalse();
         error.Code.Should().Be("INVALID_COMMAND_ENCODING");
+        error.ResponseMessageType.Should().Be(WebSocketMessageType.Binary);
     }
 
     private static ChatWebSocketInboundFrame TextFrame(string json) =>

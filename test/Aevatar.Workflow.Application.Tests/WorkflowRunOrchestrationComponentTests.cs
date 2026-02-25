@@ -90,8 +90,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var requestExecutor = new CapturingRequestExecutor();
         var outputStreamer = new SequenceOutputStreamer(
         [
-            new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
-            new WorkflowOutputFrame { Type = "STEP_STARTED", StepName = "s1" },
+            new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" },
+            new WorkflowOutputFrame { Type = WorkflowRunEventTypes.StepStarted, StepName = "s1" },
         ]);
         var finalizer = new SpyResourceFinalizer();
         var snapshotEmitter = new WorkflowRunStateSnapshotEmitter(
@@ -122,7 +122,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         result.FinalizeResult!.ProjectionCompleted.Should().BeFalse();
         result.FinalizeResult.ProjectionCompletionStatus.Should().Be(WorkflowProjectionCompletionStatus.Failed);
         emitted.Should().HaveCount(3);
-        emitted[^1].Type.Should().Be("STATE_SNAPSHOT");
+        emitted[^1].Type.Should().Be(WorkflowRunEventTypes.StateSnapshot);
         emitted[^1].Snapshot.Should().NotBeNull();
         requestExecutor.Calls.Should().ContainSingle();
         finalizer.Calls.Should().ContainSingle();
@@ -173,8 +173,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
         };
         var outputStreamer = new SequenceOutputStreamer(
         [
-            new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-7" },
-            new WorkflowOutputFrame { Type = "RUN_FINISHED", ThreadId = "actor-7" },
+            new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-7" },
+            new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunFinished, ThreadId = "actor-7" },
         ]);
         var snapshotEmitter = new WorkflowRunStateSnapshotEmitter(queryPort, outputStreamer);
         var engine = new WorkflowRunExecutionEngine(
@@ -196,11 +196,15 @@ public sealed class WorkflowRunOrchestrationComponentTests
             },
             ct: CancellationToken.None);
 
-        emitted.Should().Contain(f => f.Type == "STATE_SNAPSHOT");
-        var snapshotFrame = emitted.First(f => f.Type == "STATE_SNAPSHOT");
-        var snapshot = snapshotFrame.Snapshot.Should().BeOfType<WorkflowActorSnapshot>().Subject;
-        snapshot.ActorId.Should().Be("actor-7");
-        snapshot.LastCommandId.Should().Be("cmd-7");
+        emitted.Should().Contain(f => f.Type == WorkflowRunEventTypes.StateSnapshot);
+        var snapshotFrame = emitted.First(f => f.Type == WorkflowRunEventTypes.StateSnapshot);
+        var payload = snapshotFrame.Snapshot.Should().BeOfType<WorkflowStateSnapshotPayload>().Subject;
+        payload.ActorId.Should().Be("actor-7");
+        payload.CommandId.Should().Be("cmd-7");
+        payload.ProjectionCompletionStatus.Should().Be(WorkflowProjectionCompletionStatus.Completed.ToString());
+        payload.ProjectionCompleted.Should().BeTrue();
+        payload.SnapshotAvailable.Should().BeTrue();
+        payload.Snapshot.Should().BeOfType<WorkflowActorSnapshot>();
     }
 
     [Fact]
@@ -242,9 +246,9 @@ public sealed class WorkflowRunOrchestrationComponentTests
     }
 
     [Theory]
-    [InlineData("RUN_FINISHED", true, WorkflowProjectionCompletionStatus.Completed)]
-    [InlineData("RUN_ERROR", true, WorkflowProjectionCompletionStatus.Failed)]
-    [InlineData("STEP_STARTED", false, WorkflowProjectionCompletionStatus.Unknown)]
+    [InlineData(WorkflowRunEventTypes.RunFinished, true, WorkflowProjectionCompletionStatus.Completed)]
+    [InlineData(WorkflowRunEventTypes.RunError, true, WorkflowProjectionCompletionStatus.Failed)]
+    [InlineData(WorkflowRunEventTypes.StepStarted, false, WorkflowProjectionCompletionStatus.Unknown)]
     public void CompletionPolicy_ShouldResolveExpectedTerminalTypes(
         string frameType,
         bool expectedResolved,

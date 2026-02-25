@@ -56,8 +56,8 @@ public class WorkflowChatRunApplicationServiceTests
             new StubWorkflowRunRequestExecutor(),
             new StubWorkflowRunOutputStreamer(
             [
-                new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
-                new WorkflowOutputFrame { Type = "RUN_FINISHED", ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunFinished, ThreadId = "actor-1" },
             ]),
             new WorkflowRunCompletionPolicy(),
             new WorkflowRunResourceFinalizer(projectionPort),
@@ -88,8 +88,8 @@ public class WorkflowChatRunApplicationServiceTests
             new StubWorkflowRunRequestExecutor(),
             new StubWorkflowRunOutputStreamer(
             [
-                new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
-                new WorkflowOutputFrame { Type = "RUN_ERROR", Message = "boom" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunError, Message = "boom" },
             ]),
             new WorkflowRunCompletionPolicy(),
             new WorkflowRunResourceFinalizer(projectionPort),
@@ -120,8 +120,8 @@ public class WorkflowChatRunApplicationServiceTests
             new StubWorkflowRunRequestExecutor(),
             new StubWorkflowRunOutputStreamer(
             [
-                new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
-                new WorkflowOutputFrame { Type = "RUN_FINISHED", ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunFinished, ThreadId = "actor-1" },
             ]),
             new WorkflowRunCompletionPolicy(),
             new WorkflowRunResourceFinalizer(projectionPort),

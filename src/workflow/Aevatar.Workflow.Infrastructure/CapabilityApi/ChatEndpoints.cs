@@ -72,9 +72,11 @@ public static class WorkflowCapabilityEndpoints
 
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
         var startSignal = new TaskCompletionSource<WorkflowChatRunStarted>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>> executionTask;
 
-        var executionTask = Task.Run(
-            () => chatRunService.ExecuteAsync(
+        try
+        {
+            executionTask = chatRunService.ExecuteAsync(
                 new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId),
                 static (_, _) => ValueTask.CompletedTask,
                 onStartedAsync: (started, _) =>
@@ -82,8 +84,15 @@ public static class WorkflowCapabilityEndpoints
                     startSignal.TrySetResult(started);
                     return ValueTask.CompletedTask;
                 },
-                CancellationToken.None),
-            CancellationToken.None);
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Workflow command execution failed before start signal");
+            return Results.Json(
+                new { code = "EXECUTION_FAILED", message = "Command execution failed." },
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
 
         var completed = await Task.WhenAny(startSignal.Task, executionTask);
 
@@ -126,11 +135,12 @@ public static class WorkflowCapabilityEndpoints
 
         if (result.Error != WorkflowChatRunStartError.None)
         {
+            var mappedError = ChatRunStartErrorMapper.ToCommandError(result.Error);
             return Results.Json(
                 new
                 {
-                    code = ChatRunStartErrorMapper.ToCommandError(result.Error).Code,
-                    message = ChatRunStartErrorMapper.ToCommandError(result.Error).Message,
+                    code = mappedError.Code,
+                    message = mappedError.Message,
                 },
                 statusCode: ChatRunStartErrorMapper.ToHttpStatusCode(result.Error));
         }
@@ -169,24 +179,21 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var incomingFrame = await ChatWebSocketProtocol.ReceiveAsync(socket, ct);
-            if (incomingFrame != null && incomingFrame.Value.MessageType == WebSocketMessageType.Binary)
-                responseMessageType = WebSocketMessageType.Binary;
+            responseMessageType = incomingFrame.HasValue
+                ? ChatWebSocketProtocol.NormalizeMessageType(incomingFrame.Value.MessageType)
+                : WebSocketMessageType.Text;
 
             if (!ChatWebSocketCommandParser.TryParse(incomingFrame, out var command, out var parseError))
             {
-                await ChatWebSocketProtocol.SendAsync(socket, new
-                {
-                    type = "command.error",
-                    requestId = parseError.RequestId,
-                    code = parseError.Code,
-                    message = parseError.Message,
-                }, ct, responseMessageType);
+                await ChatWebSocketProtocol.SendAsync(
+                    socket,
+                    ChatWebSocketEnvelopeFactory.CreateCommandError(parseError.RequestId, parseError.Code, parseError.Message),
+                    ct,
+                    parseError.ResponseMessageType);
                 return;
             }
 
-            responseMessageType = command.ResponseMessageType == WebSocketMessageType.Binary
-                ? WebSocketMessageType.Binary
-                : WebSocketMessageType.Text;
+            responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
             await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, ct);
         }
         catch (OperationCanceledException)
@@ -197,12 +204,14 @@ public static class WorkflowCapabilityEndpoints
             logger?.LogWarning(ex, "Failed to execute websocket chat command");
             if (socket.State == System.Net.WebSockets.WebSocketState.Open)
             {
-                await ChatWebSocketProtocol.SendAsync(socket, new
-                {
-                    type = "command.error",
-                    code = "RUN_EXECUTION_FAILED",
-                    message = "Failed to execute run.",
-                }, ct, responseMessageType);
+                await ChatWebSocketProtocol.SendAsync(
+                    socket,
+                    ChatWebSocketEnvelopeFactory.CreateCommandError(
+                        requestId: null,
+                        code: "RUN_EXECUTION_FAILED",
+                        message: "Failed to execute run."),
+                    ct,
+                    responseMessageType);
             }
         }
         finally

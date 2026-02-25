@@ -17,6 +17,11 @@ internal static class ChatWebSocketProtocol
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
+    public static WebSocketMessageType NormalizeMessageType(WebSocketMessageType messageType) =>
+        messageType == WebSocketMessageType.Binary
+            ? WebSocketMessageType.Binary
+            : WebSocketMessageType.Text;
+
     public static async Task<ChatWebSocketInboundFrame?> ReceiveAsync(WebSocket socket, CancellationToken ct)
     {
         var buffer = new byte[8192];

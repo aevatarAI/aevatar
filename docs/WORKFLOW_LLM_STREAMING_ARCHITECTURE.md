@@ -167,7 +167,7 @@ sequenceDiagram
     RUN->>CMD: "ExecuteAsync(...)"
     CMD-->>WS: "command.ack (same frame type)"
     CMD-->>WS: "agui.event * (same frame type)"
-    RUN-->>WS: "query.result (same frame type)"
+    RUN-->>WS: "agui.event* (same frame type)"
     API-->>WS: "CloseAsync"
 ```
 
@@ -273,8 +273,10 @@ flowchart LR
 
 锚点：
 
-1. `src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunEventContracts.cs:13`
-2. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowOutputFrameMapper.cs:11`
+1. `src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunEventTypes.cs:3`
+2. `src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunEventContracts.cs:13`
+3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowOutputFrameMapper.cs:11`
+4. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowRunEventSessionCodec.cs:17`
 
 ### 8.3 支持矩阵（当前实现）
 
@@ -282,9 +284,9 @@ flowchart LR
 |---|---|---|
 | 文本增量流（delta text） | 已支持 | 主链路能力 |
 | 工具调用结果流 | 已支持 | 通过 AGUI ToolCall 映射进入统一输出 |
-| 状态快照流 | 已支持 | `WorkflowRunExecutionEngine` 在 run 收敛后统一补发 `STATE_SNAPSHOT` 帧 |
+| 状态快照流 | 已支持 | `STATE_SNAPSHOT` 统一携带 `actorId/commandId/projectionCompletion*` 与可选 projection snapshot |
 | 流式 `DeltaToolCall` | 已支持 | Provider -> `ChatRuntime` -> `RoleGAgent` 贯通，转为 `ToolCallEvent` |
-| WS 二进制命令/事件帧 | 已支持 | `ChatWebSocketProtocol` 支持 text/binary 接收，响应按命令入帧类型回写 |
+| WS 二进制命令/事件帧 | 已支持 | `ChatWebSocketProtocol` + `ChatWebSocketMessageContracts` 统一 text/binary 与 `ack/event/error` 强类型出站 |
 | 多模态业务事件（音频/图像/video） | 待扩展 | 统一事件模型尚无 `MEDIA_*` 专用语义事件类型 |
 
 锚点：
@@ -292,7 +294,8 @@ flowchart LR
 1. `src/Aevatar.AI.Abstractions/LLMProviders/LLMResponse.cs:34`
 2. `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:89`
 3. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:16`
-4. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:27`
+4. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketMessageContracts.cs:5`
+5. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:20`
 
 ## 9. 失败处理与收敛语义
 
@@ -339,6 +342,8 @@ flowchart LR
 2. `RoleGAgent` 已把流式工具调用转为 `ToolCallEvent` 发布到上行事件链路。
 3. `WorkflowRunExecutionEngine` 已在 run 收敛后统一发出 `STATE_SNAPSHOT` 输出帧。
 4. `ChatWebSocketProtocol`/`ChatWebSocketCommandParser` 已支持 text/binary 类型化帧输入输出，且回包帧类型与命令入帧一致。
+5. `ChatWebSocketMessageContracts` 已统一 `command.ack / agui.event / command.error` 出站契约，移除匿名对象拼装分支。
+6. `WorkflowRunEventTypes` 已成为 `Application/Projection` 共享的唯一事件类型常量源，消除跨层硬编码字符串漂移。
 
 ## 11. 验证建议
 
@@ -351,6 +356,6 @@ flowchart LR
 推荐测试关注点：
 
 1. SSE 文本增量顺序、终止帧与错误帧。
-2. WS `command.ack -> agui.event* -> query.result` 顺序稳定性（text/binary 两种帧类型）。
+2. WS `command.ack -> agui.event*` 顺序稳定性（text/binary 两种帧类型）。
 3. `commandId` 会话隔离（同 actor 多 command 并发）。
 4. sink 背压异常下的 detach 与 run error 遥测。

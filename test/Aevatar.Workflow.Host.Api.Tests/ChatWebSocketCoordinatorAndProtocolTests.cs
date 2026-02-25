@@ -12,7 +12,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class ChatWebSocketCoordinatorAndProtocolTests
 {
     [Fact]
-    public async Task ExecuteAsync_WhenSuccess_ShouldSendAckEventsAndQueryResult()
+    public async Task ExecuteAsync_WhenSuccess_ShouldSendAckAndRunEventsOnly()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
         var service = new FakeCommandExecutionService
@@ -23,8 +23,8 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 if (onStartedAsync != null)
                     await onStartedAsync(started, ct);
 
-                await emitAsync(new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" }, ct);
-                await emitAsync(new WorkflowOutputFrame { Type = "RUN_FINISHED", ThreadId = "actor-1" }, ct);
+                await emitAsync(new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" }, ct);
+                await emitAsync(new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunFinished, ThreadId = "actor-1" }, ct);
 
                 return new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
                     WorkflowChatRunStartError.None,
@@ -47,7 +47,10 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         var types = socket.SentTexts
             .Select(static text => JsonDocument.Parse(text).RootElement.GetProperty("type").GetString())
             .ToList();
-        types.Should().Equal("command.ack", "agui.event", "agui.event", "query.result");
+        types.Should().Equal(
+            ChatWebSocketMessageTypes.CommandAck,
+            ChatWebSocketMessageTypes.AguiEvent,
+            ChatWebSocketMessageTypes.AguiEvent);
 
         service.LastCommand.Should().NotBeNull();
         service.LastCommand!.Prompt.Should().Be("hello");
@@ -74,8 +77,9 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
         socket.SentTexts.Should().ContainSingle();
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
-        doc.RootElement.GetProperty("type").GetString().Should().Be("command.error");
+        doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("WORKFLOW_NOT_FOUND");
+        doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
     }
 
     [Fact]

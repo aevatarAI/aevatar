@@ -12,7 +12,8 @@ internal readonly record struct ChatWebSocketCommandEnvelope(
 internal readonly record struct ChatWebSocketCommandParseError(
     string Code,
     string Message,
-    string? RequestId = null);
+    string? RequestId = null,
+    WebSocketMessageType ResponseMessageType = WebSocketMessageType.Text);
 
 internal static class ChatWebSocketCommandParser
 {
@@ -24,11 +25,16 @@ internal static class ChatWebSocketCommandParser
         commandEnvelope = default;
         parseError = default;
 
+        var responseMessageType = incomingFrame.HasValue
+            ? ChatWebSocketProtocol.NormalizeMessageType(incomingFrame.Value.MessageType)
+            : WebSocketMessageType.Text;
+
         if (incomingFrame == null)
         {
             parseError = new ChatWebSocketCommandParseError(
                 "EMPTY_COMMAND",
-                "Command payload is required.");
+                "Command payload is required.",
+                ResponseMessageType: responseMessageType);
             return false;
         }
 
@@ -36,13 +42,14 @@ internal static class ChatWebSocketCommandParser
         {
             parseError = new ChatWebSocketCommandParseError(
                 "INVALID_COMMAND_ENCODING",
-                "Command payload must be UTF-8 encoded JSON.");
+                "Command payload must be UTF-8 encoded JSON.",
+                ResponseMessageType: responseMessageType);
             return false;
         }
 
         return TryParse(
             rawCommand,
-            ResolveResponseMessageType(incomingFrame.Value.MessageType),
+            responseMessageType,
             out commandEnvelope,
             out parseError);
     }
@@ -60,7 +67,8 @@ internal static class ChatWebSocketCommandParser
         {
             parseError = new ChatWebSocketCommandParseError(
                 "EMPTY_COMMAND",
-                "Command payload is required.");
+                "Command payload is required.",
+                ResponseMessageType: responseMessageType);
             return false;
         }
 
@@ -74,11 +82,12 @@ internal static class ChatWebSocketCommandParser
             command = null;
         }
 
-        if (command?.Payload == null || !string.Equals(command.Type, "chat.command", StringComparison.Ordinal))
+        if (command?.Payload == null || !string.Equals(command.Type, WorkflowCapabilityMessageTypes.ChatCommand, StringComparison.Ordinal))
         {
             parseError = new ChatWebSocketCommandParseError(
                 "INVALID_COMMAND",
-                "Expected { type: 'chat.command', payload: { prompt, workflow?, agentId? } }.");
+                "Expected { type: 'chat.command', payload: { prompt, workflow?, agentId? } }.",
+                ResponseMessageType: responseMessageType);
             return false;
         }
 
@@ -91,18 +100,12 @@ internal static class ChatWebSocketCommandParser
             parseError = new ChatWebSocketCommandParseError(
                 "INVALID_PROMPT",
                 "Prompt is required.",
-                requestId);
+                requestId,
+                responseMessageType);
             return false;
         }
 
         commandEnvelope = new ChatWebSocketCommandEnvelope(requestId, command.Payload, responseMessageType);
         return true;
-    }
-
-    private static WebSocketMessageType ResolveResponseMessageType(WebSocketMessageType incomingMessageType)
-    {
-        return incomingMessageType == WebSocketMessageType.Binary
-            ? WebSocketMessageType.Binary
-            : WebSocketMessageType.Text;
     }
 }

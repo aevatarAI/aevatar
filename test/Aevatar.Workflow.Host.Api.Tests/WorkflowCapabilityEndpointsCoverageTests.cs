@@ -151,8 +151,9 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
 
         socket.SentTexts.Should().ContainSingle();
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
-        doc.RootElement.GetProperty("type").GetString().Should().Be("command.error");
+        doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("INVALID_COMMAND");
+        doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -181,8 +182,9 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
 
         socket.SentTexts.Should().ContainSingle();
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
-        doc.RootElement.GetProperty("type").GetString().Should().Be("command.error");
+        doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
+        doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -212,7 +214,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         socket.SentTexts.Should().BeEmpty();
         socket.SentBinaries.Should().ContainSingle();
         using var doc = JsonDocument.Parse(socket.SentBinaries[0]);
-        doc.RootElement.GetProperty("type").GetString().Should().Be("command.error");
+        doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
     }
 

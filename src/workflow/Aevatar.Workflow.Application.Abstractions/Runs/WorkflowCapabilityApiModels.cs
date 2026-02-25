@@ -9,7 +9,7 @@ public sealed record ChatInput
 
 public sealed record ChatWsCommand
 {
-    public string Type { get; init; } = "chat.command";
+    public string Type { get; init; } = WorkflowCapabilityMessageTypes.ChatCommand;
     public string? RequestId { get; init; }
     public ChatInput? Payload { get; init; }
 }

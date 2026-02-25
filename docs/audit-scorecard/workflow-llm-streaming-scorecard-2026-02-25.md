@@ -25,7 +25,7 @@
 ### 3.1 文本流主链路是统一的（非 API 直连 LLM）
 
 1. Host 入口统一：`/api/chat`（SSE）与 `/api/ws/chat`（WS）都进入同一 `ICommandExecutionService`。  
-证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:16`、`:21`、`:43`、`:190`。
+证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:16`、`:21`、`:43`、`:200`。
 2. 应用层先建立 projection lease，再挂 live sink，按 `commandId` 会话输出。  
 证据：`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunContextFactory.cs:53`、`:62`。
 3. `RoleGAgent` 使用 `ChatStreamAsync`，按三段式发布文本事件：`START -> CONTENT* -> END`。  
@@ -34,17 +34,19 @@
 证据：`src/Aevatar.AI.Core/Chat/ChatRuntime.cs:89`、`:154`、`:232`。
 5. 投影分支将 `EventEnvelope` 转为 AGUI 事件，再转 `WorkflowRunEvent`，发布到 `workflow-run:{actorId}:{commandId}` 会话流。  
 证据：`src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionAGUIEventProjector.cs:34`、`:48`；`src/Aevatar.CQRS.Projection.Core/Streaming/ProjectionSessionEventHub.cs:77`；`src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowRunEventSessionCodec.cs:12`。
-6. 最终输出统一映射为 `WorkflowOutputFrame`，并在 run 收敛后统一补发 `STATE_SNAPSHOT`，由 SSE/WS 发送。  
-证据：`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunExecutionEngine.cs:72`；`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunStateSnapshotEmitter.cs:40`；`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowOutputFrameMapper.cs:11`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatSseResponseWriter.cs:41`、`:45`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:22`、`:56`。
+6. 最终输出统一映射为 `WorkflowOutputFrame`，并在 run 收敛后统一补发标准化 `STATE_SNAPSHOT`（含 `projectionCompletion*` 元信息），由 SSE/WS 发送。  
+证据：`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunExecutionEngine.cs:72`；`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunStateSnapshotEmitter.cs:29`、`:40`；`src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowChatRunModels.cs:47`；`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowOutputFrameMapper.cs:11`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatSseResponseWriter.cs:41`、`:45`。
+7. 命令式 API 路径已移除不必要 `Task.Run` 包装，改为直接异步执行并保留 started-signal 语义，减少线程池分叉。  
+证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:78`、`:104`。
 
 ### 3.2 其他“事件流类型”支持情况
 
-1. 统一输出模型支持 `RUN_* / STEP_* / TEXT_* / TOOL_CALL_* / CUSTOM / STATE_SNAPSHOT`。  
-证据：`src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunEventContracts.cs:13`-`:109`。
+1. 统一输出模型支持 `RUN_* / STEP_* / TEXT_* / TOOL_CALL_* / CUSTOM / STATE_SNAPSHOT`，且事件类型字符串已收敛到单一常量源。  
+证据：`src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunEventTypes.cs:3`；`src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunEventContracts.cs:13`-`:109`；`src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowRunEventSessionCodec.cs:17`。
 2. AGUI adapter 已支持 ToolCall 事件映射（`ToolCallEvent -> TOOL_CALL_START`，`ToolResultEvent -> TOOL_CALL_END`）。  
 证据：`src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/EventEnvelopeToAGUIEventMapper.cs:281`-`:309`。
-3. WebSocket 传输层已升级为类型化帧：支持 `text/binary` 接收与发送；命令解析后按入帧类型回写 `ack/event/error/result`。  
-证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:20`、`:72`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketCommandParser.cs:19`、`:104`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:18`、`:27`。
+3. WebSocket 传输层已升级为类型化帧：支持 `text/binary` 接收与发送；命令解析后按入帧类型回写 `ack/event/error`，且控制帧已抽为强类型契约。  
+证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:20`、`:76`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketCommandParser.cs:19`、`:56`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketMessageContracts.cs:5`、`:27`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:18`、`:28`。
 
 ### 3.3 测试覆盖现状
 
@@ -52,7 +54,7 @@
 证据：`test/Aevatar.AI.Tests/ChatRuntimeStreamingBufferTests.cs:13`、`:30`。
 2. `WorkflowRunOrchestrationComponentTests` 覆盖 `STATE_SNAPSHOT` 在收敛后统一输出与快照载荷。  
 证据：`test/Aevatar.Workflow.Application.Tests/WorkflowRunOrchestrationComponentTests.cs:88`、`:160`、`:199`。
-3. `ChatWebSocketCoordinatorAndProtocolTests` 覆盖 `command.ack -> agui.event* -> query.result` 顺序、`ReceiveAsync` text/binary 读取与双通道发送行为。  
+3. `ChatWebSocketCoordinatorAndProtocolTests` 覆盖 `command.ack -> agui.event*` 顺序、`ReceiveAsync` text/binary 读取与双通道发送行为。  
 证据：`test/Aevatar.Workflow.Host.Api.Tests/ChatWebSocketCoordinatorAndProtocolTests.cs:15`、`:82`、`:96`、`:121`。
 4. `WorkflowCapabilityEndpointsCoverageTests` 覆盖 WS 入口错误分支、文本异常映射与二进制命令异常回写。  
 证据：`test/Aevatar.Workflow.Host.Api.Tests/WorkflowCapabilityEndpointsCoverageTests.cs:135`、`:159`、`:189`。
@@ -79,7 +81,7 @@
 ## 6. 改进建议（优先级）
 
 1. P2：若进入多模态阶段，新增 `MEDIA_*` 业务事件类型并映射到统一 `WorkflowRunEvent`，避免把媒体语义塞进文本 delta。
-2. P3：可选将 `query.result` 与 `command.ack` 抽象为统一控制帧模型，减少协议分支判断。
+2. P3：若后续需要长连接会话复用，可将 WS 入口从单命令模型扩展为多命令循环并增加会话级背压策略。
 
 ## 7. 非扣分观察项（基线口径）
 
