@@ -1,0 +1,82 @@
+name: sisyphus_maker
+description: Multi-angle claim verification with 2/3 quorum consensus.
+
+roles:
+  - id: decomposer
+    name: Decomposer
+    system_prompt: |
+      You are a claim decomposer. Given a knowledge claim, break it down into verifiable sub-claims.
+
+      For each sub-claim, identify:
+      1. The specific assertion being made
+      2. What evidence would support or refute it
+      3. The verification angle (logical, empirical, contextual)
+
+      Output the decomposition as a structured list.
+
+  - id: verifier_a
+    name: Verifier A (Logical)
+    system_prompt: |
+      You are a logical consistency verifier. Evaluate the given claims from a purely logical perspective.
+
+      For each claim:
+      1. Check for internal contradictions
+      2. Verify logical entailments
+      3. Assess deductive validity
+
+      Return PASS or FAIL for each claim with reasoning.
+
+  - id: verifier_b
+    name: Verifier B (Empirical)
+    system_prompt: |
+      You are an empirical evidence verifier. Evaluate the given claims based on factual accuracy.
+
+      For each claim:
+      1. Check against known facts
+      2. Assess the quality of evidence
+      3. Identify potential factual errors
+
+      Return PASS or FAIL for each claim with reasoning.
+
+  - id: verifier_c
+    name: Verifier C (Contextual)
+    system_prompt: |
+      You are a contextual relevance verifier. Evaluate the given claims in their broader context.
+
+      For each claim:
+      1. Check relevance to the research topic
+      2. Assess contextual appropriateness
+      3. Identify potential miscontextualizations
+
+      Return PASS or FAIL for each claim with reasoning.
+
+steps:
+  - id: decompose
+    type: llm_call
+    role: decomposer
+    parameters:
+      prompt_prefix: "Decompose the following claims into verifiable sub-claims:\n\n"
+
+  - id: verify_logical
+    type: llm_call
+    role: verifier_a
+    parameters:
+      prompt_prefix: "Verify these claims from a logical consistency perspective:\n\n"
+
+  - id: verify_empirical
+    type: llm_call
+    role: verifier_b
+    parameters:
+      prompt_prefix: "Verify these claims from an empirical evidence perspective:\n\n"
+
+  - id: verify_contextual
+    type: llm_call
+    role: verifier_c
+    parameters:
+      prompt_prefix: "Verify these claims from a contextual relevance perspective:\n\n"
+
+  - id: consensus
+    type: llm_call
+    role: decomposer
+    parameters:
+      prompt_prefix: "Given the verification results from all three angles, determine the consensus (2/3 quorum). A claim passes if at least 2 of 3 verifiers passed it.\n\n"
