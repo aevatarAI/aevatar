@@ -114,7 +114,7 @@ public class WorkflowGAgentCoverageTests
         var runtime = new RecordingActorRuntime();
         var resolver = new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
         var agent = CreateAgent(runtime, resolver);
-        agent.ConfigureWorkflow(
+        await agent.ConfigureWorkflowAsync(
             BuildValidWorkflowYaml(
                 roleId: "role_cfg",
                 roleName: "RoleCfg",
