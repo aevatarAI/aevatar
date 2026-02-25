@@ -38,6 +38,8 @@
 证据：`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunExecutionEngine.cs:72`；`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunStateSnapshotEmitter.cs:29`、`:40`；`src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowChatRunModels.cs:47`；`src/workflow/Aevatar.Workflow.Application/Runs/WorkflowOutputFrameMapper.cs:11`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatSseResponseWriter.cs:41`、`:45`。
 7. 命令式 API 路径已移除不必要 `Task.Run` 包装，改为直接异步执行并保留 started-signal 语义，减少线程池分叉。  
 证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:78`、`:104`。
+8. `chat.command` 输入协议模型已收敛到宿主层：`ChatInput/ChatWsCommand` 位于 `Infrastructure/CapabilityApi`，不再驻留 `Application.Abstractions`。  
+证据：`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatCapabilityModels.cs:1`；`src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketCommandParser.cs:75`。
 
 ### 3.2 其他“事件流类型”支持情况
 

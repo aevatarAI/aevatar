@@ -82,7 +82,7 @@ internal static class ChatWebSocketCommandParser
             command = null;
         }
 
-        if (command?.Payload == null || !string.Equals(command.Type, WorkflowCapabilityMessageTypes.ChatCommand, StringComparison.Ordinal))
+        if (command?.Payload == null || !string.Equals(command.Type, ChatCapabilityMessageTypes.ChatCommand, StringComparison.Ordinal))
         {
             parseError = new ChatWebSocketCommandParseError(
                 "INVALID_COMMAND",
