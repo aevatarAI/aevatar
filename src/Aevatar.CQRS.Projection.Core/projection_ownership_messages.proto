@@ -9,11 +9,13 @@ message ProjectionOwnershipCoordinatorState {
   string session_id = 2;
   bool active = 3;
   google.protobuf.Timestamp last_updated_at_utc = 4;
+  int64 lease_ttl_ms = 5;
 }
 
 message ProjectionOwnershipAcquireEvent {
   string scope_id = 1;
   string session_id = 2;
+  int64 lease_ttl_ms = 3;
 }
 
 message ProjectionOwnershipReleaseEvent {

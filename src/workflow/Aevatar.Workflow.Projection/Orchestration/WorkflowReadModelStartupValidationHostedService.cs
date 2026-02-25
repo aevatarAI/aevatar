@@ -24,33 +24,79 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
         _logger = logger ?? NullLogger<WorkflowReadModelStartupValidationHostedService>.Instance;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!_options.Enabled)
-            return Task.CompletedTask;
+            return;
+
+        var production = IsProductionEnvironment();
 
         if (_options.ValidateDocumentProviderOnStartup)
         {
-            _ = _serviceProvider.GetRequiredService<IProjectionDocumentStore<WorkflowExecutionReport, string>>();
-            _logger.LogInformation(
-                "Workflow read-model document startup validation passed. readModelType={ReadModelType}",
-                typeof(WorkflowExecutionReport).FullName);
+            try
+            {
+                var documentStore = _serviceProvider.GetRequiredService<IProjectionDocumentStore<WorkflowExecutionReport, string>>();
+                _ = await documentStore.ListAsync(take: 1, cancellationToken);
+                _logger.LogInformation(
+                    "Workflow read-model document startup probe passed. readModelType={ReadModelType}",
+                    typeof(WorkflowExecutionReport).FullName);
+            }
+            catch (Exception ex)
+            {
+                HandleProbeFailure("document", ex, production);
+            }
         }
 
         if (_options.ValidateGraphProviderOnStartup)
         {
-            _ = _serviceProvider.GetRequiredService<IProjectionGraphStore>();
-            _logger.LogInformation(
-                "Workflow read-model graph startup validation passed. graphType={GraphType}",
-                typeof(ProjectionGraphNode).FullName);
+            try
+            {
+                var graphStore = _serviceProvider.GetRequiredService<IProjectionGraphStore>();
+                _ = await graphStore.ListNodesByOwnerAsync(
+                    scope: WorkflowExecutionGraphConstants.Scope,
+                    ownerId: "startup-probe",
+                    take: 1,
+                    ct: cancellationToken);
+                _logger.LogInformation(
+                    "Workflow read-model graph startup probe passed. graphType={GraphType}",
+                    typeof(ProjectionGraphNode).FullName);
+            }
+            catch (Exception ex)
+            {
+                HandleProbeFailure("graph", ex, production);
+            }
         }
-        return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.CompletedTask;
+    }
+
+    private void HandleProbeFailure(string provider, Exception exception, bool production)
+    {
+        if (production)
+        {
+            throw new InvalidOperationException(
+                $"Workflow read-model {provider} startup probe failed in production environment.",
+                exception);
+        }
+
+        _logger.LogWarning(
+            exception,
+            "Workflow read-model {Provider} startup probe failed in non-production environment and will be ignored.",
+            provider);
+    }
+
+    private static bool IsProductionEnvironment()
+    {
+        var dotnetEnvironment = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        if (string.Equals(dotnetEnvironment, Environments.Production, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var aspnetEnvironment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        return string.Equals(aspnetEnvironment, Environments.Production, StringComparison.OrdinalIgnoreCase);
     }
 }

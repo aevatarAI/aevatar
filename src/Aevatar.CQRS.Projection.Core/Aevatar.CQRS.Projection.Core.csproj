@@ -21,6 +21,7 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
   <ItemGroup>
+    <Protobuf Include="projection_dispatch_compensation_messages.proto" GrpcServices="None" />
     <Protobuf Include="projection_ownership_messages.proto" GrpcServices="None" />
     <Protobuf Include="projection_session_event_transport.proto" GrpcServices="None" />
   </ItemGroup>

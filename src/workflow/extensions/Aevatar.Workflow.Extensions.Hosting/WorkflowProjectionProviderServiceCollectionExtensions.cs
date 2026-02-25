@@ -35,6 +35,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             configuration["Projection:Graph:Providers:InMemory:Enabled"],
             fallbackValue: !enableNeo4jGraph);
 
+        EnforceDocumentProviderPolicy(configuration, enableInMemoryDocument);
         EnforceGraphProviderPolicy(configuration, enableInMemoryGraph);
 
         var documentProviderCount = (enableElasticsearchDocument ? 1 : 0) + (enableInMemoryDocument ? 1 : 0);
@@ -162,6 +163,24 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             throw new InvalidOperationException(
                 "InMemory graph provider is not allowed by projection policy. " +
                 "Disable Projection:Graph:Providers:InMemory:Enabled and configure Neo4j.");
+        }
+    }
+
+    private static void EnforceDocumentProviderPolicy(
+        IConfiguration configuration,
+        bool enableInMemoryDocumentProvider)
+    {
+        var denyInMemoryDocumentProvider = ResolveOptionalBool(
+            configuration["Projection:Policies:DenyInMemoryDocumentReadStore"],
+            fallbackValue: false);
+        var environment = ResolveRuntimeEnvironment(configuration["Projection:Policies:Environment"]);
+        var production = IsProductionEnvironment(environment);
+
+        if ((denyInMemoryDocumentProvider || production) && enableInMemoryDocumentProvider)
+        {
+            throw new InvalidOperationException(
+                "InMemory document provider is not allowed by projection policy. " +
+                "Disable Projection:Document:Providers:InMemory:Enabled and configure Elasticsearch.");
         }
     }
 

@@ -180,4 +180,26 @@ public class WorkflowHostingExtensionsCoverageTests
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*InMemory graph provider is not allowed*");
     }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_WhenProductionAndInMemoryDocumentEnabled_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Policies:Environment"] = "Production",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Uri"] = "bolt://localhost:7687",
+            })
+            .Build();
+
+        Action act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*InMemory document provider is not allowed*");
+    }
 }

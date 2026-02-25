@@ -211,12 +211,15 @@ public sealed class ProjectionStoreDispatcher<TReadModel, TKey>
     {
         var context = new ProjectionStoreDispatchCompensationContext<TReadModel, TKey>
         {
+            DispatchId = Guid.NewGuid().ToString("N"),
             Operation = operation,
             Key = key,
             ReadModel = readModel,
             FailedStore = failedBinding.StoreName,
             SucceededStores = succeededBindings.Select(x => x.StoreName).ToList(),
             Exception = exception,
+            ReadModelType = typeof(TReadModel).FullName ?? typeof(TReadModel).Name,
+            OccurredAtUtc = DateTimeOffset.UtcNow,
         };
         return _compensator.CompensateAsync(context, ct);
     }

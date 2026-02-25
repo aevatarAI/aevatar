@@ -31,8 +31,31 @@ public class ActorProjectionOwnershipCoordinatorTests
         var evt = envelope.Payload.Unpack<ProjectionOwnershipAcquireEvent>();
         evt.ScopeId.Should().Be("scope-1");
         evt.SessionId.Should().Be("session-1");
+        evt.LeaseTtlMs.Should().Be(ProjectionOwnershipCoordinatorOptions.DefaultLeaseTtlMs);
         envelope.CorrelationId.Should().Be("session-1");
         envelope.Direction.Should().Be(EventDirection.Self);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_ShouldUseConfiguredLeaseTtl()
+    {
+        var runtime = new OwnershipCoordinatorRuntime();
+        var manifestStore = new TestAgentManifestStore();
+        var coordinator = CreateCoordinator(
+            runtime,
+            manifestStore,
+            new ProjectionOwnershipCoordinatorOptions
+            {
+                LeaseTtlMs = 45_000,
+            });
+
+        await coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
+
+        var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
+        var actor = runtime.GetOwnershipActor(actorId);
+        var envelope = actor.HandledEnvelopes.Single();
+        var evt = envelope.Payload.Unpack<ProjectionOwnershipAcquireEvent>();
+        evt.LeaseTtlMs.Should().Be(45_000);
     }
 
     [Fact]
@@ -126,10 +149,11 @@ public class ActorProjectionOwnershipCoordinatorTests
 
     private static ActorProjectionOwnershipCoordinator CreateCoordinator(
         IActorRuntime runtime,
-        IAgentManifestStore manifestStore)
+        IAgentManifestStore manifestStore,
+        ProjectionOwnershipCoordinatorOptions? options = null)
     {
         var verifier = new DefaultAgentTypeVerifier(new RuntimeActorTypeProbe(runtime), manifestStore);
-        return new ActorProjectionOwnershipCoordinator(runtime, verifier);
+        return new ActorProjectionOwnershipCoordinator(runtime, verifier, options);
     }
 }
 
@@ -170,6 +194,7 @@ public class ProjectionOwnershipCoordinatorGAgentTests
         agent.State.ScopeId.Should().Be("scope-1");
         agent.State.SessionId.Should().Be("session-1");
         agent.State.LastUpdatedAtUtc.Should().NotBeNull();
+        agent.State.LeaseTtlMs.Should().Be(ProjectionOwnershipCoordinatorOptions.DefaultLeaseTtlMs);
     }
 
     [Fact]
@@ -189,6 +214,56 @@ public class ProjectionOwnershipCoordinatorGAgentTests
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task HandleAcquireAsync_ShouldRenewLease_WhenSessionMatches()
+    {
+        var agent = CreateStatefulAgent(CreateStatefulAgentServices());
+        await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
+        {
+            ScopeId = "scope-1",
+            SessionId = "session-1",
+            LeaseTtlMs = 30_000,
+        });
+        var firstUpdatedAt = agent.State.LastUpdatedAtUtc;
+
+        await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
+        {
+            ScopeId = "scope-1",
+            SessionId = "session-1",
+            LeaseTtlMs = 90_000,
+        });
+
+        agent.State.Active.Should().BeTrue();
+        agent.State.SessionId.Should().Be("session-1");
+        agent.State.LeaseTtlMs.Should().Be(90_000);
+        agent.State.LastUpdatedAtUtc.Should().NotBeNull();
+        agent.State.LastUpdatedAtUtc.Seconds.Should().BeGreaterThanOrEqualTo(firstUpdatedAt.Seconds);
+    }
+
+    [Fact]
+    public async Task HandleAcquireAsync_ShouldAllowTakeover_WhenExistingLeaseExpired()
+    {
+        var agent = CreateStatefulAgent(CreateStatefulAgentServices());
+        await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
+        {
+            ScopeId = "scope-1",
+            SessionId = "session-1",
+            LeaseTtlMs = 1_000,
+        });
+        agent.State.LastUpdatedAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-5));
+
+        await agent.HandleAcquireAsync(new ProjectionOwnershipAcquireEvent
+        {
+            ScopeId = "scope-1",
+            SessionId = "session-2",
+            LeaseTtlMs = 120_000,
+        });
+
+        agent.State.Active.Should().BeTrue();
+        agent.State.SessionId.Should().Be("session-2");
+        agent.State.LeaseTtlMs.Should().Be(120_000);
     }
 
     [Fact]

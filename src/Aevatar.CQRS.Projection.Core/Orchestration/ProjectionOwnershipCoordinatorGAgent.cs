@@ -31,13 +31,37 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
         if (string.IsNullOrWhiteSpace(evt.SessionId))
             throw new InvalidOperationException("Session id is required to acquire projection ownership.");
 
+        var normalizedLeaseTtlMs = ProjectionOwnershipCoordinatorOptions.NormalizeLeaseTtlMs(evt.LeaseTtlMs);
+        var acquireEvent = new ProjectionOwnershipAcquireEvent
+        {
+            ScopeId = evt.ScopeId,
+            SessionId = evt.SessionId,
+            LeaseTtlMs = normalizedLeaseTtlMs,
+        };
+
         if (State.Active)
         {
-            throw new InvalidOperationException(
-                $"Projection ownership for scope '{State.ScopeId}' is already active (session '{State.SessionId}').");
+            if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Projection ownership coordinator '{Id}' scope mismatch. expected='{State.ScopeId}', actual='{evt.ScopeId}'.");
+            }
+
+            if (string.Equals(State.SessionId, evt.SessionId, StringComparison.Ordinal))
+            {
+                // Same session acquire is treated as lease renewal.
+                await PersistDomainEventAsync(acquireEvent);
+                return;
+            }
+
+            if (!IsOwnershipExpired(State, DateTime.UtcNow))
+            {
+                throw new InvalidOperationException(
+                    $"Projection ownership for scope '{State.ScopeId}' is already active (session '{State.SessionId}').");
+            }
         }
 
-        await PersistDomainEventAsync(evt);
+        await PersistDomainEventAsync(acquireEvent);
     }
 
     [EventHandler]
@@ -83,6 +107,7 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
         next.SessionId = evt.SessionId;
         next.Active = true;
         next.LastUpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
+        next.LeaseTtlMs = ProjectionOwnershipCoordinatorOptions.NormalizeLeaseTtlMs(evt.LeaseTtlMs);
         return next;
     }
 
@@ -99,5 +124,27 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
         next.SessionId = string.Empty;
         next.LastUpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
         return next;
+    }
+
+    private static bool IsOwnershipExpired(ProjectionOwnershipCoordinatorState state, DateTime utcNow)
+    {
+        if (!state.Active)
+            return false;
+
+        var lastUpdatedUtc = ResolveLastUpdatedUtc(state.LastUpdatedAtUtc);
+        var leaseTtlMs = ProjectionOwnershipCoordinatorOptions.NormalizeLeaseTtlMs(state.LeaseTtlMs);
+        var leaseDuration = TimeSpan.FromMilliseconds(leaseTtlMs);
+        return utcNow - lastUpdatedUtc >= leaseDuration;
+    }
+
+    private static DateTime ResolveLastUpdatedUtc(Timestamp? timestamp)
+    {
+        if (timestamp == null)
+            return DateTime.UnixEpoch;
+
+        var lastUpdatedUtc = timestamp.ToDateTime();
+        return lastUpdatedUtc.Kind == DateTimeKind.Utc
+            ? lastUpdatedUtc
+            : DateTime.SpecifyKind(lastUpdatedUtc, DateTimeKind.Utc);
     }
 }
