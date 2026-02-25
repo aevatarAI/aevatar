@@ -3,6 +3,7 @@
 // 在每个 hook 点位记录 trace 日志
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Microsoft.Extensions.Logging;
 
@@ -36,11 +37,27 @@ public sealed class ExecutionTraceHook : IAIGAgentExecutionHook
     { _logger.LogInformation("[Trace] LLM Request Start: Agent={Agent}", ctx.AgentId); return Task.CompletedTask; }
 
     public Task OnLLMRequestEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
-    { _logger.LogInformation("[Trace] LLM Request End: Agent={Agent}", ctx.AgentId); return Task.CompletedTask; }
+    {
+        var response = ctx.LLMResponse as LLMResponse;
+        var content = response?.Content;
+        var toolCalls = response?.ToolCalls;
+        var contentPreview = content != null
+            ? (content.Length > 300 ? content[..300] + "..." : content)
+            : "(no text)";
+        var toolCallSummary = toolCalls != null
+            ? string.Join(", ", toolCalls.Select(tc => $"{tc.Name}({Truncate(tc.ArgumentsJson, 200)})"))
+            : "(no tool calls)";
+        _logger.LogInformation("[Trace] LLM Request End: Agent={Agent} Content={Content} ToolCalls=[{ToolCalls}]",
+            ctx.AgentId, contentPreview, toolCallSummary);
+        return Task.CompletedTask;
+    }
 
     public Task OnToolExecuteStartAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
-    { _logger.LogInformation("[Trace] Tool Start: {Tool}", ctx.ToolName); return Task.CompletedTask; }
+    { _logger.LogInformation("[Trace] Tool Start: {Tool} Args={Args}", ctx.ToolName, Truncate(ctx.ToolArguments, 500)); return Task.CompletedTask; }
 
     public Task OnToolExecuteEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
-    { _logger.LogInformation("[Trace] Tool End: {Tool}", ctx.ToolName); return Task.CompletedTask; }
+    { _logger.LogInformation("[Trace] Tool End: {Tool} Result={Result}", ctx.ToolName, Truncate(ctx.ToolResult, 500)); return Task.CompletedTask; }
+
+    private static string Truncate(string? value, int maxLength) =>
+        value == null ? "(null)" : value.Length > maxLength ? value[..maxLength] + "..." : value;
 }
