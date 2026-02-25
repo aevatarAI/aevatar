@@ -68,7 +68,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         SetRoleName(evt.RoleName);
         await ((IRoleAgent)this).ConfigureAsync(new RoleAgentConfig
         {
-            ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? "deepseek" : evt.ProviderName,
+            ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName,
             Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,
             SystemPrompt = evt.SystemPrompt ?? string.Empty,
             Temperature = evt.Temperature == 0 ? null : evt.Temperature,

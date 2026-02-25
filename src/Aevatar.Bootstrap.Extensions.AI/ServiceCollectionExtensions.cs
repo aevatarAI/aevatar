@@ -20,7 +20,7 @@ public sealed class AevatarAIFeatureOptions
     public bool EnableSkills { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
-    public string DefaultProvider { get; set; } = "deepseek";
+    public string DefaultProvider { get; set; } = "openai";
     public string OpenAIModel { get; set; } = "gpt-4o-mini";
     public string DeepSeekModel { get; set; } = "deepseek-chat";
     public List<string> SkillDirectories { get; } = [];
@@ -62,51 +62,105 @@ public static class ServiceCollectionExtensions
         if (!options.EnableMEAIProviders)
             return;
 
+        var secrets = options.SecretsStore ?? new AevatarSecretsStore();
+        var configuredProviders = ReadConfiguredProviders(secrets, options);
+        if (configuredProviders.Count > 0)
+        {
+            services.AddMEAIProviders(factory =>
+            {
+                foreach (var provider in configuredProviders)
+                {
+                    factory.RegisterOpenAI(
+                        provider.Name,
+                        provider.Model,
+                        provider.ApiKey,
+                        string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
+                }
+
+                var preferredDefault = secrets.GetDefaultProvider()
+                    ?? configuration["Models:DefaultProvider"]
+                    ?? options.DefaultProvider;
+                var defaultName = configuredProviders.Any(p => string.Equals(p.Name, preferredDefault, StringComparison.OrdinalIgnoreCase))
+                    ? preferredDefault
+                    : configuredProviders[0].Name;
+                factory.SetDefault(defaultName);
+            });
+            return;
+        }
+
         var apiKey = options.ApiKey
             ?? Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY")
             ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
             ?? Environment.GetEnvironmentVariable("AEVATAR_LLM_API_KEY");
 
-        var provider = options.DefaultProvider;
-
-        if (string.IsNullOrEmpty(apiKey))
-        {
-            var secrets = options.SecretsStore ?? new AevatarSecretsStore();
-            provider = secrets.GetDefaultProvider() ?? configuration["Models:DefaultProvider"] ?? options.DefaultProvider;
-            apiKey = secrets.GetApiKey(provider);
-            if (string.IsNullOrEmpty(apiKey))
-            {
-                foreach (var fallback in new[] { "deepseek", "openai" })
-                {
-                    apiKey = secrets.GetApiKey(fallback);
-                    if (!string.IsNullOrEmpty(apiKey))
-                    {
-                        provider = fallback;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (string.IsNullOrEmpty(apiKey))
+        if (string.IsNullOrWhiteSpace(apiKey))
         {
             services.AddMEAIProviders(_ => { });
             return;
         }
 
-        var useDeepSeek = provider.Contains("deepseek", StringComparison.OrdinalIgnoreCase);
-        if (useDeepSeek)
-        {
-            services.AddMEAIProviders(factory => factory
-                .RegisterOpenAI("deepseek", options.DeepSeekModel, apiKey, baseUrl: "https://api.deepseek.com/v1")
-                .SetDefault("deepseek"));
-            return;
-        }
+        var fallbackProvider = options.DefaultProvider;
+        var fallbackModel = fallbackProvider.Contains("deepseek", StringComparison.OrdinalIgnoreCase)
+            ? options.DeepSeekModel
+            : options.OpenAIModel;
+        var fallbackEndpoint = fallbackProvider.Contains("deepseek", StringComparison.OrdinalIgnoreCase)
+            ? "https://api.deepseek.com/v1"
+            : null;
 
         services.AddMEAIProviders(factory => factory
-            .RegisterOpenAI("openai", options.OpenAIModel, apiKey)
-            .SetDefault("openai"));
+            .RegisterOpenAI(fallbackProvider, fallbackModel, apiKey, fallbackEndpoint)
+            .SetDefault(fallbackProvider));
     }
+
+    private static List<ConfiguredProvider> ReadConfiguredProviders(
+        IAevatarSecretsStore secrets,
+        AevatarAIFeatureOptions options)
+    {
+        const string prefix = "LLMProviders:Providers:";
+        var all = secrets.GetAll();
+        var names = all.Keys
+            .Where(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Select(key => key[prefix.Length..])
+            .Select(rest =>
+            {
+                var splitIndex = rest.IndexOf(':');
+                return splitIndex <= 0 ? string.Empty : rest[..splitIndex];
+            })
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var configured = new List<ConfiguredProvider>();
+        foreach (var name in names)
+        {
+            var apiKey = secrets.GetApiKey(name);
+            if (string.IsNullOrWhiteSpace(apiKey))
+                continue;
+
+            all.TryGetValue($"LLMProviders:Providers:{name}:ProviderType", out var providerType);
+            all.TryGetValue($"LLMProviders:Providers:{name}:Model", out var model);
+            all.TryGetValue($"LLMProviders:Providers:{name}:Endpoint", out var endpoint);
+
+            var normalizedType = string.IsNullOrWhiteSpace(providerType) ? "openai" : providerType.Trim();
+            var resolvedModel = string.IsNullOrWhiteSpace(model)
+                ? (normalizedType.Contains("deepseek", StringComparison.OrdinalIgnoreCase) ? options.DeepSeekModel : options.OpenAIModel)
+                : model.Trim();
+            var resolvedEndpoint = string.IsNullOrWhiteSpace(endpoint)
+                ? (normalizedType.Contains("deepseek", StringComparison.OrdinalIgnoreCase) ? "https://api.deepseek.com/v1" : null)
+                : endpoint.Trim();
+
+            configured.Add(new ConfiguredProvider(name.Trim(), normalizedType, resolvedModel, resolvedEndpoint, apiKey.Trim()));
+        }
+
+        return configured;
+    }
+
+    private sealed record ConfiguredProvider(
+        string Name,
+        string ProviderType,
+        string Model,
+        string? Endpoint,
+        string ApiKey);
 
     private static void RegisterMCPTools(IServiceCollection services)
     {

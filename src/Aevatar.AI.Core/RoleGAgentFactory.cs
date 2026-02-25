@@ -53,7 +53,7 @@ public static class RoleGAgentFactory
         await agent.ConfigureAsync(new AIAgentConfig
         {
             SystemPrompt = config.SystemPrompt ?? "",
-            ProviderName = config.Provider ?? "deepseek",
+            ProviderName = config.Provider ?? string.Empty,
             Model = config.Model,
             Temperature = config.Temperature,
         });

@@ -512,14 +512,14 @@ public sealed class OrleansDistributedCoverageTests
 
     private sealed class TopologyGrainStub : IStreamTopologyGrain
     {
-        private readonly List<StreamForwardingBinding> _bindings = [];
+        private readonly List<StreamForwardingBindingEntry> _bindings = [];
         private long _revision;
 
         public int ListCallCount { get; private set; }
 
         public int RevisionCallCount { get; private set; }
 
-        public Task UpsertAsync(StreamForwardingBinding binding)
+        public Task UpsertAsync(StreamForwardingBindingEntry binding)
         {
             var index = _bindings.FindIndex(x => string.Equals(x.TargetStreamId, binding.TargetStreamId, StringComparison.Ordinal));
             var clone = Clone(binding);
@@ -539,10 +539,10 @@ public sealed class OrleansDistributedCoverageTests
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<StreamForwardingBinding>> ListAsync()
+        public Task<IReadOnlyList<StreamForwardingBindingEntry>> ListAsync()
         {
             ListCallCount++;
-            return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>(_bindings.Select(Clone).ToList());
+            return Task.FromResult<IReadOnlyList<StreamForwardingBindingEntry>>(_bindings.Select(Clone).ToList());
         }
 
         public Task<long> GetRevisionAsync()
@@ -559,14 +559,14 @@ public sealed class OrleansDistributedCoverageTests
             return Task.CompletedTask;
         }
 
-        private static StreamForwardingBinding Clone(StreamForwardingBinding binding) =>
+        private static StreamForwardingBindingEntry Clone(StreamForwardingBindingEntry binding) =>
             new()
             {
                 SourceStreamId = binding.SourceStreamId,
                 TargetStreamId = binding.TargetStreamId,
                 ForwardingMode = binding.ForwardingMode,
-                DirectionFilter = new HashSet<EventDirection>(binding.DirectionFilter),
-                EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
+                DirectionFilter = [.. binding.DirectionFilter],
+                EventTypeFilter = [.. binding.EventTypeFilter],
                 Version = binding.Version,
                 LeaseId = binding.LeaseId,
             };
