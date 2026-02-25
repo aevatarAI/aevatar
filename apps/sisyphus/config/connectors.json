@@ -12,7 +12,7 @@
           "tokenUrl": "${NYXID_AUTH_TOKEN_URL}",
           "clientId": "${NYXID_SA_CLIENT_ID}",
           "clientSecret": "${NYXID_SA_CLIENT_SECRET}",
-          "scope": "graph:read graph:write"
+          "scope": "proxy:*"
         },
         "allowedTools": [
           "chrono-graph__get_snapshot",

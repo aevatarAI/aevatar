@@ -10,17 +10,17 @@ public sealed class MCPConnectorBuilder : IConnectorBuilder
 {
     public string Type => "mcp";
 
-    public bool TryBuild(ConnectorConfigEntry entry, ILogger logger, out IConnector? connector)
+    /// <summary>
+    /// Convert a <see cref="ConnectorConfigEntry"/> with type "mcp" into an <see cref="MCPServerConfig"/>.
+    /// Returns null when the entry has neither a URL nor a command.
+    /// </summary>
+    public static MCPServerConfig? ToMCPServerConfig(ConnectorConfigEntry entry)
     {
-        connector = null;
         var hasUrl = !string.IsNullOrWhiteSpace(entry.MCP.Url);
         var hasCommand = !string.IsNullOrWhiteSpace(entry.MCP.Command);
 
         if (!hasUrl && !hasCommand)
-        {
-            logger.LogWarning("Skip connector {Name}: mcp requires either url or command", entry.Name);
-            return false;
-        }
+            return null;
 
         MCPAuthConfig? auth = null;
         if (entry.MCP.Auth is { } authConfig && !string.IsNullOrWhiteSpace(authConfig.TokenUrl))
@@ -35,7 +35,7 @@ public sealed class MCPConnectorBuilder : IConnectorBuilder
             };
         }
 
-        var server = new MCPServerConfig
+        return new MCPServerConfig
         {
             Name = string.IsNullOrWhiteSpace(entry.MCP.ServerName) ? entry.Name : entry.MCP.ServerName,
             Command = hasCommand ? entry.MCP.Command : null,
@@ -45,6 +45,17 @@ public sealed class MCPConnectorBuilder : IConnectorBuilder
             Headers = entry.MCP.Headers,
             Auth = auth,
         };
+    }
+
+    public bool TryBuild(ConnectorConfigEntry entry, ILogger logger, out IConnector? connector)
+    {
+        connector = null;
+        var server = ToMCPServerConfig(entry);
+        if (server is null)
+        {
+            logger.LogWarning("Skip connector {Name}: mcp requires either url or command", entry.Name);
+            return false;
+        }
 
         connector = new MCPConnector(
             entry.Name,

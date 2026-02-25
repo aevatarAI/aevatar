@@ -7,6 +7,7 @@ services:
       - "5200:8080"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
+      - AEVATAR_HOME=/app/config
       - ActorRuntime__Provider=Orleans
       - ActorRuntime__OrleansPersistenceBackend=InMemory
       # NyxId (Session Manager REST proxy + MCP connector shared credentials)
@@ -15,6 +16,8 @@ services:
       - NyxId__ClientId=${NYXID_SA_CLIENT_ID}
       - NyxId__ClientSecret=${NYXID_SA_CLIENT_SECRET}
       - NyxId__ChronoGraphServiceId=${NYXID_CHRONO_GRAPH_SERVICE_ID}
+      # DeepSeek LLM
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       # MCP connector env vars (consumed by connectors.json ${} placeholders)
       - NYXID_MCP_URL=${NYXID_MCP_URL}
       - NYXID_AUTH_TOKEN_URL=${NYXID_AUTH_TOKEN_URL}
