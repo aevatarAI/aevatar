@@ -88,28 +88,20 @@ public static class ServiceCollectionExtensions
             return;
         }
 
-        var apiKey = options.ApiKey
-            ?? Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY")
-            ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
-            ?? Environment.GetEnvironmentVariable("AEVATAR_LLM_API_KEY");
-
-        if (string.IsNullOrWhiteSpace(apiKey))
+        var fallbackRegistration = ResolveFallbackRegistration(options);
+        if (fallbackRegistration is null)
         {
             services.AddMEAIProviders(_ => { });
             return;
         }
 
-        var fallbackProvider = options.DefaultProvider;
-        var fallbackModel = fallbackProvider.Contains("deepseek", StringComparison.OrdinalIgnoreCase)
-            ? options.DeepSeekModel
-            : options.OpenAIModel;
-        var fallbackEndpoint = fallbackProvider.Contains("deepseek", StringComparison.OrdinalIgnoreCase)
-            ? "https://api.deepseek.com/v1"
-            : null;
-
         services.AddMEAIProviders(factory => factory
-            .RegisterOpenAI(fallbackProvider, fallbackModel, apiKey, fallbackEndpoint)
-            .SetDefault(fallbackProvider));
+            .RegisterOpenAI(
+                fallbackRegistration.ProviderName,
+                fallbackRegistration.Model,
+                fallbackRegistration.ApiKey,
+                fallbackRegistration.Endpoint)
+            .SetDefault(fallbackRegistration.ProviderName));
     }
 
     private static List<ConfiguredProvider> ReadConfiguredProviders(
@@ -141,18 +133,144 @@ public static class ServiceCollectionExtensions
             all.TryGetValue($"LLMProviders:Providers:{name}:Model", out var model);
             all.TryGetValue($"LLMProviders:Providers:{name}:Endpoint", out var endpoint);
 
-            var normalizedType = string.IsNullOrWhiteSpace(providerType) ? "openai" : providerType.Trim();
+            var semantic = ResolveProviderSemantic(providerType, name, options.DefaultProvider, options);
             var resolvedModel = string.IsNullOrWhiteSpace(model)
-                ? (normalizedType.Contains("deepseek", StringComparison.OrdinalIgnoreCase) ? options.DeepSeekModel : options.OpenAIModel)
+                ? semantic.Model
                 : model.Trim();
             var resolvedEndpoint = string.IsNullOrWhiteSpace(endpoint)
-                ? (normalizedType.Contains("deepseek", StringComparison.OrdinalIgnoreCase) ? "https://api.deepseek.com/v1" : null)
+                ? semantic.Endpoint
                 : endpoint.Trim();
 
-            configured.Add(new ConfiguredProvider(name.Trim(), normalizedType, resolvedModel, resolvedEndpoint, apiKey.Trim()));
+            configured.Add(new ConfiguredProvider(name.Trim(), semantic.ProviderType, resolvedModel, resolvedEndpoint, apiKey.Trim()));
         }
 
         return configured;
+    }
+
+    private static FallbackRegistration? ResolveFallbackRegistration(AevatarAIFeatureOptions options)
+    {
+        var apiKeySelection = ResolveApiKeySelection(options);
+        if (apiKeySelection is null)
+            return null;
+
+        ProviderSemantic semantic;
+        string providerName;
+        switch (apiKeySelection.Source)
+        {
+            case ApiKeySource.DeepSeekEnvironment:
+                semantic = BuildProviderSemantic(ProviderKind.DeepSeek, options);
+                providerName = semantic.ProviderType;
+                break;
+            case ApiKeySource.OpenAIEnvironment:
+                semantic = BuildProviderSemantic(ProviderKind.OpenAI, options);
+                providerName = semantic.ProviderType;
+                break;
+            default:
+                semantic = ResolveProviderSemantic(null, options.DefaultProvider, null, options);
+                providerName = string.IsNullOrWhiteSpace(options.DefaultProvider)
+                    ? semantic.ProviderType
+                    : options.DefaultProvider.Trim();
+                break;
+        }
+
+        return new FallbackRegistration(providerName, semantic.Model, semantic.Endpoint, apiKeySelection.ApiKey);
+    }
+
+    private static ApiKeySelection? ResolveApiKeySelection(AevatarAIFeatureOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(options.ApiKey))
+            return new ApiKeySelection(options.ApiKey.Trim(), ApiKeySource.Options);
+
+        var deepSeekApiKey = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY");
+        if (!string.IsNullOrWhiteSpace(deepSeekApiKey))
+            return new ApiKeySelection(deepSeekApiKey.Trim(), ApiKeySource.DeepSeekEnvironment);
+
+        var openAiApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        if (!string.IsNullOrWhiteSpace(openAiApiKey))
+            return new ApiKeySelection(openAiApiKey.Trim(), ApiKeySource.OpenAIEnvironment);
+
+        var genericApiKey = Environment.GetEnvironmentVariable("AEVATAR_LLM_API_KEY");
+        if (!string.IsNullOrWhiteSpace(genericApiKey))
+            return new ApiKeySelection(genericApiKey.Trim(), ApiKeySource.GenericEnvironment);
+
+        return null;
+    }
+
+    private static ProviderSemantic ResolveProviderSemantic(
+        string? providerTypeHint,
+        string? providerNameHint,
+        string? fallbackHint,
+        AevatarAIFeatureOptions options)
+    {
+        if (TryResolveProviderKind(providerTypeHint, out var providerKind))
+            return BuildProviderSemantic(providerKind, options);
+
+        if (TryResolveProviderKind(providerNameHint, out providerKind))
+            return BuildProviderSemantic(providerKind, options);
+
+        if (TryResolveProviderKind(fallbackHint, out providerKind))
+            return BuildProviderSemantic(providerKind, options);
+
+        return BuildProviderSemantic(ProviderKind.OpenAI, options);
+    }
+
+    private static bool TryResolveProviderKind(string? candidate, out ProviderKind providerKind)
+    {
+        if (!string.IsNullOrWhiteSpace(candidate))
+        {
+            if (candidate.Contains("deepseek", StringComparison.OrdinalIgnoreCase))
+            {
+                providerKind = ProviderKind.DeepSeek;
+                return true;
+            }
+
+            if (candidate.Contains("openai", StringComparison.OrdinalIgnoreCase))
+            {
+                providerKind = ProviderKind.OpenAI;
+                return true;
+            }
+        }
+
+        providerKind = default;
+        return false;
+    }
+
+    private static ProviderSemantic BuildProviderSemantic(ProviderKind providerKind, AevatarAIFeatureOptions options)
+    {
+        return providerKind switch
+        {
+            ProviderKind.DeepSeek => new ProviderSemantic("deepseek", options.DeepSeekModel, "https://api.deepseek.com/v1"),
+            _ => new ProviderSemantic("openai", options.OpenAIModel, null),
+        };
+    }
+
+    private sealed record FallbackRegistration(
+        string ProviderName,
+        string Model,
+        string? Endpoint,
+        string ApiKey);
+
+    private sealed record ApiKeySelection(
+        string ApiKey,
+        ApiKeySource Source);
+
+    private sealed record ProviderSemantic(
+        string ProviderType,
+        string Model,
+        string? Endpoint);
+
+    private enum ApiKeySource
+    {
+        Options,
+        DeepSeekEnvironment,
+        OpenAIEnvironment,
+        GenericEnvironment,
+    }
+
+    private enum ProviderKind
+    {
+        OpenAI,
+        DeepSeek,
     }
 
     private sealed record ConfiguredProvider(
