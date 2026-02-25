@@ -73,7 +73,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? "deepseek" : evt.ProviderName,
             Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,
             SystemPrompt = evt.SystemPrompt ?? string.Empty,
-            Temperature = evt.Temperature == 0 ? null : evt.Temperature,
+            Temperature = evt.HasTemperature ? evt.Temperature : null,
             MaxTokens = evt.MaxTokens == 0 ? null : evt.MaxTokens,
             MaxToolRounds = evt.MaxToolRounds <= 0 ? 10 : evt.MaxToolRounds,
             MaxHistoryMessages = evt.MaxHistoryMessages <= 0 ? 100 : evt.MaxHistoryMessages,

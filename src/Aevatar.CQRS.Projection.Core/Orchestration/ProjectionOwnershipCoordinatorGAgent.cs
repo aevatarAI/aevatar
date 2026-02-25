@@ -32,11 +32,13 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
             throw new InvalidOperationException("Session id is required to acquire projection ownership.");
 
         var normalizedLeaseTtlMs = ProjectionOwnershipCoordinatorOptions.NormalizeLeaseTtlMs(evt.LeaseTtlMs);
+        var nowUtc = DateTime.UtcNow;
         var acquireEvent = new ProjectionOwnershipAcquireEvent
         {
             ScopeId = evt.ScopeId,
             SessionId = evt.SessionId,
             LeaseTtlMs = normalizedLeaseTtlMs,
+            OccurredAtUtc = ResolveOccurredAtForPersist(evt.OccurredAtUtc, nowUtc),
         };
 
         if (State.Active)
@@ -86,7 +88,14 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
                 $"Projection ownership coordinator '{Id}' session mismatch. expected='{State.SessionId}', actual='{evt.SessionId}'.");
         }
 
-        await PersistDomainEventAsync(evt);
+        var releaseEvent = new ProjectionOwnershipReleaseEvent
+        {
+            ScopeId = evt.ScopeId,
+            SessionId = evt.SessionId,
+            OccurredAtUtc = ResolveOccurredAtForPersist(evt.OccurredAtUtc, DateTime.UtcNow),
+        };
+
+        await PersistDomainEventAsync(releaseEvent);
     }
 
     protected override ProjectionOwnershipCoordinatorState TransitionState(
@@ -106,7 +115,7 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
         next.ScopeId = evt.ScopeId;
         next.SessionId = evt.SessionId;
         next.Active = true;
-        next.LastUpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
+        next.LastUpdatedAtUtc = RequireOccurredAtUtc(evt.OccurredAtUtc, nameof(ProjectionOwnershipAcquireEvent));
         next.LeaseTtlMs = ProjectionOwnershipCoordinatorOptions.NormalizeLeaseTtlMs(evt.LeaseTtlMs);
         return next;
     }
@@ -115,14 +124,13 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
         ProjectionOwnershipCoordinatorState current,
         ProjectionOwnershipReleaseEvent evt)
     {
-        _ = evt;
         if (!current.Active)
             return current;
 
         var next = current.Clone();
         next.Active = false;
         next.SessionId = string.Empty;
-        next.LastUpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
+        next.LastUpdatedAtUtc = RequireOccurredAtUtc(evt.OccurredAtUtc, nameof(ProjectionOwnershipReleaseEvent));
         return next;
     }
 
@@ -147,4 +155,25 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
             ? lastUpdatedUtc
             : DateTime.SpecifyKind(lastUpdatedUtc, DateTimeKind.Utc);
     }
+
+    private static Timestamp ResolveOccurredAtForPersist(Timestamp? occurredAtUtc, DateTime fallbackUtcNow)
+    {
+        if (occurredAtUtc != null)
+            return NormalizeTimestamp(occurredAtUtc);
+
+        return Timestamp.FromDateTime(EnsureUtc(fallbackUtcNow));
+    }
+
+    private static Timestamp RequireOccurredAtUtc(Timestamp? occurredAtUtc, string eventName) =>
+        occurredAtUtc == null
+            ? throw new InvalidOperationException($"{eventName} must include occurred_at_utc.")
+            : NormalizeTimestamp(occurredAtUtc);
+
+    private static Timestamp NormalizeTimestamp(Timestamp timestamp) =>
+        Timestamp.FromDateTime(EnsureUtc(timestamp.ToDateTime()));
+
+    private static DateTime EnsureUtc(DateTime value) =>
+        value.Kind == DateTimeKind.Utc
+            ? value
+            : DateTime.SpecifyKind(value, DateTimeKind.Utc);
 }
