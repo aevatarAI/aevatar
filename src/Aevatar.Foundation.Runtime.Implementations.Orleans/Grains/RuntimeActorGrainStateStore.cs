@@ -53,6 +53,7 @@ internal sealed class RuntimeActorGrainStateStore<TState>
 
         _runtimeState.State.AgentStateTypeName = StateTypeName;
         _runtimeState.State.AgentStateSnapshot = state.ToByteArray();
+        _runtimeState.State.AgentStateSnapshotVersion = 0;
         return _runtimeState.WriteStateAsync();
     }
 
@@ -63,6 +64,7 @@ internal sealed class RuntimeActorGrainStateStore<TState>
 
         _runtimeState.State.AgentStateTypeName = null;
         _runtimeState.State.AgentStateSnapshot = null;
+        _runtimeState.State.AgentStateSnapshotVersion = 0;
         return _runtimeState.WriteStateAsync();
     }
 }

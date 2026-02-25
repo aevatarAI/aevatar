@@ -50,9 +50,10 @@ internal static class WorkflowExecutionProjectionMutations
         });
     }
 
-    public static void RefreshDerivedFields(WorkflowExecutionReport report)
+    public static void RefreshDerivedFields(WorkflowExecutionReport report, DateTimeOffset updatedAt)
     {
         report.DurationMs = Math.Max(0, (report.EndedAt - report.StartedAt).TotalMilliseconds);
+        report.UpdatedAt = updatedAt;
 
         var stepTypeCounts = report.Steps
             .Where(x => !string.IsNullOrWhiteSpace(x.StepType))

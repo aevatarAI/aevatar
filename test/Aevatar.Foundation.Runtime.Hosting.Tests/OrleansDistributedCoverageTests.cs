@@ -370,7 +370,7 @@ public sealed class OrleansDistributedCoverageTests
     {
         var state = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
         var stateProxy = (RuntimeActorPersistentStateProxy)(object)state;
-        var grain = new RuntimeActorGrain(state, new AsyncLocalRuntimeActorStateBindingAccessor());
+        var grain = new RuntimeActorGrain(state);
 
         (await grain.IsInitializedAsync()).Should().BeFalse();
         stateProxy.State.AgentTypeName = "Known.Type";
@@ -409,7 +409,7 @@ public sealed class OrleansDistributedCoverageTests
     public async Task RuntimeActorGrain_ShouldCoverExceptionalBranches()
     {
         var state = DispatchProxy.Create<IPersistentState<RuntimeActorGrainState>, RuntimeActorPersistentStateProxy>();
-        var grain = new RuntimeActorGrain(state, new AsyncLocalRuntimeActorStateBindingAccessor());
+        var grain = new RuntimeActorGrain(state);
 
         var initialized = await grain.InitializeAgentAsync("Unknown.Agent.Type, Unknown.Assembly");
         initialized.Should().BeFalse();

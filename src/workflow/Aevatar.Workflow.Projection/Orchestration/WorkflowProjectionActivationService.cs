@@ -1,26 +1,27 @@
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowProjectionActivationService : IWorkflowProjectionActivationService
+public sealed class WorkflowProjectionActivationService : IProjectionPortActivationService<WorkflowExecutionRuntimeLease>
 {
     private readonly IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> _lifecycle;
     private readonly IProjectionClock _clock;
     private readonly IWorkflowExecutionProjectionContextFactory _contextFactory;
-    private readonly IWorkflowProjectionLeaseManager _leaseManager;
+    private readonly IProjectionOwnershipCoordinator _ownershipCoordinator;
     private readonly IWorkflowProjectionReadModelUpdater _readModelUpdater;
 
     public WorkflowProjectionActivationService(
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
         IProjectionClock clock,
         IWorkflowExecutionProjectionContextFactory contextFactory,
-        IWorkflowProjectionLeaseManager leaseManager,
+        IProjectionOwnershipCoordinator ownershipCoordinator,
         IWorkflowProjectionReadModelUpdater readModelUpdater)
     {
         _lifecycle = lifecycle;
         _clock = clock;
         _contextFactory = contextFactory;
-        _leaseManager = leaseManager;
+        _ownershipCoordinator = ownershipCoordinator;
         _readModelUpdater = readModelUpdater;
     }
 
@@ -33,7 +34,7 @@ public sealed class WorkflowProjectionActivationService : IWorkflowProjectionAct
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootActorId);
 
-        await _leaseManager.AcquireAsync(rootActorId, commandId, ct);
+        await _ownershipCoordinator.AcquireAsync(rootActorId, commandId, ct);
         try
         {
             var startedAt = _clock.UtcNow;
@@ -62,7 +63,7 @@ public sealed class WorkflowProjectionActivationService : IWorkflowProjectionAct
     {
         try
         {
-            await _leaseManager.ReleaseAsync(rootActorId, commandId, CancellationToken.None);
+            await _ownershipCoordinator.ReleaseAsync(rootActorId, commandId, CancellationToken.None);
         }
         catch
         {

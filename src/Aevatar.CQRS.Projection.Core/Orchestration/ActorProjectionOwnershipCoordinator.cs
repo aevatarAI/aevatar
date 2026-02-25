@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -13,11 +13,16 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
     private const string CoordinatorPublisherId = "projection.ownership.coordinator";
     private readonly IActorRuntime _runtime;
     private readonly IAgentTypeVerifier _agentTypeVerifier;
+    private readonly ProjectionOwnershipCoordinatorOptions _options;
 
-    public ActorProjectionOwnershipCoordinator(IActorRuntime runtime, IAgentTypeVerifier agentTypeVerifier)
+    public ActorProjectionOwnershipCoordinator(
+        IActorRuntime runtime,
+        IAgentTypeVerifier agentTypeVerifier,
+        ProjectionOwnershipCoordinatorOptions? options = null)
     {
         _runtime = runtime;
         _agentTypeVerifier = agentTypeVerifier;
+        _options = options ?? new ProjectionOwnershipCoordinatorOptions();
     }
 
     public async Task AcquireAsync(
@@ -26,11 +31,14 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
         CancellationToken ct = default)
     {
         var coordinatorActor = await ResolveCoordinatorActorAsync(scopeId, ct);
+        var occurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
         var envelope = CreateCoordinatorEnvelope(
             new ProjectionOwnershipAcquireEvent
             {
                 ScopeId = scopeId,
                 SessionId = sessionId,
+                LeaseTtlMs = _options.ResolveLeaseTtlMs(),
+                OccurredAtUtc = occurredAtUtc,
             },
             sessionId);
         await coordinatorActor.HandleEventAsync(envelope, ct);
@@ -42,11 +50,13 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
         CancellationToken ct = default)
     {
         var coordinatorActor = await ResolveCoordinatorActorAsync(scopeId, ct);
+        var occurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
         var envelope = CreateCoordinatorEnvelope(
             new ProjectionOwnershipReleaseEvent
             {
                 ScopeId = scopeId,
                 SessionId = sessionId,
+                OccurredAtUtc = occurredAtUtc,
             },
             sessionId);
         await coordinatorActor.HandleEventAsync(envelope, ct);

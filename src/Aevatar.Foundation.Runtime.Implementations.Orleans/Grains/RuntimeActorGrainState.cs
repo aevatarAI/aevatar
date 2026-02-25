@@ -20,4 +20,7 @@ public sealed class RuntimeActorGrainState
 
     [Id(5)]
     public byte[]? AgentStateSnapshot { get; set; }
+
+    [Id(6)]
+    public long AgentStateSnapshotVersion { get; set; }
 }

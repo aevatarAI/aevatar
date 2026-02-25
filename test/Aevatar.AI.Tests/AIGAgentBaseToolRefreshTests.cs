@@ -4,6 +4,8 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -17,10 +19,14 @@ public class AIGAgentBaseToolRefreshTests
         var source = new MutableToolSource("tool-a", "tool-b");
         var services = new ServiceCollection();
         services.AddSingleton<IAgentToolSource>(source);
+        services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         using var provider = services.BuildServiceProvider();
         var agent = new TestAIGAgent(provider.GetServices<IAgentToolSource>())
         {
             Services = provider,
+            EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
         };
 
         await agent.ActivateAsync();
@@ -38,10 +44,14 @@ public class AIGAgentBaseToolRefreshTests
         var source = new MutableToolSource("source-old");
         var services = new ServiceCollection();
         services.AddSingleton<IAgentToolSource>(source);
+        services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         using var provider = services.BuildServiceProvider();
         var agent = new TestAIGAgent(provider.GetServices<IAgentToolSource>())
         {
             Services = provider,
+            EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
         };
 
         await agent.ActivateAsync();
@@ -145,4 +155,5 @@ public class AIGAgentBaseToolRefreshTests
             yield break;
         }
     }
+
 }

@@ -7,11 +7,11 @@ namespace Aevatar.Workflow.Application.Queries;
 public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
 {
     private readonly IWorkflowDefinitionRegistry _workflowRegistry;
-    private readonly IWorkflowExecutionProjectionPort _projectionPort;
+    private readonly IWorkflowExecutionProjectionQueryPort _projectionPort;
 
     public WorkflowExecutionQueryApplicationService(
         IWorkflowDefinitionRegistry workflowRegistry,
-        IWorkflowExecutionProjectionPort projectionPort)
+        IWorkflowExecutionProjectionQueryPort projectionPort)
     {
         _workflowRegistry = workflowRegistry;
         _projectionPort = projectionPort;
@@ -53,5 +53,46 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
             return [];
 
         return await _projectionPort.ListActorTimelineAsync(actorId, take, ct);
+    }
+
+    public async Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
+        string actorId,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default)
+    {
+        if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
+            return [];
+
+        return await _projectionPort.GetActorGraphEdgesAsync(actorId, take, options, ct);
+    }
+
+    public async Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default)
+    {
+        if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
+            return new WorkflowActorGraphSubgraph
+            {
+                RootNodeId = actorId ?? string.Empty,
+            };
+
+        return await _projectionPort.GetActorGraphSubgraphAsync(actorId, depth, take, options, ct);
+    }
+
+    public async Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default)
+    {
+        if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
+            return null;
+
+        return await _projectionPort.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, options, ct);
     }
 }

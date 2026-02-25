@@ -34,6 +34,62 @@ public sealed class WorkflowActorTimelineItem
     public Dictionary<string, string> Data { get; set; } = [];
 }
 
+public sealed class WorkflowActorGraphNode
+{
+    public string NodeId { get; set; } = string.Empty;
+
+    public string NodeType { get; set; } = string.Empty;
+
+    public DateTimeOffset UpdatedAt { get; set; }
+
+    public Dictionary<string, string> Properties { get; set; } = [];
+}
+
+public enum WorkflowActorGraphDirection
+{
+    Outbound = 0,
+    Inbound = 1,
+    Both = 2,
+}
+
+public sealed class WorkflowActorGraphQueryOptions
+{
+    public WorkflowActorGraphDirection Direction { get; set; } = WorkflowActorGraphDirection.Both;
+
+    public IReadOnlyList<string> EdgeTypes { get; set; } = [];
+}
+
+public sealed class WorkflowActorGraphEdge
+{
+    public string EdgeId { get; set; } = string.Empty;
+
+    public string FromNodeId { get; set; } = string.Empty;
+
+    public string ToNodeId { get; set; } = string.Empty;
+
+    public string EdgeType { get; set; } = string.Empty;
+
+    public DateTimeOffset UpdatedAt { get; set; }
+
+    public Dictionary<string, string> Properties { get; set; } = [];
+}
+
+public sealed class WorkflowActorGraphSubgraph
+{
+    public string RootNodeId { get; set; } = string.Empty;
+
+    public List<WorkflowActorGraphNode> Nodes { get; set; } = [];
+
+    public List<WorkflowActorGraphEdge> Edges { get; set; } = [];
+}
+
+public sealed class WorkflowActorGraphEnrichedSnapshot
+{
+    public WorkflowActorSnapshot Snapshot { get; set; } = new();
+
+    public WorkflowActorGraphSubgraph Subgraph { get; set; } = new();
+}
+
 public sealed record WorkflowTopologyEdge(string Parent, string Child);
 
 public enum WorkflowRunProjectionScope
@@ -72,6 +128,8 @@ public sealed class WorkflowRunReport
     public string CommandId { get; set; } = string.Empty;
     public long StateVersion { get; set; }
     public string LastEventId { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset EndedAt { get; set; }
     public double DurationMs { get; set; }

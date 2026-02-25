@@ -1,212 +1,156 @@
-using Aevatar.CQRS.Projection.Abstractions;
-using Aevatar.AI.Projection.Reducers;
-using Aevatar.Workflow.Extensions.AIProjection;
-using Aevatar.Workflow.Projection;
-using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Workflow.Projection.Configuration;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Workflow.Projection.DependencyInjection;
-using Aevatar.Workflow.Projection.Reducers;
+using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowExecutionProjectionRegistrationTests
 {
     [Fact]
-    public async Task AddWorkflowExecutionProjectionReducer_ShouldSupportExternalReducer()
+    public async Task AddWorkflowExecutionProjectionCQRS_WhenNoProvidersRegistered_ShouldFailFast()
     {
+        using var env = new EnvironmentVariableScope("DOTNET_ENVIRONMENT", "Production");
         var services = new ServiceCollection();
+        RegisterEventStore(services);
         services.AddWorkflowExecutionProjectionCQRS();
-        services.AddWorkflowExecutionProjectionReducer<CustomChatRequestReducer>();
 
         await using var provider = services.BuildServiceProvider();
-        var coordinator = provider.GetRequiredService<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        Func<Task> act = () => StartHostedServicesAsync(provider);
 
-        var context = new WorkflowExecutionProjectionContext
-        {
-            ProjectionId = "ext-1",
-            CommandId = "cmd-ext-1",
-            RootActorId = "root",
-            WorkflowName = "direct",
-            StartedAt = DateTimeOffset.UtcNow,
-            Input = "hello",
-        };
-
-        await coordinator.InitializeAsync(context);
-        await coordinator.ProjectAsync(context, Wrap(new ChatRequestEvent { Prompt = "hello" }));
-        await coordinator.CompleteAsync(context, []);
-
-        var report = await store.GetAsync(context.RootActorId);
-        report.Should().NotBeNull();
-        report!.Timeline.Should().ContainSingle(x => x.Stage == "custom.chat.request");
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*document startup probe failed in production environment*");
     }
 
     [Fact]
-    public async Task AddWorkflowExecutionProjectionExtensionsFromAssembly_ShouldAutoRegisterReducer()
+    public async Task AddWorkflowExecutionProjectionCQRS_ShouldResolveDispatcherAndStores()
     {
         var services = new ServiceCollection();
+        RegisterEventStore(services);
+        RegisterInMemoryProviders(services);
         services.AddWorkflowExecutionProjectionCQRS();
-        services.AddWorkflowExecutionProjectionExtensionsFromAssembly(typeof(CustomChatRequestReducer).Assembly);
 
         await using var provider = services.BuildServiceProvider();
-        var coordinator = provider.GetRequiredService<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
+        var documentStore = provider.GetRequiredService<IProjectionDocumentStore<WorkflowExecutionReport, string>>();
+        var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
+        var dispatcher = provider.GetRequiredService<IProjectionStoreDispatcher<WorkflowExecutionReport, string>>();
 
-        var context = new WorkflowExecutionProjectionContext
-        {
-            ProjectionId = "ext-2",
-            CommandId = "cmd-ext-2",
-            RootActorId = "root",
-            WorkflowName = "direct",
-            StartedAt = DateTimeOffset.UtcNow,
-            Input = "hello",
-        };
+        documentStore.Should().NotBeNull();
+        relationStore.Should().NotBeNull();
+        dispatcher.Should().NotBeNull();
 
-        await coordinator.InitializeAsync(context);
-        await coordinator.ProjectAsync(context, Wrap(new ChatRequestEvent { Prompt = "hello" }));
-        await coordinator.CompleteAsync(context, []);
-
-        var report = await store.GetAsync(context.RootActorId);
-        report.Should().NotBeNull();
-        report!.Timeline.Should().ContainSingle(x => x.Stage == "custom.chat.request");
+        Func<Task> act = () => StartHostedServicesAsync(provider);
+        await act.Should().NotThrowAsync();
     }
 
     [Fact]
-    public void AddWorkflowExecutionProjectionCQRS_MultipleCalls_ShouldUseLastOptions()
+    public void AddWorkflowExecutionProjectionCQRS_WhenGraphProviderMissing_ShouldThrowOnGraphStoreResolution()
     {
         var services = new ServiceCollection();
-        services.AddWorkflowExecutionProjectionCQRS(options => options.Enabled = true);
-        services.AddWorkflowExecutionProjectionCQRS(options => options.Enabled = false);
-
-        using var provider = services.BuildServiceProvider();
-        var options = provider.GetRequiredService<WorkflowExecutionProjectionOptions>();
-        var coordinator = provider.GetRequiredService<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
-
-        options.Enabled.Should().BeFalse();
-        coordinator.Should().NotBeNull();
-        store.Should().NotBeNull();
-    }
-
-    [Fact]
-    public void AddWorkflowExecutionProjectionCQRS_ShouldExposeGenericProjectionAbstractions()
-    {
-        var services = new ServiceCollection();
+        RegisterEventStore(services);
+        RegisterElasticsearchDocumentProvider(services);
         services.AddWorkflowExecutionProjectionCQRS();
 
         using var provider = services.BuildServiceProvider();
-        var coordinator = provider.GetRequiredService<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
-        var reducers = provider.GetServices<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>();
-        var projectors = provider.GetServices<IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
+        Action act = () => provider.GetRequiredService<IProjectionGraphStore>();
 
-        coordinator.Should().NotBeNull();
-        store.Should().NotBeNull();
-        reducers.Should().NotBeEmpty();
-        projectors.Should().NotBeEmpty();
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*IProjectionGraphStore*");
     }
 
-    [Fact]
-    public void AddWorkflowExecutionProjectionCQRS_WithAIExtensions_ShouldRegisterDefaultAIReducers()
+    private static void RegisterInMemoryProviders(IServiceCollection services)
     {
-        var services = new ServiceCollection();
-        services.AddWorkflowExecutionProjectionCQRS();
-        services.AddWorkflowAIProjectionExtensions();
-
-        using var provider = services.BuildServiceProvider();
-        var reducerTypes = provider
-            .GetServices<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>()
-            .Select(x => x.GetType())
-            .ToList();
-
-        reducerTypes.Should().Contain(x =>
-            x.IsGenericType &&
-            x.GetGenericTypeDefinition() == typeof(TextMessageEndProjectionReducer<,>));
-        reducerTypes.Should().Contain(x =>
-            x.IsGenericType &&
-            x.GetGenericTypeDefinition() == typeof(TextMessageStartProjectionReducer<,>));
-        reducerTypes.Should().Contain(x =>
-            x.IsGenericType &&
-            x.GetGenericTypeDefinition() == typeof(TextMessageContentProjectionReducer<,>));
-        reducerTypes.Should().Contain(x =>
-            x.IsGenericType &&
-            x.GetGenericTypeDefinition() == typeof(ToolCallProjectionReducer<,>));
-        reducerTypes.Should().Contain(x =>
-            x.IsGenericType &&
-            x.GetGenericTypeDefinition() == typeof(ToolResultProjectionReducer<,>));
+        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
+            keySelector: report => report.RootActorId,
+            keyFormatter: key => key,
+            listSortSelector: report => report.CreatedAt,
+            listTakeMax: 200);
+        services.AddInMemoryGraphProjectionStore();
     }
 
-    [Fact]
-    public async Task AddWorkflowExecutionProjectionCQRS_WithAIExtensions_ShouldProjectAIEventsWithoutWorkflowApplier()
+    private static void RegisterElasticsearchDocumentProvider(IServiceCollection services)
     {
-        var services = new ServiceCollection();
-        services.AddWorkflowExecutionProjectionCQRS();
-        services.AddWorkflowAIProjectionExtensions();
-
-        await using var provider = services.BuildServiceProvider();
-        var coordinator = provider.GetRequiredService<IProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
-
-        var context = new WorkflowExecutionProjectionContext
-        {
-            ProjectionId = "ai-layer-1",
-            CommandId = "cmd-ai-layer-1",
-            RootActorId = "root",
-            WorkflowName = "wf",
-            StartedAt = DateTimeOffset.UtcNow,
-            Input = "hello",
-        };
-
-        await coordinator.InitializeAsync(context);
-        await coordinator.ProjectAsync(context, Wrap(new TextMessageStartEvent { SessionId = "s1" }, "assistant"));
-        await coordinator.ProjectAsync(context, Wrap(new TextMessageContentEvent { SessionId = "s1", Delta = "hi" }, "assistant"));
-        await coordinator.ProjectAsync(context, Wrap(new TextMessageEndEvent { SessionId = "s1", Content = "hello" }, "assistant"));
-        await coordinator.ProjectAsync(context, Wrap(new ToolCallEvent { ToolName = "search", CallId = "c1" }, "assistant"));
-        await coordinator.ProjectAsync(context, Wrap(new ToolResultEvent { CallId = "c1", Success = true }, "assistant"));
-        await coordinator.CompleteAsync(context, []);
-
-        var report = await store.GetAsync(context.RootActorId);
-        report.Should().NotBeNull();
-        report!.Timeline.Should().Contain(x => x.Stage == "llm.start");
-        report.Timeline.Should().Contain(x => x.Stage == "llm.content");
-        report.Timeline.Should().Contain(x => x.Stage == "llm.end");
-        report.Timeline.Should().Contain(x => x.Stage == "tool.call");
-        report.Timeline.Should().Contain(x => x.Stage == "tool.result");
-        report.RoleReplies.Should().ContainSingle(x => x.RoleId == "assistant");
-    }
-
-    private static EventEnvelope Wrap(IMessage evt, string publisherId = "test") => new()
-    {
-        Id = Guid.NewGuid().ToString("N"),
-        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Payload = Any.Pack(evt),
-        PublisherId = publisherId,
-        Direction = EventDirection.Down,
-    };
-
-    public sealed class CustomChatRequestReducer : WorkflowExecutionEventReducerBase<ChatRequestEvent>
-    {
-        protected override bool Reduce(
-            WorkflowExecutionReport report,
-            WorkflowExecutionProjectionContext context,
-            EventEnvelope envelope,
-            ChatRequestEvent evt,
-            DateTimeOffset now)
-        {
-            report.Timeline.Add(new WorkflowExecutionTimelineEvent
+        services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
+            optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
             {
-                Timestamp = now,
-                Stage = "custom.chat.request",
-                Message = evt.Prompt ?? "",
-                AgentId = envelope.PublisherId ?? "",
-                EventType = envelope.Payload?.TypeUrl ?? "",
-            });
+                Endpoints = ["http://localhost:9200"],
+            },
+            metadataFactory: sp =>
+            {
+                var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
+                return metadataResolver.Resolve<WorkflowExecutionReport>();
+            },
+            keySelector: report => report.RootActorId,
+            keyFormatter: key => key);
+    }
 
-            return true;
+    private static async Task StartHostedServicesAsync(IServiceProvider provider)
+    {
+        var hostedServices = provider.GetServices<IHostedService>().ToList();
+        foreach (var hostedService in hostedServices)
+            await hostedService.StartAsync(CancellationToken.None);
+    }
+
+    private static void RegisterEventStore(IServiceCollection services)
+    {
+        services.AddSingleton<IEventStore, InMemoryEventStore>();
+        services.AddSingleton<IActorRuntime, NoOpActorRuntime>();
+        services.AddSingleton<IAgentTypeVerifier, AlwaysTrueTypeVerifier>();
+    }
+
+    private sealed class NoOpActorRuntime : IActorRuntime
+    {
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            throw new NotSupportedException("No-op runtime.");
+
+        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
+            throw new NotSupportedException("No-op runtime.");
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
+
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task RestoreAllAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class AlwaysTrueTypeVerifier : IAgentTypeVerifier
+    {
+        public Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default) =>
+            Task.FromResult(true);
+    }
+
+    private sealed class EnvironmentVariableScope : IDisposable
+    {
+        private readonly string _name;
+        private readonly string? _previous;
+
+        public EnvironmentVariableScope(string name, string? value)
+        {
+            _name = name;
+            _previous = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(_name, _previous);
         }
     }
 }

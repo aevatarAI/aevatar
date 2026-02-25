@@ -11,7 +11,14 @@ namespace Aevatar.Foundation.Runtime.Persistence;
 /// <summary>In-memory event store with append and version-based query support.</summary>
 public sealed class InMemoryEventStore : IEventStore
 {
-    private readonly ConcurrentDictionary<string, List<StateEvent>> _store = new();
+    private sealed class EventStreamState
+    {
+        public long CurrentVersion { get; set; }
+
+        public List<StateEvent> Events { get; } = [];
+    }
+
+    private readonly ConcurrentDictionary<string, EventStreamState> _store = new();
     private readonly object _lock = new();
 
     /// <summary>Appends events with optimistic concurrency check on expectedVersion.</summary>
@@ -22,30 +29,62 @@ public sealed class InMemoryEventStore : IEventStore
     /// <returns>Latest version after append.</returns>
     public Task<long> AppendAsync(string agentId, IEnumerable<StateEvent> events, long expectedVersion, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         lock (_lock)
         {
-            var list = _store.GetOrAdd(agentId, _ => []);
-            var current = list.Count > 0 ? list[^1].Version : 0;
+            var stream = _store.GetOrAdd(agentId, _ => new EventStreamState());
+            var current = stream.CurrentVersion;
             if (current != expectedVersion)
                 throw new InvalidOperationException($"Optimistic concurrency conflict: expected {expectedVersion}, actual {current}");
             var eventList = events.ToList();
-            list.AddRange(eventList);
-            return Task.FromResult(eventList.Count > 0 ? eventList[^1].Version : current);
+            stream.Events.AddRange(eventList.Select(static x => x.Clone()));
+            if (eventList.Count > 0)
+                stream.CurrentVersion = eventList[^1].Version;
+            return Task.FromResult(stream.CurrentVersion);
         }
     }
 
     /// <summary>Gets events for an agent, optionally filtered by fromVersion.</summary>
     public Task<IReadOnlyList<StateEvent>> GetEventsAsync(string agentId, long? fromVersion = null, CancellationToken ct = default)
     {
-        if (!_store.TryGetValue(agentId, out var list))
-            return Task.FromResult<IReadOnlyList<StateEvent>>([]);
-        IReadOnlyList<StateEvent> result = fromVersion.HasValue
-            ? list.Where(e => e.Version > fromVersion.Value).ToList()
-            : list.ToList();
-        return Task.FromResult(result);
+        ct.ThrowIfCancellationRequested();
+        lock (_lock)
+        {
+            if (!_store.TryGetValue(agentId, out var stream))
+                return Task.FromResult<IReadOnlyList<StateEvent>>([]);
+
+            IReadOnlyList<StateEvent> result = fromVersion.HasValue
+                ? stream.Events.Where(e => e.Version > fromVersion.Value).Select(static x => x.Clone()).ToList()
+                : stream.Events.Select(static x => x.Clone()).ToList();
+            return Task.FromResult(result);
+        }
     }
 
     /// <summary>Gets the current version for the specified agent.</summary>
-    public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
-        Task.FromResult(!_store.TryGetValue(agentId, out var list) || list.Count == 0 ? 0L : list[^1].Version);
+    public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        lock (_lock)
+        {
+            return Task.FromResult(!_store.TryGetValue(agentId, out var stream) ? 0L : stream.CurrentVersion);
+        }
+    }
+
+    public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (toVersion <= 0)
+            return Task.FromResult(0L);
+
+        lock (_lock)
+        {
+            if (!_store.TryGetValue(agentId, out var stream))
+                return Task.FromResult(0L);
+
+            var before = stream.Events.Count;
+            stream.Events.RemoveAll(x => x.Version <= toVersion);
+            var removed = before - stream.Events.Count;
+            return Task.FromResult((long)removed);
+        }
+    }
 }

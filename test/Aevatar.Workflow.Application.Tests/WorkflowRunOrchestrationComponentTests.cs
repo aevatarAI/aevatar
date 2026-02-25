@@ -277,7 +277,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         }
     }
 
-    private sealed class CapturingProjectionPort : IWorkflowExecutionProjectionPort
+    private sealed class CapturingProjectionPort : IWorkflowExecutionProjectionLifecyclePort
     {
         public bool ProjectionEnabled { get; set; } = true;
         public bool EnableActorQueryEndpoints => false;
@@ -356,6 +356,32 @@ public sealed class WorkflowRunOrchestrationComponentTests
             _ = take;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(
+            string actorId,
+            int take = 200,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = take;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
+        }
+
+        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            CancellationToken ct = default)
+        {
+            _ = depth;
+            _ = take;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new WorkflowActorGraphSubgraph
+            {
+                RootNodeId = actorId,
+            });
         }
     }
 

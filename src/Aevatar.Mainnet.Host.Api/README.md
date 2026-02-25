@@ -31,6 +31,8 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 - `ActorRuntime:MassTransitTransportBackend=Kafka`
 - `Orleans:ClusteringMode=Localhost`
 
+在上述配置下，Event Sourcing 的 `IEventStore` 会自动使用 `GarnetEventStore`（连接串复用 `ActorRuntime:OrleansGarnetConnectionString`）。
+
 `Orleans:ClusteringMode` 支持：
 
 - `Localhost`：本机多进程开发模式（默认）。

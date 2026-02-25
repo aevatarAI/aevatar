@@ -16,7 +16,7 @@ message ConfigureRoleAgentEvent {
   string provider_name = 2;
   string model = 3;
   string system_prompt = 4;
-  double temperature = 5;
+  optional double temperature = 5;
   int32 max_tokens = 6;
   int32 max_tool_rounds = 7;
   int32 max_history_messages = 8;
