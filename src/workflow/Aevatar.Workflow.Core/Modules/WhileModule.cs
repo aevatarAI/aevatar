@@ -35,7 +35,9 @@ public sealed class WhileModule : IEventModule
             if (request.StepType != "while") return;
 
             var maxIterations = int.TryParse(request.Parameters.GetValueOrDefault("max_iterations", "10"), out var max) ? max : 10;
-            _iterations[request.StepId] = 0;
+            var runId = string.IsNullOrWhiteSpace(request.RunId) ? "default" : request.RunId;
+            var whileKey = BuildRunStepKey(runId, request.StepId);
+            _iterations[whileKey] = 0;
 
             ctx.Logger.LogInformation("While 循环 {StepId}: 开始，最大 {Max} 次迭代", request.StepId, maxIterations);
 
@@ -45,6 +47,7 @@ public sealed class WhileModule : IEventModule
             {
                 StepId = $"{request.StepId}_iter_0",
                 StepType = subStepType,
+                RunId = request.RunId,
                 Input = request.Input,
                 TargetRole = request.TargetRole,
             }, EventDirection.Down, ct);
@@ -55,10 +58,12 @@ public sealed class WhileModule : IEventModule
 
             // 找到对应的 while 步骤
             var whileStepId = GetWhileStepId(completed.StepId);
-            if (whileStepId == null || !_iterations.ContainsKey(whileStepId)) return;
+            var runId = string.IsNullOrWhiteSpace(completed.RunId) ? "default" : completed.RunId;
+            var whileKey = whileStepId == null ? null : BuildRunStepKey(runId, whileStepId);
+            if (whileStepId == null || whileKey == null || !_iterations.ContainsKey(whileKey)) return;
 
-            _iterations[whileStepId]++;
-            var iteration = _iterations[whileStepId];
+            _iterations[whileKey]++;
+            var iteration = _iterations[whileKey];
             var maxIterations = 10; // 简化：从初始请求中获取
 
             // 检查条件：简化实现——output 中不包含 "DONE" 且未达上限
@@ -72,16 +77,18 @@ public sealed class WhileModule : IEventModule
                 {
                     StepId = $"{whileStepId}_iter_{iteration}",
                     StepType = "llm_call",
+                    RunId = completed.RunId,
                     Input = completed.Output,
                 }, EventDirection.Down, ct);
             }
             else
             {
                 ctx.Logger.LogInformation("While 循环 {StepId}: 完成，共 {Iter} 次迭代", whileStepId, iteration);
-                _iterations.Remove(whileStepId);
+                _iterations.Remove(whileKey);
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = whileStepId,
+                    RunId = completed.RunId,
                     Success = true,
                     Output = completed.Output,
                 }, EventDirection.Self, ct);
@@ -94,4 +101,6 @@ public sealed class WhileModule : IEventModule
         var idx = subStepId.LastIndexOf("_iter_", StringComparison.Ordinal);
         return idx > 0 ? subStepId[..idx] : null;
     }
+
+    private static string BuildRunStepKey(string runId, string stepId) => $"{runId}:{stepId}";
 }

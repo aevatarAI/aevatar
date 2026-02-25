@@ -13,6 +13,7 @@ namespace Aevatar.Workflow.Core.Modules;
 public sealed class EvaluateModule : IEventModule
 {
     private readonly Dictionary<string, EvalContext> _pending = [];
+    private readonly Dictionary<string, int> _attemptsByRunStep = [];
 
     public string Name => "evaluate";
     public int Priority => 5;
@@ -41,6 +42,7 @@ public sealed class EvaluateModule : IEventModule
             var thresholdStr = request.Parameters.GetValueOrDefault("threshold", "3");
             var threshold = double.TryParse(thresholdStr, out var th) ? th : 3.0;
             var onBelow = request.Parameters.GetValueOrDefault("on_below", "");
+            var runId = string.IsNullOrWhiteSpace(request.RunId) ? "default" : request.RunId;
 
             var prompt = $"""
                 Evaluate the following content on these criteria: {criteria}
@@ -50,8 +52,12 @@ public sealed class EvaluateModule : IEventModule
                 {request.Input}
                 """;
 
-            var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, request.StepId);
-            _pending[sessionId] = new EvalContext(request.StepId, request.Input ?? "", threshold, onBelow);
+            var stepRunKey = $"{runId}:{request.StepId}";
+            var attempt = _attemptsByRunStep.GetValueOrDefault(stepRunKey, 0) + 1;
+            _attemptsByRunStep[stepRunKey] = attempt;
+
+            var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
+            _pending[sessionId] = new EvalContext(request.StepId, runId, request.Input ?? "", threshold, onBelow);
 
             var targetRole = request.TargetRole;
             if (!string.IsNullOrEmpty(targetRole))
@@ -90,6 +96,7 @@ public sealed class EvaluateModule : IEventModule
         }
 
         if (sid == null || !_pending.Remove(sid, out var evalCtx)) return;
+        _attemptsByRunStep.Remove($"{evalCtx.RunId}:{evalCtx.StepId}");
 
         var score = ParseScore(content ?? "");
         var passed = score >= evalCtx.Threshold;
@@ -100,6 +107,7 @@ public sealed class EvaluateModule : IEventModule
         var completed = new StepCompletedEvent
         {
             StepId = evalCtx.StepId,
+            RunId = evalCtx.RunId,
             Success = true,
             Output = evalCtx.OriginalInput,
         };
@@ -132,5 +140,5 @@ public sealed class EvaluateModule : IEventModule
             : $"{workflowActorId}:{targetRole}";
     }
 
-    private sealed record EvalContext(string StepId, string OriginalInput, double Threshold, string OnBelow);
+    private sealed record EvalContext(string StepId, string RunId, string OriginalInput, double Threshold, string OnBelow);
 }

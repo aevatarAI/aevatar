@@ -39,8 +39,9 @@ public sealed class ReflectModule : IEventModule
             var maxRounds = int.TryParse(request.Parameters.GetValueOrDefault("max_rounds", "3"), out var mr) ? mr : 3;
             var criteria = request.Parameters.GetValueOrDefault("criteria", "quality and correctness");
             maxRounds = Math.Clamp(maxRounds, 1, 10);
+            var runId = string.IsNullOrWhiteSpace(request.RunId) ? "default" : request.RunId;
 
-            var state = new ReflectState(request.StepId, request.TargetRole ?? "", request.Input ?? "",
+            var state = new ReflectState(request.StepId, runId, request.TargetRole ?? "", request.Input ?? "",
                 criteria, maxRounds, 0, ReflectPhase.Critique);
             _states[request.StepId] = state;
 
@@ -77,7 +78,7 @@ public sealed class ReflectModule : IEventModule
                 _states.Remove(state2.StepId);
                 var completed = new StepCompletedEvent
                 {
-                    StepId = state2.StepId, Success = true, Output = state2.CurrentDraft,
+                    StepId = state2.StepId, RunId = state2.RunId, Success = true, Output = state2.CurrentDraft,
                 };
                 completed.Metadata["reflect.rounds"] = round.ToString();
                 completed.Metadata["reflect.passed"] = passed.ToString();
@@ -108,7 +109,7 @@ public sealed class ReflectModule : IEventModule
             {draft}
             """;
 
-        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, $"{state.StepId}_r{state.Round}_critique");
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, state.RunId, $"{state.StepId}_r{state.Round}_critique");
         _pendingLLM[sessionId] = state;
 
         if (!string.IsNullOrEmpty(state.TargetRole))
@@ -132,7 +133,7 @@ public sealed class ReflectModule : IEventModule
             {state.CurrentDraft}
             """;
 
-        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, $"{state.StepId}_r{state.Round}_improve");
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, state.RunId, $"{state.StepId}_r{state.Round}_improve");
         _pendingLLM[sessionId] = state;
 
         if (!string.IsNullOrEmpty(state.TargetRole))
@@ -155,6 +156,6 @@ public sealed class ReflectModule : IEventModule
     private enum ReflectPhase { Critique, Improve }
 
     private sealed record ReflectState(
-        string StepId, string TargetRole, string CurrentDraft,
+        string StepId, string RunId, string TargetRole, string CurrentDraft,
         string Criteria, int MaxRounds, int Round, ReflectPhase Phase);
 }

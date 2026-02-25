@@ -38,7 +38,7 @@ public sealed class WaitSignalModule : IEventModule
             var prompt = request.Parameters.GetValueOrDefault("prompt", "");
             var timeoutMs = int.TryParse(request.Parameters.GetValueOrDefault("timeout_ms", "0"), out var t) ? t : 0;
 
-            _pending[signalName] = new PendingSignal(request.StepId, request.Input ?? "");
+            _pending[signalName] = new PendingSignal(request.StepId, request.RunId, request.Input ?? "");
 
             ctx.Logger.LogInformation("WaitSignal: step={StepId} waiting for signal={Signal}", request.StepId, signalName);
 
@@ -64,6 +64,7 @@ public sealed class WaitSignalModule : IEventModule
                         await ctx.PublishAsync(new StepCompletedEvent
                         {
                             StepId = stepId,
+                            RunId = request.RunId,
                             Success = false,
                             Error = $"signal '{signalName}' timed out after {timeoutMs}ms",
                         }, EventDirection.Self, CancellationToken.None);
@@ -83,11 +84,12 @@ public sealed class WaitSignalModule : IEventModule
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = pending.StepId,
+                RunId = pending.RunId,
                 Success = true,
                 Output = output,
             }, EventDirection.Self, ct);
         }
     }
 
-    private sealed record PendingSignal(string StepId, string Input);
+    private sealed record PendingSignal(string StepId, string RunId, string Input);
 }

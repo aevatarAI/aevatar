@@ -32,7 +32,7 @@ public sealed class DelayModule : IEventModule
 
         await ctx.PublishAsync(new StepCompletedEvent
         {
-            StepId = request.StepId, Success = true, Output = request.Input ?? "",
+            StepId = request.StepId, RunId = request.RunId, Success = true, Output = request.Input ?? "",
         }, EventDirection.Self, ct);
     }
 }

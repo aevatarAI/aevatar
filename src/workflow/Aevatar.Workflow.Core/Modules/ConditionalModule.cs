@@ -36,6 +36,7 @@ public sealed class ConditionalModule : IEventModule
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = request.StepId,
+            RunId = request.RunId,
             Success = true, Output = input,
         }, EventDirection.Self, ct);
     }

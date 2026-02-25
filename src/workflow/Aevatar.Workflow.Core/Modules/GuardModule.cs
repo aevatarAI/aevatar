@@ -35,7 +35,7 @@ public sealed class GuardModule : IEventModule
             ctx.Logger.LogInformation("Guard {StepId}: check={Check} passed", request.StepId, check);
             await ctx.PublishAsync(new StepCompletedEvent
             {
-                StepId = request.StepId, Success = true, Output = input,
+                StepId = request.StepId, RunId = request.RunId, Success = true, Output = input,
             }, EventDirection.Self, ct);
             return;
         }
@@ -46,7 +46,7 @@ public sealed class GuardModule : IEventModule
         {
             var completed = new StepCompletedEvent
             {
-                StepId = request.StepId, Success = true, Output = input,
+                StepId = request.StepId, RunId = request.RunId, Success = true, Output = input,
             };
             completed.Metadata["guard.skipped"] = "true";
             completed.Metadata["guard.reason"] = reason;
@@ -56,7 +56,7 @@ public sealed class GuardModule : IEventModule
         {
             var completed = new StepCompletedEvent
             {
-                StepId = request.StepId, Success = true, Output = input,
+                StepId = request.StepId, RunId = request.RunId, Success = true, Output = input,
             };
             completed.Metadata["branch"] = target;
             completed.Metadata["guard.reason"] = reason;
@@ -66,7 +66,7 @@ public sealed class GuardModule : IEventModule
         {
             await ctx.PublishAsync(new StepCompletedEvent
             {
-                StepId = request.StepId, Success = false, Error = $"guard check '{check}' failed: {reason}",
+                StepId = request.StepId, RunId = request.RunId, Success = false, Error = $"guard check '{check}' failed: {reason}",
             }, EventDirection.Self, ct);
         }
     }

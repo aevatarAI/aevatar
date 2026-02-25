@@ -30,7 +30,7 @@ public sealed class EmitModule : IEventModule
 
         var completed = new StepCompletedEvent
         {
-            StepId = request.StepId, Success = true, Output = request.Input ?? "",
+            StepId = request.StepId, RunId = request.RunId, Success = true, Output = request.Input ?? "",
         };
         completed.Metadata["emit.event_type"] = eventType;
         completed.Metadata["emit.payload"] = payload;

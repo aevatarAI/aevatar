@@ -497,6 +497,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             {
                 StepId = "llm-1",
                 StepType = "llm_call",
+                RunId = "run-llm-1",
                 Input = "question",
                 Parameters = { ["prompt_prefix"] = "system" },
             }),
@@ -505,7 +506,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
         chat.Prompt.Should().Be("system\n\nquestion");
-        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-1"));
+        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1"));
         ctx.Published.Last().direction.Should().Be(EventDirection.Self);
     }
 
@@ -520,13 +521,14 @@ public sealed class WorkflowCoreModulesCoverageTests
             {
                 StepId = "llm-text",
                 StepType = "llm_call",
+                RunId = "run-text",
                 Input = "q1",
             }),
             ctx,
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-text");
+        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-text", "llm-text");
         await module.HandleAsync(
             Envelope(new TextMessageEndEvent
             {
@@ -548,13 +550,14 @@ public sealed class WorkflowCoreModulesCoverageTests
             {
                 StepId = "llm-chat",
                 StepType = "llm_call",
+                RunId = "run-chat",
                 Input = "q2",
             }),
             ctx,
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-chat");
+        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-chat", "llm-chat");
         await module.HandleAsync(
             Envelope(new ChatResponseEvent
             {

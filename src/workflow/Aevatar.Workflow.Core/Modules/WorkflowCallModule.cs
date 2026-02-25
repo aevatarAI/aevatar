@@ -32,6 +32,7 @@ public sealed class WorkflowCallModule : IEventModule
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
+                RunId = request.RunId,
                 Success = false, Error = "workflow_call 缺少 workflow 参数",
             }, EventDirection.Self, ct);
             return;

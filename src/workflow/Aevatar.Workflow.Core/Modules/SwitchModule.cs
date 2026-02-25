@@ -39,6 +39,7 @@ public sealed class SwitchModule : IEventModule
         var completed = new StepCompletedEvent
         {
             StepId = request.StepId,
+            RunId = request.RunId,
             Success = true,
             Output = request.Input ?? "",
         };

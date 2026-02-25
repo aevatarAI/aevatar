@@ -19,7 +19,6 @@ public sealed class WorkflowLoopModule : IEventModule
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
     private readonly Dictionary<string, int> _retryAttempts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CancellationTokenSource> _timeouts = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> _stepToRunId = new(StringComparer.Ordinal);
 
     public string Name => "workflow_loop";
     public int Priority => 0;
@@ -100,7 +99,6 @@ public sealed class WorkflowLoopModule : IEventModule
             }
 
             CancelTimeout(runId, evt.StepId);
-            _stepToRunId.Remove(evt.StepId);
 
             var outputPreview = (evt.Output ?? "").Length > 200 ? evt.Output![..200] + "..." : evt.Output ?? "";
             ctx.Logger.LogInformation("workflow_loop: step={StepId} completed success={Success} output=({Len} chars) {Preview}",
@@ -266,7 +264,6 @@ public sealed class WorkflowLoopModule : IEventModule
                 req.Parameters["allowed_connectors"] = string.Join(",", role.Connectors);
         }
 
-        _stepToRunId[step.Id] = runId;
         StartTimeout(step, runId, ctx, ct);
         await ctx.PublishAsync(req, EventDirection.Self, ct);
     }
@@ -325,9 +322,6 @@ public sealed class WorkflowLoopModule : IEventModule
         if (!string.IsNullOrWhiteSpace(evt.RunId))
             return evt.RunId;
 
-        if (!string.IsNullOrWhiteSpace(evt.StepId) && _stepToRunId.TryGetValue(evt.StepId, out var runId))
-            return runId;
-
         return _activeRunIds.Count == 1 ? _activeRunIds.First() : string.Empty;
     }
 
@@ -348,7 +342,5 @@ public sealed class WorkflowLoopModule : IEventModule
             cts.Dispose();
         }
 
-        foreach (var stepId in _stepToRunId.Where(x => string.Equals(x.Value, runId, StringComparison.Ordinal)).Select(x => x.Key).ToList())
-            _stepToRunId.Remove(stepId);
     }
 }

@@ -13,7 +13,7 @@ namespace Aevatar.Workflow.Core.Modules;
 public sealed class CacheModule : IEventModule
 {
     private readonly Dictionary<string, CacheEntry> _cache = [];
-    private readonly Dictionary<string, string> _childToParent = [];
+    private readonly Dictionary<(string RunId, string StepId), (string RunId, string StepId)> _childToParent = [];
 
     public string Name => "cache";
     public int Priority => 3;
@@ -31,6 +31,7 @@ public sealed class CacheModule : IEventModule
         {
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "cache") return;
+            var runId = NormalizeRunId(request.RunId);
 
             var cacheKey = request.Parameters.GetValueOrDefault("cache_key", request.Input ?? "");
             var ttlSeconds = int.TryParse(request.Parameters.GetValueOrDefault("ttl_seconds", "3600"), out var t) ? t : 3600;
@@ -41,7 +42,7 @@ public sealed class CacheModule : IEventModule
                 ctx.Logger.LogInformation("Cache {StepId}: HIT key={Key}", request.StepId, ShortenKey(cacheKey));
                 var hit = new StepCompletedEvent
                 {
-                    StepId = request.StepId, Success = true, Output = cached.Value,
+                    StepId = request.StepId, RunId = request.RunId, Success = true, Output = cached.Value,
                 };
                 hit.Metadata["cache.hit"] = "true";
                 hit.Metadata["cache.key"] = ShortenKey(cacheKey);
@@ -55,13 +56,15 @@ public sealed class CacheModule : IEventModule
             var childRole = request.Parameters.GetValueOrDefault("child_target_role", request.TargetRole);
             var childStepId = $"{request.StepId}_cached";
 
-            _childToParent[childStepId] = request.StepId;
-            _cache[cacheKey] = new CacheEntry("", DateTimeOffset.UtcNow.AddSeconds(ttlSeconds), request.StepId, cacheKey);
+            var childKey = (runId, childStepId);
+            _childToParent[childKey] = (runId, request.StepId);
+            _cache[cacheKey] = new CacheEntry("", DateTimeOffset.UtcNow.AddSeconds(ttlSeconds), request.StepId, runId, cacheKey);
 
             await ctx.PublishAsync(new StepRequestEvent
             {
                 StepId = childStepId,
                 StepType = childType,
+                RunId = request.RunId,
                 Input = request.Input ?? "",
                 TargetRole = childRole ?? "",
             }, EventDirection.Self, ct);
@@ -69,10 +72,12 @@ public sealed class CacheModule : IEventModule
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
             var evt = payload.Unpack<StepCompletedEvent>();
-            if (!_childToParent.Remove(evt.StepId, out var parentId)) return;
+            var runId = NormalizeRunId(evt.RunId);
+            var childKey = (runId, evt.StepId);
+            if (!_childToParent.Remove(childKey, out var parentKey)) return;
 
             var cacheKey = _cache.Values
-                .Where(e => e.ParentStepId == parentId)
+                .Where(e => e.ParentStepId == parentKey.StepId && e.ParentRunId == parentKey.RunId)
                 .Select(e => e.Key)
                 .FirstOrDefault();
 
@@ -84,7 +89,7 @@ public sealed class CacheModule : IEventModule
 
             var completed = new StepCompletedEvent
             {
-                StepId = parentId, Success = evt.Success, Output = evt.Output, Error = evt.Error,
+                StepId = parentKey.StepId, RunId = parentKey.RunId, Success = evt.Success, Output = evt.Output, Error = evt.Error,
             };
             completed.Metadata["cache.hit"] = "false";
             if (cacheKey != null) completed.Metadata["cache.key"] = ShortenKey(cacheKey);
@@ -92,7 +97,9 @@ public sealed class CacheModule : IEventModule
         }
     }
 
+    private static string NormalizeRunId(string runId) => string.IsNullOrWhiteSpace(runId) ? string.Empty : runId;
+
     private static string ShortenKey(string key) => key.Length > 60 ? key[..60] + "..." : key;
 
-    private sealed record CacheEntry(string Value, DateTimeOffset ExpiresAt, string ParentStepId, string Key);
+    private sealed record CacheEntry(string Value, DateTimeOffset ExpiresAt, string ParentStepId, string ParentRunId, string Key);
 }

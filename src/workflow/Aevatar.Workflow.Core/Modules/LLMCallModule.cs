@@ -21,6 +21,7 @@ namespace Aevatar.Workflow.Core.Modules;
 public sealed class LLMCallModule : IEventModule
 {
     private readonly Dictionary<string, StepRequestEvent> _pending = [];
+    private readonly Dictionary<string, int> _attemptsByRunStep = [];
 
     public string Name => "llm_call";
     public int Priority => 10;
@@ -54,8 +55,13 @@ public sealed class LLMCallModule : IEventModule
                 prompt = prefix.TrimEnd() + "\n\n" + prompt;
             }
 
-            // Use per-step session id to avoid collisions across concurrent llm_call steps.
-            var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, request.StepId);
+            var runId = string.IsNullOrWhiteSpace(request.RunId) ? "default" : request.RunId;
+            var stepRunKey = $"{runId}:{request.StepId}";
+            var attempt = _attemptsByRunStep.GetValueOrDefault(stepRunKey, 0) + 1;
+            _attemptsByRunStep[stepRunKey] = attempt;
+
+            // Use run/step/attempt-scoped session id to avoid collisions across concurrent runs and retries.
+            var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
             _pending[chatSessionId] = request;
 
             var targetRole = request.TargetRole;
@@ -96,6 +102,8 @@ public sealed class LLMCallModule : IEventModule
             if (string.IsNullOrEmpty(sessionId)) return;
             if (!_pending.TryGetValue(sessionId, out var pending)) return;
             _pending.Remove(sessionId);
+            var pendingRunId = string.IsNullOrWhiteSpace(pending.RunId) ? "default" : pending.RunId;
+            _attemptsByRunStep.Remove($"{pendingRunId}:{pending.StepId}");
 
             var outputPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";
             ctx.Logger.LogInformation(
@@ -105,6 +113,7 @@ public sealed class LLMCallModule : IEventModule
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = pending.StepId,
+                RunId = pending.RunId,
                 Success = true, Output = evt.Content ?? "",
                 WorkerId = envelope.PublisherId,
             }, EventDirection.Self, ct);
@@ -119,6 +128,8 @@ public sealed class LLMCallModule : IEventModule
             if (string.IsNullOrEmpty(sessionId)) return;
             if (!_pending.TryGetValue(sessionId, out var pending)) return;
             _pending.Remove(sessionId);
+            var pendingRunId = string.IsNullOrWhiteSpace(pending.RunId) ? "default" : pending.RunId;
+            _attemptsByRunStep.Remove($"{pendingRunId}:{pending.StepId}");
 
             var nsPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";
             ctx.Logger.LogInformation(
@@ -128,6 +139,7 @@ public sealed class LLMCallModule : IEventModule
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = pending.StepId,
+                RunId = pending.RunId,
                 Success = true, Output = evt.Content ?? "",
                 WorkerId = ctx.AgentId,
             }, EventDirection.Self, ct);

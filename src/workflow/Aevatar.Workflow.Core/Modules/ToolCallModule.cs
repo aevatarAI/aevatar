@@ -41,6 +41,7 @@ public sealed class ToolCallModule : IEventModule
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
+                RunId = request.RunId,
                 Success = false, Error = "tool_call 缺少 tool 参数",
             }, EventDirection.Self, ct);
             return;
@@ -79,6 +80,7 @@ public sealed class ToolCallModule : IEventModule
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
+                RunId = request.RunId,
                 Success = true,
                 Output = result,
             }, EventDirection.Self, ct);
@@ -151,6 +153,7 @@ public sealed class ToolCallModule : IEventModule
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = request.StepId,
+            RunId = request.RunId,
             Success = false,
             Error = errorMessage,
         }, EventDirection.Self, ct);

@@ -12,7 +12,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class RaceModule : IEventModule
 {
-    private readonly Dictionary<string, RaceState> _races = [];
+    private readonly Dictionary<(string RunId, string StepId), RaceState> _races = [];
 
     public string Name => "race";
     public int Priority => 5;
@@ -30,6 +30,8 @@ public sealed class RaceModule : IEventModule
         {
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "race") return;
+            var runId = NormalizeRunId(request.RunId);
+            var parentKey = (runId, request.StepId);
 
             var workers = new List<string>();
             if (request.Parameters.TryGetValue("workers", out var w) && !string.IsNullOrEmpty(w))
@@ -39,7 +41,7 @@ public sealed class RaceModule : IEventModule
                 : int.TryParse(request.Parameters.GetValueOrDefault("count", "2"), out var n) ? n : 2;
             count = Math.Clamp(count, 1, 10);
 
-            _races[request.StepId] = new RaceState(count, 0, false);
+            _races[parentKey] = new RaceState(count, 0, false);
 
             ctx.Logger.LogInformation("Race {StepId}: dispatching {Count} branches", request.StepId, count);
 
@@ -50,6 +52,7 @@ public sealed class RaceModule : IEventModule
                 {
                     StepId = $"{request.StepId}_race_{i}",
                     StepType = "llm_call",
+                    RunId = request.RunId,
                     Input = request.Input,
                     TargetRole = role ?? "",
                 }, EventDirection.Self, ct);
@@ -59,42 +62,47 @@ public sealed class RaceModule : IEventModule
         {
             var evt = payload.Unpack<StepCompletedEvent>();
             var parent = ExtractParent(evt.StepId);
-            if (parent == null || !_races.TryGetValue(parent, out var state)) return;
+            if (parent == null) return;
+            var runId = NormalizeRunId(evt.RunId);
+            var parentKey = (runId, parent);
+            if (!_races.TryGetValue(parentKey, out var state)) return;
 
             state = state with { Received = state.Received + 1 };
-            _races[parent] = state;
+            _races[parentKey] = state;
 
             if (evt.Success && !state.Resolved)
             {
-                _races[parent] = state with { Resolved = true };
+                _races[parentKey] = state with { Resolved = true };
                 ctx.Logger.LogInformation("Race {StepId}: winner={Winner}", parent, evt.StepId);
 
                 var completed = new StepCompletedEvent
                 {
-                    StepId = parent, Success = true, Output = evt.Output, WorkerId = evt.WorkerId,
+                    StepId = parent, RunId = evt.RunId, Success = true, Output = evt.Output, WorkerId = evt.WorkerId,
                 };
                 completed.Metadata["race.winner"] = evt.StepId;
                 await ctx.PublishAsync(completed, EventDirection.Self, ct);
 
                 if (state.Received >= state.Total)
-                    _races.Remove(parent);
+                    _races.Remove(parentKey);
                 return;
             }
 
             if (state.Received >= state.Total)
             {
-                _races.Remove(parent);
+                _races.Remove(parentKey);
                 if (!state.Resolved)
                 {
                     ctx.Logger.LogWarning("Race {StepId}: all {Count} branches failed", parent, state.Total);
                     await ctx.PublishAsync(new StepCompletedEvent
                     {
-                        StepId = parent, Success = false, Error = "all race branches failed",
+                        StepId = parent, RunId = evt.RunId, Success = false, Error = "all race branches failed",
                     }, EventDirection.Self, ct);
                 }
             }
         }
     }
+
+    private static string NormalizeRunId(string runId) => string.IsNullOrWhiteSpace(runId) ? string.Empty : runId;
 
     private static string? ExtractParent(string stepId)
     {
