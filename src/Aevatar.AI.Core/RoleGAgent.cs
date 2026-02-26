@@ -113,6 +113,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             : request.Prompt;
         Logger.LogInformation("[{Role}] LLM request: {Preview}", RoleName, promptPreview);
 
+        // Each workflow step is independent — the graph (or input) carries all state.
+        // Clear history so previous tool call results don't accumulate and hit API limits.
+        ClearHistory();
+
         // ─── AG-UI: TEXT_MESSAGE_START ───
         await PublishAsync(new TextMessageStartEvent
         {
