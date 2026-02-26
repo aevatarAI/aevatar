@@ -82,7 +82,7 @@ public sealed class TornadoLLMProvider : ILLMProvider
                 {
                     yield return new LLMStreamChunk
                     {
-                        DeltaToolCall = ConvertToolCall(toolCall),
+                        DeltaToolCall = ConvertToolCallDelta(toolCall),
                         Usage = usage,
                     };
                     usage = null;
@@ -182,6 +182,17 @@ public sealed class TornadoLLMProvider : ILLMProvider
         return new AevatarToolCall
         {
             Id = toolCall.Id ?? Guid.NewGuid().ToString("N"),
+            Name = toolCall.FunctionCall?.Name ?? string.Empty,
+            ArgumentsJson = toolCall.FunctionCall?.Arguments ?? "{}",
+        };
+    }
+
+    // Keep delta semantics: missing stream IDs should remain empty for downstream merge.
+    private static AevatarToolCall ConvertToolCallDelta(LlmTornado.ChatFunctions.ToolCall toolCall)
+    {
+        return new AevatarToolCall
+        {
+            Id = toolCall.Id ?? string.Empty,
             Name = toolCall.FunctionCall?.Name ?? string.Empty,
             ArgumentsJson = toolCall.FunctionCall?.Arguments ?? string.Empty,
         };
