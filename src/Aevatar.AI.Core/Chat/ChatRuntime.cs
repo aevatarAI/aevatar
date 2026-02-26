@@ -149,7 +149,7 @@ public sealed class ChatRuntime
 
                         var full = new StringBuilder();
                         TokenUsage? usage = null;
-                        var toolCalls = new StreamToolCallAccumulator();
+                        var toolCalls = new StreamingToolCallAccumulator();
 
                         await foreach (var chunk in provider.ChatStreamAsync(llmCallContext.Request, runToken))
                         {
@@ -231,7 +231,7 @@ public sealed class ChatRuntime
 
     private static LLMStreamChunk? NormalizeStreamChunk(
         LLMStreamChunk chunk,
-        StreamToolCallAccumulator toolCalls,
+        StreamingToolCallAccumulator toolCalls,
         StringBuilder fullContent,
         ref TokenUsage? usage)
     {
@@ -286,92 +286,4 @@ public sealed class ChatRuntime
         return chunks;
     }
 
-    private sealed class StreamToolCallAccumulator
-    {
-        private readonly Dictionary<string, ToolCallAggregate> _aggregates = new(StringComparer.Ordinal);
-        private readonly List<string> _order = [];
-        private int _anonymousCounter;
-        private string? _activeAnonymousKey;
-
-        public ToolCall TrackDelta(ToolCall delta)
-        {
-            var key = ResolveKey(delta);
-            if (!_aggregates.TryGetValue(key, out var aggregate))
-            {
-                aggregate = new ToolCallAggregate(ResolveCallId(delta));
-                _aggregates[key] = aggregate;
-                _order.Add(key);
-            }
-
-            if (!string.IsNullOrWhiteSpace(delta.Name))
-                aggregate.Name = delta.Name;
-
-            if (!string.IsNullOrEmpty(delta.ArgumentsJson))
-                aggregate.Arguments.Append(delta.ArgumentsJson);
-
-            return new ToolCall
-            {
-                Id = aggregate.Id,
-                Name = string.IsNullOrWhiteSpace(delta.Name)
-                    ? aggregate.Name ?? string.Empty
-                    : delta.Name,
-                ArgumentsJson = delta.ArgumentsJson ?? string.Empty,
-            };
-        }
-
-        public IReadOnlyList<ToolCall> BuildToolCalls()
-        {
-            var result = new List<ToolCall>(_order.Count);
-            foreach (var key in _order)
-            {
-                var aggregate = _aggregates[key];
-                result.Add(new ToolCall
-                {
-                    Id = aggregate.Id,
-                    Name = aggregate.Name ?? string.Empty,
-                    ArgumentsJson = aggregate.Arguments.ToString(),
-                });
-            }
-
-            return result;
-        }
-
-        private string ResolveKey(ToolCall delta)
-        {
-            if (!string.IsNullOrWhiteSpace(delta.Id))
-            {
-                _activeAnonymousKey = null;
-                return $"id:{delta.Id}";
-            }
-
-            if (!string.IsNullOrWhiteSpace(_activeAnonymousKey))
-                return _activeAnonymousKey;
-
-            _anonymousCounter++;
-            _activeAnonymousKey = $"anon:{_anonymousCounter}";
-            return _activeAnonymousKey;
-        }
-
-        private string ResolveCallId(ToolCall delta)
-        {
-            if (!string.IsNullOrWhiteSpace(delta.Id))
-                return delta.Id;
-
-            return $"stream-tool-call-{_anonymousCounter}";
-        }
-
-        private sealed class ToolCallAggregate
-        {
-            public ToolCallAggregate(string id)
-            {
-                Id = id;
-            }
-
-            public string Id { get; }
-
-            public string? Name { get; set; }
-
-            public StringBuilder Arguments { get; } = new();
-        }
-    }
 }

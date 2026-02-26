@@ -87,7 +87,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                         case FunctionCallContent functionCall:
                             yield return new LLMStreamChunk
                             {
-                                DeltaToolCall = ConvertFunctionCall(functionCall),
+                                DeltaToolCall = ConvertFunctionCallDelta(functionCall),
                             };
                             break;
                     }
@@ -238,7 +238,21 @@ public sealed class MEAILLMProvider : ILLMProvider
         return new ToolCall
         {
             Id = functionCall.CallId ?? Guid.NewGuid().ToString("N"),
-            Name = functionCall.Name,
+            Name = functionCall.Name ?? string.Empty,
+            ArgumentsJson = argsJson,
+        };
+    }
+
+    // Keep delta semantics: missing callId should stay empty and be resolved by downstream accumulator.
+    private static ToolCall ConvertFunctionCallDelta(FunctionCallContent functionCall)
+    {
+        var argsJson = functionCall.Arguments != null
+            ? System.Text.Json.JsonSerializer.Serialize(functionCall.Arguments)
+            : string.Empty;
+        return new ToolCall
+        {
+            Id = functionCall.CallId ?? string.Empty,
+            Name = functionCall.Name ?? string.Empty,
             ArgumentsJson = argsJson,
         };
     }

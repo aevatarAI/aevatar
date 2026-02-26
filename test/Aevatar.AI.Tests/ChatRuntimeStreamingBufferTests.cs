@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using FluentAssertions;
@@ -49,6 +50,48 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenToolCallIdAppearsLate_ShouldPromoteToSingleFinalToolCall()
+    {
+        var provider = new StreamingProvider(
+            chunks: ["done"],
+            streamToolDeltas:
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = string.Empty,
+                        Name = "search",
+                        ArgumentsJson = "{\"q\":\"ae",
+                    },
+                },
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-merge",
+                        Name = string.Empty,
+                        ArgumentsJson = "vatar\"}",
+                    },
+                },
+            ]);
+        var captureMiddleware = new CaptureLLMResponseMiddleware();
+        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, llmMiddlewares: [captureMiddleware]);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello"))
+        {
+        }
+
+        captureMiddleware.LastResponse.Should().NotBeNull();
+        var toolCalls = captureMiddleware.LastResponse!.ToolCalls;
+        toolCalls.Should().NotBeNull();
+        toolCalls!.Should().ContainSingle();
+        toolCalls[0].Id.Should().Be("tc-merge");
+        toolCalls[0].Name.Should().Be("search");
+        toolCalls[0].ArgumentsJson.Should().Be("{\"q\":\"aevatar\"}");
+    }
+
+    [Fact]
     public void Constructor_WhenStreamBufferCapacityIsInvalid_ShouldThrow()
     {
         var provider = new StreamingProvider([]);
@@ -58,7 +101,10 @@ public sealed class ChatRuntimeStreamingBufferTests
         act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
-    private static ChatRuntime CreateRuntime(ILLMProvider provider, int streamBufferCapacity)
+    private static ChatRuntime CreateRuntime(
+        ILLMProvider provider,
+        int streamBufferCapacity,
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null)
     {
         var history = new ChatHistory();
         var toolLoop = new ToolCallLoop(new ToolManager());
@@ -69,10 +115,14 @@ public sealed class ChatRuntimeStreamingBufferTests
             toolLoop: toolLoop,
             hooks: null,
             requestBuilder: () => new LLMRequest { Messages = [] },
+            llmMiddlewares: llmMiddlewares,
             streamBufferCapacity: streamBufferCapacity);
     }
 
-    private sealed class StreamingProvider(IReadOnlyList<string> chunks, ToolCall? streamToolCall = null) : ILLMProvider
+    private sealed class StreamingProvider(
+        IReadOnlyList<string> chunks,
+        ToolCall? streamToolCall = null,
+        IReadOnlyList<LLMStreamChunk>? streamToolDeltas = null) : ILLMProvider
     {
         public string Name => "streaming-provider";
         public int StreamCallCount { get; private set; }
@@ -98,13 +148,32 @@ public sealed class ChatRuntimeStreamingBufferTests
                 await Task.Yield();
             }
 
-            if (streamToolCall != null)
+            if (streamToolDeltas is { Count: > 0 })
+            {
+                foreach (var streamChunk in streamToolDeltas)
+                {
+                    yield return streamChunk;
+                    await Task.Yield();
+                }
+            }
+            else if (streamToolCall != null)
             {
                 yield return new LLMStreamChunk
                 {
                     DeltaToolCall = streamToolCall,
                 };
             }
+        }
+    }
+
+    private sealed class CaptureLLMResponseMiddleware : ILLMCallMiddleware
+    {
+        public LLMResponse? LastResponse { get; private set; }
+
+        public async Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            await next();
+            LastResponse = context.Response;
         }
     }
 }

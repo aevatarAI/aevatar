@@ -234,6 +234,25 @@ public class AIComponentCoverageTests
         streamedToolCall.Id.Should().Be("call-stream-1");
         streamedToolCall.Name.Should().Be("lookup");
         streamedToolCall.ArgumentsJson.Should().Contain("term");
+
+        var toolStreamMissingIdClient = new StubChatClient
+        {
+            OnGetStreamingResponse = static (_, _, _) => StreamWithToolCallMissingId(),
+        };
+        var toolStreamMissingIdProvider = new MEAILLMProvider("meai-tool-stream-missing-id", toolStreamMissingIdClient);
+        var toolStreamMissingIdChunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in toolStreamMissingIdProvider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "trigger tool without id" }],
+        }))
+        {
+            toolStreamMissingIdChunks.Add(chunk);
+        }
+
+        var missingIdToolCall = toolStreamMissingIdChunks.First(x => x.DeltaToolCall != null).DeltaToolCall!;
+        missingIdToolCall.Id.Should().BeEmpty();
+        missingIdToolCall.Name.Should().Be("lookup");
+        missingIdToolCall.ArgumentsJson.Should().Contain("term");
     }
 
     [Fact]
@@ -397,6 +416,22 @@ public class AIComponentCoverageTests
 
         var mappedNullResponse = InvokePrivateStatic<LLMResponse>(typeof(TornadoLLMProvider), "MapResponse", new object?[] { null });
         mappedNullResponse.FinishReason.Should().Be("error");
+
+        var deltaToolCall = InvokePrivateStatic<Aevatar.AI.Abstractions.LLMProviders.ToolCall>(
+            typeof(TornadoLLMProvider),
+            "ConvertToolCallDelta",
+            new LlmTornado.ChatFunctions.ToolCall
+            {
+                Id = string.Empty,
+                FunctionCall = new FunctionCall
+                {
+                    Name = "lookup",
+                    Arguments = "{\"term\":\"aevatar\"}",
+                },
+            });
+        deltaToolCall.Id.Should().BeEmpty();
+        deltaToolCall.Name.Should().Be("lookup");
+        deltaToolCall.ArgumentsJson.Should().Be("{\"term\":\"aevatar\"}");
     }
 
     [Fact]
@@ -498,6 +533,19 @@ public class AIComponentCoverageTests
             [
                 new FunctionCallContent(
                     "call-stream-1",
+                    "lookup",
+                    new Dictionary<string, object?> { ["term"] = "aevatar" }),
+            ]);
+        await Task.Yield();
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> StreamWithToolCallMissingId()
+    {
+        yield return new ChatResponseUpdate(
+            ChatRole.Assistant,
+            [
+                new FunctionCallContent(
+                    string.Empty,
                     "lookup",
                     new Dictionary<string, object?> { ["term"] = "aevatar" }),
             ]);

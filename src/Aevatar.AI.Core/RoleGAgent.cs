@@ -13,6 +13,7 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
@@ -121,7 +122,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
         // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
         var fullContent = new StringBuilder();
-        var toolCalls = new StreamToolCallAccumulator();
+        var toolCalls = new StreamingToolCallAccumulator();
 
         await foreach (var chunk in ChatStreamAsync(request.Prompt))
         {
@@ -162,86 +163,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             Content = response,
             SessionId = request.SessionId,
         }, EventDirection.Up);
-    }
-
-    private sealed class StreamToolCallAccumulator
-    {
-        private readonly Dictionary<string, ToolCallAggregate> _aggregates = new(StringComparer.Ordinal);
-        private readonly List<string> _order = [];
-        private int _anonymousCounter;
-        private string? _activeAnonymousKey;
-
-        public void TrackDelta(ToolCall delta)
-        {
-            var key = ResolveKey(delta);
-            if (!_aggregates.TryGetValue(key, out var aggregate))
-            {
-                aggregate = new ToolCallAggregate(ResolveId(delta));
-                _aggregates[key] = aggregate;
-                _order.Add(key);
-            }
-
-            if (!string.IsNullOrWhiteSpace(delta.Name))
-                aggregate.Name = delta.Name;
-
-            if (!string.IsNullOrEmpty(delta.ArgumentsJson))
-                aggregate.Arguments.Append(delta.ArgumentsJson);
-        }
-
-        public IReadOnlyList<ToolCall> BuildToolCalls()
-        {
-            var result = new List<ToolCall>(_order.Count);
-            foreach (var key in _order)
-            {
-                var aggregate = _aggregates[key];
-                result.Add(new ToolCall
-                {
-                    Id = aggregate.Id,
-                    Name = aggregate.Name ?? string.Empty,
-                    ArgumentsJson = aggregate.Arguments.ToString(),
-                });
-            }
-
-            return result;
-        }
-
-        private string ResolveKey(ToolCall delta)
-        {
-            if (!string.IsNullOrWhiteSpace(delta.Id))
-            {
-                _activeAnonymousKey = null;
-                return $"id:{delta.Id}";
-            }
-
-            if (!string.IsNullOrWhiteSpace(_activeAnonymousKey))
-                return _activeAnonymousKey;
-
-            _anonymousCounter++;
-            _activeAnonymousKey = $"anon:{_anonymousCounter}";
-            return _activeAnonymousKey;
-        }
-
-        private string ResolveId(ToolCall delta)
-        {
-            if (!string.IsNullOrWhiteSpace(delta.Id))
-                return delta.Id;
-
-            return $"stream-tool-call-{_anonymousCounter}";
-        }
-
-        private sealed class ToolCallAggregate
-        {
-            public ToolCallAggregate(string id)
-            {
-                Id = id;
-            }
-
-            public string Id { get; }
-
-            public string? Name { get; set; }
-
-            public StringBuilder Arguments { get; } = new();
-        }
     }
 
     private static RoleGAgentState ApplyConfigureRoleAgent(
