@@ -60,10 +60,54 @@ public sealed class OrleansDistributedCoverageTests
 
         built.Should().BeTrue();
         nextAttempt.Should().Be(1);
-        retryEnvelope.Id.Should().NotBe(envelope.Id);
+        retryEnvelope.Id.Should().Be(envelope.Id);
         retryEnvelope.Metadata["aevatar.retry.attempt"].Should().Be("1");
         retryEnvelope.Metadata["aevatar.retry.last_error"].Should().Be("InvalidOperationException");
         retryEnvelope.Metadata["aevatar.retry.origin_event_id"].Should().Be("evt-1");
+    }
+
+    [Fact]
+    public void RuntimeEnvelopeRetryPolicy_ShouldKeepRootOriginEventIdAcrossRetries()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("2", "10");
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-retry-2",
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
+            Direction = EventDirection.Down,
+        };
+        envelope.Metadata["aevatar.retry.origin_event_id"] = "evt-root";
+        envelope.Metadata["aevatar.retry.attempt"] = "1";
+
+        var built = policy.TryBuildRetryEnvelope(
+            envelope,
+            new InvalidOperationException("boom"),
+            out var retryEnvelope,
+            out var nextAttempt);
+
+        built.Should().BeTrue();
+        nextAttempt.Should().Be(2);
+        retryEnvelope.Id.Should().Be("evt-retry-2");
+        retryEnvelope.Metadata["aevatar.retry.origin_event_id"].Should().Be("evt-root");
+    }
+
+    [Fact]
+    public void RuntimeEnvelopeRetryPolicy_ShouldBeDisabledByDefault_WhenEnvironmentNotConfigured()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues(null, null);
+
+        policy.Enabled.Should().BeFalse();
+        policy.MaxAttempts.Should().Be(0);
+    }
+
+    [Fact]
+    public void RuntimeEnvelopeRetryPolicy_ShouldUseSafeDelayDefault_WhenAttemptsConfiguredWithoutDelay()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("2", null);
+
+        policy.Enabled.Should().BeTrue();
+        policy.MaxAttempts.Should().Be(2);
+        policy.RetryDelayMs.Should().Be(1000);
     }
 
     [Fact]

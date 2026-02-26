@@ -27,8 +27,8 @@ internal sealed class RuntimeEnvelopeRetryPolicy
 
     internal static RuntimeEnvelopeRetryPolicy FromValues(string? maxAttemptsRaw, string? retryDelayRaw)
     {
-        var maxAttempts = ParseOrDefault(maxAttemptsRaw, defaultValue: 5);
-        var retryDelayMs = ParseOrDefault(retryDelayRaw, defaultValue: 0);
+        var maxAttempts = ParseOrDefault(maxAttemptsRaw, defaultValue: 0);
+        var retryDelayMs = ParseOrDefault(retryDelayRaw, defaultValue: 1000);
         if (maxAttempts < 0)
             maxAttempts = 0;
         if (retryDelayMs < 0)
@@ -51,11 +51,11 @@ internal sealed class RuntimeEnvelopeRetryPolicy
         }
 
         retryEnvelope = originalEnvelope.Clone();
-        retryEnvelope.Id = Guid.NewGuid().ToString("N");
         retryEnvelope.Metadata[RetryAttemptMetadataKey] = nextAttempt.ToString();
         retryEnvelope.Metadata[RetryLastErrorMetadataKey] = exception.GetType().Name;
-        if (!string.IsNullOrWhiteSpace(originalEnvelope.Id))
-            retryEnvelope.Metadata[RetryOriginEventIdMetadataKey] = originalEnvelope.Id;
+        var originEventId = ResolveOriginEventId(originalEnvelope);
+        if (!string.IsNullOrWhiteSpace(originEventId))
+            retryEnvelope.Metadata[RetryOriginEventIdMetadataKey] = originEventId;
         return true;
     }
 
@@ -71,5 +71,13 @@ internal sealed class RuntimeEnvelopeRetryPolicy
         if (int.TryParse(value, out var parsed))
             return parsed;
         return defaultValue;
+    }
+
+    private static string? ResolveOriginEventId(EventEnvelope envelope)
+    {
+        if (envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var originEventId) &&
+            !string.IsNullOrWhiteSpace(originEventId))
+            return originEventId;
+        return string.IsNullOrWhiteSpace(envelope.Id) ? null : envelope.Id;
     }
 }
