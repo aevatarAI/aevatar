@@ -340,6 +340,99 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task WaitSignalModule_ShouldCompleteStepWithTimeoutError_WhenTimeoutEventMatchesPending()
+    {
+        var module = new WaitSignalModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-timeout",
+                StepType = "wait_signal",
+                RunId = "run-timeout",
+                Input = "fallback-timeout",
+                Parameters = { ["signal_name"] = "approval" },
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WaitSignalTimeoutFiredEvent
+            {
+                RunId = "run-timeout",
+                StepId = "wait-timeout",
+                SignalName = "approval",
+                TimeoutMs = 250,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var timedOut = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        timedOut.StepId.Should().Be("wait-timeout");
+        timedOut.RunId.Should().Be("run-timeout");
+        timedOut.Success.Should().BeFalse();
+        timedOut.Error.Should().Contain("timed out");
+    }
+
+    [Fact]
+    public async Task WaitSignalModule_WhenTimeoutCannotResolvePending_ShouldIgnore()
+    {
+        var module = new WaitSignalModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new WaitSignalTimeoutFiredEvent
+            {
+                RunId = "run-timeout",
+                StepId = " ",
+                SignalName = "approval",
+                TimeoutMs = 100,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new WaitSignalTimeoutFiredEvent
+            {
+                RunId = "run-timeout",
+                StepId = "missing-step",
+                SignalName = "approval",
+                TimeoutMs = 100,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WaitSignalModule_CanHandleAndNoPayloadPaths_ShouldBehaveAsExpected()
+    {
+        var module = new WaitSignalModule();
+        var ctx = CreateContext();
+
+        module.CanHandle(new EventEnvelope()).Should().BeFalse();
+        module.CanHandle(Envelope(new StepRequestEvent())).Should().BeTrue();
+        module.CanHandle(Envelope(new SignalReceivedEvent())).Should().BeTrue();
+        module.CanHandle(Envelope(new WaitSignalTimeoutFiredEvent())).Should().BeTrue();
+
+        await module.HandleAsync(new EventEnvelope(), ctx, CancellationToken.None);
+        ctx.Published.Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "non-wait",
+                StepType = "llm_call",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CacheModule_ShouldDispatchOnMissJoinPendingAndHitOnReadyValue()
     {
         var module = new CacheModule();

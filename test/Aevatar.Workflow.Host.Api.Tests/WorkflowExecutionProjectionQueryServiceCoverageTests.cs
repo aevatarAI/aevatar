@@ -50,6 +50,26 @@ public sealed class WorkflowExecutionProjectionQueryServiceCoverageTests
     }
 
     [Fact]
+    public async Task QueryService_WhenActorIdIsNull_ShouldReturnEmptyRootSubgraph()
+    {
+        var reader = new RecordingWorkflowProjectionQueryReader();
+        var service = new WorkflowExecutionProjectionQueryService(
+            new WorkflowExecutionProjectionOptions
+            {
+                Enabled = true,
+                EnableActorQueryEndpoints = true,
+            },
+            reader);
+
+        var subgraph = await service.GetActorGraphSubgraphAsync(null!);
+
+        subgraph.RootNodeId.Should().BeEmpty();
+        subgraph.Nodes.Should().BeEmpty();
+        subgraph.Edges.Should().BeEmpty();
+        reader.TotalCalls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task QueryService_WhenEnabled_ShouldForwardGraphOptionsToReader()
     {
         var now = DateTimeOffset.UtcNow;

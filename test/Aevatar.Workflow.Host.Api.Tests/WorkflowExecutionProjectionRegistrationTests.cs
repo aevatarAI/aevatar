@@ -4,12 +4,16 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.DependencyInjection;
 using Aevatar.Workflow.Projection.Metadata;
+using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Reducers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -80,6 +84,62 @@ public class WorkflowExecutionProjectionRegistrationTests
         provider.Metadata.Aliases.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task AddWorkflowExecutionProjectionCQRS_ShouldRegisterPassthroughEventDeduplicator()
+    {
+        var services = new ServiceCollection();
+        RegisterEventStore(services);
+        RegisterInMemoryProviders(services);
+        services.AddWorkflowExecutionProjectionCQRS();
+
+        await using var provider = services.BuildServiceProvider();
+        var deduplicator = provider.GetRequiredService<IEventDeduplicator>();
+
+        (await deduplicator.TryRecordAsync("evt-1")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void AddWorkflowExecutionProjectionReducer_ShouldRegisterReducerAsEnumerableSingleton()
+    {
+        var services = new ServiceCollection();
+
+        services.AddWorkflowExecutionProjectionReducer<TestWorkflowReducer>();
+        services.AddWorkflowExecutionProjectionReducer<TestWorkflowReducer>();
+
+        using var provider = services.BuildServiceProvider();
+        var reducers = provider.GetServices<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>().ToList();
+
+        reducers.Should().ContainSingle(x => x.GetType() == typeof(TestWorkflowReducer));
+    }
+
+    [Fact]
+    public void AddWorkflowExecutionProjectionProjector_ShouldRegisterProjectorAsEnumerableSingleton()
+    {
+        var services = new ServiceCollection();
+
+        services.AddWorkflowExecutionProjectionProjector<TestWorkflowProjector>();
+        services.AddWorkflowExecutionProjectionProjector<TestWorkflowProjector>();
+
+        using var provider = services.BuildServiceProvider();
+        var projectors = provider.GetServices<IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>().ToList();
+
+        projectors.Should().ContainSingle(x => x.GetType() == typeof(TestWorkflowProjector));
+    }
+
+    [Fact]
+    public void AddWorkflowExecutionProjectionExtensionsFromAssembly_ShouldRegisterReducerAndProjectorFromAssembly()
+    {
+        var services = new ServiceCollection();
+
+        services.AddWorkflowExecutionProjectionExtensionsFromAssembly(typeof(WorkflowExecutionReadModelProjector).Assembly);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>) &&
+            x.ImplementationType == typeof(StartWorkflowEventReducer));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>) &&
+            x.ImplementationType == typeof(WorkflowExecutionReadModelProjector));
+    }
+
     private static void RegisterInMemoryProviders(IServiceCollection services)
     {
         services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
@@ -146,6 +206,54 @@ public class WorkflowExecutionProjectionRegistrationTests
     {
         public Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default) =>
             Task.FromResult(true);
+    }
+
+    private sealed class TestWorkflowReducer : IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>
+    {
+        public string EventTypeUrl => "type://tests/workflow-reducer";
+
+        public bool Reduce(
+            WorkflowExecutionReport readModel,
+            WorkflowExecutionProjectionContext context,
+            EventEnvelope envelope,
+            DateTimeOffset now)
+        {
+            _ = readModel;
+            _ = context;
+            _ = envelope;
+            _ = now;
+            return true;
+        }
+    }
+
+    private sealed class TestWorkflowProjector
+        : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
+    {
+        public ValueTask InitializeAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
+        {
+            _ = context;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = context;
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask CompleteAsync(
+            WorkflowExecutionProjectionContext context,
+            IReadOnlyList<WorkflowExecutionTopologyEdge> topology,
+            CancellationToken ct = default)
+        {
+            _ = context;
+            _ = topology;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class EnvironmentVariableScope : IDisposable
