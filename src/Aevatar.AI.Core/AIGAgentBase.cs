@@ -41,6 +41,15 @@ public sealed class AIAgentConfig
 
     /// <summary>流式输出缓冲区容量（用于背压控制）。</summary>
     public int StreamBufferCapacity { get; set; } = 256;
+
+    /// <summary>业务应用配置 JSON（由业务层自行解释）。</summary>
+    public string AppConfigJson { get; set; } = string.Empty;
+
+    /// <summary>业务应用配置编解码标识（例如 json/plain）。</summary>
+    public string AppConfigCodec { get; set; } = string.Empty;
+
+    /// <summary>业务应用配置 schema 版本。</summary>
+    public int AppConfigSchemaVersion { get; set; }
 }
 
 /// <summary>AI GAgent 基类。组合 ChatRuntime、ToolManager、ChatHistory、HookPipeline、Middleware。</summary>

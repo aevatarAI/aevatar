@@ -1,6 +1,7 @@
 syntax = "proto3";
 package aevatar.ai;
 option csharp_namespace = "Aevatar.AI.Abstractions";
+import "google/protobuf/any.proto";
 
 message ChatRequestEvent  { string prompt = 1; string session_id = 2; map<string, string> metadata = 3; }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
@@ -23,6 +24,30 @@ message ConfigureRoleAgentEvent {
   int32 stream_buffer_capacity = 9;
   string event_modules = 10;
   string event_routes = 11;
+  string app_config_json = 12;
+  string app_config_codec = 13;
+  int32 app_config_schema_version = 14;
 }
 
-message RoleGAgentState { string role_name = 1; int32 message_count = 2; }
+message SetRoleAppConfigEvent {
+  string app_config_json = 1;
+  string app_config_codec = 2;
+  int32 app_config_schema_version = 3;
+}
+
+message SetRoleAppStateEvent {
+  google.protobuf.Any app_state = 1;
+  string app_state_codec = 2;
+  int32 app_state_schema_version = 3;
+}
+
+message RoleGAgentState {
+  string role_name = 1;
+  int32 message_count = 2;
+  google.protobuf.Any app_state = 3;
+  string app_state_codec = 4;
+  int32 app_state_schema_version = 5;
+  string app_config_json = 6;
+  string app_config_codec = 7;
+  int32 app_config_schema_version = 8;
+}

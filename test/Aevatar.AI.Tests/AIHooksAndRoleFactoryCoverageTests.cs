@@ -13,6 +13,7 @@ using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -91,6 +92,29 @@ public class AIHooksAndRoleFactoryCoverageTests
         await hook.OnEventHandlerStartAsync(foundationCtx, CancellationToken.None);
         await hook.OnEventHandlerEndAsync(foundationCtx, CancellationToken.None);
         await hook.OnErrorAsync(foundationCtx, new Exception("ignored"), CancellationToken.None);
+    }
+
+    [Fact]
+    public void RoleGAgentExtensionContract_ShouldBuildStandardPatchEvents()
+    {
+        var configPatch = RoleGAgentExtensionContract.CreateAppConfigPatch(
+            "{\"tenant\":\"a\"}",
+            appConfigSchemaVersion: 4,
+            appConfigCodec: "");
+
+        configPatch.Should().BeOfType<SetRoleAppConfigEvent>();
+        configPatch.AppConfigJson.Should().Be("{\"tenant\":\"a\"}");
+        configPatch.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
+        configPatch.AppConfigSchemaVersion.Should().Be(4);
+
+        var statePatch = RoleGAgentExtensionContract.CreateAppStateUpdate(
+            new ChatResponseEvent { Content = "state" },
+            appStateSchemaVersion: 2,
+            appStateCodec: "");
+
+        statePatch.AppStateCodec.Should().Be(RoleGAgentExtensionContract.AppStateCodecProtobufAny);
+        statePatch.AppStateSchemaVersion.Should().Be(2);
+        statePatch.AppState.Unpack<ChatResponseEvent>().Content.Should().Be("state");
     }
 
     [Fact]

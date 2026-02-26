@@ -56,6 +56,35 @@ extensions:
       to: tool_handler
 ```
 
+## RoleGAgent 零派生扩展约定
+
+`RoleGAgent` 支持“业务不写派生 GAgent 类”的扩展模式：  
+业务模块通过标准事件更新 app state / app config，而不是直接写 `State` 或旁路持久化。
+
+### 标准事件
+
+- `ConfigureRoleAgentEvent`
+  - 承载全量 AI 配置快照（provider/model/system_prompt/limits/role_name...）
+- `SetRoleAppConfigEvent`
+  - 承载 app config 补丁：`app_config_json` / `app_config_codec` / `app_config_schema_version`
+- `SetRoleAppStateEvent`
+  - 承载 app state：`app_state` / `app_state_codec` / `app_state_schema_version`
+
+### 推荐调用入口（给 EventModule 使用）
+
+- 使用 `Aevatar.AI.Abstractions.RoleGAgentExtensionContract`
+  - `CreateAppConfigPatch(...)`（返回 `SetRoleAppConfigEvent`）
+  - `CreateAppStateUpdate(...)`
+
+### codec 与版本约定
+
+- `app_state_codec` 当前支持：`protobuf-any`
+- `app_config_codec` 当前支持：`json/plain`
+- codec 留空会按默认值归一化；未知 codec 会 fail-fast（抛异常，避免 silent corruption）
+- `*_schema_version` 由业务定义并递增，用于后续迁移逻辑
+- app config 会写入 `RoleGAgentState`，可在无 Manifest 场景下通过事件回放恢复
+- Manifest `ConfigJson` 仍作为完整配置快照（provider/model/system_prompt 等）
+
 ## 设计特点
 
 - 通过接口隔离具体 LLM 供应商实现

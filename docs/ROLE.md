@@ -260,7 +260,34 @@ Connector 是**按名称调用的外部能力**：在 `~/.aevatar/connectors.jso
 
 ---
 
-## 7. 小结
+## 7. RoleGAgent 零派生扩展（App 自定义 state/config）
+
+如果你希望**应用层永远不再定义派生 GAgent 类**，而只用 `RoleGAgent + event modules` 扩展行为，推荐使用下面这套约定：
+
+1. **模块只发标准事件，不直接改状态**
+   - 全量配置：发布 `ConfigureRoleAgentEvent`（provider/model/system_prompt/limits/role_name 等完整快照）
+   - 配置补丁：发布 `SetRoleAppConfigEvent`（带 `app_config_json/app_config_codec/app_config_schema_version`）
+   - 状态更新：发布 `SetRoleAppStateEvent`（带 `app_state/app_state_codec/app_state_schema_version`）
+2. **统一辅助入口**
+   - 使用 `Aevatar.AI.Abstractions.RoleGAgentExtensionContract`
+   - 推荐方法：`CreateAppConfigPatch(...)`（返回 `SetRoleAppConfigEvent`）、`CreateAppStateUpdate(...)`
+3. **codec 与版本规则**
+   - `app_state_codec`：`protobuf-any`
+   - `app_config_codec`：`json/plain`
+   - codec 为空会归一化为默认值；未知 codec 会 fail-fast（抛异常）
+   - `*_schema_version` 由业务控制递增，用于后续迁移
+
+这种方式能保持：
+
+- 事件处理扩展由 module 完成；
+- 状态事实仍由 EventSourcing 回放恢复；
+- app config 事实可由 EventSourcing 回放恢复（写入 `RoleGAgentState`）；
+- Manifest `ConfigJson` 仍保存完整配置快照（provider/model/system_prompt 等）；
+- 业务扩展与运行时基础设施解耦。
+
+---
+
+## 8. 小结
 
 | 要点 | 说明 |
 |------|------|
