@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
 
@@ -62,13 +63,48 @@ public sealed class AIAbstractionsProtoCoverageTests
         }, ToolResultEvent.Parser);
         toolResult.Success.Should().BeTrue();
 
+        var configure = RoundTrip(new ConfigureRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = "mock",
+            AppConfigJson = "{\"tenant\":\"a\"}",
+            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
+            AppConfigSchemaVersion = 3,
+        }, ConfigureRoleAgentEvent.Parser);
+        configure.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
+
+        var appConfigEvent = RoundTrip(new SetRoleAppConfigEvent
+        {
+            AppConfigJson = "{\"tenant\":\"b\"}",
+            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
+            AppConfigSchemaVersion = 4,
+        }, SetRoleAppConfigEvent.Parser);
+        appConfigEvent.AppConfigSchemaVersion.Should().Be(4);
+
+        var appStateEvent = RoundTrip(new SetRoleAppStateEvent
+        {
+            AppState = Any.Pack(new ChatResponseEvent { Content = "payload", SessionId = "session-1" }),
+            AppStateCodec = RoleGAgentExtensionContract.AppStateCodecProtobufAny,
+            AppStateSchemaVersion = 2,
+        }, SetRoleAppStateEvent.Parser);
+        appStateEvent.AppStateCodec.Should().Be(RoleGAgentExtensionContract.AppStateCodecProtobufAny);
+
         var state = RoundTrip(new RoleGAgentState
         {
             RoleName = "assistant",
             MessageCount = 7,
+            AppState = Any.Pack(new ChatRequestEvent { Prompt = "state", SessionId = "session-2" }),
+            AppStateCodec = RoleGAgentExtensionContract.AppStateCodecProtobufAny,
+            AppStateSchemaVersion = 5,
+            AppConfigJson = "{\"tenant\":\"z\"}",
+            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
+            AppConfigSchemaVersion = 6,
         }, RoleGAgentState.Parser);
         state.RoleName.Should().Be("assistant");
         state.MessageCount.Should().Be(7);
+        state.AppStateSchemaVersion.Should().Be(5);
+        state.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
+        state.AppConfigSchemaVersion.Should().Be(6);
     }
 
     [Fact]
@@ -97,6 +133,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageEndEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolCallEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolResultEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SetRoleAppConfigEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SetRoleAppStateEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleGAgentState));
     }
 
@@ -165,7 +203,43 @@ public sealed class AIAbstractionsProtoCoverageTests
         toolResult.MergeFrom((ToolResultEvent)null!);
         toolResult.Equals((object?)null).Should().BeFalse();
 
-        var state = new RoleGAgentState { RoleName = "assistant", MessageCount = 1 };
+        var configure = new ConfigureRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = "mock",
+            AppConfigJson = "{}",
+            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
+            AppConfigSchemaVersion = 1,
+        };
+        configure.MergeFrom((ConfigureRoleAgentEvent)null!);
+        configure.Equals((object?)null).Should().BeFalse();
+
+        var appConfigEvent = new SetRoleAppConfigEvent
+        {
+            AppConfigJson = "{}",
+            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
+            AppConfigSchemaVersion = 2,
+        };
+        appConfigEvent.MergeFrom((SetRoleAppConfigEvent)null!);
+        appConfigEvent.Equals((object?)null).Should().BeFalse();
+
+        var appStateEvent = new SetRoleAppStateEvent
+        {
+            AppState = Any.Pack(new ChatResponseEvent { Content = "payload" }),
+            AppStateCodec = RoleGAgentExtensionContract.AppStateCodecProtobufAny,
+            AppStateSchemaVersion = 1,
+        };
+        appStateEvent.MergeFrom((SetRoleAppStateEvent)null!);
+        appStateEvent.Equals((object?)null).Should().BeFalse();
+
+        var state = new RoleGAgentState
+        {
+            RoleName = "assistant",
+            MessageCount = 1,
+            AppConfigJson = "{}",
+            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
+            AppConfigSchemaVersion = 1,
+        };
         state.MergeFrom((RoleGAgentState)null!);
         state.Equals((object?)null).Should().BeFalse();
 
