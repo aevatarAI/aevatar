@@ -86,9 +86,10 @@ public sealed class ConnectorCallModule : IEventModule
 
             try
             {
+                var runId = string.IsNullOrEmpty(request.RunId) ? envelope.CorrelationId : request.RunId;
                 var connectorRequest = new ConnectorRequest
                 {
-                    RunId = request.RunId,
+                    RunId = runId,
                     StepId = request.StepId,
                     Connector = connectorName,
                     Operation = operation,

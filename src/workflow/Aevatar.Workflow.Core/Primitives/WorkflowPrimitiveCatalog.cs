@@ -44,6 +44,24 @@ public static class WorkflowPrimitiveCatalog
         "foreach",
     };
 
+    private static readonly string[] IdentityPrimitives =
+    [
+        "transform", "assign", "retrieve_facts", "cache",
+        "conditional", "switch", "checkpoint", "workflow_loop",
+    ];
+
+    public static IReadOnlySet<string> BuiltInCanonicalTypes { get; } = DeriveBuiltInCanonicalTypes();
+
+    private static HashSet<string> DeriveBuiltInCanonicalTypes()
+    {
+        var set = new HashSet<string>(ClosedWorldBlockedCanonicalTypes, StringComparer.OrdinalIgnoreCase);
+        foreach (var canonical in CanonicalTypeMap.Values)
+            set.Add(canonical);
+        foreach (var identity in IdentityPrimitives)
+            set.Add(identity);
+        return set;
+    }
+
     public static string ToCanonicalType(string? stepType)
     {
         var normalized = (stepType ?? string.Empty).Trim().ToLowerInvariant();

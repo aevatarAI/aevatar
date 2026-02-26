@@ -346,6 +346,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     private List<string> ValidateWorkflowDefinition(WorkflowDefinition workflow)
     {
         var knownStepTypes = new HashSet<string>(_knownModuleStepTypes, StringComparer.OrdinalIgnoreCase);
+        knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
         ExpandKnownStepTypesFromFactory(workflow, knownStepTypes);
 
         return WorkflowValidator.Validate(
