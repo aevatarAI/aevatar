@@ -92,6 +92,7 @@ public sealed record ToolCallStartEvent : AGUIEvent
     public override string Type => "TOOL_CALL_START";
     public required string ToolCallId { get; init; }
     public required string ToolName { get; init; }
+    public string? Args { get; init; }
 }
 
 public sealed record ToolCallEndEvent : AGUIEvent

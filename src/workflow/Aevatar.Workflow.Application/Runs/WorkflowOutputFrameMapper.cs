@@ -72,6 +72,7 @@ internal static class WorkflowOutputFrameMapper
                 Timestamp = e.Timestamp,
                 ToolCallId = e.ToolCallId,
                 ToolName = e.ToolName,
+                Args = e.Args,
             },
             WorkflowToolCallEndEvent e => new WorkflowOutputFrame
             {

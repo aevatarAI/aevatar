@@ -73,6 +73,7 @@ public sealed record WorkflowOutputFrame
     public object? Snapshot { get; init; }
     public string? ToolCallId { get; init; }
     public string? ToolName { get; init; }
+    public string? Args { get; init; }
     public string? Name { get; init; }
     public object? Value { get; init; }
 }

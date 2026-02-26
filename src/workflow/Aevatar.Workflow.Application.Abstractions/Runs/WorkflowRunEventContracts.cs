@@ -88,6 +88,8 @@ public sealed record WorkflowToolCallStartEvent : WorkflowRunEvent
     public required string ToolCallId { get; init; }
 
     public required string ToolName { get; init; }
+
+    public string? Args { get; init; }
 }
 
 public sealed record WorkflowToolCallEndEvent : WorkflowRunEvent
