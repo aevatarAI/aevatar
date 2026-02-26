@@ -75,8 +75,9 @@ public sealed class WorkflowLoopModuleCoverageTests
                 Type = "transform",
             }));
         var ctx = CreateContext();
+        const string runId = "run-dispatch-advance-complete";
 
-        await module.HandleAsync(Envelope(new StartWorkflowEvent { Input = "hello" }), ctx, CancellationToken.None);
+        await module.HandleAsync(Envelope(new StartWorkflowEvent { RunId = runId, Input = "hello" }), ctx, CancellationToken.None);
         var firstRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
         firstRequest.StepId.Should().Be("s1");
         firstRequest.Input.Should().Be("hello");
@@ -84,7 +85,7 @@ public sealed class WorkflowLoopModuleCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new StepCompletedEvent { StepId = "s1", Success = true, Output = "next-input" }),
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = true, Output = "next-input" }),
             ctx,
             CancellationToken.None);
         var secondRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
@@ -93,7 +94,7 @@ public sealed class WorkflowLoopModuleCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new StepCompletedEvent { StepId = "s2", Success = true, Output = "done" }),
+            Envelope(new StepCompletedEvent { StepId = "s2", RunId = runId, Success = true, Output = "done" }),
             ctx,
             CancellationToken.None);
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
@@ -229,12 +230,13 @@ public sealed class WorkflowLoopModuleCoverageTests
         var module = new WorkflowLoopModule();
         module.SetWorkflow(BuildWorkflow(new StepDefinition { Id = "s1", Type = "llm_call" }));
         var ctx = CreateContext();
+        const string runId = "run-step-fails";
 
-        await module.HandleAsync(Envelope(new StartWorkflowEvent { Input = "start" }), ctx, CancellationToken.None);
+        await module.HandleAsync(Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }), ctx, CancellationToken.None);
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new StepCompletedEvent { StepId = "s1", Success = false, Error = "boom" }),
+            Envelope(new StepCompletedEvent { StepId = "s1", RunId = runId, Success = false, Error = "boom" }),
             ctx,
             CancellationToken.None);
 
@@ -249,12 +251,43 @@ public sealed class WorkflowLoopModuleCoverageTests
         var module = new WorkflowLoopModule();
         module.SetWorkflow(BuildWorkflow(new StepDefinition { Id = "s1", Type = "llm_call" }));
         var ctx = CreateContext();
+        const string runId = "run-unknown-step";
 
-        await module.HandleAsync(Envelope(new StartWorkflowEvent { Input = "start" }), ctx, CancellationToken.None);
+        await module.HandleAsync(Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }), ctx, CancellationToken.None);
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new StepCompletedEvent { StepId = "s1_internal_sub_1", Success = true, Output = "x" }),
+            Envelope(new StepCompletedEvent { StepId = "s1_internal_sub_1", RunId = runId, Success = true, Output = "x" }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenCompletionRunIdMissing_ShouldIgnoreEvenWithSingleActiveRun()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(new StepDefinition { Id = "s1", Type = "llm_call" }));
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-missing-completion-run-id",
+                Input = "start",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                Success = true,
+                Output = "done",
+            }),
             ctx,
             CancellationToken.None);
 

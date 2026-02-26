@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Foundation.Abstractions.EventModules;
 
 namespace Aevatar.Workflow.Extensions.Maker.Modules;
@@ -23,6 +24,7 @@ public sealed class MakerVoteModule : IEventModule
         if (!string.Equals(request.StepType, "maker_vote", StringComparison.OrdinalIgnoreCase))
             return;
 
+        var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var k = request.Parameters.TryGetValue("k", out var kRaw) && int.TryParse(kRaw, out var parsedK) ? parsedK : 1;
         var maxLen = request.Parameters.TryGetValue("max_response_length", out var mlRaw) && int.TryParse(mlRaw, out var parsedMl)
             ? parsedMl
@@ -38,7 +40,7 @@ public sealed class MakerVoteModule : IEventModule
                 ["maker_vote.valid_candidates"] = "0",
                 ["maker_vote.k"] = k.ToString(),
                 ["maker_vote.max_response_length"] = maxLen.ToString(),
-            });
+            }, runId);
             return;
         }
 
@@ -70,7 +72,8 @@ public sealed class MakerVoteModule : IEventModule
                     ["maker_vote.valid_candidates"] = "0",
                     ["maker_vote.k"] = k.ToString(),
                     ["maker_vote.max_response_length"] = maxLen.ToString(),
-                });
+                },
+                runId);
             return;
         }
 
@@ -90,6 +93,7 @@ public sealed class MakerVoteModule : IEventModule
         var completed = new StepCompletedEvent
         {
             StepId = request.StepId,
+            RunId = runId,
             Success = true,
             Output = winner,
         };
@@ -110,11 +114,13 @@ public sealed class MakerVoteModule : IEventModule
         StepRequestEvent request,
         string error,
         CancellationToken ct,
-        Dictionary<string, string>? metadata = null)
+        Dictionary<string, string>? metadata = null,
+        string runId = "")
     {
         var completed = new StepCompletedEvent
         {
             StepId = request.StepId,
+            RunId = runId,
             Success = false,
             Error = error,
         };

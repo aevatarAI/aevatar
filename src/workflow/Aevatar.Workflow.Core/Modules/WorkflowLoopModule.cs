@@ -118,6 +118,14 @@ public sealed class WorkflowLoopModule : IEventModule
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
             var evt = payload.Unpack<StepCompletedEvent>();
+            if (string.IsNullOrWhiteSpace(evt.RunId))
+            {
+                ctx.Logger.LogWarning(
+                    "workflow_loop: ignore completion without run_id step={StepId}",
+                    evt.StepId);
+                return;
+            }
+
             var runId = ResolveRunId(evt);
             if (string.IsNullOrWhiteSpace(runId) || !_activeRunIds.Contains(runId))
                 return;
@@ -466,12 +474,9 @@ public sealed class WorkflowLoopModule : IEventModule
 
     private static string GetStepRunKey(string runId, string stepId) => $"{runId}:{stepId}";
 
-    private string ResolveRunId(StepCompletedEvent evt)
+    private static string ResolveRunId(StepCompletedEvent evt)
     {
-        if (!string.IsNullOrWhiteSpace(evt.RunId))
-            return WorkflowRunIdNormalizer.Normalize(evt.RunId);
-
-        return _activeRunIds.Count == 1 ? _activeRunIds.First() : string.Empty;
+        return WorkflowRunIdNormalizer.Normalize(evt.RunId);
     }
 
     private void CleanupRun(string runId)

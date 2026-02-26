@@ -57,6 +57,7 @@ public sealed class WaitSignalModule : IEventModule
                 SignalName = signalName,
                 Prompt = prompt,
                 TimeoutMs = timeoutMs,
+                RunId = runId,
             }, EventDirection.Both, ct);
 
             if (timeoutMs > 0)

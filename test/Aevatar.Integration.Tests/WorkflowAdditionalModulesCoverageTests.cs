@@ -174,6 +174,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var waiting = ctx.Published.Select(x => x.evt).OfType<WaitingForSignalEvent>().Single();
         waiting.StepId.Should().Be("wait-1");
         waiting.SignalName.Should().Be("approval");
+        waiting.RunId.Should().Be("run-w1");
         ctx.Published.Clear();
 
         await module.HandleAsync(
