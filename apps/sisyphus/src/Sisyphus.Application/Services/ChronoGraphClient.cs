@@ -16,6 +16,30 @@ public sealed class ChronoGraphClient(
     private readonly string _serviceId = options.Value.ChronoGraphServiceId;
     private string ProxyPath(string path) => $"/api/v1/proxy/{_serviceId}/{path.TrimStart('/')}";
 
+    /// <summary>Finds a graph UUID by name. Returns null if not found.</summary>
+    public async Task<string?> FindGraphIdByNameAsync(string name, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, ProxyPath("api/graphs"));
+        await tokenService.SetAuthHeaderAsync(request, ct);
+
+        var response = await httpClient.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+
+        using var doc = await JsonDocument.ParseAsync(
+            await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+
+        foreach (var element in doc.RootElement.EnumerateArray())
+        {
+            var graphName = element.TryGetProperty("name", out var n) ? n.GetString() : null;
+            if (string.Equals(graphName, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return element.GetProperty("id").GetString();
+            }
+        }
+
+        return null;
+    }
+
     public async Task<string> CreateGraphAsync(string name, CancellationToken ct = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, ProxyPath("api/graphs"));
@@ -37,7 +61,7 @@ public sealed class ChronoGraphClient(
 
         var response = await httpClient.SendAsync(request, ct);
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-            return; // Idempotent
+            return;
         response.EnsureSuccessStatusCode();
     }
 }

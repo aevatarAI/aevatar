@@ -1,15 +1,25 @@
 services:
+  garnet:
+    image: ghcr.io/microsoft/garnet:latest
+    command: ["--lua", "--bind", "0.0.0.0", "--port", "6379"]
+    ports:
+      - "6379:6379"
+
   sisyphus-host:
     build:
       context: ../..
       dockerfile: apps/sisyphus/Dockerfile
+    depends_on:
+      - garnet
+    restart: on-failure
     ports:
       - "5200:8080"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - AEVATAR_HOME=/app/config
       - ActorRuntime__Provider=Orleans
-      - ActorRuntime__OrleansPersistenceBackend=InMemory
+      - ActorRuntime__OrleansPersistenceBackend=Garnet
+      - ActorRuntime__OrleansGarnetConnectionString=garnet:6379
       # NyxId (Session Manager REST proxy + MCP connector shared credentials)
       - NyxId__BaseUrl=${NYXID_BASE_URL}
       - NyxId__TokenUrl=${NYXID_AUTH_TOKEN_URL}
@@ -23,3 +33,11 @@ services:
       - NYXID_AUTH_TOKEN_URL=${NYXID_AUTH_TOKEN_URL}
       - NYXID_SA_CLIENT_ID=${NYXID_SA_CLIENT_ID}
       - NYXID_SA_CLIENT_SECRET=${NYXID_SA_CLIENT_SECRET}
+
+  frontend:
+    build:
+      context: frontend
+    depends_on:
+      - sisyphus-host
+    ports:
+      - "5174:80"
