@@ -186,6 +186,32 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
     }
 
     [Fact]
+    public async Task LLMCall_WithSensitiveDataEnabled_IncludesResponseContent()
+    {
+        _activities.Clear();
+        GenAIActivitySource.EnableSensitiveData = true;
+
+        var ctx = new LLMCallContext
+        {
+            Request = new LLMRequest { Messages = [], Model = "gpt-4" },
+            Provider = new FakeLLMProvider(),
+        };
+
+        await _middleware.InvokeAsync(ctx, () =>
+        {
+            ctx.Response = new LLMResponse
+            {
+                Content = "sensitive-content",
+            };
+            return Task.CompletedTask;
+        });
+
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "chat").Last();
+        activity.GetTagItem("gen_ai.response.content").Should().Be("sensitive-content");
+    }
+
+    [Fact]
     public async Task ToolCall_EmitsExecuteToolSpan()
     {
         _activities.Clear();

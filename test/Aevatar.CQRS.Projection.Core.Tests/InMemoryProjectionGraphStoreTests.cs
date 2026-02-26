@@ -1,3 +1,4 @@
+using System.Reflection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using FluentAssertions;
@@ -225,6 +226,107 @@ public class InMemoryProjectionGraphStoreTests
         await Assert.ThrowsAsync<OperationCanceledException>(() => store.ListEdgesByOwnerAsync("scope-1", "owner-1", ct: cts.Token));
         await Assert.ThrowsAsync<OperationCanceledException>(() => store.GetNeighborsAsync(new ProjectionGraphQuery { Scope = "scope-1", RootNodeId = "n-1" }, cts.Token));
         await Assert.ThrowsAsync<OperationCanceledException>(() => store.GetSubgraphAsync(new ProjectionGraphQuery { Scope = "scope-1", RootNodeId = "n-1" }, cts.Token));
+    }
+
+    [Fact]
+    public async Task ListByOwnerAsync_ShouldIgnoreEntriesWithoutOwnerIdProperty()
+    {
+        var store = new InMemoryProjectionGraphStore();
+        await store.UpsertNodeAsync(Node("scope-1", "owned-node", ownerId: "owner-1"));
+        await store.UpsertNodeAsync(Node("scope-1", "no-owner"));
+        await store.UpsertEdgeAsync(Edge("scope-1", "owned-edge", "owned-node", "x", ownerId: "owner-1"));
+        await store.UpsertEdgeAsync(Edge("scope-1", "no-owner-edge", "owned-node", "y"));
+
+        var ownedNodes = await store.ListNodesByOwnerAsync("scope-1", "owner-1");
+        var ownedEdges = await store.ListEdgesByOwnerAsync("scope-1", "owner-1");
+
+        ownedNodes.Select(x => x.NodeId).Should().Equal("owned-node");
+        ownedEdges.Select(x => x.EdgeId).Should().Equal("owned-edge");
+    }
+
+    [Fact]
+    public async Task GetNeighborsAndSubgraphAsync_WhenScopeOrRootMissing_ShouldReturnEmpty()
+    {
+        var store = new InMemoryProjectionGraphStore();
+        await store.UpsertEdgeAsync(Edge("scope-1", "e-1", "a", "b", ownerId: "owner-1"));
+
+        var neighborsMissingScope = await store.GetNeighborsAsync(new ProjectionGraphQuery
+        {
+            Scope = " ",
+            RootNodeId = "a",
+        });
+        var neighborsMissingRoot = await store.GetNeighborsAsync(new ProjectionGraphQuery
+        {
+            Scope = "scope-1",
+            RootNodeId = " ",
+        });
+        var subgraphMissingScope = await store.GetSubgraphAsync(new ProjectionGraphQuery
+        {
+            Scope = "",
+            RootNodeId = "a",
+        });
+        var subgraphMissingRoot = await store.GetSubgraphAsync(new ProjectionGraphQuery
+        {
+            Scope = "scope-1",
+            RootNodeId = "",
+        });
+
+        neighborsMissingScope.Should().BeEmpty();
+        neighborsMissingRoot.Should().BeEmpty();
+        subgraphMissingScope.Nodes.Should().BeEmpty();
+        subgraphMissingScope.Edges.Should().BeEmpty();
+        subgraphMissingRoot.Nodes.Should().BeEmpty();
+        subgraphMissingRoot.Edges.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetSubgraphAsync_ShouldRespectTakeLimitAndInboundTraversal()
+    {
+        var store = new InMemoryProjectionGraphStore();
+        await store.UpsertNodeAsync(Node("scope-1", "root", ownerId: "owner-1"));
+        await store.UpsertNodeAsync(Node("scope-1", "left", ownerId: "owner-1"));
+        await store.UpsertNodeAsync(Node("scope-1", "right", ownerId: "owner-1"));
+        await store.UpsertEdgeAsync(Edge("scope-1", "e-right", "right", "root", edgeType: "LINK", updatedAt: new DateTimeOffset(2026, 2, 26, 0, 0, 3, TimeSpan.Zero)));
+        await store.UpsertEdgeAsync(Edge("scope-1", "e-left", "left", "root", edgeType: "LINK", updatedAt: new DateTimeOffset(2026, 2, 26, 0, 0, 2, TimeSpan.Zero)));
+
+        var inboundLimited = await store.GetSubgraphAsync(new ProjectionGraphQuery
+        {
+            Scope = "scope-1",
+            RootNodeId = "root",
+            Direction = ProjectionGraphDirection.Inbound,
+            EdgeTypes = [],
+            Depth = 2,
+            Take = 1,
+        });
+
+        inboundLimited.Edges.Should().ContainSingle();
+        inboundLimited.Edges[0].EdgeId.Should().Be("e-right");
+        inboundLimited.Nodes.Select(x => x.NodeId).Should().Contain("right");
+    }
+
+    [Fact]
+    public void ResolveCounterpartNodeId_ShouldHandleToNodeAndNoMatch()
+    {
+        var method = typeof(InMemoryProjectionGraphStore).GetMethod(
+            "ResolveCounterpartNodeId",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull();
+
+        var edge = new ProjectionGraphEdge
+        {
+            Scope = "scope-1",
+            EdgeId = "e-1",
+            FromNodeId = "from",
+            ToNodeId = "to",
+            EdgeType = "LINK",
+            Properties = new Dictionary<string, string>(StringComparer.Ordinal),
+        };
+
+        var counterpartFromTo = (string?)method!.Invoke(null, new object?[] { edge, "to" });
+        var counterpartNoMatch = (string?)method.Invoke(null, new object?[] { edge, "other" });
+
+        counterpartFromTo.Should().Be("from");
+        counterpartNoMatch.Should().Be("");
     }
 
     private static ProjectionGraphNode Node(
