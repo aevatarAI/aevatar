@@ -64,6 +64,11 @@ public sealed class DemoJsonPickModule : IEventModule
         if (!payload.Is(ChatRequestEvent.Descriptor))
             return;
 
+        // Only intercept role-level ChatRequest events. Root workflow actor ChatRequest
+        // must continue into WorkflowGAgent -> StartWorkflow flow.
+        if (ctx.AgentId.IndexOf(':', StringComparison.Ordinal) < 0)
+            return;
+
         var chatRequest = payload.Unpack<ChatRequestEvent>();
         var outputText = ResolveRoleOutput(chatRequest.Prompt ?? string.Empty, "incident.owner.team");
         var response = new ChatResponseEvent

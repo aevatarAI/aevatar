@@ -210,6 +210,215 @@ public class ProjectionGraphStoreBindingTests
         binding.AvailabilityReason.Should().Contain("does not implement");
     }
 
+    [Fact]
+    public void AvailabilityReason_WhenConfigured_ShouldReturnActiveAndStoreName()
+    {
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(new RecordingGraphStore());
+
+        binding.IsConfigured.Should().BeTrue();
+        binding.AvailabilityReason.Should().Be("Graph binding is active.");
+        binding.StoreName.Should().Be("Graph");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenGraphStoreMissing_ShouldNoOp()
+    {
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(graphStore: null);
+
+        var act = () => binding.UpsertAsync(new TestGraphReadModel
+        {
+            Id = "owner-1",
+            GraphScope = "scope-1",
+            GraphNodes = [Node("root")],
+            GraphEdges = [],
+        });
+
+        await act.Should().NotThrowAsync();
+        binding.StoreName.Should().Be("Graph(Unconfigured)");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenReadModelIsNotGraphReadModel_ShouldNoOp()
+    {
+        var store = new EmptyCleanupGraphStore();
+        var binding = new ProjectionGraphStoreBinding<NonGraphReadModel, string>(store);
+
+        await binding.UpsertAsync(new NonGraphReadModel
+        {
+            Id = "owner-1",
+        });
+
+        store.UpsertNodeCalls.Should().Be(0);
+        store.UpsertEdgeCalls.Should().Be(0);
+        store.ListNodesByOwnerCalls.Should().Be(0);
+        store.ListEdgesByOwnerCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenGraphScopeIsEmpty_ShouldThrow()
+    {
+        var store = new RecordingGraphStore();
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store);
+
+        Func<Task> act = () => binding.UpsertAsync(new TestGraphReadModel
+        {
+            Id = "owner-1",
+            GraphScope = " ",
+            GraphNodes = [Node("root")],
+            GraphEdges = [],
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Graph scope is required*");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WithEmptyGraphCollections_ShouldCleanupManagedResources()
+    {
+        var store = new RecordingGraphStore();
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store);
+
+        await binding.UpsertAsync(new TestGraphReadModel
+        {
+            Id = "owner-1",
+            GraphScope = "scope-1",
+            GraphNodes = [Node("root"), Node("leaf")],
+            GraphEdges = [Edge("edge-root-leaf", "root", "leaf")],
+        });
+
+        await binding.UpsertAsync(new TestGraphReadModel
+        {
+            Id = "owner-1",
+            GraphScope = "scope-1",
+            GraphNodes = [],
+            GraphEdges = [],
+        });
+
+        var ownerId = BuildOwnerId("owner-1");
+        (await store.ListNodesByOwnerAsync("scope-1", ownerId, take: 100)).Should().BeEmpty();
+        (await store.ListEdgesByOwnerAsync("scope-1", ownerId, take: 100)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldSkipDeletingNodeWhenNodeStillHasNeighbors()
+    {
+        var store = new RecordingGraphStore();
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store);
+
+        await binding.UpsertAsync(new TestGraphReadModel
+        {
+            Id = "owner-1",
+            GraphScope = "scope-1",
+            GraphNodes = [Node("root"), Node("stale")],
+            GraphEdges = [],
+        });
+
+        await store.UpsertEdgeAsync(new ProjectionGraphEdge
+        {
+            Scope = "scope-1",
+            EdgeId = "external-edge",
+            EdgeType = "LINK",
+            FromNodeId = "stale",
+            ToNodeId = "external-node",
+            Properties = new Dictionary<string, string>(StringComparer.Ordinal),
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        await binding.UpsertAsync(new TestGraphReadModel
+        {
+            Id = "owner-1",
+            GraphScope = "scope-1",
+            GraphNodes = [Node("root")],
+            GraphEdges = [],
+        });
+
+        var ownerNodes = await store.ListNodesByOwnerAsync("scope-1", BuildOwnerId("owner-1"), take: 100);
+        ownerNodes.Select(x => x.NodeId).Should().Contain("stale");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldNormalizeInvalidNodesAndEdges()
+    {
+        var store = new RecordingGraphStore();
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store);
+
+        await binding.UpsertAsync(new TestGraphReadModel
+        {
+            Id = "owner-2",
+            GraphScope = "scope-1",
+            GraphNodes =
+            [
+                new ProjectionGraphNode
+                {
+                    Scope = "scope-1",
+                    NodeId = "valid-node",
+                    NodeType = " ",
+                    Properties = new Dictionary<string, string>(StringComparer.Ordinal),
+                    UpdatedAt = default,
+                },
+                new ProjectionGraphNode
+                {
+                    Scope = "scope-1",
+                    NodeId = " ",
+                    NodeType = "Actor",
+                    Properties = new Dictionary<string, string>(StringComparer.Ordinal),
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                },
+            ],
+            GraphEdges =
+            [
+                new ProjectionGraphEdge
+                {
+                    Scope = "scope-1",
+                    EdgeId = "valid-edge",
+                    EdgeType = "LINK",
+                    FromNodeId = "valid-node",
+                    ToNodeId = "target-node",
+                    Properties = new Dictionary<string, string>(StringComparer.Ordinal),
+                    UpdatedAt = default,
+                },
+                new ProjectionGraphEdge
+                {
+                    Scope = "scope-1",
+                    EdgeId = "",
+                    EdgeType = "LINK",
+                    FromNodeId = "valid-node",
+                    ToNodeId = "target-node",
+                    Properties = new Dictionary<string, string>(StringComparer.Ordinal),
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                },
+            ],
+        });
+
+        var ownerId = BuildOwnerId("owner-2");
+        var nodes = await store.ListNodesByOwnerAsync("scope-1", ownerId, take: 100);
+        var edges = await store.ListEdgesByOwnerAsync("scope-1", ownerId, take: 100);
+
+        nodes.Select(x => x.NodeId).Should().Equal("valid-node");
+        nodes[0].NodeType.Should().Be("Unknown");
+        nodes[0].UpdatedAt.Should().NotBe(default);
+        edges.Select(x => x.EdgeId).Should().Equal("valid-edge");
+        edges[0].UpdatedAt.Should().NotBe(default);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenCleanupStoreReturnsEmptyPages_ShouldBreakImmediately()
+    {
+        var store = new EmptyCleanupGraphStore();
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store);
+
+        await binding.UpsertAsync(new TestGraphReadModel
+        {
+            Id = "owner-3",
+            GraphScope = "scope-1",
+            GraphNodes = [Node("root")],
+            GraphEdges = [],
+        });
+
+        store.ListEdgesByOwnerCalls.Should().Be(1);
+        store.ListNodesByOwnerCalls.Should().Be(1);
+    }
+
     private static string BuildOwnerId(string id) => $"{typeof(TestGraphReadModel).FullName}:{id}";
 
     private static ProjectionGraphNode Node(string nodeId)
@@ -252,6 +461,83 @@ public class ProjectionGraphStoreBindingTests
     private sealed class NonGraphReadModel : IProjectionReadModel
     {
         public string Id { get; init; } = "";
+    }
+
+    private sealed class EmptyCleanupGraphStore : IProjectionGraphStore
+    {
+        public int UpsertNodeCalls { get; private set; }
+
+        public int UpsertEdgeCalls { get; private set; }
+
+        public int ListNodesByOwnerCalls { get; private set; }
+
+        public int ListEdgesByOwnerCalls { get; private set; }
+
+        public Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            UpsertNodeCalls++;
+            return Task.CompletedTask;
+        }
+
+        public Task UpsertEdgeAsync(ProjectionGraphEdge edge, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            UpsertEdgeCalls++;
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteNodeAsync(string scope, string nodeId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<ProjectionGraphNode>> ListNodesByOwnerAsync(
+            string scope,
+            string ownerId,
+            int skip = 0,
+            int take = 5000,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ListNodesByOwnerCalls++;
+            return Task.FromResult<IReadOnlyList<ProjectionGraphNode>>([]);
+        }
+
+        public Task<IReadOnlyList<ProjectionGraphEdge>> ListEdgesByOwnerAsync(
+            string scope,
+            string ownerId,
+            int skip = 0,
+            int take = 5000,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ListEdgesByOwnerCalls++;
+            return Task.FromResult<IReadOnlyList<ProjectionGraphEdge>>([]);
+        }
+
+        public Task<IReadOnlyList<ProjectionGraphEdge>> GetNeighborsAsync(
+            ProjectionGraphQuery query,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<ProjectionGraphEdge>>([]);
+        }
+
+        public Task<ProjectionGraphSubgraph> GetSubgraphAsync(
+            ProjectionGraphQuery query,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new ProjectionGraphSubgraph());
+        }
     }
 
     private sealed class RecordingGraphStore : IProjectionGraphStore

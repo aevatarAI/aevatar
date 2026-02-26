@@ -74,5 +74,8 @@
 - mermaid 默认指令（所有图统一加在代码块首行）：
   `%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%`
 - mermaid 的标签用引号包起来, 如 A2[“RoleGAgent”], 不要 A2[RoleGAgent]. 
+- `sequenceDiagram` 默认使用紧凑布局（优先收紧 `actorMargin/messageMargin/diagramMarginX/diagramMarginY` 与文案长度），避免图整体过大。
+- 禁止通过固定大宽度样式撑大时序图（如 `min-width: 2200px`、`width: max-content` 强制放大）；优先按容器宽度渲染。
+- 需要查看完整细节时，使用外层容器横向滚动（`overflow-x: auto`），不要放大图本体。
 - 默认将打分/审计文档生成到 `docs/audit-scorecard/` 目录。
 - 工作文档不需要添加到解决方案（`aevatar.slnx`）。

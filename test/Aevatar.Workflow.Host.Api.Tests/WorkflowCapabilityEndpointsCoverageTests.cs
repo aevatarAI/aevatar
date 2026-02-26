@@ -2,7 +2,6 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -118,13 +117,11 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             Response = { Body = new MemoryStream() },
         };
         var service = new FakeCommandExecutionService();
-        var query = new FakeQueryService();
         using var loggerFactory = LoggerFactory.Create(_ => { });
 
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
             service,
-            query,
             loggerFactory,
             CancellationToken.None);
 
@@ -144,20 +141,19 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         http.Features.Set<IHttpWebSocketFeature>(new FakeWebSocketFeature(socket));
 
         var service = new FakeCommandExecutionService();
-        var query = new FakeQueryService();
         using var loggerFactory = LoggerFactory.Create(_ => { });
 
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
             service,
-            query,
             loggerFactory,
             CancellationToken.None);
 
         socket.SentTexts.Should().ContainSingle();
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
-        doc.RootElement.GetProperty("type").GetString().Should().Be("command.error");
+        doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("INVALID_COMMAND");
+        doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -176,19 +172,49 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         {
             Handler = (_, _, _, _) => throw new InvalidOperationException("boom"),
         };
-        var query = new FakeQueryService();
         using var loggerFactory = LoggerFactory.Create(_ => { });
 
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
             service,
-            query,
             loggerFactory,
             CancellationToken.None);
 
         socket.SentTexts.Should().ContainSingle();
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
-        doc.RootElement.GetProperty("type").GetString().Should().Be("command.error");
+        doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
+        doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleChatWebSocket_WhenBinaryExecutionThrows_ShouldSendBinaryRunExecutionFailed()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Binary,
+            Encoding.UTF8.GetBytes("""{"type":"chat.command","requestId":"req-b","payload":{"prompt":"hello"}}"""),
+            true);
+
+        var http = new DefaultHttpContext();
+        http.Features.Set<IHttpWebSocketFeature>(new FakeWebSocketFeature(socket));
+
+        var service = new FakeCommandExecutionService
+        {
+            Handler = (_, _, _, _) => throw new InvalidOperationException("boom"),
+        };
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+
+        await WorkflowCapabilityEndpoints.HandleChatWebSocket(
+            http,
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        socket.SentTexts.Should().BeEmpty();
+        socket.SentBinaries.Should().ContainSingle();
+        using var doc = JsonDocument.Parse(socket.SentBinaries[0]);
+        doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
     }
 
@@ -230,48 +256,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         }
     }
 
-    private sealed class FakeQueryService : IWorkflowExecutionQueryApplicationService
-    {
-        public bool ActorQueryEnabled => true;
-
-        public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowAgentSummary>>([]);
-
-        public IReadOnlyList<string> ListWorkflows() => [];
-
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult<WorkflowActorSnapshot?>(null);
-
-        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
-
-        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
-            string actorId,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
-
-        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
-            string actorId,
-            int depth = 2,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowActorGraphSubgraph
-            {
-                RootNodeId = actorId,
-            });
-
-        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
-            string actorId,
-            int depth = 2,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(null);
-    }
-
     private sealed class FakeWebSocketFeature : IHttpWebSocketFeature
     {
         private readonly WebSocket _socket;
@@ -300,6 +284,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         }
 
         public List<string> SentTexts { get; } = [];
+        public List<byte[]> SentBinaries { get; } = [];
 
         public override WebSocketCloseStatus? CloseStatus => null;
         public override string? CloseStatusDescription => null;
@@ -347,6 +332,12 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         {
             if (messageType == WebSocketMessageType.Text && buffer.Array != null)
                 SentTexts.Add(Encoding.UTF8.GetString(buffer.Array, buffer.Offset, buffer.Count));
+            else if (messageType == WebSocketMessageType.Binary && buffer.Array != null)
+            {
+                var bytes = new byte[buffer.Count];
+                Array.Copy(buffer.Array, buffer.Offset, bytes, 0, buffer.Count);
+                SentBinaries.Add(bytes);
+            }
             return Task.CompletedTask;
         }
     }

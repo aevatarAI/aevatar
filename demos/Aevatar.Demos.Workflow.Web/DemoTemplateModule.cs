@@ -60,6 +60,11 @@ public sealed class DemoTemplateModule : IEventModule
         if (!payload.Is(ChatRequestEvent.Descriptor))
             return;
 
+        // Only intercept role-level ChatRequest events. Root workflow actor ChatRequest
+        // must continue into WorkflowGAgent -> StartWorkflow flow.
+        if (ctx.AgentId.IndexOf(':', StringComparison.Ordinal) < 0)
+            return;
+
         var chatRequest = payload.Unpack<ChatRequestEvent>();
         var inputPrompt = chatRequest.Prompt ?? string.Empty;
         var outputText = $"[demo_template role module]\nIncident '{inputPrompt}' has been normalized by role event_modules.";

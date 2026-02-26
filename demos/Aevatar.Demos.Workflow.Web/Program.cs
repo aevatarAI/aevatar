@@ -19,6 +19,7 @@ using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Validation;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -44,6 +45,7 @@ builder.Services.Configure<JsonOptions>(o =>
 builder.Services.AddAevatarRuntime();
 builder.Services.AddAevatarConfig();
 builder.Services.AddAevatarWorkflow();
+builder.Services.AddSingleton<IWorkflowModulePack, DemoWorkflowModulePack>();
 builder.Services.Replace(ServiceDescriptor.Singleton<IEventModuleFactory, DemoWorkflowModuleFactory>());
 builder.Services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
@@ -391,6 +393,26 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
     ctx.Response.Headers["Connection"] = "keep-alive";
 
     var yaml = File.ReadAllText(workflowFile.FilePath);
+    WorkflowDefinition parsedDefinition;
+    try
+    {
+        parsedDefinition = parser.Parse(yaml);
+    }
+    catch (Exception ex)
+    {
+        ctx.Response.StatusCode = 400;
+        await ctx.Response.WriteAsync($"Invalid workflow YAML: {ex.Message}");
+        return;
+    }
+
+    var validationErrors = ValidateWorkflowDefinitionForRuntime(parsedDefinition, ctx.RequestServices);
+    if (validationErrors.Count > 0)
+    {
+        ctx.Response.StatusCode = 400;
+        await ctx.Response.WriteAsync($"Workflow validation failed: {string.Join("; ", validationErrors)}");
+        return;
+    }
+
     var actualInput = input ?? demoInputs.GetValueOrDefault(name, "Hello, world!");
     var shouldAutoResume = autoResume == true;
 
@@ -587,6 +609,19 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
                 {
                     var role = publisher.Contains(':') ? publisher[(publisher.LastIndexOf(':') + 1)..] : publisher;
                     await WriteSse("llm.response", new { role, content = Truncate(evt.Content, 2000) });
+                }
+            }
+
+            if (payload.Is(ChatResponseEvent.Descriptor))
+            {
+                var evt = payload.Unpack<ChatResponseEvent>();
+                if (string.Equals(envelope.PublisherId, actor.Id, StringComparison.Ordinal))
+                {
+                    var error = string.IsNullOrWhiteSpace(evt.Content) ? "Workflow run failed." : evt.Content;
+                    await WriteSse("workflow.error", new { error });
+                    if (!string.IsNullOrWhiteSpace(activeRunId))
+                        CleanupRunContext(activeRunId);
+                    tcs.TrySetResult(false);
                 }
             }
 
@@ -1158,7 +1193,11 @@ app.MapPost("/api/playground/run", async (HttpContext ctx, CancellationToken ct)
         return;
     }
 
-    try { parser.Parse(body.Yaml); }
+    WorkflowDefinition parsedDefinition;
+    try
+    {
+        parsedDefinition = parser.Parse(body.Yaml);
+    }
     catch (Exception ex)
     {
         ctx.Response.StatusCode = 400;
@@ -1166,14 +1205,16 @@ app.MapPost("/api/playground/run", async (HttpContext ctx, CancellationToken ct)
         return;
     }
 
-    var needsLlm = false;
-    try
+    var validationErrors = ValidateWorkflowDefinitionForRuntime(parsedDefinition, ctx.RequestServices);
+    if (validationErrors.Count > 0)
     {
-        var def = parser.Parse(body.Yaml);
-        needsLlm = def.Roles.Count > 0 || def.Steps.Any(s =>
-            s.Type is "llm_call" or "evaluate" or "reflect" or "map_reduce" or "race" or "parallel" or "parallel_fanout");
+        ctx.Response.StatusCode = 400;
+        await ctx.Response.WriteAsync($"Invalid YAML: {string.Join("; ", validationErrors)}");
+        return;
     }
-    catch { }
+
+    var needsLlm = parsedDefinition.Roles.Count > 0 || parsedDefinition.Steps.Any(s =>
+        s.Type is "llm_call" or "evaluate" or "reflect" or "map_reduce" or "race" or "parallel" or "parallel_fanout");
 
     if (needsLlm && !llmAvailable)
     {
@@ -1368,6 +1409,18 @@ app.MapPost("/api/playground/run", async (HttpContext ctx, CancellationToken ct)
                 {
                     var role = pub.Contains(':') ? pub[(pub.LastIndexOf(':') + 1)..] : pub;
                     await WriteSse("llm.response", new { role, content = Truncate(evt.Content, 2000) });
+                }
+            }
+            if (payload.Is(ChatResponseEvent.Descriptor))
+            {
+                var evt = payload.Unpack<ChatResponseEvent>();
+                if (string.Equals(envelope.PublisherId, actor.Id, StringComparison.Ordinal))
+                {
+                    var error = string.IsNullOrWhiteSpace(evt.Content) ? "Workflow run failed." : evt.Content;
+                    await WriteSse("workflow.error", new { error });
+                    if (!string.IsNullOrWhiteSpace(activeRunId))
+                        CleanupRunContext(activeRunId);
+                    tcs.TrySetResult(false);
                 }
             }
             if (payload.Is(WorkflowCompletedEvent.Descriptor))
@@ -1687,6 +1740,56 @@ static WorkflowListClassification ClassifyWorkflowForList(
         Group: "deterministic-other",
         GroupLabel: "Other Deterministic Demos",
         SortOrder: index ?? 20_000);
+}
+
+static List<string> ValidateWorkflowDefinitionForRuntime(WorkflowDefinition definition, IServiceProvider services)
+{
+    var modulePacks = services.GetServices<IWorkflowModulePack>();
+    var knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
+        modulePacks.SelectMany(pack => pack.Modules).SelectMany(module => module.Names));
+
+    var moduleFactory = services.GetRequiredService<IEventModuleFactory>();
+    foreach (var stepType in EnumerateReferencedStepTypes(definition.Steps))
+    {
+        var canonical = WorkflowPrimitiveCatalog.ToCanonicalType(stepType);
+        if (string.IsNullOrWhiteSpace(canonical) || knownStepTypes.Contains(canonical))
+            continue;
+
+        if (moduleFactory.TryCreate(canonical, out _))
+            knownStepTypes.Add(canonical);
+    }
+
+    return WorkflowValidator.Validate(
+        definition,
+        new WorkflowValidator.WorkflowValidationOptions
+        {
+            RequireKnownStepTypes = true,
+            KnownStepTypes = knownStepTypes,
+        },
+        availableWorkflowNames: null);
+}
+
+static IEnumerable<string> EnumerateReferencedStepTypes(IEnumerable<StepDefinition> steps)
+{
+    foreach (var step in steps)
+    {
+        yield return step.Type;
+
+        foreach (var (key, value) in step.Parameters)
+        {
+            if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
+                !string.IsNullOrWhiteSpace(value))
+            {
+                yield return value;
+            }
+        }
+
+        if (step.Children is { Count: > 0 })
+        {
+            foreach (var childType in EnumerateReferencedStepTypes(step.Children))
+                yield return childType;
+        }
+    }
 }
 
 static int? TryParseWorkflowIndex(string workflowName)

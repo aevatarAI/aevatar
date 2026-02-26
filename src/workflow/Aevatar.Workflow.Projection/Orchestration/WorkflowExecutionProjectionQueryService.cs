@@ -10,16 +10,18 @@ public sealed class WorkflowExecutionProjectionQueryService
       IWorkflowExecutionProjectionQueryPort
 {
     private readonly IWorkflowProjectionQueryReader _queryReader;
+    private readonly bool _enableActorQueryEndpoints;
 
     public WorkflowExecutionProjectionQueryService(
         WorkflowExecutionProjectionOptions options,
         IWorkflowProjectionQueryReader queryReader)
-        : base(() => options.Enabled && options.EnableActorQueryEndpoints)
+        : base(() => options.Enabled)
     {
         _queryReader = queryReader;
+        _enableActorQueryEndpoints = options.Enabled && options.EnableActorQueryEndpoints;
     }
 
-    public bool EnableActorQueryEndpoints => QueryEnabledCore;
+    public bool EnableActorQueryEndpoints => _enableActorQueryEndpoints;
 
     public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
         string actorId,
