@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 using Sisyphus.Application.Models;
 using Sisyphus.Application.Services;
 
@@ -71,15 +72,32 @@ public static class SessionEndpoints
     private static IResult HandleRunSession(
         Guid id,
         SessionLifecycleService lifecycle,
-        WorkflowTriggerService trigger)
+        WorkflowTriggerService trigger,
+        ILoggerFactory loggerFactory)
     {
         var session = lifecycle.GetSession(id);
         if (session is null) return Results.NotFound();
         if (!lifecycle.TryStartSession(id))
             return Results.Conflict(new { code = "ALREADY_RUNNING", message = "Session is already running." });
 
-        _ = trigger.TriggerAsync(session, ct: CancellationToken.None);
+        var logger = loggerFactory.CreateLogger("SessionEndpoints");
+        _ = RunSessionAsync(id, trigger, logger);
         return Results.Accepted($"/api/v2/sessions/{id}", new { status = "running", session.Id });
+    }
+
+    private static async Task RunSessionAsync(
+        Guid sessionId,
+        WorkflowTriggerService trigger,
+        ILogger logger)
+    {
+        try
+        {
+            await trigger.TriggerAsync(sessionId, ct: CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Background workflow trigger failed for session {SessionId}", sessionId);
+        }
     }
 }
 

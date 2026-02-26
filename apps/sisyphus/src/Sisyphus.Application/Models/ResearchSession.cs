@@ -20,4 +20,5 @@ public sealed class ResearchSession
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
+    public string? FailureReason { get; set; }
 }

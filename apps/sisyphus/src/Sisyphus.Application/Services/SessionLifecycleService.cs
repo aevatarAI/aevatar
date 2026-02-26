@@ -39,6 +39,36 @@ public sealed class SessionLifecycleService(ChronoGraphClient chronoGraph)
                 return false;
             session.Status = SessionStatus.Running;
             session.StartedAt = DateTime.UtcNow;
+            session.CompletedAt = null;
+            session.FailureReason = null;
+            return true;
+        }
+    }
+
+    public bool MarkSessionCompleted(Guid id)
+    {
+        var session = GetSession(id);
+        if (session is null) return false;
+
+        lock (session)
+        {
+            session.Status = SessionStatus.Completed;
+            session.CompletedAt = DateTime.UtcNow;
+            session.FailureReason = null;
+            return true;
+        }
+    }
+
+    public bool MarkSessionFailed(Guid id, string? reason = null)
+    {
+        var session = GetSession(id);
+        if (session is null) return false;
+
+        lock (session)
+        {
+            session.Status = SessionStatus.Failed;
+            session.CompletedAt = DateTime.UtcNow;
+            session.FailureReason = reason;
             return true;
         }
     }
