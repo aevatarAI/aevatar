@@ -58,6 +58,43 @@ public class WorkflowModuleCompositionTests
     }
 
     [Fact]
+    public void ModuleDependencyExpanders_WhenWorkflowUsesCacheDefaultChild_ShouldIncludeLlmCall()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf_cache",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "cache_1",
+                    Type = "cache",
+                    Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["cache_key"] = "k1",
+                    },
+                },
+            ],
+        };
+
+        var moduleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        IWorkflowModuleDependencyExpander[] expanders =
+        [
+            new WorkflowLoopModuleDependencyExpander(),
+            new WorkflowStepTypeModuleDependencyExpander(),
+            new WorkflowImplicitModuleDependencyExpander(),
+        ];
+
+        foreach (var expander in expanders.OrderBy(x => x.Order))
+            expander.Expand(workflow, moduleNames);
+
+        moduleNames.Should().Contain("workflow_loop");
+        moduleNames.Should().Contain("cache");
+        moduleNames.Should().Contain("llm_call");
+    }
+
+    [Fact]
     public void AddAevatarWorkflow_ShouldRegisterDefaultCompositionModulePack()
     {
         var provider = new ServiceCollection()

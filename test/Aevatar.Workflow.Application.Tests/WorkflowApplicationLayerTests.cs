@@ -331,6 +331,31 @@ public class WorkflowRunActorResolverTests
         ((FakeWorkflowAgent)actor.Agent).WorkflowName.Should().Be("inline_direct");
     }
 
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenExistingActorBoundAndInlineWorkflowYamlProvided_ShouldCreateIsolatedActor()
+    {
+        var existingActor = CreateWorkflowActor("actor-1", "direct");
+        var isolatedActor = new FakeActor("isolated-actor", null, new FakeWorkflowAgent("wf-agent-isolated"));
+        var actorPort = new FakeWorkflowRunActorPort([existingActor], () => isolatedActor);
+        var registry = new WorkflowDefinitionRegistry();
+        var resolver = new WorkflowRunActorResolver(actorPort, registry);
+
+        var resolved = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                "direct",
+                "actor-1",
+                BuildInlineWorkflowYaml("direct")),
+            CancellationToken.None);
+
+        resolved.Error.Should().Be(WorkflowChatRunStartError.None);
+        resolved.Actor.Should().BeSameAs(isolatedActor);
+        resolved.Actor.Should().NotBeSameAs(existingActor);
+        resolved.WorkflowNameForRun.Should().Be("direct");
+        ((FakeWorkflowAgent)isolatedActor.Agent).WorkflowName.Should().Be("direct");
+        ((FakeWorkflowAgent)existingActor.Agent).WorkflowName.Should().Be("direct");
+    }
+
     private static IActor CreateWorkflowActor(string actorId, string workflowName)
     {
         var workflowAgent = new FakeWorkflowAgent($"wf-agent-{actorId}");

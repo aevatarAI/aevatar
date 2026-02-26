@@ -15,6 +15,7 @@ public sealed class WorkflowImplicitModuleDependencyExpander : IWorkflowModuleDe
             moduleNames.Contains("select") ||
             moduleNames.Contains("map_reduce") ||
             moduleNames.Contains("mapreduce") ||
+            moduleNames.Contains("cache") ||
             moduleNames.Contains("evaluate") ||
             moduleNames.Contains("judge") ||
             moduleNames.Contains("reflect"))
