@@ -160,6 +160,37 @@ public class WorkflowChatRunApplicationServiceTests
 public class WorkflowRunActorResolverTests
 {
     [Fact]
+    public async Task ResolveOrCreateAsync_WhenActorIdNotFound_ShouldReturnAgentNotFound()
+    {
+        var actorPort = new FakeWorkflowRunActorPort([]);
+        var registry = new WorkflowDefinitionRegistry();
+        var resolver = new WorkflowRunActorResolver(actorPort, registry);
+
+        var resolved = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", "direct", "missing-actor"),
+            CancellationToken.None);
+
+        resolved.Error.Should().Be(WorkflowChatRunStartError.AgentNotFound);
+        resolved.Actor.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenActorTypeIsNotWorkflow_ShouldReturnTypeNotSupported()
+    {
+        var nonWorkflowActor = new FakeActor("actor-1", null, new FakeAgent("non-workflow", "plain agent"));
+        var actorPort = new FakeWorkflowRunActorPort([nonWorkflowActor]);
+        var registry = new WorkflowDefinitionRegistry();
+        var resolver = new WorkflowRunActorResolver(actorPort, registry);
+
+        var resolved = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", "direct", "actor-1"),
+            CancellationToken.None);
+
+        resolved.Error.Should().Be(WorkflowChatRunStartError.AgentTypeNotSupported);
+        resolved.Actor.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ResolveOrCreateAsync_WhenExistingActorWorkflowMismatches_ShouldReturnConflictError()
     {
         var actor = CreateWorkflowActor("actor-1", "direct");
@@ -290,6 +321,24 @@ public class WorkflowRunActorResolverTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_WhenInlineWorkflowNameIsEmpty_ShouldReturnInvalidWorkflowYaml()
+    {
+        var actorPort = new FakeWorkflowRunActorPort([])
+        {
+            ParseWorkflowYamlHandler = _ => WorkflowYamlParseResult.Success("   "),
+        };
+        var registry = new WorkflowDefinitionRegistry();
+        var resolver = new WorkflowRunActorResolver(actorPort, registry);
+
+        var resolved = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", null, null, "name: ignored"),
+            CancellationToken.None);
+
+        resolved.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        resolved.Actor.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ResolveOrCreateAsync_WhenWorkflowNameDoesNotMatchInlineWorkflowYaml_ShouldReturnMismatch()
     {
         var actorPort = new FakeWorkflowRunActorPort([]);
@@ -354,6 +403,27 @@ public class WorkflowRunActorResolverTests
         resolved.WorkflowNameForRun.Should().Be("direct");
         ((FakeWorkflowAgent)isolatedActor.Agent).WorkflowName.Should().Be("direct");
         ((FakeWorkflowAgent)existingActor.Agent).WorkflowName.Should().Be("direct");
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenInlineWorkflowOnBoundActorMismatchesBinding_ShouldReturnBindingMismatch()
+    {
+        var existingActor = CreateWorkflowActor("actor-1", "direct");
+        var actorPort = new FakeWorkflowRunActorPort([existingActor]);
+        var registry = new WorkflowDefinitionRegistry();
+        var resolver = new WorkflowRunActorResolver(actorPort, registry);
+
+        var resolved = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                null,
+                "actor-1",
+                BuildInlineWorkflowYaml("inline_other")),
+            CancellationToken.None);
+
+        resolved.Error.Should().Be(WorkflowChatRunStartError.WorkflowBindingMismatch);
+        resolved.Actor.Should().BeNull();
+        resolved.WorkflowNameForRun.Should().Be("direct");
     }
 
     private static IActor CreateWorkflowActor(string actorId, string workflowName)

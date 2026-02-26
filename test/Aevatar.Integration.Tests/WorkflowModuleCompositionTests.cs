@@ -9,6 +9,46 @@ namespace Aevatar.Integration.Tests;
 
 public class WorkflowModuleCompositionTests
 {
+    [Theory]
+    [InlineData("parallel")]
+    [InlineData("parallel_fanout")]
+    [InlineData("fan_out")]
+    [InlineData("race")]
+    [InlineData("select")]
+    [InlineData("map_reduce")]
+    [InlineData("mapreduce")]
+    [InlineData("cache")]
+    [InlineData("evaluate")]
+    [InlineData("judge")]
+    [InlineData("reflect")]
+    public void WorkflowImplicitModuleDependencyExpander_ShouldAddLlmCall_ForImplicitModules(string moduleName)
+    {
+        var moduleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            moduleName,
+        };
+        var expander = new WorkflowImplicitModuleDependencyExpander();
+
+        expander.Expand(workflow: null, moduleNames);
+
+        moduleNames.Should().Contain("llm_call");
+    }
+
+    [Fact]
+    public void WorkflowImplicitModuleDependencyExpander_WhenNoImplicitModules_ShouldNotAddLlmCall()
+    {
+        var moduleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "transform",
+            "assign",
+        };
+        var expander = new WorkflowImplicitModuleDependencyExpander();
+
+        expander.Expand(workflow: null, moduleNames);
+
+        moduleNames.Should().NotContain("llm_call");
+    }
+
     [Fact]
     public void ModuleDependencyExpanders_ShouldResolveDeclaredAndImplicitModules()
     {

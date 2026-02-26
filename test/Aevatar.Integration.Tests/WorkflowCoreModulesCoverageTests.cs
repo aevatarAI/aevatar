@@ -530,6 +530,223 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
+    public void CacheModule_MetadataAndCanHandle_ShouldCoverModuleSurface()
+    {
+        var module = new CacheModule();
+
+        module.Name.Should().Be("cache");
+        module.Priority.Should().Be(3);
+        module.CanHandle(Envelope(new StepRequestEvent { StepId = "cache-1", StepType = "cache" })).Should().BeTrue();
+        module.CanHandle(Envelope(new StepCompletedEvent { StepId = "cache-1", Success = true })).Should().BeTrue();
+        module.CanHandle(Envelope(new WorkflowCompletedEvent { WorkflowName = "wf", Success = true })).Should().BeFalse();
+        module.CanHandle(new EventEnvelope()).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CacheModule_WithLongCacheKey_ShouldShortenMetadataKey()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+        var longKey = new string('k', 80);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-long-1",
+                StepType = "cache",
+                RunId = "run-long-1",
+                Input = "input",
+                Parameters = { ["cache_key"] = longKey },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var childRequest = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = childRequest.StepId,
+                RunId = "run-long-1",
+                Success = true,
+                Output = "ok",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completion.Metadata["cache.key"].Should().EndWith("...");
+        completion.Metadata["cache.key"].Length.Should().Be(63);
+    }
+
+    [Fact]
+    public async Task CacheModule_MissThenHit_ShouldDispatchDefaultChildAndServeCachedValue()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-1",
+                StepType = "cache",
+                RunId = "run-cache-1",
+                Input = "input-1",
+                Parameters =
+                {
+                    ["cache_key"] = "key-1",
+                    ["ttl_seconds"] = "60",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var childRequest = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        childRequest.StepId.Should().StartWith("cache-parent-1_cached_");
+        childRequest.StepType.Should().Be("llm_call");
+        childRequest.RunId.Should().Be("run-cache-1");
+        childRequest.Input.Should().Be("input-1");
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = childRequest.StepId,
+                RunId = "run-cache-1",
+                Success = true,
+                Output = "cached-output",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var missCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        missCompletion.StepId.Should().Be("cache-parent-1");
+        missCompletion.Success.Should().BeTrue();
+        missCompletion.Output.Should().Be("cached-output");
+        missCompletion.Metadata["cache.hit"].Should().Be("false");
+        missCompletion.Metadata.Should().ContainKey("cache.key");
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-2",
+                StepType = "cache",
+                RunId = "run-cache-2",
+                Input = "input-2",
+                Parameters =
+                {
+                    ["cache_key"] = "key-1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var hitCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        hitCompletion.StepId.Should().Be("cache-parent-2");
+        hitCompletion.Success.Should().BeTrue();
+        hitCompletion.Output.Should().Be("cached-output");
+        hitCompletion.Metadata["cache.hit"].Should().Be("true");
+        hitCompletion.Metadata.Should().ContainKey("cache.key");
+    }
+
+    [Fact]
+    public async Task CacheModule_WhenSecondCallerJoinsPending_ShouldFanOutCompletionAndNotCacheFailures()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-a",
+                StepType = "cache",
+                RunId = "run-a",
+                Input = "input-a",
+                Parameters = { ["cache_key"] = "shared-key" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var childRequest = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-b",
+                StepType = "cache",
+                RunId = "run-b",
+                Input = "input-b",
+                Parameters = { ["cache_key"] = "shared-key" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = childRequest.StepId,
+                RunId = "run-a",
+                Success = false,
+                Error = "child failed",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var waiterCompletions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToList();
+        waiterCompletions.Should().HaveCount(2);
+        waiterCompletions.Should().ContainSingle(x => x.StepId == "cache-parent-a" && !x.Success && x.Error == "child failed");
+        waiterCompletions.Should().ContainSingle(x => x.StepId == "cache-parent-b" && !x.Success && x.Error == "child failed");
+        foreach (var completion in waiterCompletions)
+        {
+            completion.Metadata.TryGetValue("cache.hit", out var hit).Should().BeTrue();
+            hit.Should().Be("false");
+        }
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-c",
+                StepType = "cache",
+                RunId = "run-c",
+                Input = "input-c",
+                Parameters = { ["cache_key"] = "shared-key" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task CacheModule_WhenCompletionDoesNotMatchPendingChild_ShouldIgnore()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "unknown-child",
+                RunId = "run-unknown",
+                Success = true,
+                Output = "x",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
     public void LLMCallModule_CanHandle_ShouldMatchSupportedPayloads()
     {
         var module = new LLMCallModule();
