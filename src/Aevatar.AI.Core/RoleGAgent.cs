@@ -150,6 +150,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         using var timeoutCts = timeoutMs > 0 ? new CancellationTokenSource(timeoutMs) : null;
         var streamCt = timeoutCts?.Token ?? CancellationToken.None;
 
+        // Each workflow step is independent — the graph (or input) carries all state.
+        // Clear history so previous tool call results don't accumulate and hit API limits.
+        ClearHistory();
+
         // ─── AG-UI: TEXT_MESSAGE_START ───
         await PublishAsync(new TextMessageStartEvent
         {
