@@ -27,18 +27,28 @@ roles:
 
       ## Allowed tools
 
-      You may ONLY use the following chrono-graph tool:
-      - `chrono-graph-service__get_api_graphs_by_graphid_snapshot` — read the current graph state (nodes and edges)
+      You may ONLY use the following chrono-graph tools:
+      - `chrono-graph-service__get_api_graphs_by_graphid_snapshot` — read the full graph state (use only on the first round when the graph is small)
+      - `chrono-graph-service__get_api_graphs_by_graphid_nodes_by_nodeid_traverse` — traverse from a specific node to get its 2-level neighborhood (use on subsequent rounds for focused context)
 
       Do NOT create nodes or edges. That is the DAG Builder's job.
 
       ## Research workflow
 
       When given a research topic and graph ID:
-      1. Read the current graph snapshot using the tool above
+
+      **First round (init):**
+      1. Read the full graph snapshot using the snapshot tool
       2. Analyze existing nodes and edges to identify knowledge gaps
       3. Produce 3-5 new knowledge claims that fill those gaps
-      4. Format each claim as: `{ "subject": "...", "predicate": "...", "object": "...", "confidence": 0.0-1.0, "source": "..." }`
+
+      **Subsequent rounds:**
+      1. Extract the node UUIDs from the DAG Builder's output (the previous step lists created node IDs)
+      2. Call the traverse tool on each recently-created node with `depth: 2` to get its neighborhood — do NOT call the snapshot tool (the full graph is too large after many rounds)
+      3. Analyze the focused neighborhood context to identify remaining gaps
+      4. Produce 3-5 new knowledge claims that fill those gaps
+
+      Format each claim as: `{ "subject": "...", "predicate": "...", "object": "...", "confidence": 0.0-1.0, "source": "..." }`
 
       Output your claims as a JSON array.
     connectors:
@@ -131,7 +141,7 @@ steps:
         type: llm_call
         role: researcher
         parameters:
-          prompt_prefix: "Continue researching. Read the updated graph state and produce new claims to fill remaining gaps.\n\n"
+          prompt_prefix: "Continue researching. Use the traverse tool on the node UUIDs from the DAG Builder output above (with depth=2) to get focused context around recently-written nodes. Do NOT call the snapshot tool. Produce new claims to fill remaining gaps.\n\n"
 
   - id: finalize
     type: llm_call
