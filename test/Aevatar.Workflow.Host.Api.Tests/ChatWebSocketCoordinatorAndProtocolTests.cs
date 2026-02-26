@@ -39,6 +39,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             {
                 Prompt = "hello",
                 Workflow = "direct",
+                WorkflowYaml = "name: direct",
                 AgentId = "actor-1",
             }, WebSocketMessageType.Text),
             service,
@@ -54,6 +55,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
         service.LastCommand.Should().NotBeNull();
         service.LastCommand!.Prompt.Should().Be("hello");
+        service.LastCommand.WorkflowYaml.Should().Be("name: direct");
     }
 
     [Fact]

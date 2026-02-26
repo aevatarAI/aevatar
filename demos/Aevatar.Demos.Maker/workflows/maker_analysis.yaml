@@ -79,6 +79,26 @@ steps:
       decompose_workers: "coordinator,coordinator,coordinator"
       solve_workers: "worker_a,worker_b,worker_c"
       compose_workers: "coordinator,coordinator,coordinator"
+      atomic_prompt: |
+        You are a MAKER atomicity judge.
+        Use MAKER_CONTEXT to decide:
+        - If DEPTH is 0 and the task asks for multiple deliverables, return DECOMPOSE.
+        - If DEPTH is greater than 0 and the task is already a focused micro-task, return ATOMIC.
+        - If DEPTH has reached MAX_DEPTH, return ATOMIC.
+        Return exactly one token: ATOMIC or DECOMPOSE.
+      decompose_prompt: |
+        You are a MAKER decomposer.
+        Use MAKER_CONTEXT and split the task into 2-4 independent, non-overlapping subtasks.
+        Each subtask should be closer to an atomic micro-task.
+        Output only a numbered list, one subtask per line.
+      solve_prompt: |
+        You are a MAKER worker.
+        Solve this atomic micro-task directly and concisely.
+        Return only the answer for the current task.
+      compose_prompt: |
+        You are a MAKER composer.
+        Merge all child solutions into one coherent parent-level answer.
+        Preserve key evidence and avoid introducing unsupported claims.
 
   # Optional connector post-processing（以 coordinator 身份调用，仅当该 role 的 connectors 包含 maker_post_processor 时允许）
   - id: connector_post

@@ -6,6 +6,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -15,11 +16,11 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class ParallelFanOutModule : IEventModule
 {
-    private readonly Dictionary<string, int> _expected = [];
-    private readonly Dictionary<string, List<StepCompletedEvent>> _collected = [];
-    private readonly Dictionary<string, VoteConfig> _voteConfigs = [];
-    private readonly Dictionary<string, string> _voteStepToParent = [];
-    private readonly Dictionary<string, bool> _parentWorkerSuccess = [];
+    private readonly Dictionary<(string RunId, string StepId), int> _expected = [];
+    private readonly Dictionary<(string RunId, string StepId), List<StepCompletedEvent>> _collected = [];
+    private readonly Dictionary<(string RunId, string StepId), VoteConfig> _voteConfigs = [];
+    private readonly Dictionary<(string RunId, string StepId), (string RunId, string StepId)> _voteStepToParent = [];
+    private readonly Dictionary<(string RunId, string StepId), bool> _parentWorkerSuccess = [];
 
     /// <summary>
     /// 模块名称。
@@ -55,8 +56,11 @@ public sealed class ParallelFanOutModule : IEventModule
         {
             var evt = payload.Unpack<StepRequestEvent>();
             if (evt.StepType != "parallel") return;
+            var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
+            var parentKey = (runId, evt.StepId);
             var count = evt.Parameters.TryGetValue("parallel_count", out var cs) && int.TryParse(cs, out var n) ? n : 3;
-            _expected[evt.StepId] = count; _collected[evt.StepId] = [];
+            _expected[parentKey] = count;
+            _collected[parentKey] = [];
             // Resolve which worker roles to fan out to
             // If step has workers param (comma-separated role IDs), use those; else generate generic sub-steps
             var workerRoles = new List<string>();
@@ -64,7 +68,7 @@ public sealed class ParallelFanOutModule : IEventModule
             {
                 workerRoles.AddRange(workersParam.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
                 count = workerRoles.Count;
-                _expected[evt.StepId] = count;
+                _expected[parentKey] = count;
             }
 
             var voteStepType = evt.Parameters.TryGetValue("vote_step_type", out var vst) ? vst : "";
@@ -74,7 +78,7 @@ public sealed class ParallelFanOutModule : IEventModule
                 if (key.StartsWith("vote_param_", StringComparison.OrdinalIgnoreCase))
                     voteParams[key["vote_param_".Length..]] = value;
             }
-            _voteConfigs[evt.StepId] = new VoteConfig(voteStepType, voteParams);
+            _voteConfigs[parentKey] = new VoteConfig(voteStepType, voteParams);
 
             var inputPreview = evt.Input.Length > 150 ? evt.Input[..150] + "..." : evt.Input;
             ctx.Logger.LogInformation("ParallelFanOut: step={StepId} fanout to {Count} workers, vote={VoteType}, input=({Len} chars) {Preview}",
@@ -87,6 +91,7 @@ public sealed class ParallelFanOutModule : IEventModule
                 {
                     StepId = $"{evt.StepId}_sub_{i}",
                     StepType = "llm_call",
+                    RunId = runId,
                     Input = evt.Input,
                     TargetRole = role ?? "",
                 }, EventDirection.Self, ct);
@@ -95,20 +100,23 @@ public sealed class ParallelFanOutModule : IEventModule
         else
         {
             var evt = payload.Unpack<StepCompletedEvent>();
+            var eventRunId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
 
             // Vote result: map back to parent parallel step.
-            if (_voteStepToParent.TryGetValue(evt.StepId, out var voteParent))
+            var voteStepKey = (eventRunId, evt.StepId);
+            if (_voteStepToParent.TryGetValue(voteStepKey, out var voteParentKey))
             {
-                _voteStepToParent.Remove(evt.StepId);
-                _voteConfigs.Remove(voteParent);
+                _voteStepToParent.Remove(voteStepKey);
+                _voteConfigs.Remove(voteParentKey);
 
-                var workersSuccess = _parentWorkerSuccess.TryGetValue(voteParent, out var successFromWorkers) &&
+                var workersSuccess = _parentWorkerSuccess.TryGetValue(voteParentKey, out var successFromWorkers) &&
                                      successFromWorkers;
-                _parentWorkerSuccess.Remove(voteParent);
+                _parentWorkerSuccess.Remove(voteParentKey);
 
                 var final = new StepCompletedEvent
                 {
-                    StepId = voteParent,
+                    StepId = voteParentKey.StepId,
+                    RunId = voteParentKey.RunId,
                     Success = workersSuccess && evt.Success,
                     Output = evt.Output,
                     Error = evt.Error,
@@ -126,29 +134,33 @@ public sealed class ParallelFanOutModule : IEventModule
             }
 
             var parent = evt.StepId.LastIndexOf("_sub_", StringComparison.Ordinal) is var idx and > 0 ? evt.StepId[..idx] : null;
-            if (parent == null || !_collected.ContainsKey(parent)) return;
-            _collected[parent].Add(evt);
+            if (parent == null) return;
+            var parentKey = (eventRunId, parent);
+            if (!_collected.ContainsKey(parentKey)) return;
+            _collected[parentKey].Add(evt);
             ctx.Logger.LogInformation("ParallelFanOut: collected {StepId} ({Count}/{Expected})",
-                evt.StepId, _collected[parent].Count, _expected[parent]);
-            if (_collected[parent].Count >= _expected[parent])
+                evt.StepId, _collected[parentKey].Count, _expected[parentKey]);
+            if (_collected[parentKey].Count >= _expected[parentKey])
             {
-                var results = _collected[parent];
+                var results = _collected[parentKey];
                 var allSuccess = results.All(r => r.Success);
                 var merged = string.Join("\n---\n", results.Select(r => r.Output));
                 ctx.Logger.LogInformation("ParallelFanOut: step={StepId} all {Count} workers done, merged=({Len} chars)",
                     parent, results.Count, merged.Length);
 
-                if (_voteConfigs.TryGetValue(parent, out var voteConfig) &&
+                if (_voteConfigs.TryGetValue(parentKey, out var voteConfig) &&
                     !string.IsNullOrWhiteSpace(voteConfig.StepType))
                 {
                     var voteStepId = $"{parent}_vote";
-                    _voteStepToParent[voteStepId] = parent;
-                    _parentWorkerSuccess[parent] = allSuccess;
+                    var voteStepKey2 = (eventRunId, voteStepId);
+                    _voteStepToParent[voteStepKey2] = parentKey;
+                    _parentWorkerSuccess[parentKey] = allSuccess;
 
                     var voteReq = new StepRequestEvent
                     {
                         StepId = voteStepId,
                         StepType = voteConfig.StepType,
+                        RunId = eventRunId,
                         Input = merged,
                     };
                     foreach (var (key, value) in voteConfig.Parameters)
@@ -165,16 +177,17 @@ public sealed class ParallelFanOutModule : IEventModule
                     var completed = new StepCompletedEvent
                     {
                         StepId = parent,
+                        RunId = eventRunId,
                         Success = allSuccess,
                         Output = merged,
                     };
                     completed.Metadata["parallel.used_vote"] = "false";
                     await ctx.PublishAsync(completed, EventDirection.Self, ct);
-                    _voteConfigs.Remove(parent);
+                    _voteConfigs.Remove(parentKey);
                 }
 
-                _collected.Remove(parent);
-                _expected.Remove(parent);
+                _collected.Remove(parentKey);
+                _expected.Remove(parentKey);
             }
         }
     }

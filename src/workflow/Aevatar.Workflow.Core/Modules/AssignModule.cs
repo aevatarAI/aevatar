@@ -31,15 +31,23 @@ public sealed class AssignModule : IEventModule
         var value = request.Parameters.GetValueOrDefault("value", "");
 
         // 如果 value 以 $ 开头，表示从 input（上一步输出）中取值
-        var resolvedValue = value.StartsWith('$') ? request.Input : value;
+        var resolvedValue = value.StartsWith('$') ? request.Input ?? string.Empty : value;
 
         ctx.Logger.LogInformation("Assign: {Target} = {Value}", target, resolvedValue.Length > 50 ? resolvedValue[..50] + "..." : resolvedValue);
 
-        await ctx.PublishAsync(new StepCompletedEvent
+        var completed = new StepCompletedEvent
         {
             StepId = request.StepId,
+            RunId = request.RunId,
             Success = true,
             Output = resolvedValue,
-        }, EventDirection.Self, ct);
+        };
+        if (!string.IsNullOrWhiteSpace(target))
+        {
+            completed.Metadata["assign.target"] = target;
+            completed.Metadata["assign.value"] = resolvedValue;
+        }
+
+        await ctx.PublishAsync(completed, EventDirection.Self, ct);
     }
 }

@@ -17,7 +17,8 @@ internal static class ChatWebSocketRunCoordinator
         var request = new WorkflowChatRunRequest(
             command.Input.Prompt,
             command.Input.Workflow,
-            command.Input.AgentId);
+            command.Input.AgentId,
+            command.Input.WorkflowYaml);
 
         var executionResult = await chatRunService.ExecuteAsync(
             request,

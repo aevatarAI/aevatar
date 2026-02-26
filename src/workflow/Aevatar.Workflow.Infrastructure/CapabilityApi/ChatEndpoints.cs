@@ -42,7 +42,7 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var result = await chatRunService.ExecuteAsync(
-                new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId),
+                new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId, input.WorkflowYaml),
                 (frame, token) => writer.WriteAsync(frame, token),
                 onStartedAsync: (_, token) => writer.StartAsync(token),
                 ct);
@@ -77,7 +77,7 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             executionTask = chatRunService.ExecuteAsync(
-                new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId),
+                new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId, input.WorkflowYaml),
                 static (_, _) => ValueTask.CompletedTask,
                 onStartedAsync: (started, _) =>
                 {

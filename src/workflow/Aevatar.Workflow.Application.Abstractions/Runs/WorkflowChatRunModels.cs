@@ -3,7 +3,8 @@ namespace Aevatar.Workflow.Application.Abstractions.Runs;
 public sealed record WorkflowChatRunRequest(
     string Prompt,
     string? WorkflowName,
-    string? ActorId);
+    string? ActorId,
+    string? WorkflowYaml = null);
 
 public enum WorkflowChatRunStartError
 {
@@ -14,6 +15,8 @@ public enum WorkflowChatRunStartError
     ProjectionDisabled = 4,
     WorkflowBindingMismatch = 5,
     AgentWorkflowNotConfigured = 6,
+    InvalidWorkflowYaml = 7,
+    WorkflowNameMismatch = 8,
 }
 
 public enum WorkflowProjectionCompletionStatus

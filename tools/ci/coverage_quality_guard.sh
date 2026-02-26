@@ -8,7 +8,10 @@ cd "${REPO_ROOT}"
 
 line_threshold="${COVERAGE_LINE_THRESHOLD:-85}"
 branch_threshold="${COVERAGE_BRANCH_THRESHOLD:-72}"
-generated_file_filters="${COVERAGE_GENERATED_FILE_FILTERS:--*obj/*;-*Generated/*;-*.g.cs;-*.g.i.cs;-*.generated.cs;-*.Generated.cs;-*AssemblyInfo.cs;-*AssemblyAttributes.cs}"
+# Exclude all generated sources under obj/ (protobuf, source generators, etc.).
+# Also exclude common generated filename patterns.
+# Override via COVERAGE_GENERATED_FILE_FILTERS when needed.
+generated_file_filters="${COVERAGE_GENERATED_FILE_FILTERS:--*/obj/*;-*\\obj\\*;-*Generated/*;-*.g.cs;-*.g.i.cs;-*.generated.cs;-*.Generated.cs;-*AssemblyInfo.cs;-*AssemblyAttributes.cs}"
 
 timestamp="$(date +%Y%m%d-%H%M%S)"
 output_root="artifacts/coverage/${timestamp}-ci-gate"

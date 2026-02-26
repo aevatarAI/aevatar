@@ -382,6 +382,12 @@ done
 echo "Running projection route-mapping guard..."
 bash tools/ci/projection_route_mapping_guard.sh
 
+echo "Running closed-world workflow guards..."
+bash tools/ci/workflow_closed_world_guards.sh
+
+echo "Running workflow run-id guard..."
+bash tools/ci/workflow_runid_guard.sh
+
 if rg -n "Aevatar\.AI\.Core\.csproj" src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj; then
   echo "Workflows.Core must not reference AI.Core."
   exit 1

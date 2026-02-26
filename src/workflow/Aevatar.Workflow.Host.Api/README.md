@@ -8,10 +8,28 @@
   - `POST /api/chat`（SSE）
   - `GET /api/ws/chat`（WebSocket）
   - `GET /api/agents`、`GET /api/workflows`、`GET /api/actors/{actorId}`、`GET /api/actors/{actorId}/timeline`
+  - `chat` payload 支持 `prompt` + `agentId` 复用已绑定 Actor，也支持 `workflow`（按名称）或 `workflowYaml`（inline YAML）
 - 调用应用层：
   - `ICommandExecutionService<WorkflowChatRunRequest,...>`
   - `IWorkflowExecutionQueryApplicationService`
 - 不承载 workflow/cqrs 业务编排。
+
+## `/api/chat` 入参速查
+
+| 场景 | 示例 |
+|------|------|
+| 按名称加载 workflow（新建 Actor） | `{ "prompt": "...", "workflow": "direct" }` |
+| 复用已绑定 workflow 的 Actor | `{ "prompt": "...", "agentId": "actor-123" }` |
+| inline 提交 workflow YAML（新建 Actor） | `{ "prompt": "...", "workflowYaml": "name: demo\\nroles: ...\\nsteps: ..." }` |
+| 指定 Actor + inline YAML | `{ "prompt": "...", "agentId": "actor-123", "workflowYaml": "..." }` |
+| `workflow` + `workflowYaml` 同传 | 要求 `workflow == workflowYaml.name`，否则返回 `WORKFLOW_NAME_MISMATCH`（400） |
+
+常见错误码：
+
+- `INVALID_WORKFLOW_YAML`：`workflowYaml` 解析或校验失败（400）
+- `WORKFLOW_NAME_MISMATCH`：`workflow` 与 YAML 内 `name` 不一致（400）
+- `WORKFLOW_BINDING_MISMATCH`：目标 actor 已绑定其它 workflow（409）
+- `AGENT_WORKFLOW_NOT_CONFIGURED`：传了 `agentId`，但 actor 未绑定且未提供 `workflowYaml`（409）
 
 ## Endpoint 定义归属
 

@@ -54,12 +54,14 @@ public class MakerVoteModuleCoverageTests
             {
                 StepId = "vote-empty",
                 StepType = "maker_vote",
+                RunId = "run-vote-empty",
                 Input = "",
             }),
             ctx,
             CancellationToken.None);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.RunId.Should().Be("run-vote-empty");
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("No candidates provided");
         completed.Metadata["maker_vote.total_candidates"].Should().Be("0");
@@ -80,6 +82,7 @@ public class MakerVoteModuleCoverageTests
             {
                 StepId = "vote-flagged",
                 StepType = "maker_vote",
+                RunId = "run-vote-flagged",
                 Input = "abcd\n---\nefgh",
                 Parameters =
                 {
@@ -91,6 +94,7 @@ public class MakerVoteModuleCoverageTests
             CancellationToken.None);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.RunId.Should().Be("run-vote-flagged");
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("red-flagged");
         completed.Metadata["maker_vote.total_candidates"].Should().Be("2");
@@ -111,6 +115,7 @@ public class MakerVoteModuleCoverageTests
             {
                 StepId = "vote-ok",
                 StepType = "maker_vote",
+                RunId = "run-vote-ok",
                 Input = "A\n---\nB\n---\nB",
                 Parameters =
                 {
@@ -122,6 +127,7 @@ public class MakerVoteModuleCoverageTests
             CancellationToken.None);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.RunId.Should().Be("run-vote-ok");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("B");
         completed.Metadata["maker_vote.total_candidates"].Should().Be("3");
@@ -144,6 +150,7 @@ public class MakerVoteModuleCoverageTests
             {
                 StepId = "vote-defaults",
                 StepType = "maker_vote",
+                RunId = "run-vote-defaults",
                 Input = $"short\n---\n{longCandidate}",
                 Parameters =
                 {
@@ -155,6 +162,7 @@ public class MakerVoteModuleCoverageTests
             CancellationToken.None);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.RunId.Should().Be("run-vote-defaults");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("short");
         completed.Metadata["maker_vote.k"].Should().Be("1");
