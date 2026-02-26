@@ -58,7 +58,7 @@ public sealed class GuardModule : IEventModule
             {
                 StepId = request.StepId, RunId = request.RunId, Success = true, Output = input,
             };
-            completed.Metadata["branch"] = target;
+            completed.Metadata["next_step"] = target;
             completed.Metadata["guard.reason"] = reason;
             await ctx.PublishAsync(completed, EventDirection.Self, ct);
         }

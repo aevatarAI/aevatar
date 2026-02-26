@@ -15,6 +15,7 @@ public sealed class WorkflowLoopModule : IEventModule
 {
     private WorkflowDefinition? _workflow;
     private readonly HashSet<string> _activeRunIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _currentStepByRunId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, string>> _variablesByRunId = new(StringComparer.Ordinal);
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
     private readonly Dictionary<string, int> _retryAttempts = new(StringComparer.Ordinal);
@@ -98,6 +99,17 @@ public sealed class WorkflowLoopModule : IEventModule
                 return;
             }
 
+            if (!_currentStepByRunId.TryGetValue(runId, out var expectedStepId) ||
+                !string.Equals(expectedStepId, evt.StepId, StringComparison.Ordinal))
+            {
+                ctx.Logger.LogWarning(
+                    "workflow_loop: ignore stale completion run={RunId} step={StepId} expected={ExpectedStepId}",
+                    runId,
+                    evt.StepId,
+                    expectedStepId ?? "(none)");
+                return;
+            }
+
             CancelTimeout(runId, evt.StepId);
 
             var outputPreview = (evt.Output ?? "").Length > 200 ? evt.Output![..200] + "..." : evt.Output ?? "";
@@ -122,6 +134,19 @@ public sealed class WorkflowLoopModule : IEventModule
 
             if (!evt.Success)
             {
+                if (IsTimeoutError(evt.Error))
+                {
+                    CleanupRun(runId);
+                    await ctx.PublishAsync(new WorkflowCompletedEvent
+                    {
+                        WorkflowName = _workflow.Name,
+                        RunId = runId,
+                        Success = false,
+                        Error = evt.Error,
+                    }, EventDirection.Both, ct);
+                    return;
+                }
+
                 if (await TryRetryAsync(current, evt, runId, ctx, ct)) return;
                 if (await TryOnErrorAsync(current, evt, runId, ctx, ct)) return;
 
@@ -138,8 +163,30 @@ public sealed class WorkflowLoopModule : IEventModule
 
             _retryAttempts.Remove(GetStepRunKey(runId, evt.StepId));
 
-            var branchKey = evt.Metadata.TryGetValue("branch", out var bk) ? bk : null;
-            var next = _workflow.GetNextStep(current.Id, branchKey);
+            StepDefinition? next;
+            if (evt.Metadata.TryGetValue("next_step", out var directNextStepId) &&
+                !string.IsNullOrWhiteSpace(directNextStepId))
+            {
+                next = _workflow.GetStep(directNextStepId);
+                if (next == null)
+                {
+                    CleanupRun(runId);
+                    await ctx.PublishAsync(new WorkflowCompletedEvent
+                    {
+                        WorkflowName = _workflow.Name,
+                        RunId = runId,
+                        Success = false,
+                        Error = $"invalid next_step '{directNextStepId}' from step '{current.Id}'",
+                    }, EventDirection.Both, ct);
+                    return;
+                }
+            }
+            else
+            {
+                var branchKey = evt.Metadata.TryGetValue("branch", out var bk) ? bk : null;
+                next = _workflow.GetNextStep(current.Id, branchKey);
+            }
+
             if (next == null)
             {
                 CleanupRun(runId);
@@ -165,6 +212,13 @@ public sealed class WorkflowLoopModule : IEventModule
     {
         var policy = step.Retry;
         if (policy == null) return false;
+        if (IsTimeoutError(evt.Error))
+        {
+            ctx.Logger.LogWarning(
+                "workflow_loop: step={StepId} timeout is not retried to avoid stale completion races",
+                step.Id);
+            return false;
+        }
 
         var stepRunKey = GetStepRunKey(runId, step.Id);
         var maxAttempts = Math.Clamp(policy.MaxAttempts, 1, 10);
@@ -249,6 +303,7 @@ public sealed class WorkflowLoopModule : IEventModule
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
+        _currentStepByRunId[runId] = step.Id;
         var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
         if (_workflow?.Configuration.ClosedWorldMode == true &&
             WorkflowPrimitiveCatalog.IsClosedWorldBlocked(canonicalStepType))
@@ -280,6 +335,12 @@ public sealed class WorkflowLoopModule : IEventModule
 
         foreach (var (k, v) in step.Parameters)
         {
+            if (ShouldDeferWhileParameterEvaluation(canonicalStepType, k))
+            {
+                req.Parameters[k] = v;
+                continue;
+            }
+
             var evaluated = _expressionEvaluator.Evaluate(v, vars);
             req.Parameters[k] = WorkflowPrimitiveCatalog.IsStepTypeParameterKey(k)
                 ? WorkflowPrimitiveCatalog.ToCanonicalType(evaluated)
@@ -302,6 +363,15 @@ public sealed class WorkflowLoopModule : IEventModule
         StartTimeout(step, runId, ctx, ct);
         await ctx.PublishAsync(req, EventDirection.Self, ct);
     }
+
+    private static bool ShouldDeferWhileParameterEvaluation(string canonicalStepType, string parameterKey) =>
+        string.Equals(canonicalStepType, "while", StringComparison.OrdinalIgnoreCase) &&
+        (string.Equals(parameterKey, "condition", StringComparison.OrdinalIgnoreCase) ||
+         parameterKey.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsTimeoutError(string? error) =>
+        !string.IsNullOrWhiteSpace(error) &&
+        error.Contains("TIMEOUT", StringComparison.OrdinalIgnoreCase);
 
     private void StartTimeout(StepDefinition step, string runId, IEventHandlerContext ctx, CancellationToken ct)
     {
@@ -363,6 +433,7 @@ public sealed class WorkflowLoopModule : IEventModule
     private void CleanupRun(string runId)
     {
         _activeRunIds.Remove(runId);
+        _currentStepByRunId.Remove(runId);
         _variablesByRunId.Remove(runId);
 
         var retryPrefix = $"{runId}:";

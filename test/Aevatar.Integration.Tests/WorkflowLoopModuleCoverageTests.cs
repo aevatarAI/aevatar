@@ -135,6 +135,39 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenDispatchingWhileStep_ShouldPreserveRuntimeEvaluatedParameters()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "while",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["step"] = "transform",
+                    ["max_iterations"] = "3",
+                    ["condition"] = "${lt(iteration, 3)}",
+                    ["sub_param_prompt"] = "${concat('iter=', iteration, ', input=', input)}",
+                },
+            }));
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-while-runtime-params",
+                Input = "seed",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var request = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["condition"].Should().Be("${lt(iteration, 3)}");
+        request.Parameters["sub_param_prompt"].Should().Be("${concat('iter=', iteration, ', input=', input)}");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenAlreadyRunning_ShouldPublishFailure()
     {
         var module = new WorkflowLoopModule();
@@ -470,6 +503,39 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenNextStepMetadataProvided_ShouldJumpToTargetStep()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition { Id = "s1", Type = "guard" },
+            new StepDefinition { Id = "s2", Type = "transform" },
+            new StepDefinition { Id = "s3", Type = "transform" }));
+        var ctx = CreateContext();
+        const string runId = "run-next-step";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = runId,
+                Success = true,
+                Output = "branch-output",
+                Metadata = { ["next_step"] = "s3" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var nextRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        nextRequest.StepId.Should().Be("s3");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenTimeoutConfigured_ShouldPublishTimeoutCompletion()
     {
         var module = new WorkflowLoopModule();
@@ -620,6 +686,61 @@ public sealed class WorkflowLoopModuleCoverageTests
 
         var next = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
         next.StepId.Should().Be("s2");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenLateCompletionArrivesAfterTimeoutFailure_ShouldIgnoreIt()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "llm_call",
+                OnError = new StepErrorPolicy
+                {
+                    Strategy = "fallback",
+                    FallbackStep = "s2",
+                },
+            },
+            new StepDefinition
+            {
+                Id = "s2",
+                Type = "transform",
+            }));
+        var ctx = CreateContext();
+        const string runId = "run-late-completion-after-timeout";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = runId,
+                Success = false,
+                Error = "TIMEOUT after 100ms",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Should().ContainSingle().Which.evt.Should().BeOfType<WorkflowCompletedEvent>().Which.Success.Should().BeFalse();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = runId,
+                Success = true,
+                Output = "late-success",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Should().BeEmpty();
     }
 
     [Fact]

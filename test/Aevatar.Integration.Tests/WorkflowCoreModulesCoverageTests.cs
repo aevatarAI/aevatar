@@ -285,6 +285,50 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
+    public async Task WhileModule_ShouldEvaluateSubParametersPerIteration()
+    {
+        var module = new WhileModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "while-dynamic",
+                StepType = "while",
+                Input = "seed",
+                TargetRole = "worker",
+                Parameters =
+                {
+                    ["step"] = "transform",
+                    ["max_iterations"] = "3",
+                    ["condition"] = "${lt(iteration, 3)}",
+                    ["sub_param_prompt"] = "${concat('iter=', iteration, ',input=', input)}",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var firstDispatch = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        firstDispatch.Parameters["prompt"].Should().Be("iter=0,input=seed");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "while-dynamic_iter_0", Success = true, Output = "out-0" }),
+            ctx,
+            CancellationToken.None);
+        var secondDispatch = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        secondDispatch.Parameters["prompt"].Should().Be("iter=1,input=out-0");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "while-dynamic_iter_1", Success = true, Output = "out-1" }),
+            ctx,
+            CancellationToken.None);
+        var thirdDispatch = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        thirdDispatch.Parameters["prompt"].Should().Be("iter=2,input=out-1");
+    }
+
+    [Fact]
     public async Task TransformModule_ShouldApplyOperationsAndFallbacks()
     {
         var module = new TransformModule();

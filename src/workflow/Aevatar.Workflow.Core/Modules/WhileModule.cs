@@ -148,15 +148,10 @@ public sealed class WhileModule : IEventModule
 
     private bool EvaluateCondition(WhileRuntimeState state, string output, int nextIteration)
     {
-        var vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["output"] = output,
-            ["input"] = output,
-            ["iteration"] = nextIteration.ToString(),
-            ["max_iterations"] = state.MaxIterations.ToString(),
-        };
-
-        var eval = _expressionEvaluator.EvaluateExpression(state.ConditionExpression, vars);
+        var vars = BuildIterationVariables(output, nextIteration, state.MaxIterations);
+        var eval = state.ConditionExpression.Contains("${", StringComparison.Ordinal)
+            ? _expressionEvaluator.Evaluate(state.ConditionExpression, vars)
+            : _expressionEvaluator.EvaluateExpression(state.ConditionExpression, vars);
         return IsTruthy(eval);
     }
 
@@ -174,11 +169,21 @@ public sealed class WhileModule : IEventModule
             Input = input,
             TargetRole = state.SubTargetRole,
         };
+        var vars = BuildIterationVariables(input, state.Iteration, state.MaxIterations);
         foreach (var (key, value) in state.SubParameters)
-            request.Parameters[key] = value;
+            request.Parameters[key] = _expressionEvaluator.Evaluate(value, vars);
 
         await ctx.PublishAsync(request, EventDirection.Down, ct);
     }
+
+    private static Dictionary<string, string> BuildIterationVariables(string input, int iteration, int maxIterations) =>
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["output"] = input,
+            ["input"] = input,
+            ["iteration"] = iteration.ToString(),
+            ["max_iterations"] = maxIterations.ToString(),
+        };
 
     private static bool IsTruthy(string value)
     {

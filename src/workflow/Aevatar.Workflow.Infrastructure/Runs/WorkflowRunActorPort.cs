@@ -19,16 +19,24 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
     private readonly IActorRuntime _runtime;
     private readonly IAgentManifestStore _manifestStore;
     private readonly IAgentTypeVerifier _agentTypeVerifier;
+    private readonly ISet<string> _knownStepTypes;
     private readonly WorkflowParser _workflowParser = new();
 
     public WorkflowRunActorPort(
         IActorRuntime runtime,
         IAgentManifestStore manifestStore,
-        IAgentTypeVerifier agentTypeVerifier)
+        IAgentTypeVerifier agentTypeVerifier,
+        IEnumerable<IWorkflowModulePack> modulePacks)
     {
         _runtime = runtime;
         _manifestStore = manifestStore;
         _agentTypeVerifier = agentTypeVerifier;
+        var packs = modulePacks?.ToList()
+            ?? throw new ArgumentNullException(nameof(modulePacks));
+        if (packs.Count == 0)
+            packs.Add(new WorkflowCoreModulePack());
+        _knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
+            packs.SelectMany(x => x.Modules).SelectMany(x => x.Names));
     }
 
     public Task<IActor?> GetAsync(string actorId, CancellationToken ct = default)
@@ -86,7 +94,14 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         try
         {
             var workflow = _workflowParser.Parse(workflowYaml);
-            var errors = WorkflowValidator.Validate(workflow);
+            var errors = WorkflowValidator.Validate(
+                workflow,
+                new WorkflowValidator.WorkflowValidationOptions
+                {
+                    RequireKnownStepTypes = true,
+                    KnownStepTypes = _knownStepTypes,
+                },
+                availableWorkflowNames: null);
             if (errors.Count > 0)
                 return Task.FromResult(WorkflowYamlParseResult.Invalid(string.Join("; ", errors)));
 

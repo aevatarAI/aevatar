@@ -409,7 +409,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         completions["guard-skip"].Success.Should().BeTrue();
         completions["guard-skip"].Metadata["guard.skipped"].Should().Be("true");
         completions["guard-branch"].Success.Should().BeTrue();
-        completions["guard-branch"].Metadata["branch"].Should().Be("manual_review");
+        completions["guard-branch"].Metadata["next_step"].Should().Be("manual_review");
         completions["guard-fail"].Success.Should().BeFalse();
         completions["guard-fail"].Error.Should().Contain("guard check");
     }
