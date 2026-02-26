@@ -8,6 +8,8 @@ public interface IWorkflowExecutionQueryApplicationService
 
     IReadOnlyList<string> ListWorkflows();
 
+    string? GetWorkflowYaml(string name);
+
     Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default);
 
     Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default);

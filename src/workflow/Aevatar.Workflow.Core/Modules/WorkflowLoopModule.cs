@@ -21,6 +21,7 @@ public sealed class WorkflowLoopModule : IEventModule
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
     private readonly Dictionary<string, int> _retryAttempts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CancellationTokenSource> _timeouts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _originalInputByRunId = new(StringComparer.Ordinal);
 
     public string Name => "workflow_loop";
     public int Priority => 0;
@@ -66,6 +67,7 @@ public sealed class WorkflowLoopModule : IEventModule
             {
                 ["input"] = evt.Input ?? string.Empty,
             };
+            _originalInputByRunId[runId] = evt.Input ?? string.Empty;
 
             var entry = _workflow.Steps.FirstOrDefault();
             if (entry == null)
@@ -407,6 +409,10 @@ public sealed class WorkflowLoopModule : IEventModule
                 req.Parameters[$"branch.{bk}"] = bv;
         }
 
+        // Propagate original user prompt as context so all steps can access initial metadata (e.g. Graph ID)
+        if (_originalInputByRunId.TryGetValue(runId, out var originalInput) && !string.IsNullOrEmpty(originalInput))
+            req.Parameters["context"] = originalInput;
+
         if (!string.IsNullOrWhiteSpace(step.TargetRole) && _workflow != null)
         {
             var role = _workflow.Roles.FirstOrDefault(r => string.Equals(r.Id, step.TargetRole, StringComparison.OrdinalIgnoreCase));
@@ -485,6 +491,7 @@ public sealed class WorkflowLoopModule : IEventModule
         _currentStepByRunId.Remove(runId);
         _currentStepInputByRunId.Remove(runId);
         _variablesByRunId.Remove(runId);
+        _originalInputByRunId.Remove(runId);
 
         var retryPrefix = $"{runId}:";
         foreach (var key in _retryAttempts.Keys.Where(k => k.StartsWith(retryPrefix, StringComparison.Ordinal)).ToList())

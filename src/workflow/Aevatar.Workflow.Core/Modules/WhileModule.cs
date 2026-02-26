@@ -70,8 +70,9 @@ public sealed class WhileModule : IEventModule
                 CurrentIteration = 0,
                 CurrentChildIndex = 0,
                 Children = children,
-                Input = request.Input,
-                FallbackRole = request.TargetRole,
+                Input = request.Input ?? string.Empty,
+                FallbackRole = request.TargetRole ?? string.Empty,
+                Context = request.Parameters.GetValueOrDefault("context", ""),
             };
             _activeLoops[request.StepId] = state;
 
@@ -160,7 +161,11 @@ public sealed class WhileModule : IEventModule
         foreach (var (k, v) in child.Parameters)
             req.Parameters[k] = v;
 
-        // Inject allowed_connectors from role definition
+        // Propagate original user context to child steps
+        if (!string.IsNullOrEmpty(state.Context))
+            req.Parameters["context"] = state.Context;
+
+        // Inject allowed_connectors from role definition.
         if (!string.IsNullOrWhiteSpace(req.TargetRole) && _workflow != null)
         {
             var role = _workflow.Roles.FirstOrDefault(
@@ -185,5 +190,6 @@ public sealed class WhileModule : IEventModule
         public required List<StepDefinition> Children { get; init; }
         public required string Input { get; set; }
         public required string FallbackRole { get; init; }
+        public required string Context { get; init; }
     }
 }

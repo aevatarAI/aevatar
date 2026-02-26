@@ -61,6 +61,13 @@ public sealed class LLMCallModule : IEventModule
             var attempt = _attemptsByRunStep.GetValueOrDefault(stepRunKey, 0) + 1;
             _attemptsByRunStep[stepRunKey] = attempt;
 
+            // Prepend original user context so agents can access metadata like Graph ID
+            if (request.Parameters.TryGetValue("context", out var context) &&
+                !string.IsNullOrEmpty(context))
+            {
+                prompt = "--- Original Context ---\n" + context.TrimEnd() + "\n--- End Context ---\n\n" + prompt;
+            }
+
             // Use run/step/attempt-scoped session id to avoid collisions across concurrent runs and retries.
             var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
             _pending[chatSessionId] = request;
