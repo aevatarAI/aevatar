@@ -1,0 +1,31 @@
+name: 14_evaluate
+description: |
+  Demonstrates the `evaluate` primitive — LLM-as-judge quality evaluation.
+  Step 1: Writer generates content.
+  Step 2: Judge evaluates the content on creativity and structure (1-5 scale).
+
+roles:
+  - id: writer
+    name: Writer
+    system_prompt: |
+      You are a creative poet. Write exactly what is requested, nothing more.
+
+  - id: judge
+    name: Judge
+    system_prompt: |
+      You are a literary critic. When asked to evaluate, respond with ONLY
+      a single number (the score) on the given scale. No explanation.
+
+steps:
+  - id: write_content
+    type: llm_call
+    role: writer
+    next: judge_quality
+
+  - id: judge_quality
+    type: evaluate
+    role: judge
+    parameters:
+      criteria: "creativity, structure, and adherence to format"
+      scale: "1-5"
+      threshold: "3"

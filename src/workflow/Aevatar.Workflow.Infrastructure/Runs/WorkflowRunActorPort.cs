@@ -4,6 +4,8 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Validation;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
@@ -17,15 +19,24 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
     private readonly IActorRuntime _runtime;
     private readonly IAgentManifestStore _manifestStore;
     private readonly IAgentTypeVerifier _agentTypeVerifier;
+    private readonly ISet<string> _knownStepTypes;
+    private readonly WorkflowParser _workflowParser = new();
 
     public WorkflowRunActorPort(
         IActorRuntime runtime,
         IAgentManifestStore manifestStore,
-        IAgentTypeVerifier agentTypeVerifier)
+        IAgentTypeVerifier agentTypeVerifier,
+        IEnumerable<IWorkflowModulePack> modulePacks)
     {
         _runtime = runtime;
         _manifestStore = manifestStore;
         _agentTypeVerifier = agentTypeVerifier;
+        var packs = modulePacks?.ToList()
+            ?? throw new ArgumentNullException(nameof(modulePacks));
+        if (packs.Count == 0)
+            packs.Add(new WorkflowCoreModulePack());
+        _knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
+            packs.SelectMany(x => x.Modules).SelectMany(x => x.Names));
     }
 
     public Task<IActor?> GetAsync(string actorId, CancellationToken ct = default)
@@ -72,6 +83,40 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         ArgumentNullException.ThrowIfNull(actor);
         var envelope = CreateConfigureWorkflowEnvelope(workflowYaml, workflowName);
         return actor.HandleEventAsync(envelope, ct);
+    }
+
+    public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(workflowYaml))
+            return Task.FromResult(WorkflowYamlParseResult.Invalid("Workflow YAML is required."));
+
+        try
+        {
+            var workflow = _workflowParser.Parse(workflowYaml);
+            var errors = WorkflowValidator.Validate(
+                workflow,
+                new WorkflowValidator.WorkflowValidationOptions
+                {
+                    RequireKnownStepTypes = true,
+                    KnownStepTypes = _knownStepTypes,
+                },
+                availableWorkflowNames: null);
+            if (errors.Count > 0)
+                return Task.FromResult(WorkflowYamlParseResult.Invalid(string.Join("; ", errors)));
+
+            var workflowName = string.IsNullOrWhiteSpace(workflow.Name)
+                ? string.Empty
+                : workflow.Name.Trim();
+            if (string.IsNullOrWhiteSpace(workflowName))
+                return Task.FromResult(WorkflowYamlParseResult.Invalid("Workflow name is required."));
+
+            return Task.FromResult(WorkflowYamlParseResult.Success(workflowName));
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(WorkflowYamlParseResult.Invalid(ex.Message));
+        }
     }
 
     private static EventEnvelope CreateConfigureWorkflowEnvelope(string workflowYaml, string workflowName) =>

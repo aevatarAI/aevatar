@@ -681,6 +681,7 @@ public class WorkflowExecutionProjectionServiceTests
             [new AIToolCallProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
         new ToolResultProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
             [new AIToolResultProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
+        new WorkflowSuspendedEventReducer(),
         new WorkflowCompletedEventReducer(),
     ];
 

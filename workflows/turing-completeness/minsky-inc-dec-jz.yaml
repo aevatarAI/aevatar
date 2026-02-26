@@ -1,0 +1,41 @@
+name: minsky_inc_dec_jz
+description: |
+  Closed-world Minsky-style program with INC/DEC/JZ semantics.
+configuration:
+  closed_world_mode: true
+roles: []
+steps:
+  - id: init_c1
+    type: assign
+    parameters:
+      target: c1
+      value: "2"
+  - id: init_c2
+    type: assign
+    parameters:
+      target: c2
+      value: "0"
+  - id: jz_c1
+    type: conditional
+    parameters:
+      condition: "${eq(variables.c1, '0')}"
+    branches:
+      true: halt
+      false: dec_c1
+  - id: dec_c1
+    type: assign
+    next: inc_c2
+    parameters:
+      target: c1
+      value: "${sub(variables.c1, 1)}"
+  - id: inc_c2
+    type: assign
+    next: jz_c1
+    parameters:
+      target: c2
+      value: "${add(variables.c2, 1)}"
+  - id: halt
+    type: assign
+    parameters:
+      target: result
+      value: "${variables.c2}"

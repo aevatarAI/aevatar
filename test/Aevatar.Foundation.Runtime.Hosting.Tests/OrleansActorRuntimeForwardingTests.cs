@@ -8,6 +8,7 @@ using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans;
+using Orleans.Runtime;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -39,6 +40,19 @@ public sealed class OrleansActorRuntimeForwardingTests
         grains["parent"].Children.Should().NotContain("child");
         grains["child"].ParentId.Should().BeNull();
         (await registry.ListBySourceAsync("parent", CancellationToken.None)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LinkAsync_ShouldCreateCallChainReentrancyScope_ForGrainCalls()
+    {
+        RequestContext.Clear();
+        var runtime = CreateRuntime(out _, out var grains);
+
+        await runtime.LinkAsync("parent", "child");
+
+        grains["parent"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        grains["child"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        RequestContext.ReentrancyId.Should().Be(Guid.Empty);
     }
 
     [Fact]
@@ -162,17 +176,20 @@ public sealed class OrleansActorRuntimeForwardingTests
         public bool Initialized { get; set; } = true;
 
         public List<string> Calls { get; } = [];
+        public List<Guid> ObservedReentrancyIds { get; } = [];
 
         public int IsInitializedCallCount { get; private set; }
 
         public Task<bool> InitializeAgentAsync(string agentTypeName)
         {
             _ = agentTypeName;
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
             return Task.FromResult(true);
         }
 
         public Task<bool> IsInitializedAsync()
         {
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
             IsInitializedCallCount++;
             return Task.FromResult(Initialized);
         }
@@ -180,38 +197,49 @@ public sealed class OrleansActorRuntimeForwardingTests
         public Task HandleEnvelopeAsync(byte[] envelopeBytes)
         {
             _ = envelopeBytes;
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
             return Task.CompletedTask;
         }
 
         public Task AddChildAsync(string childId)
         {
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
             Children.Add(childId);
             return Task.CompletedTask;
         }
 
         public Task RemoveChildAsync(string childId)
         {
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
             Children.Remove(childId);
             return Task.CompletedTask;
         }
 
         public Task SetParentAsync(string parentId)
         {
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
             ParentId = parentId;
             return Task.CompletedTask;
         }
 
         public Task ClearParentAsync()
         {
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
             ParentId = null;
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<string>> GetChildrenAsync() =>
-            Task.FromResult<IReadOnlyList<string>>(Children.ToList());
+        public Task<IReadOnlyList<string>> GetChildrenAsync()
+        {
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
+            return Task.FromResult<IReadOnlyList<string>>(Children.ToList());
+        }
 
-        public Task<string?> GetParentAsync() =>
-            Task.FromResult(ParentId);
+        public Task<string?> GetParentAsync()
+        {
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
+            return Task.FromResult(ParentId);
+        }
 
         public Task<string> GetDescriptionAsync() =>
             Task.FromResult("recording");

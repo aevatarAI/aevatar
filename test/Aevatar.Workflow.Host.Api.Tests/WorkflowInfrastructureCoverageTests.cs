@@ -271,6 +271,48 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunActorPort_ParseWorkflowYaml_ShouldRejectUnknownStepTypes()
+    {
+        var runtime = new FakeActorRuntime();
+        var manifestStore = new FakeAgentManifestStore();
+        var port = CreatePort(runtime, manifestStore);
+
+        var parseResult = await port.ParseWorkflowYamlAsync(
+            """
+            name: inline_unknown
+            roles: []
+            steps:
+              - id: s1
+                type: typo_unknown_step
+            """,
+            CancellationToken.None);
+
+        parseResult.Succeeded.Should().BeFalse();
+        parseResult.Error.Should().Contain("未知原语");
+    }
+
+    [Fact]
+    public async Task WorkflowRunActorPort_ParseWorkflowYaml_ShouldAcceptKnownStepTypes()
+    {
+        var runtime = new FakeActorRuntime();
+        var manifestStore = new FakeAgentManifestStore();
+        var port = CreatePort(runtime, manifestStore);
+
+        var parseResult = await port.ParseWorkflowYamlAsync(
+            """
+            name: inline_known
+            roles: []
+            steps:
+              - id: s1
+                type: transform
+            """,
+            CancellationToken.None);
+
+        parseResult.Succeeded.Should().BeTrue();
+        parseResult.WorkflowName.Should().Be("inline_known");
+    }
+
+    [Fact]
     public void AddWorkflowCapability_ShouldRegisterCapabilityAndValidateNull()
     {
         Action act = () => WorkflowCapabilityHostBuilderExtensions.AddWorkflowCapability(null!);
@@ -320,7 +362,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     private static WorkflowRunActorPort CreatePort(FakeActorRuntime runtime, FakeAgentManifestStore manifestStore)
     {
         var verifier = new DefaultAgentTypeVerifier(new RuntimeBackedActorTypeProbe(runtime), manifestStore);
-        return new WorkflowRunActorPort(runtime, manifestStore, verifier);
+        return new WorkflowRunActorPort(runtime, manifestStore, verifier, [new WorkflowCoreModulePack()]);
     }
 
     private sealed class FakeReportSink : IWorkflowExecutionReportArtifactSink

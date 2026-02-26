@@ -1,0 +1,19 @@
+name: 13_foreach
+description: |
+  Demonstrates the `foreach` primitive — iterate over items with sub-steps.
+  For each technology name, calls LLM to generate a one-line description.
+
+roles:
+  - id: describer
+    name: Describer
+    system_prompt: |
+      Given a technology name, write a single sentence describing what it is
+      and what it's used for. Be concise and factual.
+
+steps:
+  - id: describe_each
+    type: foreach
+    parameters:
+      delimiter: "\n---\n"
+      sub_step_type: "llm_call"
+      sub_target_role: "describer"

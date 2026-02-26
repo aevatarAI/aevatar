@@ -3,16 +3,16 @@
 //
 // Handles ChatRequestEvent:
 // 1. Calls LLM via ChatStreamAsync (streaming)
-// 2. Publishes AG-UI events: TextMessageStart → Content* → End
+// 2. Publishes AG-UI events: TextMessageStart → Content* → ToolCall* → End
 // 3. Logs prompt and full LLM response for observability
 // ─────────────────────────────────────────────────────────────
 
-using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
@@ -79,6 +79,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             MaxHistoryMessages = evt.MaxHistoryMessages <= 0 ? 100 : evt.MaxHistoryMessages,
             StreamBufferCapacity = evt.StreamBufferCapacity <= 0 ? 256 : evt.StreamBufferCapacity,
         });
+
+        RoleGAgentFactory.ApplyModuleExtensions(this, evt.EventModules, evt.EventRoutes, Services);
     }
 
     /// <summary>Returns agent description.</summary>

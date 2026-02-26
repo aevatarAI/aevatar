@@ -7,6 +7,7 @@ using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -80,6 +81,29 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
     }
 
     [Fact]
+    public async Task HandleEnqueue_ShouldThrow_WhenFailedStoreMissing()
+    {
+        var agent = CreateAgent(CreateAgentServices());
+
+        Func<Task> act = () => agent.HandleEnqueueAsync(new ProjectionCompensationEnqueuedEvent
+        {
+            RecordId = "r1",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void BuildActorId_ShouldTrimScopeAndThrowForBlank()
+    {
+        WorkflowProjectionDispatchCompensationOutboxGAgent.BuildActorId(" workflow ").Should()
+            .Be("projection.compensation.outbox:workflow");
+
+        Action act = () => WorkflowProjectionDispatchCompensationOutboxGAgent.BuildActorId("   ");
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
     public async Task HandleTriggerReplay_WithSuccessfulBinding_ShouldMarkSucceeded()
     {
         var binding = new FlakyGraphBinding(failuresBeforeSuccess: 0);
@@ -131,6 +155,127 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
 
         await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 2 });
         binding.AttemptCount.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task HandleTriggerReplay_WhenBatchSizeIsNonPositive_ShouldFallbackToDefaultBatchSize()
+    {
+        var binding = new FlakyGraphBinding(failuresBeforeSuccess: 0);
+        var services = CreateAgentServices(bindings: [binding]);
+        var agent = CreateAgent(services);
+
+        for (var i = 0; i < 21; i++)
+            await agent.HandleEnqueueAsync(CreateEnqueueEvent($"r{i}", CreateReadModelJson($"root-{i}")));
+
+        await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 0 });
+        binding.AttemptCount.Should().Be(20);
+
+        await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = -1 });
+        binding.AttemptCount.Should().Be(21);
+    }
+
+    [Fact]
+    public async Task HandleTriggerReplay_WhenBindingMissing_ShouldScheduleRetry()
+    {
+        var agent = CreateAgent(CreateAgentServices());
+
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelJson("root-1")));
+        await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
+
+        var entry = agent.State.Entries["r1"];
+        entry.AttemptCount.Should().Be(1);
+        entry.CompletedAtUtc.Should().BeNull();
+        entry.LastError.Should().Contain("not registered");
+    }
+
+    [Fact]
+    public async Task HandleTriggerReplay_WhenReadModelJsonInvalid_ShouldScheduleRetryWithoutStoreWrite()
+    {
+        var binding = new FlakyGraphBinding(failuresBeforeSuccess: 0);
+        var services = CreateAgentServices(bindings: [binding]);
+        var agent = CreateAgent(services);
+
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", "{"));
+        await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
+
+        var entry = agent.State.Entries["r1"];
+        entry.AttemptCount.Should().Be(1);
+        entry.LastError.Should().Contain("JsonException");
+        binding.AttemptCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleTriggerReplay_WhenReadModelJsonDeserializesNull_ShouldScheduleRetry()
+    {
+        var binding = new FlakyGraphBinding(failuresBeforeSuccess: 0);
+        var services = CreateAgentServices(bindings: [binding]);
+        var agent = CreateAgent(services);
+
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", "null"));
+        await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
+
+        var entry = agent.State.Entries["r1"];
+        entry.AttemptCount.Should().Be(1);
+        entry.LastError.Should().Contain("deserialized null read model");
+        binding.AttemptCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleTriggerReplay_WhenEntryNotVisibleYet_ShouldSkipReplay()
+    {
+        var binding = new FlakyGraphBinding(failuresBeforeSuccess: 0);
+        var services = CreateAgentServices(bindings: [binding]);
+        var agent = CreateAgent(services);
+        var futureVisibleAt = Timestamp.FromDateTime(DateTime.UtcNow.AddHours(1));
+
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelJson("root-1"), enqueuedAtUtc: futureVisibleAt));
+        await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
+
+        binding.AttemptCount.Should().Be(0);
+        var entry = agent.State.Entries["r1"];
+        entry.AttemptCount.Should().Be(0);
+        entry.CompletedAtUtc.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleTriggerReplay_WhenBindingsDuplicate_ShouldUseLastRegisteredStoreBinding()
+    {
+        var first = new FlakyGraphBinding(failuresBeforeSuccess: 100, storeName: "Graph");
+        var second = new FlakyGraphBinding(failuresBeforeSuccess: 0, storeName: "graph");
+        var services = CreateAgentServices(bindings: [first, second]);
+        var agent = CreateAgent(services);
+
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelJson("root-1")));
+        await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
+
+        first.AttemptCount.Should().Be(0);
+        second.AttemptCount.Should().Be(1);
+        agent.State.Entries["r1"].CompletedAtUtc.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task HandleTriggerReplay_WhenBaseDelayConfigured_ShouldScheduleFutureVisibility()
+    {
+        var binding = new FlakyGraphBinding(failuresBeforeSuccess: 1);
+        var options = new WorkflowExecutionProjectionOptions
+        {
+            DispatchCompensationReplayBaseDelayMs = 200,
+            DispatchCompensationReplayMaxDelayMs = 1000,
+        };
+        var services = CreateAgentServices(bindings: [binding], options: options);
+        var agent = CreateAgent(services);
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelJson("root-1")));
+
+        await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
+        var afterReplay = DateTime.UtcNow;
+
+        var entry = agent.State.Entries["r1"];
+        entry.AttemptCount.Should().Be(1);
+        entry.NextVisibleAtUtc.Should().NotBeNull();
+        var nextVisible = entry.NextVisibleAtUtc!.ToDateTime();
+        if (nextVisible.Kind != DateTimeKind.Utc)
+            nextVisible = DateTime.SpecifyKind(nextVisible, DateTimeKind.Utc);
+        nextVisible.Should().BeAfter(afterReplay);
     }
 
     [Fact]
@@ -200,17 +345,22 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         binding.SuccessCount.Should().Be(1);
     }
 
-    private static ProjectionCompensationEnqueuedEvent CreateEnqueueEvent(string recordId, string readModelJson) =>
+    private static ProjectionCompensationEnqueuedEvent CreateEnqueueEvent(
+        string recordId,
+        string readModelJson,
+        string failedStore = "Graph",
+        Timestamp? enqueuedAtUtc = null) =>
         new()
         {
             RecordId = recordId,
             Operation = "mutate",
-            FailedStore = "Graph",
+            FailedStore = failedStore,
             SucceededStores = { "Document" },
             ReadModelType = typeof(WorkflowExecutionReport).FullName!,
             ReadModelJson = readModelJson,
             Key = recordId,
             LastError = "test",
+            EnqueuedAtUtc = enqueuedAtUtc,
         };
 
     private static string CreateReadModelJson(string rootActorId) =>
@@ -232,13 +382,15 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
     private sealed class FlakyGraphBinding : IProjectionStoreBinding<WorkflowExecutionReport, string>
     {
         private int _remainingFailures;
+        private readonly string _storeName;
 
-        public FlakyGraphBinding(int failuresBeforeSuccess)
+        public FlakyGraphBinding(int failuresBeforeSuccess, string storeName = "Graph")
         {
             _remainingFailures = Math.Max(0, failuresBeforeSuccess);
+            _storeName = storeName;
         }
 
-        public string StoreName => "Graph";
+        public string StoreName => _storeName;
 
         public int AttemptCount { get; private set; }
 

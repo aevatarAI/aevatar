@@ -11,19 +11,22 @@ public sealed class WorkflowRunExecutionEngine : IWorkflowRunExecutionEngine
     private readonly IWorkflowRunOutputStreamer _outputStreamer;
     private readonly IWorkflowRunCompletionPolicy _completionPolicy;
     private readonly IWorkflowRunResourceFinalizer _resourceFinalizer;
+    private readonly IWorkflowRunStateSnapshotEmitter _stateSnapshotEmitter;
 
     public WorkflowRunExecutionEngine(
         ICommandEnvelopeFactory<WorkflowChatRunRequest> requestEnvelopeFactory,
         IWorkflowRunRequestExecutor requestExecutor,
         IWorkflowRunOutputStreamer outputStreamer,
         IWorkflowRunCompletionPolicy completionPolicy,
-        IWorkflowRunResourceFinalizer resourceFinalizer)
+        IWorkflowRunResourceFinalizer resourceFinalizer,
+        IWorkflowRunStateSnapshotEmitter stateSnapshotEmitter)
     {
         _requestEnvelopeFactory = requestEnvelopeFactory;
         _requestExecutor = requestExecutor;
         _outputStreamer = outputStreamer;
         _completionPolicy = completionPolicy;
         _resourceFinalizer = resourceFinalizer;
+        _stateSnapshotEmitter = stateSnapshotEmitter;
     }
 
     public async Task<WorkflowChatRunExecutionResult> ExecuteAsync(
@@ -65,6 +68,13 @@ public sealed class WorkflowRunExecutionEngine : IWorkflowRunExecutionEngine
             await JoinProcessingTaskAsync(processingTask);
             if (!projectionCompleted)
                 projectionCompletionStatus = WorkflowProjectionCompletionStatus.Failed;
+
+            await _stateSnapshotEmitter.EmitAsync(
+                runContext,
+                projectionCompletionStatus,
+                projectionCompleted,
+                emitAsync,
+                ct);
 
             var result = new WorkflowChatRunFinalizeResult(projectionCompletionStatus, projectionCompleted);
             return new WorkflowChatRunExecutionResult(

@@ -242,6 +242,7 @@ public sealed class WorkflowCoreModulesCoverageTests
                 {
                     ["step"] = "transform",
                     ["max_iterations"] = "3",
+                    ["condition"] = "not(eq(output, 'DONE'))",
                 },
             }),
             ctx,
@@ -259,11 +260,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             ctx,
             CancellationToken.None);
         await module.HandleAsync(
-            Envelope(new StepCompletedEvent { StepId = "while-1_iter_1", Success = true, Output = "more" }),
-            ctx,
-            CancellationToken.None);
-        await module.HandleAsync(
-            Envelope(new StepCompletedEvent { StepId = "while-1_iter_2", Success = true, Output = "final" }),
+            Envelope(new StepCompletedEvent { StepId = "while-1_iter_1", Success = true, Output = "DONE" }),
             ctx,
             CancellationToken.None);
         await module.HandleAsync(
@@ -272,7 +269,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
 
         var deltaEvents = ctx.Published.Skip(countAfterStart).ToList();
-        deltaEvents.Should().HaveCount(3);
+        deltaEvents.Should().HaveCount(2);
 
         var secondDispatch = deltaEvents[0].evt.Should().BeOfType<StepRequestEvent>().Subject;
         secondDispatch.StepId.Should().Be("while-1_iter_1");
@@ -280,16 +277,55 @@ public sealed class WorkflowCoreModulesCoverageTests
         secondDispatch.Input.Should().Be("continue");
         deltaEvents[0].direction.Should().Be(EventDirection.Self);
 
-        var thirdDispatch = deltaEvents[1].evt.Should().BeOfType<StepRequestEvent>().Subject;
-        thirdDispatch.StepId.Should().Be("while-1_iter_2");
-        thirdDispatch.StepType.Should().Be("transform");
-        thirdDispatch.Input.Should().Be("more");
-        deltaEvents[1].direction.Should().Be(EventDirection.Self);
-
-        var completed = deltaEvents[2].evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var completed = deltaEvents[1].evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.StepId.Should().Be("while-1");
         completed.Success.Should().BeTrue();
-        completed.Output.Should().Be("final");
+        completed.Output.Should().Be("DONE");
+        completed.Metadata["while.iterations"].Should().Be("2");
+    }
+
+    [Fact]
+    public async Task WhileModule_ShouldEvaluateSubParametersPerIteration()
+    {
+        var module = new WhileModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "while-dynamic",
+                StepType = "while",
+                Input = "seed",
+                TargetRole = "worker",
+                Parameters =
+                {
+                    ["step"] = "transform",
+                    ["max_iterations"] = "3",
+                    ["condition"] = "${lt(iteration, 3)}",
+                    ["sub_param_prompt"] = "${concat('iter=', iteration, ',input=', input)}",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var firstDispatch = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        firstDispatch.Parameters["prompt"].Should().Be("iter=0,input=seed");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "while-dynamic_iter_0", Success = true, Output = "out-0" }),
+            ctx,
+            CancellationToken.None);
+        var secondDispatch = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        secondDispatch.Parameters["prompt"].Should().Be("iter=1,input=out-0");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "while-dynamic_iter_1", Success = true, Output = "out-1" }),
+            ctx,
+            CancellationToken.None);
+        var thirdDispatch = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        thirdDispatch.Parameters["prompt"].Should().Be("iter=2,input=out-1");
     }
 
     [Fact]
@@ -471,6 +507,243 @@ public sealed class WorkflowCoreModulesCoverageTests
         var start = ctx.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
         start.WorkflowName.Should().Be("sub_flow");
         start.Input.Should().Be("payload-2");
+        start.RunId.Should().NotBeNullOrWhiteSpace();
+        start.Parameters["workflow_call.parent_step_id"].Should().Be("wf-2");
+
+        ctx.Published.Clear();
+        await module.HandleAsync(
+            Envelope(new WorkflowCompletedEvent
+            {
+                RunId = start.RunId,
+                Success = true,
+                Output = "child-output",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var parentCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        parentCompletion.StepId.Should().Be("wf-2");
+        parentCompletion.RunId.Should().Be("default");
+        parentCompletion.Success.Should().BeTrue();
+        parentCompletion.Output.Should().Be("child-output");
+        parentCompletion.Metadata["workflow_call.child_run_id"].Should().Be(start.RunId);
+    }
+
+    [Fact]
+    public void CacheModule_MetadataAndCanHandle_ShouldCoverModuleSurface()
+    {
+        var module = new CacheModule();
+
+        module.Name.Should().Be("cache");
+        module.Priority.Should().Be(3);
+        module.CanHandle(Envelope(new StepRequestEvent { StepId = "cache-1", StepType = "cache" })).Should().BeTrue();
+        module.CanHandle(Envelope(new StepCompletedEvent { StepId = "cache-1", Success = true })).Should().BeTrue();
+        module.CanHandle(Envelope(new WorkflowCompletedEvent { WorkflowName = "wf", Success = true })).Should().BeFalse();
+        module.CanHandle(new EventEnvelope()).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CacheModule_WithLongCacheKey_ShouldShortenMetadataKey()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+        var longKey = new string('k', 80);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-long-1",
+                StepType = "cache",
+                RunId = "run-long-1",
+                Input = "input",
+                Parameters = { ["cache_key"] = longKey },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var childRequest = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = childRequest.StepId,
+                RunId = "run-long-1",
+                Success = true,
+                Output = "ok",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completion.Metadata["cache.key"].Should().EndWith("...");
+        completion.Metadata["cache.key"].Length.Should().Be(63);
+    }
+
+    [Fact]
+    public async Task CacheModule_MissThenHit_ShouldDispatchDefaultChildAndServeCachedValue()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-1",
+                StepType = "cache",
+                RunId = "run-cache-1",
+                Input = "input-1",
+                Parameters =
+                {
+                    ["cache_key"] = "key-1",
+                    ["ttl_seconds"] = "60",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var childRequest = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        childRequest.StepId.Should().StartWith("cache-parent-1_cached_");
+        childRequest.StepType.Should().Be("llm_call");
+        childRequest.RunId.Should().Be("run-cache-1");
+        childRequest.Input.Should().Be("input-1");
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = childRequest.StepId,
+                RunId = "run-cache-1",
+                Success = true,
+                Output = "cached-output",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var missCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        missCompletion.StepId.Should().Be("cache-parent-1");
+        missCompletion.Success.Should().BeTrue();
+        missCompletion.Output.Should().Be("cached-output");
+        missCompletion.Metadata["cache.hit"].Should().Be("false");
+        missCompletion.Metadata.Should().ContainKey("cache.key");
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-2",
+                StepType = "cache",
+                RunId = "run-cache-2",
+                Input = "input-2",
+                Parameters =
+                {
+                    ["cache_key"] = "key-1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var hitCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        hitCompletion.StepId.Should().Be("cache-parent-2");
+        hitCompletion.Success.Should().BeTrue();
+        hitCompletion.Output.Should().Be("cached-output");
+        hitCompletion.Metadata["cache.hit"].Should().Be("true");
+        hitCompletion.Metadata.Should().ContainKey("cache.key");
+    }
+
+    [Fact]
+    public async Task CacheModule_WhenSecondCallerJoinsPending_ShouldFanOutCompletionAndNotCacheFailures()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-a",
+                StepType = "cache",
+                RunId = "run-a",
+                Input = "input-a",
+                Parameters = { ["cache_key"] = "shared-key" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var childRequest = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-b",
+                StepType = "cache",
+                RunId = "run-b",
+                Input = "input-b",
+                Parameters = { ["cache_key"] = "shared-key" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = childRequest.StepId,
+                RunId = "run-a",
+                Success = false,
+                Error = "child failed",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var waiterCompletions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToList();
+        waiterCompletions.Should().HaveCount(2);
+        waiterCompletions.Should().ContainSingle(x => x.StepId == "cache-parent-a" && !x.Success && x.Error == "child failed");
+        waiterCompletions.Should().ContainSingle(x => x.StepId == "cache-parent-b" && !x.Success && x.Error == "child failed");
+        foreach (var completion in waiterCompletions)
+        {
+            completion.Metadata.TryGetValue("cache.hit", out var hit).Should().BeTrue();
+            hit.Should().Be("false");
+        }
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-c",
+                StepType = "cache",
+                RunId = "run-c",
+                Input = "input-c",
+                Parameters = { ["cache_key"] = "shared-key" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task CacheModule_WhenCompletionDoesNotMatchPendingChild_ShouldIgnore()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "unknown-child",
+                RunId = "run-unknown",
+                Success = true,
+                Output = "x",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
     }
 
     [Fact]
@@ -507,6 +780,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             {
                 StepId = "llm-1",
                 StepType = "llm_call",
+                RunId = "run-llm-1",
                 Input = "question",
                 Parameters = { ["prompt_prefix"] = "system" },
             }),
@@ -515,7 +789,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
         chat.Prompt.Should().Be("system\n\nquestion");
-        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-1"));
+        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1"));
         ctx.Published.Last().direction.Should().Be(EventDirection.Self);
     }
 
@@ -530,13 +804,14 @@ public sealed class WorkflowCoreModulesCoverageTests
             {
                 StepId = "llm-text",
                 StepType = "llm_call",
+                RunId = "run-text",
                 Input = "q1",
             }),
             ctx,
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-text");
+        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-text", "llm-text");
         await module.HandleAsync(
             Envelope(new TextMessageEndEvent
             {
@@ -558,13 +833,14 @@ public sealed class WorkflowCoreModulesCoverageTests
             {
                 StepId = "llm-chat",
                 StepType = "llm_call",
+                RunId = "run-chat",
                 Input = "q2",
             }),
             ctx,
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-chat");
+        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-chat", "llm-chat");
         await module.HandleAsync(
             Envelope(new ChatResponseEvent
             {
@@ -783,9 +1059,13 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId, x => x);
         completions["assign-1"].Output.Should().Be("input-value");
+        completions["assign-1"].Metadata["assign.target"].Should().Be("x");
+        completions["assign-1"].Metadata["assign.value"].Should().Be("input-value");
         completions["assign-2"].Output.Should().Be("literal");
         completions["cond-1"].Output.Should().Be("contains KEY text");
+        completions["cond-1"].Metadata["branch"].Should().Be("true");
         completions["cond-2"].Output.Should().Be("other text");
+        completions["cond-2"].Metadata["branch"].Should().Be("false");
         completions["cp-1"].Output.Should().Be("snapshot");
     }
 
