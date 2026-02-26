@@ -3,21 +3,21 @@ using Sisyphus.Application.Models;
 
 namespace Sisyphus.Application.Services;
 
-public sealed class SessionLifecycleService(ChronoGraphClient chronoGraph)
+public sealed class SessionLifecycleService(GraphIdProvider graphIdProvider)
 {
     private readonly ConcurrentDictionary<Guid, ResearchSession> _sessions = new();
 
     public async Task<ResearchSession> CreateSessionAsync(
         string topic, int maxRounds = 20, CancellationToken ct = default)
     {
+        var graphId = await graphIdProvider.WaitAsync(ct);
+
         var session = new ResearchSession
         {
             Topic = topic,
             MaxRounds = maxRounds,
+            GraphId = graphId,
         };
-
-        var graphId = await chronoGraph.CreateGraphAsync($"session-{session.Id}", ct);
-        session.GraphId = graphId;
 
         _sessions[session.Id] = session;
         return session;
@@ -43,14 +43,9 @@ public sealed class SessionLifecycleService(ChronoGraphClient chronoGraph)
         }
     }
 
-    public async Task<bool> DeleteSessionAsync(Guid id, CancellationToken ct = default)
+    public Task<bool> DeleteSessionAsync(Guid id, CancellationToken ct = default)
     {
-        if (!_sessions.TryRemove(id, out var session))
-            return false;
-
-        if (!string.IsNullOrWhiteSpace(session.GraphId))
-            await chronoGraph.DeleteGraphAsync(session.GraphId, ct);
-
-        return true;
+        _ = ct;
+        return Task.FromResult(_sessions.TryRemove(id, out _));
     }
 }

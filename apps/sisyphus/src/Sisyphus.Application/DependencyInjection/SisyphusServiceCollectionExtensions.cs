@@ -25,8 +25,10 @@ public static class SisyphusServiceCollectionExtensions
                 {
                     client.BaseAddress = new Uri(nyxIdBaseUrl);
                 });
+                services.AddSingleton<GraphIdProvider>();
                 services.AddSingleton<SessionLifecycleService>();
                 services.AddSingleton<WorkflowTriggerService>();
+                services.AddHostedService<GraphBootstrapService>();
             },
             mapEndpoints: app => app.MapSessionEndpoints());
     }

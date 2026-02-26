@@ -3,16 +3,20 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Sisyphus.Application.Services;
 
-public sealed class WorkflowTriggerService(IWorkflowRunCommandService workflowRunService)
+public sealed class WorkflowTriggerService(
+    IWorkflowRunCommandService workflowRunService,
+    GraphIdProvider graphIdProvider)
 {
     public async Task TriggerAsync(
         ResearchSession session,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask>? emitAsync = null,
         CancellationToken ct = default)
     {
+        var graphId = await graphIdProvider.WaitAsync(ct);
+
         var prompt = $"""
             Research Topic: {session.Topic}
-            Graph ID: {session.GraphId}
+            Graph ID: {graphId}
             Max Rounds: {session.MaxRounds}
 
             Begin the research loop. Read the current graph state, identify knowledge gaps, produce claims, verify them, and write verified claims back to the graph.

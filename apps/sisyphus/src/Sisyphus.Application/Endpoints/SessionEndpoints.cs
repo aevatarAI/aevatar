@@ -10,6 +10,13 @@ public static class SessionEndpoints
 {
     public static IEndpointRouteBuilder MapSessionEndpoints(this IEndpointRouteBuilder app)
     {
+        // Graph ID endpoint — returns the resolved chrono-graph UUID
+        app.MapGet("/api/graph-id", (GraphIdProvider provider) =>
+            provider.GraphId is { } id
+                ? Results.Ok(new { graphId = id, name = GraphIdProvider.GraphName })
+                : Results.StatusCode(StatusCodes.Status503ServiceUnavailable))
+            .WithTags("Graph");
+
         var group = app.MapGroup("/api/v2/sessions").WithTags("Sessions");
 
         group.MapPost("/", HandleCreateSession)
