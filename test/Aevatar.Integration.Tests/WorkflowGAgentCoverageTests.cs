@@ -94,6 +94,33 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_ShouldPassThroughFullRoleConfigurationToConfigureEvent()
+    {
+        var runtime = new RecordingActorRuntime();
+        var resolver = new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
+        var agent = CreateAgent(runtime, resolver);
+        await agent.ConfigureWorkflowAsync(BuildWorkflowYamlWithFullRoleConfig(), "wf_role_fields");
+
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+
+        var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
+        roleAgent.LastConfigureEvent.Should().NotBeNull();
+        var configureEvent = roleAgent.LastConfigureEvent!;
+        configureEvent.RoleName.Should().Be("RoleA");
+        configureEvent.ProviderName.Should().Be("openai");
+        configureEvent.Model.Should().Be("gpt-4o-mini");
+        configureEvent.SystemPrompt.Should().Be("helpful role");
+        configureEvent.HasTemperature.Should().BeTrue();
+        configureEvent.Temperature.Should().Be(0.2);
+        configureEvent.MaxTokens.Should().Be(256);
+        configureEvent.MaxToolRounds.Should().Be(4);
+        configureEvent.MaxHistoryMessages.Should().Be(30);
+        configureEvent.StreamBufferCapacity.Should().Be(64);
+        configureEvent.EventModules.Should().Be("llm_handler,tool_handler");
+        configureEvent.EventRoutes.Should().Contain("event.type");
+    }
+
+    [Fact]
     public async Task HandleChatRequest_WhenResolvedAgentNotIRoleAgent_ShouldThrow()
     {
         var runtime = new RecordingActorRuntime();
@@ -204,6 +231,20 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task ConfigureWorkflow_WhenRequiredModuleCannotBeCreated_ShouldFailFast()
+    {
+        var factory = new SelectiveFailingEventModuleFactory("missing_module");
+        var expander = new StaticDependencyExpander(0, "missing_module");
+        var pack = new TestModulePack([expander], []);
+        var agent = CreateAgent(eventModuleFactory: factory, packs: [pack]);
+
+        Func<Task> act = () => agent.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_modules");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*requires module 'missing_module'*");
+    }
+
+    [Fact]
     public async Task ActivateAsync_WhenStateContainsWorkflowYaml_ShouldCompileAndInstallModules()
     {
         var factory = new RecordingEventModuleFactory();
@@ -262,6 +303,30 @@ public class WorkflowGAgentCoverageTests
                    - id: step_1
                      type: transform
                  """;
+    }
+
+    private static string BuildWorkflowYamlWithFullRoleConfig()
+    {
+        return """
+               name: wf_valid
+               roles:
+                 - id: role_a
+                   name: RoleA
+                   system_prompt: "helpful role"
+                   provider: openai
+                   model: gpt-4o-mini
+                   temperature: 0.2
+                   max_tokens: 256
+                   max_tool_rounds: 4
+                   max_history_messages: 30
+                   stream_buffer_capacity: 64
+                   event_modules: "llm_handler,tool_handler"
+                   event_routes: |
+                     event.type == ChatRequestEvent -> llm_handler
+               steps:
+                 - id: step_1
+                   type: transform
+               """;
     }
 
     private sealed class RecordingEventPublisher : IEventPublisher
@@ -345,6 +410,7 @@ public class WorkflowGAgentCoverageTests
     {
         public string Id { get; } = id;
         public string RoleName { get; private set; } = "";
+        public ConfigureRoleAgentEvent? LastConfigureEvent { get; private set; }
         public RoleAgentConfig? LastConfig { get; private set; }
 
         public void SetRoleName(string name) => RoleName = name;
@@ -359,12 +425,18 @@ public class WorkflowGAgentCoverageTests
             if (envelope.Payload?.Is(ConfigureRoleAgentEvent.Descriptor) == true)
             {
                 var evt = envelope.Payload.Unpack<ConfigureRoleAgentEvent>();
+                LastConfigureEvent = evt;
                 SetRoleName(evt.RoleName);
                 LastConfig = new RoleAgentConfig
                 {
                     ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? "deepseek" : evt.ProviderName,
                     Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,
                     SystemPrompt = evt.SystemPrompt ?? string.Empty,
+                    Temperature = evt.HasTemperature ? evt.Temperature : null,
+                    MaxTokens = evt.MaxTokens == 0 ? null : evt.MaxTokens,
+                    MaxToolRounds = evt.MaxToolRounds <= 0 ? 10 : evt.MaxToolRounds,
+                    MaxHistoryMessages = evt.MaxHistoryMessages <= 0 ? 100 : evt.MaxHistoryMessages,
+                    StreamBufferCapacity = evt.StreamBufferCapacity <= 0 ? 256 : evt.StreamBufferCapacity,
                 };
             }
 
@@ -398,6 +470,21 @@ public class WorkflowGAgentCoverageTests
         public bool TryCreate(string name, out IEventModule? module)
         {
             CreatedNames.Add(name);
+            module = new RecordingEventModule(name);
+            return true;
+        }
+    }
+
+    private sealed class SelectiveFailingEventModuleFactory(string failingModuleName) : IEventModuleFactory
+    {
+        public bool TryCreate(string name, out IEventModule? module)
+        {
+            if (string.Equals(name, failingModuleName, StringComparison.OrdinalIgnoreCase))
+            {
+                module = null;
+                return false;
+            }
+
             module = new RecordingEventModule(name);
             return true;
         }

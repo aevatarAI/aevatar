@@ -1,0 +1,20 @@
+name: 28_role_event_module_extensions_csv
+description: |
+  Role-level module demo using extensions.* fields only.
+  The role routes ChatRequestEvent to demo_csv_markdown via extensions.
+
+roles:
+  - id: extensions_role
+    name: Extensions Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by routed role event module.
+    extensions:
+      event_modules: "demo_csv_markdown"
+      event_routes: |
+        - when: event.type == "ChatRequestEvent"
+          to: demo_csv_markdown
+
+steps:
+  - id: role_reply
+    type: llm_call
+    role: extensions_role

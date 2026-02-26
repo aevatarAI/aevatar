@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -42,7 +43,7 @@ public sealed class EvaluateModule : IEventModule
             var thresholdStr = request.Parameters.GetValueOrDefault("threshold", "3");
             var threshold = double.TryParse(thresholdStr, out var th) ? th : 3.0;
             var onBelow = request.Parameters.GetValueOrDefault("on_below", "");
-            var runId = string.IsNullOrWhiteSpace(request.RunId) ? "default" : request.RunId;
+            var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
 
             var prompt = $"""
                 Evaluate the following content on these criteria: {criteria}

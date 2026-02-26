@@ -121,9 +121,39 @@ public sealed class RoleDefinition
     public string? Model { get; init; }
 
     /// <summary>
+    /// 采样温度。
+    /// </summary>
+    public double? Temperature { get; init; }
+
+    /// <summary>
+    /// 单次请求最大输出 token 数。
+    /// </summary>
+    public int? MaxTokens { get; init; }
+
+    /// <summary>
+    /// 单次请求工具调用最大轮数。
+    /// </summary>
+    public int? MaxToolRounds { get; init; }
+
+    /// <summary>
+    /// 会话中保留的历史消息上限。
+    /// </summary>
+    public int? MaxHistoryMessages { get; init; }
+
+    /// <summary>
+    /// 流式缓冲区容量。
+    /// </summary>
+    public int? StreamBufferCapacity { get; init; }
+
+    /// <summary>
     /// 该角色绑定的事件模块列表（逗号分隔）。
     /// </summary>
     public string? EventModules { get; init; }
+
+    /// <summary>
+    /// 该角色绑定的事件路由规则（DSL 或 YAML list）。
+    /// </summary>
+    public string? EventRoutes { get; init; }
 
     /// <summary>
     /// 该角色允许使用的 Connector 名称列表（中心化配置在 ~/.aevatar/connectors.json）。

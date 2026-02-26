@@ -13,34 +13,6 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class WorkflowLoopModule : IEventModule
 {
-    private static readonly HashSet<string> ClosedWorldBlockedStepTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "llm_call",
-        "tool_call",
-        "connector_call",
-        "bridge_call",
-        "evaluate",
-        "judge",
-        "reflect",
-        "human_input",
-        "human_approval",
-        "wait_signal",
-        "wait",
-        "emit",
-        "publish",
-        "parallel",
-        "parallel_fanout",
-        "fan_out",
-        "race",
-        "select",
-        "map_reduce",
-        "mapreduce",
-        "vote_consensus",
-        "vote",
-        "foreach",
-        "for_each",
-    };
-
     private WorkflowDefinition? _workflow;
     private readonly HashSet<string> _activeRunIds = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, string>> _variablesByRunId = new(StringComparer.Ordinal);
@@ -277,29 +249,42 @@ public sealed class WorkflowLoopModule : IEventModule
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
+        var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
         if (_workflow?.Configuration.ClosedWorldMode == true &&
-            ClosedWorldBlockedStepTypes.Contains(step.Type))
+            WorkflowPrimitiveCatalog.IsClosedWorldBlocked(canonicalStepType))
         {
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = step.Id,
                 RunId = runId,
                 Success = false,
-                Error = $"step type '{step.Type}' is blocked in closed_world_mode",
+                Error = $"step type '{canonicalStepType}' is blocked in closed_world_mode",
             }, EventDirection.Self, ct);
             return;
         }
 
         var inputPreview = input.Length > 200 ? input[..200] + "..." : input;
         ctx.Logger.LogInformation("workflow_loop: dispatch step={StepId} type={Type} role={Role} input=({Len} chars) {Preview}",
-            step.Id, step.Type, step.TargetRole ?? "(none)", input.Length, inputPreview);
+            step.Id, canonicalStepType, step.TargetRole ?? "(none)", input.Length, inputPreview);
 
-        var req = new StepRequestEvent { StepId = step.Id, StepType = step.Type, RunId = runId, Input = input, TargetRole = step.TargetRole ?? "" };
+        var req = new StepRequestEvent
+        {
+            StepId = step.Id,
+            StepType = canonicalStepType,
+            RunId = runId,
+            Input = input,
+            TargetRole = step.TargetRole ?? "",
+        };
         var vars = ResolveVariables(runId);
         vars["input"] = input;
 
         foreach (var (k, v) in step.Parameters)
-            req.Parameters[k] = _expressionEvaluator.Evaluate(v, vars);
+        {
+            var evaluated = _expressionEvaluator.Evaluate(v, vars);
+            req.Parameters[k] = WorkflowPrimitiveCatalog.IsStepTypeParameterKey(k)
+                ? WorkflowPrimitiveCatalog.ToCanonicalType(evaluated)
+                : evaluated;
+        }
 
         if (step.Branches is { Count: > 0 })
         {

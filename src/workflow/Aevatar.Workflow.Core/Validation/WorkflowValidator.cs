@@ -12,34 +12,6 @@ namespace Aevatar.Workflow.Core.Validation;
 /// </summary>
 public static class WorkflowValidator
 {
-    private static readonly HashSet<string> ClosedWorldBlockedStepTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "llm_call",
-        "tool_call",
-        "connector_call",
-        "bridge_call",
-        "evaluate",
-        "judge",
-        "reflect",
-        "human_input",
-        "human_approval",
-        "wait_signal",
-        "wait",
-        "emit",
-        "publish",
-        "parallel",
-        "parallel_fanout",
-        "fan_out",
-        "race",
-        "select",
-        "map_reduce",
-        "mapreduce",
-        "vote_consensus",
-        "vote",
-        "foreach",
-        "for_each",
-    };
-
     /// <summary>
     /// 校验工作流定义。
     /// 检查 name 非空、至少一个步骤、步骤 ID 不重复、角色引用有效、next 引用有效。
@@ -62,6 +34,9 @@ public static class WorkflowValidator
         if (string.IsNullOrWhiteSpace(wf.Name)) errors.Add("缺少 name");
         if (wf.Steps.Count == 0) errors.Add("至少需要一个 step");
 
+        var knownCanonicalStepTypes = options.RequireKnownStepTypes
+            ? WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(options.KnownStepTypes)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var closedWorldMode = options.ForceClosedWorldMode ?? wf.Configuration.ClosedWorldMode;
         var allSteps = EnumerateSteps(wf.Steps).ToList();
         var stepIds = new HashSet<string>(StringComparer.Ordinal);
@@ -87,7 +62,7 @@ public static class WorkflowValidator
                 errors.Add($"步骤 '{step.Id}' 的 next 引用不存在的步骤 '{step.Next}'");
 
             ValidateBranchTargets(step, stepIds, errors);
-            ValidateTypeSpecificRules(step, availableWorkflowNames, options, errors);
+            ValidateTypeSpecificRules(step, availableWorkflowNames, knownCanonicalStepTypes, options, errors);
 
             if (closedWorldMode)
                 ValidateClosedWorldRules(step, errors);
@@ -120,10 +95,34 @@ public static class WorkflowValidator
     private static void ValidateTypeSpecificRules(
         StepDefinition step,
         ISet<string>? availableWorkflowNames,
+        ISet<string> knownCanonicalStepTypes,
         WorkflowValidationOptions options,
         List<string> errors)
     {
-        var stepType = NormalizeStepType(step.Type);
+        var stepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
+        if (options.RequireKnownStepTypes &&
+            !WorkflowPrimitiveCatalog.IsKnownStepType(stepType, knownCanonicalStepTypes))
+        {
+            errors.Add($"步骤 '{step.Id}' 使用未知原语 '{step.Type}'（canonical='{stepType}'）");
+        }
+
+        foreach (var (key, value) in step.Parameters)
+        {
+            if (!WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) ||
+                string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            var parameterStepType = WorkflowPrimitiveCatalog.ToCanonicalType(value);
+            if (options.RequireKnownStepTypes &&
+                !WorkflowPrimitiveCatalog.IsKnownStepType(parameterStepType, knownCanonicalStepTypes))
+            {
+                errors.Add(
+                    $"步骤 '{step.Id}' 的参数 '{key}' 使用未知原语 '{value}'（canonical='{parameterStepType}'）");
+            }
+        }
+
         if (stepType == "conditional")
         {
             if (step.Branches == null || step.Branches.Count == 0)
@@ -195,33 +194,17 @@ public static class WorkflowValidator
 
     private static void ValidateClosedWorldRules(StepDefinition step, List<string> errors)
     {
-        if (ClosedWorldBlockedStepTypes.Contains(step.Type))
+        if (WorkflowPrimitiveCatalog.IsClosedWorldBlocked(step.Type))
             errors.Add($"步骤 '{step.Id}' 使用非闭包原语 '{step.Type}'（closed_world_mode=true）");
 
         foreach (var (key, value) in step.Parameters)
         {
-            if (key.EndsWith("_step_type", StringComparison.OrdinalIgnoreCase) &&
-                ClosedWorldBlockedStepTypes.Contains(value))
+            if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
+                WorkflowPrimitiveCatalog.IsClosedWorldBlocked(value))
             {
                 errors.Add($"步骤 '{step.Id}' 的参数 '{key}' 引用了非闭包原语 '{value}'");
             }
         }
-    }
-
-    private static string NormalizeStepType(string stepType)
-    {
-        var normalized = (stepType ?? string.Empty).Trim().ToLowerInvariant();
-        return normalized switch
-        {
-            "loop" => "while",
-            "sub_workflow" => "workflow_call",
-            "for_each" => "foreach",
-            "parallel_fanout" or "fan_out" => "parallel",
-            "mapreduce" => "map_reduce",
-            "judge" => "evaluate",
-            "select" => "race",
-            _ => normalized,
-        };
     }
 
     public sealed class WorkflowValidationOptions
@@ -237,6 +220,16 @@ public static class WorkflowValidator
         /// 当提供 availableWorkflowNames 时，是否强制校验 workflow_call 目标可解析。
         /// </summary>
         public bool RequireResolvableWorkflowCallTargets { get; init; } = true;
+
+        /// <summary>
+        /// 当 KnownStepTypes 提供且非空时，是否强制校验 step type（含 step type 参数位）必须可解析。
+        /// </summary>
+        public bool RequireKnownStepTypes { get; init; }
+
+        /// <summary>
+        /// 已注册的原语名称集合（可包含别名，校验时会 canonicalize）。
+        /// </summary>
+        public ISet<string>? KnownStepTypes { get; init; }
     }
 
     private static IEnumerable<StepDefinition> EnumerateSteps(IEnumerable<StepDefinition> steps)

@@ -72,6 +72,39 @@ YAML 里 `type: parallel` 会经工厂解析到 `ParallelFanOutModule`。
 
 ---
 
+### Workflow Roles（正式 schema）
+
+`workflow yaml` 里的 `roles` 现在是 `RoleGAgent` 的正式配置入口，运行时会完整透传到 `ConfigureRoleAgentEvent`：
+
+```yaml
+roles:
+  - id: planner
+    name: Planner
+    system_prompt: "You are a planning assistant."
+    provider: openai
+    model: gpt-4o-mini
+    temperature: 0.2
+    max_tokens: 512
+    max_tool_rounds: 4
+    max_history_messages: 50
+    stream_buffer_capacity: 128
+    event_modules: "llm_handler,tool_handler"
+    event_routes: |
+      event.type == ChatRequestEvent -> llm_handler
+    connectors: [incident_api, search_mcp]
+    extensions:
+      event_modules: "fallback_module"
+      event_routes: "event.type == X -> fallback_module"
+```
+
+语义规则：
+
+- `workflow roles` 与 `role yaml` 共用同一份解析归一化逻辑（`RoleConfigurationNormalizer`）。
+- `event_modules` / `event_routes` 支持平铺写法和 `extensions.*` 写法，且**平铺字段优先级更高**。
+- 未配置 `event_modules` 时，`RoleGAgent` 不会额外装配 event modules（保持旧行为）。
+
+---
+
 ## 三、内置模块一览
 
 | 类别 | YAML type | 模块 | 说明 |
@@ -92,6 +125,7 @@ YAML 里 `type: parallel` 会经工厂解析到 `ParallelFanOutModule`。
 | | `retrieve_facts` | `RetrieveFactsModule` | 按关键词检索事实片段 |
 
 每个原语的作用、参数和 YAML sample，见 [WORKFLOW_PRIMITIVES.md](./WORKFLOW_PRIMITIVES.md)。
+如果要把 `human_input` / `human_approval` / `wait_signal` 接到真实应用交互，优先参考该文档中的“实际应用集成模式”小节。
 
 ### 从 Foundation Orchestration 迁移
 
@@ -120,10 +154,10 @@ steps:
 ## 四、运行链路（从请求到结果）
 
 ```
-POST /api/chat { prompt, workflow }
+POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │
   ├── WorkflowChatRunApplicationService.ExecuteAsync
-  │     ├── WorkflowRunActorResolver: 按 workflow 名查 YAML，创建/复用 WorkflowGAgent
+  │     ├── WorkflowRunActorResolver: 优先解析 workflowYaml（inline），否则按 workflow 名查 registry，创建/复用 WorkflowGAgent
   │     ├── WorkflowExecutionRunOrchestrator.StartAsync: 启动投影 run
   │     └── WorkflowRunRequestExecutor: 投递 ChatRequestEvent
   │
@@ -153,6 +187,32 @@ POST /api/chat { prompt, workflow }
 ```
 
 关键点：**流程控制由模块完成，不写死在单个 Agent 的方法里。**
+
+### `/api/chat` 入参矩阵（推荐）
+
+| 场景 | 推荐请求体 | 说明 |
+|------|------------|------|
+| 新建 Actor，按名称加载已注册 workflow | `{ "prompt": "...", "workflow": "direct" }` | `workflow` 按名称从 registry 查 YAML。 |
+| 复用已绑定 workflow 的 Actor | `{ "prompt": "...", "agentId": "actor-123" }` | 只传 `prompt + agentId` 即可，`workflow/workflowYaml` 可留空。 |
+| 新建 Actor，直接提交 inline YAML | `{ "prompt": "...", "workflowYaml": "name: demo\\nroles: ...\\nsteps: ..." }` | 不依赖预存文件，服务端先解析 `workflowYaml`。 |
+| 给指定 Actor 传 inline YAML | `{ "prompt": "...", "agentId": "actor-123", "workflowYaml": "..." }` | 仅允许“未绑定 actor 首次绑定”或“同名 workflow 更新”；不允许切换到其它 workflow 名。 |
+| 同时传 `workflow` + `workflowYaml` | `{ "prompt": "...", "workflow": "demo", "workflowYaml": "name: demo\\n..." }` | 两者名称必须一致；不一致返回 `WORKFLOW_NAME_MISMATCH`（400）。 |
+
+错误码要点：
+
+- `INVALID_WORKFLOW_YAML`（400）：`workflowYaml` 解析/校验失败。
+- `WORKFLOW_NAME_MISMATCH`（400）：`workflow` 与 `workflowYaml.name` 不一致。
+- `WORKFLOW_BINDING_MISMATCH`（409）：目标 actor 已绑定其它 workflow。
+- `AGENT_WORKFLOW_NOT_CONFIGURED`（409）：传了 `agentId`，但 actor 未绑定且未提供 `workflowYaml`。
+
+最小可用示例（复用已有 Actor）：
+
+```json
+{
+  "prompt": "继续上一次分析，给我三条行动建议",
+  "agentId": "actor-123"
+}
+```
 
 ### 和 CQRS 投影的关系
 

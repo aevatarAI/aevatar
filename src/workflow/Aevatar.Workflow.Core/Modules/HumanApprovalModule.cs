@@ -7,6 +7,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -17,7 +18,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class HumanApprovalModule : IEventModule
 {
-    private readonly Dictionary<string, StepRequestEvent> _pending = [];
+    private readonly Dictionary<(string RunId, string StepId), StepRequestEvent> _pending = [];
 
     public string Name => "human_approval";
     public int Priority => 5;
@@ -40,20 +41,21 @@ public sealed class HumanApprovalModule : IEventModule
         {
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "human_approval") return;
+            var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
 
             var prompt = request.Parameters.GetValueOrDefault("prompt", "Approve this step?");
             var timeoutSeconds = int.TryParse(
                 request.Parameters.GetValueOrDefault("timeout", "3600"), out var t) ? t : 3600;
 
-            _pending[request.StepId] = request;
+            _pending[(runId, request.StepId)] = request;
 
             ctx.Logger.LogInformation(
-                "HumanApproval: step={StepId} suspended, prompt=\"{Prompt}\", timeout={Timeout}s",
-                request.StepId, prompt, timeoutSeconds);
+                "HumanApproval: run={RunId} step={StepId} suspended, prompt=\"{Prompt}\", timeout={Timeout}s",
+                runId, request.StepId, prompt, timeoutSeconds);
 
             await ctx.PublishAsync(new WorkflowSuspendedEvent
             {
-                RunId = request.RunId,
+                RunId = runId,
                 StepId = request.StepId,
                 SuspensionType = "human_approval",
                 Prompt = prompt,
@@ -66,14 +68,18 @@ public sealed class HumanApprovalModule : IEventModule
         if (payload.Is(WorkflowResumedEvent.Descriptor))
         {
             var resumed = payload.Unpack<WorkflowResumedEvent>();
-            if (!_pending.TryGetValue(resumed.StepId, out var pending)) return;
-            _pending.Remove(resumed.StepId);
+            if (!TryResolvePending(resumed, out var pendingKey, out var pending))
+                return;
+            _pending.Remove(pendingKey);
 
             var onReject = pending.Parameters.GetValueOrDefault("on_reject", "fail");
 
             if (resumed.Approved)
             {
-                ctx.Logger.LogInformation("HumanApproval: step={StepId} approved", resumed.StepId);
+                ctx.Logger.LogInformation(
+                    "HumanApproval: run={RunId} step={StepId} approved",
+                    pending.RunId,
+                    pending.StepId);
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = pending.StepId,
@@ -84,8 +90,11 @@ public sealed class HumanApprovalModule : IEventModule
             }
             else
             {
-                ctx.Logger.LogInformation("HumanApproval: step={StepId} rejected, on_reject={OnReject}",
-                    resumed.StepId, onReject);
+                ctx.Logger.LogInformation(
+                    "HumanApproval: run={RunId} step={StepId} rejected, on_reject={OnReject}",
+                    pending.RunId,
+                    pending.StepId,
+                    onReject);
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = pending.StepId,
@@ -97,4 +106,36 @@ public sealed class HumanApprovalModule : IEventModule
             }
         }
     }
+
+    private bool TryResolvePending(
+        WorkflowResumedEvent resumed,
+        out (string RunId, string StepId) pendingKey,
+        out StepRequestEvent pending)
+    {
+        if (!string.IsNullOrWhiteSpace(resumed.RunId))
+        {
+            pendingKey = (WorkflowRunIdNormalizer.Normalize(resumed.RunId), resumed.StepId);
+            return _pending.TryGetValue(pendingKey, out pending!);
+        }
+
+        // Backward compatibility: old clients may omit run_id.
+        var matchCount = 0;
+        pendingKey = default;
+        pending = default!;
+        foreach (var entry in _pending)
+        {
+            if (!entry.Key.StepId.Equals(resumed.StepId, StringComparison.Ordinal))
+                continue;
+
+            matchCount++;
+            if (matchCount > 1)
+                return false;
+
+            pendingKey = entry.Key;
+            pending = entry.Value;
+        }
+
+        return matchCount == 1;
+    }
+
 }

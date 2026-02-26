@@ -11,6 +11,7 @@
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -55,7 +56,7 @@ public sealed class LLMCallModule : IEventModule
                 prompt = prefix.TrimEnd() + "\n\n" + prompt;
             }
 
-            var runId = string.IsNullOrWhiteSpace(request.RunId) ? "default" : request.RunId;
+            var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
             var stepRunKey = $"{runId}:{request.StepId}";
             var attempt = _attemptsByRunStep.GetValueOrDefault(stepRunKey, 0) + 1;
             _attemptsByRunStep[stepRunKey] = attempt;
@@ -102,7 +103,7 @@ public sealed class LLMCallModule : IEventModule
             if (string.IsNullOrEmpty(sessionId)) return;
             if (!_pending.TryGetValue(sessionId, out var pending)) return;
             _pending.Remove(sessionId);
-            var pendingRunId = string.IsNullOrWhiteSpace(pending.RunId) ? "default" : pending.RunId;
+            var pendingRunId = WorkflowRunIdNormalizer.Normalize(pending.RunId);
             _attemptsByRunStep.Remove($"{pendingRunId}:{pending.StepId}");
 
             var outputPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";
@@ -128,7 +129,7 @@ public sealed class LLMCallModule : IEventModule
             if (string.IsNullOrEmpty(sessionId)) return;
             if (!_pending.TryGetValue(sessionId, out var pending)) return;
             _pending.Remove(sessionId);
-            var pendingRunId = string.IsNullOrWhiteSpace(pending.RunId) ? "default" : pending.RunId;
+            var pendingRunId = WorkflowRunIdNormalizer.Normalize(pending.RunId);
             _attemptsByRunStep.Remove($"{pendingRunId}:{pending.StepId}");
 
             var nsPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";

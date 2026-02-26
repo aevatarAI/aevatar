@@ -1,0 +1,17 @@
+name: 33_role_event_module_no_routes_template
+description: |
+  Edge-case demo: role defines event_modules but no event_routes.
+  In this case modules are attached directly (no RoutedEventModule wrapper),
+  and demo_template handles ChatRequestEvent deterministically.
+
+roles:
+  - id: no_routes_role
+    name: No Routes Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by role event module.
+    event_modules: "demo_template"
+
+steps:
+  - id: role_reply
+    type: llm_call
+    role: no_routes_role

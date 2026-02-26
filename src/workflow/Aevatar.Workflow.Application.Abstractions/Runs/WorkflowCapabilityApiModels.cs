@@ -5,6 +5,7 @@ public sealed record ChatInput
     public required string Prompt { get; init; }
     public string? Workflow { get; init; }
     public string? AgentId { get; init; }
+    public string? WorkflowYaml { get; init; }
 }
 
 public sealed record ChatWsCommand

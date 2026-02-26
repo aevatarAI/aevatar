@@ -10,6 +10,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -45,7 +46,7 @@ public sealed class ForEachModule : IEventModule
         {
             var evt = payload.Unpack<StepRequestEvent>();
             if (evt.StepType != "foreach") return;
-            var runId = string.IsNullOrWhiteSpace(evt.RunId) ? "default" : evt.RunId;
+            var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var parentKey = BuildRunStepKey(runId, evt.StepId);
 
             // ─── Parameters ───
@@ -60,7 +61,7 @@ public sealed class ForEachModule : IEventModule
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = evt.StepId,
-                    RunId = evt.RunId,
+                    RunId = runId,
                     Success = true, Output = "",
                 }, EventDirection.Self, ct);
                 return;
@@ -80,7 +81,7 @@ public sealed class ForEachModule : IEventModule
                 {
                     StepId = $"{evt.StepId}_item_{i}",
                     StepType = subStepType,
-                    RunId = evt.RunId,
+                    RunId = runId,
                     Input = items[i].Trim(),
                     TargetRole = subTargetRole ?? "",
                 };
@@ -102,7 +103,7 @@ public sealed class ForEachModule : IEventModule
             // Only collect direct foreach item completions: "<parent>_item_<index>".
             // Ignore nested children like "_item_0_sub_1" or "_item_0_vote".
             var parent = TryGetParentFromDirectItemStepId(evt.StepId);
-            var runId = string.IsNullOrWhiteSpace(evt.RunId) ? "default" : evt.RunId;
+            var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var parentKey = parent == null ? null : BuildRunStepKey(runId, parent);
 
             if (parent == null || parentKey == null || !_collected.ContainsKey(parentKey)) return;
@@ -122,7 +123,7 @@ public sealed class ForEachModule : IEventModule
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = parent,
-                    RunId = evt.RunId,
+                    RunId = runId,
                     Success = allSuccess, Output = merged,
                 }, EventDirection.Self, ct);
 

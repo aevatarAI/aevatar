@@ -15,6 +15,8 @@ internal static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.ProjectionDisabled => StatusCodes.Status503ServiceUnavailable,
             WorkflowChatRunStartError.WorkflowBindingMismatch => StatusCodes.Status409Conflict,
             WorkflowChatRunStartError.AgentWorkflowNotConfigured => StatusCodes.Status409Conflict,
+            WorkflowChatRunStartError.InvalidWorkflowYaml => StatusCodes.Status400BadRequest,
+            WorkflowChatRunStartError.WorkflowNameMismatch => StatusCodes.Status400BadRequest,
             _ => StatusCodes.Status400BadRequest,
         };
     }
@@ -29,6 +31,8 @@ internal static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.ProjectionDisabled => ("PROJECTION_DISABLED", "Projection pipeline is disabled."),
             WorkflowChatRunStartError.WorkflowBindingMismatch => ("WORKFLOW_BINDING_MISMATCH", "Actor is bound to a different workflow."),
             WorkflowChatRunStartError.AgentWorkflowNotConfigured => ("AGENT_WORKFLOW_NOT_CONFIGURED", "Actor has no bound workflow."),
+            WorkflowChatRunStartError.InvalidWorkflowYaml => ("INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),
+            WorkflowChatRunStartError.WorkflowNameMismatch => ("WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
             _ => ("RUN_START_FAILED", "Failed to resolve actor."),
         };
     }

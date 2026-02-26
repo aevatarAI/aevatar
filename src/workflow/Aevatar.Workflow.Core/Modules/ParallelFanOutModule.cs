@@ -6,6 +6,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -55,7 +56,7 @@ public sealed class ParallelFanOutModule : IEventModule
         {
             var evt = payload.Unpack<StepRequestEvent>();
             if (evt.StepType != "parallel") return;
-            var runId = NormalizeRunId(evt.RunId);
+            var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var parentKey = (runId, evt.StepId);
             var count = evt.Parameters.TryGetValue("parallel_count", out var cs) && int.TryParse(cs, out var n) ? n : 3;
             _expected[parentKey] = count;
@@ -90,7 +91,7 @@ public sealed class ParallelFanOutModule : IEventModule
                 {
                     StepId = $"{evt.StepId}_sub_{i}",
                     StepType = "llm_call",
-                    RunId = evt.RunId,
+                    RunId = runId,
                     Input = evt.Input,
                     TargetRole = role ?? "",
                 }, EventDirection.Self, ct);
@@ -99,7 +100,7 @@ public sealed class ParallelFanOutModule : IEventModule
         else
         {
             var evt = payload.Unpack<StepCompletedEvent>();
-            var eventRunId = NormalizeRunId(evt.RunId);
+            var eventRunId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
 
             // Vote result: map back to parent parallel step.
             var voteStepKey = (eventRunId, evt.StepId);
@@ -159,7 +160,7 @@ public sealed class ParallelFanOutModule : IEventModule
                     {
                         StepId = voteStepId,
                         StepType = voteConfig.StepType,
-                        RunId = evt.RunId,
+                        RunId = eventRunId,
                         Input = merged,
                     };
                     foreach (var (key, value) in voteConfig.Parameters)
@@ -176,7 +177,7 @@ public sealed class ParallelFanOutModule : IEventModule
                     var completed = new StepCompletedEvent
                     {
                         StepId = parent,
-                        RunId = evt.RunId,
+                        RunId = eventRunId,
                         Success = allSuccess,
                         Output = merged,
                     };
@@ -190,8 +191,6 @@ public sealed class ParallelFanOutModule : IEventModule
             }
         }
     }
-
-    private static string NormalizeRunId(string runId) => string.IsNullOrWhiteSpace(runId) ? string.Empty : runId;
 
     private sealed record VoteConfig(string StepType, Dictionary<string, string> Parameters);
 }

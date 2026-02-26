@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -30,7 +31,7 @@ public sealed class MapReduceModule : IEventModule
         {
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "map_reduce") return;
-            var runId = NormalizeRunId(request.RunId);
+            var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
             var parentKey = (runId, request.StepId);
 
             var delimiter = request.Parameters.GetValueOrDefault("delimiter", "\n---\n");
@@ -39,7 +40,7 @@ public sealed class MapReduceModule : IEventModule
             {
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
-                    StepId = request.StepId, RunId = request.RunId, Success = true, Output = "",
+                    StepId = request.StepId, RunId = runId, Success = true, Output = "",
                 }, EventDirection.Self, ct);
                 return;
             }
@@ -61,7 +62,7 @@ public sealed class MapReduceModule : IEventModule
                 {
                     StepId = $"{request.StepId}_map_{i}",
                     StepType = mapType,
-                    RunId = request.RunId,
+                    RunId = runId,
                     Input = items[i],
                     TargetRole = mapRole ?? "",
                 }, EventDirection.Self, ct);
@@ -70,7 +71,7 @@ public sealed class MapReduceModule : IEventModule
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
             var evt = payload.Unpack<StepCompletedEvent>();
-            var runId = NormalizeRunId(evt.RunId);
+            var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
 
             var reduceKey = (runId, evt.StepId);
             if (_reduceToParent.Remove(reduceKey, out var reduceParent))
@@ -101,7 +102,7 @@ public sealed class MapReduceModule : IEventModule
                 _states.Remove(parentKey);
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
-                    StepId = parent, RunId = evt.RunId, Success = allSuccess, Output = merged,
+                    StepId = parent, RunId = runId, Success = allSuccess, Output = merged,
                     Error = allSuccess ? "" : "one or more map steps failed",
                 }, EventDirection.Self, ct);
                 return;
@@ -121,14 +122,12 @@ public sealed class MapReduceModule : IEventModule
             {
                 StepId = reduceStepId,
                 StepType = state.ReduceType,
-                RunId = evt.RunId,
+                RunId = runId,
                 Input = reduceInput,
                 TargetRole = state.ReduceRole,
             }, EventDirection.Self, ct);
         }
     }
-
-    private static string NormalizeRunId(string runId) => string.IsNullOrWhiteSpace(runId) ? string.Empty : runId;
 
     private static string? ExtractMapParent(string stepId)
     {

@@ -11,4 +11,4 @@ message WorkflowSuspendedEvent { string run_id = 1; string step_id = 2; string s
 message WorkflowResumedEvent   { string run_id = 1; string step_id = 2; bool approved = 3; string user_input = 4; map<string, string> metadata = 5; }
 
 message WaitingForSignalEvent { string step_id = 1; string signal_name = 2; string prompt = 3; int32 timeout_ms = 4; }
-message SignalReceivedEvent   { string signal_name = 1; string payload = 2; }
+message SignalReceivedEvent   { string signal_name = 1; string payload = 2; string run_id = 3; }

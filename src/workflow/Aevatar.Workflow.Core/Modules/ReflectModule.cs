@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -11,7 +12,6 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class ReflectModule : IEventModule
 {
-    private readonly Dictionary<string, ReflectState> _states = [];
     private readonly Dictionary<string, ReflectState> _pendingLLM = [];
 
     public string Name => "reflect";
@@ -39,11 +39,10 @@ public sealed class ReflectModule : IEventModule
             var maxRounds = int.TryParse(request.Parameters.GetValueOrDefault("max_rounds", "3"), out var mr) ? mr : 3;
             var criteria = request.Parameters.GetValueOrDefault("criteria", "quality and correctness");
             maxRounds = Math.Clamp(maxRounds, 1, 10);
-            var runId = string.IsNullOrWhiteSpace(request.RunId) ? "default" : request.RunId;
+            var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
 
             var state = new ReflectState(request.StepId, runId, request.TargetRole ?? "", request.Input ?? "",
                 criteria, maxRounds, 0, ReflectPhase.Critique);
-            _states[request.StepId] = state;
 
             await SendCritiqueAsync(state, request.Input ?? "", ctx, ct);
             return;
@@ -75,7 +74,6 @@ public sealed class ReflectModule : IEventModule
 
             if (passed || round >= state2.MaxRounds)
             {
-                _states.Remove(state2.StepId);
                 var completed = new StepCompletedEvent
                 {
                     StepId = state2.StepId, RunId = state2.RunId, Success = true, Output = state2.CurrentDraft,
@@ -87,13 +85,11 @@ public sealed class ReflectModule : IEventModule
             }
 
             var next = state2 with { Round = round, Phase = ReflectPhase.Improve };
-            _states[state2.StepId] = next;
             await SendImproveAsync(next, content, ctx, ct);
         }
         else
         {
             var next = state2 with { CurrentDraft = content, Phase = ReflectPhase.Critique };
-            _states[state2.StepId] = next;
             await SendCritiqueAsync(next, content, ctx, ct);
         }
     }

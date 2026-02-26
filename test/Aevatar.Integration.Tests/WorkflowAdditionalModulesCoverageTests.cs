@@ -159,6 +159,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             {
                 StepId = "wait-1",
                 StepType = "wait_signal",
+                RunId = "run-w1",
                 Input = "fallback-input",
                 Parameters =
                 {
@@ -180,12 +181,14 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             {
                 SignalName = "approval",
                 Payload = "",
+                RunId = "run-w1",
             }),
             ctx,
             CancellationToken.None);
 
         var resumed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         resumed.StepId.Should().Be("wait-1");
+        resumed.RunId.Should().Be("run-w1");
         resumed.Success.Should().BeTrue();
         resumed.Output.Should().Be("fallback-input");
         ctx.Published.Clear();
@@ -195,6 +198,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             {
                 SignalName = "unknown",
                 Payload = "noop",
+                RunId = "run-w1",
             }),
             ctx,
             CancellationToken.None);
@@ -202,7 +206,64 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task CacheModule_ShouldDispatchOnMissStoreResultAndHitOnNextRequest()
+    public async Task WaitSignalModule_WhenSignalRunIdMissingAndAmbiguous_ShouldNotResumeAnyRun()
+    {
+        var module = new WaitSignalModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-a",
+                StepType = "wait_signal",
+                RunId = "run-a",
+                Input = "input-a",
+                Parameters = { ["signal_name"] = "approval" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-b",
+                StepType = "wait_signal",
+                RunId = "run-b",
+                Input = "input-b",
+                Parameters = { ["signal_name"] = "approval" },
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new SignalReceivedEvent
+            {
+                SignalName = "approval",
+                Payload = "ambiguous",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new SignalReceivedEvent
+            {
+                SignalName = "approval",
+                RunId = "run-b",
+                Payload = "resolved-b",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var resumed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        resumed.StepId.Should().Be("wait-b");
+        resumed.RunId.Should().Be("run-b");
+        resumed.Output.Should().Be("resolved-b");
+    }
+
+    [Fact]
+    public async Task CacheModule_ShouldDispatchOnMissJoinPendingAndHitOnReadyValue()
     {
         var module = new CacheModule();
         var ctx = CreateContext();
@@ -225,32 +286,45 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var childDispatch = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
-        childDispatch.StepId.Should().Be("cache-1_cached");
+        childDispatch.StepId.Should().StartWith("cache-1_cached_");
         childDispatch.StepType.Should().Be("transform");
         childDispatch.TargetRole.Should().Be("worker");
-        ctx.Published.Clear();
-
-        await module.HandleAsync(
-            Envelope(new StepCompletedEvent
-            {
-                StepId = "cache-1_cached",
-                Success = true,
-                Output = "cached-value",
-            }),
-            ctx,
-            CancellationToken.None);
-
-        var missCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        missCompletion.StepId.Should().Be("cache-1");
-        missCompletion.Success.Should().BeTrue();
-        missCompletion.Output.Should().Be("cached-value");
-        missCompletion.Metadata["cache.hit"].Should().Be("false");
+        var childStepId = childDispatch.StepId;
         ctx.Published.Clear();
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
             {
                 StepId = "cache-2",
+                StepType = "cache",
+                Input = "origin-2",
+                Parameters = { ["cache_key"] = "k1" },
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = childStepId,
+                Success = true,
+                Output = "cached-value",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var pendingCompletions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToList();
+        pendingCompletions.Should().HaveCount(2);
+        pendingCompletions.Should().ContainSingle(x => x.StepId == "cache-1" && x.Success && x.Output == "cached-value");
+        pendingCompletions.Should().ContainSingle(x => x.StepId == "cache-2" && x.Success && x.Output == "cached-value");
+        pendingCompletions.Should().OnlyContain(x => x.Metadata["cache.hit"] == "false");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-3",
                 StepType = "cache",
                 Input = "ignored",
                 Parameters = { ["cache_key"] = "k1" },
@@ -259,7 +333,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var hitCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        hitCompletion.StepId.Should().Be("cache-2");
+        hitCompletion.StepId.Should().Be("cache-3");
         hitCompletion.Success.Should().BeTrue();
         hitCompletion.Output.Should().Be("cached-value");
         hitCompletion.Metadata["cache.hit"].Should().Be("true");
@@ -416,6 +490,68 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task HumanApprovalModule_ShouldUseRunScopedPendingForSameStepId()
+    {
+        var module = new HumanApprovalModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "approval-shared",
+                StepType = "human_approval",
+                RunId = "run-a",
+                Input = "A",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "approval-shared",
+                StepType = "human_approval",
+                RunId = "run-b",
+                Input = "B",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-b",
+                StepId = "approval-shared",
+                Approved = true,
+                UserInput = "B-approved",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var resumedB = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        resumedB.RunId.Should().Be("run-b");
+        resumedB.StepId.Should().Be("approval-shared");
+        resumedB.Output.Should().Be("B-approved");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-a",
+                StepId = "approval-shared",
+                Approved = true,
+                UserInput = "A-approved",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var resumedA = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        resumedA.RunId.Should().Be("run-a");
+        resumedA.Output.Should().Be("A-approved");
+    }
+
+    [Fact]
     public async Task HumanInputModule_ShouldSuspendThenHandleInputAndTimeoutStrategies()
     {
         var module = new HumanInputModule();
@@ -512,6 +648,67 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var timeoutFail = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         timeoutFail.Success.Should().BeFalse();
         timeoutFail.Error.Should().Be("Human input timed out");
+    }
+
+    [Fact]
+    public async Task HumanInputModule_ShouldUseRunScopedPendingForSameStepId()
+    {
+        var module = new HumanInputModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "input-shared",
+                StepType = "human_input",
+                RunId = "run-a",
+                Input = "A",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "input-shared",
+                StepType = "human_input",
+                RunId = "run-b",
+                Input = "B",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-b",
+                StepId = "input-shared",
+                Approved = true,
+                UserInput = "input-from-b",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var resumedB = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        resumedB.RunId.Should().Be("run-b");
+        resumedB.Output.Should().Be("input-from-b");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-a",
+                StepId = "input-shared",
+                Approved = true,
+                UserInput = "input-from-a",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var resumedA = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        resumedA.RunId.Should().Be("run-a");
+        resumedA.Output.Should().Be("input-from-a");
     }
 
     [Fact]
@@ -835,6 +1032,68 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         maxRoundCompleted.Output.Should().Be("draft-2-better");
         maxRoundCompleted.Metadata["reflect.rounds"].Should().Be("2");
         maxRoundCompleted.Metadata["reflect.passed"].Should().Be("False");
+    }
+
+    [Fact]
+    public async Task ReflectModule_ShouldIsolateConcurrentRunsWithSameStepId()
+    {
+        var module = new ReflectModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "reflect-shared",
+                StepType = "reflect",
+                RunId = "run-a",
+                Input = "draft-a",
+                Parameters = { ["max_rounds"] = "2" },
+            }),
+            ctx,
+            CancellationToken.None);
+        var sessionA = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "reflect-shared",
+                StepType = "reflect",
+                RunId = "run-b",
+                Input = "draft-b",
+                Parameters = { ["max_rounds"] = "2" },
+            }),
+            ctx,
+            CancellationToken.None);
+        var sessionB = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single().SessionId;
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = sessionB,
+                Content = "PASS",
+            }),
+            ctx,
+            CancellationToken.None);
+        var completedB = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completedB.RunId.Should().Be("run-b");
+        completedB.StepId.Should().Be("reflect-shared");
+        completedB.Output.Should().Be("draft-b");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = sessionA,
+                Content = "PASS",
+            }),
+            ctx,
+            CancellationToken.None);
+        var completedA = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completedA.RunId.Should().Be("run-a");
+        completedA.StepId.Should().Be("reflect-shared");
+        completedA.Output.Should().Be("draft-a");
     }
 
     private static RecordingEventHandlerContext CreateContext(IServiceProvider? services = null)

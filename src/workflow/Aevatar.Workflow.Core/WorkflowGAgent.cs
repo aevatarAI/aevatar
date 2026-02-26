@@ -46,6 +46,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     private readonly IEventModuleFactory _eventModuleFactory;
     private readonly IReadOnlyList<IWorkflowModuleDependencyExpander> _moduleDependencyExpanders;
     private readonly IReadOnlyList<IWorkflowModuleConfigurator> _moduleConfigurators;
+    private readonly ISet<string> _knownModuleStepTypes;
 
     public WorkflowGAgent(
         IActorRuntime runtime,
@@ -73,6 +74,11 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             .Select(x => x.First())
             .OrderBy(x => x.Order)
             .ToList();
+
+        _knownModuleStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
+            packs
+                .SelectMany(x => x.Modules)
+                .SelectMany(x => x.Names));
     }
 
     // ─── 生命周期 ───
@@ -218,7 +224,12 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             {
                 ConfigureModule(m);
                 modules.Add(m);
+                continue;
             }
+
+            var workflowName = _compiledWorkflow?.Name ?? State.WorkflowName;
+            throw new InvalidOperationException(
+                $"Workflow '{workflowName}' requires module '{name}', but no module registration was found.");
         }
 
         if (modules.Count > 0) SetModules(modules);
@@ -279,7 +290,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         try
         {
             var workflow = _parser.Parse(yaml);
-            var errors = WorkflowValidator.Validate(workflow);
+            var errors = ValidateWorkflowDefinition(workflow);
             if (errors.Count > 0)
                 return WorkflowCompilationResult.Invalid(string.Join("; ", errors));
 
@@ -302,7 +313,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         try
         {
             var workflow = _parser.Parse(State.WorkflowYaml);
-            var errors = WorkflowValidator.Validate(workflow);
+            var errors = ValidateWorkflowDefinition(workflow);
             _compiledWorkflow = errors.Count == 0 ? workflow : null;
         }
         catch
@@ -332,6 +343,18 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             new(false, error ?? string.Empty);
     }
 
+    private List<string> ValidateWorkflowDefinition(WorkflowDefinition workflow)
+    {
+        return WorkflowValidator.Validate(
+            workflow,
+            new WorkflowValidator.WorkflowValidationOptions
+            {
+                RequireKnownStepTypes = true,
+                KnownStepTypes = _knownModuleStepTypes,
+            },
+            availableWorkflowNames: null);
+    }
+
     private async Task PersistWorkflowBindingAsync(string workflowName, CancellationToken ct = default)
     {
         if (ManifestStore == null || string.IsNullOrWhiteSpace(Id))
@@ -347,20 +370,33 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         await ManifestStore.SaveAsync(Id, manifest, ct);
     }
 
-    private EventEnvelope CreateRoleAgentConfigureEnvelope(RoleDefinition role) =>
-        new()
+    private EventEnvelope CreateRoleAgentConfigureEnvelope(RoleDefinition role)
+    {
+        var configure = new ConfigureRoleAgentEvent
+        {
+            RoleName = role.Name ?? string.Empty,
+            ProviderName = role.Provider ?? "deepseek",
+            Model = role.Model ?? string.Empty,
+            SystemPrompt = role.SystemPrompt ?? string.Empty,
+            MaxTokens = role.MaxTokens ?? 0,
+            MaxToolRounds = role.MaxToolRounds ?? 0,
+            MaxHistoryMessages = role.MaxHistoryMessages ?? 0,
+            StreamBufferCapacity = role.StreamBufferCapacity ?? 0,
+            EventModules = role.EventModules ?? string.Empty,
+            EventRoutes = role.EventRoutes ?? string.Empty,
+        };
+
+        if (role.Temperature.HasValue)
+            configure.Temperature = role.Temperature.Value;
+
+        return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ConfigureRoleAgentEvent
-            {
-                RoleName = role.Name ?? string.Empty,
-                ProviderName = role.Provider ?? "deepseek",
-                Model = role.Model ?? string.Empty,
-                SystemPrompt = role.SystemPrompt ?? string.Empty,
-            }),
+            Payload = Any.Pack(configure),
             PublisherId = Id,
             Direction = EventDirection.Self,
             CorrelationId = Guid.NewGuid().ToString("N"),
         };
+    }
 }

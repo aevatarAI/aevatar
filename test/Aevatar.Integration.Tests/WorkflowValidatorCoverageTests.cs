@@ -183,4 +183,79 @@ public class WorkflowValidatorCoverageTests
 
         errors.Should().Contain(e => e.Contains("sub_flow"));
     }
+
+    [Fact]
+    public void Validate_WhenStepTypeIsUnknownAndKnownTypesRequired_ShouldReportError()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "m1",
+                    Type = "mystery_step",
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(
+            wf,
+            options: new WorkflowValidator.WorkflowValidationOptions
+            {
+                RequireKnownStepTypes = true,
+                KnownStepTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "assign",
+                    "transform",
+                    "while",
+                },
+            },
+            availableWorkflowNames: null);
+
+        errors.Should().Contain(e => e.Contains("未知原语") && e.Contains("mystery_step"));
+    }
+
+    [Fact]
+    public void Validate_WhenStepTypeParameterIsUnknownAndKnownTypesRequired_ShouldReportError()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "loop-1",
+                    Type = "while",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["step"] = "mystery_sub_step",
+                        ["max_iterations"] = "1",
+                    },
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(
+            wf,
+            options: new WorkflowValidator.WorkflowValidationOptions
+            {
+                RequireKnownStepTypes = true,
+                KnownStepTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "while",
+                    "assign",
+                },
+            },
+            availableWorkflowNames: null);
+
+        errors.Should().Contain(e =>
+            e.Contains("参数 'step'") &&
+            e.Contains("未知原语") &&
+            e.Contains("mystery_sub_step"));
+    }
 }

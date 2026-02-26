@@ -40,7 +40,7 @@ public class ChatWebSocketCommandParserTests
     [Fact]
     public void TryParse_ValidCommand_ShouldReturnEnvelope()
     {
-        const string payload = """{"type":"chat.command","requestId":"req-9","payload":{"prompt":"hello","workflow":"direct","agentId":"a-1"}}""";
+        const string payload = """{"type":"chat.command","requestId":"req-9","payload":{"prompt":"hello","workflow":"direct","workflowYaml":"name: direct","agentId":"a-1"}}""";
 
         var ok = ChatWebSocketCommandParser.TryParse(payload, out var envelope, out _);
 
@@ -48,6 +48,7 @@ public class ChatWebSocketCommandParserTests
         envelope.RequestId.Should().Be("req-9");
         envelope.Input.Prompt.Should().Be("hello");
         envelope.Input.Workflow.Should().Be("direct");
+        envelope.Input.WorkflowYaml.Should().Be("name: direct");
         envelope.Input.AgentId.Should().Be("a-1");
     }
 }

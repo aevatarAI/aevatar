@@ -23,12 +23,7 @@
       <div id="llm-status" class="llm-badge"></div>
 
       <div id="sidebar-workflows" class="sidebar-section">
-        <div class="section-label">Deterministic</div>
-        <ul id="list-deterministic" class="workflow-list"></ul>
-        <div class="section-label">Turing Completeness</div>
-        <ul id="list-turing" class="workflow-list"></ul>
-        <div class="section-label">LLM-Powered</div>
-        <ul id="list-llm" class="workflow-list"></ul>
+        <div id="workflow-groups"></div>
       </div>
 
       <div id="sidebar-primitives" class="sidebar-section hidden">
@@ -74,6 +69,10 @@
             <div id="input-section" class="detail-block">
               <div class="detail-label">Input</div>
               <textarea id="wf-input" class="input-area" rows="3"></textarea>
+              <label class="inline-toggle">
+                <input id="wf-auto-resume" type="checkbox">
+                Auto simulate human interactions
+              </label>
             </div>
 
             <div id="turing-proof" class="detail-block hidden">
@@ -86,13 +85,19 @@
             </div>
 
             <div id="roles-section" class="detail-block hidden">
-              <div class="detail-label">Roles</div>
+              <div class="detail-label">Roles (Formal Config)</div>
+              <div id="workflow-config" class="workflow-config hidden"></div>
               <div id="roles-list" class="roles-grid"></div>
             </div>
 
             <div id="exec-log" class="detail-block hidden">
               <div class="detail-label">Execution Log</div>
               <div id="log-entries" class="log-entries"></div>
+            </div>
+
+            <div id="interaction-section" class="detail-block hidden">
+              <div class="detail-label">Human Interaction</div>
+              <div id="interaction-panel" class="interaction-panel"></div>
             </div>
 
             <div id="result-section" class="detail-block hidden">
@@ -151,12 +156,20 @@
             <div class="pg-run-section">
               <div class="pg-run-bar">
                 <textarea id="pg-run-input" class="pg-run-input" rows="1" placeholder="Input for workflow execution..."></textarea>
+                <label class="inline-toggle compact">
+                  <input id="pg-auto-resume" type="checkbox">
+                  Auto
+                </label>
                 <button id="pg-run-btn" class="btn btn-primary" disabled>Run</button>
                 <button id="pg-run-reset" class="btn btn-secondary hidden">Reset</button>
               </div>
               <div id="pg-exec-log" class="pg-exec-block hidden">
                 <div class="detail-label">Execution Log</div>
                 <div id="pg-log-entries" class="log-entries"></div>
+              </div>
+              <div id="pg-interaction-section" class="pg-exec-block hidden">
+                <div class="detail-label">Human Interaction</div>
+                <div id="pg-interaction-panel" class="interaction-panel"></div>
               </div>
               <div id="pg-result-section" class="pg-exec-block hidden">
                 <div class="detail-label">Result</div>

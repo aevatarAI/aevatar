@@ -113,6 +113,47 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChat_WhenWorkflowYamlProvided_ShouldForwardWorkflowYamlToRequest()
+    {
+        var http = CreateHttpContext();
+        WorkflowChatRunRequest? captured = null;
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (request, _, _, _) =>
+            {
+                captured = request;
+                return Task.FromResult(ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.WorkflowNotFound,
+                        null,
+                        null)));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput
+            {
+                Prompt = "hello",
+                WorkflowYaml = """
+                               name: inline_direct
+                               roles:
+                                 - id: assistant
+                                   name: Assistant
+                               steps:
+                                 - id: reply
+                                   type: llm_call
+                                   role: assistant
+                               """,
+            },
+            service,
+            CancellationToken.None);
+
+        captured.Should().NotBeNull();
+        captured!.WorkflowYaml.Should().Contain("name: inline_direct");
+    }
+
+    [Fact]
     public async Task HandleCommand_WhenStarted_ShouldReturnAcceptedCommandId()
     {
         using var loggerFactory = LoggerFactory.Create(_ => { });
@@ -201,6 +242,36 @@ public class ChatEndpointsInternalTests
 
         statusCode.Should().Be(StatusCodes.Status500InternalServerError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("EXECUTION_FAILED");
+    }
+
+    [Fact]
+    public async Task HandleCommand_WhenWorkflowYamlInvalid_ShouldReturn400WithStructuredCode()
+    {
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) => Task.FromResult(ToCoreResult(
+                new WorkflowChatRunExecutionResult(
+                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    null,
+                    null))),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput
+            {
+                Prompt = "hello",
+                WorkflowYaml = "invalid",
+            },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("INVALID_WORKFLOW_YAML");
     }
 
     [Fact]

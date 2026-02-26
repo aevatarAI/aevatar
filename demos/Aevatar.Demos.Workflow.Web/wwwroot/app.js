@@ -11,6 +11,7 @@
   let stepStates = {};
   let turingMachineState = {};
   let eventSource = null;
+  let pendingInteraction = null;
 
   const TYPE_COLORS = {
     transform: "#3b82f6", guard: "#f97316", conditional: "#f59e0b", switch: "#f59e0b",
@@ -21,6 +22,28 @@
     wait_signal: "#f59e0b", human_approval: "#f97316", human_input: "#f97316",
     workflow_call: "#6366f1", vote_consensus: "#22c55e", tool_call: "#a855f7",
     connector_call: "#14b8a6", workflow_loop: "#64748b",
+  };
+  const WORKFLOW_GROUP_ORDER = [
+    "start-here",
+    "custom-step-modules",
+    "role-event-modules",
+    "human-interaction-manual",
+    "human-interaction-legacy",
+    "turing-completeness",
+    "llm-workflows",
+    "deterministic-other",
+    "other",
+  ];
+  const WORKFLOW_GROUP_LABELS = {
+    "start-here": "Start Here (Deterministic Basics)",
+    "custom-step-modules": "Custom Step Modules",
+    "role-event-modules": "Role Event Modules",
+    "human-interaction-manual": "Human Interaction (Manual)",
+    "human-interaction-legacy": "Human Interaction (Legacy Auto)",
+    "turing-completeness": "Turing Completeness",
+    "llm-workflows": "LLM Workflows",
+    "deterministic-other": "Other Deterministic Demos",
+    "other": "Other",
   };
 
   // ── DOM refs ──
@@ -77,23 +100,67 @@
 
   // ── Render: Sidebar ──
   function renderWorkflowList() {
-    const detList = $("#list-deterministic");
-    const turingList = $("#list-turing");
-    const llmList = $("#list-llm");
-    detList.innerHTML = "";
-    turingList.innerHTML = "";
-    llmList.innerHTML = "";
+    const groupsContainer = $("#workflow-groups");
+    if (!groupsContainer) return;
+    groupsContainer.innerHTML = "";
 
+    const grouped = new Map();
     for (const wf of workflows) {
-      const li = document.createElement("li");
-      li.dataset.name = wf.name;
-      li.innerHTML = `
-        <div>${wf.name}</div>
-        <div class="wf-primitives">
-          ${wf.primitives.map((p) => `<span class="prim-dot" style="background:${TYPE_COLORS[p] || "#64748b"}" title="${p}"></span>`).join("")}
-        </div>`;
-      li.addEventListener("click", () => selectWorkflow(wf.name));
-      (wf.category === "deterministic" ? detList : wf.category === "turing" ? turingList : llmList).appendChild(li);
+      const fallbackGroup = wf.category === "turing"
+        ? "turing-completeness"
+        : wf.category === "llm"
+          ? "llm-workflows"
+          : "start-here";
+      const groupKey = wf.group || fallbackGroup;
+      const groupLabel = wf.groupLabel || WORKFLOW_GROUP_LABELS[groupKey] || "Other";
+      if (!grouped.has(groupKey)) {
+        grouped.set(groupKey, { label: groupLabel, items: [] });
+      }
+      grouped.get(groupKey).items.push(wf);
+    }
+
+    const orderedKeys = Array.from(grouped.keys()).sort((left, right) => {
+      const leftIdx = WORKFLOW_GROUP_ORDER.indexOf(left);
+      const rightIdx = WORKFLOW_GROUP_ORDER.indexOf(right);
+      const leftOrder = leftIdx === -1 ? 999 : leftIdx;
+      const rightOrder = rightIdx === -1 ? 999 : rightIdx;
+      return leftOrder - rightOrder || left.localeCompare(right);
+    });
+
+    for (const groupKey of orderedKeys) {
+      const group = grouped.get(groupKey);
+      if (!group) continue;
+
+      const label = document.createElement("div");
+      label.className = "section-label";
+      label.textContent = group.label;
+      groupsContainer.appendChild(label);
+
+      const list = document.createElement("ul");
+      list.className = "workflow-list";
+
+      const sortedItems = group.items.sort((a, b) => {
+        const leftOrder = Number.isFinite(a.sortOrder) ? a.sortOrder : 10_000;
+        const rightOrder = Number.isFinite(b.sortOrder) ? b.sortOrder : 10_000;
+        return leftOrder - rightOrder || a.name.localeCompare(b.name);
+      });
+
+      for (const wf of sortedItems) {
+        const li = document.createElement("li");
+        li.dataset.name = wf.name;
+        li.classList.toggle("active", selectedWorkflow === wf.name);
+        const summary = truncate(String(wf.description || "").replace(/\s+/g, " ").trim(), 88);
+        li.innerHTML = `
+          <div>${wf.name}</div>
+          ${summary ? `<div class="wf-summary">${esc(summary)}</div>` : ""}
+          <div class="wf-primitives">
+            ${wf.primitives.map((p) => `<span class="prim-dot" style="background:${TYPE_COLORS[p] || "#64748b"}" title="${p}"></span>`).join("")}
+          </div>`;
+        li.addEventListener("click", () => selectWorkflow(wf.name));
+        list.appendChild(li);
+      }
+
+      groupsContainer.appendChild(list);
     }
   }
 
@@ -152,10 +219,10 @@
 
       if (def.roles && def.roles.length > 0) {
         $("#roles-section").classList.remove("hidden");
-        $("#roles-list").innerHTML = def.roles
-          .map((r) => `<span class="role-chip" title="${esc(r.systemPrompt)}">${esc(r.name)}</span>`)
-          .join("");
+        renderWorkflowConfig(def.configuration);
+        renderRoleCards(def.roles);
       } else {
+        $("#workflow-config").classList.add("hidden");
         $("#roles-section").classList.add("hidden");
       }
 
@@ -514,10 +581,12 @@
     stopExecution();
     resetExecution();
     resetTuringMachineState();
+    setWorkflowInteraction(null);
 
     const input = $("#wf-input").value;
+    const autoResume = $("#wf-auto-resume")?.checked === true;
     const encodedInput = encodeURIComponent(input);
-    const url = `/api/workflows/${selectedWorkflow}/run?input=${encodedInput}`;
+    const url = `/api/workflows/${selectedWorkflow}/run?input=${encodedInput}&autoResume=${autoResume ? "true" : "false"}`;
 
     $("#btn-run").disabled = true;
     $("#btn-reset").classList.remove("hidden");
@@ -560,10 +629,37 @@
       addLogEntry("llm", `\uD83E\uDD16 ${data.role}`, truncate(data.content, 400));
     });
 
+    eventSource.addEventListener("workflow.suspended", (e) => {
+      const data = JSON.parse(e.data);
+      addLogEntry("suspended", `\u23F8 ${data.stepId} (${data.suspensionType})`, data.prompt || "Waiting for human action");
+      setWorkflowInteraction({
+        type: data.suspensionType || "human_input",
+        runId: data.runId || "",
+        stepId: data.stepId || "",
+        prompt: data.prompt || "",
+        timeoutSeconds: data.timeoutSeconds || 0,
+        metadata: data.metadata || {},
+      });
+    });
+
+    eventSource.addEventListener("workflow.waiting_signal", (e) => {
+      const data = JSON.parse(e.data);
+      addLogEntry("waiting", `\u23F3 ${data.stepId} (${data.signalName})`, data.prompt || "Waiting for external signal");
+      setWorkflowInteraction({
+        type: "wait_signal",
+        runId: data.runId || "",
+        stepId: data.stepId || "",
+        signalName: data.signalName || "",
+        prompt: data.prompt || "",
+        timeoutMs: data.timeoutMs || 0,
+      });
+    });
+
     eventSource.addEventListener("workflow.completed", (e) => {
       const data = JSON.parse(e.data);
       addLogEntry("done", data.success ? "\u2705 Workflow completed" : "\u274C Workflow failed", "");
       showResult(data);
+      setWorkflowInteraction(null);
       stopExecution();
       $("#btn-run").disabled = false;
     });
@@ -571,12 +667,14 @@
     eventSource.addEventListener("workflow.error", (e) => {
       const data = JSON.parse(e.data);
       addLogEntry("error", "\u274C Error", data.error);
+      setWorkflowInteraction(null);
       stopExecution();
       $("#btn-run").disabled = false;
     });
 
     eventSource.onerror = () => {
       if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+        setWorkflowInteraction(null);
         stopExecution();
         $("#btn-run").disabled = false;
       }
@@ -594,6 +692,7 @@
     stopExecution();
     stepStates = {};
     resetTuringMachineState();
+    setWorkflowInteraction(null);
     $("#exec-log").classList.add("hidden");
     $("#result-section").classList.add("hidden");
     $("#log-entries").innerHTML = "";
@@ -624,7 +723,7 @@
   function addLogEntry(type, title, detail) {
     const el = document.createElement("div");
     el.className = `log-entry log-${type}`;
-    const icons = { request: "\u25B6", completed: "\u2713", failed: "\u2717", llm: "\uD83E\uDD16", done: "\u2705", error: "\u274C" };
+    const icons = { request: "\u25B6", completed: "\u2713", failed: "\u2717", llm: "\uD83E\uDD16", suspended: "\u23F8", waiting: "\u23F3", action: "\u270D", done: "\u2705", error: "\u274C" };
     el.innerHTML = `<span class="log-icon">${icons[type] || ""}</span><span class="log-text"><strong>${esc(title)}</strong>${detail ? "<br>" + esc(detail) : ""}</span>`;
     const container = $("#log-entries");
     container.appendChild(el);
@@ -636,6 +735,305 @@
     const pre = $("#wf-result");
     pre.textContent = data.success ? data.output : (data.error || "Failed");
     pre.className = `result-pre ${data.success ? "success" : "failure"}`;
+  }
+
+  function setWorkflowInteraction(interaction) {
+    pendingInteraction = interaction;
+    const section = $("#interaction-section");
+    const panel = $("#interaction-panel");
+    if (!section || !panel) return;
+
+    if (!interaction) {
+      section.classList.add("hidden");
+      panel.innerHTML = "";
+      return;
+    }
+
+    section.classList.remove("hidden");
+    renderInteractionPanel(panel, "wf", interaction, addLogEntry, () => setWorkflowInteraction(null));
+  }
+
+  function setPlaygroundInteraction(interaction) {
+    pgPendingInteraction = interaction;
+    const section = $("#pg-interaction-section");
+    const panel = $("#pg-interaction-panel");
+    if (!section || !panel) return;
+
+    if (!interaction) {
+      section.classList.add("hidden");
+      panel.innerHTML = "";
+      return;
+    }
+
+    section.classList.remove("hidden");
+    renderInteractionPanel(panel, "pg", interaction, pgAddLog, () => setPlaygroundInteraction(null));
+  }
+
+  function renderInteractionPanel(container, prefix, interaction, logFn, clearFn) {
+    const type = String(interaction.type || "").toLowerCase();
+    const runId = interaction.runId || "";
+    const stepId = interaction.stepId || "";
+    const signalName = interaction.signalName || "";
+    const prompt = interaction.prompt || "";
+    const timeoutSeconds = Number(interaction.timeoutSeconds || 0);
+    const timeoutMs = Number(interaction.timeoutMs || 0);
+    const timeoutLabel = timeoutMs > 0
+      ? `${Math.ceil(timeoutMs / 1000)}s`
+      : (timeoutSeconds > 0 ? `${timeoutSeconds}s` : "none");
+
+    const kindLabel = type === "wait_signal"
+      ? "wait_signal"
+      : (type === "human_approval" ? "human_approval" : "human_input");
+    const title = type === "wait_signal"
+      ? "External signal required"
+      : (type === "human_approval" ? "Manual approval required" : "Manual input required");
+
+    let controlHtml = "";
+    if (type === "human_approval") {
+      controlHtml = `
+        <textarea id="${prefix}-interaction-comment" class="interaction-input" rows="2" placeholder="Optional comment..."></textarea>
+        <div class="interaction-actions">
+          <button id="${prefix}-interaction-approve" class="btn btn-primary">Approve</button>
+          <button id="${prefix}-interaction-reject" class="btn btn-danger">Reject</button>
+        </div>`;
+    } else if (type === "wait_signal") {
+      controlHtml = `
+        <textarea id="${prefix}-interaction-payload" class="interaction-input" rows="2" placeholder="Signal payload (optional)"></textarea>
+        <div class="interaction-actions">
+          <button id="${prefix}-interaction-signal" class="btn btn-primary">Send signal</button>
+        </div>`;
+    } else {
+      const variableName = interaction.metadata?.variable ? ` (${interaction.metadata.variable})` : "";
+      controlHtml = `
+        <textarea id="${prefix}-interaction-input" class="interaction-input" rows="3" placeholder="Input for human step${esc(variableName)}"></textarea>
+        <div class="interaction-actions">
+          <button id="${prefix}-interaction-submit" class="btn btn-primary">Submit input</button>
+        </div>`;
+    }
+
+    container.innerHTML = `
+      <div class="interaction-summary">
+        <strong>${esc(title)}</strong><br>
+        ${esc(prompt || "No prompt provided by workflow.")}
+      </div>
+      <div class="interaction-meta">
+        <span class="interaction-chip">type: ${esc(kindLabel)}</span>
+        <span class="interaction-chip">step: ${esc(stepId || "n/a")}</span>
+        <span class="interaction-chip">run: ${esc(runId || "missing")}</span>
+        ${type === "wait_signal" ? `<span class="interaction-chip">signal: ${esc(signalName || "n/a")}</span>` : ""}
+        <span class="interaction-chip">timeout: ${esc(timeoutLabel)}</span>
+      </div>
+      ${controlHtml}
+      ${runId ? "" : `<div class="interaction-note">Cannot submit: missing runId in SSE context.</div>`}
+    `;
+
+    bindInteractionActions(prefix, interaction, logFn, clearFn);
+  }
+
+  function bindInteractionActions(prefix, interaction, logFn, clearFn) {
+    const type = String(interaction.type || "").toLowerCase();
+    const runId = interaction.runId || "";
+    const stepId = interaction.stepId || "";
+    const signalName = interaction.signalName || "";
+
+    if (!runId) return;
+
+    if (type === "human_approval") {
+      const approveBtn = $(`#${prefix}-interaction-approve`);
+      const rejectBtn = $(`#${prefix}-interaction-reject`);
+      const commentEl = $(`#${prefix}-interaction-comment`);
+      if (!approveBtn || !rejectBtn || !commentEl || !stepId) return;
+
+      const submitApproval = async (approved) => {
+        approveBtn.disabled = true;
+        rejectBtn.disabled = true;
+        const comment = commentEl.value.trim();
+        try {
+          await postJson("/api/workflows/resume", {
+            runId,
+            stepId,
+            approved,
+            userInput: comment,
+          });
+          logFn("action", approved ? "✍ Approval submitted" : "✍ Rejection submitted", comment || "(no comment)");
+          clearFn();
+        } catch (e) {
+          logFn("error", "\u274C Resume failed", e.message || String(e));
+        } finally {
+          approveBtn.disabled = false;
+          rejectBtn.disabled = false;
+        }
+      };
+
+      approveBtn.addEventListener("click", () => submitApproval(true));
+      rejectBtn.addEventListener("click", () => submitApproval(false));
+      return;
+    }
+
+    if (type === "wait_signal") {
+      const sendBtn = $(`#${prefix}-interaction-signal`);
+      const payloadEl = $(`#${prefix}-interaction-payload`);
+      if (!sendBtn || !payloadEl || !signalName) return;
+
+      sendBtn.addEventListener("click", async () => {
+        sendBtn.disabled = true;
+        const payload = payloadEl.value;
+        try {
+          await postJson("/api/workflows/signal", {
+            runId,
+            signalName,
+            payload,
+          });
+          logFn("action", "✍ Signal submitted", truncate(payload, 220) || "(empty payload)");
+          clearFn();
+        } catch (e) {
+          logFn("error", "\u274C Signal failed", e.message || String(e));
+        } finally {
+          sendBtn.disabled = false;
+        }
+      });
+      return;
+    }
+
+    const submitBtn = $(`#${prefix}-interaction-submit`);
+    const inputEl = $(`#${prefix}-interaction-input`);
+    if (!submitBtn || !inputEl || !stepId) return;
+
+    submitBtn.addEventListener("click", async () => {
+      submitBtn.disabled = true;
+      const userInput = inputEl.value.trim();
+      try {
+        await postJson("/api/workflows/resume", {
+          runId,
+          stepId,
+          approved: true,
+          userInput,
+        });
+        logFn("action", "✍ Human input submitted", truncate(userInput, 220) || "(empty input)");
+        clearFn();
+      } catch (e) {
+        logFn("error", "\u274C Resume failed", e.message || String(e));
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  }
+
+  async function postJson(url, payload) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const raw = await res.text();
+    let data = null;
+    if (raw) {
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        data = null;
+      }
+    }
+
+    if (!res.ok) {
+      const errorMessage = data?.error || raw || `HTTP ${res.status}`;
+      throw new Error(errorMessage);
+    }
+
+    return data;
+  }
+
+  function renderWorkflowConfig(configuration) {
+    const el = $("#workflow-config");
+    if (!configuration) {
+      el.classList.add("hidden");
+      el.innerHTML = "";
+      return;
+    }
+
+    const closedWorld = configuration.closedWorldMode === true;
+    el.classList.remove("hidden");
+    el.innerHTML = `<span class="config-chip ${closedWorld ? "on" : "off"}">closed_world_mode: ${closedWorld}</span>`;
+  }
+
+  function renderRoleCards(roles) {
+    const container = $("#roles-list");
+    container.innerHTML = roles.map((role) => renderRoleCard(role)).join("");
+  }
+
+  function renderRoleCard(role) {
+    const displayName = role.name || role.id || "unnamed";
+    const displayId = role.id || role.name || "n/a";
+    const providerModel = `${role.provider || "default"} / ${role.model || "default"}`;
+    const limits = [
+      `temperature=${formatRoleValue(role.temperature)}`,
+      `max_tokens=${formatRoleValue(role.maxTokens)}`,
+      `max_tool_rounds=${formatRoleValue(role.maxToolRounds)}`,
+      `max_history_messages=${formatRoleValue(role.maxHistoryMessages)}`,
+      `stream_buffer_capacity=${formatRoleValue(role.streamBufferCapacity)}`,
+    ].join(" · ");
+
+    const modules = splitCsv(role.eventModules);
+    const connectors = Array.isArray(role.connectors)
+      ? role.connectors.map((item) => String(item).trim()).filter((item) => item.length > 0)
+      : [];
+    const systemPrompt = role.systemPrompt ? truncate(role.systemPrompt, 220) : "";
+    const routes = role.eventRoutes ? role.eventRoutes : "";
+
+    return `
+      <article class="role-card">
+        <div class="role-head">
+          <div class="role-title">${esc(displayName)}</div>
+          <div class="role-id">@${esc(displayId)}</div>
+        </div>
+        <div class="role-meta">
+          <div><span class="role-key">model</span>${esc(providerModel)}</div>
+          <div><span class="role-key">limits</span>${esc(limits)}</div>
+        </div>
+        ${systemPrompt ? `
+          <div class="role-section">
+            <div class="role-key">system_prompt</div>
+            <div class="role-prompt">${esc(systemPrompt)}</div>
+          </div>` : ""}
+        <div class="role-section">
+          <div class="role-key">event_modules</div>
+          <div class="role-tags">${renderRoleTags(modules)}</div>
+        </div>
+        <div class="role-section">
+          <div class="role-key">connectors</div>
+          <div class="role-tags">${renderRoleTags(connectors)}</div>
+        </div>
+        ${routes ? `
+          <div class="role-section">
+            <div class="role-key">event_routes</div>
+            <pre class="role-routes">${esc(routes)}</pre>
+          </div>` : ""}
+      </article>
+    `;
+  }
+
+  function splitCsv(value) {
+    if (!value || typeof value !== "string") return [];
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  }
+
+  function renderRoleTags(items) {
+    if (!items || items.length === 0) {
+      return `<span class="role-tag empty">none</span>`;
+    }
+
+    return items.map((item) => `<span class="role-tag">${esc(item)}</span>`).join("");
+  }
+
+  function formatRoleValue(value) {
+    if (value === null || value === undefined || value === "") {
+      return "default";
+    }
+    return String(value);
   }
 
   function renderTuringDemoPanel(workflowMeta) {
@@ -728,6 +1126,7 @@
   let pgStepStates = {};
   let pgEventSource = null;
   let pgRunning = false;
+  let pgPendingInteraction = null;
 
   function setupPlayground() {
     $("#pg-send").addEventListener("click", () => pgSend());
@@ -913,6 +1312,7 @@
     if (!pgCurrentYaml || pgRunning) return;
     pgResetRun();
     pgRunning = true;
+    setPlaygroundInteraction(null);
     $("#pg-run-btn").disabled = true;
     $("#pg-run-reset").classList.remove("hidden");
     $("#pg-exec-log").classList.remove("hidden");
@@ -924,7 +1324,8 @@
     renderFlowInto($("#pg-graph"), pgParsedDef?.definition?.steps || [], pgParsedDef?.edges || [], pgStepStates);
 
     const input = $("#pg-run-input").value || "Hello, world!";
-    const body = JSON.stringify({ yaml: pgCurrentYaml, input });
+    const autoResume = $("#pg-auto-resume")?.checked === true;
+    const body = JSON.stringify({ yaml: pgCurrentYaml, input, autoResume });
 
     fetch("/api/playground/run", {
       method: "POST",
@@ -985,16 +1386,38 @@
         data.success ? truncate(data.output, 300) : (data.error || "Failed"));
     } else if (eventType === "llm.response") {
       pgAddLog("llm", `\uD83E\uDD16 ${data.role}`, truncate(data.content, 400));
+    } else if (eventType === "workflow.suspended") {
+      pgAddLog("suspended", `\u23F8 ${data.stepId} (${data.suspensionType})`, data.prompt || "Waiting for human action");
+      setPlaygroundInteraction({
+        type: data.suspensionType || "human_input",
+        runId: data.runId || "",
+        stepId: data.stepId || "",
+        prompt: data.prompt || "",
+        timeoutSeconds: data.timeoutSeconds || 0,
+        metadata: data.metadata || {},
+      });
+    } else if (eventType === "workflow.waiting_signal") {
+      pgAddLog("waiting", `\u23F3 ${data.stepId} (${data.signalName})`, data.prompt || "Waiting for external signal");
+      setPlaygroundInteraction({
+        type: "wait_signal",
+        runId: data.runId || "",
+        stepId: data.stepId || "",
+        signalName: data.signalName || "",
+        prompt: data.prompt || "",
+        timeoutMs: data.timeoutMs || 0,
+      });
     } else if (eventType === "workflow.completed") {
       pgAddLog("done", data.success ? "\u2705 Workflow completed" : "\u274C Workflow failed", "");
       $("#pg-result-section").classList.remove("hidden");
       const pre = $("#pg-result");
       pre.textContent = data.success ? data.output : (data.error || "Failed");
       pre.className = `result-pre ${data.success ? "success" : "failure"}`;
+      setPlaygroundInteraction(null);
       pgRunning = false;
       $("#pg-run-btn").disabled = false;
     } else if (eventType === "workflow.error") {
       pgAddLog("error", "\u274C Error", data.error);
+      setPlaygroundInteraction(null);
       pgRunning = false;
       $("#pg-run-btn").disabled = false;
     }
@@ -1014,7 +1437,7 @@
   function pgAddLog(type, title, detail) {
     const el = document.createElement("div");
     el.className = `log-entry log-${type}`;
-    const icons = { request: "\u25B6", completed: "\u2713", failed: "\u2717", llm: "\uD83E\uDD16", done: "\u2705", error: "\u274C" };
+    const icons = { request: "\u25B6", completed: "\u2713", failed: "\u2717", llm: "\uD83E\uDD16", suspended: "\u23F8", waiting: "\u23F3", action: "\u270D", done: "\u2705", error: "\u274C" };
     el.innerHTML = `<span class="log-icon">${icons[type] || ""}</span><span class="log-text"><strong>${esc(title)}</strong>${detail ? "<br>" + esc(detail) : ""}</span>`;
     const container = $("#pg-log-entries");
     container.appendChild(el);
@@ -1024,6 +1447,7 @@
   function pgResetRun() {
     pgRunning = false;
     pgStepStates = {};
+    setPlaygroundInteraction(null);
     $("#pg-exec-log").classList.add("hidden");
     $("#pg-result-section").classList.add("hidden");
     $("#pg-log-entries").innerHTML = "";

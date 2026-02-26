@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -10,7 +11,9 @@ using Aevatar.AI.Core.Agents;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.Bootstrap;
 using Aevatar.Configuration;
+using Aevatar.Demos.Workflow.Web;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Workflow.Abstractions;
@@ -18,6 +21,7 @@ using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http.Json;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using ChatMessage = Aevatar.AI.Abstractions.LLMProviders.ChatMessage;
 
 var port = 5280;
@@ -40,6 +44,7 @@ builder.Services.Configure<JsonOptions>(o =>
 builder.Services.AddAevatarRuntime();
 builder.Services.AddAevatarConfig();
 builder.Services.AddAevatarWorkflow();
+builder.Services.Replace(ServiceDescriptor.Singleton<IEventModuleFactory, DemoWorkflowModuleFactory>());
 builder.Services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
 var primaryYamlDir = ResolveYamlDir();
@@ -128,6 +133,30 @@ var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCas
 {
     "01_transform", "02_guard", "03_conditional", "04_switch",
     "05_assign", "06_retrieve_facts", "07_pipeline",
+    "17_demo_template", "18_demo_csv_markdown", "19_demo_json_pick",
+    "20_role_event_module_template", "21_role_event_module_csv_markdown", "22_role_event_module_json_pick",
+    "23_role_event_module_multiplex_template", "24_role_event_module_multiplex_csv", "25_role_event_module_multiplex_json",
+    "26_role_event_module_multi_role_chain",
+    "27_role_event_module_extensions_template", "28_role_event_module_extensions_csv",
+    "29_role_event_module_top_level_overrides_extensions",
+    "30_role_event_module_extensions_multi_role_chain",
+    "31_role_event_module_extensions_multiplex_json",
+    "32_role_event_module_top_level_overrides_extensions_multiplex",
+    "33_role_event_module_no_routes_template",
+    "34_role_event_module_route_dsl_csv",
+    "35_role_event_module_unknown_ignored_template",
+    "36_mixed_step_json_pick_then_role_template",
+    "37_mixed_step_csv_markdown_then_role_template",
+    "38_mixed_step_template_then_role_csv_markdown",
+    "39_human_input_basic_auto_resume",
+    "40_human_approval_approved_auto_resume",
+    "41_human_approval_rejected_fail_auto_resume",
+    "42_human_approval_rejected_skip_auto_resume",
+    "43_human_input_manual_triage",
+    "44_wait_signal_manual_success",
+    "45_wait_signal_timeout_failure",
+    "46_human_approval_release_gate",
+    "47_mixed_human_approval_wait_signal",
 };
 var turingWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
@@ -155,6 +184,37 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
     ["14_evaluate"] = "Write a haiku about programming.",
     ["15_reflect"] = "Write a concise explanation of the CAP theorem suitable for a junior developer.",
     ["16_cache"] = "What is the difference between SQL and NoSQL databases?",
+    ["17_demo_template"] = "payment_api_timeout",
+    ["18_demo_csv_markdown"] = "service,error_rate,latency_ms\ngateway,1.2,210\ncheckout,0.3,120",
+    ["19_demo_json_pick"] = """{"incident":{"id":"INC-2026-001","owner":{"team":"sre","user":"alice"}},"severity":"high"}""",
+    ["20_role_event_module_template"] = "checkout_db_latency_spike",
+    ["21_role_event_module_csv_markdown"] = "service,error_rate,latency_ms\nauth,0.8,180\nbilling,1.4,260",
+    ["22_role_event_module_json_pick"] = """{"incident":{"id":"INC-2026-007","owner":{"team":"platform","user":"bob"}},"severity":"critical"}""",
+    ["23_role_event_module_multiplex_template"] = "order_service_high_latency",
+    ["24_role_event_module_multiplex_csv"] = "service,error_rate,latency_ms\napi,1.1,240\nworker,0.5,170",
+    ["25_role_event_module_multiplex_json"] = """{"incident":{"id":"INC-2026-011","owner":{"team":"infra","user":"charlie"}},"severity":"high"}""",
+    ["26_role_event_module_multi_role_chain"] = "checkout_timeout_spike",
+    ["27_role_event_module_extensions_template"] = "payments_retry_exhausted",
+    ["28_role_event_module_extensions_csv"] = "service,error_rate,latency_ms\nsearch,0.6,150\nrecommendation,1.3,280",
+    ["29_role_event_module_top_level_overrides_extensions"] = """{"incident":{"id":"INC-2026-023","owner":{"team":"runtime","user":"eve"}},"severity":"critical"}""",
+    ["30_role_event_module_extensions_multi_role_chain"] = "payment_timeout_burst",
+    ["31_role_event_module_extensions_multiplex_json"] = """{"incident":{"id":"INC-2026-033","owner":{"team":"gateway","user":"gina"}},"severity":"high"}""",
+    ["32_role_event_module_top_level_overrides_extensions_multiplex"] = "service,error_rate,latency_ms\nedge,1.0,210\npayment,1.8,320",
+    ["33_role_event_module_no_routes_template"] = "inventory_sync_lag",
+    ["34_role_event_module_route_dsl_csv"] = "service,error_rate,latency_ms\ncatalog,0.4,140\ncheckout,1.6,300",
+    ["35_role_event_module_unknown_ignored_template"] = "payments_duplicate_callback",
+    ["36_mixed_step_json_pick_then_role_template"] = """{"incident":{"id":"INC-2026-041","owner":{"team":"data","user":"harry"}},"severity":"high"}""",
+    ["37_mixed_step_csv_markdown_then_role_template"] = "service,error_rate,latency_ms\nsearch,0.7,160\nfeed,1.4,295",
+    ["38_mixed_step_template_then_role_csv_markdown"] = "1.3",
+    ["39_human_input_basic_auto_resume"] = "checkout request missing approver and rollback plan",
+    ["40_human_approval_approved_auto_resume"] = "deploy release v1.2.3 to production",
+    ["41_human_approval_rejected_fail_auto_resume"] = "delete production database",
+    ["42_human_approval_rejected_skip_auto_resume"] = "restart read replica cluster",
+    ["43_human_input_manual_triage"] = "api gateway latency spikes in us-east-1",
+    ["44_wait_signal_manual_success"] = "release candidate v2.4.0 passed smoke checks",
+    ["45_wait_signal_timeout_failure"] = "database migration waiting for DBA ack",
+    ["46_human_approval_release_gate"] = "change request CR-2026-021",
+    ["47_mixed_human_approval_wait_signal"] = "deploy cache cluster patch-7",
     ["counter-addition"] = "Run the closed-world two-counter addition demo.",
     ["minsky-inc-dec-jz"] = "Run the closed-world INC/DEC/JZ transfer demo.",
     ["counter_addition"] = "Run the closed-world two-counter addition demo.",
@@ -162,6 +222,66 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
 };
 
 var parser = new WorkflowParser();
+var runContexts = new ConcurrentDictionary<string, DemoRunContext>(StringComparer.Ordinal);
+
+void TrackRunContext(
+    string runId,
+    string actorId,
+    string channel,
+    string workflowName,
+    Action<DemoRunContext>? mutate = null)
+{
+    if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(actorId))
+        return;
+
+    var normalizedRunId = runId.Trim();
+    var normalizedActorId = actorId.Trim();
+    var now = DateTimeOffset.UtcNow;
+
+    var context = runContexts.AddOrUpdate(
+        normalizedRunId,
+        _ => new DemoRunContext
+        {
+            RunId = normalizedRunId,
+            ActorId = normalizedActorId,
+            Channel = channel,
+            WorkflowName = workflowName,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        },
+        (_, existing) =>
+        {
+            existing.ActorId = normalizedActorId;
+            existing.Channel = channel;
+            existing.WorkflowName = workflowName;
+            existing.UpdatedAtUtc = now;
+            return existing;
+        });
+
+    mutate?.Invoke(context);
+    context.UpdatedAtUtc = DateTimeOffset.UtcNow;
+}
+
+void CleanupRunContext(string runId)
+{
+    if (string.IsNullOrWhiteSpace(runId))
+        return;
+
+    runContexts.TryRemove(runId.Trim(), out _);
+}
+
+void CleanupRunContextsForActor(string actorId)
+{
+    if (string.IsNullOrWhiteSpace(actorId))
+        return;
+
+    var normalized = actorId.Trim();
+    foreach (var (runId, context) in runContexts)
+    {
+        if (string.Equals(context.ActorId, normalized, StringComparison.Ordinal))
+            runContexts.TryRemove(runId, out _);
+    }
+}
 
 // GET /api/workflows — list all workflows
 app.MapGet("/api/workflows", () =>
@@ -171,21 +291,20 @@ app.MapGet("/api/workflows", () =>
     foreach (var workflowFile in workflowFiles.Values.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
     {
         var name = workflowFile.Name;
+        var listMeta = ClassifyWorkflowForList(name, workflowFile.SourceKind, deterministicWorkflows, turingWorkflows);
         try
         {
             var yaml = File.ReadAllText(workflowFile.FilePath);
             var def = parser.Parse(yaml);
             var primitives = def.Steps.Select(s => s.Type).Distinct().ToList();
-            var category =
-                string.Equals(workflowFile.SourceKind, "turing", StringComparison.OrdinalIgnoreCase) ||
-                turingWorkflows.Contains(name)
-                    ? "turing"
-                    : deterministicWorkflows.Contains(name) ? "deterministic" : "llm";
             workflows.Add(new
             {
                 name,
                 description = def.Description,
-                category,
+                category = listMeta.Category,
+                group = listMeta.Group,
+                groupLabel = listMeta.GroupLabel,
+                sortOrder = listMeta.SortOrder,
                 primitives,
                 defaultInput = demoInputs.GetValueOrDefault(name, "Hello, world!"),
             });
@@ -196,7 +315,10 @@ app.MapGet("/api/workflows", () =>
             {
                 name,
                 description = "Failed to parse",
-                category = "unknown",
+                category = listMeta.Category,
+                group = listMeta.Group,
+                groupLabel = listMeta.GroupLabel,
+                sortOrder = listMeta.SortOrder,
                 primitives = new List<string>(),
                 defaultInput = "",
             });
@@ -234,7 +356,11 @@ app.MapGet("/api/workflows/{name}", (string name) =>
         {
             name = def.Name,
             description = def.Description,
-            roles = def.Roles.Select(r => new { id = r.Id, name = r.Name, systemPrompt = r.SystemPrompt }),
+            configuration = new
+            {
+                closedWorldMode = def.Configuration.ClosedWorldMode,
+            },
+            roles = def.Roles.Select(BuildRoleDto),
             steps,
         },
         edges,
@@ -242,7 +368,7 @@ app.MapGet("/api/workflows/{name}", (string name) =>
 });
 
 // GET /api/workflows/{name}/run — SSE execution endpoint
-app.MapGet("/api/workflows/{name}/run", async (string name, string? input, HttpContext ctx, CancellationToken ct) =>
+app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool? autoResume, HttpContext ctx, CancellationToken ct) =>
 {
     if (!TryResolveWorkflowFile(name, workflowSources, out var workflowFile))
     {
@@ -251,11 +377,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, HttpC
         return;
     }
 
-    var workflowCategory =
-        string.Equals(workflowFile.SourceKind, "turing", StringComparison.OrdinalIgnoreCase) ||
-        turingWorkflows.Contains(name)
-            ? "turing"
-            : deterministicWorkflows.Contains(name) ? "deterministic" : "llm";
+    var workflowCategory = ClassifyWorkflowForList(name, workflowFile.SourceKind, deterministicWorkflows, turingWorkflows).Category;
 
     if (string.Equals(workflowCategory, "llm", StringComparison.OrdinalIgnoreCase) && !llmAvailable)
     {
@@ -270,10 +392,11 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, HttpC
 
     var yaml = File.ReadAllText(workflowFile.FilePath);
     var actualInput = input ?? demoInputs.GetValueOrDefault(name, "Hello, world!");
+    var shouldAutoResume = autoResume == true;
 
     var runtime = ctx.RequestServices.GetRequiredService<IActorRuntime>();
     var streams = ctx.RequestServices.GetRequiredService<IStreamProvider>();
-    var actorId = $"web-{name}-{Guid.NewGuid():N}"[..32];
+    var actorId = $"web-{Guid.NewGuid():N}"[..32];
 
     var actor = await runtime.CreateAsync<WorkflowGAgent>(actorId);
 
@@ -293,12 +416,54 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, HttpC
 
     var tcs = new TaskCompletionSource<bool>();
     var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    string? activeRunId = null;
 
     async Task WriteSse(string eventType, object data)
     {
         var json = JsonSerializer.Serialize(data, jsonOpts);
         await ctx.Response.WriteAsync($"event: {eventType}\ndata: {json}\n\n", ct);
         await ctx.Response.Body.FlushAsync(ct);
+    }
+
+    void RememberRunId(string? runId)
+    {
+        if (string.IsNullOrWhiteSpace(runId))
+            return;
+
+        activeRunId = runId.Trim();
+        TrackRunContext(activeRunId, actor.Id, "workflow", name);
+    }
+
+    void ScheduleAutoResume(WorkflowSuspendedEvent suspended)
+    {
+        var resumed = BuildAutoResumedEvent(suspended, actualInput);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(50, CancellationToken.None);
+                await actor.HandleEventAsync(new EventEnvelope
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Payload = Any.Pack(resumed),
+                    PublisherId = "web.demo.auto-human",
+                    Direction = EventDirection.Self,
+                    CorrelationId = Guid.NewGuid().ToString("N"),
+                });
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    await WriteSse("workflow.error", new { error = $"Auto resume failed: {ex.Message}" });
+                }
+                catch
+                {
+                    // ignore write failures after client disconnect
+                }
+            }
+        }, CancellationToken.None);
     }
 
     var stream = streams.GetStream(actor.Id);
@@ -312,22 +477,104 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, HttpC
             if (payload.Is(StepRequestEvent.Descriptor))
             {
                 var evt = payload.Unpack<StepRequestEvent>();
-                await WriteSse("step.request", new { stepId = evt.StepId, stepType = evt.StepType, input = Truncate(evt.Input, 500) });
+                RememberRunId(evt.RunId);
+                if (!string.IsNullOrWhiteSpace(activeRunId))
+                {
+                    TrackRunContext(activeRunId, actor.Id, "workflow", name, tracked =>
+                    {
+                        tracked.LastStepId = evt.StepId;
+                        tracked.LastEventType = "step.request";
+                    });
+                }
+
+                await WriteSse("step.request", new
+                {
+                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
+                    stepId = evt.StepId,
+                    stepType = evt.StepType,
+                    input = Truncate(evt.Input, 500),
+                });
             }
 
             if (payload.Is(StepCompletedEvent.Descriptor))
             {
                 var evt = payload.Unpack<StepCompletedEvent>();
+                RememberRunId(evt.RunId);
+                if (!string.IsNullOrWhiteSpace(activeRunId))
+                {
+                    TrackRunContext(activeRunId, actor.Id, "workflow", name, tracked =>
+                    {
+                        tracked.LastStepId = evt.StepId;
+                        tracked.LastEventType = "step.completed";
+                    });
+                }
+
                 var meta = new Dictionary<string, string>();
                 foreach (var kv in evt.Metadata)
                     meta[kv.Key] = kv.Value;
                 await WriteSse("step.completed", new
                 {
+                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
                     stepId = evt.StepId,
                     success = evt.Success,
                     output = Truncate(evt.Output, 1000),
                     error = string.IsNullOrEmpty(evt.Error) ? null : evt.Error,
                     metadata = meta.Count > 0 ? meta : null,
+                });
+            }
+
+            if (payload.Is(WorkflowSuspendedEvent.Descriptor))
+            {
+                var evt = payload.Unpack<WorkflowSuspendedEvent>();
+                RememberRunId(evt.RunId);
+                if (!string.IsNullOrWhiteSpace(activeRunId))
+                {
+                    TrackRunContext(activeRunId, actor.Id, "workflow", name, tracked =>
+                    {
+                        tracked.LastStepId = evt.StepId;
+                        tracked.LastSuspensionType = evt.SuspensionType;
+                        tracked.LastEventType = "workflow.suspended";
+                    });
+                }
+
+                var meta = new Dictionary<string, string>();
+                foreach (var kv in evt.Metadata)
+                    meta[kv.Key] = kv.Value;
+
+                await WriteSse("workflow.suspended", new
+                {
+                    runId = evt.RunId,
+                    stepId = evt.StepId,
+                    suspensionType = evt.SuspensionType,
+                    prompt = evt.Prompt,
+                    timeoutSeconds = evt.TimeoutSeconds,
+                    metadata = meta.Count > 0 ? meta : null,
+                });
+
+                if (shouldAutoResume)
+                    ScheduleAutoResume(evt);
+            }
+
+            if (payload.Is(WaitingForSignalEvent.Descriptor))
+            {
+                var evt = payload.Unpack<WaitingForSignalEvent>();
+                if (!string.IsNullOrWhiteSpace(activeRunId))
+                {
+                    TrackRunContext(activeRunId, actor.Id, "workflow", name, tracked =>
+                    {
+                        tracked.LastStepId = evt.StepId;
+                        tracked.LastSignalName = evt.SignalName;
+                        tracked.LastEventType = "workflow.waiting_signal";
+                    });
+                }
+
+                await WriteSse("workflow.waiting_signal", new
+                {
+                    runId = activeRunId,
+                    stepId = evt.StepId,
+                    signalName = evt.SignalName,
+                    prompt = evt.Prompt,
+                    timeoutMs = evt.TimeoutMs,
                 });
             }
 
@@ -346,12 +593,18 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, HttpC
             if (payload.Is(WorkflowCompletedEvent.Descriptor))
             {
                 var evt = payload.Unpack<WorkflowCompletedEvent>();
+                RememberRunId(evt.RunId);
                 await WriteSse("workflow.completed", new
                 {
+                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
                     success = evt.Success,
                     output = Truncate(evt.Output, 2000),
                     error = string.IsNullOrEmpty(evt.Error) ? null : evt.Error,
                 });
+                if (!string.IsNullOrWhiteSpace(evt.RunId))
+                    CleanupRunContext(evt.RunId);
+                else if (!string.IsNullOrWhiteSpace(activeRunId))
+                    CleanupRunContext(activeRunId);
                 tcs.TrySetResult(evt.Success);
             }
         }
@@ -390,6 +643,119 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, HttpC
     await Task.Delay(500, CancellationToken.None);
 
     await runtime.DestroyAsync(actor.Id);
+    CleanupRunContextsForActor(actor.Id);
+});
+
+// POST /api/workflows/resume — resume a suspended human_input/human_approval step
+app.MapPost("/api/workflows/resume", async (WorkflowResumeRequest? body, HttpContext ctx) =>
+{
+    if (body == null)
+        return Results.BadRequest(new { error = "Request body is required." });
+
+    var runId = (body.RunId ?? string.Empty).Trim();
+    var stepId = (body.StepId ?? string.Empty).Trim();
+    if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(stepId))
+        return Results.BadRequest(new { error = "runId and stepId are required." });
+
+    if (!runContexts.TryGetValue(runId, out var runContext))
+        return Results.NotFound(new { error = $"Run context '{runId}' not found or already finished." });
+
+    var runtime = ctx.RequestServices.GetRequiredService<IActorRuntime>();
+    var actor = await runtime.GetAsync(runContext.ActorId);
+    if (actor == null)
+    {
+        CleanupRunContext(runId);
+        return Results.NotFound(new { error = $"Actor '{runContext.ActorId}' is no longer active for run '{runId}'." });
+    }
+
+    var resumed = new WorkflowResumedEvent
+    {
+        RunId = runId,
+        StepId = stepId,
+        Approved = body.Approved,
+        UserInput = body.UserInput ?? string.Empty,
+    };
+    if (body.Metadata is { Count: > 0 })
+    {
+        foreach (var (key, value) in body.Metadata)
+            resumed.Metadata[key] = value;
+    }
+
+    await actor.HandleEventAsync(new EventEnvelope
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+        Payload = Any.Pack(resumed),
+        PublisherId = "web.demo.resume",
+        Direction = EventDirection.Self,
+        CorrelationId = Guid.NewGuid().ToString("N"),
+    });
+
+    TrackRunContext(runId, runContext.ActorId, runContext.Channel, runContext.WorkflowName, tracked =>
+    {
+        tracked.LastStepId = stepId;
+        tracked.LastEventType = "api.resume";
+    });
+
+    return Results.Json(new
+    {
+        accepted = true,
+        runId,
+        stepId,
+        actorId = runContext.ActorId,
+    });
+});
+
+// POST /api/workflows/signal — deliver signal to wait_signal step
+app.MapPost("/api/workflows/signal", async (WorkflowSignalRequest? body, HttpContext ctx) =>
+{
+    if (body == null)
+        return Results.BadRequest(new { error = "Request body is required." });
+
+    var runId = (body.RunId ?? string.Empty).Trim();
+    var signalName = (body.SignalName ?? string.Empty).Trim();
+    if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(signalName))
+        return Results.BadRequest(new { error = "runId and signalName are required." });
+
+    if (!runContexts.TryGetValue(runId, out var runContext))
+        return Results.NotFound(new { error = $"Run context '{runId}' not found or already finished." });
+
+    var runtime = ctx.RequestServices.GetRequiredService<IActorRuntime>();
+    var actor = await runtime.GetAsync(runContext.ActorId);
+    if (actor == null)
+    {
+        CleanupRunContext(runId);
+        return Results.NotFound(new { error = $"Actor '{runContext.ActorId}' is no longer active for run '{runId}'." });
+    }
+
+    await actor.HandleEventAsync(new EventEnvelope
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+        Payload = Any.Pack(new SignalReceivedEvent
+        {
+            RunId = runId,
+            SignalName = signalName,
+            Payload = body.Payload ?? string.Empty,
+        }),
+        PublisherId = "web.demo.signal",
+        Direction = EventDirection.Self,
+        CorrelationId = Guid.NewGuid().ToString("N"),
+    });
+
+    TrackRunContext(runId, runContext.ActorId, runContext.Channel, runContext.WorkflowName, tracked =>
+    {
+        tracked.LastSignalName = signalName;
+        tracked.LastEventType = "api.signal";
+    });
+
+    return Results.Json(new
+    {
+        accepted = true,
+        runId,
+        signalName,
+        actorId = runContext.ActorId,
+    });
 });
 
 // GET /api/llm/status — LLM availability
@@ -418,6 +784,31 @@ static object[] BuildPrimitivesCatalog()
                     "identity, uppercase, lowercase, trim, count, count_words, take, take_last, join, split, distinct, reverse_lines"),
                 P("n", "Number of lines for take/take_last", "5"),
                 P("separator", "Delimiter for join/split", "\\n"),
+            },
+        },
+        new {
+            name = "demo_template", aliases = new[] { "demo_template", "demo_format" }, category = "data",
+            description = "Demo custom module. Renders a text template for StepRequest, and can short-circuit role ChatRequest when attached via roles.event_modules.",
+            parameters = new object[] {
+                P("template", "Template text. Supports {{input}} and {{param.<key>}} placeholders", "Incident {{input}} owned by {{param.owner}}"),
+                P("prefix", "Optional prefix to prepend to rendered output"),
+                P("suffix", "Optional suffix to append to rendered output"),
+                P("uppercase", "Uppercase final output", "false", "true, false"),
+            },
+        },
+        new {
+            name = "demo_csv_markdown", aliases = new[] { "demo_csv_markdown", "demo_table" }, category = "data",
+            description = "Demo custom module. Converts CSV to markdown table for StepRequest, and can respond to role ChatRequest with deterministic table output.",
+            parameters = new object[] {
+                P("delimiter", "CSV delimiter", ","),
+                P("has_header", "Treat first line as header", "true", "true, false"),
+            },
+        },
+        new {
+            name = "demo_json_pick", aliases = new[] { "demo_json_pick", "demo_json_path" }, category = "data",
+            description = "Demo custom module. Extracts a nested JSON field for StepRequest, and can process role ChatRequest JSON payload deterministically.",
+            parameters = new object[] {
+                P("path", "Dot path to extract", "incident.owner.team"),
             },
         },
         new {
@@ -729,12 +1120,22 @@ app.MapPost("/api/playground/parse", async (HttpContext ctx) =>
             children = s.Children?.Select(c => new { id = c.Id, type = c.Type, targetRole = c.TargetRole }).ToList(),
         }).ToList();
         var edges = ComputeEdges(def);
-        var roles = def.Roles.Select(r => new { id = r.Id, name = r.Name, systemPrompt = r.SystemPrompt });
+        var roles = def.Roles.Select(BuildRoleDto);
 
         await ctx.Response.WriteAsJsonAsync(new
         {
             valid = true,
-            definition = new { name = def.Name, description = def.Description, roles, steps },
+            definition = new
+            {
+                name = def.Name,
+                description = def.Description,
+                configuration = new
+                {
+                    closedWorldMode = def.Configuration.ClosedWorldMode,
+                },
+                roles,
+                steps,
+            },
             edges,
         });
     }
@@ -786,6 +1187,7 @@ app.MapPost("/api/playground/run", async (HttpContext ctx, CancellationToken ct)
     ctx.Response.Headers["Connection"] = "keep-alive";
 
     var actualInput = body.Input ?? "Hello, world!";
+    var shouldAutoResume = body.AutoResume == true;
     var runtime = ctx.RequestServices.GetRequiredService<IActorRuntime>();
     var streams = ctx.RequestServices.GetRequiredService<IStreamProvider>();
     var actorId = $"pg-{Guid.NewGuid():N}"[..24];
@@ -803,12 +1205,54 @@ app.MapPost("/api/playground/run", async (HttpContext ctx, CancellationToken ct)
 
     var tcs = new TaskCompletionSource<bool>();
     var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    string? activeRunId = null;
 
     async Task WriteSse(string eventType, object data)
     {
         var json = JsonSerializer.Serialize(data, jsonOpts);
         await ctx.Response.WriteAsync($"event: {eventType}\ndata: {json}\n\n", ct);
         await ctx.Response.Body.FlushAsync(ct);
+    }
+
+    void RememberRunId(string? runId)
+    {
+        if (string.IsNullOrWhiteSpace(runId))
+            return;
+
+        activeRunId = runId.Trim();
+        TrackRunContext(activeRunId, actor.Id, "playground", "playground");
+    }
+
+    void ScheduleAutoResume(WorkflowSuspendedEvent suspended)
+    {
+        var resumed = BuildAutoResumedEvent(suspended, actualInput);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(50, CancellationToken.None);
+                await actor.HandleEventAsync(new EventEnvelope
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Payload = Any.Pack(resumed),
+                    PublisherId = "playground.auto-human",
+                    Direction = EventDirection.Self,
+                    CorrelationId = Guid.NewGuid().ToString("N"),
+                });
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    await WriteSse("workflow.error", new { error = $"Auto resume failed: {ex.Message}" });
+                }
+                catch
+                {
+                    // ignore write failures after client disconnect
+                }
+            }
+        }, CancellationToken.None);
     }
 
     var stream = streams.GetStream(actor.Id);
@@ -821,19 +1265,99 @@ app.MapPost("/api/playground/run", async (HttpContext ctx, CancellationToken ct)
             if (payload.Is(StepRequestEvent.Descriptor))
             {
                 var evt = payload.Unpack<StepRequestEvent>();
-                await WriteSse("step.request", new { stepId = evt.StepId, stepType = evt.StepType, input = Truncate(evt.Input, 500) });
+                RememberRunId(evt.RunId);
+                if (!string.IsNullOrWhiteSpace(activeRunId))
+                {
+                    TrackRunContext(activeRunId, actor.Id, "playground", "playground", tracked =>
+                    {
+                        tracked.LastStepId = evt.StepId;
+                        tracked.LastEventType = "step.request";
+                    });
+                }
+
+                await WriteSse("step.request", new
+                {
+                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
+                    stepId = evt.StepId,
+                    stepType = evt.StepType,
+                    input = Truncate(evt.Input, 500),
+                });
             }
             if (payload.Is(StepCompletedEvent.Descriptor))
             {
                 var evt = payload.Unpack<StepCompletedEvent>();
+                RememberRunId(evt.RunId);
+                if (!string.IsNullOrWhiteSpace(activeRunId))
+                {
+                    TrackRunContext(activeRunId, actor.Id, "playground", "playground", tracked =>
+                    {
+                        tracked.LastStepId = evt.StepId;
+                        tracked.LastEventType = "step.completed";
+                    });
+                }
+
                 var meta = new Dictionary<string, string>();
                 foreach (var kv in evt.Metadata) meta[kv.Key] = kv.Value;
                 await WriteSse("step.completed", new
                 {
+                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
                     stepId = evt.StepId, success = evt.Success,
                     output = Truncate(evt.Output, 1000),
                     error = string.IsNullOrEmpty(evt.Error) ? null : evt.Error,
                     metadata = meta.Count > 0 ? meta : null,
+                });
+            }
+            if (payload.Is(WorkflowSuspendedEvent.Descriptor))
+            {
+                var evt = payload.Unpack<WorkflowSuspendedEvent>();
+                RememberRunId(evt.RunId);
+                if (!string.IsNullOrWhiteSpace(activeRunId))
+                {
+                    TrackRunContext(activeRunId, actor.Id, "playground", "playground", tracked =>
+                    {
+                        tracked.LastStepId = evt.StepId;
+                        tracked.LastSuspensionType = evt.SuspensionType;
+                        tracked.LastEventType = "workflow.suspended";
+                    });
+                }
+
+                var meta = new Dictionary<string, string>();
+                foreach (var kv in evt.Metadata)
+                    meta[kv.Key] = kv.Value;
+
+                await WriteSse("workflow.suspended", new
+                {
+                    runId = evt.RunId,
+                    stepId = evt.StepId,
+                    suspensionType = evt.SuspensionType,
+                    prompt = evt.Prompt,
+                    timeoutSeconds = evt.TimeoutSeconds,
+                    metadata = meta.Count > 0 ? meta : null,
+                });
+
+                if (shouldAutoResume)
+                    ScheduleAutoResume(evt);
+            }
+            if (payload.Is(WaitingForSignalEvent.Descriptor))
+            {
+                var evt = payload.Unpack<WaitingForSignalEvent>();
+                if (!string.IsNullOrWhiteSpace(activeRunId))
+                {
+                    TrackRunContext(activeRunId, actor.Id, "playground", "playground", tracked =>
+                    {
+                        tracked.LastStepId = evt.StepId;
+                        tracked.LastSignalName = evt.SignalName;
+                        tracked.LastEventType = "workflow.waiting_signal";
+                    });
+                }
+
+                await WriteSse("workflow.waiting_signal", new
+                {
+                    runId = activeRunId,
+                    stepId = evt.StepId,
+                    signalName = evt.SignalName,
+                    prompt = evt.Prompt,
+                    timeoutMs = evt.TimeoutMs,
                 });
             }
             if (payload.Is(TextMessageEndEvent.Descriptor))
@@ -849,11 +1373,17 @@ app.MapPost("/api/playground/run", async (HttpContext ctx, CancellationToken ct)
             if (payload.Is(WorkflowCompletedEvent.Descriptor))
             {
                 var evt = payload.Unpack<WorkflowCompletedEvent>();
+                RememberRunId(evt.RunId);
                 await WriteSse("workflow.completed", new
                 {
+                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
                     success = evt.Success, output = Truncate(evt.Output, 2000),
                     error = string.IsNullOrEmpty(evt.Error) ? null : evt.Error,
                 });
+                if (!string.IsNullOrWhiteSpace(evt.RunId))
+                    CleanupRunContext(evt.RunId);
+                else if (!string.IsNullOrWhiteSpace(activeRunId))
+                    CleanupRunContext(activeRunId);
                 tcs.TrySetResult(evt.Success);
             }
         }
@@ -880,6 +1410,7 @@ app.MapPost("/api/playground/run", async (HttpContext ctx, CancellationToken ct)
 
     await Task.Delay(500, CancellationToken.None);
     await runtime.DestroyAsync(actor.Id);
+    CleanupRunContextsForActor(actor.Id);
 });
 
 app.MapFallbackToFile("index.html");
@@ -918,6 +1449,59 @@ static List<object> ComputeEdges(WorkflowDefinition def)
         }
     }
     return edges;
+}
+
+static object BuildRoleDto(RoleDefinition role) => new
+{
+    id = role.Id,
+    name = role.Name,
+    systemPrompt = role.SystemPrompt,
+    provider = role.Provider,
+    model = role.Model,
+    temperature = role.Temperature,
+    maxTokens = role.MaxTokens,
+    maxToolRounds = role.MaxToolRounds,
+    maxHistoryMessages = role.MaxHistoryMessages,
+    streamBufferCapacity = role.StreamBufferCapacity,
+    eventModules = role.EventModules,
+    eventRoutes = role.EventRoutes,
+    connectors = role.Connectors,
+};
+
+static WorkflowResumedEvent BuildAutoResumedEvent(WorkflowSuspendedEvent suspended, string originalInput)
+{
+    var suspensionType = suspended.SuspensionType ?? string.Empty;
+    if (string.Equals(suspensionType, "human_approval", StringComparison.OrdinalIgnoreCase))
+    {
+        var shouldReject = (suspended.Prompt ?? string.Empty).Contains("AUTO_REJECT", StringComparison.OrdinalIgnoreCase) ||
+            (suspended.Metadata.TryGetValue("auto_reject", out var marker) &&
+             string.Equals(marker, "true", StringComparison.OrdinalIgnoreCase));
+
+        return new WorkflowResumedEvent
+        {
+            RunId = suspended.RunId,
+            StepId = suspended.StepId,
+            Approved = !shouldReject,
+            UserInput = string.Empty,
+        };
+    }
+
+    var variable = suspended.Metadata.TryGetValue("variable", out var v) && !string.IsNullOrWhiteSpace(v)
+        ? v.Trim()
+        : "user_input";
+    var source = (originalInput ?? string.Empty).ReplaceLineEndings(" ").Trim();
+    if (source.Length > 80)
+        source = source[..80];
+    if (string.IsNullOrWhiteSpace(source))
+        source = "empty";
+
+    return new WorkflowResumedEvent
+    {
+        RunId = suspended.RunId,
+        StepId = suspended.StepId,
+        Approved = true,
+        UserInput = $"{variable}=AUTO<{source}>",
+    };
 }
 
 static string Truncate(string s, int max) => s.Length > max ? s[..max] + "..." : s;
@@ -1018,6 +1602,109 @@ static void OpenBrowser(string url)
     catch { }
 }
 
+static WorkflowListClassification ClassifyWorkflowForList(
+    string workflowName,
+    string sourceKind,
+    ISet<string> deterministicWorkflows,
+    ISet<string> turingWorkflows)
+{
+    var name = workflowName ?? string.Empty;
+    var normalizedSource = sourceKind ?? string.Empty;
+    var index = TryParseWorkflowIndex(name);
+
+    var isTuring =
+        string.Equals(normalizedSource, "turing", StringComparison.OrdinalIgnoreCase) ||
+        turingWorkflows.Contains(name);
+    if (isTuring)
+    {
+        var turingOrder = name.Contains("counter", StringComparison.OrdinalIgnoreCase) ? 1
+            : name.Contains("minsky", StringComparison.OrdinalIgnoreCase) ? 2
+            : 1000;
+        return new WorkflowListClassification(
+            Category: "turing",
+            Group: "turing-completeness",
+            GroupLabel: "Turing Completeness",
+            SortOrder: turingOrder);
+    }
+
+    var isDeterministic = deterministicWorkflows.Contains(name);
+    if (!isDeterministic)
+    {
+        return new WorkflowListClassification(
+            Category: "llm",
+            Group: "llm-workflows",
+            GroupLabel: "LLM Workflows",
+            SortOrder: index ?? 10_000);
+    }
+
+    if (index is >= 1 and <= 7)
+    {
+        return new WorkflowListClassification(
+            Category: "deterministic",
+            Group: "start-here",
+            GroupLabel: "Start Here (Deterministic Basics)",
+            SortOrder: index.Value);
+    }
+
+    if (index is >= 17 and <= 19)
+    {
+        return new WorkflowListClassification(
+            Category: "deterministic",
+            Group: "custom-step-modules",
+            GroupLabel: "Custom Step Modules",
+            SortOrder: index.Value);
+    }
+
+    if (index is >= 20 and <= 38)
+    {
+        return new WorkflowListClassification(
+            Category: "deterministic",
+            Group: "role-event-modules",
+            GroupLabel: "Role Event Modules",
+            SortOrder: index.Value);
+    }
+
+    if (index is >= 43 and <= 47)
+    {
+        return new WorkflowListClassification(
+            Category: "deterministic",
+            Group: "human-interaction-manual",
+            GroupLabel: "Human Interaction (Manual)",
+            SortOrder: index.Value);
+    }
+
+    if (index is >= 39 and <= 42)
+    {
+        return new WorkflowListClassification(
+            Category: "deterministic",
+            Group: "human-interaction-legacy",
+            GroupLabel: "Human Interaction (Legacy Auto)",
+            SortOrder: index.Value);
+    }
+
+    return new WorkflowListClassification(
+        Category: "deterministic",
+        Group: "deterministic-other",
+        GroupLabel: "Other Deterministic Demos",
+        SortOrder: index ?? 20_000);
+}
+
+static int? TryParseWorkflowIndex(string workflowName)
+{
+    if (string.IsNullOrWhiteSpace(workflowName))
+        return null;
+
+    var span = workflowName.AsSpan().Trim();
+    var i = 0;
+    while (i < span.Length && char.IsDigit(span[i]))
+        i++;
+
+    if (i == 0 || i >= span.Length || span[i] != '_')
+        return null;
+
+    return int.TryParse(span[..i], out var value) ? value : null;
+}
+
 static string BuildPlaygroundSystemPrompt() => """
 You are an expert Aevatar Workflow YAML author. You help users design workflows by writing valid YAML.
 
@@ -1025,11 +1712,26 @@ You are an expert Aevatar Workflow YAML author. You help users design workflows 
 ```
 name: string            # required
 description: string     # optional
+configuration:          # optional
+  closed_world_mode: bool # optional, default false
 roles:                  # optional — LLM persona definitions
   - id: string          # required (or name)
     name: string        # required (or id)
     system_prompt: |    # optional
       ...
+    provider: string    # optional
+    model: string       # optional
+    temperature: number # optional
+    max_tokens: int     # optional
+    max_tool_rounds: int # optional
+    max_history_messages: int # optional
+    stream_buffer_capacity: int # optional
+    event_modules: string # optional, comma-separated module names
+    event_routes: string  # optional, route DSL/YAML list
+    connectors: [string]  # optional
+    extensions:           # optional compatibility container
+      event_modules: string
+      event_routes: string
 steps:                  # ordered step list
   - id: string          # required — unique
     type: string        # default "llm_call"
@@ -1042,6 +1744,18 @@ steps:                  # ordered step list
     on_error: { strategy: "fail"|"skip"|"fallback", fallback_step: "...", default_output: "..." }
     timeout_ms: int
 ```
+
+## Role Customization Guidance
+- You can and should design custom roles based on the user's domain and task.
+- Each role should have a stable `id` (snake_case) and a clear `system_prompt`.
+- For multi-stage workflows, prefer specialized roles (e.g. researcher, reviewer, writer) over one generic role.
+- All role-referenced steps must point to existing role ids (`target_role` or `role`).
+- When user asks runtime behavior, include role runtime fields:
+  `provider`, `model`, `temperature`, `max_tokens`, `max_tool_rounds`,
+  `max_history_messages`, `stream_buffer_capacity`, `event_modules`,
+  `event_routes`, `connectors`.
+- If user explicitly wants a single-role workflow, keep exactly one role.
+- If workflow is purely deterministic and has no role-driven AI steps, roles can be omitted.
 
 ## Step Types
 | Type | Category | Purpose |
@@ -1076,6 +1790,9 @@ steps:                  # ordered step list
 - All parameter values are strings (even numbers: "3" not 3).
 - type defaults to "llm_call" when omitted.
 - target_role and role are aliases; target_role takes precedence.
+- Role fields `event_modules/event_routes` support both top-level and `extensions.*`; top-level has higher priority.
+- For workflows using `llm_call` / `evaluate` / `reflect`, always provide matching roles.
+- When user customizes roles, preserve requested role names/ids and wire all related steps correctly.
 - Steps flow: next → explicit jump; branches → conditional routing; neither → sequential (list order).
 - For switch: both parameters.branch.* AND branches: must be set.
 - Each branch target should have next: pointing to a merge step.
@@ -1086,11 +1803,34 @@ steps:                  # ordered step list
 - Explain your design choices briefly.
 - If the user's request is ambiguous, ask clarifying questions.
 - Generate complete, valid, parseable YAML.
+- Return a full workflow YAML (including roles) unless the user explicitly asks for a partial snippet.
 """;
 
 sealed record PlaygroundChatMessage(string Role, string Content);
 sealed record PlaygroundChatRequest(List<PlaygroundChatMessage> Messages);
-sealed record PlaygroundRunRequest(string Yaml, string? Input);
+sealed record PlaygroundRunRequest(string Yaml, string? Input, bool? AutoResume = null);
+sealed record WorkflowResumeRequest(
+    string RunId,
+    string StepId,
+    bool Approved = true,
+    string? UserInput = null,
+    Dictionary<string, string>? Metadata = null);
+sealed record WorkflowSignalRequest(string RunId, string SignalName, string? Payload = null);
 sealed record WorkflowYamlSource(string Kind, string DirectoryPath);
 sealed record WorkflowFileEntry(string Name, string FilePath, string SourceKind);
+sealed record WorkflowListClassification(string Category, string Group, string GroupLabel, int SortOrder);
+
+sealed class DemoRunContext
+{
+    public string RunId { get; init; } = string.Empty;
+    public string ActorId { get; set; } = string.Empty;
+    public string Channel { get; set; } = string.Empty;
+    public string WorkflowName { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAtUtc { get; init; }
+    public DateTimeOffset UpdatedAtUtc { get; set; }
+    public string? LastStepId { get; set; }
+    public string? LastSuspensionType { get; set; }
+    public string? LastSignalName { get; set; }
+    public string? LastEventType { get; set; }
+}
 

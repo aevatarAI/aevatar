@@ -7,6 +7,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Expressions;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -39,7 +40,7 @@ public sealed class WhileModule : IEventModule
             var maxIterations = int.TryParse(request.Parameters.GetValueOrDefault("max_iterations", "10"), out var max)
                 ? Math.Clamp(max, 1, 1_000_000)
                 : 10;
-            var runId = string.IsNullOrWhiteSpace(request.RunId) ? "default" : request.RunId;
+            var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
             var whileKey = BuildRunStepKey(runId, request.StepId);
             var subStepType = request.Parameters.GetValueOrDefault("step", "llm_call");
             var condition = request.Parameters.GetValueOrDefault("condition", "true");
@@ -78,7 +79,7 @@ public sealed class WhileModule : IEventModule
 
             // 找到对应的 while 步骤
             var whileStepId = GetWhileStepId(completed.StepId);
-            var runId = string.IsNullOrWhiteSpace(completed.RunId) ? "default" : completed.RunId;
+            var runId = WorkflowRunIdNormalizer.Normalize(completed.RunId);
             var whileKey = whileStepId == null ? null : BuildRunStepKey(runId, whileStepId);
             if (whileStepId == null || whileKey == null || !_states.TryGetValue(whileKey, out var state)) return;
 

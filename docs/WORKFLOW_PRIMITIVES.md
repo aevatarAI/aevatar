@@ -31,6 +31,33 @@ steps:
       value: "$input"
 ```
 
+### `roles` 正式 schema（Workflow 与 Role YAML 对齐）
+
+```yaml
+roles:
+  - id: assistant
+    name: Assistant
+    system_prompt: "You are helpful."
+    provider: openai
+    model: gpt-4o-mini
+    temperature: 0.2
+    max_tokens: 512
+    max_tool_rounds: 4
+    max_history_messages: 80
+    stream_buffer_capacity: 256
+    event_modules: "llm_handler,tool_handler"
+    event_routes: |
+      event.type == ChatRequestEvent -> llm_handler
+    connectors: [my_api, my_mcp]
+    extensions:
+      event_modules: "fallback_module"
+      event_routes: "event.type == X -> fallback_module"
+```
+
+- `roles` 配置会透传到 `ConfigureRoleAgentEvent`，并在 `RoleGAgent` 运行时生效。
+- `event_modules/event_routes` 合并优先级：平铺字段 > `extensions.*`。
+- `workflow yaml roles` 与独立 `role yaml` 共享同一归一化语义，避免双套解析规则。
+
 ## 2. Data 原语
 
 ### `transform`
@@ -420,6 +447,52 @@ steps:
       timeout: "3600"
       on_reject: "fail"
 ```
+
+### 实际应用集成模式（`human_input` / `human_approval` / `wait_signal`）
+
+推荐把“人工/外部系统回调”当作**标准双向事件交互**来接入：
+
+1. Workflow 运行到阻塞点，发出等待事件（SSE/WebSocket/EventBus 都可）。
+2. App 渲染交互 UI（输入框、审批按钮、发送信号表单）。
+3. App 收集用户/系统回调后，回发 resume/signal 事件给同一个 run。
+
+事件对照：
+
+- `human_input` / `human_approval`：`WorkflowSuspendedEvent` -> `WorkflowResumedEvent`
+- `wait_signal`：`WaitingForSignalEvent` -> `SignalReceivedEvent`
+
+建议的请求契约（以 Web API 为例）：
+
+```json
+POST /api/workflows/resume
+{
+  "runId": "c7e0...",
+  "stepId": "approval_gate",
+  "approved": true,
+  "userInput": "approved by oncall",
+  "metadata": { "operator": "alice" }
+}
+```
+
+```json
+POST /api/workflows/signal
+{
+  "runId": "c7e0...",
+  "signalName": "ops_window_open",
+  "payload": "window=2026-02-25T21:00Z"
+}
+```
+
+约定与注意事项：
+
+- `runId`：必须来自当前运行上下文（如 `workflow.suspended` / `workflow.waiting_signal` 事件）。
+- `stepId`：resume 时必须对应当前挂起步骤；不要用旧步骤 ID 复用请求。
+- `signalName`：建议统一小写蛇形命名，和 YAML `signal_name` 保持一致。
+- `human_approval.on_reject`：
+  - `fail`：拒绝会终止流程；
+  - `skip`：拒绝后继续下一个步骤（输入保持原值）。
+- `wait_signal.timeout_ms`：超时会返回失败 `StepCompletedEvent`，上层可配 `on_error` 做降级。
+- UI 层建议把“待处理交互卡片”与执行日志放在一起，便于审计 run 的人工干预轨迹。
 
 ## 8. 引擎内部原语
 

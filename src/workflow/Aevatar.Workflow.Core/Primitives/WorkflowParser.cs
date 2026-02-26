@@ -5,6 +5,7 @@
 
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using Aevatar.AI.Abstractions.Agents;
 
 namespace Aevatar.Workflow.Core.Primitives;
 
@@ -29,16 +30,7 @@ public sealed class WorkflowParser
         {
             Name = raw.Name ?? throw new InvalidOperationException("缺少 name"),
             Description = raw.Description ?? "",
-            Roles = (raw.Roles ?? []).Select(r => new RoleDefinition
-            {
-                Id = r.Id ?? r.Name ?? "",
-                Name = r.Name ?? r.Id ?? "",
-                SystemPrompt = r.SystemPrompt ?? "",
-                Provider = r.Provider,
-                Model = r.Model,
-                EventModules = r.EventModules,
-                Connectors = r.Connectors ?? [],
-            }).ToList(),
+            Roles = (raw.Roles ?? []).Select(MapRole).ToList(),
             Steps = (raw.Steps ?? []).Select(MapStep).ToList(),
             Configuration = new WorkflowRuntimeConfiguration
             {
@@ -47,14 +39,67 @@ public sealed class WorkflowParser
         };
     }
 
-    private static StepDefinition MapStep(RawStep s) => new()
+    private static RoleDefinition MapRole(RawRole role)
     {
-        Id = s.Id ?? throw new InvalidOperationException("step 缺 id"),
-        Type = s.Type ?? "llm_call", TargetRole = s.TargetRole ?? s.Role,
-        Parameters = s.Parameters ?? [], Next = s.Next,
-        Children = s.Children?.Select(MapStep).ToList(), Branches = s.Branches,
-        Retry = MapRetry(s.Retry), OnError = MapOnError(s.OnError), TimeoutMs = s.TimeoutMs,
-    };
+        var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
+        {
+            Id = role.Id,
+            Name = role.Name,
+            SystemPrompt = role.SystemPrompt,
+            Provider = role.Provider,
+            Model = role.Model,
+            Temperature = role.Temperature,
+            MaxTokens = role.MaxTokens,
+            MaxToolRounds = role.MaxToolRounds,
+            MaxHistoryMessages = role.MaxHistoryMessages,
+            StreamBufferCapacity = role.StreamBufferCapacity,
+            EventModules = role.EventModules,
+            EventRoutes = role.EventRoutes,
+            Extensions = role.Extensions == null
+                ? null
+                : new RoleExtensionsInput
+                {
+                    EventModules = role.Extensions.EventModules,
+                    EventRoutes = role.Extensions.EventRoutes,
+                },
+            Connectors = role.Connectors,
+        });
+
+        return new RoleDefinition
+        {
+            Id = normalized.Id,
+            Name = normalized.Name,
+            SystemPrompt = normalized.SystemPrompt,
+            Provider = normalized.Provider,
+            Model = normalized.Model,
+            Temperature = normalized.Temperature,
+            MaxTokens = normalized.MaxTokens,
+            MaxToolRounds = normalized.MaxToolRounds,
+            MaxHistoryMessages = normalized.MaxHistoryMessages,
+            StreamBufferCapacity = normalized.StreamBufferCapacity,
+            EventModules = normalized.EventModules,
+            EventRoutes = normalized.EventRoutes,
+            Connectors = normalized.Connectors.ToList(),
+        };
+    }
+
+    private static StepDefinition MapStep(RawStep s)
+    {
+        var rawType = s.Type ?? "llm_call";
+        return new StepDefinition
+        {
+            Id = s.Id ?? throw new InvalidOperationException("step 缺 id"),
+            Type = WorkflowPrimitiveCatalog.ToCanonicalType(rawType),
+            TargetRole = s.TargetRole ?? s.Role,
+            Parameters = WorkflowPrimitiveCatalog.CanonicalizeStepTypeParameters(s.Parameters),
+            Next = s.Next,
+            Children = s.Children?.Select(MapStep).ToList(),
+            Branches = s.Branches,
+            Retry = MapRetry(s.Retry),
+            OnError = MapOnError(s.OnError),
+            TimeoutMs = s.TimeoutMs,
+        };
+    }
 
     private static StepRetryPolicy? MapRetry(RawRetry? r) =>
         r == null ? null : new StepRetryPolicy
@@ -73,9 +118,26 @@ public sealed class WorkflowParser
         };
 
     private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } public RawConfiguration? Configuration { get; set; } }
-    private sealed class RawRole { public string? Id { get; set; } public string? Name { get; set; } public string? SystemPrompt { get; set; } public string? Provider { get; set; } public string? Model { get; set; } public string? EventModules { get; set; } public List<string>? Connectors { get; set; } }
+    private sealed class RawRole
+    {
+        public string? Id { get; set; }
+        public string? Name { get; set; }
+        public string? SystemPrompt { get; set; }
+        public string? Provider { get; set; }
+        public string? Model { get; set; }
+        public double? Temperature { get; set; }
+        public int? MaxTokens { get; set; }
+        public int? MaxToolRounds { get; set; }
+        public int? MaxHistoryMessages { get; set; }
+        public int? StreamBufferCapacity { get; set; }
+        public string? EventModules { get; set; }
+        public string? EventRoutes { get; set; }
+        public RawRoleExtensions? Extensions { get; set; }
+        public List<string>? Connectors { get; set; }
+    }
     private sealed class RawStep { public string? Id { get; set; } public string? Type { get; set; } public string? TargetRole { get; set; } public string? Role { get; set; } public Dictionary<string, string>? Parameters { get; set; } public string? Next { get; set; } public List<RawStep>? Children { get; set; } public Dictionary<string, string>? Branches { get; set; } public RawRetry? Retry { get; set; } public RawOnError? OnError { get; set; } public int? TimeoutMs { get; set; } }
     private sealed class RawRetry { public int? MaxAttempts { get; set; } public string? Backoff { get; set; } public int? DelayMs { get; set; } }
     private sealed class RawOnError { public string? Strategy { get; set; } public string? FallbackStep { get; set; } public string? DefaultOutput { get; set; } }
     private sealed class RawConfiguration { public bool? ClosedWorldMode { get; set; } }
+    private sealed class RawRoleExtensions { public string? EventModules { get; set; } public string? EventRoutes { get; set; } }
 }

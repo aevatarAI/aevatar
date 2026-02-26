@@ -79,6 +79,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             MaxHistoryMessages = evt.MaxHistoryMessages <= 0 ? 100 : evt.MaxHistoryMessages,
             StreamBufferCapacity = evt.StreamBufferCapacity <= 0 ? 256 : evt.StreamBufferCapacity,
         });
+
+        RoleGAgentFactory.ApplyModuleExtensions(this, evt.EventModules, evt.EventRoutes, Services);
     }
 
     /// <summary>Returns agent description.</summary>

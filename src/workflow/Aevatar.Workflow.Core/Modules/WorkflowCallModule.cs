@@ -6,6 +6,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -33,6 +34,7 @@ public sealed class WorkflowCallModule : IEventModule
         {
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "workflow_call") return;
+            var parentRunId = WorkflowRunIdNormalizer.Normalize(request.RunId);
 
             var workflowName = request.Parameters.GetValueOrDefault("workflow", "");
             if (string.IsNullOrEmpty(workflowName))
@@ -40,14 +42,13 @@ public sealed class WorkflowCallModule : IEventModule
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = request.StepId,
-                    RunId = request.RunId,
+                    RunId = parentRunId,
                     Success = false,
                     Error = "workflow_call 缺少 workflow 参数",
                 }, EventDirection.Self, ct);
                 return;
             }
 
-            var parentRunId = string.IsNullOrWhiteSpace(request.RunId) ? "default" : request.RunId;
             var childRunId = BuildChildRunId(parentRunId, request.StepId);
             _pendingByChildRunId[childRunId] = new PendingWorkflowCall(
                 request.StepId,

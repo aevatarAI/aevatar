@@ -102,6 +102,39 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
+    public async Task HandleAsync_ShouldCanonicalizeStepTypeAndStepTypeParametersBeforeDispatch()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "loop",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["step"] = "judge",
+                    ["max_iterations"] = "1",
+                },
+            }));
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-alias",
+                Input = "seed",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var request = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        request.StepId.Should().Be("s1");
+        request.StepType.Should().Be("while");
+        request.RunId.Should().Be("run-alias");
+        request.Parameters["step"].Should().Be("evaluate");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenAlreadyRunning_ShouldPublishFailure()
     {
         var module = new WorkflowLoopModule();

@@ -4,34 +4,6 @@ namespace Aevatar.Workflow.Core.Composition;
 
 public sealed class WorkflowStepTypeModuleDependencyExpander : IWorkflowModuleDependencyExpander
 {
-    private static readonly HashSet<string> ClosedWorldBlockedModules = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "llm_call",
-        "tool_call",
-        "connector_call",
-        "bridge_call",
-        "evaluate",
-        "judge",
-        "reflect",
-        "human_input",
-        "human_approval",
-        "wait_signal",
-        "wait",
-        "emit",
-        "publish",
-        "parallel",
-        "parallel_fanout",
-        "fan_out",
-        "race",
-        "select",
-        "map_reduce",
-        "mapreduce",
-        "vote_consensus",
-        "vote",
-        "foreach",
-        "for_each",
-    };
-
     public int Order => 100;
 
     public void Expand(WorkflowDefinition? workflow, ISet<string> moduleNames)
@@ -52,24 +24,25 @@ public sealed class WorkflowStepTypeModuleDependencyExpander : IWorkflowModuleDe
     {
         foreach (var step in steps)
         {
-            if (!closedWorldMode || !ClosedWorldBlockedModules.Contains(step.Type))
-                moduleNames.Add(step.Type);
+            var stepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
+            if (!closedWorldMode || !WorkflowPrimitiveCatalog.IsClosedWorldBlocked(stepType))
+                moduleNames.Add(stepType);
 
             if (!closedWorldMode && !string.IsNullOrWhiteSpace(step.TargetRole))
                 moduleNames.Add("llm_call");
 
             foreach (var (key, value) in step.Parameters)
             {
-                if (key.EndsWith("_step_type", StringComparison.OrdinalIgnoreCase) &&
+                if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
                     !string.IsNullOrWhiteSpace(value))
                 {
-                    if (!closedWorldMode || !ClosedWorldBlockedModules.Contains(value))
-                        moduleNames.Add(value);
+                    var parameterStepType = WorkflowPrimitiveCatalog.ToCanonicalType(value);
+                    if (!closedWorldMode || !WorkflowPrimitiveCatalog.IsClosedWorldBlocked(parameterStepType))
+                        moduleNames.Add(parameterStepType);
                 }
             }
 
-            if ((step.Type.Equals("foreach", StringComparison.OrdinalIgnoreCase) ||
-                 step.Type.Equals("for_each", StringComparison.OrdinalIgnoreCase)) &&
+            if (stepType.Equals("foreach", StringComparison.OrdinalIgnoreCase) &&
                 !step.Parameters.ContainsKey("sub_step_type"))
             {
                 if (!closedWorldMode)

@@ -7,6 +7,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -17,7 +18,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class HumanInputModule : IEventModule
 {
-    private readonly Dictionary<string, StepRequestEvent> _pending = [];
+    private readonly Dictionary<(string RunId, string StepId), StepRequestEvent> _pending = [];
 
     public string Name => "human_input";
     public int Priority => 5;
@@ -40,21 +41,22 @@ public sealed class HumanInputModule : IEventModule
         {
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "human_input") return;
+            var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
 
             var prompt = request.Parameters.GetValueOrDefault("prompt", "Please provide input:");
             var variable = request.Parameters.GetValueOrDefault("variable", "user_input");
             var timeoutSeconds = int.TryParse(
                 request.Parameters.GetValueOrDefault("timeout", "1800"), out var t) ? t : 1800;
 
-            _pending[request.StepId] = request;
+            _pending[(runId, request.StepId)] = request;
 
             ctx.Logger.LogInformation(
-                "HumanInput: step={StepId} suspended, prompt=\"{Prompt}\", variable={Var}, timeout={Timeout}s",
-                request.StepId, prompt, variable, timeoutSeconds);
+                "HumanInput: run={RunId} step={StepId} suspended, prompt=\"{Prompt}\", variable={Var}, timeout={Timeout}s",
+                runId, request.StepId, prompt, variable, timeoutSeconds);
 
             var suspended = new WorkflowSuspendedEvent
             {
-                RunId = request.RunId,
+                RunId = runId,
                 StepId = request.StepId,
                 SuspensionType = "human_input",
                 Prompt = prompt,
@@ -70,15 +72,19 @@ public sealed class HumanInputModule : IEventModule
         if (payload.Is(WorkflowResumedEvent.Descriptor))
         {
             var resumed = payload.Unpack<WorkflowResumedEvent>();
-            if (!_pending.TryGetValue(resumed.StepId, out var pending)) return;
-            _pending.Remove(resumed.StepId);
+            if (!TryResolvePending(resumed, out var pendingKey, out var pending))
+                return;
+            _pending.Remove(pendingKey);
 
             var userInput = resumed.UserInput;
             var onTimeout = pending.Parameters.GetValueOrDefault("on_timeout", "fail");
 
             if (string.IsNullOrEmpty(userInput) && !resumed.Approved)
             {
-                ctx.Logger.LogWarning("HumanInput: step={StepId} timed out or cancelled", resumed.StepId);
+                ctx.Logger.LogWarning(
+                    "HumanInput: run={RunId} step={StepId} timed out or cancelled",
+                    pending.RunId,
+                    pending.StepId);
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = pending.StepId,
@@ -90,8 +96,11 @@ public sealed class HumanInputModule : IEventModule
                 return;
             }
 
-            ctx.Logger.LogInformation("HumanInput: step={StepId} received input ({Len} chars)",
-                resumed.StepId, userInput?.Length ?? 0);
+            ctx.Logger.LogInformation(
+                "HumanInput: run={RunId} step={StepId} received input ({Len} chars)",
+                pending.RunId,
+                pending.StepId,
+                userInput?.Length ?? 0);
 
             await ctx.PublishAsync(new StepCompletedEvent
             {
@@ -102,4 +111,36 @@ public sealed class HumanInputModule : IEventModule
             }, EventDirection.Self, ct);
         }
     }
+
+    private bool TryResolvePending(
+        WorkflowResumedEvent resumed,
+        out (string RunId, string StepId) pendingKey,
+        out StepRequestEvent pending)
+    {
+        if (!string.IsNullOrWhiteSpace(resumed.RunId))
+        {
+            pendingKey = (WorkflowRunIdNormalizer.Normalize(resumed.RunId), resumed.StepId);
+            return _pending.TryGetValue(pendingKey, out pending!);
+        }
+
+        // Backward compatibility: old clients may omit run_id.
+        var matchCount = 0;
+        pendingKey = default;
+        pending = default!;
+        foreach (var entry in _pending)
+        {
+            if (!entry.Key.StepId.Equals(resumed.StepId, StringComparison.Ordinal))
+                continue;
+
+            matchCount++;
+            if (matchCount > 1)
+                return false;
+
+            pendingKey = entry.Key;
+            pending = entry.Value;
+        }
+
+        return matchCount == 1;
+    }
+
 }

@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -30,7 +31,7 @@ public sealed class RaceModule : IEventModule
         {
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "race") return;
-            var runId = NormalizeRunId(request.RunId);
+            var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
             var parentKey = (runId, request.StepId);
 
             var workers = new List<string>();
@@ -52,7 +53,7 @@ public sealed class RaceModule : IEventModule
                 {
                     StepId = $"{request.StepId}_race_{i}",
                     StepType = "llm_call",
-                    RunId = request.RunId,
+                    RunId = runId,
                     Input = request.Input,
                     TargetRole = role ?? "",
                 }, EventDirection.Self, ct);
@@ -63,7 +64,7 @@ public sealed class RaceModule : IEventModule
             var evt = payload.Unpack<StepCompletedEvent>();
             var parent = ExtractParent(evt.StepId);
             if (parent == null) return;
-            var runId = NormalizeRunId(evt.RunId);
+            var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var parentKey = (runId, parent);
             if (!_races.TryGetValue(parentKey, out var state)) return;
 
@@ -77,7 +78,7 @@ public sealed class RaceModule : IEventModule
 
                 var completed = new StepCompletedEvent
                 {
-                    StepId = parent, RunId = evt.RunId, Success = true, Output = evt.Output, WorkerId = evt.WorkerId,
+                    StepId = parent, RunId = runId, Success = true, Output = evt.Output, WorkerId = evt.WorkerId,
                 };
                 completed.Metadata["race.winner"] = evt.StepId;
                 await ctx.PublishAsync(completed, EventDirection.Self, ct);
@@ -95,14 +96,12 @@ public sealed class RaceModule : IEventModule
                     ctx.Logger.LogWarning("Race {StepId}: all {Count} branches failed", parent, state.Total);
                     await ctx.PublishAsync(new StepCompletedEvent
                     {
-                        StepId = parent, RunId = evt.RunId, Success = false, Error = "all race branches failed",
+                        StepId = parent, RunId = runId, Success = false, Error = "all race branches failed",
                     }, EventDirection.Self, ct);
                 }
             }
         }
     }
-
-    private static string NormalizeRunId(string runId) => string.IsNullOrWhiteSpace(runId) ? string.Empty : runId;
 
     private static string? ExtractParent(string stepId)
     {
