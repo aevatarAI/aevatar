@@ -1,3 +1,5 @@
+using System.Collections;
+using System.Reflection;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -17,6 +19,30 @@ namespace Aevatar.Bootstrap.Tests;
 
 public class AIFeatureBootstrapCoverageTests
 {
+    [Fact]
+    public void ReadConfiguredProviders_WhenProviderTypeMissing_ShouldInferProviderSemanticFromName()
+    {
+        var options = new AevatarAIFeatureOptions
+        {
+            OpenAIModel = "openai-default",
+            DeepSeekModel = "deepseek-default",
+            DefaultProvider = "openai",
+        };
+        var secretsStore = new InMemorySecretsStore(new Dictionary<string, string>
+        {
+            ["LLMProviders:Providers:deepseek:ApiKey"] = "deepseek-key",
+        });
+
+        var configuredProviders = InvokeReadConfiguredProviders(secretsStore, options);
+
+        configuredProviders.Should().ContainSingle();
+        var provider = configuredProviders[0];
+        ReadConfiguredProviderString(provider, "Name").Should().Be("deepseek");
+        ReadConfiguredProviderString(provider, "ProviderType").Should().Be("deepseek");
+        ReadConfiguredProviderString(provider, "Model").Should().Be("deepseek-default");
+        ReadConfiguredProviderString(provider, "Endpoint").Should().Be("https://api.deepseek.com/v1");
+    }
+
     [Fact]
     public void AddAevatarAIFeatures_ShouldRegisterCoreServicesWithExplicitApiKey()
     {
@@ -42,6 +68,58 @@ public class AIFeatureBootstrapCoverageTests
         var skillOptions = provider.GetRequiredService<SkillsOptions>();
         skillOptions.Directories.Should().ContainSingle().Which.Should().Be("./skills-a");
         provider.GetServices<IAgentToolSource>().Should().ContainSingle(x => x is SkillsAgentToolSource);
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_WhenOnlyDeepSeekEnvironmentKeyExists_ShouldBindDeepSeekFallbackProvider()
+    {
+        using var envScope = new EnvironmentVariablesScope(new Dictionary<string, string?>
+        {
+            ["DEEPSEEK_API_KEY"] = "deepseek-env-key",
+            ["OPENAI_API_KEY"] = null,
+            ["AEVATAR_LLM_API_KEY"] = null,
+        });
+
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = true;
+            options.DefaultProvider = "openai";
+            options.SecretsStore = new InMemorySecretsStore();
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
+        llmFactory.GetDefault().Name.Should().Be("deepseek");
+        llmFactory.GetAvailableProviders().Should().ContainSingle().Which.Should().Be("deepseek");
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_WhenDeepSeekAndOpenAIEnvironmentKeysBothExist_ShouldPreferDeepSeekFallbackProvider()
+    {
+        using var envScope = new EnvironmentVariablesScope(new Dictionary<string, string?>
+        {
+            ["DEEPSEEK_API_KEY"] = "deepseek-env-key",
+            ["OPENAI_API_KEY"] = "openai-env-key",
+            ["AEVATAR_LLM_API_KEY"] = null,
+        });
+
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = true;
+            options.DefaultProvider = "openai";
+            options.SecretsStore = new InMemorySecretsStore();
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
+        llmFactory.GetDefault().Name.Should().Be("deepseek");
+        llmFactory.GetAvailableProviders().Should().ContainSingle().Which.Should().Be("deepseek");
     }
 
     [Fact]
@@ -149,5 +227,85 @@ public class AIFeatureBootstrapCoverageTests
         connector.Should().NotBeNull();
         connector!.Type.Should().Be("mcp");
         connector.Name.Should().Be("mcp-b");
+    }
+
+    private static IReadOnlyList<object> InvokeReadConfiguredProviders(
+        IAevatarSecretsStore secretsStore,
+        AevatarAIFeatureOptions options)
+    {
+        var method = typeof(global::Aevatar.Bootstrap.Extensions.AI.ServiceCollectionExtensions).GetMethod(
+            "ReadConfiguredProviders",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull();
+
+        var result = method!.Invoke(null, [secretsStore, options]);
+        result.Should().NotBeNull();
+        return ((IEnumerable)result!).Cast<object>().ToList();
+    }
+
+    private static string? ReadConfiguredProviderString(object configuredProvider, string propertyName)
+    {
+        var property = configuredProvider.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+        property.Should().NotBeNull();
+        return property!.GetValue(configuredProvider) as string;
+    }
+
+    private sealed class EnvironmentVariablesScope : IDisposable
+    {
+        private readonly Dictionary<string, string?> _previousValues = new(StringComparer.Ordinal);
+
+        public EnvironmentVariablesScope(IReadOnlyDictionary<string, string?> overrides)
+        {
+            foreach (var pair in overrides)
+            {
+                _previousValues[pair.Key] = Environment.GetEnvironmentVariable(pair.Key);
+                Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (var pair in _previousValues)
+                Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+        }
+    }
+
+    private sealed class InMemorySecretsStore : IAevatarSecretsStore
+    {
+        private readonly Dictionary<string, string> _values;
+
+        public InMemorySecretsStore(Dictionary<string, string>? seed = null)
+        {
+            _values = seed is null
+                ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, string>(seed, StringComparer.OrdinalIgnoreCase);
+        }
+
+        public string? Get(string key) => _values.GetValueOrDefault(key);
+
+        public string? GetApiKey(string providerName)
+        {
+            if (_values.TryGetValue($"LLMProviders:Providers:{providerName}:ApiKey", out var providerScoped) &&
+                !string.IsNullOrWhiteSpace(providerScoped))
+                return providerScoped;
+
+            if (_values.TryGetValue($"LLMProviders:{providerName}:ApiKey", out var legacyScoped) &&
+                !string.IsNullOrWhiteSpace(legacyScoped))
+                return legacyScoped;
+
+            if (_values.TryGetValue($"{providerName}_API_KEY", out var envScoped) &&
+                !string.IsNullOrWhiteSpace(envScoped))
+                return envScoped;
+
+            return null;
+        }
+
+        public string? GetDefaultProvider() => Get("LLMProviders:Default");
+
+        public IReadOnlyDictionary<string, string> GetAll() => _values;
+
+        public void Set(string key, string value) => _values[key] = value;
+
+        public void Remove(string key) => _values.Remove(key);
     }
 }

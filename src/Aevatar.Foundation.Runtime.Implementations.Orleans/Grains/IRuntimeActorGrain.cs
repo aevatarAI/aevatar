@@ -1,9 +1,12 @@
+using Orleans.Concurrency;
+
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
 public interface IRuntimeActorGrain : IGrainWithStringKey
 {
     Task<bool> InitializeAgentAsync(string agentTypeName);
 
+    [AlwaysInterleave]
     Task<bool> IsInitializedAsync();
 
     Task HandleEnvelopeAsync(byte[] envelopeBytes);

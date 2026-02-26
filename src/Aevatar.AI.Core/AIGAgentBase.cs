@@ -19,7 +19,7 @@ namespace Aevatar.AI.Core;
 public sealed class AIAgentConfig
 {
     /// <summary>LLM Provider 名称。</summary>
-    public string ProviderName { get; set; } = "deepseek";
+    public string ProviderName { get; set; } = string.Empty;
 
     /// <summary>模型名称，可选，覆盖 Provider 默认。</summary>
     public string? Model { get; set; }

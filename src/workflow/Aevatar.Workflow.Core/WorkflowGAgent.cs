@@ -375,8 +375,10 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         var configure = new ConfigureRoleAgentEvent
         {
             RoleName = role.Name ?? string.Empty,
-            ProviderName = role.Provider ?? "deepseek",
-            Model = role.Model ?? string.Empty,
+            // Keep provider/model empty when workflow does not specify them,
+            // so RoleGAgent resolves from globally configured default provider.
+            ProviderName = string.IsNullOrWhiteSpace(role.Provider) ? string.Empty : role.Provider,
+            Model = string.IsNullOrWhiteSpace(role.Model) ? string.Empty : role.Model,
             SystemPrompt = role.SystemPrompt ?? string.Empty,
             MaxTokens = role.MaxTokens ?? 0,
             MaxToolRounds = role.MaxToolRounds ?? 0,

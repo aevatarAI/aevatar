@@ -75,7 +75,7 @@ public static class RoleGAgentFactory
         {
             RoleName = normalized.Name,
             SystemPrompt = normalized.SystemPrompt,
-            ProviderName = normalized.Provider ?? "deepseek",
+            ProviderName = normalized.Provider ?? string.Empty,
             Model = normalized.Model ?? string.Empty,
             MaxTokens = normalized.MaxTokens ?? 0,
             MaxToolRounds = normalized.MaxToolRounds ?? 0,

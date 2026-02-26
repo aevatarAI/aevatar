@@ -7,17 +7,23 @@ public sealed class StreamTopologyGrain(
     [PersistentState("stream-topology", OrleansRuntimeConstants.GrainStateStorageName)]
     IPersistentState<StreamTopologyGrainState> state) : Grain, IStreamTopologyGrain
 {
-    private IReadOnlyList<StreamForwardingBinding> _readSnapshot = Array.Empty<StreamForwardingBinding>();
+    private IReadOnlyList<StreamForwardingBindingEntry> _readSnapshot = Array.Empty<StreamForwardingBindingEntry>();
     private bool _initialized;
 
-    public async Task UpsertAsync(StreamForwardingBinding binding)
+    public Task UpsertAsync(StreamForwardingBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        return UpsertAsync(ToEntry(binding));
+    }
+
+    public async Task UpsertAsync(StreamForwardingBindingEntry binding)
     {
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentException.ThrowIfNullOrWhiteSpace(binding.SourceStreamId);
         ArgumentException.ThrowIfNullOrWhiteSpace(binding.TargetStreamId);
 
         EnsureInitialized();
-        var entry = ToEntry(binding);
+        var entry = CloneEntry(binding);
         if (state.State.BindingsByTarget.TryGetValue(binding.TargetStreamId, out var existing) &&
             EntryEquals(existing, entry))
         {
@@ -43,7 +49,7 @@ public sealed class StreamTopologyGrain(
         await state.WriteStateAsync();
     }
 
-    public Task<IReadOnlyList<StreamForwardingBinding>> ListAsync()
+    public Task<IReadOnlyList<StreamForwardingBindingEntry>> ListAsync()
     {
         EnsureInitialized();
         return Task.FromResult(_readSnapshot);
@@ -93,14 +99,14 @@ public sealed class StreamTopologyGrain(
     {
         if (state.State.BindingsByTarget.Count == 0)
         {
-            _readSnapshot = Array.Empty<StreamForwardingBinding>();
+            _readSnapshot = Array.Empty<StreamForwardingBindingEntry>();
             return;
         }
 
-        var snapshot = new StreamForwardingBinding[state.State.BindingsByTarget.Count];
+        var snapshot = new StreamForwardingBindingEntry[state.State.BindingsByTarget.Count];
         var index = 0;
         foreach (var entry in state.State.BindingsByTarget.Values)
-            snapshot[index++] = ToBinding(entry);
+            snapshot[index++] = CloneEntry(entry);
 
         _readSnapshot = snapshot;
     }
@@ -115,18 +121,6 @@ public sealed class StreamTopologyGrain(
             EventTypeFilter = binding.EventTypeFilter.OrderBy(x => x, StringComparer.Ordinal).ToList(),
             Version = binding.Version,
             LeaseId = binding.LeaseId,
-        };
-
-    private static StreamForwardingBinding ToBinding(StreamForwardingBindingEntry entry) =>
-        new()
-        {
-            SourceStreamId = entry.SourceStreamId,
-            TargetStreamId = entry.TargetStreamId,
-            ForwardingMode = entry.ForwardingMode,
-            DirectionFilter = new HashSet<EventDirection>(entry.DirectionFilter),
-            EventTypeFilter = new HashSet<string>(entry.EventTypeFilter, StringComparer.Ordinal),
-            Version = entry.Version,
-            LeaseId = entry.LeaseId,
         };
 
     private static StreamForwardingBindingEntry CloneEntry(StreamForwardingBindingEntry entry) =>

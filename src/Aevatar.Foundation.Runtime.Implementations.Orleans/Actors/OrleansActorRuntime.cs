@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Orleans.Runtime;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
@@ -100,11 +101,10 @@ public sealed class OrleansActorRuntime : IActorRuntime
         ct.ThrowIfCancellationRequested();
         var parent = _grainFactory.GetGrain<IRuntimeActorGrain>(parentId);
         var child = _grainFactory.GetGrain<IRuntimeActorGrain>(childId);
-        if (!await parent.IsInitializedAsync())
-            throw new InvalidOperationException($"Parent actor {parentId} is not initialized.");
         if (!await child.IsInitializedAsync())
             throw new InvalidOperationException($"Child actor {childId} is not initialized.");
 
+        using var reentrancyScope = RequestContext.AllowCallChainReentrancy();
         await parent.AddChildAsync(childId);
         await child.SetParentAsync(parentId);
         await _streams.GetStream(parentId).UpsertRelayAsync(

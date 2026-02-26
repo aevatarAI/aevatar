@@ -16,7 +16,16 @@ var port = 6677;
 if (portIndex >= 0 && portIndex + 1 < args.Length && int.TryParse(args[portIndex + 1], out var customPort))
     port = customPort;
 var toolDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) ?? Environment.CurrentDirectory;
-var webRootPath = Path.Combine(toolDir, "wwwroot");
+var webRootCandidates = new[]
+{
+    Path.Combine(toolDir, "wwwroot"),
+    Path.GetFullPath(Path.Combine(toolDir, "../../../wwwroot")),
+    Path.GetFullPath(Path.Combine(toolDir, "../../../../tools/Aevatar.Tools.Config/wwwroot")),
+    Path.Combine(Environment.CurrentDirectory, "wwwroot"),
+    Path.Combine(Environment.CurrentDirectory, "tools", "Aevatar.Tools.Config", "wwwroot"),
+};
+var webRootPath = webRootCandidates.FirstOrDefault(path => File.Exists(Path.Combine(path, "index.html")))
+    ?? webRootCandidates[0];
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, WebRootPath = webRootPath, ContentRootPath = toolDir });
 var url = $"http://localhost:{port}";
 builder.WebHost.UseUrls(url);
@@ -38,6 +47,8 @@ Console.WriteLine("╔═══════════════════�
 Console.WriteLine("║                    aevatar-config                         ║");
 Console.WriteLine("╠═══════════════════════════════════════════════════════════╣");
 Console.WriteLine($"║  🌐 Web UI: {url,-45} ║");
+Console.WriteLine($"║  📦 WebRoot: {webRootPath,-42} ║");
+if (webRootPath.Length > 51) Console.WriteLine($"║     {webRootPath,-49} ║");
 Console.WriteLine($"║  📁 Secrets: {AevatarPaths.SecretsJson,-42} ║");
 if (AevatarPaths.SecretsJson.Length > 51) Console.WriteLine($"║     {AevatarPaths.SecretsJson,-49} ║");
 Console.WriteLine("║  Press Ctrl+C to stop                                      ║");
