@@ -96,7 +96,6 @@ public sealed class OrleansActorRuntime : IActorRuntime
 
     public async Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
     {
-        using var reentrancyScope = RequestContext.AllowCallChainReentrancy();
 
         ct.ThrowIfCancellationRequested();
         var parent = _grainFactory.GetGrain<IRuntimeActorGrain>(parentId);
