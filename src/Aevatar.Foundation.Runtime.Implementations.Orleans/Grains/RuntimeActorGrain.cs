@@ -118,63 +118,54 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
+        if (await TryHandleCompatibilityRetryAsync(envelope))
+            return;
+
+        if (!string.IsNullOrWhiteSpace(envelope.Id) && _deduplicator != null)
+        {
+            var dedupKey = $"{this.GetPrimaryKeyString()}:{envelope.Id}";
+            if (!await _deduplicator.TryRecordAsync(dedupKey))
+                return;
+        }
+
+        if (PublisherChainMetadata.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
+            return;
+
+        var selfActorId = this.GetPrimaryKeyString();
+        switch (envelope.Direction)
+        {
+            case EventDirection.Self:
+            case EventDirection.Up:
+                break;
+            case EventDirection.Down:
+            case EventDirection.Both:
+                if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
+                {
+                    if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
+                        return;
+                    break;
+                }
+
+                if (envelope.Metadata.TryGetValue("__source_actor_id", out var sourceActorId) &&
+                    string.Equals(sourceActorId, selfActorId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                break;
+            default:
+                return;
+        }
+
         try
         {
-            if (_compatibilityFailureInjectionPolicy.ShouldInject(envelope.Payload?.TypeUrl))
-            {
-                _logger.LogWarning(
-                    "Injected compatibility failure for actor {ActorId}, event type '{EventTypeUrl}'.",
-                    this.GetPrimaryKeyString(),
-                    envelope.Payload?.TypeUrl ?? "(none)");
-                throw new InvalidOperationException("Injected compatibility failure for mixed-version rollout testing.");
-            }
-
-            if (!string.IsNullOrWhiteSpace(envelope.Id) && _deduplicator != null)
-            {
-                var dedupKey = $"{this.GetPrimaryKeyString()}:{envelope.Id}";
-                if (!await _deduplicator.TryRecordAsync(dedupKey))
-                    return;
-            }
-
-            if (PublisherChainMetadata.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
-                return;
-
-            var selfActorId = this.GetPrimaryKeyString();
-            switch (envelope.Direction)
-            {
-                case EventDirection.Self:
-                case EventDirection.Up:
-                    break;
-                case EventDirection.Down:
-                case EventDirection.Both:
-                    if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
-                    {
-                        if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
-                            return;
-                        break;
-                    }
-
-                    if (envelope.Metadata.TryGetValue("__source_actor_id", out var sourceActorId) &&
-                        string.Equals(sourceActorId, selfActorId, StringComparison.Ordinal))
-                    {
-                        return;
-                    }
-                    break;
-                default:
-                    return;
-            }
-
             using var stateBinding = _stateBindingAccessor?.Bind(_state);
             await _agent.HandleEventAsync(envelope);
         }
         catch (Exception ex)
         {
-            if (await TryScheduleRetryAsync(envelope, ex))
-                return;
-
             _logger.LogError(
                 ex,
-                "Runtime envelope handling failed after retry exhausted (or retry disabled) for actor {ActorId}, envelope {EnvelopeId}, event type '{EventTypeUrl}'.",
+                "Runtime envelope handling failed without auto-retry for actor {ActorId}, envelope {EnvelopeId}, event type '{EventTypeUrl}'.",
                 this.GetPrimaryKeyString(),
                 envelope.Id,
                 envelope.Payload?.TypeUrl ?? "(none)");
@@ -379,6 +370,30 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             this.GetPrimaryKeyString(),
             nextAttempt,
             _runtimeEnvelopeRetryPolicy.MaxAttempts);
+        return true;
+    }
+
+    private async Task<bool> TryHandleCompatibilityRetryAsync(EventEnvelope envelope)
+    {
+        if (!_compatibilityFailureInjectionPolicy.ShouldInject(envelope.Payload?.TypeUrl))
+            return false;
+
+        _logger.LogWarning(
+            "Injected compatibility failure for actor {ActorId}, event type '{EventTypeUrl}'.",
+            this.GetPrimaryKeyString(),
+            envelope.Payload?.TypeUrl ?? "(none)");
+
+        var compatibilityException =
+            new InvalidOperationException("Injected compatibility failure for mixed-version rollout testing.");
+        if (await TryScheduleRetryAsync(envelope, compatibilityException))
+            return true;
+
+        _logger.LogError(
+            compatibilityException,
+            "Runtime envelope handling failed after compatibility retry exhausted (or retry disabled) for actor {ActorId}, envelope {EnvelopeId}, event type '{EventTypeUrl}'.",
+            this.GetPrimaryKeyString(),
+            envelope.Id,
+            envelope.Payload?.TypeUrl ?? "(none)");
         return true;
     }
 
