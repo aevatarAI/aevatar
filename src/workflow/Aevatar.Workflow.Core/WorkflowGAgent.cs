@@ -345,14 +345,53 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
 
     private List<string> ValidateWorkflowDefinition(WorkflowDefinition workflow)
     {
+        var knownStepTypes = new HashSet<string>(_knownModuleStepTypes, StringComparer.OrdinalIgnoreCase);
+        ExpandKnownStepTypesFromFactory(workflow, knownStepTypes);
+
         return WorkflowValidator.Validate(
             workflow,
             new WorkflowValidator.WorkflowValidationOptions
             {
                 RequireKnownStepTypes = true,
-                KnownStepTypes = _knownModuleStepTypes,
+                KnownStepTypes = knownStepTypes,
             },
             availableWorkflowNames: null);
+    }
+
+    private void ExpandKnownStepTypesFromFactory(WorkflowDefinition workflow, ISet<string> knownStepTypes)
+    {
+        foreach (var stepType in EnumerateReferencedStepTypes(workflow.Steps))
+        {
+            var canonical = WorkflowPrimitiveCatalog.ToCanonicalType(stepType);
+            if (string.IsNullOrWhiteSpace(canonical) || knownStepTypes.Contains(canonical))
+                continue;
+
+            if (_eventModuleFactory.TryCreate(canonical, out _))
+                knownStepTypes.Add(canonical);
+        }
+    }
+
+    private static IEnumerable<string> EnumerateReferencedStepTypes(IEnumerable<StepDefinition> steps)
+    {
+        foreach (var step in steps)
+        {
+            yield return step.Type;
+
+            foreach (var (key, value) in step.Parameters)
+            {
+                if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
+                    !string.IsNullOrWhiteSpace(value))
+                {
+                    yield return value;
+                }
+            }
+
+            if (step.Children is { Count: > 0 })
+            {
+                foreach (var childType in EnumerateReferencedStepTypes(step.Children))
+                    yield return childType;
+            }
+        }
     }
 
     private async Task PersistWorkflowBindingAsync(string workflowName, CancellationToken ct = default)

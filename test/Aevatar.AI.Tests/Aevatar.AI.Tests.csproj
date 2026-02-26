@@ -11,6 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.Projection\Aevatar.AI.Projection.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.LLMProviders.Tornado\Aevatar.AI.LLMProviders.Tornado.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.MCP\Aevatar.AI.ToolProviders.MCP.csproj" />

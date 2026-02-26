@@ -18,11 +18,34 @@ public sealed class ChatRuntimeStreamingBufferTests
         var output = new StringBuilder();
         await foreach (var chunk in runtime.ChatStreamAsync("hello"))
         {
-            output.Append(chunk);
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                output.Append(chunk.DeltaContent);
         }
 
         output.ToString().Should().Be("ABCD");
         provider.StreamCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenProviderReturnsToolCallDelta_ShouldSurfaceStructuredChunks()
+    {
+        var provider = new StreamingProvider(["done"], streamToolCall: new ToolCall
+        {
+            Id = "tc-1",
+            Name = "search",
+            ArgumentsJson = "{\"q\":\"aevatar\"}",
+        });
+        var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
+        var chunks = new List<LLMStreamChunk>();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+            chunks.Add(chunk);
+
+        chunks.Should().Contain(x => x.DeltaToolCall != null);
+        var toolCall = chunks.First(x => x.DeltaToolCall != null).DeltaToolCall!;
+        toolCall.Id.Should().Be("tc-1");
+        toolCall.Name.Should().Be("search");
+        toolCall.ArgumentsJson.Should().Contain("aevatar");
     }
 
     [Fact]
@@ -49,7 +72,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             streamBufferCapacity: streamBufferCapacity);
     }
 
-    private sealed class StreamingProvider(IReadOnlyList<string> chunks) : ILLMProvider
+    private sealed class StreamingProvider(IReadOnlyList<string> chunks, ToolCall? streamToolCall = null) : ILLMProvider
     {
         public string Name => "streaming-provider";
         public int StreamCallCount { get; private set; }
@@ -73,6 +96,14 @@ public sealed class ChatRuntimeStreamingBufferTests
                 ct.ThrowIfCancellationRequested();
                 yield return new LLMStreamChunk { DeltaContent = chunk };
                 await Task.Yield();
+            }
+
+            if (streamToolCall != null)
+            {
+                yield return new LLMStreamChunk
+                {
+                    DeltaToolCall = streamToolCall,
+                };
             }
         }
     }

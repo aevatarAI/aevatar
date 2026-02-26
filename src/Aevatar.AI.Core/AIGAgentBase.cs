@@ -112,7 +112,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     }
 
     /// <summary>流式 Chat。</summary>
-    protected IAsyncEnumerable<string> ChatStreamAsync(string userMessage, CancellationToken ct = default)
+    protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
         return _chat!.ChatStreamAsync(userMessage, ct);

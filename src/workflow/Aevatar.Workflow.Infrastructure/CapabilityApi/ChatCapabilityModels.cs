@@ -1,4 +1,9 @@
-namespace Aevatar.Workflow.Application.Abstractions.Runs;
+namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
+
+internal static class ChatCapabilityMessageTypes
+{
+    public const string ChatCommand = "chat.command";
+}
 
 public sealed record ChatInput
 {
@@ -8,9 +13,9 @@ public sealed record ChatInput
     public string? WorkflowYaml { get; init; }
 }
 
-public sealed record ChatWsCommand
+internal sealed record ChatWsCommand
 {
-    public string Type { get; init; } = "chat.command";
+    public string Type { get; init; } = ChatCapabilityMessageTypes.ChatCommand;
     public string? RequestId { get; init; }
     public ChatInput? Payload { get; init; }
 }

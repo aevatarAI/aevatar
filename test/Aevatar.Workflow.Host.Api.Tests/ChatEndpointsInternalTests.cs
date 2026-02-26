@@ -79,13 +79,13 @@ public class ChatEndpointsInternalTests
 
                 await emitAsync(new WorkflowOutputFrame
                 {
-                    Type = "RUN_STARTED",
+                    Type = WorkflowRunEventTypes.RunStarted,
                     ThreadId = "actor-1",
                 }, ct);
 
                 await emitAsync(new WorkflowOutputFrame
                 {
-                    Type = "RUN_FINISHED",
+                    Type = WorkflowRunEventTypes.RunFinished,
                     ThreadId = "actor-1",
                 }, ct);
 
@@ -108,8 +108,8 @@ public class ChatEndpointsInternalTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         var body = await ReadBodyAsync(http);
         body.Should().Contain("data:");
-        body.Should().Contain("RUN_STARTED");
-        body.Should().Contain("RUN_FINISHED");
+        body.Should().Contain(WorkflowRunEventTypes.RunStarted);
+        body.Should().Contain(WorkflowRunEventTypes.RunFinished);
     }
 
     [Fact]

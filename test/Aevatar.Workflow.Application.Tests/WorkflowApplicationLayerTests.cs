@@ -28,7 +28,8 @@ public class WorkflowChatRunApplicationServiceTests
             new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance),
             new WorkflowRunOutputStreamer(),
             new WorkflowRunCompletionPolicy(),
-            new WorkflowRunResourceFinalizer(projectionPort));
+            new WorkflowRunResourceFinalizer(projectionPort),
+            projectionPort);
 
         var result = await service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "missing", null),
@@ -55,11 +56,12 @@ public class WorkflowChatRunApplicationServiceTests
             new StubWorkflowRunRequestExecutor(),
             new StubWorkflowRunOutputStreamer(
             [
-                new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
-                new WorkflowOutputFrame { Type = "RUN_FINISHED", ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunFinished, ThreadId = "actor-1" },
             ]),
             new WorkflowRunCompletionPolicy(),
-            new WorkflowRunResourceFinalizer(projectionPort));
+            new WorkflowRunResourceFinalizer(projectionPort),
+            projectionPort);
 
         var result = await service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "direct", "actor-1"),
@@ -86,11 +88,12 @@ public class WorkflowChatRunApplicationServiceTests
             new StubWorkflowRunRequestExecutor(),
             new StubWorkflowRunOutputStreamer(
             [
-                new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
-                new WorkflowOutputFrame { Type = "RUN_ERROR", Message = "boom" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunError, Message = "boom" },
             ]),
             new WorkflowRunCompletionPolicy(),
-            new WorkflowRunResourceFinalizer(projectionPort));
+            new WorkflowRunResourceFinalizer(projectionPort),
+            projectionPort);
 
         var result = await service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "direct", "actor-1"),
@@ -117,11 +120,12 @@ public class WorkflowChatRunApplicationServiceTests
             new StubWorkflowRunRequestExecutor(),
             new StubWorkflowRunOutputStreamer(
             [
-                new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
-                new WorkflowOutputFrame { Type = "RUN_FINISHED", ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" },
+                new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunFinished, ThreadId = "actor-1" },
             ]),
             new WorkflowRunCompletionPolicy(),
-            new WorkflowRunResourceFinalizer(projectionPort));
+            new WorkflowRunResourceFinalizer(projectionPort),
+            projectionPort);
 
         _ = await service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "direct", "actor-1"),
@@ -138,14 +142,17 @@ public class WorkflowChatRunApplicationServiceTests
         IWorkflowRunRequestExecutor requestExecutor,
         IWorkflowRunOutputStreamer outputStreamer,
         IWorkflowRunCompletionPolicy completionPolicy,
-        IWorkflowRunResourceFinalizer resourceFinalizer)
+        IWorkflowRunResourceFinalizer resourceFinalizer,
+        IWorkflowExecutionProjectionQueryPort projectionQueryPort)
     {
+        var snapshotEmitter = new WorkflowRunStateSnapshotEmitter(projectionQueryPort, outputStreamer);
         var executionEngine = new WorkflowRunExecutionEngine(
             envelopeFactory,
             requestExecutor,
             outputStreamer,
             completionPolicy,
-            resourceFinalizer);
+            resourceFinalizer,
+            snapshotEmitter);
         return new WorkflowChatRunApplicationService(runContextFactory, executionEngine);
     }
 }
@@ -799,6 +806,8 @@ internal sealed class StubWorkflowRunOutputStreamer : IWorkflowRunOutputStreamer
         foreach (var frame in _frames)
             await emitAsync(frame, ct);
     }
+
+    public WorkflowOutputFrame Map(WorkflowRunEvent evt) => new WorkflowRunOutputStreamer().Map(evt);
 }
 
 internal sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort

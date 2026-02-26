@@ -86,13 +86,13 @@ public sealed class ChatRuntime
     }
 
     /// <summary>流式 Chat，包裹 LLM Call Middleware。</summary>
-    public async IAsyncEnumerable<string> ChatStreamAsync(
+    public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage, [EnumeratorCancellation] CancellationToken ct = default)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var runToken = linkedCts.Token;
 
-        var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(_streamBufferCapacity)
+        var channel = Channel.CreateBounded<LLMStreamChunk>(new BoundedChannelOptions(_streamBufferCapacity)
         {
             SingleReader = true,
             SingleWriter = true,
@@ -141,6 +141,7 @@ public sealed class ChatRuntime
 
                     string? streamedContent = null;
                     TokenUsage? streamedUsage = null;
+                    IReadOnlyList<ToolCall>? streamedToolCalls = null;
 
                     await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
                     {
@@ -148,26 +149,27 @@ public sealed class ChatRuntime
 
                         var full = new StringBuilder();
                         TokenUsage? usage = null;
+                        var toolCalls = new StreamToolCallAccumulator();
 
                         await foreach (var chunk in provider.ChatStreamAsync(llmCallContext.Request, runToken))
                         {
-                            if (chunk.DeltaContent != null)
-                            {
-                                full.Append(chunk.DeltaContent);
-                                await channel.Writer.WriteAsync(chunk.DeltaContent, runToken);
-                                wroteOutput = true;
-                            }
+                            var normalizedChunk = NormalizeStreamChunk(chunk, toolCalls, full, ref usage);
+                            if (normalizedChunk == null)
+                                continue;
 
-                            if (chunk.Usage != null)
-                                usage = chunk.Usage;
+                            await channel.Writer.WriteAsync(normalizedChunk, runToken);
+                            wroteOutput = true;
                         }
 
-                        streamedContent = full.ToString();
+                        streamedContent = full.Length > 0 ? full.ToString() : null;
                         streamedUsage = usage;
+                        var finalizedToolCalls = toolCalls.BuildToolCalls();
+                        streamedToolCalls = finalizedToolCalls.Count > 0 ? finalizedToolCalls : null;
                         llmCallContext.Response = new LLMResponse
                         {
                             Content = streamedContent,
                             Usage = streamedUsage,
+                            ToolCalls = streamedToolCalls,
                         };
                     });
 
@@ -175,23 +177,36 @@ public sealed class ChatRuntime
                     {
                         streamedContent = llmCallContext.Response?.Content;
                         streamedUsage = llmCallContext.Response?.Usage;
+                        streamedToolCalls = llmCallContext.Response?.ToolCalls;
 
-                        if (streamedContent != null)
+                        if (llmCallContext.Response != null)
                         {
-                            await channel.Writer.WriteAsync(streamedContent, runToken);
-                            wroteOutput = true;
+                            foreach (var chunk in BuildSyntheticChunks(llmCallContext.Response))
+                            {
+                                await channel.Writer.WriteAsync(chunk, runToken);
+                                wroteOutput = true;
+                            }
                         }
                     }
 
-                    if (!string.IsNullOrEmpty(streamedContent))
-                        _history.Add(ChatMessage.Assistant(streamedContent));
+                    if (!string.IsNullOrEmpty(streamedContent) || streamedToolCalls is { Count: > 0 })
+                    {
+                        _history.Add(new ChatMessage
+                        {
+                            Role = "assistant",
+                            Content = streamedContent,
+                            ToolCalls = streamedToolCalls,
+                        });
+                    }
 
                     runContext.Result = streamedContent;
                 });
 
                 if (runContext.Terminate && runContext.Result != null && !wroteOutput)
                 {
-                    await channel.Writer.WriteAsync(runContext.Result, runToken);
+                    await channel.Writer.WriteAsync(
+                        new LLMStreamChunk { DeltaContent = runContext.Result },
+                        runToken);
                 }
 
                 channel.Writer.TryComplete();
@@ -204,13 +219,159 @@ public sealed class ChatRuntime
 
         try
         {
-            await foreach (var delta in channel.Reader.ReadAllAsync(runToken))
-                yield return delta;
+            await foreach (var chunk in channel.Reader.ReadAllAsync(runToken))
+                yield return chunk;
         }
         finally
         {
             linkedCts.Cancel();
             try { await runTask.ConfigureAwait(false); } catch { /* best-effort */ }
+        }
+    }
+
+    private static LLMStreamChunk? NormalizeStreamChunk(
+        LLMStreamChunk chunk,
+        StreamToolCallAccumulator toolCalls,
+        StringBuilder fullContent,
+        ref TokenUsage? usage)
+    {
+        ToolCall? normalizedToolCall = null;
+        if (chunk.DeltaToolCall != null)
+            normalizedToolCall = toolCalls.TrackDelta(chunk.DeltaToolCall);
+
+        if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            fullContent.Append(chunk.DeltaContent);
+
+        if (chunk.Usage != null)
+            usage = chunk.Usage;
+
+        if (string.IsNullOrEmpty(chunk.DeltaContent) &&
+            normalizedToolCall == null &&
+            !chunk.IsLast &&
+            chunk.Usage == null)
+        {
+            return null;
+        }
+
+        return new LLMStreamChunk
+        {
+            DeltaContent = chunk.DeltaContent,
+            DeltaToolCall = normalizedToolCall,
+            Usage = chunk.Usage,
+            IsLast = chunk.IsLast,
+        };
+    }
+
+    private static IReadOnlyList<LLMStreamChunk> BuildSyntheticChunks(LLMResponse response)
+    {
+        var chunks = new List<LLMStreamChunk>();
+
+        if (!string.IsNullOrEmpty(response.Content))
+            chunks.Add(new LLMStreamChunk { DeltaContent = response.Content });
+
+        if (response.ToolCalls is { Count: > 0 })
+        {
+            chunks.AddRange(response.ToolCalls.Select(toolCall => new LLMStreamChunk
+            {
+                DeltaToolCall = toolCall,
+            }));
+        }
+
+        chunks.Add(new LLMStreamChunk
+        {
+            IsLast = true,
+            Usage = response.Usage,
+        });
+
+        return chunks;
+    }
+
+    private sealed class StreamToolCallAccumulator
+    {
+        private readonly Dictionary<string, ToolCallAggregate> _aggregates = new(StringComparer.Ordinal);
+        private readonly List<string> _order = [];
+        private int _anonymousCounter;
+        private string? _activeAnonymousKey;
+
+        public ToolCall TrackDelta(ToolCall delta)
+        {
+            var key = ResolveKey(delta);
+            if (!_aggregates.TryGetValue(key, out var aggregate))
+            {
+                aggregate = new ToolCallAggregate(ResolveCallId(delta));
+                _aggregates[key] = aggregate;
+                _order.Add(key);
+            }
+
+            if (!string.IsNullOrWhiteSpace(delta.Name))
+                aggregate.Name = delta.Name;
+
+            if (!string.IsNullOrEmpty(delta.ArgumentsJson))
+                aggregate.Arguments.Append(delta.ArgumentsJson);
+
+            return new ToolCall
+            {
+                Id = aggregate.Id,
+                Name = string.IsNullOrWhiteSpace(delta.Name)
+                    ? aggregate.Name ?? string.Empty
+                    : delta.Name,
+                ArgumentsJson = delta.ArgumentsJson ?? string.Empty,
+            };
+        }
+
+        public IReadOnlyList<ToolCall> BuildToolCalls()
+        {
+            var result = new List<ToolCall>(_order.Count);
+            foreach (var key in _order)
+            {
+                var aggregate = _aggregates[key];
+                result.Add(new ToolCall
+                {
+                    Id = aggregate.Id,
+                    Name = aggregate.Name ?? string.Empty,
+                    ArgumentsJson = aggregate.Arguments.ToString(),
+                });
+            }
+
+            return result;
+        }
+
+        private string ResolveKey(ToolCall delta)
+        {
+            if (!string.IsNullOrWhiteSpace(delta.Id))
+            {
+                _activeAnonymousKey = null;
+                return $"id:{delta.Id}";
+            }
+
+            if (!string.IsNullOrWhiteSpace(_activeAnonymousKey))
+                return _activeAnonymousKey;
+
+            _anonymousCounter++;
+            _activeAnonymousKey = $"anon:{_anonymousCounter}";
+            return _activeAnonymousKey;
+        }
+
+        private string ResolveCallId(ToolCall delta)
+        {
+            if (!string.IsNullOrWhiteSpace(delta.Id))
+                return delta.Id;
+
+            return $"stream-tool-call-{_anonymousCounter}";
+        }
+
+        private sealed class ToolCallAggregate
+        {
+            public ToolCallAggregate(string id)
+            {
+                Id = id;
+            }
+
+            public string Id { get; }
+
+            public string? Name { get; set; }
+
+            public StringBuilder Arguments { get; } = new();
         }
     }
 }
