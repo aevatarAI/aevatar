@@ -500,6 +500,65 @@ public class ProjectionSessionEventHubTests
         });
         received.Should().Equal("accepted");
     }
+
+    [Fact]
+    public async Task PublishAsync_ShouldThrow_ForInvalidArguments_AndMissingChannel()
+    {
+        var provider = new SessionHubStreamProvider();
+        var codec = new StringSessionEventCodec();
+        var hub = new ProjectionSessionEventHub<string>(provider, codec);
+
+        Func<Task> blankScope = () => hub.PublishAsync(" ", "session-1", "hello", CancellationToken.None);
+        Func<Task> blankSession = () => hub.PublishAsync("scope-1", " ", "hello", CancellationToken.None);
+        Func<Task> nullEvent = () => hub.PublishAsync("scope-1", "session-1", null!, CancellationToken.None);
+
+        var emptyChannelHub = new ProjectionSessionEventHub<string>(provider, new EmptyChannelSessionEventCodec());
+        Func<Task> emptyChannel = () => emptyChannelHub.PublishAsync("scope-1", "session-1", "hello", CancellationToken.None);
+
+        await blankScope.Should().ThrowAsync<ArgumentException>();
+        await blankSession.Should().ThrowAsync<ArgumentException>();
+        await nullEvent.Should().ThrowAsync<ArgumentNullException>();
+        await emptyChannel.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task SubscribeAsync_ShouldThrow_ForInvalidArguments_AndMissingChannel()
+    {
+        var provider = new SessionHubStreamProvider();
+        var codec = new StringSessionEventCodec();
+        var hub = new ProjectionSessionEventHub<string>(provider, codec);
+
+        Func<Task> blankScope = async () => await hub.SubscribeAsync(" ", "session-1", _ => ValueTask.CompletedTask, CancellationToken.None);
+        Func<Task> blankSession = async () => await hub.SubscribeAsync("scope-1", " ", _ => ValueTask.CompletedTask, CancellationToken.None);
+        Func<Task> nullHandler = async () => await hub.SubscribeAsync("scope-1", "session-1", null!, CancellationToken.None);
+
+        var emptyChannelHub = new ProjectionSessionEventHub<string>(provider, new EmptyChannelSessionEventCodec());
+        Func<Task> emptyChannel = async () => await emptyChannelHub.SubscribeAsync(
+            "scope-1",
+            "session-1",
+            _ => ValueTask.CompletedTask,
+            CancellationToken.None);
+
+        await blankScope.Should().ThrowAsync<ArgumentException>();
+        await blankSession.Should().ThrowAsync<ArgumentException>();
+        await nullHandler.Should().ThrowAsync<ArgumentNullException>();
+        await emptyChannel.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task PublishAsync_ShouldTrimScopeAndSession_WhenResolvingStreamId()
+    {
+        var provider = new SessionHubStreamProvider();
+        var codec = new StringSessionEventCodec();
+        var hub = new ProjectionSessionEventHub<string>(provider, codec);
+
+        await hub.PublishAsync(" scope-1 ", " session-1 ", "hello", CancellationToken.None);
+
+        provider.GetStream("projection.session:scope-1:session-1")
+            .ProducedMessages
+            .Should()
+            .ContainSingle();
+    }
 }
 
 internal sealed class OwnershipCoordinatorRuntime : IActorRuntime
@@ -616,6 +675,17 @@ internal sealed class StringSessionEventCodec : IProjectionSessionEventCodec<str
 
     public string? Deserialize(string eventType, string payload) =>
         string.Equals(eventType, "string", StringComparison.Ordinal) ? payload : null;
+}
+
+internal sealed class EmptyChannelSessionEventCodec : IProjectionSessionEventCodec<string>
+{
+    public string Channel => "";
+
+    public string GetEventType(string evt) => "string";
+
+    public string Serialize(string evt) => evt;
+
+    public string? Deserialize(string eventType, string payload) => payload;
 }
 
 internal sealed class TestInMemoryEventStore : IEventStore

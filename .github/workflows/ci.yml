@@ -98,30 +98,6 @@ jobs:
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
 
-  full-solution-regression:
-    if: github.event_name == 'pull_request' && needs.changes.outputs.core_code == 'true'
-    needs: changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 55
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Prepare Runner
-        uses: ./.github/actions/prepare-runner
-
-      - name: Restore and Build
-        run: bash tools/ci/restore_and_build.sh
-
-      - name: Full Solution Regression Test
-        run: |
-          dotnet test aevatar.slnx \
-            --nologo \
-            --tl:off \
-            -m:1 \
-            -p:UseSharedCompilation=false \
-            -p:NuGetAudit=false \
-            --no-build
-
   split-test-guards:
     if: |
       github.event_name == 'workflow_dispatch' ||
@@ -257,6 +233,7 @@ jobs:
 
   coverage-quality:
     if: |
+      github.event_name == 'pull_request' ||
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))

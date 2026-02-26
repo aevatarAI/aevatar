@@ -2,12 +2,12 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
 
-public interface IWorkflowRunOutputStreamer
+public interface IWorkflowRunStateSnapshotEmitter
 {
-    Task StreamAsync(
-        IWorkflowRunEventSink sink,
+    Task EmitAsync(
+        WorkflowRunContext runContext,
+        WorkflowProjectionCompletionStatus projectionCompletionStatus,
+        bool projectionCompleted,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default);
-
-    WorkflowOutputFrame Map(WorkflowRunEvent evt);
 }

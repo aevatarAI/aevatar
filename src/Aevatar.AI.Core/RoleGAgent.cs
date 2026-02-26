@@ -3,7 +3,7 @@
 //
 // Handles ChatRequestEvent:
 // 1. Calls LLM via ChatStreamAsync (streaming)
-// 2. Publishes AG-UI events: TextMessageStart → Content* → End
+// 2. Publishes AG-UI events: TextMessageStart → Content* → ToolCall* → End
 // 3. Logs prompt and full LLM response for observability
 // ─────────────────────────────────────────────────────────────
 
@@ -13,6 +13,7 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
@@ -100,7 +101,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
     /// <summary>
     /// Handles ChatRequestEvent via streaming LLM call.
-    /// Publishes AG-UI three-phase events and logs the interaction.
+    /// Publishes text stream events and tool call events.
     /// </summary>
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
@@ -119,13 +120,31 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
         // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
         var fullContent = new StringBuilder();
+        var toolCalls = new StreamingToolCallAccumulator();
+
         await foreach (var chunk in ChatStreamAsync(request.Prompt))
         {
-            fullContent.Append(chunk);
-            await PublishAsync(new TextMessageContentEvent
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
-                Delta = chunk,
-                SessionId = request.SessionId,
+                fullContent.Append(chunk.DeltaContent);
+                await PublishAsync(new TextMessageContentEvent
+                {
+                    Delta = chunk.DeltaContent,
+                    SessionId = request.SessionId,
+                }, EventDirection.Up);
+            }
+
+            if (chunk.DeltaToolCall != null)
+                toolCalls.TrackDelta(chunk.DeltaToolCall);
+        }
+
+        foreach (var toolCall in toolCalls.BuildToolCalls())
+        {
+            await PublishAsync(new ToolCallEvent
+            {
+                CallId = toolCall.Id,
+                ToolName = toolCall.Name,
+                ArgumentsJson = toolCall.ArgumentsJson,
             }, EventDirection.Up);
         }
 
