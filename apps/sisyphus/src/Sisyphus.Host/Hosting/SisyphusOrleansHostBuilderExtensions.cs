@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
+using Orleans.Configuration;
 
 namespace Sisyphus.Host.Hosting;
 
@@ -31,6 +32,13 @@ public static class SisyphusOrleansHostBuilderExtensions
             siloBuilder.UseLocalhostClustering(
                 serviceId: builder.Configuration["Orleans:ServiceId"] ?? "sisyphus-host",
                 clusterId: builder.Configuration["Orleans:ClusterId"] ?? "sisyphus-cluster");
+
+            // LLM streaming + tool calling loops can take 2-5 minutes per step.
+            // The Orleans default ResponseTimeout is 30s, which kills in-flight LLM calls.
+            siloBuilder.Configure<SiloMessagingOptions>(options =>
+            {
+                options.ResponseTimeout = TimeSpan.FromMinutes(5);
+            });
 
             siloBuilder.AddAevatarFoundationRuntimeOrleans(orleansOptions =>
             {
