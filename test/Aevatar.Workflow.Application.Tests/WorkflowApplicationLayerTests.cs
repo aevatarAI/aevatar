@@ -585,6 +585,93 @@ public class WorkflowExecutionQueryApplicationServiceTests
         item.Nodes.Should().HaveCount(2);
         item.Edges.Should().ContainSingle(x => x.EdgeId == "edge-1");
     }
+
+    [Fact]
+    public async Task ListAgentsAsync_WhenTokenCanceled_ShouldThrowOperationCanceledException()
+    {
+        var projection = new FakeProjectionService
+        {
+            EnableActorQueryEndpointsValue = true,
+        };
+        var queryService = new WorkflowExecutionQueryApplicationService(
+            new WorkflowDefinitionRegistry(),
+            projection);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Func<Task> act = () => queryService.ListAgentsAsync(cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task QueryMethods_WhenActorQueryDisabled_ShouldShortCircuit()
+    {
+        var projection = new FakeProjectionService
+        {
+            EnableActorQueryEndpointsValue = false,
+            SnapshotList =
+            [
+                new WorkflowActorSnapshot
+                {
+                    ActorId = "wf-1",
+                    WorkflowName = "direct",
+                },
+            ],
+        };
+        var queryService = new WorkflowExecutionQueryApplicationService(
+            new WorkflowDefinitionRegistry(),
+            projection);
+
+        queryService.ActorQueryEnabled.Should().BeFalse();
+        (await queryService.ListAgentsAsync()).Should().BeEmpty();
+        (await queryService.GetActorSnapshotAsync("actor-1")).Should().BeNull();
+        (await queryService.ListActorTimelineAsync("actor-1")).Should().BeEmpty();
+        (await queryService.ListActorGraphEdgesAsync("actor-1")).Should().BeEmpty();
+        (await queryService.GetActorGraphEnrichedSnapshotAsync("actor-1")).Should().BeNull();
+
+        var subgraph = await queryService.GetActorGraphSubgraphAsync("actor-1");
+        subgraph.RootNodeId.Should().Be("actor-1");
+        subgraph.Nodes.Should().BeEmpty();
+        subgraph.Edges.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GraphQueries_WhenActorIdBlank_ShouldReturnEmptyOrNull()
+    {
+        var queryService = new WorkflowExecutionQueryApplicationService(
+            new WorkflowDefinitionRegistry(),
+            new FakeProjectionService
+            {
+                EnableActorQueryEndpointsValue = true,
+            });
+
+        (await queryService.ListActorGraphEdgesAsync("   ")).Should().BeEmpty();
+
+        var subgraph = await queryService.GetActorGraphSubgraphAsync("   ");
+        subgraph.RootNodeId.Should().Be("   ");
+        subgraph.Nodes.Should().BeEmpty();
+        subgraph.Edges.Should().BeEmpty();
+
+        (await queryService.GetActorGraphEnrichedSnapshotAsync("   ")).Should().BeNull();
+    }
+
+    [Fact]
+    public void ListWorkflows_ShouldReturnRegisteredWorkflowNames()
+    {
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("workflow-a", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+        registry.Register("workflow-b", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+
+        var queryService = new WorkflowExecutionQueryApplicationService(
+            registry,
+            new FakeProjectionService());
+
+        var workflows = queryService.ListWorkflows();
+
+        workflows.Should().BeEquivalentTo(["workflow-a", "workflow-b"]);
+    }
 }
 
 public class ActorRuntimeWorkflowExecutionTopologyResolverTests

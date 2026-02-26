@@ -8,6 +8,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Workflow.Projection.DependencyInjection;
+using Aevatar.Workflow.Projection.Metadata;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -66,6 +67,17 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*IProjectionGraphStore*");
+    }
+
+    [Fact]
+    public void WorkflowExecutionReportDocumentMetadataProvider_ShouldExposeExpectedDefaults()
+    {
+        var provider = new WorkflowExecutionReportDocumentMetadataProvider();
+
+        provider.Metadata.IndexName.Should().Be("workflow-execution-reports");
+        provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
+        provider.Metadata.Settings.Should().BeEmpty();
+        provider.Metadata.Aliases.Should().BeEmpty();
     }
 
     private static void RegisterInMemoryProviders(IServiceCollection services)
