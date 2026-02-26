@@ -2,8 +2,12 @@
 // ToolCallLoop — Tool Calling 循环逻辑
 // LLM 返回 tool_call → 执行 → 将结果加入历史 → 继续调 LLM
 // 在每次 LLM 调用和 Tool 执行前后调用 Hook Pipeline + Middleware
+//
+// When onContent is provided, uses ChatStreamAsync for real-time
+// token-by-token streaming to the caller. Otherwise uses ChatAsync.
 // ─────────────────────────────────────────────────────────────
 
+using System.Text;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -37,9 +41,16 @@ public sealed class ToolCallLoop
     /// 循环：LLM → tool_call → execute → result → LLM → ...
     /// 每次 LLM 调用和 Tool 执行前后触发 Hook + Middleware。
     /// </summary>
+    public Task<string?> ExecuteAsync(
+        ILLMProvider provider, List<ChatMessage> messages,
+        LLMRequest baseRequest, int maxRounds, CancellationToken ct) =>
+        ExecuteAsync(provider, messages, baseRequest, maxRounds, onContent: null, ct);
+
     public async Task<string?> ExecuteAsync(
         ILLMProvider provider, List<ChatMessage> messages,
-        LLMRequest baseRequest, int maxRounds, CancellationToken ct)
+        LLMRequest baseRequest, int maxRounds,
+        Func<string, CancellationToken, Task>? onContent,
+        CancellationToken ct)
     {
         for (var round = 0; round < maxRounds; round++)
         {
@@ -50,13 +61,30 @@ public sealed class ToolCallLoop
                 MaxTokens = baseRequest.MaxTokens,
             };
 
-            var (response, terminated) = await InvokeLlmAsync(provider, request, ct);
+            var (response, terminated, contentStreamedLive) = await InvokeLlmAsync(provider, request, onContent, ct);
 
             if (terminated || !response.HasToolCalls)
             {
                 if (response.Content != null)
                     messages.Add(ChatMessage.Assistant(response.Content));
+
+                // Only call onContent if content wasn't already streamed live
+                if (!contentStreamedLive && onContent != null && !string.IsNullOrEmpty(response.Content))
+                    await onContent(response.Content, ct);
+
                 return response.Content;
+            }
+
+            // Publish intermediate reasoning text separator before executing tool calls.
+            // Text content was already streamed live; just emit a line break separator.
+            if (contentStreamedLive)
+            {
+                if (!string.IsNullOrEmpty(response.Content))
+                    await onContent!("\n\n", ct);
+            }
+            else if (onContent != null && !string.IsNullOrEmpty(response.Content))
+            {
+                await onContent(response.Content + "\n\n", ct);
             }
 
             // 记录 assistant tool_call 消息（保留 Content，部分 LLM 会同时返回文本和 tool_call）
@@ -117,16 +145,17 @@ public sealed class ToolCallLoop
             Model = baseRequest.Model, Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
         };
-        var (finalResponse, _) = await InvokeLlmAsync(provider, finalRequest, ct);
+        var (finalResponse, _, _) = await InvokeLlmAsync(provider, finalRequest, onContent, ct);
         var finalContent = finalResponse?.Content;
         if (finalContent != null)
             messages.Add(ChatMessage.Assistant(finalContent));
         return finalContent;
     }
 
-    private async Task<(LLMResponse Response, bool Terminated)> InvokeLlmAsync(
+    private async Task<(LLMResponse Response, bool Terminated, bool ContentStreamed)> InvokeLlmAsync(
         ILLMProvider provider,
         LLMRequest request,
+        Func<string, CancellationToken, Task>? onContent,
         CancellationToken ct)
     {
         // ─── Hook: LLM Request Start ───
@@ -138,13 +167,47 @@ public sealed class ToolCallLoop
             Request = request,
             Provider = provider,
             CancellationToken = ct,
-            IsStreaming = false,
+            IsStreaming = onContent != null,
         };
+
+        var contentStreamedLive = false;
 
         await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
         {
             if (llmCallContext.Terminate) return;
-            llmCallContext.Response = await provider.ChatAsync(llmCallContext.Request, ct);
+
+            if (onContent != null)
+            {
+                // ─── Streaming path: stream text tokens in real-time ───
+                var sb = new StringBuilder();
+                List<ToolCall>? streamToolCalls = null;
+
+                await foreach (var chunk in provider.ChatStreamAsync(llmCallContext.Request, ct))
+                {
+                    if (chunk.DeltaContent != null)
+                    {
+                        sb.Append(chunk.DeltaContent);
+                        await onContent(chunk.DeltaContent, ct);
+                    }
+                    if (chunk.DeltaToolCall != null)
+                    {
+                        streamToolCalls ??= [];
+                        streamToolCalls.Add(chunk.DeltaToolCall);
+                    }
+                }
+
+                llmCallContext.Response = new LLMResponse
+                {
+                    Content = sb.Length > 0 ? sb.ToString() : null,
+                    ToolCalls = streamToolCalls,
+                };
+                contentStreamedLive = true;
+            }
+            else
+            {
+                // ─── Non-streaming path: existing behavior ───
+                llmCallContext.Response = await provider.ChatAsync(llmCallContext.Request, ct);
+            }
         });
 
         var response = llmCallContext.Response
@@ -154,7 +217,7 @@ public sealed class ToolCallLoop
         // ─── Hook: LLM Request End ───
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);
 
-        return (response, llmCallContext.Terminate);
+        return (response, llmCallContext.Terminate, contentStreamedLive);
     }
 
     private sealed class NullAgentTool(string name) : IAgentTool

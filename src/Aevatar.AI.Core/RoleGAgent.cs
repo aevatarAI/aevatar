@@ -7,7 +7,6 @@
 // 3. Logs prompt and full LLM response for observability
 // ─────────────────────────────────────────────────────────────
 
-using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -102,8 +101,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     }
 
     /// <summary>
-    /// Handles ChatRequestEvent via streaming LLM call.
-    /// Publishes text stream events and tool call events.
+    /// Handles ChatRequestEvent via non-streaming LLM call with tool-calling loop.
+    /// Publishes AG-UI three-phase events with real-time intermediate text streaming.
     /// </summary>
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
@@ -124,37 +123,17 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             AgentId = Id,
         }, EventDirection.Up);
 
-        // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
-        var fullContent = new StringBuilder();
-        var toolCalls = new StreamingToolCallAccumulator();
-
-        await foreach (var chunk in ChatStreamAsync(request.Prompt))
+        // ChatAsync with onContent callback: streams LLM tokens in real-time.
+        // Each callback invocation delivers a small text delta (token-level granularity).
+        var response = await ChatAsync(request.Prompt, async (content, _) =>
         {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            await PublishAsync(new TextMessageContentEvent
             {
-                fullContent.Append(chunk.DeltaContent);
-                await PublishAsync(new TextMessageContentEvent
-                {
-                    Delta = chunk.DeltaContent,
-                    SessionId = request.SessionId,
-                }, EventDirection.Up);
-            }
-
-            if (chunk.DeltaToolCall != null)
-                toolCalls.TrackDelta(chunk.DeltaToolCall);
-        }
-
-        foreach (var toolCall in toolCalls.BuildToolCalls())
-        {
-            await PublishAsync(new ToolCallEvent
-            {
-                CallId = toolCall.Id,
-                ToolName = toolCall.Name,
-                ArgumentsJson = toolCall.ArgumentsJson,
+                Delta = content,
+                SessionId = request.SessionId,
             }, EventDirection.Up);
-        }
+        }) ?? "";
 
-        var response = fullContent.ToString();
         var responsePreview = response.Length > 300
             ? response[..300] + "..."
             : response;
