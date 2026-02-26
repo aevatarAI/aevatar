@@ -72,6 +72,44 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
     }
 
     [Fact]
+    public async Task AgentRun_WithProviderMetadata_SetsProviderTag()
+    {
+        _activities.Clear();
+
+        var ctx = new AgentRunContext
+        {
+            UserMessage = "hello",
+            AgentId = "agent-1",
+            AgentName = "TestAgent",
+        };
+        ctx.Metadata["gen_ai.provider.name"] = "openai";
+
+        await _middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+
+        var activity = _activities.Last();
+        activity.GetTagItem("gen_ai.provider.name").Should().Be("openai");
+    }
+
+    [Fact]
+    public async Task AgentRun_WithInvalidProviderMetadata_DoesNotSetProviderTag()
+    {
+        _activities.Clear();
+
+        var ctx = new AgentRunContext
+        {
+            UserMessage = "hello",
+            AgentId = "agent-1",
+            AgentName = "TestAgent",
+        };
+        ctx.Metadata["gen_ai.provider.name"] = "   ";
+
+        await _middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+
+        var activity = _activities.Last();
+        activity.GetTagItem("gen_ai.provider.name").Should().BeNull();
+    }
+
+    [Fact]
     public async Task LLMCall_EmitsChatSpan()
     {
         _activities.Clear();
@@ -104,6 +142,50 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
     }
 
     [Fact]
+    public async Task LLMCall_WithBlankProviderName_UsesUnknownAndHandlesNullResponse()
+    {
+        _activities.Clear();
+        GenAIActivitySource.EnableSensitiveData = true;
+
+        var ctx = new LLMCallContext
+        {
+            Request = new LLMRequest { Messages = null!, Model = "gpt-4o-mini" },
+            Provider = new FakeLLMProvider("   "),
+        };
+
+        await _middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "chat").Last();
+        activity.GetTagItem("gen_ai.provider.name").Should().Be("unknown");
+        activity.GetTagItem("gen_ai.request.message_count").Should().Be(0);
+        activity.GetTagItem("gen_ai.response.finish_reason").Should().BeNull();
+        activity.GetTagItem("gen_ai.response.content").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LLMCall_OnError_SetsErrorTag()
+    {
+        _activities.Clear();
+
+        var ctx = new LLMCallContext
+        {
+            Request = new LLMRequest { Messages = [], Model = "gpt-4" },
+            Provider = new FakeLLMProvider(),
+        };
+
+        var act = async () => await _middleware.InvokeAsync(ctx, () =>
+            throw new InvalidOperationException("llm boom"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "chat").Last();
+        activity.GetTagItem("error.message").Should().Be("llm boom");
+        activity.GetTagItem("error.type")?.ToString().Should().Contain("InvalidOperationException");
+    }
+
+    [Fact]
     public async Task ToolCall_EmitsExecuteToolSpan()
     {
         _activities.Clear();
@@ -128,6 +210,80 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
         matching.Last().Kind.Should().Be(ActivityKind.Internal);
         matching.Last().GetTagItem("gen_ai.tool.name").Should().Be("search");
         matching.Last().GetTagItem("gen_ai.tool.status").Should().Be("ok");
+    }
+
+    [Fact]
+    public async Task ToolCall_WhenTerminateTrue_SetsTerminatedStatus()
+    {
+        _activities.Clear();
+
+        var ctx = new ToolCallContext
+        {
+            Tool = new FakeTool("search"),
+            ToolName = "search",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+        };
+
+        await _middleware.InvokeAsync(ctx, () =>
+        {
+            ctx.Terminate = true;
+            return Task.CompletedTask;
+        });
+
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
+        activity.GetTagItem("gen_ai.tool.status").Should().Be("terminated");
+    }
+
+    [Fact]
+    public async Task ToolCall_OnError_SetsErrorTag()
+    {
+        _activities.Clear();
+
+        var ctx = new ToolCallContext
+        {
+            Tool = new FakeTool("search"),
+            ToolName = "search",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+        };
+
+        var act = async () => await _middleware.InvokeAsync(ctx, () =>
+            throw new InvalidOperationException("tool boom"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
+        activity.GetTagItem("gen_ai.tool.status").Should().Be("error");
+        activity.GetTagItem("error.message").Should().Be("tool boom");
+    }
+
+    [Fact]
+    public async Task ToolCall_WithSensitiveDataEnabled_IncludesArgumentsAndResult()
+    {
+        _activities.Clear();
+        GenAIActivitySource.EnableSensitiveData = true;
+
+        var ctx = new ToolCallContext
+        {
+            Tool = new FakeTool("search"),
+            ToolName = "search",
+            ToolCallId = "call-2",
+            ArgumentsJson = "{\"q\":\"test\"}",
+        };
+
+        await _middleware.InvokeAsync(ctx, () =>
+        {
+            ctx.Result = "ok";
+            return Task.CompletedTask;
+        });
+
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "execute_tool").Last();
+        activity.GetTagItem("gen_ai.tool.arguments").Should().Be("{\"q\":\"test\"}");
+        activity.GetTagItem("gen_ai.tool.result").Should().Be("ok");
     }
 
     [Fact]
@@ -175,9 +331,9 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
             Task.FromResult("fake");
     }
 
-    private sealed class FakeLLMProvider : ILLMProvider
+    private sealed class FakeLLMProvider(string name = "fake") : ILLMProvider
     {
-        public string Name => "fake";
+        public string Name => name;
         public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct) =>
             Task.FromResult(new LLMResponse { Content = "r" });
         public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(LLMRequest request, CancellationToken ct) =>
