@@ -16,6 +16,79 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class OrleansDistributedCoverageTests
 {
     [Fact]
+    public void CompatibilityFailureInjectionPolicy_ShouldEnableForOldNodeWithConfiguredEventTypeUrls()
+    {
+        var policy = CompatibilityFailureInjectionPolicy.FromValues(
+            "old",
+            "type.googleapis.com/aevatar.events.NewEvent,type.googleapis.com/aevatar.events.OtherEvent");
+
+        policy.Enabled.Should().BeTrue();
+        policy.ShouldInject("type.googleapis.com/aevatar.events.NewEvent").Should().BeTrue();
+        policy.ShouldInject("type.googleapis.com/aevatar.events.Unknown").Should().BeFalse();
+    }
+
+    [Fact]
+    public void CompatibilityFailureInjectionPolicy_ShouldBeDisabledForNewNodeOrMissingConfig()
+    {
+        var policyForNewNode = CompatibilityFailureInjectionPolicy.FromValues(
+            "new",
+            "type.googleapis.com/aevatar.events.NewEvent");
+        policyForNewNode.Enabled.Should().BeFalse();
+        policyForNewNode.ShouldInject("type.googleapis.com/aevatar.events.NewEvent").Should().BeFalse();
+
+        var policyWithoutTypeUrls = CompatibilityFailureInjectionPolicy.FromValues("old", "  ");
+        policyWithoutTypeUrls.Enabled.Should().BeFalse();
+        policyWithoutTypeUrls.ShouldInject("type.googleapis.com/aevatar.events.NewEvent").Should().BeFalse();
+    }
+
+    [Fact]
+    public void RuntimeEnvelopeRetryPolicy_ShouldBuildRetryEnvelope_WhenAttemptWithinLimit()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("2", "10");
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-1",
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
+            Direction = EventDirection.Down,
+        };
+
+        var built = policy.TryBuildRetryEnvelope(
+            envelope,
+            new InvalidOperationException("boom"),
+            out var retryEnvelope,
+            out var nextAttempt);
+
+        built.Should().BeTrue();
+        nextAttempt.Should().Be(1);
+        retryEnvelope.Id.Should().NotBe(envelope.Id);
+        retryEnvelope.Metadata["aevatar.retry.attempt"].Should().Be("1");
+        retryEnvelope.Metadata["aevatar.retry.last_error"].Should().Be("InvalidOperationException");
+        retryEnvelope.Metadata["aevatar.retry.origin_event_id"].Should().Be("evt-1");
+    }
+
+    [Fact]
+    public void RuntimeEnvelopeRetryPolicy_ShouldStopRetry_WhenAttemptExceedsLimit()
+    {
+        var policy = RuntimeEnvelopeRetryPolicy.FromValues("1", "0");
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-2",
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
+            Direction = EventDirection.Down,
+        };
+        envelope.Metadata["aevatar.retry.attempt"] = "1";
+
+        var built = policy.TryBuildRetryEnvelope(
+            envelope,
+            new InvalidOperationException("boom"),
+            out _,
+            out var nextAttempt);
+
+        built.Should().BeFalse();
+        nextAttempt.Should().Be(2);
+    }
+
+    [Fact]
     public async Task OrleansActorTypeProbe_ShouldResolveAndNormalizeTypeName()
     {
         var grain = new RuntimeActorGrainStub { AgentTypeName = " " };
