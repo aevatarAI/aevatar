@@ -191,6 +191,39 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenRunIdContainsWhitespace_ShouldNormalizeStartAndCompletion()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(new StepDefinition { Id = "s1", Type = "llm_call" }));
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = "  run-trim  ", Input = "start" }),
+            ctx,
+            CancellationToken.None);
+
+        var request = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        request.RunId.Should().Be("run-trim");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = "run-trim",
+                Success = true,
+                Output = "done",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        completed.RunId.Should().Be("run-trim");
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("done");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenStepFails_ShouldPublishWorkflowFailure()
     {
         var module = new WorkflowLoopModule();
@@ -546,9 +579,16 @@ public sealed class WorkflowLoopModuleCoverageTests
             TimeoutMs = 1,
         }));
         var ctx = CreateContext();
+        var timeoutFired = new TaskCompletionSource<WorkflowStepTimeoutFiredEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
         var timeoutPublished = new TaskCompletionSource<StepCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
         ctx.OnPublish = (evt, _) =>
         {
+            if (evt is WorkflowStepTimeoutFiredEvent fired &&
+                fired.StepId == "s1")
+            {
+                timeoutFired.TrySetResult(fired);
+            }
+
             if (evt is StepCompletedEvent completed &&
                 completed.StepId == "s1" &&
                 !completed.Success &&
@@ -563,12 +603,15 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
+        var timeoutFiredEvent = await timeoutFired.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await module.HandleAsync(Envelope(timeoutFiredEvent), ctx, CancellationToken.None);
+
         var timeoutEvent = await timeoutPublished.Task.WaitAsync(TimeSpan.FromSeconds(2));
         timeoutEvent.Error.Should().Contain("TIMEOUT");
     }
 
     [Fact]
-    public async Task HandleAsync_WhenRetryUsesExponentialDelay_ShouldRetryWithEmptyOutput()
+    public async Task HandleAsync_WhenRetryUsesExponentialDelay_ShouldRetryWithOriginalInput()
     {
         var module = new WorkflowLoopModule();
         module.SetWorkflow(BuildWorkflow(new StepDefinition
@@ -598,7 +641,7 @@ public sealed class WorkflowLoopModuleCoverageTests
 
         var retry = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
         retry.StepId.Should().Be("s1");
-        retry.Input.Should().BeEmpty();
+        retry.Input.Should().Be("start");
     }
 
     [Fact]

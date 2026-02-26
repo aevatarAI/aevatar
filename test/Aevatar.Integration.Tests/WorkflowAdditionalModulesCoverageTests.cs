@@ -263,6 +263,82 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task WaitSignalModule_WhenSameRunAndSignalHasMultipleWaiters_ShouldRequireStepIdToDisambiguate()
+    {
+        var module = new WaitSignalModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-a",
+                StepType = "wait_signal",
+                RunId = "run-shared",
+                Input = "fallback-a",
+                Parameters = { ["signal_name"] = "approval" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-b",
+                StepType = "wait_signal",
+                RunId = "run-shared",
+                Input = "fallback-b",
+                Parameters = { ["signal_name"] = "approval" },
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new SignalReceivedEvent
+            {
+                SignalName = "approval",
+                RunId = "run-shared",
+                Payload = "ambiguous",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new SignalReceivedEvent
+            {
+                SignalName = "approval",
+                RunId = "run-shared",
+                StepId = "wait-b",
+                Payload = "resolved-b",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var resumedB = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        resumedB.StepId.Should().Be("wait-b");
+        resumedB.RunId.Should().Be("run-shared");
+        resumedB.Output.Should().Be("resolved-b");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new SignalReceivedEvent
+            {
+                SignalName = "approval",
+                RunId = "run-shared",
+                StepId = "wait-a",
+                Payload = "",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var resumedA = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        resumedA.StepId.Should().Be("wait-a");
+        resumedA.RunId.Should().Be("run-shared");
+        resumedA.Output.Should().Be("fallback-a");
+    }
+
+    [Fact]
     public async Task CacheModule_ShouldDispatchOnMissJoinPendingAndHitOnReadyValue()
     {
         var module = new CacheModule();
