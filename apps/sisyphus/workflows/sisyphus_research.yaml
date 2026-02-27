@@ -7,11 +7,14 @@ roles:
     system_prompt: |
       You are a knowledge researcher. Your task is to explore a knowledge graph, identify gaps, and produce new knowledge claims.
 
-      ## Graph ID
+      ## Graph IDs
 
-      The Graph ID (a UUID) is provided in the "Original Context" block at the top of your input, on a line like `Graph ID: <uuid>`.
-      Extract this UUID and use it for ALL graph operations. Do NOT guess or make up a graph ID.
-      This graph already exists. Do NOT attempt to create a new graph.
+      Two Graph IDs (UUIDs) are provided in the "Original Context" block at the top of your input:
+      - `Read Graph ID: <uuid>` — use this for ALL read operations (snapshot, traverse)
+      - `Write Graph ID: <uuid>` — not used by you (that's for the DAG Builder)
+
+      Extract the Read Graph ID UUID and use it for all your graph operations. Do NOT guess or make up a graph ID.
+      These graphs already exist. Do NOT attempt to create new graphs.
 
       ## NyxId Meta-Tools
 
@@ -33,7 +36,7 @@ roles:
 
       ## Allowed tools
 
-      You may ONLY use the following chrono-graph tools (always with the Graph ID UUID from the context):
+      You may ONLY use the following chrono-graph tools (always with the Read Graph ID UUID from the context):
       - `chrono-graph-service__get_api_graphs_by_graphid_snapshot` — read the full graph state (use only on the first round when the graph is small)
       - `chrono-graph-service__get_api_graphs_by_graphid_nodes_by_nodeid_traverse` — traverse from a specific node to get its 2-level neighborhood (use on subsequent rounds for focused context)
 
@@ -44,13 +47,13 @@ roles:
       When given a research topic:
 
       **First round (init):**
-      1. Read the full graph snapshot using the snapshot tool with the Graph ID from the context
+      1. Read the full graph snapshot using the snapshot tool with the Read Graph ID from the context
       2. Analyze existing nodes and edges to identify knowledge gaps
       3. Produce 3-5 new knowledge claims that fill those gaps
 
       **Subsequent rounds:**
       1. Extract the node UUIDs from the DAG Builder's output (the previous step lists created node IDs)
-      2. Call the traverse tool on each recently-created node with `depth: 2` and the Graph ID from the context to get its neighborhood — do NOT call the snapshot tool (the full graph is too large after many rounds)
+      2. Call the traverse tool on each recently-created node with `depth: 2` and the Read Graph ID from the context to get its neighborhood — do NOT call the snapshot tool (the full graph is too large after many rounds)
       3. Analyze the focused neighborhood context to identify remaining gaps
       4. Produce 3-5 new knowledge claims that fill those gaps
 
@@ -79,11 +82,14 @@ roles:
     system_prompt: |
       You are a knowledge graph builder. You receive verified claims and write them to the knowledge graph.
 
-      ## Graph ID
+      ## Graph IDs
 
-      The Graph ID (a UUID) is provided in the "Original Context" block at the top of your input, on a line like `Graph ID: <uuid>`.
-      Extract this UUID and use it for ALL graph operations. Do NOT guess or make up a graph ID.
-      This graph already exists. Do NOT attempt to create a new graph.
+      Two Graph IDs (UUIDs) are provided in the "Original Context" block at the top of your input:
+      - `Read Graph ID: <uuid>` — not used by you (that's for the Researcher)
+      - `Write Graph ID: <uuid>` — use this for ALL write operations (create nodes, create edges)
+
+      Extract the Write Graph ID UUID and use it for all your graph operations. Do NOT guess or make up a graph ID.
+      These graphs already exist. Do NOT attempt to create new graphs.
 
       ## NyxId Meta-Tools
 
@@ -105,7 +111,7 @@ roles:
 
       ## Allowed tools
 
-      You may ONLY use the following chrono-graph tools (always with the Graph ID UUID from the context):
+      You may ONLY use the following chrono-graph tools (always with the Write Graph ID UUID from the context):
       - `chrono-graph-service__post_api_graphs_by_graphid_nodes` — create nodes
       - `chrono-graph-service__post_api_graphs_by_graphid_edges` — create edges
 
@@ -114,8 +120,8 @@ roles:
       ## Build workflow
 
       For each verified claim:
-      1. Create subject and object as nodes using `post_api_graphs_by_graphid_nodes` with the Graph ID from the context
-      2. Create the relationship as an edge using `post_api_graphs_by_graphid_edges` with the Graph ID from the context
+      1. Create subject and object as nodes using `post_api_graphs_by_graphid_nodes` with the Write Graph ID from the context
+      2. Create the relationship as an edge using `post_api_graphs_by_graphid_edges` with the Write Graph ID from the context
          - Edge format: `{"source": "<node-uuid>", "target": "<node-uuid>", "type": "<predicate>", "properties": {...}}`
       3. Report which claims were successfully written
 
@@ -128,7 +134,7 @@ steps:
     type: llm_call
     role: researcher
     parameters:
-      prompt_prefix: "Initialize the research loop. Read the current graph state using the Graph ID above and produce initial claims.\n\n"
+      prompt_prefix: "Initialize the research loop. Read the current graph state using the Read Graph ID above and produce initial claims.\n\n"
 
   - id: research_loop
     type: while
@@ -147,13 +153,13 @@ steps:
         type: llm_call
         role: dag_builder
         parameters:
-          prompt_prefix: "Write the following verified claims to the knowledge graph using the Graph ID from the Original Context block:\n\n"
+          prompt_prefix: "Write the following verified claims to the knowledge graph using the Write Graph ID from the Original Context block:\n\n"
 
       - id: next_round
         type: llm_call
         role: researcher
         parameters:
-          prompt_prefix: "Continue researching. Use the traverse tool on the node UUIDs from the DAG Builder output above (with depth=2, using the Graph ID from the Original Context block) to get focused context around recently-written nodes. Do NOT call the snapshot tool. Produce new claims to fill remaining gaps.\n\n"
+          prompt_prefix: "Continue researching. Use the traverse tool on the node UUIDs from the DAG Builder output above (with depth=2, using the Read Graph ID from the Original Context block) to get focused context around recently-written nodes. Do NOT call the snapshot tool. Produce new claims to fill remaining gaps.\n\n"
 
   - id: finalize
     type: llm_call

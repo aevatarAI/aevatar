@@ -1,59 +1,42 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Sisyphus.Application.Services;
 
 /// <summary>
-/// On startup, resolves the "sisyphus" graph UUID from ChronoGraph.
-/// If the graph doesn't exist yet, creates it once. Stores the UUID in
-/// <see cref="GraphIdProvider"/> so the rest of the app can use it.
+/// On startup, reads the configured graph UUIDs and stores them in
+/// <see cref="GraphIdProvider"/> so the rest of the app can use them.
 /// </summary>
 public sealed class GraphBootstrapService(
-    ChronoGraphClient chronoGraph,
     GraphIdProvider graphIdProvider,
+    IOptions<SisyphusGraphOptions> graphOptions,
     ILogger<GraphBootstrapService> logger) : BackgroundService
 {
-    private const int MaxRetries = 10;
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        for (var attempt = 1; attempt <= MaxRetries; attempt++)
+        var opts = graphOptions.Value;
+
+        if (string.IsNullOrWhiteSpace(opts.ReadGraphId))
         {
-            try
-            {
-                // Try to find an existing graph named "sisyphus"
-                var graphId = await chronoGraph.FindGraphIdByNameAsync(
-                    GraphIdProvider.GraphName, stoppingToken);
-
-                if (graphId is not null)
-                {
-                    graphIdProvider.Set(graphId);
-                    logger.LogInformation(
-                        "Graph '{Name}' found with id {Id}", GraphIdProvider.GraphName, graphId);
-                    return;
-                }
-
-                // Doesn't exist yet — create it
-                graphId = await chronoGraph.CreateGraphAsync(
-                    GraphIdProvider.GraphName, stoppingToken);
-
-                graphIdProvider.Set(graphId);
-                logger.LogInformation(
-                    "Graph '{Name}' created with id {Id}", GraphIdProvider.GraphName, graphId);
-                return;
-            }
-            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
-            {
-                var delay = TimeSpan.FromSeconds(Math.Min(attempt * 2, 30));
-                logger.LogWarning(ex,
-                    "ChronoGraph not reachable (attempt {Attempt}/{Max}), retrying in {Delay}s",
-                    attempt, MaxRetries, delay.TotalSeconds);
-                await Task.Delay(delay, stoppingToken);
-            }
+            logger.LogError("Sisyphus:Graph:ReadGraphId is not configured — read operations will fail");
+        }
+        else
+        {
+            logger.LogInformation("Graph [read] configured: {Id}", opts.ReadGraphId);
+            graphIdProvider.SetRead(opts.ReadGraphId);
         }
 
-        logger.LogError(
-            "Could not resolve graph '{Name}' after {Max} attempts — graph operations will fail",
-            GraphIdProvider.GraphName, MaxRetries);
+        if (string.IsNullOrWhiteSpace(opts.WriteGraphId))
+        {
+            logger.LogError("Sisyphus:Graph:WriteGraphId is not configured — write operations will fail");
+        }
+        else
+        {
+            logger.LogInformation("Graph [write] configured: {Id}", opts.WriteGraphId);
+            graphIdProvider.SetWrite(opts.WriteGraphId);
+        }
+
+        return Task.CompletedTask;
     }
 }

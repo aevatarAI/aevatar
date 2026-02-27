@@ -1,29 +1,59 @@
 namespace Sisyphus.Application.Services;
 
 /// <summary>
-/// Holds the resolved chrono-graph UUID for the "sisyphus" graph.
+/// Holds the resolved chrono-graph UUIDs for read and write operations.
 /// Populated by <see cref="GraphBootstrapService"/> on startup.
 /// </summary>
 public sealed class GraphIdProvider
 {
-    public const string GraphName = "sisyphus";
+    private readonly TaskCompletionSource<string> _readReady = new();
+    private readonly TaskCompletionSource<string> _writeReady = new();
 
-    private readonly TaskCompletionSource<string> _ready = new();
+    /// <summary>Resolved UUID for read operations (snapshot, traverse).</summary>
+    public string? ReadGraphId { get; private set; }
 
-    /// <summary>The resolved UUID. Only available after bootstrap completes.</summary>
-    public string? GraphId { get; private set; }
+    /// <summary>Resolved UUID for write operations (create nodes/edges).</summary>
+    public string? WriteGraphId { get; private set; }
 
-    /// <summary>Sets the resolved graph UUID. Called once by the bootstrap service.</summary>
-    public void Set(string graphId)
+    /// <summary>Sets the resolved read graph UUID.</summary>
+    public void SetRead(string graphId)
     {
-        GraphId = graphId;
-        _ready.TrySetResult(graphId);
+        ReadGraphId = graphId;
+        _readReady.TrySetResult(graphId);
     }
 
-    /// <summary>Waits until the graph UUID is resolved. Throws if bootstrap failed.</summary>
-    public Task<string> WaitAsync(CancellationToken ct = default)
+    /// <summary>Sets the resolved write graph UUID.</summary>
+    public void SetWrite(string graphId)
     {
-        ct.Register(() => _ready.TrySetCanceled());
-        return _ready.Task;
+        WriteGraphId = graphId;
+        _writeReady.TrySetResult(graphId);
+    }
+
+    /// <summary>Waits until the read graph UUID is resolved.</summary>
+    public Task<string> WaitReadAsync(CancellationToken ct = default)
+    {
+        var tcs = new TaskCompletionSource<string>();
+        ct.Register(() => tcs.TrySetCanceled());
+        _readReady.Task.ContinueWith(t =>
+        {
+            if (t.IsCompletedSuccessfully) tcs.TrySetResult(t.Result);
+            else if (t.IsFaulted) tcs.TrySetException(t.Exception!.InnerExceptions);
+            else tcs.TrySetCanceled();
+        }, TaskScheduler.Default);
+        return tcs.Task;
+    }
+
+    /// <summary>Waits until the write graph UUID is resolved.</summary>
+    public Task<string> WaitWriteAsync(CancellationToken ct = default)
+    {
+        var tcs = new TaskCompletionSource<string>();
+        ct.Register(() => tcs.TrySetCanceled());
+        _writeReady.Task.ContinueWith(t =>
+        {
+            if (t.IsCompletedSuccessfully) tcs.TrySetResult(t.Result);
+            else if (t.IsFaulted) tcs.TrySetException(t.Exception!.InnerExceptions);
+            else tcs.TrySetCanceled();
+        }, TaskScheduler.Default);
+        return tcs.Task;
     }
 }
