@@ -6,6 +6,7 @@ import { useResearchStream } from './hooks/use-research-stream'
 import YamlViewer from './components/YamlViewer'
 import ResearchStream from './components/ResearchStream'
 import InputBar from './components/InputBar'
+import GraphView from './components/GraphView'
 import aevatarLogo from './assets/aevatar_ai_logo.svg'
 
 export default function App() {
@@ -17,6 +18,8 @@ export default function App() {
   const [leftPanelWidth, setLeftPanelWidth] = useState(35) // percentage
   const draggingRef = useRef(false)
   const containerRef = useRef<HTMLElement>(null)
+
+  const [activeTab, setActiveTab] = useState<'research' | 'graph'>('research')
 
   const { messages, toolCalls, timeline, runStatus, currentStep, error, iterationCount, startRun, stopRun } = useResearchStream()
 
@@ -163,24 +166,52 @@ export default function App() {
             onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
           />
         </div>
-        {/* Research stream panel + input */}
+        {/* Right panel with tabs */}
         <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-          <ResearchStream
-            messages={messages}
-            toolCalls={toolCalls}
-            timeline={timeline}
-            runStatus={runStatus}
-            currentStep={currentStep}
-            error={error}
-            iterationCount={iterationCount}
-          />
-          <div className="divider-h" />
-          <InputBar
-            runStatus={runStatus}
-            onRun={handleRun}
-            onStop={stopRun}
-            selectedWorkflow={selectedWorkflow ?? undefined}
-          />
+          {/* Tab bar */}
+          <div className="flex shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+            {(['research', 'graph'] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider transition-colors relative"
+                style={{
+                  color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-dimmed)',
+                }}
+              >
+                {tab}
+                {activeTab === tab && (
+                  <div
+                    className="absolute bottom-0 left-0 right-0 h-[2px]"
+                    style={{ background: 'var(--text-primary)' }}
+                  />
+                )}
+              </button>
+            ))}
+          </div>
+          {/* Tab content */}
+          {activeTab === 'research' ? (
+            <>
+              <ResearchStream
+                messages={messages}
+                toolCalls={toolCalls}
+                timeline={timeline}
+                runStatus={runStatus}
+                currentStep={currentStep}
+                error={error}
+                iterationCount={iterationCount}
+              />
+              <div className="divider-h" />
+              <InputBar
+                runStatus={runStatus}
+                onRun={handleRun}
+                onStop={stopRun}
+                selectedWorkflow={selectedWorkflow ?? undefined}
+              />
+            </>
+          ) : (
+            <GraphView runStatus={runStatus} />
+          )}
         </div>
       </main>
     </div>
