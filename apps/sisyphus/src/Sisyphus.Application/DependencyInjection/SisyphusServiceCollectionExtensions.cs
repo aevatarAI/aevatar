@@ -13,6 +13,7 @@ public static class SisyphusServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         builder.Services.Configure<SisyphusGraphOptions>(builder.Configuration.GetSection(SisyphusGraphOptions.SectionName));
+        builder.Services.Configure<ChronoGraphOptions>(builder.Configuration.GetSection(ChronoGraphOptions.SectionName));
 
         return builder.AddAevatarCapability(
             name: "sisyphus",
@@ -22,7 +23,9 @@ public static class SisyphusServiceCollectionExtensions
                 services.AddSingleton<SessionLifecycleService>();
                 services.AddSingleton<WorkflowTriggerService>();
                 services.AddHostedService<GraphBootstrapService>();
+                services.AddSingleton<NyxIdTokenService>();
+                services.AddHttpClient<ChronoGraphProxyService>();
             },
-            mapEndpoints: app => app.MapSessionEndpoints());
+            mapEndpoints: app => app.MapSessionEndpoints().MapGraphEndpoints());
     }
 }
