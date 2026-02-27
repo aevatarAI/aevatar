@@ -30,6 +30,8 @@ services:
       - NYXID_AUTH_TOKEN_URL=${NYXID_AUTH_TOKEN_URL}
       - NYXID_SA_CLIENT_ID=${NYXID_SA_CLIENT_ID}
       - NYXID_SA_CLIENT_SECRET=${NYXID_SA_CLIENT_SECRET}
+      # ChronoGraph proxy base URL
+      - Sisyphus__ChronoGraph__BaseUrl=${CHRONOGRAPH_BASE_URL}
 
   frontend:
     build:
@@ -37,4 +39,4 @@ services:
     depends_on:
       - sisyphus-host
     ports:
-      - "5174:80"
+      - "5175:80"
