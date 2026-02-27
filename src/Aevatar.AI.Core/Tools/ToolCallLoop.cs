@@ -53,6 +53,14 @@ public sealed class ToolCallLoop
     /// </summary>
     public int MaxContextChars { get; set; } = 400_000;
 
+    /// <summary>
+    /// Maximum character count for a single tool result. Results exceeding this
+    /// limit are truncated with a notice. Prevents a single large tool response
+    /// (e.g. a full graph snapshot) from blowing the context window.
+    /// ~200K chars ≈ ~50K tokens — leaves room for system prompt, history, etc.
+    /// </summary>
+    public int MaxToolResultChars { get; set; } = 200_000;
+
     public async Task<string?> ExecuteAsync(
         ILLMProvider provider, List<ChatMessage> messages,
         LLMRequest baseRequest, int maxRounds,
@@ -136,6 +144,15 @@ public sealed class ToolCallLoop
                 });
 
                 var toolResult = toolCallContext.Result ?? $"Tool '{toolCallContext.ToolName}' returned no result";
+
+                // Truncate oversized tool results to prevent context-window overflow
+                if (!toolCallContext.Terminate && toolResult.Length > MaxToolResultChars)
+                {
+                    toolResult = string.Concat(
+                        toolResult.AsSpan(0, MaxToolResultChars),
+                        $"\n\n[TRUNCATED — tool result was {toolResult.Length:N0} chars, limit is {MaxToolResultChars:N0}]");
+                }
+
                 if (toolCallContext.Terminate)
                     messages.Add(ChatMessage.Tool(call.Id, toolCallContext.Result ?? "Tool call terminated by middleware"));
                 else

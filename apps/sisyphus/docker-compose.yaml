@@ -20,12 +20,9 @@ services:
       - ActorRuntime__Provider=Orleans
       - ActorRuntime__OrleansPersistenceBackend=Garnet
       - ActorRuntime__OrleansGarnetConnectionString=garnet:6379
-      # NyxId (Session Manager REST proxy + MCP connector shared credentials)
-      - NyxId__BaseUrl=${NYXID_BASE_URL}
-      - NyxId__TokenUrl=${NYXID_AUTH_TOKEN_URL}
-      - NyxId__ClientId=${NYXID_SA_CLIENT_ID}
-      - NyxId__ClientSecret=${NYXID_SA_CLIENT_SECRET}
-      - NyxId__ChronoGraphServiceId=${NYXID_CHRONO_GRAPH_SERVICE_ID}
+      # Graph UUIDs for read/write operations
+      - Sisyphus__Graph__ReadGraphId=${SISYPHUS_READ_GRAPH_ID}
+      - Sisyphus__Graph__WriteGraphId=${SISYPHUS_WRITE_GRAPH_ID}
       # DeepSeek LLM
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       # MCP connector env vars (consumed by connectors.json ${} placeholders)

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Activity, ChevronDown } from 'lucide-react'
 import clsx from 'clsx'
-import { fetchGraphId, fetchWorkflows, fetchWorkflowYaml } from './api'
+import { fetchWorkflows, fetchWorkflowYaml } from './api'
 import { useResearchStream } from './hooks/use-research-stream'
 import YamlViewer from './components/YamlViewer'
 import ResearchStream from './components/ResearchStream'
@@ -14,7 +14,6 @@ export default function App() {
   const [workflowYaml, setWorkflowYaml] = useState<string | null>(null)
   const [yamlLoading, setYamlLoading] = useState(false)
   const [dropdownOpen, setDropdownOpen] = useState(false)
-  const [graphId, setGraphId] = useState<string | null>(null)
   const [leftPanelWidth, setLeftPanelWidth] = useState(35) // percentage
   const draggingRef = useRef(false)
   const containerRef = useRef<HTMLElement>(null)
@@ -49,13 +48,6 @@ export default function App() {
     }
   }, [])
 
-  // Resolve graph UUID on mount
-  useEffect(() => {
-    fetchGraphId()
-      .then((id) => setGraphId(id))
-      .catch(console.error)
-  }, [])
-
   // Load workflows on mount
   useEffect(() => {
     fetchWorkflows()
@@ -77,8 +69,7 @@ export default function App() {
   }, [selectedWorkflow])
 
   const handleRun = (topic: string, maxIterations: number) => {
-    if (!graphId) return
-    const prompt = `Research Topic: ${topic}\nGraph ID: ${graphId}\nMax Rounds: ${maxIterations}`
+    const prompt = `Research Topic: ${topic}\nMax Rounds: ${maxIterations}`
     startRun(prompt, selectedWorkflow ?? undefined)
   }
 

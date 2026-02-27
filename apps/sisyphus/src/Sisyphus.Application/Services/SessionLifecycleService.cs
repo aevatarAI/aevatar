@@ -10,13 +10,15 @@ public sealed class SessionLifecycleService(GraphIdProvider graphIdProvider)
     public async Task<ResearchSession> CreateSessionAsync(
         string topic, int maxRounds = 20, CancellationToken ct = default)
     {
-        var graphId = await graphIdProvider.WaitAsync(ct);
+        var readGraphId = await graphIdProvider.WaitReadAsync(ct);
+        var writeGraphId = await graphIdProvider.WaitWriteAsync(ct);
 
         var session = new ResearchSession
         {
             Topic = topic,
             MaxRounds = maxRounds,
-            GraphId = graphId,
+            ReadGraphId = readGraphId,
+            WriteGraphId = writeGraphId,
         };
 
         _sessions[session.Id] = session;

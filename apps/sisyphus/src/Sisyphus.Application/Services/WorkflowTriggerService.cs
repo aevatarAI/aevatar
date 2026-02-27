@@ -12,14 +12,16 @@ public sealed class WorkflowTriggerService(
         Func<WorkflowOutputFrame, CancellationToken, ValueTask>? emitAsync = null,
         CancellationToken ct = default)
     {
-        var graphId = await graphIdProvider.WaitAsync(ct);
+        var readGraphId = await graphIdProvider.WaitReadAsync(ct);
+        var writeGraphId = await graphIdProvider.WaitWriteAsync(ct);
 
         var prompt = $"""
             Research Topic: {session.Topic}
-            Graph ID: {graphId}
+            Read Graph ID: {readGraphId}
+            Write Graph ID: {writeGraphId}
             Max Rounds: {session.MaxRounds}
 
-            Begin the research loop. Read the current graph state, identify knowledge gaps, produce claims, verify them, and write verified claims back to the graph.
+            Begin the research loop. Read the current graph state using the Read Graph ID, identify knowledge gaps, produce claims, verify them, and write verified claims to the Write Graph ID.
             """;
 
         var result = await workflowRunService.ExecuteAsync(

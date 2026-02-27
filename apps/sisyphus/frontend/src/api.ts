@@ -1,12 +1,5 @@
 import type { SSEEvent } from './types'
 
-export async function fetchGraphId(): Promise<string> {
-  const res = await fetch('/api/graph-id')
-  if (!res.ok) throw new Error(`Failed to fetch graph ID: ${res.status}`)
-  const data = await res.json()
-  return data.graphId
-}
-
 export async function fetchWorkflows(): Promise<string[]> {
   const res = await fetch('/api/workflows')
   if (!res.ok) throw new Error(`Failed to fetch workflows: ${res.status}`)
@@ -30,7 +23,7 @@ export function startResearchStream(
   onError: (error: Error) => void,
   signal?: AbortSignal,
 ): void {
-  fetch('/api/chat', {
+  fetch('/api/research', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
