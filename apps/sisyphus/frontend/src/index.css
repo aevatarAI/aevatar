@@ -419,6 +419,26 @@
     background: linear-gradient(90deg, rgba(255,255,255,0.02) 0%, transparent 100%);
     pointer-events: none;
   }
+
+  /* === Graph Grid Background === */
+  .graph-grid-bg {
+    background-image: radial-gradient(circle, var(--border-subtle) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  /* === Slide-in Panel === */
+  .animate-slide-in {
+    animation: slide-in-right 0.2s ease-out;
+  }
+
+  @keyframes slide-in-right {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
 }
 
 @layer utilities {
