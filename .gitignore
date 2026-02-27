@@ -290,6 +290,7 @@ FakesAssemblies/
 # Node.js Tools for Visual Studio
 .ntvs_analysis.dat
 node_modules/
+dist/
 
 # Visual Studio 6 build log
 *.plg
@@ -489,3 +490,4 @@ scripts/.pids/
 *.db
 docs/agents-working-space/*
 .tools/*
+.gitnexus
