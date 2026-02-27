@@ -5,6 +5,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 using Sisyphus.Application.Models;
 using Sisyphus.Application.Services;
 
@@ -171,15 +172,35 @@ public static class SessionEndpoints
     private static IResult HandleRunSession(
         Guid id,
         SessionLifecycleService lifecycle,
-        WorkflowTriggerService trigger)
+        WorkflowTriggerService trigger,
+        ILogger<WorkflowTriggerService> logger)
     {
         var session = lifecycle.GetSession(id);
         if (session is null) return Results.NotFound();
         if (!lifecycle.TryStartSession(id))
             return Results.Conflict(new { code = "ALREADY_RUNNING", message = "Session is already running." });
 
-        _ = trigger.TriggerAsync(session, ct: CancellationToken.None);
+        // P1-2: Observe the background task so exceptions are logged
+        // and the session converges to a terminal state instead of staying Running.
+        _ = RunTriggerWithFallbackAsync(trigger, session, logger);
         return Results.Accepted($"/api/v2/sessions/{id}", new { status = "running", session.Id });
+    }
+
+    private static async Task RunTriggerWithFallbackAsync(
+        WorkflowTriggerService trigger,
+        ResearchSession session,
+        ILogger logger)
+    {
+        try
+        {
+            await trigger.TriggerAsync(session, ct: CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Session {SessionId} workflow trigger failed — converging to Failed", session.Id);
+            session.Status = SessionStatus.Failed;
+            session.CompletedAt = DateTime.UtcNow;
+        }
     }
 }
 
