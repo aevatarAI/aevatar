@@ -166,6 +166,7 @@ public sealed class ToolCallLoop
 
         // maxRounds exhausted — tool results from the last round are already in messages.
         // Make one final LLM call WITHOUT tools so the model must produce a text response.
+        // P2-2: Route through the same hook/middleware pipeline as loop iterations.
         TrimMessagesIfOverLimit(messages, MaxContextChars);
         var finalRequest = new LLMRequest
         {
