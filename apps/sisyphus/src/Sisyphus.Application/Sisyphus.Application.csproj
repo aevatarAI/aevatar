@@ -13,4 +13,7 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Sisyphus.Application.Tests" />
+  </ItemGroup>
 </Project>

@@ -140,6 +140,8 @@ steps:
     type: while
     role: researcher
     parameters:
+      # Default max_iterations — overridden at runtime by session.MaxRounds
+      # via WorkflowTriggerService.PatchMaxIterations when launched through /api/v2/sessions/{id}/run.
       max_iterations: "20"
       step: llm_call
     children:
