@@ -153,6 +153,23 @@ public class LocalActorRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ChildBothEvent_ShouldReachParentMailbox()
+    {
+        var parent = await _runtime.CreateAsync<CollectorAgent>("parent-1");
+        var child = await _runtime.CreateAsync<CollectorAgent>("child-1");
+        await _runtime.LinkAsync(parent.Id, child.Id);
+
+        await ((GAgentBase)child.Agent).EventPublisher.PublishAsync(
+            new PingEvent { Message = "child-both" },
+            EventDirection.Both,
+            CancellationToken.None);
+
+        var parentCollector = (CollectorAgent)parent.Agent;
+        await parentCollector.WaitForMessageCountAsync(1, TimeSpan.FromSeconds(2));
+        parentCollector.ReceivedMessages.Should().Contain("child-both");
+    }
+
+    [Fact]
     public async Task TransitOnlyBinding_ShouldSkipIntermediateActorHandling_AndKeepTransitToLeaf()
     {
         var root = await _runtime.CreateAsync<EchoAgent>("root-t");

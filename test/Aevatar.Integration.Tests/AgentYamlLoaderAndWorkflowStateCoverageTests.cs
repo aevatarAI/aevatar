@@ -68,6 +68,22 @@ public class AgentYamlLoaderAndWorkflowStateCoverageTests
             SuccessfulExecutions = 8,
             FailedExecutions = 2,
         };
+        state.SubWorkflowBindings.Add(new WorkflowState.Types.SubWorkflowBinding
+        {
+            WorkflowName = "sub_flow",
+            ChildActorId = "actor-sub",
+            Lifecycle = "singleton",
+        });
+        state.PendingSubWorkflowInvocations.Add(new WorkflowState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-1",
+            ParentRunId = "run-parent",
+            ParentStepId = "step-a",
+            WorkflowName = "sub_flow",
+            ChildActorId = "actor-sub",
+            ChildRunId = "run-child",
+            Lifecycle = "singleton",
+        });
 
         var clone = state.Clone();
         clone.Should().BeEquivalentTo(state);
@@ -81,6 +97,8 @@ public class AgentYamlLoaderAndWorkflowStateCoverageTests
         parsed.TotalExecutions.Should().Be(10);
         parsed.SuccessfulExecutions.Should().Be(8);
         parsed.FailedExecutions.Should().Be(2);
+        parsed.SubWorkflowBindings.Should().ContainSingle();
+        parsed.PendingSubWorkflowInvocations.Should().ContainSingle();
 
         WorkflowStateReflection.Descriptor.Should().NotBeNull();
         WorkflowStateReflection.Descriptor.MessageTypes.Should().ContainSingle(x => x.Name == nameof(WorkflowState));
@@ -120,6 +138,22 @@ public class AgentYamlLoaderAndWorkflowStateCoverageTests
             SuccessfulExecutions = 2,
             FailedExecutions = 1,
         };
+        full.SubWorkflowBindings.Add(new WorkflowState.Types.SubWorkflowBinding
+        {
+            WorkflowName = "sub_flow",
+            ChildActorId = "actor-sub",
+            Lifecycle = "singleton",
+        });
+        full.PendingSubWorkflowInvocations.Add(new WorkflowState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-2",
+            ParentRunId = "run-parent",
+            ParentStepId = "step-b",
+            WorkflowName = "sub_flow",
+            ChildActorId = "actor-sub",
+            ChildRunId = "run-child",
+            Lifecycle = "singleton",
+        });
 
         var merged = new WorkflowState();
         merged.MergeFrom(full);

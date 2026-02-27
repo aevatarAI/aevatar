@@ -26,10 +26,13 @@ using Aevatar.Workflow.Core;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Application.Workflows;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Aevatar.Workflow.Infrastructure.Workflows;
 
 // ─── Deterministic demo inputs (no LLM needed) ───
 
@@ -99,12 +102,20 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
     ["15_reflect"] = "Write a concise explanation of the CAP theorem suitable for a junior developer.",
 
     ["16_cache"] = "What is the difference between SQL and NoSQL databases?",
+
+    ["48_workflow_call_multilevel"] = """
+          apple  
+        banana
+          apple
+        carrot  
+        """,
 };
 
 var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
     "01_transform", "02_guard", "03_conditional", "04_switch",
     "05_assign", "06_retrieve_facts", "07_pipeline",
+    "48_workflow_call_multilevel",
 };
 
 // ─── Parse CLI ───
@@ -225,6 +236,28 @@ if (needsLlm)
     }
 }
 
+var workflowRootCandidates = new[]
+{
+    Path.Combine(AppContext.BaseDirectory, "workflows"),
+    Path.Combine(Directory.GetCurrentDirectory(), "workflows"),
+};
+var workflowRoot = workflowRootCandidates.FirstOrDefault(Directory.Exists) ?? workflowRootCandidates[0];
+var workflowDefinitions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+if (Directory.Exists(workflowRoot))
+{
+    foreach (var pattern in new[] { "*.yaml", "*.yml" })
+    {
+        foreach (var workflowPath in Directory.EnumerateFiles(workflowRoot, pattern, SearchOption.AllDirectories))
+        {
+            var workflowKey = Path.GetFileNameWithoutExtension(workflowPath);
+            workflowDefinitions[workflowKey] = File.ReadAllText(workflowPath);
+        }
+    }
+}
+var workflowRegistry = new WorkflowDefinitionRegistry();
+foreach (var (workflowName, workflowYaml) in workflowDefinitions)
+    workflowRegistry.Register(workflowName, workflowYaml);
+
 // ─── Build services ───
 
 var services = new ServiceCollection();
@@ -233,6 +266,8 @@ services.AddAevatarRuntime();
 services.AddAevatarConfig();
 services.AddAevatarWorkflow();
 services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+services.AddSingleton<IWorkflowDefinitionRegistry>(workflowRegistry);
+services.AddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
 
 if (needsLlm && !string.IsNullOrEmpty(apiKey))
 {
@@ -266,17 +301,11 @@ foreach (var workflowName in workflowsToRun)
     Console.WriteLine($"║  Demo: {workflowName,-49}║");
     Console.WriteLine($"╚══════════════════════════════════════════════════════════╝");
 
-    var yamlPath = Path.Combine(AppContext.BaseDirectory, "workflows", $"{workflowName}.yaml");
-    if (!File.Exists(yamlPath))
-        yamlPath = Path.Combine(Directory.GetCurrentDirectory(), "workflows", $"{workflowName}.yaml");
-
-    if (!File.Exists(yamlPath))
+    if (!workflowDefinitions.TryGetValue(workflowName, out var yaml))
     {
-        Console.WriteLine($"  YAML not found: {workflowName}.yaml — skipping");
+        Console.WriteLine($"  YAML not found: {workflowName}.yaml/.yml — skipping");
         continue;
     }
-
-    var yaml = File.ReadAllText(yamlPath);
     var actorId = $"demo-{workflowName}-{Guid.NewGuid():N}"[..32];
     var actor = await runtime.CreateAsync<WorkflowGAgent>(actorId);
 
@@ -314,13 +343,28 @@ foreach (var workflowName in workflowsToRun)
         if (payload.Is(WorkflowCompletedEvent.Descriptor))
         {
             var evt = payload.Unpack<WorkflowCompletedEvent>();
-            tcs.TrySetResult((evt.Success, evt.Output, evt.Error));
+            if (string.Equals(envelope.PublisherId, actor.Id, StringComparison.Ordinal))
+                tcs.TrySetResult((evt.Success, evt.Output, evt.Error));
+        }
+
+        if (payload.Is(ChatResponseEvent.Descriptor))
+        {
+            var evt = payload.Unpack<ChatResponseEvent>();
+            if (string.Equals(envelope.PublisherId, actor.Id, StringComparison.Ordinal))
+                tcs.TrySetResult((false, string.Empty, evt.Content));
         }
 
         if (payload.Is(TextMessageEndEvent.Descriptor))
         {
             var evt = payload.Unpack<TextMessageEndEvent>();
             var publisher = envelope.PublisherId ?? "";
+            if (string.Equals(publisher, actor.Id, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(evt.Content))
+            {
+                var isFailure = evt.Content.Contains("失败", StringComparison.OrdinalIgnoreCase);
+                tcs.TrySetResult((!isFailure, evt.Content, isFailure ? evt.Content : string.Empty));
+            }
+
             if (!string.Equals(publisher, actor.Id, StringComparison.Ordinal)
                 && !string.IsNullOrWhiteSpace(evt.Content))
             {

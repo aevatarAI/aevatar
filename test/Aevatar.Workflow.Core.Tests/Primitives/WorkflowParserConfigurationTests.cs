@@ -146,4 +146,209 @@ public class WorkflowParserConfigurationTests
         workflow.Steps[1].Parameters["child_step_type"].Should().Be("parallel");
         workflow.Steps[2].Type.Should().Be("vote");
     }
+
+    [Fact]
+    public void Parse_WhenParametersContainNestedObjects_ShouldSerializeToJsonString()
+    {
+        var yaml = """
+            name: nested_parameters
+            roles: []
+            steps:
+              - id: s1
+                type: transform
+                parameters:
+                  op: trim
+                  input:
+                    original_sentence: "{{steps.generate.output}}"
+                    story: "{{steps.story.output}}"
+              - id: done
+                type: assign
+                parameters:
+                  target: result
+                  value: "$input"
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var step = workflow.Steps.First(s => s.Id == "s1");
+
+        step.Parameters["op"].Should().Be("trim");
+        step.Parameters["input"].Should().Contain("\"original_sentence\"");
+        step.Parameters["input"].Should().Contain("\"story\"");
+    }
+
+    [Fact]
+    public void Parse_WhenBranchesProvidedAsList_ShouldNormalizeToDictionary()
+    {
+        var yaml = """
+            name: list_branches
+            roles: []
+            steps:
+              - id: gate
+                type: conditional
+                parameters:
+                  condition: "ready"
+                branches:
+                  - condition: "true"
+                    next: done
+                  - condition: "false"
+                    next: retry
+              - id: retry
+                type: assign
+                parameters:
+                  target: result
+                  value: "retrying"
+              - id: done
+                type: assign
+                parameters:
+                  target: result
+                  value: "ok"
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var gate = workflow.Steps.First(s => s.Id == "gate");
+
+        gate.Branches.Should().NotBeNull();
+        gate.Branches!.Should().ContainKey("true").WhoseValue.Should().Be("done");
+        gate.Branches.Should().ContainKey("false").WhoseValue.Should().Be("retry");
+    }
+
+    [Fact]
+    public void Parse_WhenParallelParametersProvidedAtStepRoot_ShouldMapToParameters()
+    {
+        var yaml = """
+            name: root_parallel_parameters
+            roles: []
+            steps:
+              - id: fanout
+                type: parallel
+                workers:
+                  - worker_a
+                  - worker_b
+                  - worker_c
+                parallel_count: 3
+                vote_step_type: vote_consensus
+              - id: done
+                type: assign
+                parameters:
+                  target: result
+                  value: ok
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var fanout = workflow.Steps.First(s => s.Id == "fanout");
+
+        fanout.Parameters.Should().ContainKey("workers");
+        fanout.Parameters["workers"].Should().Contain("worker_a");
+        fanout.Parameters.Should().ContainKey("parallel_count").WhoseValue.Should().Be("3");
+        fanout.Parameters.Should().ContainKey("vote_step_type").WhoseValue.Should().Be("vote");
+    }
+
+    [Fact]
+    public void Parse_WhenCommonPrimitiveFieldsAtRoot_ShouldLiftToParameters()
+    {
+        var yaml = """
+            name: root_primitive_fields
+            roles: []
+            steps:
+              - id: wait_root
+                type: wait_signal
+                signal_name: "approval"
+                timeout_ms: 2500
+                prompt: "wait here"
+              - id: foreach_root
+                type: foreach
+                delimiter: "\\n---\\n"
+                sub_step_type: llm_call
+                sub_target_role: helper
+              - id: call_root
+                type: workflow_call
+                workflow: demo_flow
+                lifecycle: isolate
+              - id: done
+                type: assign
+                parameters:
+                  target: result
+                  value: ok
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+
+        var wait = workflow.Steps.First(s => s.Id == "wait_root");
+        wait.Parameters["signal_name"].Should().Be("approval");
+        wait.Parameters["timeout_ms"].Should().Be("2500");
+        wait.Parameters["prompt"].Should().Be("wait here");
+        wait.TimeoutMs.Should().Be(2500);
+
+        var forEach = workflow.Steps.First(s => s.Id == "foreach_root");
+        forEach.Parameters["delimiter"].Should().Be("\\n---\\n");
+        forEach.Parameters["sub_step_type"].Should().Be("llm_call");
+        forEach.Parameters["sub_target_role"].Should().Be("helper");
+
+        var call = workflow.Steps.First(s => s.Id == "call_root");
+        call.Parameters["workflow"].Should().Be("demo_flow");
+        call.Parameters["lifecycle"].Should().Be("isolate");
+    }
+
+    [Fact]
+    public void Parse_AutoPatternYaml_ShouldProduceValidWorkflowDefinition()
+    {
+        var yaml = """
+            name: auto_pattern
+            roles:
+              - id: planner
+                system_prompt: "Decide whether input is yaml."
+              - id: assistant
+                system_prompt: "Refine yaml content."
+            steps:
+              - id: capture_input
+                type: assign
+                parameters:
+                  target: raw_input
+                  value: "$input"
+                next: classify
+              - id: classify
+                type: llm_call
+                role: planner
+                next: check_is_yaml
+              - id: check_is_yaml
+                type: conditional
+                parameters:
+                  condition: "name:"
+                branches:
+                  "true": show_for_approval
+                  "false": done
+              - id: show_for_approval
+                type: human_approval
+                parameters:
+                  prompt: "Approve YAML for execution"
+                next: refine_yaml
+              - id: refine_yaml
+                type: llm_call
+                role: assistant
+                next: extract_and_execute
+              - id: extract_and_execute
+                type: dynamic_workflow
+              - id: done
+                type: assign
+                parameters:
+                  target: result
+                  value: "$input"
+            """;
+        var parser = new WorkflowParser();
+
+        var workflow = parser.Parse(yaml);
+
+        workflow.Name.Should().Be("auto_pattern");
+        workflow.Roles.Should().HaveCount(2);
+        workflow.Roles.Should().Contain(r => r.Id == "planner");
+        workflow.Roles.Should().Contain(r => r.Id == "assistant");
+
+        workflow.Steps.Should().HaveCount(7);
+        workflow.Steps.Should().Contain(s => s.Id == "capture_input" && s.Type == "assign");
+        workflow.Steps.Should().Contain(s => s.Id == "classify" && s.Type == "llm_call");
+        workflow.Steps.Should().Contain(s => s.Id == "check_is_yaml" && s.Type == "conditional");
+        workflow.Steps.Should().Contain(s => s.Id == "show_for_approval" && s.Type == "human_approval");
+        workflow.Steps.Should().Contain(s => s.Id == "refine_yaml" && s.Type == "llm_call");
+        workflow.Steps.Should().Contain(s => s.Id == "extract_and_execute" && s.Type == "dynamic_workflow");
+    }
 }

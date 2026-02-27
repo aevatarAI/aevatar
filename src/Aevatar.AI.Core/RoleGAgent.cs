@@ -22,6 +22,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using System.Globalization;
 
 namespace Aevatar.AI.Core;
 
@@ -30,6 +31,9 @@ namespace Aevatar.AI.Core;
 /// </summary>
 public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 {
+    private const string LlmTimeoutMetadataKey = "aevatar.llm_timeout_ms";
+    private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
+
     public RoleGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
@@ -153,6 +157,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             ? request.Prompt[..200] + "..."
             : request.Prompt;
         Logger.LogInformation("[{Role}] LLM request: {Preview}", RoleName, promptPreview);
+        var timeoutMs = ResolveLlmTimeoutMs(request);
+        var useWorkflowFailureMarker = timeoutMs > 0;
+        using var timeoutCts = timeoutMs > 0 ? new CancellationTokenSource(timeoutMs) : null;
+        var streamCt = timeoutCts?.Token ?? CancellationToken.None;
 
         // ─── AG-UI: TEXT_MESSAGE_START ───
         await PublishAsync(new TextMessageStartEvent
@@ -161,50 +169,122 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             AgentId = Id,
         }, EventDirection.Up);
 
-        // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
-        var fullContent = new StringBuilder();
-        var toolCalls = new StreamingToolCallAccumulator();
-
-        await foreach (var chunk in ChatStreamAsync(request.Prompt))
+        try
         {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
+            var fullContent = new StringBuilder();
+            var fullReasoning = new StringBuilder();
+            var toolCalls = new StreamingToolCallAccumulator();
+
+            await foreach (var chunk in ChatStreamAsync(request.Prompt, streamCt))
             {
-                fullContent.Append(chunk.DeltaContent);
-                await PublishAsync(new TextMessageContentEvent
+                if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 {
-                    Delta = chunk.DeltaContent,
-                    SessionId = request.SessionId,
+                    fullContent.Append(chunk.DeltaContent);
+                    await PublishAsync(new TextMessageContentEvent
+                    {
+                        Delta = chunk.DeltaContent,
+                        SessionId = request.SessionId,
+                    }, EventDirection.Up);
+                }
+
+                if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
+                {
+                    fullReasoning.Append(chunk.DeltaReasoningContent);
+                    await PublishAsync(new TextMessageReasoningEvent
+                    {
+                        Delta = chunk.DeltaReasoningContent,
+                        SessionId = request.SessionId,
+                    }, EventDirection.Up);
+                }
+
+                if (chunk.DeltaToolCall != null)
+                    toolCalls.TrackDelta(chunk.DeltaToolCall);
+            }
+
+            foreach (var toolCall in toolCalls.BuildToolCalls())
+            {
+                await PublishAsync(new ToolCallEvent
+                {
+                    CallId = toolCall.Id,
+                    ToolName = toolCall.Name,
+                    ArgumentsJson = toolCall.ArgumentsJson,
                 }, EventDirection.Up);
             }
 
-            if (chunk.DeltaToolCall != null)
-                toolCalls.TrackDelta(chunk.DeltaToolCall);
-        }
+            var response = fullContent.ToString();
+            var responsePreview = response.Length > 300
+                ? response[..300] + "..."
+                : response;
+            Logger.LogInformation("[{Role}] LLM response ({Len} chars): {Preview}",
+                RoleName, response.Length, responsePreview);
 
-        foreach (var toolCall in toolCalls.BuildToolCalls())
-        {
-            await PublishAsync(new ToolCallEvent
+            if (fullReasoning.Length > 0)
             {
-                CallId = toolCall.Id,
-                ToolName = toolCall.Name,
-                ArgumentsJson = toolCall.ArgumentsJson,
+                var reasoning = fullReasoning.ToString();
+                var reasoningPreview = reasoning.Length > 300
+                    ? reasoning[..300] + "..."
+                    : reasoning;
+                Logger.LogInformation(
+                    "[{Role}] LLM reasoning ({Len} chars): {Preview}",
+                    RoleName,
+                    reasoning.Length,
+                    reasoningPreview);
+            }
+
+            // ─── AG-UI: TEXT_MESSAGE_END ───
+            await PublishAsync(new TextMessageEndEvent
+            {
+                Content = response,
+                SessionId = request.SessionId,
             }, EventDirection.Up);
         }
-
-        var response = fullContent.ToString();
-        var responsePreview = response.Length > 300
-            ? response[..300] + "..."
-            : response;
-        Logger.LogInformation("[{Role}] LLM response ({Len} chars): {Preview}",
-            RoleName, response.Length, responsePreview);
-
-        // ─── AG-UI: TEXT_MESSAGE_END ───
-        await PublishAsync(new TextMessageEndEvent
+        catch (OperationCanceledException) when (timeoutCts is { IsCancellationRequested: true })
         {
-            Content = response,
-            SessionId = request.SessionId,
-        }, EventDirection.Up);
+            Logger.LogWarning(
+                "[{Role}] LLM request timeout after {TimeoutMs}ms. session={SessionId}",
+                RoleName,
+                timeoutMs,
+                request.SessionId);
+            await PublishAsync(new TextMessageEndEvent
+            {
+                Content = BuildLlmFailureContent($"LLM request timed out after {timeoutMs}ms"),
+                SessionId = request.SessionId,
+            }, EventDirection.Up);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[{Role}] LLM request failed. session={SessionId}", RoleName, request.SessionId);
+            await PublishAsync(new TextMessageEndEvent
+            {
+                Content = useWorkflowFailureMarker
+                    ? BuildLlmFailureContent(ex.Message)
+                    : $"LLM request failed: {SanitizeFailureMessage(ex.Message)}",
+                SessionId = request.SessionId,
+            }, EventDirection.Up);
+        }
     }
+
+    private static int ResolveLlmTimeoutMs(ChatRequestEvent request)
+    {
+        if (request.Metadata.TryGetValue(LlmTimeoutMetadataKey, out var raw) &&
+            int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var timeoutMs) &&
+            timeoutMs > 0)
+        {
+            return timeoutMs;
+        }
+
+        return 0;
+    }
+
+    private static string BuildLlmFailureContent(string? message)
+    {
+        var safeMessage = SanitizeFailureMessage(message);
+        return $"{LlmFailureContentPrefix} {safeMessage}";
+    }
+
+    private static string SanitizeFailureMessage(string? message) =>
+        string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
 
     private static RoleGAgentState ApplyConfigureRoleAgent(
         RoleGAgentState current,

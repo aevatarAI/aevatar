@@ -39,6 +39,13 @@ public sealed class AIAbstractionsProtoCoverageTests
         }, TextMessageContentEvent.Parser);
         textContent.Delta.Should().Be("delta");
 
+        var textReasoning = RoundTrip(new TextMessageReasoningEvent
+        {
+            SessionId = "session-1",
+            Delta = "reasoning-delta",
+        }, TextMessageReasoningEvent.Parser);
+        textReasoning.Delta.Should().Be("reasoning-delta");
+
         var textEnd = RoundTrip(new TextMessageEndEvent
         {
             SessionId = "session-1",
@@ -130,6 +137,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ChatResponseEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageStartEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageContentEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageReasoningEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageEndEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolCallEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolResultEvent));
@@ -190,6 +198,10 @@ public sealed class AIAbstractionsProtoCoverageTests
         var textContent = new TextMessageContentEvent { SessionId = "s", Delta = "d" };
         textContent.MergeFrom((TextMessageContentEvent)null!);
         textContent.Equals((object?)null).Should().BeFalse();
+
+        var textReasoning = new TextMessageReasoningEvent { SessionId = "s", Delta = "r" };
+        textReasoning.MergeFrom((TextMessageReasoningEvent)null!);
+        textReasoning.Equals((object?)null).Should().BeFalse();
 
         var textEnd = new TextMessageEndEvent { SessionId = "s", Content = "e" };
         textEnd.MergeFrom((TextMessageEndEvent)null!);

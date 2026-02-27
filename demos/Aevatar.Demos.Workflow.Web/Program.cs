@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -8,7 +7,9 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.Agents;
+using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
+using Aevatar.AI.LLMProviders.Tornado;
 using Aevatar.Bootstrap;
 using Aevatar.Configuration;
 using Aevatar.Demos.Workflow.Web;
@@ -17,15 +18,22 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
+using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using ChatMessage = Aevatar.AI.Abstractions.LLMProviders.ChatMessage;
 
 var port = 5280;
+const int AutoResumeDelayMs = 50;
+const int WorkflowRunTimeoutMinutes = 2;
+const int FinalSseFlushDelayMs = 500;
 var noBrowser = args.Contains("--no-browser");
 var portArg = Array.IndexOf(args, "--port");
 if (portArg >= 0 && portArg + 1 < args.Length && int.TryParse(args[portArg + 1], out var customPort))
@@ -44,7 +52,8 @@ builder.Services.Configure<JsonOptions>(o =>
 
 builder.Services.AddAevatarRuntime();
 builder.Services.AddAevatarConfig();
-builder.Services.AddAevatarWorkflow();
+builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
+builder.Services.AddWorkflowCapability(builder.Configuration);
 builder.Services.AddSingleton<IWorkflowModulePack, DemoWorkflowModulePack>();
 builder.Services.Replace(ServiceDescriptor.Singleton<IEventModuleFactory, DemoWorkflowModuleFactory>());
 builder.Services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
@@ -58,58 +67,63 @@ var config = new ConfigurationBuilder()
     .AddEnvironmentVariables()
     .Build();
 
-string? apiKey = null;
-var providerName = "deepseek";
-var modelName = "deepseek-chat";
+var providerName = string.Empty;
+var modelName = string.Empty;
+var availableProviderNames = new List<string>();
+var llmAvailable = false;
 
 var secrets = new AevatarSecretsStore();
-apiKey = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY")
-      ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
-      ?? Environment.GetEnvironmentVariable("AEVATAR_LLM_API_KEY");
-
-if (!string.IsNullOrEmpty(apiKey))
+var configuredProviders = ResolveConfiguredProvidersFromSecrets(secrets, config);
+if (configuredProviders.Count == 0)
 {
-    providerName = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY") != null ? "deepseek" : "openai";
-    modelName = providerName == "deepseek" ? "deepseek-chat" : "gpt-4o-mini";
+    var fallbackProvider = ResolveFallbackProviderFromEnvironmentAndSecrets(secrets, config);
+    if (fallbackProvider != null)
+        configuredProviders.Add(fallbackProvider);
 }
-else
+
+if (configuredProviders.Count > 0)
 {
-    var defaultProv = secrets.GetDefaultProvider();
-    providerName = defaultProv ?? config["Models:DefaultProvider"] ?? "deepseek";
-    modelName = config["Models:DefaultModel"] ?? "deepseek-chat";
-    apiKey = secrets.GetApiKey(providerName);
-    if (string.IsNullOrEmpty(apiKey))
+    var preferredDefault = secrets.GetDefaultProvider() ?? config["Models:DefaultProvider"];
+    var defaultProvider = configuredProviders.FirstOrDefault(p =>
+        string.Equals(p.Name, preferredDefault, StringComparison.OrdinalIgnoreCase))
+        ?? configuredProviders[0];
+    var tornadoDefaultProvider = configuredProviders.FirstOrDefault(p =>
+        p.Name.Contains("deepseek", StringComparison.OrdinalIgnoreCase))
+        ?? defaultProvider;
+
+    providerName = defaultProvider.Name;
+    modelName = defaultProvider.Model;
+    availableProviderNames = configuredProviders.Select(p => p.Name).ToList();
+
+    var meaiFactory = new MEAILLMProviderFactory();
+    var tornadoFactory = new TornadoLLMProviderFactory();
+    foreach (var provider in configuredProviders)
     {
-        foreach (var candidate in new[] { "deepseek", "openai", "deepseek-deepseek-chat" })
+        meaiFactory.RegisterOpenAI(
+            provider.Name,
+            provider.Model,
+            provider.ApiKey,
+            string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
+        tornadoFactory.RegisterOpenAICompatible(
+            provider.Name,
+            provider.ApiKey,
+            provider.Model,
+            string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
+    }
+
+    meaiFactory.SetDefault(providerName);
+    tornadoFactory.SetDefault(tornadoDefaultProvider.Name);
+    var failoverFactory = new FailoverLLMProviderFactory(
+        meaiFactory,
+        tornadoFactory,
+        new LLMProviderFailoverOptions
         {
-            apiKey = secrets.GetApiKey(candidate);
-            if (!string.IsNullOrEmpty(apiKey))
-            {
-                providerName = candidate.Contains("deepseek") ? "deepseek" : candidate;
-                break;
-            }
-        }
-    }
-}
+            PreferFallbackDefaultProvider = true,
+            FallbackToDefaultProviderWhenNamedProviderMissing = true,
+        });
+    builder.Services.Replace(ServiceDescriptor.Singleton<ILLMProviderFactory>(failoverFactory));
 
-var llmAvailable = !string.IsNullOrEmpty(apiKey);
-if (llmAvailable)
-{
-    var isDeepSeek = providerName.Contains("deepseek", StringComparison.OrdinalIgnoreCase);
-    if (isDeepSeek)
-    {
-        providerName = "deepseek";
-        if (!modelName.Contains("deepseek")) modelName = "deepseek-chat";
-        builder.Services.AddMEAIProviders(f => f
-            .RegisterOpenAI("deepseek", modelName, apiKey!, baseUrl: "https://api.deepseek.com/v1")
-            .SetDefault("deepseek"));
-    }
-    else
-    {
-        builder.Services.AddMEAIProviders(f => f
-            .RegisterOpenAI(providerName, modelName, apiKey!)
-            .SetDefault(providerName));
-    }
+    llmAvailable = true;
 }
 
 var app = builder.Build();
@@ -120,7 +134,10 @@ Console.WriteLine("║           Workflow Primitives Web UI                    �
 Console.WriteLine("╠══════════════════════════════════════════════════════════╣");
 Console.WriteLine($"║  Web UI: {url,-48}║");
 Console.WriteLine($"║  YAML:   {primaryYamlDir,-48}║");
-Console.WriteLine($"║  LLM:    {(llmAvailable ? $"{providerName}/{modelName}" : "not configured"),-48}║");
+var llmSummary = llmAvailable
+    ? $"{providerName}/{modelName}" + (availableProviderNames.Count > 1 ? $" (+{availableProviderNames.Count} providers)" : string.Empty)
+    : "not configured";
+Console.WriteLine($"║  LLM:    {llmSummary,-48}║");
 Console.WriteLine("║  Press Ctrl+C to stop                                  ║");
 Console.WriteLine("╚══════════════════════════════════════════════════════════╝");
 Console.WriteLine();
@@ -130,6 +147,7 @@ app.Lifetime.ApplicationStarted.Register(() => { if (!noBrowser) OpenBrowser(url
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.MapWorkflowChatInteractionEndpoints();
 
 var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
@@ -159,6 +177,7 @@ var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCas
     "45_wait_signal_timeout_failure",
     "46_human_approval_release_gate",
     "47_mixed_human_approval_wait_signal",
+    "48_workflow_call_multilevel",
 };
 var turingWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
@@ -224,66 +243,6 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
 };
 
 var parser = new WorkflowParser();
-var runContexts = new ConcurrentDictionary<string, DemoRunContext>(StringComparer.Ordinal);
-
-void TrackRunContext(
-    string runId,
-    string actorId,
-    string channel,
-    string workflowName,
-    Action<DemoRunContext>? mutate = null)
-{
-    if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(actorId))
-        return;
-
-    var normalizedRunId = runId.Trim();
-    var normalizedActorId = actorId.Trim();
-    var now = DateTimeOffset.UtcNow;
-
-    var context = runContexts.AddOrUpdate(
-        normalizedRunId,
-        _ => new DemoRunContext
-        {
-            RunId = normalizedRunId,
-            ActorId = normalizedActorId,
-            Channel = channel,
-            WorkflowName = workflowName,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        },
-        (_, existing) =>
-        {
-            existing.ActorId = normalizedActorId;
-            existing.Channel = channel;
-            existing.WorkflowName = workflowName;
-            existing.UpdatedAtUtc = now;
-            return existing;
-        });
-
-    mutate?.Invoke(context);
-    context.UpdatedAtUtc = DateTimeOffset.UtcNow;
-}
-
-void CleanupRunContext(string runId)
-{
-    if (string.IsNullOrWhiteSpace(runId))
-        return;
-
-    runContexts.TryRemove(runId.Trim(), out _);
-}
-
-void CleanupRunContextsForActor(string actorId)
-{
-    if (string.IsNullOrWhiteSpace(actorId))
-        return;
-
-    var normalized = actorId.Trim();
-    foreach (var (runId, context) in runContexts)
-    {
-        if (string.Equals(context.ActorId, normalized, StringComparison.Ordinal))
-            runContexts.TryRemove(runId, out _);
-    }
-}
 
 // GET /api/workflows — list all workflows
 app.MapGet("/api/workflows", () =>
@@ -438,22 +397,12 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
 
     var tcs = new TaskCompletionSource<bool>();
     var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-    string? activeRunId = null;
 
     async Task WriteSse(string eventType, object data)
     {
         var json = JsonSerializer.Serialize(data, jsonOpts);
         await ctx.Response.WriteAsync($"event: {eventType}\ndata: {json}\n\n", ct);
         await ctx.Response.Body.FlushAsync(ct);
-    }
-
-    void RememberRunId(string? runId)
-    {
-        if (string.IsNullOrWhiteSpace(runId))
-            return;
-
-        activeRunId = runId.Trim();
-        TrackRunContext(activeRunId, actor.Id, "workflow", name);
     }
 
     void ScheduleAutoResume(WorkflowSuspendedEvent suspended)
@@ -463,7 +412,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
         {
             try
             {
-                await Task.Delay(50, CancellationToken.None);
+                await Task.Delay(AutoResumeDelayMs, ct);
                 await actor.HandleEventAsync(new EventEnvelope
                 {
                     Id = Guid.NewGuid().ToString("N"),
@@ -473,6 +422,9 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
                     Direction = EventDirection.Self,
                     CorrelationId = Guid.NewGuid().ToString("N"),
                 });
+            }
+            catch (OperationCanceledException)
+            {
             }
             catch (Exception ex)
             {
@@ -485,7 +437,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
                     // ignore write failures after client disconnect
                 }
             }
-        }, CancellationToken.None);
+        }, ct);
     }
 
     var stream = streams.GetStream(actor.Id);
@@ -499,47 +451,27 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             if (payload.Is(StepRequestEvent.Descriptor))
             {
                 var evt = payload.Unpack<StepRequestEvent>();
-                RememberRunId(evt.RunId);
-                if (!string.IsNullOrWhiteSpace(activeRunId))
-                {
-                    TrackRunContext(activeRunId, actor.Id, "workflow", name, tracked =>
-                    {
-                        tracked.LastStepId = evt.StepId;
-                        tracked.LastEventType = "step.request";
-                    });
-                }
-
                 await WriteSse("step.request", new
                 {
-                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
+                    runId = evt.RunId,
                     stepId = evt.StepId,
                     stepType = evt.StepType,
-                    input = Truncate(evt.Input, 500),
+                    input = evt.Input,
                 });
             }
 
             if (payload.Is(StepCompletedEvent.Descriptor))
             {
                 var evt = payload.Unpack<StepCompletedEvent>();
-                RememberRunId(evt.RunId);
-                if (!string.IsNullOrWhiteSpace(activeRunId))
-                {
-                    TrackRunContext(activeRunId, actor.Id, "workflow", name, tracked =>
-                    {
-                        tracked.LastStepId = evt.StepId;
-                        tracked.LastEventType = "step.completed";
-                    });
-                }
-
                 var meta = new Dictionary<string, string>();
                 foreach (var kv in evt.Metadata)
                     meta[kv.Key] = kv.Value;
                 await WriteSse("step.completed", new
                 {
-                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
+                    runId = evt.RunId,
                     stepId = evt.StepId,
                     success = evt.Success,
-                    output = Truncate(evt.Output, 1000),
+                    output = evt.Output,
                     error = string.IsNullOrEmpty(evt.Error) ? null : evt.Error,
                     metadata = meta.Count > 0 ? meta : null,
                 });
@@ -548,23 +480,13 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             if (payload.Is(WorkflowSuspendedEvent.Descriptor))
             {
                 var evt = payload.Unpack<WorkflowSuspendedEvent>();
-                RememberRunId(evt.RunId);
-                if (!string.IsNullOrWhiteSpace(activeRunId))
-                {
-                    TrackRunContext(activeRunId, actor.Id, "workflow", name, tracked =>
-                    {
-                        tracked.LastStepId = evt.StepId;
-                        tracked.LastSuspensionType = evt.SuspensionType;
-                        tracked.LastEventType = "workflow.suspended";
-                    });
-                }
-
                 var meta = new Dictionary<string, string>();
                 foreach (var kv in evt.Metadata)
                     meta[kv.Key] = kv.Value;
 
                 await WriteSse("workflow.suspended", new
                 {
+                    actorId = actor.Id,
                     runId = evt.RunId,
                     stepId = evt.StepId,
                     suspensionType = evt.SuspensionType,
@@ -580,19 +502,10 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             if (payload.Is(WaitingForSignalEvent.Descriptor))
             {
                 var evt = payload.Unpack<WaitingForSignalEvent>();
-                if (!string.IsNullOrWhiteSpace(activeRunId))
-                {
-                    TrackRunContext(activeRunId, actor.Id, "workflow", name, tracked =>
-                    {
-                        tracked.LastStepId = evt.StepId;
-                        tracked.LastSignalName = evt.SignalName;
-                        tracked.LastEventType = "workflow.waiting_signal";
-                    });
-                }
-
                 await WriteSse("workflow.waiting_signal", new
                 {
-                    runId = activeRunId,
+                    actorId = actor.Id,
+                    runId = evt.RunId,
                     stepId = evt.StepId,
                     signalName = evt.SignalName,
                     prompt = evt.Prompt,
@@ -608,7 +521,19 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
                     && !string.IsNullOrWhiteSpace(evt.Content))
                 {
                     var role = publisher.Contains(':') ? publisher[(publisher.LastIndexOf(':') + 1)..] : publisher;
-                    await WriteSse("llm.response", new { role, content = Truncate(evt.Content, 2000) });
+                    await WriteSse("llm.response", new { role, content = evt.Content });
+                }
+            }
+
+            if (payload.Is(TextMessageReasoningEvent.Descriptor))
+            {
+                var evt = payload.Unpack<TextMessageReasoningEvent>();
+                var publisher = envelope.PublisherId ?? "";
+                if (!string.Equals(publisher, actor.Id, StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(evt.Delta))
+                {
+                    var role = publisher.Contains(':') ? publisher[(publisher.LastIndexOf(':') + 1)..] : publisher;
+                    await WriteSse("llm.thinking", new { role, content = evt.Delta });
                 }
             }
 
@@ -619,8 +544,6 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
                 {
                     var error = string.IsNullOrWhiteSpace(evt.Content) ? "Workflow run failed." : evt.Content;
                     await WriteSse("workflow.error", new { error });
-                    if (!string.IsNullOrWhiteSpace(activeRunId))
-                        CleanupRunContext(activeRunId);
                     tcs.TrySetResult(false);
                 }
             }
@@ -628,18 +551,13 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             if (payload.Is(WorkflowCompletedEvent.Descriptor))
             {
                 var evt = payload.Unpack<WorkflowCompletedEvent>();
-                RememberRunId(evt.RunId);
                 await WriteSse("workflow.completed", new
                 {
-                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
+                    runId = evt.RunId,
                     success = evt.Success,
-                    output = Truncate(evt.Output, 2000),
+                    output = evt.Output,
                     error = string.IsNullOrEmpty(evt.Error) ? null : evt.Error,
                 });
-                if (!string.IsNullOrWhiteSpace(evt.RunId))
-                    CleanupRunContext(evt.RunId);
-                else if (!string.IsNullOrWhiteSpace(activeRunId))
-                    CleanupRunContext(activeRunId);
                 tcs.TrySetResult(evt.Success);
             }
         }
@@ -661,12 +579,12 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
     try
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromMinutes(2));
+        cts.CancelAfter(TimeSpan.FromMinutes(WorkflowRunTimeoutMinutes));
         await tcs.Task.WaitAsync(cts.Token);
     }
     catch (OperationCanceledException)
     {
-        await WriteSse("workflow.error", new { error = "Timeout (2 min)" });
+        await WriteSse("workflow.error", new { error = $"Timeout ({WorkflowRunTimeoutMinutes} min)" });
     }
     catch (Exception ex)
     {
@@ -675,122 +593,18 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
 
     // Keep connection open briefly so the browser's EventSource processes the final event
     // before the TCP close triggers onerror/reconnect.
-    await Task.Delay(500, CancellationToken.None);
+    if (!ct.IsCancellationRequested)
+    {
+        try
+        {
+            await Task.Delay(FinalSseFlushDelayMs, ct);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
 
     await runtime.DestroyAsync(actor.Id);
-    CleanupRunContextsForActor(actor.Id);
-});
-
-// POST /api/workflows/resume — resume a suspended human_input/human_approval step
-app.MapPost("/api/workflows/resume", async (WorkflowResumeRequest? body, HttpContext ctx) =>
-{
-    if (body == null)
-        return Results.BadRequest(new { error = "Request body is required." });
-
-    var runId = (body.RunId ?? string.Empty).Trim();
-    var stepId = (body.StepId ?? string.Empty).Trim();
-    if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(stepId))
-        return Results.BadRequest(new { error = "runId and stepId are required." });
-
-    if (!runContexts.TryGetValue(runId, out var runContext))
-        return Results.NotFound(new { error = $"Run context '{runId}' not found or already finished." });
-
-    var runtime = ctx.RequestServices.GetRequiredService<IActorRuntime>();
-    var actor = await runtime.GetAsync(runContext.ActorId);
-    if (actor == null)
-    {
-        CleanupRunContext(runId);
-        return Results.NotFound(new { error = $"Actor '{runContext.ActorId}' is no longer active for run '{runId}'." });
-    }
-
-    var resumed = new WorkflowResumedEvent
-    {
-        RunId = runId,
-        StepId = stepId,
-        Approved = body.Approved,
-        UserInput = body.UserInput ?? string.Empty,
-    };
-    if (body.Metadata is { Count: > 0 })
-    {
-        foreach (var (key, value) in body.Metadata)
-            resumed.Metadata[key] = value;
-    }
-
-    await actor.HandleEventAsync(new EventEnvelope
-    {
-        Id = Guid.NewGuid().ToString("N"),
-        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Payload = Any.Pack(resumed),
-        PublisherId = "web.demo.resume",
-        Direction = EventDirection.Self,
-        CorrelationId = Guid.NewGuid().ToString("N"),
-    });
-
-    TrackRunContext(runId, runContext.ActorId, runContext.Channel, runContext.WorkflowName, tracked =>
-    {
-        tracked.LastStepId = stepId;
-        tracked.LastEventType = "api.resume";
-    });
-
-    return Results.Json(new
-    {
-        accepted = true,
-        runId,
-        stepId,
-        actorId = runContext.ActorId,
-    });
-});
-
-// POST /api/workflows/signal — deliver signal to wait_signal step
-app.MapPost("/api/workflows/signal", async (WorkflowSignalRequest? body, HttpContext ctx) =>
-{
-    if (body == null)
-        return Results.BadRequest(new { error = "Request body is required." });
-
-    var runId = (body.RunId ?? string.Empty).Trim();
-    var signalName = (body.SignalName ?? string.Empty).Trim();
-    if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(signalName))
-        return Results.BadRequest(new { error = "runId and signalName are required." });
-
-    if (!runContexts.TryGetValue(runId, out var runContext))
-        return Results.NotFound(new { error = $"Run context '{runId}' not found or already finished." });
-
-    var runtime = ctx.RequestServices.GetRequiredService<IActorRuntime>();
-    var actor = await runtime.GetAsync(runContext.ActorId);
-    if (actor == null)
-    {
-        CleanupRunContext(runId);
-        return Results.NotFound(new { error = $"Actor '{runContext.ActorId}' is no longer active for run '{runId}'." });
-    }
-
-    await actor.HandleEventAsync(new EventEnvelope
-    {
-        Id = Guid.NewGuid().ToString("N"),
-        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Payload = Any.Pack(new SignalReceivedEvent
-        {
-            RunId = runId,
-            SignalName = signalName,
-            Payload = body.Payload ?? string.Empty,
-        }),
-        PublisherId = "web.demo.signal",
-        Direction = EventDirection.Self,
-        CorrelationId = Guid.NewGuid().ToString("N"),
-    });
-
-    TrackRunContext(runId, runContext.ActorId, runContext.Channel, runContext.WorkflowName, tracked =>
-    {
-        tracked.LastSignalName = signalName;
-        tracked.LastEventType = "api.signal";
-    });
-
-    return Results.Json(new
-    {
-        accepted = true,
-        runId,
-        signalName,
-        actorId = runContext.ActorId,
-    });
 });
 
 // GET /api/llm/status — LLM availability
@@ -799,6 +613,7 @@ app.MapGet("/api/llm/status", () => Results.Json(new
     available = llmAvailable,
     provider = llmAvailable ? providerName : null,
     model = llmAvailable ? modelName : null,
+    providers = llmAvailable ? availableProviderNames.ToArray() : Array.Empty<string>(),
 }));
 
 // GET /api/primitives — module catalog with parameter docs
@@ -1064,7 +879,6 @@ static object[] BuildPrimitivesCatalog()
 }
 
 // POST /api/playground/chat — streaming LLM chat for workflow authoring
-var playgroundSystemPrompt = BuildPlaygroundSystemPrompt();
 app.MapPost("/api/playground/chat", async (HttpContext ctx, CancellationToken ct) =>
 {
     if (!llmAvailable)
@@ -1092,6 +906,7 @@ app.MapPost("/api/playground/chat", async (HttpContext ctx, CancellationToken ct
 
     var factory = ctx.RequestServices.GetRequiredService<ILLMProviderFactory>();
     var provider = factory.GetDefault();
+    var playgroundSystemPrompt = BuildPlaygroundSystemPrompt(factory.GetAvailableProviders(), provider.Name);
 
     var llmMessages = new List<ChatMessage>
     {
@@ -1118,13 +933,19 @@ app.MapPost("/api/playground/chat", async (HttpContext ctx, CancellationToken ct
     catch (OperationCanceledException) { }
     catch (Exception ex)
     {
-        var json = JsonSerializer.Serialize(new { error = ex.Message }, jsonOpts);
-        await ctx.Response.WriteAsync($"data: {json}\n\n", CancellationToken.None);
-        await ctx.Response.Body.FlushAsync(CancellationToken.None);
+        if (!ct.IsCancellationRequested)
+        {
+            var json = JsonSerializer.Serialize(new { error = ex.Message }, jsonOpts);
+            await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
+            await ctx.Response.Body.FlushAsync(ct);
+        }
     }
 
-    await ctx.Response.WriteAsync("data: [DONE]\n\n", CancellationToken.None);
-    await ctx.Response.Body.FlushAsync(CancellationToken.None);
+    if (!ct.IsCancellationRequested)
+    {
+        await ctx.Response.WriteAsync("data: [DONE]\n\n", ct);
+        await ctx.Response.Body.FlushAsync(ct);
+    }
 });
 
 // POST /api/playground/parse — parse YAML and return steps + edges for graph
@@ -1144,6 +965,18 @@ app.MapPost("/api/playground/parse", async (HttpContext ctx) =>
     try
     {
         var def = parser.Parse(yaml);
+        var validationErrors = ValidateWorkflowDefinitionForRuntime(def, ctx.RequestServices);
+        if (validationErrors.Count > 0)
+        {
+            await ctx.Response.WriteAsJsonAsync(new
+            {
+                valid = false,
+                error = string.Join("; ", validationErrors),
+                errors = validationErrors,
+            });
+            return;
+        }
+
         var steps = def.Steps.Select(s => new
         {
             id = s.Id,
@@ -1178,292 +1011,6 @@ app.MapPost("/api/playground/parse", async (HttpContext ctx) =>
     {
         await ctx.Response.WriteAsJsonAsync(new { valid = false, error = ex.Message });
     }
-});
-
-// POST /api/playground/run — run arbitrary YAML workflow via SSE
-app.MapPost("/api/playground/run", async (HttpContext ctx, CancellationToken ct) =>
-{
-    var body = await JsonSerializer.DeserializeAsync<PlaygroundRunRequest>(ctx.Request.Body,
-        new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }, ct);
-
-    if (string.IsNullOrWhiteSpace(body?.Yaml))
-    {
-        ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsync("yaml required");
-        return;
-    }
-
-    WorkflowDefinition parsedDefinition;
-    try
-    {
-        parsedDefinition = parser.Parse(body.Yaml);
-    }
-    catch (Exception ex)
-    {
-        ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsync($"Invalid YAML: {ex.Message}");
-        return;
-    }
-
-    var validationErrors = ValidateWorkflowDefinitionForRuntime(parsedDefinition, ctx.RequestServices);
-    if (validationErrors.Count > 0)
-    {
-        ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsync($"Invalid YAML: {string.Join("; ", validationErrors)}");
-        return;
-    }
-
-    var needsLlm = parsedDefinition.Roles.Count > 0 || parsedDefinition.Steps.Any(s =>
-        s.Type is "llm_call" or "evaluate" or "reflect" or "map_reduce" or "race" or "parallel" or "parallel_fanout");
-
-    if (needsLlm && !llmAvailable)
-    {
-        ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsync("LLM not configured. Set DEEPSEEK_API_KEY or OPENAI_API_KEY.");
-        return;
-    }
-
-    ctx.Response.Headers["Content-Type"] = "text/event-stream";
-    ctx.Response.Headers["Cache-Control"] = "no-cache";
-    ctx.Response.Headers["Connection"] = "keep-alive";
-
-    var actualInput = body.Input ?? "Hello, world!";
-    var shouldAutoResume = body.AutoResume == true;
-    var runtime = ctx.RequestServices.GetRequiredService<IActorRuntime>();
-    var streams = ctx.RequestServices.GetRequiredService<IStreamProvider>();
-    var actorId = $"pg-{Guid.NewGuid():N}"[..24];
-
-    var actor = await runtime.CreateAsync<WorkflowGAgent>(actorId);
-    await actor.HandleEventAsync(new EventEnvelope
-    {
-        Id = Guid.NewGuid().ToString("N"),
-        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Payload = Any.Pack(new ConfigureWorkflowEvent { WorkflowYaml = body.Yaml, WorkflowName = "playground" }),
-        PublisherId = "playground",
-        Direction = EventDirection.Self,
-        CorrelationId = Guid.NewGuid().ToString("N"),
-    });
-
-    var tcs = new TaskCompletionSource<bool>();
-    var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-    string? activeRunId = null;
-
-    async Task WriteSse(string eventType, object data)
-    {
-        var json = JsonSerializer.Serialize(data, jsonOpts);
-        await ctx.Response.WriteAsync($"event: {eventType}\ndata: {json}\n\n", ct);
-        await ctx.Response.Body.FlushAsync(ct);
-    }
-
-    void RememberRunId(string? runId)
-    {
-        if (string.IsNullOrWhiteSpace(runId))
-            return;
-
-        activeRunId = runId.Trim();
-        TrackRunContext(activeRunId, actor.Id, "playground", "playground");
-    }
-
-    void ScheduleAutoResume(WorkflowSuspendedEvent suspended)
-    {
-        var resumed = BuildAutoResumedEvent(suspended, actualInput);
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(50, CancellationToken.None);
-                await actor.HandleEventAsync(new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                    Payload = Any.Pack(resumed),
-                    PublisherId = "playground.auto-human",
-                    Direction = EventDirection.Self,
-                    CorrelationId = Guid.NewGuid().ToString("N"),
-                });
-            }
-            catch (Exception ex)
-            {
-                try
-                {
-                    await WriteSse("workflow.error", new { error = $"Auto resume failed: {ex.Message}" });
-                }
-                catch
-                {
-                    // ignore write failures after client disconnect
-                }
-            }
-        }, CancellationToken.None);
-    }
-
-    var stream = streams.GetStream(actor.Id);
-    await using var sub = await stream.SubscribeAsync<EventEnvelope>(async envelope =>
-    {
-        if (envelope.Payload == null) return;
-        try
-        {
-            var payload = envelope.Payload;
-            if (payload.Is(StepRequestEvent.Descriptor))
-            {
-                var evt = payload.Unpack<StepRequestEvent>();
-                RememberRunId(evt.RunId);
-                if (!string.IsNullOrWhiteSpace(activeRunId))
-                {
-                    TrackRunContext(activeRunId, actor.Id, "playground", "playground", tracked =>
-                    {
-                        tracked.LastStepId = evt.StepId;
-                        tracked.LastEventType = "step.request";
-                    });
-                }
-
-                await WriteSse("step.request", new
-                {
-                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
-                    stepId = evt.StepId,
-                    stepType = evt.StepType,
-                    input = Truncate(evt.Input, 500),
-                });
-            }
-            if (payload.Is(StepCompletedEvent.Descriptor))
-            {
-                var evt = payload.Unpack<StepCompletedEvent>();
-                RememberRunId(evt.RunId);
-                if (!string.IsNullOrWhiteSpace(activeRunId))
-                {
-                    TrackRunContext(activeRunId, actor.Id, "playground", "playground", tracked =>
-                    {
-                        tracked.LastStepId = evt.StepId;
-                        tracked.LastEventType = "step.completed";
-                    });
-                }
-
-                var meta = new Dictionary<string, string>();
-                foreach (var kv in evt.Metadata) meta[kv.Key] = kv.Value;
-                await WriteSse("step.completed", new
-                {
-                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
-                    stepId = evt.StepId, success = evt.Success,
-                    output = Truncate(evt.Output, 1000),
-                    error = string.IsNullOrEmpty(evt.Error) ? null : evt.Error,
-                    metadata = meta.Count > 0 ? meta : null,
-                });
-            }
-            if (payload.Is(WorkflowSuspendedEvent.Descriptor))
-            {
-                var evt = payload.Unpack<WorkflowSuspendedEvent>();
-                RememberRunId(evt.RunId);
-                if (!string.IsNullOrWhiteSpace(activeRunId))
-                {
-                    TrackRunContext(activeRunId, actor.Id, "playground", "playground", tracked =>
-                    {
-                        tracked.LastStepId = evt.StepId;
-                        tracked.LastSuspensionType = evt.SuspensionType;
-                        tracked.LastEventType = "workflow.suspended";
-                    });
-                }
-
-                var meta = new Dictionary<string, string>();
-                foreach (var kv in evt.Metadata)
-                    meta[kv.Key] = kv.Value;
-
-                await WriteSse("workflow.suspended", new
-                {
-                    runId = evt.RunId,
-                    stepId = evt.StepId,
-                    suspensionType = evt.SuspensionType,
-                    prompt = evt.Prompt,
-                    timeoutSeconds = evt.TimeoutSeconds,
-                    metadata = meta.Count > 0 ? meta : null,
-                });
-
-                if (shouldAutoResume)
-                    ScheduleAutoResume(evt);
-            }
-            if (payload.Is(WaitingForSignalEvent.Descriptor))
-            {
-                var evt = payload.Unpack<WaitingForSignalEvent>();
-                if (!string.IsNullOrWhiteSpace(activeRunId))
-                {
-                    TrackRunContext(activeRunId, actor.Id, "playground", "playground", tracked =>
-                    {
-                        tracked.LastStepId = evt.StepId;
-                        tracked.LastSignalName = evt.SignalName;
-                        tracked.LastEventType = "workflow.waiting_signal";
-                    });
-                }
-
-                await WriteSse("workflow.waiting_signal", new
-                {
-                    runId = activeRunId,
-                    stepId = evt.StepId,
-                    signalName = evt.SignalName,
-                    prompt = evt.Prompt,
-                    timeoutMs = evt.TimeoutMs,
-                });
-            }
-            if (payload.Is(TextMessageEndEvent.Descriptor))
-            {
-                var evt = payload.Unpack<TextMessageEndEvent>();
-                var pub = envelope.PublisherId ?? "";
-                if (!string.Equals(pub, actor.Id, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(evt.Content))
-                {
-                    var role = pub.Contains(':') ? pub[(pub.LastIndexOf(':') + 1)..] : pub;
-                    await WriteSse("llm.response", new { role, content = Truncate(evt.Content, 2000) });
-                }
-            }
-            if (payload.Is(ChatResponseEvent.Descriptor))
-            {
-                var evt = payload.Unpack<ChatResponseEvent>();
-                if (string.Equals(envelope.PublisherId, actor.Id, StringComparison.Ordinal))
-                {
-                    var error = string.IsNullOrWhiteSpace(evt.Content) ? "Workflow run failed." : evt.Content;
-                    await WriteSse("workflow.error", new { error });
-                    if (!string.IsNullOrWhiteSpace(activeRunId))
-                        CleanupRunContext(activeRunId);
-                    tcs.TrySetResult(false);
-                }
-            }
-            if (payload.Is(WorkflowCompletedEvent.Descriptor))
-            {
-                var evt = payload.Unpack<WorkflowCompletedEvent>();
-                RememberRunId(evt.RunId);
-                await WriteSse("workflow.completed", new
-                {
-                    runId = string.IsNullOrWhiteSpace(evt.RunId) ? activeRunId : evt.RunId,
-                    success = evt.Success, output = Truncate(evt.Output, 2000),
-                    error = string.IsNullOrEmpty(evt.Error) ? null : evt.Error,
-                });
-                if (!string.IsNullOrWhiteSpace(evt.RunId))
-                    CleanupRunContext(evt.RunId);
-                else if (!string.IsNullOrWhiteSpace(activeRunId))
-                    CleanupRunContext(activeRunId);
-                tcs.TrySetResult(evt.Success);
-            }
-        }
-        catch (Exception ex) { tcs.TrySetException(ex); }
-    });
-
-    await actor.HandleEventAsync(new EventEnvelope
-    {
-        Id = Guid.NewGuid().ToString("N"),
-        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Payload = Any.Pack(new ChatRequestEvent { Prompt = actualInput, SessionId = "playground" }),
-        PublisherId = "playground",
-        Direction = EventDirection.Self,
-    });
-
-    try
-    {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromMinutes(2));
-        await tcs.Task.WaitAsync(cts.Token);
-    }
-    catch (OperationCanceledException) { await WriteSse("workflow.error", new { error = "Timeout (2 min)" }); }
-    catch (Exception ex) { await WriteSse("workflow.error", new { error = ex.Message }); }
-
-    await Task.Delay(500, CancellationToken.None);
-    await runtime.DestroyAsync(actor.Id);
-    CleanupRunContextsForActor(actor.Id);
 });
 
 app.MapFallbackToFile("index.html");
@@ -1556,8 +1103,6 @@ static WorkflowResumedEvent BuildAutoResumedEvent(WorkflowSuspendedEvent suspend
         UserInput = $"{variable}=AUTO<{source}>",
     };
 }
-
-static string Truncate(string s, int max) => s.Length > max ? s[..max] + "..." : s;
 
 static string ResolveYamlDir()
 {
@@ -1717,21 +1262,21 @@ static WorkflowListClassification ClassifyWorkflowForList(
             SortOrder: index.Value);
     }
 
-    if (index is >= 43 and <= 47)
-    {
-        return new WorkflowListClassification(
-            Category: "deterministic",
-            Group: "human-interaction-manual",
-            GroupLabel: "Human Interaction (Manual)",
-            SortOrder: index.Value);
-    }
-
     if (index is >= 39 and <= 42)
     {
         return new WorkflowListClassification(
             Category: "deterministic",
             Group: "human-interaction-legacy",
             GroupLabel: "Human Interaction (Legacy Auto)",
+            SortOrder: index.Value);
+    }
+
+    if (index is >= 43 and <= 47)
+    {
+        return new WorkflowListClassification(
+            Category: "deterministic",
+            Group: "human-interaction-manual",
+            GroupLabel: "Human Interaction (Manual)",
             SortOrder: index.Value);
     }
 
@@ -1808,7 +1353,12 @@ static int? TryParseWorkflowIndex(string workflowName)
     return int.TryParse(span[..i], out var value) ? value : null;
 }
 
-static string BuildPlaygroundSystemPrompt() => """
+static string BuildPlaygroundSystemPrompt(IReadOnlyList<string> availableProviders, string? defaultProvider)
+{
+    var providerList = FormatProviderList(availableProviders);
+    var defaultProviderLabel = string.IsNullOrWhiteSpace(defaultProvider) ? "not-set" : defaultProvider.Trim();
+
+    return """
 You are an expert Aevatar Workflow YAML author. You help users design workflows by writing valid YAML.
 
 ## YAML Schema (snake_case)
@@ -1853,10 +1403,10 @@ steps:                  # ordered step list
 - Each role should have a stable `id` (snake_case) and a clear `system_prompt`.
 - For multi-stage workflows, prefer specialized roles (e.g. researcher, reviewer, writer) over one generic role.
 - All role-referenced steps must point to existing role ids (`target_role` or `role`).
-- When user asks runtime behavior, include role runtime fields:
-  `provider`, `model`, `temperature`, `max_tokens`, `max_tool_rounds`,
+- Runtime tuning fields are optional: `temperature`, `max_tokens`, `max_tool_rounds`,
   `max_history_messages`, `stream_buffer_capacity`, `event_modules`,
   `event_routes`, `connectors`.
+- Prefer not to set `provider` and `model` unless the user explicitly asks.
 - If user explicitly wants a single-role workflow, keep exactly one role.
 - If workflow is purely deterministic and has no role-driven AI steps, roles can be omitted.
 
@@ -1907,33 +1457,137 @@ steps:                  # ordered step list
 - If the user's request is ambiguous, ask clarifying questions.
 - Generate complete, valid, parseable YAML.
 - Return a full workflow YAML (including roles) unless the user explicitly asks for a partial snippet.
+""" + $"""
+
+## Runtime Provider Constraints (dynamic)
+- Configured providers in this runtime: {providerList}
+- Default provider: {defaultProviderLabel}
+- Prefer omitting `provider` and `model` in generated roles so runtime default is used.
+- Only set `provider` when user explicitly requests it, and it must be one of the configured providers above.
+- Never invent provider names or models.
 """;
+}
+
+static string FormatProviderList(IReadOnlyList<string>? providers)
+{
+    if (providers is not { Count: > 0 })
+        return "<none>";
+
+    var names = providers
+        .Where(name => !string.IsNullOrWhiteSpace(name))
+        .Select(name => name.Trim())
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    return names.Count == 0 ? "<none>" : string.Join(", ", names);
+}
+
+static List<LlmProviderRegistration> ResolveConfiguredProvidersFromSecrets(
+    IAevatarSecretsStore secrets,
+    IConfiguration config)
+{
+    const string prefix = "LLMProviders:Providers:";
+    var all = secrets.GetAll();
+    var names = all.Keys
+        .Where(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        .Select(key => key[prefix.Length..])
+        .Select(rest =>
+        {
+            var splitIndex = rest.IndexOf(':');
+            return splitIndex <= 0 ? string.Empty : rest[..splitIndex];
+        })
+        .Where(name => !string.IsNullOrWhiteSpace(name))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    var registrations = new List<LlmProviderRegistration>(names.Count);
+    foreach (var rawName in names)
+    {
+        var name = rawName.Trim();
+        var apiKey = secrets.GetApiKey(name);
+        if (string.IsNullOrWhiteSpace(apiKey))
+            continue;
+
+        all.TryGetValue($"LLMProviders:Providers:{name}:ProviderType", out var providerType);
+        all.TryGetValue($"LLMProviders:Providers:{name}:Model", out var model);
+        all.TryGetValue($"LLMProviders:Providers:{name}:Endpoint", out var endpoint);
+
+        var defaults = InferProviderDefaults(providerType ?? name, config);
+        var resolvedModel = string.IsNullOrWhiteSpace(model) ? defaults.Model : model.Trim();
+        var resolvedEndpoint = string.IsNullOrWhiteSpace(endpoint) ? defaults.Endpoint : endpoint.Trim();
+
+        registrations.Add(new LlmProviderRegistration(name, resolvedModel, resolvedEndpoint, apiKey.Trim()));
+    }
+
+    return registrations;
+}
+
+static LlmProviderRegistration? ResolveFallbackProviderFromEnvironmentAndSecrets(
+    IAevatarSecretsStore secrets,
+    IConfiguration config)
+{
+    var deepSeekApiKey = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY");
+    if (!string.IsNullOrWhiteSpace(deepSeekApiKey))
+    {
+        var defaults = InferProviderDefaults("deepseek", config);
+        return new LlmProviderRegistration("deepseek", defaults.Model, defaults.Endpoint, deepSeekApiKey.Trim());
+    }
+
+    var openAiApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+    if (!string.IsNullOrWhiteSpace(openAiApiKey))
+    {
+        var defaults = InferProviderDefaults("openai", config);
+        return new LlmProviderRegistration("openai", defaults.Model, defaults.Endpoint, openAiApiKey.Trim());
+    }
+
+    var genericApiKey = Environment.GetEnvironmentVariable("AEVATAR_LLM_API_KEY");
+    if (!string.IsNullOrWhiteSpace(genericApiKey))
+    {
+        var preferredName = secrets.GetDefaultProvider() ?? config["Models:DefaultProvider"] ?? "openai";
+        var defaults = InferProviderDefaults(preferredName, config);
+        return new LlmProviderRegistration(preferredName.Trim(), defaults.Model, defaults.Endpoint, genericApiKey.Trim());
+    }
+
+    var candidates = new List<string>();
+    var preferredDefault = secrets.GetDefaultProvider() ?? config["Models:DefaultProvider"];
+    if (!string.IsNullOrWhiteSpace(preferredDefault))
+        candidates.Add(preferredDefault.Trim());
+    candidates.AddRange(["deepseek", "openai", "deepseek-deepseek-chat"]);
+
+    foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+            continue;
+
+        var apiKey = secrets.GetApiKey(candidate);
+        if (string.IsNullOrWhiteSpace(apiKey))
+            continue;
+
+        var normalizedName = candidate.Contains("deepseek", StringComparison.OrdinalIgnoreCase)
+            ? "deepseek"
+            : candidate.Trim();
+        var defaults = InferProviderDefaults(normalizedName, config);
+        return new LlmProviderRegistration(normalizedName, defaults.Model, defaults.Endpoint, apiKey.Trim());
+    }
+
+    return null;
+}
+
+static (string Model, string? Endpoint) InferProviderDefaults(string? providerHint, IConfiguration config)
+{
+    var isDeepSeek = !string.IsNullOrWhiteSpace(providerHint) &&
+        providerHint.Contains("deepseek", StringComparison.OrdinalIgnoreCase);
+    if (isDeepSeek)
+        return (config["Models:DeepSeekModel"] ?? config["Models:DefaultModel"] ?? "deepseek-chat", "https://api.deepseek.com/v1");
+
+    return (config["Models:OpenAIModel"] ?? config["Models:DefaultModel"] ?? "gpt-4o-mini", null);
+}
 
 sealed record PlaygroundChatMessage(string Role, string Content);
 sealed record PlaygroundChatRequest(List<PlaygroundChatMessage> Messages);
-sealed record PlaygroundRunRequest(string Yaml, string? Input, bool? AutoResume = null);
-sealed record WorkflowResumeRequest(
-    string RunId,
-    string StepId,
-    bool Approved = true,
-    string? UserInput = null,
-    Dictionary<string, string>? Metadata = null);
-sealed record WorkflowSignalRequest(string RunId, string SignalName, string? Payload = null);
 sealed record WorkflowYamlSource(string Kind, string DirectoryPath);
 sealed record WorkflowFileEntry(string Name, string FilePath, string SourceKind);
 sealed record WorkflowListClassification(string Category, string Group, string GroupLabel, int SortOrder);
-
-sealed class DemoRunContext
-{
-    public string RunId { get; init; } = string.Empty;
-    public string ActorId { get; set; } = string.Empty;
-    public string Channel { get; set; } = string.Empty;
-    public string WorkflowName { get; set; } = string.Empty;
-    public DateTimeOffset CreatedAtUtc { get; init; }
-    public DateTimeOffset UpdatedAtUtc { get; set; }
-    public string? LastStepId { get; set; }
-    public string? LastSuspensionType { get; set; }
-    public string? LastSignalName { get; set; }
-    public string? LastEventType { get; set; }
-}
+sealed record LlmProviderRegistration(string Name, string Model, string? Endpoint, string ApiKey);
 

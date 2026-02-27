@@ -6,6 +6,8 @@ using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -472,7 +474,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowCallModule_ShouldPublishFailureWhenMissingWorkflow_AndStartWhenPresent()
+    public async Task WorkflowCallModule_ShouldPublishFailureWhenMissingWorkflow_AndEmitInvocationRequestWhenPresent()
     {
         var module = new WorkflowCallModule();
         var ctx = CreateContext();
@@ -489,7 +491,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var failure = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         failure.Success.Should().BeFalse();
-        failure.Error.Should().Contain("缺少 workflow 参数");
+        failure.Error.Should().Contain("missing workflow parameter");
 
         ctx.Published.Clear();
 
@@ -499,34 +501,70 @@ public sealed class WorkflowCoreModulesCoverageTests
                 StepId = "wf-2",
                 StepType = "workflow_call",
                 Input = "payload-2",
-                Parameters = { ["workflow"] = "sub_flow" },
+                Parameters =
+                {
+                    ["workflow"] = "sub_flow",
+                    ["lifecycle"] = "singleton",
+                },
             }),
             ctx,
             CancellationToken.None);
 
-        var start = ctx.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
-        start.WorkflowName.Should().Be("sub_flow");
-        start.Input.Should().Be("payload-2");
-        start.RunId.Should().NotBeNullOrWhiteSpace();
-        start.Parameters["workflow_call.parent_step_id"].Should().Be("wf-2");
+        var invocation = ctx.Published.Select(x => x.evt).OfType<SubWorkflowInvokeRequestedEvent>().Single();
+        invocation.WorkflowName.Should().Be("sub_flow");
+        invocation.Input.Should().Be("payload-2");
+        invocation.ParentStepId.Should().Be("wf-2");
+        invocation.ParentRunId.Should().Be("default");
+        invocation.Lifecycle.Should().Be("singleton");
+        Regex.IsMatch(invocation.InvocationId, "^default:workflow_call:wf-2:[0-9a-f]{32}$")
+            .Should().BeTrue("workflow_call invocation id should follow canonical format");
 
         ctx.Published.Clear();
+
         await module.HandleAsync(
-            Envelope(new WorkflowCompletedEvent
+            Envelope(new StepRequestEvent
             {
-                RunId = start.RunId,
-                Success = true,
-                Output = "child-output",
+                StepId = "",
+                StepType = "workflow_call",
+                Input = "payload-3",
+                Parameters =
+                {
+                    ["workflow"] = "sub_flow",
+                },
             }),
             ctx,
             CancellationToken.None);
 
-        var parentCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        parentCompletion.StepId.Should().Be("wf-2");
-        parentCompletion.RunId.Should().Be("default");
-        parentCompletion.Success.Should().BeTrue();
-        parentCompletion.Output.Should().Be("child-output");
-        parentCompletion.Metadata["workflow_call.child_run_id"].Should().Be(start.RunId);
+        var emptyStepFailure = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        emptyStepFailure.Success.Should().BeFalse();
+        emptyStepFailure.Error.Should().Contain("missing step_id");
+        ctx.Published.Select(x => x.evt).OfType<SubWorkflowInvokeRequestedEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void WorkflowCallModule_ShouldNotKeepProcessLevelInvocationDictionaries()
+    {
+        var forbidden = new[]
+        {
+            typeof(Dictionary<,>),
+            typeof(ConcurrentDictionary<,>),
+            typeof(HashSet<>),
+            typeof(Queue<>),
+        };
+
+        var fields = typeof(WorkflowCallModule).GetFields(
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic);
+
+        var violations = fields
+            .Where(field => field.FieldType.IsGenericType)
+            .Select(field => (field.Name, genericType: field.FieldType.GetGenericTypeDefinition()))
+            .Where(x => forbidden.Contains(x.genericType))
+            .Select(x => x.Name)
+            .ToList();
+
+        violations.Should().BeEmpty("workflow_call fact state must be persisted in WorkflowGAgent state");
     }
 
     [Fact]
@@ -573,6 +611,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
         chat.Prompt.Should().Be("system\n\nquestion");
         chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1"));
+        chat.Metadata["aevatar.llm_timeout_ms"].Should().Be("60000");
         ctx.Published.Last().direction.Should().Be(EventDirection.Self);
     }
 
@@ -637,6 +676,79 @@ public sealed class WorkflowCoreModulesCoverageTests
         chatCompleted.StepId.Should().Be("llm-chat");
         chatCompleted.WorkerId.Should().Be(ctx.AgentId);
         chatCompleted.Output.Should().Be("a2");
+    }
+
+    [Fact]
+    public async Task LLMCallModule_WhenRolePublishesInternalFailureMarker_ShouldPublishFailedStepCompleted()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-failed",
+                StepType = "llm_call",
+                RunId = "run-failed",
+                Input = "q",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-failed", "llm-failed");
+        await module.HandleAsync(
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = sessionId,
+                Content = "[[AEVATAR_LLM_ERROR]] provider returned 429",
+            }, publisherId: "role-worker-failed"),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("llm-failed");
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("provider returned 429");
+        completed.WorkerId.Should().Be("role-worker-failed");
+    }
+
+    [Fact]
+    public async Task LLMCallModule_WhenNoCompletionArrivesWithinTimeout_ShouldPublishFailedStepCompleted()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+        var timeoutPublished = new TaskCompletionSource<StepCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ctx.OnPublish = (evt, _) =>
+        {
+            if (evt is StepCompletedEvent completed &&
+                completed.StepId == "llm-timeout" &&
+                !completed.Success &&
+                completed.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase))
+            {
+                timeoutPublished.TrySetResult(completed);
+            }
+        };
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-timeout",
+                StepType = "llm_call",
+                RunId = "run-timeout",
+                Input = "q-timeout",
+                Parameters =
+                {
+                    ["timeout_ms"] = "50",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var timeoutEvent = await timeoutPublished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        timeoutEvent.StepId.Should().Be("llm-timeout");
+        timeoutEvent.RunId.Should().Be("run-timeout");
+        timeoutEvent.Success.Should().BeFalse();
     }
 
     [Fact]
@@ -874,6 +986,8 @@ public sealed class WorkflowCoreModulesCoverageTests
 
     private sealed class RecordingEventHandlerContext : IEventHandlerContext
     {
+        private readonly Lock _lock = new();
+
         public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
         {
             Services = services;
@@ -883,6 +997,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         }
 
         public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+        public Action<IMessage, EventDirection>? OnPublish { get; set; }
         public EventEnvelope InboundEnvelope { get; }
         public string AgentId => Agent.Id;
         public IAgent Agent { get; }
@@ -895,7 +1010,11 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken ct = default)
             where TEvent : IMessage
         {
-            Published.Add((evt, direction));
+            lock (_lock)
+            {
+                Published.Add((evt, direction));
+            }
+            OnPublish?.Invoke(evt, direction);
             return Task.CompletedTask;
         }
     }

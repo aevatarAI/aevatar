@@ -215,6 +215,30 @@ public class AIComponentCoverageTests
         chunks.Select(x => x.DeltaContent).Should().ContainInOrder("a", "b");
         chunks.Last().IsLast.Should().BeTrue();
 
+        var nonStreamingFallbackCalls = 0;
+        var emptyStreamClient = new StubChatClient
+        {
+            OnGetStreamingResponse = static (_, _, _) => EmptyChatStream(),
+            OnGetResponse = (_, _, _) =>
+            {
+                nonStreamingFallbackCalls++;
+                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "fallback-content")));
+            },
+        };
+        var emptyStreamProvider = new MEAILLMProvider("meai-empty-stream", emptyStreamClient);
+        var emptyStreamChunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in emptyStreamProvider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "hello fallback" }],
+        }))
+        {
+            emptyStreamChunks.Add(chunk);
+        }
+
+        nonStreamingFallbackCalls.Should().Be(1);
+        emptyStreamChunks.Should().Contain(x => x.DeltaContent == "fallback-content");
+        emptyStreamChunks.Last().IsLast.Should().BeTrue();
+
         var toolStreamClient = new StubChatClient
         {
             OnGetStreamingResponse = static (_, _, _) => StreamWithToolCall(),
@@ -269,12 +293,17 @@ public class AIComponentCoverageTests
         var tornadoFactory = new TornadoLLMProviderFactory();
         tornadoFactory.Register("t1", LLmProviders.OpenAi, "key", "model");
         tornadoFactory.RegisterOpenAICompatible("t2", "key", "model");
+        tornadoFactory.RegisterOpenAICompatible("t3", "key", "model", "https://example.test/v1");
         tornadoFactory.SetDefault("t2");
 
         tornadoFactory.GetDefault().Name.Should().Be("t2");
-        tornadoFactory.GetAvailableProviders().Should().Contain(["t1", "t2"]);
+        tornadoFactory.GetAvailableProviders().Should().Contain(["t1", "t2", "t3"]);
         Action missingTornado = () => tornadoFactory.GetProvider("missing");
         missingTornado.Should().Throw<InvalidOperationException>();
+
+        var t3Provider = (TornadoLLMProvider)tornadoFactory.GetProvider("t3");
+        var t3Api = GetPrivateField<LlmTornado.TornadoApi>(t3Provider, "_api");
+        t3Api.ApiUrlFormat.Should().Contain("example.test");
     }
 
     [Fact]
@@ -550,6 +579,12 @@ public class AIComponentCoverageTests
                     new Dictionary<string, object?> { ["term"] = "aevatar" }),
             ]);
         await Task.Yield();
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> EmptyChatStream()
+    {
+        await Task.CompletedTask;
+        yield break;
     }
 
     private sealed class StubTool : IAgentTool

@@ -12,6 +12,14 @@
   let turingMachineState = {};
   let eventSource = null;
   let pendingInteraction = null;
+  let wfLogEntries = [];
+  let wfThinkingBuffers = new Map();
+  let pgLogEntries = [];
+  let pgThinkingBuffers = new Map();
+  let persistStateTimer = null;
+  let persistenceHooksBound = false;
+  const UI_STATE_STORAGE_KEY = "aevatar.workflow.web.ui.v1";
+  const UI_STATE_STORAGE_VERSION = 1;
 
   const TYPE_COLORS = {
     transform: "#3b82f6", guard: "#f97316", conditional: "#f59e0b", switch: "#f59e0b",
@@ -52,8 +60,10 @@
 
   // ── Init ──
   document.addEventListener("DOMContentLoaded", async () => {
+    const persistedState = readPersistedUiState();
     setupNavigation();
     await Promise.all([loadWorkflows(), loadLlmStatus(), loadPrimitives()]);
+    await restoreUiState(persistedState);
   });
 
   function setupNavigation() {
@@ -66,11 +76,13 @@
         $("#sidebar-primitives").classList.toggle("hidden", view !== "primitives");
         if (view === "playground") showView("playground");
         else if (view === "primitives" && !selectedWorkflow) showView("empty");
+        scheduleUiStatePersist();
       });
     });
     $("#btn-run").addEventListener("click", runWorkflow);
     $("#btn-reset").addEventListener("click", resetExecution);
     setupPlayground();
+    setupStatePersistence();
   }
 
   // ── Data Loading ──
@@ -231,10 +243,12 @@
       renderFlowDiagram();
 
       $("#btn-run").disabled = selectedWorkflowMeta?.category === "llm" && !llmStatus.available;
+      scheduleUiStatePersist();
     } catch (e) {
       console.error("Failed to load workflow", e);
       $("#wf-description").textContent = "Failed to load workflow definition.";
       renderTuringDemoPanel(null);
+      scheduleUiStatePersist();
     }
   }
 
@@ -600,6 +614,7 @@
       }
     }
     renderFlowDiagram();
+    scheduleUiStatePersist();
 
     eventSource = new EventSource(url);
 
@@ -607,7 +622,7 @@
       const data = JSON.parse(e.data);
       stepStates[data.stepId] = "running";
       updateStepNode(data.stepId);
-      addLogEntry("request", `\u25B6 ${data.stepId} (${data.stepType})`, truncate(data.input, 200));
+      addLogEntry("request", `\u25B6 ${data.stepId} (${data.stepType})`, data.input);
     });
 
     eventSource.addEventListener("step.completed", (e) => {
@@ -618,7 +633,7 @@
         updateTuringMachineState(data.metadata);
       }
       if (data.success) {
-        addLogEntry("completed", `\u2713 ${data.stepId}`, truncate(data.output, 300));
+        addLogEntry("completed", `\u2713 ${data.stepId}`, data.output);
       } else {
         addLogEntry("failed", `\u2717 ${data.stepId}`, data.error || "Failed");
       }
@@ -626,7 +641,16 @@
 
     eventSource.addEventListener("llm.response", (e) => {
       const data = JSON.parse(e.data);
-      addLogEntry("llm", `\uD83E\uDD16 ${data.role}`, truncate(data.content, 400));
+      const finalContent = absorbInlineThinking(wfThinkingBuffers, data.role, data.content);
+      flushThinkingToLog(wfThinkingBuffers, data.role, addLogEntry);
+      if (finalContent) {
+        addLogEntry("llm", `\uD83E\uDD16 ${data.role}`, finalContent);
+      }
+    });
+
+    eventSource.addEventListener("llm.thinking", (e) => {
+      const data = JSON.parse(e.data);
+      appendThinkingDelta(wfThinkingBuffers, data.role, data.content);
     });
 
     eventSource.addEventListener("workflow.suspended", (e) => {
@@ -634,6 +658,7 @@
       addLogEntry("suspended", `\u23F8 ${data.stepId} (${data.suspensionType})`, data.prompt || "Waiting for human action");
       setWorkflowInteraction({
         type: data.suspensionType || "human_input",
+        actorId: data.actorId || "",
         runId: data.runId || "",
         stepId: data.stepId || "",
         prompt: data.prompt || "",
@@ -647,6 +672,7 @@
       addLogEntry("waiting", `\u23F3 ${data.stepId} (${data.signalName})`, data.prompt || "Waiting for external signal");
       setWorkflowInteraction({
         type: "wait_signal",
+        actorId: data.actorId || "",
         runId: data.runId || "",
         stepId: data.stepId || "",
         signalName: data.signalName || "",
@@ -691,6 +717,8 @@
   function resetExecution() {
     stopExecution();
     stepStates = {};
+    wfLogEntries = [];
+    wfThinkingBuffers = new Map();
     resetTuringMachineState();
     setWorkflowInteraction(null);
     $("#exec-log").classList.add("hidden");
@@ -704,6 +732,7 @@
     }
 
     renderFlowDiagram();
+    scheduleUiStatePersist();
   }
 
   function updateStepNode(stepId) {
@@ -720,11 +749,97 @@
     }
   }
 
-  function addLogEntry(type, title, detail) {
+  function buildLogDetailHtml(detail, options = {}) {
+    if (detail === null || detail === undefined || detail === "") return "";
+
+    const text = String(detail);
+    const foldThreshold = 480;
+    const shouldFold = options.forceFold === true || text.length > foldThreshold;
+    if (!shouldFold) {
+      return `<div class="log-detail">${esc(text)}</div>`;
+    }
+
+    const openAttr = options.detailOpen === false ? "" : " open";
+    const toggleLabel = options.toggleLabel || "Full text";
+    const actionLabel = options.detailOpen === false ? "expand" : "collapse";
+    return `<details class="log-detail-fold"${openAttr}><summary><span class="log-detail-toggle">${esc(toggleLabel)} (${text.length} chars) - click to ${actionLabel}</span></summary><pre class="log-detail-full">${esc(text)}</pre></details>`;
+  }
+
+  function thinkingBufferKey(role) {
+    const normalized = String(role || "").trim();
+    return normalized || "assistant";
+  }
+
+  function appendThinkingDelta(buffers, role, delta) {
+    const text = String(delta || "");
+    if (!text) return;
+    const key = thinkingBufferKey(role);
+    const previous = buffers.get(key) || "";
+    buffers.set(key, previous + text);
+    scheduleUiStatePersist();
+  }
+
+  function splitInlineThinking(content) {
+    const text = String(content || "");
+    if (!text) return { thinking: "", answer: "" };
+
+    const regex = /<think(?:ing)?>\s*([\s\S]*?)\s*<\/think(?:ing)?>/gi;
+    const segments = [];
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      const segment = String(match[1] || "").trim();
+      if (segment) segments.push(segment);
+    }
+
+    if (segments.length === 0) {
+      return { thinking: "", answer: text };
+    }
+
+    const answer = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "").trim();
+    return {
+      thinking: segments.join("\n\n"),
+      answer,
+    };
+  }
+
+  function absorbInlineThinking(buffers, role, content) {
+    const parsed = splitInlineThinking(content);
+    if (parsed.thinking) appendThinkingDelta(buffers, role, parsed.thinking);
+    return parsed.answer || "";
+  }
+
+  function flushThinkingToLog(buffers, role, logFn) {
+    const key = thinkingBufferKey(role);
+    const content = buffers.get(key) || "";
+    if (!content) return;
+    buffers.delete(key);
+    logFn(
+      "thinking",
+      `\uD83E\uDDE0 ${key} thinking`,
+      content,
+      {
+        forceFold: true,
+        detailOpen: false,
+        toggleLabel: "Thinking trace",
+      });
+  }
+
+  function addLogEntry(type, title, detail, options = {}) {
+    const normalizedDetail = detail === null || detail === undefined ? "" : String(detail);
+    if (!options.skipStore) {
+      wfLogEntries.push({
+        type: String(type || "action"),
+        title: String(title || ""),
+        detail: normalizedDetail,
+      });
+      scheduleUiStatePersist();
+    }
+
     const el = document.createElement("div");
     el.className = `log-entry log-${type}`;
-    const icons = { request: "\u25B6", completed: "\u2713", failed: "\u2717", llm: "\uD83E\uDD16", suspended: "\u23F8", waiting: "\u23F3", action: "\u270D", done: "\u2705", error: "\u274C" };
-    el.innerHTML = `<span class="log-icon">${icons[type] || ""}</span><span class="log-text"><strong>${esc(title)}</strong>${detail ? "<br>" + esc(detail) : ""}</span>`;
+    const icons = { request: "\u25B6", completed: "\u2713", failed: "\u2717", llm: "\uD83E\uDD16", thinking: "\uD83E\uDDE0", suspended: "\u23F8", waiting: "\u23F3", action: "\u270D", done: "\u2705", error: "\u274C" };
+    const detailHtml = buildLogDetailHtml(normalizedDetail, options);
+    el.innerHTML = `<span class="log-icon">${icons[type] || ""}</span><span class="log-text"><strong>${esc(title)}</strong>${detailHtml ? `<br>${detailHtml}` : ""}</span>`;
     const container = $("#log-entries");
     container.appendChild(el);
     container.scrollTop = container.scrollHeight;
@@ -735,6 +850,7 @@
     const pre = $("#wf-result");
     pre.textContent = data.success ? data.output : (data.error || "Failed");
     pre.className = `result-pre ${data.success ? "success" : "failure"}`;
+    scheduleUiStatePersist();
   }
 
   function setWorkflowInteraction(interaction) {
@@ -746,11 +862,13 @@
     if (!interaction) {
       section.classList.add("hidden");
       panel.innerHTML = "";
+      scheduleUiStatePersist();
       return;
     }
 
     section.classList.remove("hidden");
     renderInteractionPanel(panel, "wf", interaction, addLogEntry, () => setWorkflowInteraction(null));
+    scheduleUiStatePersist();
   }
 
   function setPlaygroundInteraction(interaction) {
@@ -762,16 +880,24 @@
     if (!interaction) {
       section.classList.add("hidden");
       panel.innerHTML = "";
+      scheduleUiStatePersist();
       return;
     }
 
     section.classList.remove("hidden");
-    renderInteractionPanel(panel, "pg", interaction, pgAddLog, () => setPlaygroundInteraction(null));
+    if (pgAutoMode && interaction.type === "human_approval") {
+      renderAutoApprovalPanel(panel, interaction);
+    } else {
+      renderInteractionPanel(panel, "pg", interaction, pgAddLog, () => setPlaygroundInteraction(null));
+    }
+    scheduleUiStatePersist();
   }
 
   function renderInteractionPanel(container, prefix, interaction, logFn, clearFn) {
     const type = String(interaction.type || "").toLowerCase();
+    const actorId = interaction.actorId || "";
     const runId = interaction.runId || "";
+    const commandId = interaction.commandId || "";
     const stepId = interaction.stepId || "";
     const signalName = interaction.signalName || "";
     const prompt = interaction.prompt || "";
@@ -818,13 +944,15 @@
       </div>
       <div class="interaction-meta">
         <span class="interaction-chip">type: ${esc(kindLabel)}</span>
+        <span class="interaction-chip">actor: ${esc(actorId || "missing")}</span>
         <span class="interaction-chip">step: ${esc(stepId || "n/a")}</span>
         <span class="interaction-chip">run: ${esc(runId || "missing")}</span>
+        ${commandId ? `<span class="interaction-chip">command: ${esc(commandId)}</span>` : ""}
         ${type === "wait_signal" ? `<span class="interaction-chip">signal: ${esc(signalName || "n/a")}</span>` : ""}
         <span class="interaction-chip">timeout: ${esc(timeoutLabel)}</span>
       </div>
       ${controlHtml}
-      ${runId ? "" : `<div class="interaction-note">Cannot submit: missing runId in SSE context.</div>`}
+      ${runId && actorId ? "" : `<div class="interaction-note">Cannot submit: missing actorId/runId in SSE context.</div>`}
     `;
 
     bindInteractionActions(prefix, interaction, logFn, clearFn);
@@ -832,11 +960,13 @@
 
   function bindInteractionActions(prefix, interaction, logFn, clearFn) {
     const type = String(interaction.type || "").toLowerCase();
+    const actorId = interaction.actorId || "";
     const runId = interaction.runId || "";
+    const commandId = interaction.commandId || "";
     const stepId = interaction.stepId || "";
     const signalName = interaction.signalName || "";
 
-    if (!runId) return;
+    if (!runId || !actorId) return;
 
     if (type === "human_approval") {
       const approveBtn = $(`#${prefix}-interaction-approve`);
@@ -850,8 +980,10 @@
         const comment = commentEl.value.trim();
         try {
           await postJson("/api/workflows/resume", {
+            actorId,
             runId,
             stepId,
+            commandId,
             approved,
             userInput: comment,
           });
@@ -880,11 +1012,13 @@
         const payload = payloadEl.value;
         try {
           await postJson("/api/workflows/signal", {
+            actorId,
             runId,
             signalName,
+            commandId,
             payload,
           });
-          logFn("action", "✍ Signal submitted", truncate(payload, 220) || "(empty payload)");
+          logFn("action", "✍ Signal submitted", payload || "(empty payload)");
           clearFn();
         } catch (e) {
           logFn("error", "\u274C Signal failed", e.message || String(e));
@@ -904,12 +1038,14 @@
       const userInput = inputEl.value.trim();
       try {
         await postJson("/api/workflows/resume", {
+          actorId,
           runId,
           stepId,
+          commandId,
           approved: true,
           userInput,
         });
-        logFn("action", "✍ Human input submitted", truncate(userInput, 220) || "(empty input)");
+        logFn("action", "✍ Human input submitted", userInput || "(empty input)");
         clearFn();
       } catch (e) {
         logFn("error", "\u274C Resume failed", e.message || String(e));
@@ -1114,6 +1250,278 @@
     return s.length > max ? s.slice(0, max) + "..." : s;
   }
 
+  function setupStatePersistence() {
+    if (persistenceHooksBound) return;
+    persistenceHooksBound = true;
+
+    const bind = (selector, eventName = "input") => {
+      const el = $(selector);
+      if (el) el.addEventListener(eventName, scheduleUiStatePersist);
+    };
+
+    bind("#wf-input");
+    bind("#pg-input");
+    bind("#pg-run-input");
+    bind("#wf-auto-resume", "change");
+    bind("#pg-auto-resume", "change");
+    window.addEventListener("beforeunload", flushUiStatePersist);
+  }
+
+  function scheduleUiStatePersist() {
+    if (persistStateTimer !== null) return;
+    persistStateTimer = window.setTimeout(() => {
+      persistStateTimer = null;
+      persistUiState();
+    }, 200);
+  }
+
+  function flushUiStatePersist() {
+    if (persistStateTimer !== null) {
+      window.clearTimeout(persistStateTimer);
+      persistStateTimer = null;
+    }
+    persistUiState();
+  }
+
+  function readPersistedUiState() {
+    try {
+      const raw = sessionStorage.getItem(UI_STATE_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || parsed.version !== UI_STATE_STORAGE_VERSION) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function persistUiState() {
+    const snapshot = buildPersistedUiState();
+    const working = JSON.parse(JSON.stringify(snapshot));
+
+    while (true) {
+      try {
+        sessionStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(working));
+        return;
+      } catch (e) {
+        if (!isQuotaExceededError(e)) {
+          console.warn("Failed to persist UI state", e);
+          return;
+        }
+
+        const wfLogs = working.workflow?.logs || [];
+        const pgLogs = working.playground?.logs || [];
+        if (wfLogs.length === 0 && pgLogs.length === 0) {
+          console.warn("Unable to persist UI state: storage quota exceeded.");
+          return;
+        }
+
+        if (pgLogs.length >= wfLogs.length) {
+          pgLogs.splice(0, Math.max(1, Math.ceil(pgLogs.length * 0.2)));
+        } else {
+          wfLogs.splice(0, Math.max(1, Math.ceil(wfLogs.length * 0.2)));
+        }
+      }
+    }
+  }
+
+  function buildPersistedUiState() {
+    const wfResultPre = $("#wf-result");
+    const pgResultPre = $("#pg-result");
+    const pgAutoStatus = $("#pg-auto-status");
+    const tones = ["info", "warn", "success", "error"];
+    const activeTone = tones.find((tone) => pgAutoStatus?.classList?.contains(tone)) || "info";
+
+    return {
+      version: UI_STATE_STORAGE_VERSION,
+      activeView: getActiveNavView(),
+      selectedWorkflow,
+      workflow: {
+        input: $("#wf-input")?.value || "",
+        autoResume: $("#wf-auto-resume")?.checked === true,
+        logs: wfLogEntries.map((entry) => ({ ...entry })),
+        stepStates: { ...(stepStates || {}) },
+        result: {
+          visible: !$("#result-section")?.classList.contains("hidden"),
+          text: wfResultPre?.textContent || "",
+          className: wfResultPre?.className || "result-pre",
+        },
+      },
+      playground: {
+        autoMode: pgAutoMode,
+        input: $("#pg-input")?.value || "",
+        runInput: $("#pg-run-input")?.value || "",
+        messages: Array.isArray(pgMessages)
+          ? pgMessages.map((x) => ({ role: String(x.role || "assistant"), content: String(x.content || "") }))
+          : [],
+        currentYaml: pgCurrentYaml || "",
+        logs: pgLogEntries.map((entry) => ({ ...entry })),
+        stepStates: { ...(pgStepStates || {}) },
+        result: {
+          visible: !$("#pg-result-section")?.classList.contains("hidden"),
+          text: pgResultPre?.textContent || "",
+          className: pgResultPre?.className || "result-pre",
+        },
+        autoStatus: {
+          text: pgAutoStatus?.classList.contains("hidden") ? "" : (pgAutoStatus?.textContent || ""),
+          tone: activeTone,
+        },
+        autoCanRunFinal: pgAutoCanRunFinal === true,
+      },
+    };
+  }
+
+  async function restoreUiState(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return;
+
+    pgSetMode(snapshot.playground?.autoMode === true, { force: true, preserveMessages: true });
+
+    const targetWorkflow = typeof snapshot.selectedWorkflow === "string" ? snapshot.selectedWorkflow : "";
+    if (targetWorkflow && workflows.some((w) => w.name === targetWorkflow)) {
+      await selectWorkflow(targetWorkflow);
+      restoreWorkflowUiState(snapshot.workflow);
+    }
+
+    await restorePlaygroundUiState(snapshot.playground);
+    activateNavView(snapshot.activeView);
+    scheduleUiStatePersist();
+  }
+
+  function restoreWorkflowUiState(snapshot) {
+    if (!snapshot || !selectedWorkflow || !workflowDef) return;
+
+    if (typeof snapshot.input === "string")
+      $("#wf-input").value = snapshot.input;
+    if (typeof snapshot.autoResume === "boolean" && $("#wf-auto-resume"))
+      $("#wf-auto-resume").checked = snapshot.autoResume;
+
+    if (snapshot.stepStates && typeof snapshot.stepStates === "object")
+      stepStates = { ...snapshot.stepStates };
+    renderFlowDiagram();
+
+    const logs = normalizePersistedLogEntries(snapshot.logs);
+    wfLogEntries = logs.map((entry) => ({ ...entry }));
+    $("#log-entries").innerHTML = "";
+    if (logs.length > 0) {
+      $("#exec-log").classList.remove("hidden");
+      for (const entry of logs)
+        addLogEntry(entry.type, entry.title, entry.detail, { skipStore: true });
+    }
+
+    if (snapshot.result?.visible) {
+      $("#result-section").classList.remove("hidden");
+      const pre = $("#wf-result");
+      pre.textContent = String(snapshot.result.text || "");
+      pre.className = String(snapshot.result.className || "result-pre");
+    }
+
+    if (logs.length > 0 || snapshot.result?.visible)
+      $("#btn-reset").classList.remove("hidden");
+  }
+
+  async function restorePlaygroundUiState(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return;
+
+    if (typeof snapshot.input === "string")
+      $("#pg-input").value = snapshot.input;
+    if (typeof snapshot.runInput === "string")
+      $("#pg-run-input").value = snapshot.runInput;
+
+    const restoredMessages = Array.isArray(snapshot.messages)
+      ? snapshot.messages
+          .filter((x) => x && typeof x === "object")
+          .map((x) => ({ role: String(x.role || "assistant"), content: String(x.content || "") }))
+      : [];
+    pgMessages = restoredMessages;
+    restorePlaygroundMessages(restoredMessages);
+
+    const restoredYaml = typeof snapshot.currentYaml === "string" ? snapshot.currentYaml : "";
+    if (restoredYaml.trim())
+      await pgApplyYaml(restoredYaml);
+
+    const logs = normalizePersistedLogEntries(snapshot.logs);
+    pgLogEntries = logs.map((entry) => ({ ...entry }));
+    $("#pg-log-entries").innerHTML = "";
+    if (logs.length > 0) {
+      $("#pg-exec-log").classList.remove("hidden");
+      for (const entry of logs)
+        pgAddLog(entry.type, entry.title, entry.detail, { skipStore: true });
+    }
+
+    if (snapshot.stepStates && typeof snapshot.stepStates === "object")
+      pgStepStates = { ...snapshot.stepStates };
+    if (pgParsedDef?.definition?.steps)
+      renderFlowInto($("#pg-graph"), pgParsedDef.definition.steps, pgParsedDef.edges, pgStepStates);
+
+    if (snapshot.result?.visible) {
+      $("#pg-result-section").classList.remove("hidden");
+      const pre = $("#pg-result");
+      pre.textContent = String(snapshot.result.text || "");
+      pre.className = String(snapshot.result.className || "result-pre");
+    }
+
+    if (snapshot.autoStatus?.text) {
+      pgSetAutoStatus(String(snapshot.autoStatus.text), String(snapshot.autoStatus.tone || "info"));
+    } else {
+      pgSetAutoStatus("", "info");
+    }
+
+    pgAutoCanRunFinal = snapshot.autoCanRunFinal === true;
+    pgUpdateRunBarVisibility();
+    if (pgCurrentYaml && pgParsedDef) {
+      $("#pg-run-btn").disabled = pgAutoMode ? !pgAutoCanRunFinal : false;
+    } else {
+      $("#pg-run-btn").disabled = true;
+    }
+  }
+
+  function restorePlaygroundMessages(messages) {
+    const container = $("#pg-messages");
+    container.innerHTML = "";
+    for (const message of messages) {
+      if (message.role === "assistant") {
+        const assistantEl = pgAddBubble("assistant", "");
+        pgUpdateAssistantBubble(assistantEl, message.content, false);
+      } else if (message.role === "error") {
+        pgAddBubble("error", message.content);
+      } else {
+        pgAddBubble("user", message.content);
+      }
+    }
+  }
+
+  function normalizePersistedLogEntries(entries) {
+    if (!Array.isArray(entries)) return [];
+    return entries
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        type: String(entry.type || "action"),
+        title: String(entry.title || ""),
+        detail: entry.detail === null || entry.detail === undefined ? "" : String(entry.detail),
+      }));
+  }
+
+  function getActiveNavView() {
+    return document.querySelector(".nav-btn.active")?.dataset.view || "workflows";
+  }
+
+  function activateNavView(view) {
+    const normalized = String(view || "");
+    if (normalized !== "workflows" && normalized !== "primitives" && normalized !== "playground")
+      return;
+    const btn = document.querySelector(`.nav-btn[data-view="${normalized}"]`);
+    if (btn) btn.click();
+  }
+
+  function isQuotaExceededError(error) {
+    return error && (
+      error.name === "QuotaExceededError" ||
+      error.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+      error.code === 22 ||
+      error.code === 1014
+    );
+  }
+
   // ══════════════════════════════════════════════
   // ── Playground ──
   // ══════════════════════════════════════════════
@@ -1128,6 +1536,22 @@
   let pgRunning = false;
   let pgPendingInteraction = null;
 
+  let pgAutoMode = false;
+  let pgAutoPhase = "idle";
+  let pgAutoLlmContent = "";
+  let pgAutoAssistantBubble = null;
+  let pgAutoRunning = false;
+  let pgAutoRound = 0;
+  let pgAutoCanRunFinal = false;
+  let pgAutoActorId = "";
+  let pgAutoRunId = "";
+  let pgAutoCommandId = "";
+  let pgAutoMessageBuffers = new Map();
+  let pgRunActorId = "";
+  let pgRunRunId = "";
+  let pgRunCommandId = "";
+  let pgRunMessageBuffers = new Map();
+
   function setupPlayground() {
     $("#pg-send").addEventListener("click", () => pgSend());
     $("#pg-input").addEventListener("keydown", (e) => {
@@ -1135,9 +1559,78 @@
     });
     $("#pg-run-btn").addEventListener("click", pgRunWorkflow);
     $("#pg-run-reset").addEventListener("click", pgResetRun);
+
+    $$(".pg-mode-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        pgSetMode(btn.dataset.mode === "auto");
+      });
+    });
+
+    pgUpdateRunBarVisibility();
+  }
+
+  function pgSetMode(autoMode, options = {}) {
+    const force = options.force === true;
+    const preserveMessages = options.preserveMessages === true;
+
+    $$(".pg-mode-btn").forEach((b) => b.classList.toggle("active", (b.dataset.mode === "auto") === autoMode));
+    if (!force && autoMode === pgAutoMode) {
+      pgUpdateRunBarVisibility();
+      return;
+    }
+
+    pgAutoMode = autoMode;
+    pgResetRun();
+    pgAutoReset();
+    if (!preserveMessages) {
+      pgMessages = [];
+      $("#pg-messages").innerHTML = "";
+    }
+    pgUpdateRunBarVisibility();
+    $("#pg-input").placeholder = pgAutoMode
+      ? "Describe what you want to do..."
+      : "Describe your workflow...";
+    scheduleUiStatePersist();
+  }
+
+  function pgUpdateRunBarVisibility() {
+    const runBar = $(".pg-run-bar");
+    if (!runBar) return;
+
+    if (!pgAutoMode) {
+      runBar.style.display = "";
+      $("#pg-run-btn").textContent = "Run";
+      return;
+    }
+
+    runBar.style.display = pgAutoCanRunFinal ? "" : "none";
+    $("#pg-run-btn").textContent = "Run Final Workflow";
+  }
+
+  function pgSetAutoStatus(message, tone = "info") {
+    const el = $("#pg-auto-status");
+    if (!el) return;
+    if (!message) {
+      el.textContent = "";
+      el.className = "pg-auto-status hidden";
+      scheduleUiStatePersist();
+      return;
+    }
+    el.textContent = message;
+    el.className = `pg-auto-status ${tone}`;
+    scheduleUiStatePersist();
+  }
+
+  function pgExtractLastYaml(text) {
+    const regex = /```(?:ya?ml)?\s*\n([\s\S]*?)```/gi;
+    let lastYaml = null;
+    let m;
+    while ((m = regex.exec(text)) !== null) lastYaml = m[1].trim();
+    return lastYaml;
   }
 
   async function pgSend() {
+    if (pgAutoMode) { pgAutoSend(); return; }
     const input = $("#pg-input");
     const text = input.value.trim();
     if (!text || pgStreaming) return;
@@ -1145,6 +1638,7 @@
     input.value = "";
     pgMessages.push({ role: "user", content: text });
     pgAddBubble("user", text);
+    scheduleUiStatePersist();
 
     pgStreaming = true;
     $("#pg-send").disabled = true;
@@ -1171,6 +1665,7 @@
         pgStreaming = false;
         $("#pg-send").disabled = false;
         assistantEl.remove();
+        scheduleUiStatePersist();
         return;
       }
 
@@ -1210,10 +1705,12 @@
     if (fullText) {
       pgMessages.push({ role: "assistant", content: fullText });
       pgExtractAndRenderYaml(fullText);
+      scheduleUiStatePersist();
     }
 
     pgStreaming = false;
     $("#pg-send").disabled = false;
+    scheduleUiStatePersist();
   }
 
   function pgAddBubble(role, text) {
@@ -1293,7 +1790,7 @@
       if (data.valid && data.definition?.steps) {
         pgParsedDef = data;
         renderFlowInto($("#pg-graph"), data.definition.steps, data.edges, null);
-        $("#pg-run-btn").disabled = false;
+        $("#pg-run-btn").disabled = pgAutoMode ? !pgAutoCanRunFinal : false;
       } else {
         pgParsedDef = null;
         $("#pg-run-btn").disabled = true;
@@ -1304,14 +1801,559 @@
       $("#pg-run-btn").disabled = true;
       $("#pg-graph").innerHTML = `<p style="color:var(--state-failed);padding:16px;font-size:12px">${esc(e.message)}</p>`;
     }
+    scheduleUiStatePersist();
+  }
+
+  async function streamWorkflowChatRun(payload, onFrame) {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const raw = await res.text();
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          const code = parsed?.code ? `[${parsed.code}] ` : "";
+          const message = parsed?.message || raw;
+          throw new Error(`${code}${message}`);
+        } catch {
+          throw new Error(raw);
+        }
+      }
+
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nlIdx;
+      while ((nlIdx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nlIdx).trim();
+        buf = buf.slice(nlIdx + 1);
+        if (!line.startsWith("data: ")) continue;
+        const raw = line.slice(6);
+        if (!raw) continue;
+        try {
+          const frame = JSON.parse(raw);
+          onFrame(frame);
+        } catch { }
+      }
+    }
+  }
+
+  function pgNormalizeCustomPayload(value) {
+    if (!value || typeof value !== "object") return {};
+    return value;
+  }
+
+  function readCustomValue(value, camelKey, pascalKey) {
+    if (!value || typeof value !== "object") return "";
+    return value[camelKey] ?? value[pascalKey] ?? "";
+  }
+
+  function pgExtractRunOutput(result) {
+    if (result == null) return "";
+    if (typeof result === "string") return result;
+    if (typeof result === "object" && typeof result.output === "string") return result.output;
+    try { return JSON.stringify(result, null, 2); } catch { return String(result); }
+  }
+
+  function pgMapCustomFrameToEvent(frame) {
+    const name = String(frame.name || "");
+    const value = pgNormalizeCustomPayload(frame.value);
+    if (!name) return null;
+
+    if (name === "aevatar.step.request") {
+      return {
+        eventType: "step.request",
+        data: {
+          runId: readCustomValue(value, "runId", "RunId"),
+          stepId: readCustomValue(value, "stepId", "StepId"),
+          stepType: readCustomValue(value, "stepType", "StepType"),
+          input: readCustomValue(value, "input", "Input"),
+          targetRole: readCustomValue(value, "targetRole", "TargetRole"),
+        },
+      };
+    }
+
+    if (name === "aevatar.step.completed") {
+      return {
+        eventType: "step.completed",
+        data: {
+          runId: readCustomValue(value, "runId", "RunId"),
+          stepId: readCustomValue(value, "stepId", "StepId"),
+          success: value.success === true,
+          output: readCustomValue(value, "output", "Output"),
+          error: value.error ?? value.Error ?? null,
+          metadata: value.metadata || {},
+        },
+      };
+    }
+
+    if (name === "aevatar.human_input.request") {
+      return {
+        eventType: "workflow.suspended",
+        data: {
+          runId: readCustomValue(value, "runId", "RunId"),
+          stepId: readCustomValue(value, "stepId", "StepId"),
+          suspensionType: readCustomValue(value, "suspensionType", "SuspensionType") || "human_input",
+          prompt: readCustomValue(value, "prompt", "Prompt"),
+          timeoutSeconds: value.timeoutSeconds ?? value.TimeoutSeconds ?? 0,
+          metadata: value.metadata || {},
+        },
+      };
+    }
+
+    if (name === "aevatar.workflow.waiting_signal") {
+      return {
+        eventType: "workflow.waiting_signal",
+        data: {
+          runId: readCustomValue(value, "runId", "RunId"),
+          stepId: readCustomValue(value, "stepId", "StepId"),
+          signalName: readCustomValue(value, "signalName", "SignalName"),
+          prompt: readCustomValue(value, "prompt", "Prompt"),
+          timeoutMs: value.timeoutMs ?? value.TimeoutMs ?? 0,
+        },
+      };
+    }
+
+    if (name === "aevatar.llm.reasoning") {
+      return {
+        eventType: "llm.thinking",
+        data: {
+          role: readCustomValue(value, "role", "Role") || "assistant",
+          content: readCustomValue(value, "delta", "Delta"),
+        },
+      };
+    }
+
+    return null;
+  }
+
+  function pgAutoHandleWorkflowFrame(frame) {
+    const type = String(frame.type || "");
+    if (!type) return;
+
+    if (type === "RUN_STARTED") {
+      pgAutoActorId = frame.threadId || pgAutoActorId;
+      return;
+    }
+
+    if (type === "TEXT_MESSAGE_START") {
+      const messageId = frame.messageId || "__default__";
+      pgAutoMessageBuffers.set(messageId, "");
+      return;
+    }
+
+    if (type === "TEXT_MESSAGE_CONTENT") {
+      const messageId = frame.messageId || "__default__";
+      const prev = pgAutoMessageBuffers.get(messageId) || "";
+      const next = prev + (frame.delta || "");
+      pgAutoMessageBuffers.set(messageId, next);
+      if (pgAutoPhase === "planning" || pgAutoPhase === "approval") {
+        pgAutoHandleSseEvent("llm.response", { role: frame.role || "assistant", content: next });
+      }
+      return;
+    }
+
+    if (type === "TEXT_MESSAGE_END") {
+      const messageId = frame.messageId || "__default__";
+      const content = pgAutoMessageBuffers.get(messageId) || "";
+      pgAutoHandleSseEvent("llm.response", { role: frame.role || "assistant", content });
+      pgAutoMessageBuffers.delete(messageId);
+      return;
+    }
+
+    if (type === "CUSTOM") {
+      const customName = String(frame.name || "");
+      if (customName === "aevatar.run.context") {
+        const value = pgNormalizeCustomPayload(frame.value);
+        const commandId = readCustomValue(value, "commandId", "CommandId");
+        const actorId = readCustomValue(value, "actorId", "ActorId");
+        if (commandId) pgAutoCommandId = commandId;
+        if (actorId) pgAutoActorId = actorId;
+        return;
+      }
+
+      const mapped = pgMapCustomFrameToEvent(frame);
+      if (!mapped) return;
+      if (mapped.data?.runId &&
+          (mapped.eventType === "step.request" ||
+            mapped.eventType === "step.completed" ||
+            mapped.eventType === "workflow.suspended")) {
+        pgAutoRunId = mapped.data.runId;
+      }
+      mapped.data.actorId = pgAutoActorId || "";
+      pgAutoHandleSseEvent(mapped.eventType, mapped.data);
+      return;
+    }
+
+    if (type === "RUN_FINISHED") {
+      pgAutoHandleSseEvent("workflow.completed", {
+        runId: pgAutoRunId || "",
+        success: true,
+        output: pgExtractRunOutput(frame.result),
+      });
+      return;
+    }
+
+    if (type === "RUN_ERROR") {
+      pgAutoHandleSseEvent("workflow.error", {
+        runId: pgAutoRunId || "",
+        error: frame.message || "Workflow run failed.",
+      });
+    }
+  }
+
+  function pgHandleWorkflowFrame(frame) {
+    const type = String(frame.type || "");
+    if (!type) return;
+
+    if (type === "RUN_STARTED") {
+      pgRunActorId = frame.threadId || pgRunActorId;
+      return;
+    }
+
+    if (type === "TEXT_MESSAGE_START") {
+      const messageId = frame.messageId || "__default__";
+      pgRunMessageBuffers.set(messageId, "");
+      return;
+    }
+
+    if (type === "TEXT_MESSAGE_CONTENT") {
+      const messageId = frame.messageId || "__default__";
+      const prev = pgRunMessageBuffers.get(messageId) || "";
+      pgRunMessageBuffers.set(messageId, prev + (frame.delta || ""));
+      return;
+    }
+
+    if (type === "TEXT_MESSAGE_END") {
+      const messageId = frame.messageId || "__default__";
+      const content = pgRunMessageBuffers.get(messageId) || "";
+      pgRunMessageBuffers.delete(messageId);
+      pgHandleSseEvent("llm.response", { role: frame.role || "assistant", content });
+      return;
+    }
+
+    if (type === "CUSTOM") {
+      const customName = String(frame.name || "");
+      if (customName === "aevatar.run.context") {
+        const value = pgNormalizeCustomPayload(frame.value);
+        const commandId = readCustomValue(value, "commandId", "CommandId");
+        const actorId = readCustomValue(value, "actorId", "ActorId");
+        if (commandId) pgRunCommandId = commandId;
+        if (actorId) pgRunActorId = actorId;
+        return;
+      }
+
+      const mapped = pgMapCustomFrameToEvent(frame);
+      if (!mapped) return;
+      if (mapped.data?.runId &&
+          (mapped.eventType === "step.request" ||
+            mapped.eventType === "step.completed" ||
+            mapped.eventType === "workflow.suspended")) {
+        pgRunRunId = mapped.data.runId;
+      }
+      mapped.data.actorId = pgRunActorId || "";
+      pgHandleSseEvent(mapped.eventType, mapped.data);
+      return;
+    }
+
+    if (type === "RUN_FINISHED") {
+      pgHandleSseEvent("workflow.completed", {
+        runId: pgRunRunId || "",
+        success: true,
+        output: pgExtractRunOutput(frame.result),
+      });
+      return;
+    }
+
+    if (type === "RUN_ERROR") {
+      pgHandleSseEvent("workflow.error", {
+        runId: pgRunRunId || "",
+        error: frame.message || "Workflow run failed.",
+      });
+    }
+  }
+
+  // ── Playground: Auto Mode ──
+
+  async function pgAutoSend() {
+    const input = $("#pg-input");
+    const text = input.value.trim();
+    if (!text || pgAutoRunning) return;
+
+    input.value = "";
+    pgAutoReset();
+    pgMessages.push({ role: "user", content: text });
+    pgAddBubble("user", text);
+    scheduleUiStatePersist();
+
+    pgAutoRunning = true;
+    pgAutoPhase = "planning";
+    pgAutoRound = 0;
+    pgAutoLlmContent = "";
+    pgAutoAssistantBubble = null;
+    pgAutoCanRunFinal = false;
+    pgAutoActorId = "";
+    pgAutoRunId = "";
+    pgAutoCommandId = "";
+    pgAutoMessageBuffers = new Map();
+    pgUpdateRunBarVisibility();
+    pgSetAutoStatus("AI 正在分析需求并生成 workflow 草稿…", "info");
+    $("#pg-send").disabled = true;
+    $("#pg-exec-log").classList.remove("hidden");
+
+    try {
+      await streamWorkflowChatRun(
+        {
+          prompt: text,
+          workflow: "auto_review",
+        },
+        pgAutoHandleWorkflowFrame);
+    } catch (e) {
+      if (e.name !== "AbortError") pgAddBubble("error", e.message);
+    }
+
+    if (pgAutoRunning) {
+      pgAutoRunning = false;
+      pgAutoPhase = "idle";
+      pgSetAutoStatus("", "info");
+      $("#pg-send").disabled = false;
+      scheduleUiStatePersist();
+    }
+  }
+
+  function pgAutoHandleSseEvent(eventType, data) {
+    if (eventType === "step.request") {
+      if (data.runId) pgAutoRunId = data.runId;
+      pgStepStates[data.stepId] = "running";
+      pgUpdateGraphNode(data.stepId);
+      pgAddLog("request", `\u25B6 ${data.stepId} (${data.stepType})`, data.input);
+    } else if (eventType === "step.completed") {
+      if (data.runId) pgAutoRunId = data.runId;
+      pgStepStates[data.stepId] = data.success ? "completed" : "failed";
+      pgUpdateGraphNode(data.stepId);
+      pgAddLog(data.success ? "completed" : "failed",
+        `${data.success ? "\u2713" : "\u2717"} ${data.stepId}`,
+        data.success ? data.output : (data.error || "Failed"));
+    } else if (eventType === "llm.response") {
+      if (pgAutoPhase === "planning" || pgAutoPhase === "approval") {
+        pgAutoLlmContent = data.content || "";
+        if (!pgAutoAssistantBubble) {
+          pgAutoAssistantBubble = pgAddBubble("assistant", "");
+        }
+        pgUpdateAssistantBubble(pgAutoAssistantBubble, pgAutoLlmContent, false);
+        pgExtractAndRenderYaml(pgAutoLlmContent);
+      } else {
+        const finalContent = absorbInlineThinking(pgThinkingBuffers, data.role, data.content);
+        flushThinkingToLog(pgThinkingBuffers, data.role, pgAddLog);
+        if (finalContent) {
+          pgAddLog("llm", `\uD83E\uDD16 ${data.role}`, finalContent);
+        }
+      }
+    } else if (eventType === "llm.thinking") {
+      appendThinkingDelta(pgThinkingBuffers, data.role, data.content);
+    } else if (eventType === "workflow.suspended") {
+      if (data.runId) pgAutoRunId = data.runId;
+      pgAddLog("suspended",
+        `\u23F8 ${data.stepId} (${data.suspensionType})`,
+        data.prompt || "Waiting for human action");
+      if (data.suspensionType === "human_approval" && pgAutoPhase === "planning") {
+        pgAutoPhase = "approval";
+        pgAutoRound += 1;
+        pgSetAutoStatus(`进入人工确认（第 ${pgAutoRound} 轮）：可继续优化或确认定稿。`, "warn");
+      }
+      setPlaygroundInteraction({
+        type: data.suspensionType || "human_input",
+        actorId: data.actorId || pgAutoActorId || "",
+        runId: data.runId || "",
+        commandId: pgAutoCommandId || "",
+        stepId: data.stepId || "",
+        prompt: data.prompt || "",
+        timeoutSeconds: data.timeoutSeconds || 0,
+        metadata: data.metadata || {},
+      });
+    } else if (eventType === "workflow.waiting_signal") {
+      if (data.runId && !pgAutoRunId) pgAutoRunId = data.runId;
+      pgAddLog("waiting",
+        `\u23F3 ${data.stepId} (${data.signalName})`,
+        data.prompt || "Waiting for external signal");
+      setPlaygroundInteraction({
+        type: "wait_signal",
+        actorId: data.actorId || pgAutoActorId || "",
+        runId: data.runId || "",
+        commandId: pgAutoCommandId || "",
+        stepId: data.stepId || "",
+        signalName: data.signalName || "",
+        prompt: data.prompt || "",
+        timeoutMs: data.timeoutMs || 0,
+      });
+    } else if (eventType === "workflow.completed") {
+      pgAddLog("done", data.success ? "\u2705 Completed" : "\u274C Failed", "");
+      $("#pg-result-section").classList.remove("hidden");
+      const pre = $("#pg-result");
+      pre.textContent = data.success ? data.output : (data.error || "Failed");
+      pre.className = `result-pre ${data.success ? "success" : "failure"}`;
+      if (data.success) {
+        const finalText = data.output || "";
+        const finalYaml = pgExtractLastYaml(finalText) || pgExtractLastYaml(pgAutoLlmContent);
+        if (finalYaml) {
+          pgApplyYaml(finalYaml).then(() => {
+            pgAutoCanRunFinal = !!pgCurrentYaml && !!pgParsedDef;
+            pgUpdateRunBarVisibility();
+            $("#pg-run-btn").disabled = !pgAutoCanRunFinal;
+            if (pgAutoCanRunFinal) {
+              pgSetAutoStatus("已确认定稿。现在可点击 “Run Final Workflow” 执行。", "success");
+              pgAddBubble("assistant", "\u2705 Workflow 已定稿。确认后可运行最终版本。");
+            } else {
+              pgSetAutoStatus("已确认但 YAML 解析失败，请继续优化。", "error");
+            }
+          });
+        } else {
+          pgSetAutoStatus("本次是直接回答（无需运行 workflow）。", "info");
+          pgUpdateRunBarVisibility();
+          if (finalText) {
+            pgAddBubble("assistant", finalText);
+          }
+        }
+      }
+      setPlaygroundInteraction(null);
+      pgAutoRunning = false;
+      pgAutoPhase = "idle";
+      $("#pg-send").disabled = false;
+    } else if (eventType === "workflow.error") {
+      pgAddLog("error", "\u274C Error", data.error);
+      pgSetAutoStatus("执行出错，请调整需求或反馈后重试。", "error");
+      setPlaygroundInteraction(null);
+      pgAutoRunning = false;
+      pgAutoPhase = "idle";
+      $("#pg-send").disabled = false;
+    }
+  }
+
+  function pgAutoReset() {
+    pgStepStates = {};
+    pgLogEntries = [];
+    pgThinkingBuffers = new Map();
+    pgAutoLlmContent = "";
+    pgAutoAssistantBubble = null;
+    pgAutoPhase = "idle";
+    pgAutoRunning = false;
+    pgAutoRound = 0;
+    pgAutoCanRunFinal = false;
+    pgAutoActorId = "";
+    pgAutoRunId = "";
+    pgAutoCommandId = "";
+    pgAutoMessageBuffers = new Map();
+    setPlaygroundInteraction(null);
+    $("#pg-exec-log").classList.add("hidden");
+    $("#pg-result-section").classList.add("hidden");
+    $("#pg-log-entries").innerHTML = "";
+    $("#pg-yaml").innerHTML = "";
+    $("#pg-graph").innerHTML = "";
+    pgSetAutoStatus("", "info");
+    pgUpdateRunBarVisibility();
+    pgCurrentYaml = "";
+    pgParsedDef = null;
+    $("#pg-run-btn").disabled = true;
+    scheduleUiStatePersist();
+  }
+
+  function renderAutoApprovalPanel(container, interaction) {
+    const actorId = interaction.actorId || "";
+    const runId = interaction.runId || "";
+    const commandId = interaction.commandId || pgAutoCommandId || "";
+    const stepId = interaction.stepId || "";
+    const prompt = interaction.prompt || "Review the generated workflow.";
+
+    container.innerHTML = `
+      <div class="auto-approval-card">
+        <div class="auto-approval-header">
+          <span class="auto-approval-icon">\uD83D\uDCCB</span>
+          <strong>Review Generated Workflow</strong>
+        </div>
+        <div class="auto-approval-prompt">${esc(prompt)}</div>
+        <div class="auto-approval-hint">Review the YAML and flow graph in the panels above, then approve or reject with feedback.</div>
+        <textarea id="pg-auto-feedback" class="interaction-input" rows="2" placeholder="补充你的约束、偏好或修改建议…"></textarea>
+        <div class="interaction-actions">
+          <button id="pg-auto-approve" class="btn btn-primary">同意定稿</button>
+          <button id="pg-auto-reject" class="btn btn-danger">继续优化</button>
+        </div>
+      </div>
+    `;
+
+    const approveBtn = $("#pg-auto-approve");
+    const rejectBtn = $("#pg-auto-reject");
+    const feedbackEl = $("#pg-auto-feedback");
+
+    if (!approveBtn || !rejectBtn || !feedbackEl || !runId || !actorId) return;
+
+    const submit = async (approved) => {
+      approveBtn.disabled = true;
+      rejectBtn.disabled = true;
+      const feedback = feedbackEl.value.trim();
+      try {
+        await postJson("/api/workflows/resume", {
+          actorId,
+          runId,
+          stepId,
+          commandId,
+          approved,
+          userInput: feedback,
+        });
+        if (approved) {
+          pgAddBubble("user", feedback || "同意，按这个版本定稿。");
+        } else {
+          pgAddBubble("user", feedback || "继续优化这个 workflow。");
+        }
+        pgAddLog(
+          "action",
+          approved ? "\u270D 已同意定稿" : "\u270D 已提交优化建议",
+          feedback || "(no feedback)");
+        if (approved) {
+          pgAutoPhase = "finalizing";
+          pgAutoCanRunFinal = false;
+          pgUpdateRunBarVisibility();
+          pgSetAutoStatus("已同意，AI 正在产出定稿 YAML…", "info");
+        } else {
+          pgAutoPhase = "planning";
+          pgAutoLlmContent = "";
+          pgAutoAssistantBubble = null;
+          pgSetAutoStatus("已提交优化建议，等待 AI 给出新草稿…", "info");
+        }
+        setPlaygroundInteraction(null);
+      } catch (e) {
+        pgAddLog("error", "\u274C Resume failed", e.message || String(e));
+        approveBtn.disabled = false;
+        rejectBtn.disabled = false;
+      }
+    };
+
+    approveBtn.addEventListener("click", () => submit(true));
+    rejectBtn.addEventListener("click", () => submit(false));
   }
 
   // ── Playground: Run Workflow ──
 
-  function pgRunWorkflow() {
+  async function pgRunWorkflow() {
     if (!pgCurrentYaml || pgRunning) return;
+    if (pgAutoMode && !pgAutoCanRunFinal) return;
     pgResetRun();
     pgRunning = true;
+    pgRunActorId = "";
+    pgRunRunId = "";
+    pgRunCommandId = "";
+    pgRunMessageBuffers = new Map();
     setPlaygroundInteraction(null);
     $("#pg-run-btn").disabled = true;
     $("#pg-run-reset").classList.remove("hidden");
@@ -1324,83 +2366,72 @@
     renderFlowInto($("#pg-graph"), pgParsedDef?.definition?.steps || [], pgParsedDef?.edges || [], pgStepStates);
 
     const input = $("#pg-run-input").value || "Hello, world!";
-    const autoResume = $("#pg-auto-resume")?.checked === true;
-    const body = JSON.stringify({ yaml: pgCurrentYaml, input, autoResume });
+    if (pgAutoMode) {
+      pgSetAutoStatus("正在运行定稿 workflow…", "info");
+    }
 
-    fetch("/api/playground/run", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    }).then(async (res) => {
-      if (!res.ok) {
-        const err = await res.text();
-        pgAddLog("error", "\u274C Error", err);
+    try {
+      await streamWorkflowChatRun(
+        {
+          prompt: input,
+          workflowYaml: pgCurrentYaml,
+        },
+        pgHandleWorkflowFrame);
+      if (pgRunning) {
         pgRunning = false;
         $("#pg-run-btn").disabled = false;
-        return;
+        if (pgAutoMode) pgSetAutoStatus("定稿 workflow 已运行完成。", "success");
       }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let nlIdx;
-        while ((nlIdx = buf.indexOf("\n")) !== -1) {
-          const line = buf.slice(0, nlIdx).trim();
-          buf = buf.slice(nlIdx + 1);
-          if (!line.startsWith("event: ") && !line.startsWith("data: ")) continue;
-          if (line.startsWith("event: ")) {
-            var currentEvent = line.slice(7);
-            continue;
-          }
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const data = JSON.parse(line.slice(6));
-            pgHandleSseEvent(currentEvent, data);
-          } catch { }
-        }
-      }
-      if (!pgRunning) return;
-      pgRunning = false;
-      $("#pg-run-btn").disabled = false;
-    }).catch((e) => {
+    } catch (e) {
       pgAddLog("error", "\u274C Error", e.message);
+      if (pgAutoMode) pgSetAutoStatus("运行失败，请返回继续优化。", "error");
       pgRunning = false;
       $("#pg-run-btn").disabled = false;
-    });
+    }
   }
 
   function pgHandleSseEvent(eventType, data) {
     if (eventType === "step.request") {
+      if (data.runId) pgRunRunId = data.runId;
       pgStepStates[data.stepId] = "running";
       pgUpdateGraphNode(data.stepId);
-      pgAddLog("request", `\u25B6 ${data.stepId} (${data.stepType})`, truncate(data.input, 200));
+      pgAddLog("request", `\u25B6 ${data.stepId} (${data.stepType})`, data.input);
     } else if (eventType === "step.completed") {
+      if (data.runId) pgRunRunId = data.runId;
       pgStepStates[data.stepId] = data.success ? "completed" : "failed";
       pgUpdateGraphNode(data.stepId);
       pgAddLog(data.success ? "completed" : "failed",
         `${data.success ? "\u2713" : "\u2717"} ${data.stepId}`,
-        data.success ? truncate(data.output, 300) : (data.error || "Failed"));
+        data.success ? data.output : (data.error || "Failed"));
     } else if (eventType === "llm.response") {
-      pgAddLog("llm", `\uD83E\uDD16 ${data.role}`, truncate(data.content, 400));
+      const finalContent = absorbInlineThinking(pgThinkingBuffers, data.role, data.content);
+      flushThinkingToLog(pgThinkingBuffers, data.role, pgAddLog);
+      if (finalContent) {
+        pgAddLog("llm", `\uD83E\uDD16 ${data.role}`, finalContent);
+      }
+    } else if (eventType === "llm.thinking") {
+      appendThinkingDelta(pgThinkingBuffers, data.role, data.content);
     } else if (eventType === "workflow.suspended") {
+      if (data.runId) pgRunRunId = data.runId;
       pgAddLog("suspended", `\u23F8 ${data.stepId} (${data.suspensionType})`, data.prompt || "Waiting for human action");
       setPlaygroundInteraction({
         type: data.suspensionType || "human_input",
+        actorId: data.actorId || pgRunActorId || "",
         runId: data.runId || "",
+        commandId: pgRunCommandId || "",
         stepId: data.stepId || "",
         prompt: data.prompt || "",
         timeoutSeconds: data.timeoutSeconds || 0,
         metadata: data.metadata || {},
       });
     } else if (eventType === "workflow.waiting_signal") {
+      if (data.runId && !pgRunRunId) pgRunRunId = data.runId;
       pgAddLog("waiting", `\u23F3 ${data.stepId} (${data.signalName})`, data.prompt || "Waiting for external signal");
       setPlaygroundInteraction({
         type: "wait_signal",
+        actorId: data.actorId || pgRunActorId || "",
         runId: data.runId || "",
+        commandId: pgRunCommandId || "",
         stepId: data.stepId || "",
         signalName: data.signalName || "",
         prompt: data.prompt || "",
@@ -1415,11 +2446,15 @@
       setPlaygroundInteraction(null);
       pgRunning = false;
       $("#pg-run-btn").disabled = false;
+      if (pgAutoMode) {
+        pgSetAutoStatus(data.success ? "定稿 workflow 已运行完成。" : "运行失败，请返回继续优化。", data.success ? "success" : "error");
+      }
     } else if (eventType === "workflow.error") {
       pgAddLog("error", "\u274C Error", data.error);
       setPlaygroundInteraction(null);
       pgRunning = false;
       $("#pg-run-btn").disabled = false;
+      if (pgAutoMode) pgSetAutoStatus("运行失败，请返回继续优化。", "error");
     }
   }
 
@@ -1434,11 +2469,22 @@
     }
   }
 
-  function pgAddLog(type, title, detail) {
+  function pgAddLog(type, title, detail, options = {}) {
+    const normalizedDetail = detail === null || detail === undefined ? "" : String(detail);
+    if (!options.skipStore) {
+      pgLogEntries.push({
+        type: String(type || "action"),
+        title: String(title || ""),
+        detail: normalizedDetail,
+      });
+      scheduleUiStatePersist();
+    }
+
     const el = document.createElement("div");
     el.className = `log-entry log-${type}`;
-    const icons = { request: "\u25B6", completed: "\u2713", failed: "\u2717", llm: "\uD83E\uDD16", suspended: "\u23F8", waiting: "\u23F3", action: "\u270D", done: "\u2705", error: "\u274C" };
-    el.innerHTML = `<span class="log-icon">${icons[type] || ""}</span><span class="log-text"><strong>${esc(title)}</strong>${detail ? "<br>" + esc(detail) : ""}</span>`;
+    const icons = { request: "\u25B6", completed: "\u2713", failed: "\u2717", llm: "\uD83E\uDD16", thinking: "\uD83E\uDDE0", suspended: "\u23F8", waiting: "\u23F3", action: "\u270D", done: "\u2705", error: "\u274C" };
+    const detailHtml = buildLogDetailHtml(normalizedDetail, options);
+    el.innerHTML = `<span class="log-icon">${icons[type] || ""}</span><span class="log-text"><strong>${esc(title)}</strong>${detailHtml ? `<br>${detailHtml}` : ""}</span>`;
     const container = $("#pg-log-entries");
     container.appendChild(el);
     container.scrollTop = container.scrollHeight;
@@ -1447,6 +2493,12 @@
   function pgResetRun() {
     pgRunning = false;
     pgStepStates = {};
+    pgLogEntries = [];
+    pgThinkingBuffers = new Map();
+    pgRunActorId = "";
+    pgRunRunId = "";
+    pgRunCommandId = "";
+    pgRunMessageBuffers = new Map();
     setPlaygroundInteraction(null);
     $("#pg-exec-log").classList.add("hidden");
     $("#pg-result-section").classList.add("hidden");
@@ -1456,5 +2508,6 @@
       $("#pg-run-btn").disabled = false;
       renderFlowInto($("#pg-graph"), pgParsedDef.definition.steps, pgParsedDef.edges, null);
     }
+    scheduleUiStatePersist();
   }
 })();

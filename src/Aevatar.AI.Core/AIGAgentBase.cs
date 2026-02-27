@@ -172,9 +172,22 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
     private ILLMProvider GetLLMProvider()
     {
-        return string.IsNullOrEmpty(Config.ProviderName)
-            ? _llmProviderFactory.GetDefault()
-            : _llmProviderFactory.GetProvider(Config.ProviderName);
+        if (string.IsNullOrWhiteSpace(Config.ProviderName))
+            return _llmProviderFactory.GetDefault();
+
+        var configuredProvider = Config.ProviderName.Trim();
+        var availableProviders = _llmProviderFactory.GetAvailableProviders();
+        if (availableProviders.Any(name => string.Equals(name, configuredProvider, StringComparison.OrdinalIgnoreCase)))
+            return _llmProviderFactory.GetProvider(configuredProvider);
+
+        Logger.LogWarning(
+            "Configured provider '{ConfiguredProvider}' is unavailable for {AgentType}({AgentId}); fallback to default provider. Available providers: {AvailableProviders}",
+            configuredProvider,
+            GetType().Name,
+            Id,
+            availableProviders.Count > 0 ? string.Join(", ", availableProviders) : "<none>");
+
+        return _llmProviderFactory.GetDefault();
     }
 
     private LLMRequest BuildRequest() => new()

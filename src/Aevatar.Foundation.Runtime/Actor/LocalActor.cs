@@ -52,7 +52,11 @@ public sealed class LocalActor : IActor
             }
 
             // Handle Up events from children (they produce to parent's stream).
-            if (envelope.Direction == EventDirection.Up)
+            // Child events may use Both (self + parent), so treat direct-child Both as upward.
+            if (envelope.Direction == EventDirection.Up ||
+                (envelope.Direction == EventDirection.Both &&
+                 !string.IsNullOrWhiteSpace(envelope.PublisherId) &&
+                 _router.ChildrenIds.Contains(envelope.PublisherId)))
             {
                 await EnqueueAsync(envelope);
                 return;

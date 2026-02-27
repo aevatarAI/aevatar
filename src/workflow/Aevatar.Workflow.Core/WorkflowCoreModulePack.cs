@@ -33,6 +33,7 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<CacheModule>("cache"),
         WorkflowModuleRegistration.Create<HumanApprovalModule>("human_approval"),
         WorkflowModuleRegistration.Create<HumanInputModule>("human_input"),
+        WorkflowModuleRegistration.Create<DynamicWorkflowModule>("dynamic_workflow"),
     ];
 
     private static readonly IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanderRegistrations =

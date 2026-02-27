@@ -1,28 +1,24 @@
 // ─────────────────────────────────────────────────────────────
 // WorkflowCallModule — 子工作流调用模块
-// 递归调用另一个 workflow（通过 StartWorkflowEvent）
+// 仅负责将 workflow_call 步骤转换为内部调用请求事件。
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>子工作流调用模块。处理 type=workflow_call 的步骤。</summary>
 public sealed class WorkflowCallModule : IEventModule
 {
-    private readonly Dictionary<string, PendingWorkflowCall> _pendingByChildRunId = new(StringComparer.Ordinal);
-
     public string Name => "workflow_call";
     public int Priority => 5;
 
     /// <inheritdoc />
     public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
-        envelope.Payload?.Is(WorkflowCompletedEvent.Descriptor) == true;
+        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
@@ -30,79 +26,51 @@ public sealed class WorkflowCallModule : IEventModule
         var payload = envelope.Payload;
         if (payload == null) return;
 
-        if (payload.Is(StepRequestEvent.Descriptor))
+        if (!payload.Is(StepRequestEvent.Descriptor))
+            return;
+
+        var request = payload.Unpack<StepRequestEvent>();
+        if (request.StepType != "workflow_call")
+            return;
+
+        var parentRunId = WorkflowRunIdNormalizer.Normalize(request.RunId);
+        var parentStepId = request.StepId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(parentStepId))
         {
-            var request = payload.Unpack<StepRequestEvent>();
-            if (request.StepType != "workflow_call") return;
-            var parentRunId = WorkflowRunIdNormalizer.Normalize(request.RunId);
-
-            var workflowName = request.Parameters.GetValueOrDefault("workflow", "");
-            if (string.IsNullOrEmpty(workflowName))
+            await ctx.PublishAsync(new StepCompletedEvent
             {
-                await ctx.PublishAsync(new StepCompletedEvent
-                {
-                    StepId = request.StepId,
-                    RunId = parentRunId,
-                    Success = false,
-                    Error = "workflow_call 缺少 workflow 参数",
-                }, EventDirection.Self, ct);
-                return;
-            }
-
-            var childRunId = BuildChildRunId(parentRunId, request.StepId);
-            _pendingByChildRunId[childRunId] = new PendingWorkflowCall(
-                request.StepId,
-                parentRunId,
-                workflowName);
-
-            ctx.Logger.LogInformation(
-                "WorkflowCall: parentStep={StepId}, parentRun={ParentRun} → childWorkflow={Workflow}, childRun={ChildRun}",
-                request.StepId,
-                parentRunId,
-                workflowName,
-                childRunId);
-
-            var start = new StartWorkflowEvent
-            {
-                WorkflowName = workflowName,
-                Input = request.Input,
-                RunId = childRunId,
-            };
-            start.Parameters["workflow_call.parent_step_id"] = request.StepId;
-            start.Parameters["workflow_call.parent_run_id"] = parentRunId;
-            start.Parameters["workflow_call.requested_workflow"] = workflowName;
-
-            await ctx.PublishAsync(start, EventDirection.Self, ct);
+                StepId = request.StepId ?? string.Empty,
+                RunId = parentRunId,
+                Success = false,
+                Error = "workflow_call missing step_id",
+            }, EventDirection.Self, ct);
             return;
         }
 
-        if (payload.Is(WorkflowCompletedEvent.Descriptor))
+        var workflowName = request.Parameters.GetValueOrDefault("workflow", "").Trim();
+        if (string.IsNullOrEmpty(workflowName))
         {
-            var completed = payload.Unpack<WorkflowCompletedEvent>();
-            var childRunId = completed.RunId;
-            if (string.IsNullOrWhiteSpace(childRunId) ||
-                !_pendingByChildRunId.Remove(childRunId, out var pending))
+            await ctx.PublishAsync(new StepCompletedEvent
             {
-                return;
-            }
-
-            var parentCompleted = new StepCompletedEvent
-            {
-                StepId = pending.ParentStepId,
-                RunId = pending.ParentRunId,
-                Success = completed.Success,
-                Output = completed.Output,
-                Error = completed.Error,
-            };
-            parentCompleted.Metadata["workflow_call.child_run_id"] = childRunId;
-            parentCompleted.Metadata["workflow_call.workflow_name"] = pending.WorkflowName;
-
-            await ctx.PublishAsync(parentCompleted, EventDirection.Self, ct);
+                StepId = parentStepId,
+                RunId = parentRunId,
+                Success = false,
+                Error = "workflow_call missing workflow parameter",
+            }, EventDirection.Self, ct);
+            return;
         }
+
+        var invocation = new SubWorkflowInvokeRequestedEvent
+        {
+            InvocationId = WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId),
+            ParentRunId = parentRunId,
+            ParentStepId = parentStepId,
+            WorkflowName = workflowName,
+            Input = request.Input ?? string.Empty,
+            Lifecycle = WorkflowCallLifecycle.Normalize(request.Parameters.GetValueOrDefault("lifecycle", string.Empty)),
+            RequestedByActorId = ctx.AgentId,
+        };
+
+        await ctx.PublishAsync(invocation, EventDirection.Self, ct);
     }
-
-    private static string BuildChildRunId(string parentRunId, string parentStepId) =>
-        $"{parentRunId}:workflow_call:{parentStepId}:{Guid.NewGuid():N}";
-
-    private sealed record PendingWorkflowCall(string ParentStepId, string ParentRunId, string WorkflowName);
 }

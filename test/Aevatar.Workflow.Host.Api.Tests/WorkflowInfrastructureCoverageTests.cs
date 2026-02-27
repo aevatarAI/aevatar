@@ -33,7 +33,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowInfrastructureCoverageTests
 {
     [Fact]
-    public void AddWorkflowInfrastructure_ShouldReplaceReportSink_AndRegisterActorPort()
+    public async Task AddWorkflowInfrastructure_ShouldReplaceReportSink_AndRegisterActorPort()
     {
         var services = new ServiceCollection();
         services.AddSingleton<IWorkflowExecutionReportArtifactSink>(new FakeReportSink());
@@ -42,6 +42,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddSingleton<IAgentManifestStore>(new FakeAgentManifestStore());
         services.AddSingleton<IActorTypeProbe, RuntimeBackedActorTypeProbe>();
         services.AddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("sub_flow", "name: sub_flow\nroles: []\nsteps: []\n");
+        services.AddSingleton<IWorkflowDefinitionRegistry>(registry);
 
         services.AddWorkflowInfrastructure(options =>
         {
@@ -58,6 +61,9 @@ public sealed class WorkflowInfrastructureCoverageTests
             .Should().BeOfType<FileSystemWorkflowExecutionReportArtifactSink>();
         provider.GetRequiredService<IWorkflowRunActorPort>()
             .Should().BeOfType<WorkflowRunActorPort>();
+        var resolver = provider.GetRequiredService<IWorkflowDefinitionResolver>();
+        resolver.Should().NotBeNull();
+        (await resolver.GetWorkflowYamlAsync("sub_flow")).Should().Contain("name: sub_flow");
     }
 
     [Fact]
@@ -357,6 +363,20 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityServices_ShouldSetFileSourceDuplicatePolicyToOverride()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddWorkflowCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<WorkflowDefinitionFileSourceOptions>>().Value;
+        options.DuplicatePolicy.Should().Be(WorkflowDefinitionDuplicatePolicy.Override);
     }
 
     private static WorkflowRunActorPort CreatePort(FakeActorRuntime runtime, FakeAgentManifestStore manifestStore)

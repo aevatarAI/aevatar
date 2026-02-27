@@ -42,6 +42,7 @@ public static class WorkflowPrimitiveCatalog
         "map_reduce",
         "vote",
         "foreach",
+        "dynamic_workflow",
     };
 
     private static readonly string[] IdentityPrimitives =

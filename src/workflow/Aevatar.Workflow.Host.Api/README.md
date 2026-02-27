@@ -2,13 +2,15 @@
 
 `Aevatar.Workflow.Host.Api` 是协议层宿主，只做 HTTP/SSE/WebSocket 适配与依赖组合。
 
+详细能力文档见：`CHAT_API_CAPABILITIES.md`（含 `/api/chat`、`/api/ws/chat`、`human approval`、`resume/signal`、`auto/auto_review` 流程说明）。
+
 ## 职责边界
 
 - 暴露端点：
   - `POST /api/chat`（SSE）
   - `GET /api/ws/chat`（WebSocket）
   - `GET /api/agents`、`GET /api/workflows`、`GET /api/actors/{actorId}`、`GET /api/actors/{actorId}/timeline`
-  - `chat` payload 支持 `prompt` + `agentId` 复用已绑定 Actor，也支持 `workflow`（按名称）或 `workflowYaml`（inline YAML）
+  - `chat` payload 支持 `prompt` + `agentId` 复用已绑定 Actor，也支持 `workflow`（按名称）或 `workflowYaml`（inline YAML）；当 `workflow/workflowYaml` 同时为空时默认走 `direct`（可由运行选项切换为 `auto`）
 - 调用应用层：
   - `ICommandExecutionService<WorkflowChatRunRequest,...>`
   - `IWorkflowExecutionQueryApplicationService`
@@ -19,6 +21,7 @@
 | 场景 | 示例 |
 |------|------|
 | 按名称加载 workflow（新建 Actor） | `{ "prompt": "...", "workflow": "direct" }` |
+| `workflow/workflowYaml` 都不传（新建 Actor） | `{ "prompt": "..." }` |
 | 复用已绑定 workflow 的 Actor | `{ "prompt": "...", "agentId": "actor-123" }` |
 | inline 提交 workflow YAML（新建 Actor） | `{ "prompt": "...", "workflowYaml": "name: demo\\nroles: ...\\nsteps: ..." }` |
 | 指定 Actor + inline YAML | `{ "prompt": "...", "agentId": "actor-123", "workflowYaml": "..." }` |
@@ -30,6 +33,11 @@
 - `WORKFLOW_NAME_MISMATCH`：`workflow` 与 YAML 内 `name` 不一致（400）
 - `WORKFLOW_BINDING_MISMATCH`：目标 actor 已绑定其它 workflow（409）
 - `AGENT_WORKFLOW_NOT_CONFIGURED`：传了 `agentId`，但 actor 未绑定且未提供 `workflowYaml`（409）
+
+异常回退语义：
+
+- 应用层仅对白名单 workflow + 白名单异常类型启用一次性 `direct` 回退。
+- inline `workflowYaml` 与显式 `direct` 请求默认不触发自动回退，避免隐藏真实错误。
 
 ## Endpoint 定义归属
 

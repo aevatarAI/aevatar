@@ -95,6 +95,11 @@ sequenceDiagram
   Api-->>Client: "SSE/WS 实时输出"
 ```
 
+请求解析与回退规则：
+
+- `WorkflowRunActorResolver` 解析优先级为：`workflowYaml`（inline） > `workflow`（registry 名称） > 默认 `auto`（仅当两者都为空）。
+- `WorkflowChatRunApplicationService` 对所有请求类型执行“一次性 direct 回退”：首次异常（含运行期）会重试 `direct`，`direct` 不再二次回退。
+
 ## 3. 统一 Projection Pipeline（读侧 + AGUI）
 
 ```mermaid

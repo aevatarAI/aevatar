@@ -34,8 +34,12 @@ public sealed class MapReduceModule : IEventModule
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
             var parentKey = (runId, request.StepId);
 
-            var delimiter = request.Parameters.GetValueOrDefault("delimiter", "\n---\n");
-            var items = (request.Input ?? "").Split(delimiter, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var delimiter = WorkflowParameterValueParser.NormalizeEscapedText(
+                WorkflowParameterValueParser.GetString(request.Parameters, "\n---\n", "delimiter", "separator"),
+                "\n---\n");
+            var items = WorkflowParameterValueParser.SplitInputByDelimiterOrJsonArray(request.Input, delimiter);
+            if (items.Length == 0 && request.Parameters.TryGetValue("items", out var itemListRaw))
+                items = WorkflowParameterValueParser.ParseStringList(itemListRaw).ToArray();
             if (items.Length == 0)
             {
                 await ctx.PublishAsync(new StepCompletedEvent
@@ -45,11 +49,29 @@ public sealed class MapReduceModule : IEventModule
                 return;
             }
 
-            var mapType = request.Parameters.GetValueOrDefault("map_step_type", "llm_call");
-            var mapRole = request.Parameters.GetValueOrDefault("map_target_role", request.TargetRole);
-            var reduceType = request.Parameters.GetValueOrDefault("reduce_step_type", "llm_call");
-            var reduceRole = request.Parameters.GetValueOrDefault("reduce_target_role", request.TargetRole);
-            var reducePrefix = request.Parameters.GetValueOrDefault("reduce_prompt_prefix", "");
+            var mapTypeRaw = WorkflowParameterValueParser.GetString(request.Parameters, "llm_call", "map_step_type", "map_type");
+            var mapType = WorkflowPrimitiveCatalog.ToCanonicalType(mapTypeRaw);
+            var mapRole = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                request.TargetRole,
+                "map_target_role",
+                "map_role");
+            var reduceTypeRaw = request.Parameters.TryGetValue("reduce_step_type", out var reduceStepType)
+                ? reduceStepType
+                : request.Parameters.GetValueOrDefault("reduce_type", "llm_call");
+            var reduceType = string.IsNullOrWhiteSpace(reduceTypeRaw)
+                ? string.Empty
+                : WorkflowPrimitiveCatalog.ToCanonicalType(reduceTypeRaw);
+            var reduceRole = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                request.TargetRole,
+                "reduce_target_role",
+                "reduce_role");
+            var reducePrefix = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                string.Empty,
+                "reduce_prompt_prefix",
+                "reduce_prefix");
 
             _states[parentKey] = new MapReduceState(
                 items.Length, [], reduceType, reduceRole ?? "", reducePrefix);

@@ -8,22 +8,30 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 {
     private readonly IWorkflowRunActorPort _actorPort;
     private readonly IWorkflowDefinitionRegistry _workflowRegistry;
+    private readonly WorkflowRunBehaviorOptions _behaviorOptions;
 
     public WorkflowRunActorResolver(
         IWorkflowRunActorPort actorPort,
-        IWorkflowDefinitionRegistry workflowRegistry)
+        IWorkflowDefinitionRegistry workflowRegistry,
+        WorkflowRunBehaviorOptions? behaviorOptions = null)
     {
         _actorPort = actorPort;
         _workflowRegistry = workflowRegistry;
+        _behaviorOptions = behaviorOptions ?? new WorkflowRunBehaviorOptions();
     }
 
     public async Task<WorkflowActorResolutionResult> ResolveOrCreateAsync(
         WorkflowChatRunRequest request,
         CancellationToken ct = default)
     {
-        var requestedWorkflowName = NormalizeWorkflowName(request.WorkflowName);
+        var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(request.WorkflowName);
         var hasInlineWorkflowYaml = !string.IsNullOrWhiteSpace(request.WorkflowYaml);
-        var workflowNameForRun = string.IsNullOrWhiteSpace(requestedWorkflowName) ? "direct" : requestedWorkflowName;
+        var hasRequestedWorkflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName);
+        var workflowNameForRun = hasRequestedWorkflowName
+            ? requestedWorkflowName
+            : hasInlineWorkflowYaml
+                ? string.Empty
+                : ResolveDefaultWorkflowName();
         var workflowYamlForRun = string.Empty;
 
         if (hasInlineWorkflowYaml)
@@ -32,11 +40,11 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             if (!parseResult.Succeeded)
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.InvalidWorkflowYaml);
 
-            var inlineWorkflowName = NormalizeWorkflowName(parseResult.WorkflowName);
+            var inlineWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(parseResult.WorkflowName);
             if (string.IsNullOrWhiteSpace(inlineWorkflowName))
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.InvalidWorkflowYaml);
 
-            if (!string.IsNullOrWhiteSpace(requestedWorkflowName) &&
+            if (hasRequestedWorkflowName &&
                 !string.Equals(requestedWorkflowName, inlineWorkflowName, StringComparison.OrdinalIgnoreCase))
             {
                 return new WorkflowActorResolutionResult(
@@ -58,7 +66,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             if (!await _actorPort.IsWorkflowActorAsync(existing, ct))
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentTypeNotSupported);
 
-            var boundWorkflowName = NormalizeWorkflowName(await _actorPort.GetBoundWorkflowNameAsync(existing, ct));
+            var boundWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(await _actorPort.GetBoundWorkflowNameAsync(existing, ct));
             if (string.IsNullOrWhiteSpace(boundWorkflowName))
             {
                 if (!hasInlineWorkflowYaml)
@@ -69,7 +77,11 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                         WorkflowChatRunStartError.AgentWorkflowNotConfigured);
                 }
 
-                await _actorPort.ConfigureWorkflowAsync(existing, workflowYamlForRun, workflowNameForRun, ct);
+                await ConfigureWorkflowForRunAsync(
+                    existing,
+                    workflowYamlForRun,
+                    workflowNameForRun,
+                    ct);
                 return new WorkflowActorResolutionResult(existing, workflowNameForRun, WorkflowChatRunStartError.None);
             }
 
@@ -83,7 +95,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             }
 
             if (!hasInlineWorkflowYaml &&
-                !string.IsNullOrWhiteSpace(requestedWorkflowName) &&
+                hasRequestedWorkflowName &&
                 !string.Equals(requestedWorkflowName, boundWorkflowName, StringComparison.OrdinalIgnoreCase))
             {
                 return new WorkflowActorResolutionResult(
@@ -93,7 +105,13 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             }
 
             if (hasInlineWorkflowYaml)
-                await _actorPort.ConfigureWorkflowAsync(existing, workflowYamlForRun, boundWorkflowName, ct);
+            {
+                await ConfigureWorkflowForRunAsync(
+                    existing,
+                    workflowYamlForRun,
+                    boundWorkflowName,
+                    ct);
+            }
 
             return new WorkflowActorResolutionResult(existing, boundWorkflowName, WorkflowChatRunStartError.None);
         }
@@ -107,11 +125,61 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         }
 
         var actor = await _actorPort.CreateAsync(ct);
-        await _actorPort.ConfigureWorkflowAsync(actor, workflowYamlForRun, workflowNameForRun, ct);
+        if (hasInlineWorkflowYaml)
+        {
+            await ConfigureWorkflowForRunAsync(
+                actor,
+                workflowYamlForRun,
+                workflowNameForRun,
+                ct);
+        }
+        else
+        {
+            await ConfigureWorkflowForRunWithFallbackWrapAsync(
+                actor,
+                workflowYamlForRun,
+                workflowNameForRun,
+                ct);
+        }
 
         return new WorkflowActorResolutionResult(actor, workflowNameForRun, WorkflowChatRunStartError.None);
     }
 
-    private static string NormalizeWorkflowName(string? workflowName) =>
-        string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
+    private async Task ConfigureWorkflowForRunAsync(
+        IActor actor,
+        string workflowYaml,
+        string workflowName,
+        CancellationToken ct)
+    {
+        await _actorPort.ConfigureWorkflowAsync(actor, workflowYaml, workflowName, ct);
+    }
+
+    private async Task ConfigureWorkflowForRunWithFallbackWrapAsync(
+        IActor actor,
+        string workflowYaml,
+        string workflowName,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _actorPort.ConfigureWorkflowAsync(actor, workflowYaml, workflowName, ct);
+        }
+        catch (Exception ex) when (ex is not WorkflowDirectFallbackTriggerException)
+        {
+            throw new WorkflowDirectFallbackTriggerException(
+                $"Failed to configure workflow '{workflowName}' for actor '{actor.Id}'.",
+                ex);
+        }
+    }
+
+    private string ResolveDefaultWorkflowName()
+    {
+        if (_behaviorOptions.UseAutoAsDefaultWhenWorkflowUnspecified)
+            return WorkflowRunBehaviorOptions.AutoWorkflowName;
+
+        var configuredDefault = WorkflowRunNameNormalizer.NormalizeWorkflowName(_behaviorOptions.DefaultWorkflowName);
+        return string.IsNullOrWhiteSpace(configuredDefault)
+            ? WorkflowRunBehaviorOptions.DirectWorkflowName
+            : configuredDefault;
+    }
 }

@@ -102,6 +102,12 @@ dotnet run -- --all
 | 15 | `15_reflect.yaml` | `reflect` | 自我反思循环：反复 critique + improve |
 | 16 | `16_cache.yaml` | `cache` + `llm_call` | 缓存包装的 LLM 调用 |
 
+### 多层 workflow_call Demo（48）
+
+| 编号 | 文件 | 演示原语 | 说明 |
+|---|---|---|---|
+| 48 | `48_workflow_call_multilevel.yaml` | `workflow_call` + `transform` | 父 workflow 调子 workflow（L1），子再调子（L2），再调子（L3） |
+
 ## 目录结构
 
 ```
@@ -125,7 +131,11 @@ demos/Aevatar.Demos.Workflow/
     ├── 13_foreach.yaml
     ├── 14_evaluate.yaml
     ├── 15_reflect.yaml
-    └── 16_cache.yaml
+    ├── 16_cache.yaml
+    ├── 48_workflow_call_multilevel.yaml
+    ├── 48_subworkflow_level1.yaml
+    ├── 48_subworkflow_level2.yaml
+    └── 48_subworkflow_level3.yaml
 ```
 
 ## 未在 Demo 中覆盖的原语
@@ -135,7 +145,6 @@ demos/Aevatar.Demos.Workflow/
 - `emit` / `publish` — 发布自定义事件，使用 EventDirection.Both（需要外部流订阅消费）
 - `tool_call` — 需要注册 IAgentToolSource
 - `connector_call` — 需要配置 Connector（参见 Demos.Maker）
-- `workflow_call` — 需要已注册的子工作流
 - `while` / `loop` — 需要 LLM 子步骤产生 "DONE" 终止信号
 - `vote_consensus` — 通常作为 parallel 的 vote_step_type 子步骤使用
 - `delay` / `sleep` — 纯等待，无输出

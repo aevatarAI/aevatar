@@ -411,10 +411,48 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 }
 .log-entry .log-icon { flex-shrink: 0; font-size: 14px; line-height: 1; margin-top: 1px; }
 .log-entry .log-text { flex: 1; min-width: 0; word-break: break-word; }
+.log-entry .log-detail { margin-top: 2px; white-space: pre-wrap; word-break: break-word; }
+.log-entry .log-detail-fold {
+  margin-top: 4px;
+  border: 1px solid rgba(100, 116, 139, 0.35);
+  border-radius: var(--radius-sm);
+  background: rgba(15, 23, 42, 0.35);
+}
+.log-entry .log-detail-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  list-style: none;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+.log-entry .log-detail-fold > summary::-webkit-details-marker { display: none; }
+.log-entry .log-detail-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-entry .log-detail-toggle {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.log-entry .log-detail-full {
+  margin: 0;
+  padding: 0 6px 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  color: inherit;
+}
 .log-entry.log-request { background: rgba(250,204,21,0.08); color: var(--state-running); }
 .log-entry.log-completed { background: rgba(34,197,94,0.08); color: var(--state-completed); }
 .log-entry.log-failed { background: rgba(239,68,68,0.08); color: var(--state-failed); }
 .log-entry.log-llm { background: rgba(168,85,247,0.08); color: #c084fc; }
+.log-entry.log-thinking { background: rgba(99,102,241,0.12); color: #c4b5fd; }
 .log-entry.log-suspended,
 .log-entry.log-waiting { background: rgba(249,115,22,0.12); color: #fdba74; }
 .log-entry.log-action { background: rgba(59,130,246,0.12); color: #93c5fd; }
@@ -528,9 +566,22 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
   overflow: hidden;
 }
 .pg-chat-header {
-  padding: 10px 14px; font-size: 11px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 1px; color: var(--text-muted); border-bottom: 1px solid var(--border); flex-shrink: 0;
+  padding: 8px 14px; display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
+.pg-header-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--text-muted);
+}
+.pg-mode-toggle {
+  display: flex; gap: 2px; background: var(--bg); border-radius: var(--radius-sm); padding: 2px;
+}
+.pg-mode-btn {
+  padding: 3px 10px; border: none; background: transparent; color: var(--text-muted);
+  font-size: 11px; font-weight: 600; cursor: pointer; border-radius: 3px; transition: all 0.15s;
+}
+.pg-mode-btn.active { background: var(--accent); color: #fff; }
+.pg-mode-btn:hover:not(.active) { color: var(--text); }
 .pg-right {
   flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; overflow: hidden;
 }
@@ -555,6 +606,14 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
   font-family: 'SF Mono', 'Fira Code', monospace; line-height: 1.4;
 }
 .pg-run-input:focus { border-color: var(--accent); }
+.pg-auto-status {
+  padding: 8px 10px; border-radius: var(--radius-sm); font-size: 12px; line-height: 1.45;
+  border: 1px solid var(--border); background: var(--bg-card); color: var(--text-dim);
+}
+.pg-auto-status.info { border-color: rgba(59,130,246,0.35); color: #bfdbfe; }
+.pg-auto-status.warn { border-color: rgba(245,158,11,0.35); color: #fcd34d; }
+.pg-auto-status.success { border-color: rgba(34,197,94,0.4); color: #86efac; }
+.pg-auto-status.error { border-color: rgba(239,68,68,0.4); color: #fca5a5; }
 .pg-exec-block {
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 10px 12px;
@@ -604,6 +663,15 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 @keyframes blink-cursor { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
 .pg-msg.error { align-self: center; color: var(--state-failed); font-size: 12px; padding: 4px 10px; }
+
+/* ── Auto Approval Card ── */
+.auto-approval-card { display: flex; flex-direction: column; gap: 8px; }
+.auto-approval-header {
+  display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text);
+}
+.auto-approval-icon { font-size: 18px; }
+.auto-approval-prompt { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+.auto-approval-hint { font-size: 11px; color: var(--text-muted); font-style: italic; }
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }

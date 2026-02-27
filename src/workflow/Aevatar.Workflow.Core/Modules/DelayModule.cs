@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -22,8 +23,14 @@ public sealed class DelayModule : IEventModule
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "delay") return;
 
-        var durationMs = int.TryParse(request.Parameters.GetValueOrDefault("duration_ms", "1000"), out var d) ? d : 1000;
-        durationMs = Math.Clamp(durationMs, 0, 300_000);
+        var durationMs = WorkflowParameterValueParser.GetBoundedInt(
+            request.Parameters,
+            1000,
+            0,
+            300_000,
+            "duration_ms",
+            "duration",
+            "delay_ms");
 
         ctx.Logger.LogInformation("Delay {StepId}: waiting {Ms}ms", request.StepId, durationMs);
 

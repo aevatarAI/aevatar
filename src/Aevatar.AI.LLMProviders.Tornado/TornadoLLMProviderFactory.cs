@@ -42,7 +42,19 @@ public sealed class TornadoLLMProviderFactory : ILLMProviderFactory, ITornadoLLM
     public ITornadoLLMProviderRegistry RegisterOpenAICompatible(
         string name, string apiKey, string model, string? baseUrl = null, ILogger? logger = null)
     {
-        var api = new TornadoApi(LLmProviders.OpenAi, apiKey);
+        TornadoApi api;
+        if (!string.IsNullOrWhiteSpace(baseUrl))
+        {
+            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var endpoint))
+                throw new ArgumentException($"Invalid baseUrl '{baseUrl}'. Expected an absolute URI.", nameof(baseUrl));
+
+            api = new TornadoApi(endpoint, apiKey, LLmProviders.OpenAi);
+        }
+        else
+        {
+            api = new TornadoApi(LLmProviders.OpenAi, apiKey);
+        }
+
         _providers[name] = new TornadoLLMProvider(name, api, model, logger);
         if (string.IsNullOrEmpty(_defaultName)) _defaultName = name;
         return this;

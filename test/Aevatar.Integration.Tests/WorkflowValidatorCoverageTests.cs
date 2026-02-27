@@ -152,6 +152,31 @@ public class WorkflowValidatorCoverageTests
     }
 
     [Fact]
+    public void Validate_WhenClosedWorldModeContainsDynamicWorkflow_ShouldReportError()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Configuration = new WorkflowRuntimeConfiguration
+            {
+                ClosedWorldMode = true,
+            },
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "s1",
+                    Type = "dynamic_workflow",
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(wf);
+        errors.Should().Contain(e => e.Contains("closed_world_mode") && e.Contains("dynamic_workflow"));
+    }
+
+    [Fact]
     public void Validate_WhenWorkflowCallTargetIsUnknown_ShouldReportErrorWhenRegistryProvided()
     {
         var wf = new WorkflowDefinition

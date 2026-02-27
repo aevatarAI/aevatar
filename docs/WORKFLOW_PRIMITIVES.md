@@ -205,6 +205,7 @@ steps:
 
 - 作用：等待外部信号（可设置超时）。
 - 常用参数：`signal_name`、`prompt`、`timeout_ms`。
+- 运行时事件：`WaitingForSignalEvent` 会显式携带 `run_id + step_id + signal_name`，用于无状态 UI 回传。
 
 ```yaml
 steps:
@@ -360,7 +361,15 @@ steps:
 ### `workflow_call`（别名：`sub_workflow`）
 
 - 作用：调用子工作流，并将子工作流完成态返回到当前步骤。
-- 常用参数：`workflow`。
+- 常用参数：`workflow`、`lifecycle`。
+- `lifecycle` 语义：
+  - `singleton`（默认）：复用同名子工作流 actor；
+  - `transient`：每次调用独立 actor，子流程完成后销毁；
+  - `scope`：与 `transient` 相同生命周期策略（保留语义别名，便于上层配置表达）。
+- 运行时关联语义：
+  - `workflow_call` 调用会生成统一格式的 invocation id：`<parent_run_id>:workflow_call:<parent_step_id|step>:<guidN>`；
+  - 该规则由共享工厂统一生成，模块层与 actor 编排层保持一致；
+  - 子流程 `child_run_id` 复用 invocation id，便于跨事件链路关联与回放定位。
 
 ```yaml
 steps:
@@ -368,6 +377,21 @@ steps:
     type: workflow_call
     parameters:
       workflow: "shared_enrichment_pipeline"
+      lifecycle: "singleton"
+```
+
+### `dynamic_workflow`
+
+- 作用：从上一步输出中提取 YAML 代码块，动态重配当前 workflow actor 后继续执行。
+- 常用参数：`original_input`（可选，作为动态流程启动输入）。
+- 说明：仅在非 `closed_world_mode` 下可用；若输入中无 YAML 代码块则返回失败 `StepCompletedEvent`。
+
+```yaml
+steps:
+  - id: apply_generated_workflow
+    type: dynamic_workflow
+    parameters:
+      original_input: "{{user_request}}"
 ```
 
 ### `vote_consensus`（别名：`vote`）
@@ -454,18 +478,19 @@ steps:
 
 1. Workflow 运行到阻塞点，发出等待事件（SSE/WebSocket/EventBus 都可）。
 2. App 渲染交互 UI（输入框、审批按钮、发送信号表单）。
-3. App 收集用户/系统回调后，回发 resume/signal 事件给同一个 run。
+3. App 收集用户/系统回调后，回发 resume/signal 事件给同一个 run（显式携带 `actorId + runId`）。
 
 事件对照：
 
 - `human_input` / `human_approval`：`WorkflowSuspendedEvent` -> `WorkflowResumedEvent`
-- `wait_signal`：`WaitingForSignalEvent` -> `SignalReceivedEvent`
+- `wait_signal`：`WaitingForSignalEvent(run_id, step_id, signal_name, ...)` -> `SignalReceivedEvent`
 
 建议的请求契约（以 Web API 为例）：
 
 ```json
 POST /api/workflows/resume
 {
+  "actorId": "wf-2f3f...",
   "runId": "c7e0...",
   "stepId": "approval_gate",
   "approved": true,
@@ -477,6 +502,7 @@ POST /api/workflows/resume
 ```json
 POST /api/workflows/signal
 {
+  "actorId": "wf-2f3f...",
   "runId": "c7e0...",
   "signalName": "ops_window_open",
   "payload": "window=2026-02-25T21:00Z"
@@ -485,9 +511,11 @@ POST /api/workflows/signal
 
 约定与注意事项：
 
-- `runId`：必须来自当前运行上下文（如 `workflow.suspended` / `workflow.waiting_signal` 事件）。
+- `actorId`：必须来自当前运行上下文（例如 `RUN_STARTED` 或 `workflow.suspended` / `workflow.waiting_signal` 事件）。
+- `runId`：必须来自当前运行上下文（优先使用 `workflow.waiting_signal` 或 `workflow.suspended` 事件中显式携带的 runId）。
 - `stepId`：resume 时必须对应当前挂起步骤；不要用旧步骤 ID 复用请求。
 - `signalName`：建议统一小写蛇形命名，和 YAML `signal_name` 保持一致。
+- 交互端点为无状态契约：服务端不维护 `runId -> actorId` 进程内映射，调用方必须在每次请求里显式传入 `actorId` 与 `runId`。
 - `human_approval.on_reject`：
   - `fail`：拒绝会终止流程；
   - `skip`：拒绝后继续下一个步骤（输入保持原值）。

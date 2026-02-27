@@ -8,6 +8,7 @@ message ChatResponseEvent { string content = 1; string session_id = 2; }
 
 message TextMessageStartEvent   { string session_id = 1; string agent_id = 2; }
 message TextMessageContentEvent { string delta = 1; string session_id = 2; }
+message TextMessageReasoningEvent { string delta = 1; string session_id = 2; }
 message TextMessageEndEvent     { string content = 1; string session_id = 2; }
 
 message ToolCallEvent   { string tool_name = 1; string arguments_json = 2; string call_id = 3; }

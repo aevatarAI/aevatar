@@ -11,7 +11,7 @@ closed_world_files="$(
 )"
 
 if [ -n "${closed_world_files}" ]; then
-  blocked_type_pattern='type:\s*(llm_call|tool_call|connector_call|bridge_call|evaluate|judge|reflect|human_input|human_approval|wait_signal|wait|emit|publish|parallel|parallel_fanout|fan_out|race|select|map_reduce|mapreduce|vote_consensus|vote|foreach|for_each)\b'
+  blocked_type_pattern='type:\s*(llm_call|tool_call|connector_call|bridge_call|evaluate|judge|reflect|human_input|human_approval|wait_signal|wait|emit|publish|parallel|parallel_fanout|fan_out|race|select|map_reduce|mapreduce|vote_consensus|vote|foreach|for_each|dynamic_workflow)\b'
   while IFS= read -r wf_file; do
     [ -z "${wf_file}" ] && continue
     hits="$(rg -n "${blocked_type_pattern}" "${wf_file}" || true)"
@@ -23,8 +23,13 @@ if [ -n "${closed_world_files}" ]; then
   done <<< "${closed_world_files}"
 fi
 
-if ! rg -n "workflow_call.child_run_id" test/Aevatar.Integration.Tests/WorkflowCoreModulesCoverageTests.cs >/dev/null; then
-  echo "Missing workflow_call return-path coverage assertion in WorkflowCoreModulesCoverageTests."
+if ! rg -n "SubWorkflowInvokeRequestedEvent" test/Aevatar.Integration.Tests/WorkflowCoreModulesCoverageTests.cs >/dev/null; then
+  echo "Missing workflow_call request-path coverage assertion in WorkflowCoreModulesCoverageTests."
+  exit 1
+fi
+
+if ! rg -n "workflow_call.child_run_id" test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs >/dev/null; then
+  echo "Missing workflow_call return-path coverage assertion in WorkflowGAgentCoverageTests."
   exit 1
 fi
 
