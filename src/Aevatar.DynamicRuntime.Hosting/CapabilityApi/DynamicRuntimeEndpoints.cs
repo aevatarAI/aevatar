@@ -144,7 +144,14 @@ public static class DynamicRuntimeEndpoints
 
     private static Task<IResult> ExecuteContainer(HttpContext http, string containerId, ExecuteContainerInput input, IDynamicRuntimeCommandService commandService, CancellationToken ct)
     {
-        var request = new ExecuteContainerRequest(containerId, input.ServiceId, input.Input, input.RunId);
+        var scriptInput = new ScriptRoleRequest(
+            input.Input ?? string.Empty,
+            input.InputJson,
+            input.InputMetadata,
+            input.CorrelationId,
+            input.CausationId,
+            input.MessageType);
+        var request = new ExecuteContainerRequest(containerId, input.ServiceId, scriptInput, input.RunId);
         return ExecuteCommand(http, context => commandService.ExecuteContainerAsync(request, context, ct));
     }
 

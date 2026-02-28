@@ -49,7 +49,16 @@ public sealed record CreateContainerInput(
     string ImageDigest,
     string RoleActorId);
 
-public sealed record ExecuteContainerInput(string ContainerId, string ServiceId, string Input, string? RunId = null);
+public sealed record ExecuteContainerInput(
+    string ContainerId,
+    string ServiceId,
+    string Input,
+    string? RunId = null,
+    string? InputJson = null,
+    IReadOnlyDictionary<string, string>? InputMetadata = null,
+    string? CorrelationId = null,
+    string? CausationId = null,
+    string? MessageType = null);
 
 public sealed record CancelRunInput(string Reason);
 

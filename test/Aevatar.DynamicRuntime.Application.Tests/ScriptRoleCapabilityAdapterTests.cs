@@ -21,7 +21,7 @@ public sealed class ScriptRoleCapabilityAdapterTests
 
     private sealed class FakeEntrypoint : IScriptRoleEntrypoint
     {
-        public Task<string> HandleAsync(string input, CancellationToken ct = default)
-            => Task.FromResult($"adapter:{input}");
+        public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+            => Task.FromResult($"adapter:{input.Text}");
     }
 }

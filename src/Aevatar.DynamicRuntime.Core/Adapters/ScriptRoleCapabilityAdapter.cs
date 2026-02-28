@@ -32,7 +32,11 @@ public sealed class ScriptRoleCapabilityAdapter : IScriptRoleCapabilityAdapter
         return Task.CompletedTask;
     }
 
-    public Task<string> ExecuteAsync(string input, CancellationToken ct = default) => _entrypoint.HandleAsync(input ?? string.Empty, ct);
+    public Task<string> ExecuteAsync(ScriptRoleRequest input, CancellationToken ct = default)
+        => _entrypoint.HandleAsync(input ?? ScriptRoleRequest.FromText(string.Empty), ct);
+
+    public Task<string> ExecuteAsync(string input, CancellationToken ct = default)
+        => ExecuteAsync(ScriptRoleRequest.FromText(input), ct);
 
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {

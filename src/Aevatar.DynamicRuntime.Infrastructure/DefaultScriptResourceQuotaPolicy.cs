@@ -9,7 +9,7 @@ public sealed class DefaultScriptResourceQuotaPolicy : IScriptResourceQuotaPolic
     public Task<ResourceQuotaDecision> EvaluateAsync(ScriptExecutionContext context, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        if ((context.Input?.Length ?? 0) > MaxInputLength)
+        if ((context.Input?.PayloadLength ?? 0) > MaxInputLength)
             return Task.FromResult(new ResourceQuotaDecision(false, "RESOURCE_QUOTA_EXCEEDED", $"input exceeds {MaxInputLength} characters"));
 
         return Task.FromResult(new ResourceQuotaDecision(true));

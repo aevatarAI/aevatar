@@ -49,10 +49,17 @@ public interface IDynamicRuntimeQueryService
 
 public interface IScriptRoleEntrypoint
 {
-    Task<string> HandleAsync(string input, CancellationToken ct = default);
+    Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default);
 }
 
-public sealed record DynamicScriptExecutionRequest(string ScriptCode, string Input, string EntrypointType = "ScriptEntrypoint");
+public sealed record DynamicScriptExecutionRequest(string ScriptCode, ScriptRoleRequest Input, string EntrypointType = "ScriptEntrypoint")
+{
+    public DynamicScriptExecutionRequest(string scriptCode, string input, string entrypointType = "ScriptEntrypoint")
+        : this(scriptCode, ScriptRoleRequest.FromText(input), entrypointType)
+    {
+    }
+}
+
 public sealed record DynamicScriptExecutionResult(bool Success, string Output, string? Error = null);
 
 public interface IDynamicScriptExecutionService
@@ -63,6 +70,7 @@ public interface IDynamicScriptExecutionService
 public interface IScriptRoleCapabilityAdapter : Aevatar.AI.Abstractions.Agents.IRoleAgent
 {
     ScriptRoleCapabilitySnapshot Snapshot { get; }
+    Task<string> ExecuteAsync(ScriptRoleRequest input, CancellationToken ct = default);
     Task<string> ExecuteAsync(string input, CancellationToken ct = default);
 }
 

@@ -31,6 +31,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEventEnvelopePublisherPort, InMemoryEventEnvelopePublisherPort>();
         services.TryAddSingleton<IEventEnvelopeSubscriberPort, InMemoryEventEnvelopeSubscriberPort>();
         services.TryAddSingleton<IEventEnvelopeDedupPort, InMemoryEventEnvelopeDedupPort>();
+        services.TryAddSingleton<IScriptRoleAgentLlmClient, ScriptRoleAgentLlmClient>();
+        services.TryAddSingleton<IScriptRoleAgentClient, ScriptRoleAgentClient>();
+        services.TryAddSingleton<IScriptRoleAgentCapabilities, ScriptRoleAgentCapabilities>();
         services.TryAddSingleton<IDynamicScriptExecutionService, RoslynDynamicScriptExecutionService>();
         services.TryAddSingleton<DynamicRuntimeApplicationService>();
         services.TryAddSingleton<IDynamicRuntimeCommandService>(sp => sp.GetRequiredService<DynamicRuntimeApplicationService>());

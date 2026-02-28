@@ -3,7 +3,9 @@
 ## 1. 范围
 - 目标：通过复杂多智能体业务链路测试，验证 Dynamic Runtime 与 Docker/Compose 关键语义的一致性。
 - 测试项目：`test/Aevatar.DynamicRuntime.Application.Tests/Aevatar.DynamicRuntime.Application.Tests.csproj`
-- 关键用例：`MultiAgentBusinessSimulation_ShouldAlignDockerLikeSemantics`
+- 关键用例：
+1. `MultiAgentBusinessSimulation_ShouldAlignDockerLikeSemantics`
+2. `RefundBusiness_ShouldRunWithPureScripts_AndSimulatedLlm`
 
 ## 2. 业务场景（多 Agents）
 - 服务拓扑（Compose）：
@@ -16,6 +18,20 @@
 3. `containers:create/start` 启动四个容器（含 worker 双副本）。
 4. `exec` 串行执行 `gateway -> planner -> worker(并行2次)`。
 5. `build-jobs:plan/validate/approve/execute` 触发 `worker` 新镜像发布与服务滚动更新。
+
+### 2.1 纯脚本退款业务编排（新增）
+- 服务拓扑（Compose）：
+1. `intake`（`hybrid`，1 副本）：解析退款工单并给出模拟 LLM 风险提示。
+2. `policy`（`event`，0 副本）：基于 intake 输出做模拟 LLM 决策（`auto_refund/manual_review`）。
+3. `settlement`（`daemon`，2 副本）：根据策略执行退款或转人工。
+4. `notify`（`event`，0 副本）：生成用户通知文案。
+- 业务流：
+1. 所有业务逻辑均由 C# 脚本实现（纯脚本，不改系统实现）。
+2. 两条真实语义输入分支：
+- 低风险：`amount=299` -> `auto_refund` -> `refund_approved`
+- 高风险：`amount=1899 + fraud` -> `manual_review` -> `manual_review_required`
+3. 编排链路：`register/activate -> compose apply -> create/start containers -> intake -> policy -> settlement -> notify`。
+4. 验证点：LLM 模拟结果字段、容器 digest 固定、event/hybrid 订阅、事件发布。
 
 ## 3. Docker 语义对齐结果
 
@@ -67,6 +83,8 @@
 1. `dotnet test test/Aevatar.DynamicRuntime.Application.Tests/Aevatar.DynamicRuntime.Application.Tests.csproj --nologo`
 2. 可重点过滤：
 `dotnet test test/Aevatar.DynamicRuntime.Application.Tests/Aevatar.DynamicRuntime.Application.Tests.csproj --nologo --filter MultiAgentBusinessSimulation_ShouldAlignDockerLikeSemantics`
+3. 纯脚本退款编排过滤：
+`dotnet test test/Aevatar.DynamicRuntime.Application.Tests/Aevatar.DynamicRuntime.Application.Tests.csproj --nologo --filter RefundBusiness_ShouldRunWithPureScripts_AndSimulatedLlm`
 
 ## 6. 对齐建议（下一步）
 1. 落地 `Envelope Dispatch` 到 `Run` 的消费闭环，并补 `ack/retry/dedup` 端到端测试。

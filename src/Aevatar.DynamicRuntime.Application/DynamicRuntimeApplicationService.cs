@@ -660,8 +660,16 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
 
         await _readStore.UpsertRunAsync(new RunSnapshot(runId, request.ContainerId, request.ServiceId, "Running", string.Empty, string.Empty, string.Empty), ct);
 
+        var scriptInput = BuildScriptInput(
+            request.Input ?? ScriptRoleRequest.FromText(string.Empty),
+            runId,
+            request.ContainerId,
+            request.ServiceId,
+            container.StackId,
+            container.ServiceName);
+
         var scriptResult = await _scriptExecutionService.ExecuteAsync(
-            new DynamicScriptExecutionRequest(service.ScriptCode, request.Input, service.EntrypointType),
+            new DynamicScriptExecutionRequest(service.ScriptCode, scriptInput, service.EntrypointType),
             ct);
 
         RunSnapshot finalSnapshot;
@@ -1407,6 +1415,32 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         string.Equals(status, "Failed", StringComparison.Ordinal) ||
         string.Equals(status, "Canceled", StringComparison.Ordinal) ||
         string.Equals(status, "TimedOut", StringComparison.Ordinal);
+
+    private static ScriptRoleRequest BuildScriptInput(
+        ScriptRoleRequest input,
+        string runId,
+        string containerId,
+        string serviceId,
+        string stackId,
+        string serviceName)
+    {
+        var metadata = input.Metadata == null
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : new Dictionary<string, string>(input.Metadata, StringComparer.Ordinal);
+
+        metadata["run_id"] = runId;
+        metadata["container_id"] = containerId;
+        metadata["service_id"] = serviceId;
+        metadata["stack_id"] = stackId;
+        metadata["service_name"] = serviceName;
+
+        return input with
+        {
+            Metadata = metadata,
+            CorrelationId = string.IsNullOrWhiteSpace(input.CorrelationId) ? runId : input.CorrelationId,
+            MessageType = string.IsNullOrWhiteSpace(input.MessageType) ? "container.exec" : input.MessageType,
+        };
+    }
 
     private static string BuildDigest(string imageName, string sourceBundleDigest)
     {

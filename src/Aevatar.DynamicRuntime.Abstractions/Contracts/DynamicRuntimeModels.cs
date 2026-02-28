@@ -66,11 +66,41 @@ public sealed record CreateContainerRequest(
     string ImageDigest,
     string RoleActorId);
 
+public sealed record ScriptRoleRequest(
+    string Text,
+    string? Json = null,
+    IReadOnlyDictionary<string, string>? Metadata = null,
+    string? CorrelationId = null,
+    string? CausationId = null,
+    string? MessageType = null)
+{
+    public int PayloadLength => (Text?.Length ?? 0) + (Json?.Length ?? 0);
+    public string PrimaryPayload => string.IsNullOrWhiteSpace(Json) ? Text ?? string.Empty : Json;
+
+    public static ScriptRoleRequest FromText(
+        string text,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        string? correlationId = null,
+        string? causationId = null,
+        string? messageType = null) =>
+        new(text ?? string.Empty, null, metadata, correlationId, causationId, messageType);
+}
+
 public sealed record ExecuteContainerRequest(
     string ContainerId,
     string ServiceId,
-    string Input,
-    string? RunId = null);
+    ScriptRoleRequest Input,
+    string? RunId = null)
+{
+    public ExecuteContainerRequest(
+        string containerId,
+        string serviceId,
+        string input,
+        string? runId = null)
+        : this(containerId, serviceId, ScriptRoleRequest.FromText(input), runId)
+    {
+    }
+}
 
 public sealed record SubmitBuildPlanRequest(
     string BuildJobId,
@@ -194,7 +224,7 @@ public sealed record PolicyValidationResult(bool Allowed, string? ErrorCode = nu
 
 public sealed record CompiledScriptArtifact(string ArtifactDigest, string ServiceId, string ScriptCode, string EntrypointType);
 
-public sealed record ScriptExecutionContext(string ServiceId, string EntrypointType, string Input, long StartedAtUnixMs);
+public sealed record ScriptExecutionContext(string ServiceId, string EntrypointType, ScriptRoleRequest Input, long StartedAtUnixMs);
 
 public sealed record ScriptAssemblyHandle(string ArtifactDigest, IScriptRoleEntrypoint Entrypoint, object? RuntimeHandle = null);
 

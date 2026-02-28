@@ -23,8 +23,8 @@ using Aevatar.DynamicRuntime.Abstractions.Contracts;
 
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(string input, CancellationToken ct = default)
-        => Task.FromResult($"echo:{input}");
+    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+        => Task.FromResult($"echo:{input.Text}");
 }
 
 var entrypoint = new ScriptEntrypoint();
@@ -76,6 +76,55 @@ var entrypoint = new ScriptEntrypoint();
         state.Should().NotBeNull();
         state!.ScriptCode.Should().Contain("ScriptEntrypoint");
         state.Status.Should().Be(DynamicServiceStatus.Active.ToString());
+    }
+
+    [Fact]
+    public async Task ExecuteContainer_ShouldInjectStructuredRunMetadataIntoScriptInput()
+    {
+        var (service, _) = CreateService();
+
+        var script = """
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.DynamicRuntime.Abstractions.Contracts;
+
+public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
+{
+    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+    {
+        var runId = input.Metadata != null && input.Metadata.TryGetValue("run_id", out var run) ? run : string.Empty;
+        var serviceId = input.Metadata != null && input.Metadata.TryGetValue("service_id", out var service) ? service : string.Empty;
+        return Task.FromResult($"{input.Text}|{runId}|{serviceId}|{input.MessageType}|{input.CorrelationId}");
+    }
+}
+
+var entrypoint = new ScriptEntrypoint();
+""";
+
+        await service.RegisterServiceAsync(
+            new RegisterServiceDefinitionRequest(
+                "svc.meta",
+                "v1",
+                script,
+                "ScriptEntrypoint",
+                DynamicServiceMode.Hybrid,
+                [],
+                [],
+                "cap:meta"),
+            new DynamicCommandContext("idem-meta-register"));
+        await service.ActivateServiceAsync("svc.meta", new DynamicCommandContext("idem-meta-activate", "1"));
+        await service.CreateContainerAsync(
+            new CreateContainerRequest("container.meta.1", "stack.meta", "meta", "svc.meta", "sha256:meta", "role.meta.1"),
+            new DynamicCommandContext("idem-meta-create"));
+        await service.StartContainerAsync("container.meta.1", new DynamicCommandContext("idem-meta-start"));
+
+        await service.ExecuteContainerAsync(
+            new ExecuteContainerRequest("container.meta.1", "svc.meta", ScriptRoleRequest.FromText("hello"), "run-meta"),
+            new DynamicCommandContext("idem-meta-exec"));
+
+        var run = await service.GetRunAsync("run-meta");
+        run.Should().NotBeNull();
+        run!.Result.Should().Be("hello|run-meta|svc.meta|container.exec|run-meta");
     }
 
     [Fact]
@@ -142,7 +191,7 @@ using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(string input, CancellationToken ct = default) => Task.FromResult("ok");
+    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default) => Task.FromResult("ok");
 }
 var entrypoint = new ScriptEntrypoint();
 """,
@@ -358,7 +407,7 @@ using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(string input, CancellationToken ct = default) => Task.FromResult(input);
+    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default) => Task.FromResult(input.Text);
 }
 var entrypoint = new ScriptEntrypoint();
 """,
@@ -389,8 +438,8 @@ using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(string input, CancellationToken ct = default)
-        => Task.FromResult($"{{\"agent\":\"gateway\",\"llm\":\"intent_parsed\",\"input\":\"{input}\"}}");
+    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+        => Task.FromResult($"{{\"agent\":\"gateway\",\"llm\":\"intent_parsed\",\"input\":\"{input.Text}\"}}");
 }
 var entrypoint = new ScriptEntrypoint();
 """;
@@ -401,8 +450,8 @@ using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(string input, CancellationToken ct = default)
-        => Task.FromResult($"{{\"agent\":\"planner\",\"llm\":\"plan_created\",\"upstream\":{input}}}");
+    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+        => Task.FromResult($"{{\"agent\":\"planner\",\"llm\":\"plan_created\",\"upstream\":{input.Text}}}");
 }
 var entrypoint = new ScriptEntrypoint();
 """;
@@ -413,8 +462,8 @@ using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(string input, CancellationToken ct = default)
-        => Task.FromResult($"{{\"agent\":\"worker\",\"llm\":\"task_executed\",\"payload\":{input}}}");
+    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+        => Task.FromResult($"{{\"agent\":\"worker\",\"llm\":\"task_executed\",\"payload\":{input.Text}}}");
 }
 var entrypoint = new ScriptEntrypoint();
 """;

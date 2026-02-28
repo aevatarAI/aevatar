@@ -12,17 +12,34 @@ public sealed class RoslynDynamicScriptExecutionService : IDynamicScriptExecutio
     private readonly IScriptAssemblyLoadPolicy _assemblyLoadPolicy;
     private readonly IScriptSandboxPolicy _sandboxPolicy;
     private readonly IScriptResourceQuotaPolicy _resourceQuotaPolicy;
+    private readonly IScriptRoleAgentCapabilities _roleAgentCapabilities;
 
     public RoslynDynamicScriptExecutionService(
         IScriptCompilationPolicy compilationPolicy,
         IScriptAssemblyLoadPolicy assemblyLoadPolicy,
         IScriptSandboxPolicy sandboxPolicy,
         IScriptResourceQuotaPolicy resourceQuotaPolicy)
+        : this(
+            compilationPolicy,
+            assemblyLoadPolicy,
+            sandboxPolicy,
+            resourceQuotaPolicy,
+            new NullScriptRoleAgentCapabilities())
+    {
+    }
+
+    public RoslynDynamicScriptExecutionService(
+        IScriptCompilationPolicy compilationPolicy,
+        IScriptAssemblyLoadPolicy assemblyLoadPolicy,
+        IScriptSandboxPolicy sandboxPolicy,
+        IScriptResourceQuotaPolicy resourceQuotaPolicy,
+        IScriptRoleAgentCapabilities roleAgentCapabilities)
     {
         _compilationPolicy = compilationPolicy;
         _assemblyLoadPolicy = assemblyLoadPolicy;
         _sandboxPolicy = sandboxPolicy;
         _resourceQuotaPolicy = resourceQuotaPolicy;
+        _roleAgentCapabilities = roleAgentCapabilities;
     }
 
     public async Task<DynamicScriptExecutionResult> ExecuteAsync(DynamicScriptExecutionRequest request, CancellationToken ct = default)
@@ -37,7 +54,7 @@ public sealed class RoslynDynamicScriptExecutionService : IDynamicScriptExecutio
         if (!compilationValidation.Allowed)
             return new DynamicScriptExecutionResult(false, string.Empty, compilationValidation.ErrorCode ?? compilationValidation.Reason ?? "SCRIPT_POLICY_REJECTED");
 
-        var context = new ScriptExecutionContext(bundle.ServiceId, request.EntrypointType, request.Input ?? string.Empty, nowUnixMs);
+        var context = new ScriptExecutionContext(bundle.ServiceId, request.EntrypointType, request.Input ?? ScriptRoleRequest.FromText(string.Empty), nowUnixMs);
         var sandboxResult = await _sandboxPolicy.PrepareAsync(context, ct);
         if (!sandboxResult.Allowed)
             return new DynamicScriptExecutionResult(false, string.Empty, sandboxResult.ErrorCode ?? sandboxResult.Reason ?? "SCRIPT_SANDBOX_REJECTED");
@@ -53,7 +70,8 @@ public sealed class RoslynDynamicScriptExecutionService : IDynamicScriptExecutio
         try
         {
             handle = await _assemblyLoadPolicy.LoadAsync(artifact, ct);
-            var output = await handle.Entrypoint.HandleAsync(request.Input ?? string.Empty, ct);
+            using var scope = ScriptRoleAgentContext.BeginScope(_roleAgentCapabilities);
+            var output = await handle.Entrypoint.HandleAsync(request.Input ?? ScriptRoleRequest.FromText(string.Empty), ct);
             return new DynamicScriptExecutionResult(true, output);
         }
         catch (Exception ex)
