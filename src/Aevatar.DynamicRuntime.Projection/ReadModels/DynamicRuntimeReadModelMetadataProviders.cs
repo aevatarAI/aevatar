@@ -42,6 +42,21 @@ public sealed class DynamicRuntimeBuildJobReadModelMetadataProvider : IProjectio
     public DocumentIndexMetadata Metadata => DynamicRuntimeReadModelMetadata.Create("dynamic_runtime_build_jobs");
 }
 
+public sealed class DynamicRuntimeScriptReadModelDefinitionReadModelMetadataProvider : IProjectionDocumentMetadataProvider<DynamicRuntimeScriptReadModelDefinitionReadModel>
+{
+    public DocumentIndexMetadata Metadata => DynamicRuntimeReadModelMetadata.Create("dynamic_runtime_script_readmodel_definitions");
+}
+
+public sealed class DynamicRuntimeScriptReadModelRelationReadModelMetadataProvider : IProjectionDocumentMetadataProvider<DynamicRuntimeScriptReadModelRelationReadModel>
+{
+    public DocumentIndexMetadata Metadata => DynamicRuntimeReadModelMetadata.Create("dynamic_runtime_script_readmodel_relations");
+}
+
+public sealed class DynamicRuntimeScriptReadModelDocumentReadModelMetadataProvider : IProjectionDocumentMetadataProvider<DynamicRuntimeScriptReadModelDocumentReadModel>
+{
+    public DocumentIndexMetadata Metadata => DynamicRuntimeReadModelMetadata.Create("dynamic_runtime_script_readmodel_documents");
+}
+
 internal static class DynamicRuntimeReadModelMetadata
 {
     public static DocumentIndexMetadata Create(string indexName) =>

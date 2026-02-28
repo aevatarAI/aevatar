@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
 using Any = Google.Protobuf.WellKnownTypes.Any;
+using Struct = Google.Protobuf.WellKnownTypes.Struct;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
 using Xunit;
@@ -137,6 +138,325 @@ var entrypoint = new ScriptEntrypoint();
         var run = await service.GetRunAsync("run-meta");
         run.Should().NotBeNull();
         run!.Result.Should().Be("""{"text":"hello"}|run-meta|svc.meta||run-meta""");
+    }
+
+    [Fact]
+    public async Task ExecuteContainer_WhenScriptUsesRemovedReadModelApi_ShouldFailWithCompilationError()
+    {
+        var (service, _) = CreateService();
+
+        var script = """
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.DynamicRuntime.Abstractions.Contracts;
+
+public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
+{
+    public async Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        await ScriptRoleAgentContext.Current.UpsertReadModelDocumentAsync("orders", "O-1001", new StringValue { Value = "forbidden" }, ct: ct);
+        return new ScriptRoleExecutionResult("ok");
+    }
+}
+
+var entrypoint = new ScriptEntrypoint();
+""";
+
+        await service.RegisterServiceAsync(
+            new RegisterServiceDefinitionRequest(
+                "svc.removed.readmodel.api",
+                "v1",
+                script,
+                "ScriptEntrypoint",
+                DynamicServiceMode.Event,
+                [],
+                ["event.removed.readmodel.api"],
+                "cap:removed:readmodel:api"),
+            new DynamicCommandContext("idem-removed-readmodel-api-register"));
+        await service.ActivateServiceAsync("svc.removed.readmodel.api", new DynamicCommandContext("idem-removed-readmodel-api-activate", "1"));
+        await service.CreateContainerAsync(
+            new CreateContainerRequest("container.removed.readmodel.api", "stack.removed", "removed", "svc.removed.readmodel.api", "sha256:removed", "role.removed"),
+            new DynamicCommandContext("idem-removed-readmodel-api-create"));
+        await service.StartContainerAsync("container.removed.readmodel.api", new DynamicCommandContext("idem-removed-readmodel-api-start"));
+
+        var exec = await service.ExecuteContainerAsync(
+            new ExecuteContainerRequest("container.removed.readmodel.api", "svc.removed.readmodel.api", CreateJsonEnvelope("""{"ticket":"x"}"""), "run-removed-readmodel-api"),
+            new DynamicCommandContext("idem-removed-readmodel-api-exec"));
+
+        var run = await service.GetRunAsync("run-removed-readmodel-api");
+
+        exec.Status.Should().Be("FAILED");
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("Failed");
+        run.Error.Should().Contain("UpsertReadModelDocumentAsync");
+        run.Error.Should().Contain("CS1061");
+    }
+
+    [Fact]
+    public async Task ExecuteContainer_WhenScriptChangesCustomStateSchema_ShouldFailWithSchemaConflict()
+    {
+        var (service, _) = CreateService();
+
+        var script = """
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
+{
+    public async Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        await ScriptRoleAgentContext.Current.SetStateAsync(new Int64Value { Value = 42 }, ct);
+        return new ScriptRoleExecutionResult("ok");
+    }
+}
+
+var entrypoint = new ScriptEntrypoint();
+""";
+
+        await service.RegisterServiceAsync(
+            new RegisterServiceDefinitionRequest(
+                "svc.state.schema",
+                "v1",
+                script,
+                "ScriptEntrypoint",
+                DynamicServiceMode.Event,
+                [],
+                ["event.state.schema"],
+                "cap:state:schema",
+                Any.Pack(new StringValue { Value = "state-v1" })),
+            new DynamicCommandContext("idem-state-schema-register"));
+        await service.ActivateServiceAsync("svc.state.schema", new DynamicCommandContext("idem-state-schema-activate", "1"));
+        await service.CreateContainerAsync(
+            new CreateContainerRequest("container.state.schema", "stack.state", "state", "svc.state.schema", "sha256:state", "role.state"),
+            new DynamicCommandContext("idem-state-schema-create"));
+        await service.StartContainerAsync("container.state.schema", new DynamicCommandContext("idem-state-schema-start"));
+
+        var exec = await service.ExecuteContainerAsync(
+            new ExecuteContainerRequest("container.state.schema", "svc.state.schema", CreateJsonEnvelope("""{"ticket":"schema"}"""), "run-state-schema"),
+            new DynamicCommandContext("idem-state-schema-exec"));
+
+        var run = await service.GetRunAsync("run-state-schema");
+        var serviceSnapshot = await service.GetServiceDefinitionAsync("svc.state.schema");
+
+        exec.Status.Should().Be("FAILED");
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("Failed");
+        run.Error.Should().Contain("SCRIPT_STATE_SCHEMA_CONFLICT");
+        serviceSnapshot.Should().NotBeNull();
+        serviceSnapshot!.CustomState.Should().NotBeNull();
+        serviceSnapshot.CustomState!.Is(StringValue.Descriptor).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ExecuteContainer_ShouldPersistAllScriptRuntimeCapabilitiesFromScript()
+    {
+        var publisher = new RecordingEnvelopePublisherPort();
+        var (service, _) = CreateService(envelopePublisherPort: publisher);
+
+        var script = """
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
+{
+    public async Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        var stateAny = await ScriptRoleAgentContext.Current.GetStateAsync(ct);
+        var previousState = stateAny != null && stateAny.Is(Struct.Descriptor)
+            ? (stateAny.Unpack<Struct>().Fields.TryGetValue("seed", out var seed) ? seed.StringValue : "none")
+            : "none";
+
+        var nextState = new Struct();
+        nextState.Fields["previous_state"] = Value.ForString(previousState);
+        nextState.Fields["last_order_id"] = Value.ForString("O-2001");
+        await ScriptRoleAgentContext.Current.SetStateAsync(nextState, ct);
+
+        await ScriptRoleAgentContext.Current.PublishAsync(
+            new StringValue { Value = "event:orders-indexed" },
+            EventDirection.Both,
+            new Dictionary<string, string>
+            {
+                ["script_event"] = "orders_indexed",
+            },
+            ct);
+
+        return new ScriptRoleExecutionResult("ok");
+    }
+}
+
+var entrypoint = new ScriptEntrypoint();
+""";
+
+        await service.RegisterServiceAsync(
+            new RegisterServiceDefinitionRequest(
+                "svc.all.capabilities",
+                "v1",
+                script,
+                "ScriptEntrypoint",
+                DynamicServiceMode.Event,
+                [],
+                ["event.all.capabilities"],
+                "cap:all:capabilities",
+                Any.Pack(new Struct
+                {
+                    Fields =
+                    {
+                        ["seed"] = new Google.Protobuf.WellKnownTypes.Value { StringValue = "seed-v1" },
+                    },
+                })),
+            new DynamicCommandContext("idem-all-cap-register"));
+        await service.ActivateServiceAsync("svc.all.capabilities", new DynamicCommandContext("idem-all-cap-activate", "1"));
+        await service.CreateContainerAsync(
+            new CreateContainerRequest("container.all.capabilities", "stack.all", "all", "svc.all.capabilities", "sha256:all", "role.all"),
+            new DynamicCommandContext("idem-all-cap-create"));
+        await service.StartContainerAsync("container.all.capabilities", new DynamicCommandContext("idem-all-cap-start"));
+
+        var exec = await service.ExecuteContainerAsync(
+            new ExecuteContainerRequest("container.all.capabilities", "svc.all.capabilities", CreateJsonEnvelope("""{"order":"O-2001"}"""), "run-all-capabilities"),
+            new DynamicCommandContext("idem-all-cap-exec"));
+
+        var run = await service.GetRunAsync("run-all-capabilities");
+        var serviceSnapshot = await service.GetServiceDefinitionAsync("svc.all.capabilities");
+
+        exec.Status.Should().Be("SUCCEEDED");
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("Succeeded");
+
+        serviceSnapshot.Should().NotBeNull();
+        serviceSnapshot!.CustomState.Should().NotBeNull();
+        serviceSnapshot.CustomState!.Is(Struct.Descriptor).Should().BeTrue();
+        var customState = serviceSnapshot.CustomState.Unpack<Struct>();
+        customState.Fields["previous_state"].StringValue.Should().Be("seed-v1");
+        customState.Fields["last_order_id"].StringValue.Should().Be("O-2001");
+
+        publisher.Published.Any(item =>
+            item.Envelope.Metadata.TryGetValue("script_event", out var scriptEvent) &&
+            string.Equals(scriptEvent, "orders_indexed", StringComparison.Ordinal))
+            .Should()
+            .BeTrue();
+    }
+
+    [Fact]
+    public async Task ExecuteContainer_WhenScriptDefinesReadModelAtRuntime_ShouldFail()
+    {
+        var (service, _) = CreateService();
+
+        var script = """
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.DynamicRuntime.Abstractions.Contracts;
+
+public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
+{
+    public async Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        await ScriptRoleAgentContext.Current.DefineReadModelAsync(
+            "orders",
+            "order_id",
+            new Dictionary<string, string>
+            {
+                ["order_id"] = "string",
+                ["status"] = "string",
+            },
+            new[] { "status" },
+            ct);
+        return new ScriptRoleExecutionResult("ok");
+    }
+}
+
+var entrypoint = new ScriptEntrypoint();
+""";
+
+        await service.RegisterServiceAsync(
+            new RegisterServiceDefinitionRequest(
+                "svc.schema.forbidden",
+                "v1",
+                script,
+                "ScriptEntrypoint",
+                DynamicServiceMode.Event,
+                [],
+                ["event.schema.forbidden"],
+                "cap:schema:forbidden"),
+            new DynamicCommandContext("idem-schema-forbidden-register"));
+        await service.ActivateServiceAsync("svc.schema.forbidden", new DynamicCommandContext("idem-schema-forbidden-activate", "1"));
+        await service.CreateContainerAsync(
+            new CreateContainerRequest("container.schema.forbidden", "stack.schema", "schema", "svc.schema.forbidden", "sha256:schema", "role.schema"),
+            new DynamicCommandContext("idem-schema-forbidden-create"));
+        await service.StartContainerAsync("container.schema.forbidden", new DynamicCommandContext("idem-schema-forbidden-start"));
+
+        var exec = await service.ExecuteContainerAsync(
+            new ExecuteContainerRequest("container.schema.forbidden", "svc.schema.forbidden", CreateJsonEnvelope("""{"ticket":"schema"}"""), "run-schema-forbidden"),
+            new DynamicCommandContext("idem-schema-forbidden-exec"));
+        var run = await service.GetRunAsync("run-schema-forbidden");
+
+        exec.Status.Should().Be("FAILED");
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("Failed");
+        run.Error.Should().Contain("DefineReadModelAsync");
+        run.Error.Should().Contain("CS1061");
+    }
+
+    [Fact]
+    public async Task ExecuteContainer_WhenScriptDefinesReadModelRelationAtRuntime_ShouldFail()
+    {
+        var (service, _) = CreateService();
+
+        var script = """
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.DynamicRuntime.Abstractions.Contracts;
+
+public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
+{
+    public async Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        await ScriptRoleAgentContext.Current.DefineReadModelRelationAsync(
+            "order_customer",
+            "orders",
+            "customers",
+            "customer_id",
+            "customer_id",
+            ct);
+        return new ScriptRoleExecutionResult("ok");
+    }
+}
+
+var entrypoint = new ScriptEntrypoint();
+""";
+
+        await service.RegisterServiceAsync(
+            new RegisterServiceDefinitionRequest(
+                "svc.relation.forbidden",
+                "v1",
+                script,
+                "ScriptEntrypoint",
+                DynamicServiceMode.Event,
+                [],
+                ["event.relation.forbidden"],
+                "cap:relation:forbidden"),
+            new DynamicCommandContext("idem-relation-forbidden-register"));
+        await service.ActivateServiceAsync("svc.relation.forbidden", new DynamicCommandContext("idem-relation-forbidden-activate", "1"));
+        await service.CreateContainerAsync(
+            new CreateContainerRequest("container.relation.forbidden", "stack.relation", "relation", "svc.relation.forbidden", "sha256:relation", "role.relation"),
+            new DynamicCommandContext("idem-relation-forbidden-create"));
+        await service.StartContainerAsync("container.relation.forbidden", new DynamicCommandContext("idem-relation-forbidden-start"));
+
+        var exec = await service.ExecuteContainerAsync(
+            new ExecuteContainerRequest("container.relation.forbidden", "svc.relation.forbidden", CreateJsonEnvelope("""{"ticket":"relation"}"""), "run-relation-forbidden"),
+            new DynamicCommandContext("idem-relation-forbidden-exec"));
+        var run = await service.GetRunAsync("run-relation-forbidden");
+
+        exec.Status.Should().Be("FAILED");
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("Failed");
+        run.Error.Should().Contain("DefineReadModelRelationAsync");
+        run.Error.Should().Contain("CS1061");
     }
 
     [Fact]
@@ -715,6 +1035,40 @@ services:
                     new DefaultScriptSandboxPolicy(),
                     new DefaultScriptResourceQuotaPolicy())),
             serviceStateStore);
+    }
+
+    private static (DynamicRuntimeApplicationService Service, IStateStore<ScriptServiceDefinitionState> ServiceStateStore, InMemoryDynamicRuntimeReadStore ReadStore) CreateServiceWithReadStore(
+        IEventEnvelopeSubscriberPort? envelopeSubscriberPort = null,
+        IEventEnvelopePublisherPort? envelopePublisherPort = null)
+    {
+        var runtime = new FakeActorRuntime();
+        var store = new InMemoryDynamicRuntimeReadStore();
+        var serviceStateStore = new InMemoryScriptServiceDefinitionStateStore();
+        envelopeSubscriberPort ??= new InMemoryEventEnvelopeSubscriberPort();
+        envelopePublisherPort ??= new InMemoryEventEnvelopePublisherPort();
+        var service = new DynamicRuntimeApplicationService(
+            runtime,
+            store,
+            serviceStateStore,
+            new InMemoryIdempotencyPort(),
+            new InMemoryConcurrencyTokenPort(),
+            new DefaultImageReferenceResolver(),
+            new DefaultScriptComposeSpecValidator(),
+            new DefaultScriptComposeReconcilePort(),
+            new DefaultAgentBuildPlanPort(),
+            new DefaultAgentBuildPolicyPort(),
+            new DefaultAgentBuildExecutionPort(),
+            new DefaultServiceModePolicyPort(),
+            new DefaultBuildApprovalPort(),
+            envelopePublisherPort,
+            envelopeSubscriberPort,
+            new InMemoryEventEnvelopeDedupPort(),
+            new RoslynDynamicScriptExecutionService(
+                new DefaultScriptCompilationPolicy(),
+                new DefaultScriptAssemblyLoadPolicy(),
+                new DefaultScriptSandboxPolicy(),
+                new DefaultScriptResourceQuotaPolicy()));
+        return (service, serviceStateStore, store);
     }
 
     private sealed class RecordingEnvelopePublisherPort : IEventEnvelopePublisherPort

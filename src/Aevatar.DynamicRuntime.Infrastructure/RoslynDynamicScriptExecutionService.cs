@@ -45,25 +45,25 @@ public sealed class RoslynDynamicScriptExecutionService : IDynamicScriptExecutio
     public async Task<DynamicScriptExecutionResult> ExecuteAsync(DynamicScriptExecutionRequest request, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(request.ScriptCode))
-            return new DynamicScriptExecutionResult(false, string.Empty, null, "ScriptCode is required.");
+            return new DynamicScriptExecutionResult(Success: false, Output: string.Empty, Error: "ScriptCode is required.");
         if (request.Envelope == null)
-            return new DynamicScriptExecutionResult(false, string.Empty, null, "Envelope is required.");
+            return new DynamicScriptExecutionResult(Success: false, Output: string.Empty, Error: "Envelope is required.");
 
         var nowUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var bundle = new ScriptSourceBundle("dynamic-runtime.exec", request.ScriptCode, request.EntrypointType);
 
         var compilationValidation = await _compilationPolicy.ValidateAsync(bundle, ct);
         if (!compilationValidation.Allowed)
-            return new DynamicScriptExecutionResult(false, string.Empty, null, compilationValidation.ErrorCode ?? compilationValidation.Reason ?? "SCRIPT_POLICY_REJECTED");
+            return new DynamicScriptExecutionResult(Success: false, Output: string.Empty, Error: compilationValidation.ErrorCode ?? compilationValidation.Reason ?? "SCRIPT_POLICY_REJECTED");
 
         var context = new ScriptExecutionContext(bundle.ServiceId, request.EntrypointType, request.Envelope, nowUnixMs);
         var sandboxResult = await _sandboxPolicy.PrepareAsync(context, ct);
         if (!sandboxResult.Allowed)
-            return new DynamicScriptExecutionResult(false, string.Empty, null, sandboxResult.ErrorCode ?? sandboxResult.Reason ?? "SCRIPT_SANDBOX_REJECTED");
+            return new DynamicScriptExecutionResult(Success: false, Output: string.Empty, Error: sandboxResult.ErrorCode ?? sandboxResult.Reason ?? "SCRIPT_SANDBOX_REJECTED");
 
         var quotaResult = await _resourceQuotaPolicy.EvaluateAsync(context, ct);
         if (!quotaResult.Allowed)
-            return new DynamicScriptExecutionResult(false, string.Empty, null, quotaResult.ErrorCode ?? quotaResult.Reason ?? "RESOURCE_QUOTA_EXCEEDED");
+            return new DynamicScriptExecutionResult(Success: false, Output: string.Empty, Error: quotaResult.ErrorCode ?? quotaResult.Reason ?? "RESOURCE_QUOTA_EXCEEDED");
 
         var artifactDigest = ComputeArtifactDigest(request.ScriptCode, request.EntrypointType);
         var artifact = new CompiledScriptArtifact(artifactDigest, bundle.ServiceId, request.ScriptCode, request.EntrypointType);
@@ -74,14 +74,18 @@ public sealed class RoslynDynamicScriptExecutionService : IDynamicScriptExecutio
             handle = await _assemblyLoadPolicy.LoadAsync(artifact, ct);
             Func<string, string?, string?, string?, CancellationToken, Task<string>> chatAsync =
                 _chatClient is null ? NotConfiguredChatAsync : _chatClient.ChatAsync;
-            var runtime = new ScriptRoleAgentRuntime(chatAsync, request.Envelope);
+            var runtime = new ScriptRoleAgentRuntime(chatAsync, request.Envelope, request.CustomState);
             using var scope = ScriptRoleAgentContext.BeginScope(runtime);
             var execution = await handle.Entrypoint.HandleEventAsync(request.Envelope, ct);
-            return new DynamicScriptExecutionResult(true, execution.Output ?? string.Empty, runtime.PublishedEnvelopes.ToArray());
+            return new DynamicScriptExecutionResult(
+                Success: true,
+                Output: execution.Output ?? string.Empty,
+                PublishedEvents: runtime.PublishedEnvelopes.ToArray(),
+                CustomState: runtime.UpdatedState);
         }
         catch (Exception ex)
         {
-            return new DynamicScriptExecutionResult(false, string.Empty, null, ex.Message);
+            return new DynamicScriptExecutionResult(Success: false, Output: string.Empty, Error: ex.Message);
         }
         finally
         {

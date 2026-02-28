@@ -13,6 +13,9 @@ public sealed class InMemoryDynamicRuntimeReadStore : IDynamicRuntimeReadStore
     private readonly ConcurrentDictionary<string, ContainerSnapshot> _containers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, RunSnapshot> _runs = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, BuildJobSnapshot> _buildJobs = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ScriptReadModelDefinitionSnapshot> _scriptReadModelDefinitions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ScriptReadModelRelationSnapshot> _scriptReadModelRelations = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ScriptReadModelDocumentSnapshot> _scriptReadModelDocuments = new(StringComparer.Ordinal);
 
     public Task UpsertImageAsync(ImageSnapshot snapshot, CancellationToken ct = default)
     {
@@ -69,6 +72,27 @@ public sealed class InMemoryDynamicRuntimeReadStore : IDynamicRuntimeReadStore
     {
         ct.ThrowIfCancellationRequested();
         _buildJobs[snapshot.BuildJobId] = snapshot;
+        return Task.CompletedTask;
+    }
+
+    public Task UpsertScriptReadModelDefinitionAsync(ScriptReadModelDefinitionSnapshot snapshot, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _scriptReadModelDefinitions[BuildReadModelDefinitionKey(snapshot.ServiceId, snapshot.ReadModelName)] = snapshot;
+        return Task.CompletedTask;
+    }
+
+    public Task UpsertScriptReadModelRelationAsync(ScriptReadModelRelationSnapshot snapshot, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _scriptReadModelRelations[BuildReadModelRelationKey(snapshot.ServiceId, snapshot.RelationName)] = snapshot;
+        return Task.CompletedTask;
+    }
+
+    public Task UpsertScriptReadModelDocumentAsync(ScriptReadModelDocumentSnapshot snapshot, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _scriptReadModelDocuments[BuildReadModelDocumentKey(snapshot.ServiceId, snapshot.ReadModelName, snapshot.DocumentId)] = snapshot;
         return Task.CompletedTask;
     }
 
@@ -146,4 +170,52 @@ public sealed class InMemoryDynamicRuntimeReadStore : IDynamicRuntimeReadStore
         ct.ThrowIfCancellationRequested();
         return Task.FromResult<IReadOnlyList<BuildJobSnapshot>>(_buildJobs.Values.OrderBy(item => item.BuildJobId, StringComparer.Ordinal).ToArray());
     }
+
+    public Task<IReadOnlyList<ScriptReadModelDefinitionSnapshot>> GetScriptReadModelDefinitionsAsync(string serviceId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var snapshots = _scriptReadModelDefinitions.Values
+            .Where(item => string.Equals(item.ServiceId, serviceId, StringComparison.Ordinal))
+            .OrderBy(item => item.ReadModelName, StringComparer.Ordinal)
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<ScriptReadModelDefinitionSnapshot>>(snapshots);
+    }
+
+    public Task<IReadOnlyList<ScriptReadModelRelationSnapshot>> GetScriptReadModelRelationsAsync(string serviceId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var snapshots = _scriptReadModelRelations.Values
+            .Where(item => string.Equals(item.ServiceId, serviceId, StringComparison.Ordinal))
+            .OrderBy(item => item.RelationName, StringComparer.Ordinal)
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<ScriptReadModelRelationSnapshot>>(snapshots);
+    }
+
+    public Task<IReadOnlyList<ScriptReadModelDocumentSnapshot>> GetScriptReadModelDocumentsAsync(string serviceId, string readModelName, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var snapshots = _scriptReadModelDocuments.Values
+            .Where(item =>
+                string.Equals(item.ServiceId, serviceId, StringComparison.Ordinal) &&
+                string.Equals(item.ReadModelName, readModelName, StringComparison.Ordinal))
+            .OrderBy(item => item.DocumentId, StringComparer.Ordinal)
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<ScriptReadModelDocumentSnapshot>>(snapshots);
+    }
+
+    public Task<ScriptReadModelDocumentSnapshot?> GetScriptReadModelDocumentAsync(string serviceId, string readModelName, string documentId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _scriptReadModelDocuments.TryGetValue(BuildReadModelDocumentKey(serviceId, readModelName, documentId), out var snapshot);
+        return Task.FromResult(snapshot);
+    }
+
+    private static string BuildReadModelDefinitionKey(string serviceId, string readModelName)
+        => $"{serviceId}:{readModelName}";
+
+    private static string BuildReadModelRelationKey(string serviceId, string relationName)
+        => $"{serviceId}:{relationName}";
+
+    private static string BuildReadModelDocumentKey(string serviceId, string readModelName, string documentId)
+        => $"{serviceId}:{readModelName}:{documentId}";
 }

@@ -1,6 +1,7 @@
 using System.Threading;
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.DynamicRuntime.Abstractions.Contracts;
 
@@ -8,6 +9,7 @@ public interface IScriptRoleAgentRuntime
 {
     EventEnvelope CurrentEnvelope { get; }
     IReadOnlyList<EventEnvelope> PublishedEnvelopes { get; }
+    Any? UpdatedState { get; }
     Task<string> ChatAsync(
         string prompt,
         string? systemPrompt = null,
@@ -20,6 +22,10 @@ public interface IScriptRoleAgentRuntime
         EventDirection direction = EventDirection.Self,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default);
+
+    Task<Any?> GetStateAsync(CancellationToken ct = default);
+
+    Task SetStateAsync(IMessage value, CancellationToken ct = default);
 }
 
 public static class ScriptRoleAgentContext
@@ -55,5 +61,21 @@ public static class ScriptRoleAgentContext
                 return;
             _disposeAction();
         }
+    }
+}
+
+public static class ScriptRoleAgentRuntimeExtensions
+{
+    public static async Task<TState?> GetStateAsync<TState>(
+        this IScriptRoleAgentRuntime runtime,
+        CancellationToken ct = default)
+        where TState : class, IMessage<TState>, new()
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        var any = await runtime.GetStateAsync(ct);
+        var descriptor = new TState().Descriptor;
+        return any != null && any.Is(descriptor)
+            ? any.Unpack<TState>()
+            : null;
     }
 }

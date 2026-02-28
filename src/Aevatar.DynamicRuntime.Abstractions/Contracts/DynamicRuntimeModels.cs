@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.DynamicRuntime.Abstractions.Contracts;
 
@@ -46,7 +47,8 @@ public sealed record RegisterServiceDefinitionRequest(
     DynamicServiceMode ServiceMode,
     IReadOnlyList<string> PublicEndpoints,
     IReadOnlyList<string> EventSubscriptions,
-    string CapabilitiesHash);
+    string CapabilitiesHash,
+    Any? CustomState = null);
 
 public sealed record UpdateServiceDefinitionRequest(
     string ServiceId,
@@ -56,7 +58,8 @@ public sealed record UpdateServiceDefinitionRequest(
     DynamicServiceMode ServiceMode,
     IReadOnlyList<string> PublicEndpoints,
     IReadOnlyList<string> EventSubscriptions,
-    string CapabilitiesHash);
+    string CapabilitiesHash,
+    Any? CustomState = null);
 
 public sealed record CreateContainerRequest(
     string ContainerId,
@@ -107,7 +110,8 @@ public sealed record ServiceDefinitionSnapshot(
     IReadOnlyList<string> PublicEndpoints,
     IReadOnlyList<string> EventSubscriptions,
     string CapabilitiesHash,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    Any? CustomState);
 
 public sealed record ContainerSnapshot(
     string ContainerId,
@@ -155,6 +159,50 @@ public sealed record ComposeEventSnapshot(
     string EventType,
     string Details,
     DateTime OccurredAtUtc);
+
+public sealed record ScriptReadModelDefinition(
+    string ReadModelName,
+    string KeyField,
+    IReadOnlyDictionary<string, string> Fields,
+    IReadOnlyList<string> Indexes);
+
+public sealed record ScriptReadModelRelation(
+    string RelationName,
+    string FromReadModel,
+    string ToReadModel,
+    string FromKeyField,
+    string ToKeyField);
+
+public sealed record ScriptReadModelDocument(
+    string ReadModelName,
+    string DocumentId,
+    Any Document,
+    IReadOnlyDictionary<string, Any> IndexValues);
+
+public sealed record ScriptReadModelDefinitionSnapshot(
+    string ServiceId,
+    string ReadModelName,
+    string KeyField,
+    IReadOnlyDictionary<string, string> Fields,
+    IReadOnlyList<string> Indexes,
+    DateTime UpdatedAtUtc);
+
+public sealed record ScriptReadModelRelationSnapshot(
+    string ServiceId,
+    string RelationName,
+    string FromReadModel,
+    string ToReadModel,
+    string FromKeyField,
+    string ToKeyField,
+    DateTime UpdatedAtUtc);
+
+public sealed record ScriptReadModelDocumentSnapshot(
+    string ServiceId,
+    string ReadModelName,
+    string DocumentId,
+    Any Document,
+    IReadOnlyDictionary<string, Any> IndexValues,
+    DateTime UpdatedAtUtc);
 
 public sealed record IdempotencyAcquireResult(bool Acquired, bool IsReplay, string? ErrorCode = null);
 

@@ -102,17 +102,23 @@ internal sealed class ScriptRoleAgentRuntime : IScriptRoleAgentRuntime
 {
     private readonly Func<string, string?, string?, string?, CancellationToken, Task<string>> _chatAsync;
     private readonly List<EventEnvelope> _publishedEnvelopes = [];
+    private readonly Any? _baseState;
+    private Any? _updatedState;
+    private bool _stateWasSet;
 
     public ScriptRoleAgentRuntime(
         Func<string, string?, string?, string?, CancellationToken, Task<string>> chatAsync,
-        EventEnvelope currentEnvelope)
+        EventEnvelope currentEnvelope,
+        Any? baseState = null)
     {
         _chatAsync = chatAsync ?? throw new ArgumentNullException(nameof(chatAsync));
         CurrentEnvelope = currentEnvelope ?? throw new ArgumentNullException(nameof(currentEnvelope));
+        _baseState = baseState?.Clone();
     }
 
     public EventEnvelope CurrentEnvelope { get; }
     public IReadOnlyList<EventEnvelope> PublishedEnvelopes => _publishedEnvelopes;
+    public Any? UpdatedState => _updatedState?.Clone();
     public Task<string> ChatAsync(
         string prompt,
         string? systemPrompt = null,
@@ -169,4 +175,23 @@ internal sealed class ScriptRoleAgentRuntime : IScriptRoleAgentRuntime
         _publishedEnvelopes.Add(envelope);
         return Task.CompletedTask;
     }
+
+    public Task<Any?> GetStateAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(_updatedState?.Clone() ?? _baseState?.Clone());
+    }
+
+    public Task SetStateAsync(IMessage value, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(value);
+        if (_stateWasSet)
+            throw new InvalidOperationException("State can be set at most once per script run.");
+
+        _updatedState = Any.Pack(value);
+        _stateWasSet = true;
+        return Task.CompletedTask;
+    }
+
 }

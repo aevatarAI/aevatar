@@ -23,6 +23,18 @@ public sealed class ScriptRunGAgent : GAgentBase<ScriptRunState>
     [EventHandler]
     public Task HandleTimedOutAsync(ScriptRunTimedOutEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
 
+    [EventHandler]
+    public Task HandleCustomStateUpdatedAsync(ScriptCustomStateUpdatedEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
+
+    [EventHandler]
+    public Task HandleReadModelDefinedAsync(ScriptReadModelDefinedEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
+
+    [EventHandler]
+    public Task HandleReadModelRelationDefinedAsync(ScriptReadModelRelationDefinedEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
+
+    [EventHandler]
+    public Task HandleReadModelDocumentUpsertedAsync(ScriptReadModelDocumentUpsertedEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
+
     protected override ScriptRunState TransitionState(ScriptRunState current, IMessage evt) =>
         StateTransitionMatcher.Match(current, evt)
             .On<ScriptRunStartedEvent>(ApplyStarted)

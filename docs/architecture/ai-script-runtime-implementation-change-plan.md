@@ -288,8 +288,20 @@ sequenceDiagram
 10. `RUN_ALREADY_TERMINAL`
 11. `IDEMPOTENCY_PAYLOAD_MISMATCH`
 12. `VERSION_CONFLICT`
+13. `SCRIPT_EVENT_SOURCING_CONFLICT`
+14. `SCRIPT_STATE_SCHEMA_CONFLICT`
 
-### 7.4 必须落地的接口合同
+### 7.4 脚本 Event Sourcing 约束（强制）
+1. 脚本只能输出“副作用意图”（`custom_state`、read model 定义/关系/文档、发布 envelope），不能直接写平台存储。
+2. `exec` 完成后必须先执行副作用一致性校验，再发布 run actor 事件，最后更新读侧快照（event-first）。
+3. ReadModel 约束：
+4. 定义必须包含 `key_field`，且 `indexes` 必须是 `fields` 子集。
+5. relation 的 `from/to` read model 必须已存在（历史或本次定义），并且键字段必须在对应 `fields` 内。
+6. document upsert 必须指向已定义 read model，`index_values` 键必须在该模型已声明索引中。
+7. `custom_state` 采用单 `protobuf Any`，同一 service 在 run 内禁止类型漂移（`TypeUrl` 变更即冲突）。
+8. 冲突统一失败为 `SCRIPT_EVENT_SOURCING_CONFLICT` / `SCRIPT_STATE_SCHEMA_CONFLICT`，run 状态转 `Failed`，禁止部分提交。
+
+### 7.5 必须落地的接口合同
 ```csharp
 public interface IIdempotencyPort
 {

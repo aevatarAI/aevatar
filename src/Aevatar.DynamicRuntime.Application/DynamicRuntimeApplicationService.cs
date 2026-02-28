@@ -31,6 +31,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
     private readonly IEventEnvelopeSubscriberPort _eventEnvelopeSubscriberPort;
     private readonly IEventEnvelopeDedupPort _eventEnvelopeDedupPort;
     private readonly IDynamicScriptExecutionService _scriptExecutionService;
+    private readonly IScriptSideEffectPlanner _scriptSideEffectPlanner;
 
     public DynamicRuntimeApplicationService(
         IActorRuntime runtime,
@@ -68,6 +69,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         _eventEnvelopeSubscriberPort = eventEnvelopeSubscriberPort;
         _eventEnvelopeDedupPort = eventEnvelopeDedupPort;
         _scriptExecutionService = scriptExecutionService;
+        _scriptSideEffectPlanner = new ScriptSideEffectPlanner();
     }
 
     public async Task<DynamicCommandResult> BuildImageAsync(BuildImageRequest request, DynamicCommandContext context, CancellationToken ct = default)
@@ -420,6 +422,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             ServiceMode = request.ServiceMode.ToString().ToLowerInvariant(),
             CapabilitiesHash = request.CapabilitiesHash,
             UpdatedAtUnixMs = updatedAtUnixMs,
+            CustomState = request.CustomState?.Clone(),
         };
         state.PublicEndpoints.AddRange(request.PublicEndpoints);
         state.EventSubscriptions.AddRange(request.EventSubscriptions);
@@ -471,6 +474,8 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         nextState.ServiceMode = request.ServiceMode.ToString().ToLowerInvariant();
         nextState.CapabilitiesHash = request.CapabilitiesHash;
         nextState.UpdatedAtUnixMs = updatedAtUnixMs;
+        if (request.CustomState != null)
+            nextState.CustomState = request.CustomState.Clone();
         if (string.IsNullOrWhiteSpace(nextState.Status))
             nextState.Status = DynamicServiceStatus.Inactive.ToString();
         nextState.PublicEndpoints.Clear();
@@ -669,7 +674,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             container.ServiceName);
 
         var scriptResult = await _scriptExecutionService.ExecuteAsync(
-            new DynamicScriptExecutionRequest(service.ScriptCode, scriptEnvelope, service.EntrypointType),
+            new DynamicScriptExecutionRequest(service.ScriptCode, scriptEnvelope, service.EntrypointType, service.CustomState?.Clone()),
             ct);
 
         RunSnapshot finalSnapshot;
@@ -677,22 +682,53 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
 
         if (scriptResult.Success)
         {
-            await PublishScriptOutputEnvelopesAsync(container.StackId, container.ServiceName, container.ContainerId, scriptResult.PublishedEvents, ct);
-
-            await PublishActorEventAsync(
-                runActor,
-                container.StackId,
-                container.ServiceName,
-                container.ContainerId,
-                new ScriptRunCompletedEvent
+            try
             {
-                RunId = runId,
-                Result = scriptResult.Output,
-            },
-                ct);
+                await ApplyScriptSideEffectsAsync(
+                    runActor,
+                    runId,
+                    request.ServiceId,
+                    service,
+                    container.StackId,
+                    container.ServiceName,
+                    container.ContainerId,
+                    scriptResult,
+                    ct);
 
-            finalSnapshot = new RunSnapshot(runId, request.ContainerId, request.ServiceId, "Succeeded", scriptResult.Output, string.Empty, string.Empty);
-            status = "SUCCEEDED";
+                await PublishScriptOutputEnvelopesAsync(container.StackId, container.ServiceName, container.ContainerId, scriptResult.PublishedEvents, ct);
+
+                await PublishActorEventAsync(
+                    runActor,
+                    container.StackId,
+                    container.ServiceName,
+                    container.ContainerId,
+                    new ScriptRunCompletedEvent
+                {
+                    RunId = runId,
+                    Result = scriptResult.Output,
+                },
+                    ct);
+
+                finalSnapshot = new RunSnapshot(runId, request.ContainerId, request.ServiceId, "Succeeded", scriptResult.Output, string.Empty, string.Empty);
+                status = "SUCCEEDED";
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                await PublishActorEventAsync(
+                    runActor,
+                    container.StackId,
+                    container.ServiceName,
+                    container.ContainerId,
+                    new ScriptRunFailedEvent
+                {
+                    RunId = runId,
+                    Error = $"SCRIPT_SIDE_EFFECT_FAILED: {ex.Message}",
+                },
+                    ct);
+
+                finalSnapshot = new RunSnapshot(runId, request.ContainerId, request.ServiceId, "Failed", string.Empty, $"SCRIPT_SIDE_EFFECT_FAILED: {ex.Message}", string.Empty);
+                status = "FAILED";
+            }
         }
         else
         {
@@ -962,6 +998,10 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
     public Task<RunSnapshot?> GetRunAsync(string runId, CancellationToken ct = default) => _readStore.GetRunAsync(runId, ct);
     public Task<BuildJobSnapshot?> GetBuildJobAsync(string buildJobId, CancellationToken ct = default) => _readStore.GetBuildJobAsync(buildJobId, ct);
     public Task<IReadOnlyList<BuildJobSnapshot>> GetBuildJobsAsync(CancellationToken ct = default) => _readStore.GetBuildJobsAsync(ct);
+    public Task<IReadOnlyList<ScriptReadModelDefinitionSnapshot>> GetScriptReadModelDefinitionsAsync(string serviceId, CancellationToken ct = default) => _readStore.GetScriptReadModelDefinitionsAsync(serviceId, ct);
+    public Task<IReadOnlyList<ScriptReadModelRelationSnapshot>> GetScriptReadModelRelationsAsync(string serviceId, CancellationToken ct = default) => _readStore.GetScriptReadModelRelationsAsync(serviceId, ct);
+    public Task<IReadOnlyList<ScriptReadModelDocumentSnapshot>> GetScriptReadModelDocumentsAsync(string serviceId, string readModelName, CancellationToken ct = default) => _readStore.GetScriptReadModelDocumentsAsync(serviceId, readModelName, ct);
+    public Task<ScriptReadModelDocumentSnapshot?> GetScriptReadModelDocumentAsync(string serviceId, string readModelName, string documentId, CancellationToken ct = default) => _readStore.GetScriptReadModelDocumentAsync(serviceId, readModelName, documentId, ct);
 
     public async Task<ImageTagSnapshot?> GetImageTagAsync(string imageName, string tag, CancellationToken ct = default)
     {
@@ -1054,6 +1094,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             ServiceMode = snapshot.ServiceMode.ToString().ToLowerInvariant(),
             CapabilitiesHash = snapshot.CapabilitiesHash,
             UpdatedAtUnixMs = new DateTimeOffset(snapshot.UpdatedAtUtc).ToUnixTimeMilliseconds(),
+            CustomState = snapshot.CustomState?.Clone(),
         };
     }
 
@@ -1083,7 +1124,8 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             [.. state.PublicEndpoints],
             [.. state.EventSubscriptions],
             state.CapabilitiesHash,
-            updatedAt);
+            updatedAt,
+            state.CustomState?.Clone());
     }
 
     private static DynamicServiceMode ParseServiceMode(string? value)
@@ -1479,6 +1521,37 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             await _eventEnvelopePublisherPort.PublishAsync(
                 new ScriptEventEnvelope(envelope.Id, stackId, serviceName, instanceSelector, envelope),
                 ct);
+        }
+    }
+
+    private async Task ApplyScriptSideEffectsAsync(
+        IActor runActor,
+        string runId,
+        string serviceId,
+        ScriptServiceDefinitionState serviceState,
+        string stackId,
+        string serviceName,
+        string instanceSelector,
+        DynamicScriptExecutionResult scriptResult,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var serviceActorId = $"dynamic:service:{serviceId}";
+        var sideEffects = await _scriptSideEffectPlanner.BuildAsync(runId, serviceId, serviceState, scriptResult, now, ct);
+
+        // Event-first sequencing: no state/read-model mutation without persisted run events.
+        foreach (var evt in sideEffects.Events)
+        {
+            ct.ThrowIfCancellationRequested();
+            await PublishActorEventAsync(runActor, stackId, serviceName, instanceSelector, evt, ct);
+        }
+
+        if (sideEffects.CustomState != null)
+        {
+            serviceState.CustomState = sideEffects.CustomState.Clone();
+            serviceState.UpdatedAtUnixMs = sideEffects.CustomStateUpdatedAtUnixMs;
+            await _serviceDefinitionStateStore.SaveAsync(serviceActorId, serviceState, ct);
+            await _readStore.UpsertServiceDefinitionAsync(ToServiceSnapshot(serviceState), ct);
         }
     }
 

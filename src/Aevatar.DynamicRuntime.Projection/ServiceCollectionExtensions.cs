@@ -22,6 +22,9 @@ public static class ServiceCollectionExtensions
         services.AddInMemoryDocumentProjectionStore<DynamicRuntimeContainerReadModel, string>(model => model.Id);
         services.AddInMemoryDocumentProjectionStore<DynamicRuntimeRunReadModel, string>(model => model.Id);
         services.AddInMemoryDocumentProjectionStore<DynamicRuntimeBuildJobReadModel, string>(model => model.Id);
+        services.AddInMemoryDocumentProjectionStore<DynamicRuntimeScriptReadModelDefinitionReadModel, string>(model => model.Id);
+        services.AddInMemoryDocumentProjectionStore<DynamicRuntimeScriptReadModelRelationReadModel, string>(model => model.Id);
+        services.AddInMemoryDocumentProjectionStore<DynamicRuntimeScriptReadModelDocumentReadModel, string>(model => model.Id);
         services.AddInMemoryGraphProjectionStore();
 
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<DynamicRuntimeImageReadModel>, DynamicRuntimeImageReadModelMetadataProvider>();
@@ -32,6 +35,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<DynamicRuntimeContainerReadModel>, DynamicRuntimeContainerReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<DynamicRuntimeRunReadModel>, DynamicRuntimeRunReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<DynamicRuntimeBuildJobReadModel>, DynamicRuntimeBuildJobReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<DynamicRuntimeScriptReadModelDefinitionReadModel>, DynamicRuntimeScriptReadModelDefinitionReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<DynamicRuntimeScriptReadModelRelationReadModel>, DynamicRuntimeScriptReadModelRelationReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<DynamicRuntimeScriptReadModelDocumentReadModel>, DynamicRuntimeScriptReadModelDocumentReadModelMetadataProvider>();
         services.TryAddSingleton<IDynamicRuntimeReadStore, ProjectionBackedDynamicRuntimeReadStore>();
 
         return services;

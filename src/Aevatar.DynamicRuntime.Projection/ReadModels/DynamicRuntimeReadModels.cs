@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.DynamicRuntime.Projection.ReadModels;
 
@@ -47,7 +48,8 @@ public sealed record DynamicRuntimeServiceDefinitionReadModel(
     IReadOnlyList<string> PublicEndpoints,
     IReadOnlyList<string> EventSubscriptions,
     string CapabilitiesHash,
-    DateTime UpdatedAtUtc) : IProjectionReadModel;
+    DateTime UpdatedAtUtc,
+    Any? CustomState) : IProjectionReadModel;
 
 public sealed record DynamicRuntimeContainerReadModel(
     string Id,
@@ -81,3 +83,31 @@ public sealed record DynamicRuntimeBuildJobReadModel(
     string Status,
     bool RequiresManualApproval,
     string RequestedByAgentId) : IProjectionReadModel;
+
+public sealed record DynamicRuntimeScriptReadModelDefinitionReadModel(
+    string Id,
+    string ServiceId,
+    string ReadModelName,
+    string KeyField,
+    IReadOnlyDictionary<string, string> Fields,
+    IReadOnlyList<string> Indexes,
+    DateTime UpdatedAtUtc) : IProjectionReadModel;
+
+public sealed record DynamicRuntimeScriptReadModelRelationReadModel(
+    string Id,
+    string ServiceId,
+    string RelationName,
+    string FromReadModel,
+    string ToReadModel,
+    string FromKeyField,
+    string ToKeyField,
+    DateTime UpdatedAtUtc) : IProjectionReadModel;
+
+public sealed record DynamicRuntimeScriptReadModelDocumentReadModel(
+    string Id,
+    string ServiceId,
+    string ReadModelName,
+    string DocumentId,
+    Any Document,
+    IReadOnlyDictionary<string, Any> IndexValues,
+    DateTime UpdatedAtUtc) : IProjectionReadModel;

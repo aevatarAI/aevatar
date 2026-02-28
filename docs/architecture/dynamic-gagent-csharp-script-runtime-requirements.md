@@ -39,6 +39,8 @@
 11. Envelope-first messaging：跨服务消息一律通过 `Event Envelope`，附带 trace/correlation/causation 与幂等键。
 12. Policy-guarded autonomy：智能体可自主构建/升级服务，但必须经过策略校验、审计与批准门槛。
 13. Dual-mode serving：同一编排体系必须同时支持长期对外服务（daemon）与事件响应服务（event），并可组合为 hybrid。
+14. Script side-effects are event-sourced：脚本只能声明副作用意图，平台以事件先行顺序提交，禁止脚本直写事实存储。
+15. Schema stability first：`custom_state` 使用单 `protobuf Any`，run 过程中禁止无版本语义的 `TypeUrl` 漂移。
 
 ## 4. 范围与非范围
 

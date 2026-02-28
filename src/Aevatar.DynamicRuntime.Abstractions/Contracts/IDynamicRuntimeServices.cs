@@ -1,3 +1,5 @@
+using Google.Protobuf.WellKnownTypes;
+
 namespace Aevatar.DynamicRuntime.Abstractions.Contracts;
 
 public interface IDynamicRuntimeCommandService
@@ -45,6 +47,10 @@ public interface IDynamicRuntimeQueryService
     Task<RunSnapshot?> GetRunAsync(string runId, CancellationToken ct = default);
     Task<BuildJobSnapshot?> GetBuildJobAsync(string buildJobId, CancellationToken ct = default);
     Task<IReadOnlyList<BuildJobSnapshot>> GetBuildJobsAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<ScriptReadModelDefinitionSnapshot>> GetScriptReadModelDefinitionsAsync(string serviceId, CancellationToken ct = default);
+    Task<IReadOnlyList<ScriptReadModelRelationSnapshot>> GetScriptReadModelRelationsAsync(string serviceId, CancellationToken ct = default);
+    Task<IReadOnlyList<ScriptReadModelDocumentSnapshot>> GetScriptReadModelDocumentsAsync(string serviceId, string readModelName, CancellationToken ct = default);
+    Task<ScriptReadModelDocumentSnapshot?> GetScriptReadModelDocumentAsync(string serviceId, string readModelName, string documentId, CancellationToken ct = default);
 }
 
 public interface IScriptRoleEntrypoint
@@ -60,12 +66,14 @@ public sealed record ScriptRoleExecutionResult(string Output)
 public sealed record DynamicScriptExecutionRequest(
     string ScriptCode,
     Aevatar.Foundation.Abstractions.EventEnvelope Envelope,
-    string EntrypointType = "ScriptEntrypoint");
+    string EntrypointType = "ScriptEntrypoint",
+    Any? CustomState = null);
 
 public sealed record DynamicScriptExecutionResult(
     bool Success,
     string Output,
     IReadOnlyList<Aevatar.Foundation.Abstractions.EventEnvelope>? PublishedEvents = null,
+    Any? CustomState = null,
     string? Error = null);
 
 public interface IDynamicScriptExecutionService
@@ -184,6 +192,9 @@ public interface IDynamicRuntimeReadStore
     Task UpsertContainerAsync(ContainerSnapshot snapshot, CancellationToken ct = default);
     Task UpsertRunAsync(RunSnapshot snapshot, CancellationToken ct = default);
     Task UpsertBuildJobAsync(BuildJobSnapshot snapshot, CancellationToken ct = default);
+    Task UpsertScriptReadModelDefinitionAsync(ScriptReadModelDefinitionSnapshot snapshot, CancellationToken ct = default);
+    Task UpsertScriptReadModelRelationAsync(ScriptReadModelRelationSnapshot snapshot, CancellationToken ct = default);
+    Task UpsertScriptReadModelDocumentAsync(ScriptReadModelDocumentSnapshot snapshot, CancellationToken ct = default);
 
     Task<ImageSnapshot?> GetImageAsync(string imageName, CancellationToken ct = default);
     Task<StackSnapshot?> GetStackAsync(string stackId, CancellationToken ct = default);
@@ -195,4 +206,8 @@ public interface IDynamicRuntimeReadStore
     Task<RunSnapshot?> GetRunAsync(string runId, CancellationToken ct = default);
     Task<BuildJobSnapshot?> GetBuildJobAsync(string buildJobId, CancellationToken ct = default);
     Task<IReadOnlyList<BuildJobSnapshot>> GetBuildJobsAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<ScriptReadModelDefinitionSnapshot>> GetScriptReadModelDefinitionsAsync(string serviceId, CancellationToken ct = default);
+    Task<IReadOnlyList<ScriptReadModelRelationSnapshot>> GetScriptReadModelRelationsAsync(string serviceId, CancellationToken ct = default);
+    Task<IReadOnlyList<ScriptReadModelDocumentSnapshot>> GetScriptReadModelDocumentsAsync(string serviceId, string readModelName, CancellationToken ct = default);
+    Task<ScriptReadModelDocumentSnapshot?> GetScriptReadModelDocumentAsync(string serviceId, string readModelName, string documentId, CancellationToken ct = default);
 }

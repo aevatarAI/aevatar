@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package aevatar.dynamicruntime;
 option csharp_namespace = "Aevatar.DynamicRuntime.Abstractions";
+import "google/protobuf/any.proto";
 
 message ScriptImageCatalogState {
   string image_name = 1;
@@ -37,6 +38,7 @@ message ScriptServiceDefinitionState {
   repeated string event_subscriptions = 8;
   string capabilities_hash = 9;
   int64 updated_at_unix_ms = 10;
+  google.protobuf.Any custom_state = 11;
 }
 
 message ScriptContainerState {
@@ -184,6 +186,40 @@ message ScriptRunCanceledEvent {
 message ScriptRunTimedOutEvent {
   string run_id = 1;
   string reason = 2;
+}
+
+message ScriptCustomStateUpdatedEvent {
+  string service_id = 1;
+  string run_id = 2;
+  google.protobuf.Any custom_state = 3;
+}
+
+message ScriptReadModelDefinedEvent {
+  string service_id = 1;
+  string run_id = 2;
+  string read_model_name = 3;
+  string key_field = 4;
+  map<string, string> fields = 5;
+  repeated string indexes = 6;
+}
+
+message ScriptReadModelRelationDefinedEvent {
+  string service_id = 1;
+  string run_id = 2;
+  string relation_name = 3;
+  string from_read_model = 4;
+  string to_read_model = 5;
+  string from_key_field = 6;
+  string to_key_field = 7;
+}
+
+message ScriptReadModelDocumentUpsertedEvent {
+  string service_id = 1;
+  string run_id = 2;
+  string read_model_name = 3;
+  string document_id = 4;
+  google.protobuf.Any document = 5;
+  map<string, google.protobuf.Any> index_values = 6;
 }
 
 message ScriptBuildPlanSubmittedEvent {

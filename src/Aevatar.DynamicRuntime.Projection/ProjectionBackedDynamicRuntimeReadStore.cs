@@ -14,6 +14,9 @@ public sealed class ProjectionBackedDynamicRuntimeReadStore : IDynamicRuntimeRea
     private readonly IProjectionDocumentStore<DynamicRuntimeContainerReadModel, string> _containers;
     private readonly IProjectionDocumentStore<DynamicRuntimeRunReadModel, string> _runs;
     private readonly IProjectionDocumentStore<DynamicRuntimeBuildJobReadModel, string> _buildJobs;
+    private readonly IProjectionDocumentStore<DynamicRuntimeScriptReadModelDefinitionReadModel, string> _scriptReadModelDefinitions;
+    private readonly IProjectionDocumentStore<DynamicRuntimeScriptReadModelRelationReadModel, string> _scriptReadModelRelations;
+    private readonly IProjectionDocumentStore<DynamicRuntimeScriptReadModelDocumentReadModel, string> _scriptReadModelDocuments;
 
     public ProjectionBackedDynamicRuntimeReadStore(
         IProjectionDocumentStore<DynamicRuntimeImageReadModel, string> images,
@@ -23,7 +26,10 @@ public sealed class ProjectionBackedDynamicRuntimeReadStore : IDynamicRuntimeRea
         IProjectionDocumentStore<DynamicRuntimeServiceDefinitionReadModel, string> services,
         IProjectionDocumentStore<DynamicRuntimeContainerReadModel, string> containers,
         IProjectionDocumentStore<DynamicRuntimeRunReadModel, string> runs,
-        IProjectionDocumentStore<DynamicRuntimeBuildJobReadModel, string> buildJobs)
+        IProjectionDocumentStore<DynamicRuntimeBuildJobReadModel, string> buildJobs,
+        IProjectionDocumentStore<DynamicRuntimeScriptReadModelDefinitionReadModel, string> scriptReadModelDefinitions,
+        IProjectionDocumentStore<DynamicRuntimeScriptReadModelRelationReadModel, string> scriptReadModelRelations,
+        IProjectionDocumentStore<DynamicRuntimeScriptReadModelDocumentReadModel, string> scriptReadModelDocuments)
     {
         _images = images;
         _stacks = stacks;
@@ -33,6 +39,9 @@ public sealed class ProjectionBackedDynamicRuntimeReadStore : IDynamicRuntimeRea
         _containers = containers;
         _runs = runs;
         _buildJobs = buildJobs;
+        _scriptReadModelDefinitions = scriptReadModelDefinitions;
+        _scriptReadModelRelations = scriptReadModelRelations;
+        _scriptReadModelDocuments = scriptReadModelDocuments;
     }
 
     public Task UpsertImageAsync(ImageSnapshot snapshot, CancellationToken ct = default)
@@ -85,7 +94,8 @@ public sealed class ProjectionBackedDynamicRuntimeReadStore : IDynamicRuntimeRea
             PublicEndpoints: snapshot.PublicEndpoints,
             EventSubscriptions: snapshot.EventSubscriptions,
             CapabilitiesHash: snapshot.CapabilitiesHash,
-            UpdatedAtUtc: snapshot.UpdatedAtUtc), ct);
+            UpdatedAtUtc: snapshot.UpdatedAtUtc,
+            CustomState: snapshot.CustomState?.Clone()), ct);
 
     public Task UpsertContainerAsync(ContainerSnapshot snapshot, CancellationToken ct = default)
         => _containers.UpsertAsync(new DynamicRuntimeContainerReadModel(
@@ -122,6 +132,37 @@ public sealed class ProjectionBackedDynamicRuntimeReadStore : IDynamicRuntimeRea
             Status: snapshot.Status,
             RequiresManualApproval: snapshot.RequiresManualApproval,
             RequestedByAgentId: snapshot.RequestedByAgentId), ct);
+
+    public Task UpsertScriptReadModelDefinitionAsync(ScriptReadModelDefinitionSnapshot snapshot, CancellationToken ct = default)
+        => _scriptReadModelDefinitions.UpsertAsync(new DynamicRuntimeScriptReadModelDefinitionReadModel(
+            Id: BuildScriptReadModelDefinitionId(snapshot.ServiceId, snapshot.ReadModelName),
+            ServiceId: snapshot.ServiceId,
+            ReadModelName: snapshot.ReadModelName,
+            KeyField: snapshot.KeyField,
+            Fields: snapshot.Fields,
+            Indexes: snapshot.Indexes,
+            UpdatedAtUtc: snapshot.UpdatedAtUtc), ct);
+
+    public Task UpsertScriptReadModelRelationAsync(ScriptReadModelRelationSnapshot snapshot, CancellationToken ct = default)
+        => _scriptReadModelRelations.UpsertAsync(new DynamicRuntimeScriptReadModelRelationReadModel(
+            Id: BuildScriptReadModelRelationId(snapshot.ServiceId, snapshot.RelationName),
+            ServiceId: snapshot.ServiceId,
+            RelationName: snapshot.RelationName,
+            FromReadModel: snapshot.FromReadModel,
+            ToReadModel: snapshot.ToReadModel,
+            FromKeyField: snapshot.FromKeyField,
+            ToKeyField: snapshot.ToKeyField,
+            UpdatedAtUtc: snapshot.UpdatedAtUtc), ct);
+
+    public Task UpsertScriptReadModelDocumentAsync(ScriptReadModelDocumentSnapshot snapshot, CancellationToken ct = default)
+        => _scriptReadModelDocuments.UpsertAsync(new DynamicRuntimeScriptReadModelDocumentReadModel(
+            Id: BuildScriptReadModelDocumentId(snapshot.ServiceId, snapshot.ReadModelName, snapshot.DocumentId),
+            ServiceId: snapshot.ServiceId,
+            ReadModelName: snapshot.ReadModelName,
+            DocumentId: snapshot.DocumentId,
+            Document: snapshot.Document.Clone(),
+            IndexValues: snapshot.IndexValues.ToDictionary(item => item.Key, item => item.Value.Clone(), StringComparer.Ordinal),
+            UpdatedAtUtc: snapshot.UpdatedAtUtc), ct);
 
     public async Task<ImageSnapshot?> GetImageAsync(string imageName, CancellationToken ct = default)
     {
@@ -186,14 +227,15 @@ public sealed class ProjectionBackedDynamicRuntimeReadStore : IDynamicRuntimeRea
             : new ServiceDefinitionSnapshot(
                 model.ServiceId,
                 model.Version,
-                Enum.TryParse<DynamicServiceStatus>(model.Status, true, out var status) ? status : DynamicServiceStatus.Inactive,
+                System.Enum.TryParse<DynamicServiceStatus>(model.Status, true, out var status) ? status : DynamicServiceStatus.Inactive,
                 model.ScriptCode,
                 model.EntrypointType,
                 ParseServiceMode(model.ServiceMode),
                 model.PublicEndpoints,
                 model.EventSubscriptions,
                 model.CapabilitiesHash,
-                model.UpdatedAtUtc);
+                model.UpdatedAtUtc,
+                model.CustomState?.Clone());
     }
 
     public async Task<ContainerSnapshot?> GetContainerAsync(string containerId, CancellationToken ct = default)
@@ -280,10 +322,84 @@ public sealed class ProjectionBackedDynamicRuntimeReadStore : IDynamicRuntimeRea
             .ToArray();
     }
 
+    public async Task<IReadOnlyList<ScriptReadModelDefinitionSnapshot>> GetScriptReadModelDefinitionsAsync(string serviceId, CancellationToken ct = default)
+    {
+        var models = await _scriptReadModelDefinitions.ListAsync(10_000, ct);
+        return models
+            .Where(model => string.Equals(model.ServiceId, serviceId, StringComparison.Ordinal))
+            .OrderBy(model => model.ReadModelName, StringComparer.Ordinal)
+            .Select(model => new ScriptReadModelDefinitionSnapshot(
+                model.ServiceId,
+                model.ReadModelName,
+                model.KeyField,
+                model.Fields,
+                model.Indexes,
+                model.UpdatedAtUtc))
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<ScriptReadModelRelationSnapshot>> GetScriptReadModelRelationsAsync(string serviceId, CancellationToken ct = default)
+    {
+        var models = await _scriptReadModelRelations.ListAsync(10_000, ct);
+        return models
+            .Where(model => string.Equals(model.ServiceId, serviceId, StringComparison.Ordinal))
+            .OrderBy(model => model.RelationName, StringComparer.Ordinal)
+            .Select(model => new ScriptReadModelRelationSnapshot(
+                model.ServiceId,
+                model.RelationName,
+                model.FromReadModel,
+                model.ToReadModel,
+                model.FromKeyField,
+                model.ToKeyField,
+                model.UpdatedAtUtc))
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<ScriptReadModelDocumentSnapshot>> GetScriptReadModelDocumentsAsync(string serviceId, string readModelName, CancellationToken ct = default)
+    {
+        var models = await _scriptReadModelDocuments.ListAsync(10_000, ct);
+        return models
+            .Where(model =>
+                string.Equals(model.ServiceId, serviceId, StringComparison.Ordinal) &&
+                string.Equals(model.ReadModelName, readModelName, StringComparison.Ordinal))
+            .OrderBy(model => model.DocumentId, StringComparer.Ordinal)
+            .Select(model => new ScriptReadModelDocumentSnapshot(
+                model.ServiceId,
+                model.ReadModelName,
+                model.DocumentId,
+                model.Document.Clone(),
+                model.IndexValues.ToDictionary(item => item.Key, item => item.Value.Clone(), StringComparer.Ordinal),
+                model.UpdatedAtUtc))
+            .ToArray();
+    }
+
+    public async Task<ScriptReadModelDocumentSnapshot?> GetScriptReadModelDocumentAsync(string serviceId, string readModelName, string documentId, CancellationToken ct = default)
+    {
+        var model = await _scriptReadModelDocuments.GetAsync(BuildScriptReadModelDocumentId(serviceId, readModelName, documentId), ct);
+        return model == null
+            ? null
+            : new ScriptReadModelDocumentSnapshot(
+                model.ServiceId,
+                model.ReadModelName,
+                model.DocumentId,
+                model.Document.Clone(),
+                model.IndexValues.ToDictionary(item => item.Key, item => item.Value.Clone(), StringComparer.Ordinal),
+                model.UpdatedAtUtc);
+    }
+
     private static string BuildComposeServiceId(string stackId, string serviceName) => $"{stackId}:{serviceName}";
 
     private static string BuildComposeEventId(ComposeEventSnapshot snapshot)
         => $"{snapshot.StackId}:{snapshot.Generation}:{snapshot.EventType}:{snapshot.OccurredAtUtc.Ticks}";
+
+    private static string BuildScriptReadModelDefinitionId(string serviceId, string readModelName)
+        => $"{serviceId}:{readModelName}";
+
+    private static string BuildScriptReadModelRelationId(string serviceId, string relationName)
+        => $"{serviceId}:{relationName}";
+
+    private static string BuildScriptReadModelDocumentId(string serviceId, string readModelName, string documentId)
+        => $"{serviceId}:{readModelName}:{documentId}";
 
     private static DynamicServiceMode ParseServiceMode(string? value)
     {
