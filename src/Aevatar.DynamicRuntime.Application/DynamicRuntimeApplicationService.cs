@@ -32,6 +32,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
     private readonly IEventEnvelopeDedupPort _eventEnvelopeDedupPort;
     private readonly IDynamicScriptExecutionService _scriptExecutionService;
     private readonly IScriptSideEffectPlanner _scriptSideEffectPlanner;
+    private readonly IDynamicRuntimeEventProjector _eventProjector;
 
     public DynamicRuntimeApplicationService(
         IActorRuntime runtime,
@@ -70,6 +71,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         _eventEnvelopeDedupPort = eventEnvelopeDedupPort;
         _scriptExecutionService = scriptExecutionService;
         _scriptSideEffectPlanner = new ScriptSideEffectPlanner();
+        _eventProjector = new DynamicRuntimeEventProjector(readStore);
     }
 
     public async Task<DynamicCommandResult> BuildImageAsync(BuildImageRequest request, DynamicCommandContext context, CancellationToken ct = default)
@@ -127,6 +129,12 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             ComposeSpecDigest = request.ComposeSpecDigest,
             DesiredGeneration = request.DesiredGeneration,
         },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["compose_yaml"] = request.ComposeYaml ?? string.Empty,
+                ["services_count"] = request.Services.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["compose_action"] = "apply",
+            },
             ct);
 
         foreach (var service in request.Services)
@@ -148,17 +156,13 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
                 ServiceMode = service.ServiceMode.ToString().ToLowerInvariant(),
                 ImageRef = service.ImageRef,
             },
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["generation"] = request.DesiredGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["replicas_ready"] = service.ReplicasDesired.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["rollout_status"] = "RolledOut",
+                },
                 ct);
-
-            await _readStore.UpsertComposeServiceAsync(new ComposeServiceSnapshot(
-                request.StackId,
-                service.ServiceName,
-                service.ImageRef,
-                service.ReplicasDesired,
-                service.ReplicasDesired,
-                service.ServiceMode,
-                request.DesiredGeneration,
-                "RolledOut"), ct);
 
             await EnsureServiceEnvelopeSubscriptionAsync(
                 request.StackId,
@@ -181,22 +185,12 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             StackId = request.StackId,
             ObservedGeneration = reconcile.ObservedGeneration,
         },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["desired_generation"] = request.DesiredGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["compose_action"] = "apply",
+            },
             ct);
-
-        await _readStore.UpsertStackAsync(new StackSnapshot(
-            request.StackId,
-            request.ComposeSpecDigest,
-            request.ComposeYaml,
-            request.DesiredGeneration,
-            reconcile.ObservedGeneration,
-            "Converged"), ct);
-
-        await _readStore.AppendComposeEventAsync(new ComposeEventSnapshot(
-            request.StackId,
-            request.DesiredGeneration,
-            "ComposeApplied",
-            $"services={request.Services.Count}",
-            DateTime.UtcNow), ct);
 
         var etag = await AdvanceVersionAsync(stackActorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(stackActorId, "APPLIED", etag);
@@ -225,10 +219,12 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             StackId = stackId,
             ObservedGeneration = snapshot.DesiredGeneration,
         },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["desired_generation"] = snapshot.DesiredGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["compose_action"] = "up",
+            },
             ct);
-
-        await _readStore.UpsertStackAsync(snapshot with { ReconcileStatus = "Converged", ObservedGeneration = snapshot.DesiredGeneration }, ct);
-        await _readStore.AppendComposeEventAsync(new ComposeEventSnapshot(stackId, snapshot.DesiredGeneration, "ComposeUp", "stack up requested", DateTime.UtcNow), ct);
 
         var etag = await AdvanceVersionAsync(stackActorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(stackActorId, "UP", etag);
@@ -265,25 +261,30 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
                 ServiceMode = service.ServiceMode.ToString().ToLowerInvariant(),
                 ImageRef = service.ImageRef,
             },
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["generation"] = nextGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["replicas_ready"] = "0",
+                    ["rollout_status"] = "Stopped",
+                },
                 ct);
-
-            await _readStore.UpsertComposeServiceAsync(service with
-            {
-                ReplicasDesired = 0,
-                ReplicasReady = 0,
-                Generation = nextGeneration,
-                RolloutStatus = "Stopped",
-            }, ct);
         }
-
-        await _readStore.UpsertStackAsync(snapshot with
-        {
-            DesiredGeneration = nextGeneration,
-            ObservedGeneration = nextGeneration,
-            ReconcileStatus = "Converged",
-        }, ct);
-
-        await _readStore.AppendComposeEventAsync(new ComposeEventSnapshot(stackId, nextGeneration, "ComposeDown", "stack down requested", DateTime.UtcNow), ct);
+        await PublishActorEventAsync(
+            await EnsureActorAsync<ScriptComposeStackGAgent>(stackActorId, ct),
+            stackId,
+            serviceName: "_stack",
+            instanceSelector: "stack-controller",
+            new ScriptComposeConvergedEvent
+            {
+                StackId = stackId,
+                ObservedGeneration = nextGeneration,
+            },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["desired_generation"] = nextGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["compose_action"] = "down",
+            },
+            ct);
         var etag = await AdvanceVersionAsync(stackActorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(stackActorId, "DOWN", etag);
         await CommitIdempotencyAsync("compose.down", context.IdempotencyKey, result, ct);
@@ -314,22 +315,13 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             ServiceMode = serviceSnapshot.ServiceMode.ToString().ToLowerInvariant(),
             ImageRef = serviceSnapshot.ImageRef,
         },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["generation"] = (serviceSnapshot.Generation + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["replicas_ready"] = request.ReplicasDesired.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["rollout_status"] = "Scaled",
+            },
             ct);
-
-        await _readStore.UpsertComposeServiceAsync(serviceSnapshot with
-        {
-            ReplicasDesired = request.ReplicasDesired,
-            ReplicasReady = request.ReplicasDesired,
-            Generation = serviceSnapshot.Generation + 1,
-            RolloutStatus = "Scaled",
-        }, ct);
-
-        await _readStore.AppendComposeEventAsync(new ComposeEventSnapshot(
-            request.StackId,
-            serviceSnapshot.Generation + 1,
-            "ComposeServiceScaled",
-            $"service={request.ServiceName},replicas={request.ReplicasDesired}",
-            DateTime.UtcNow), ct);
 
         var etag = await AdvanceVersionAsync(serviceActorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(serviceActorId, "SCALED", etag);
@@ -355,27 +347,19 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             request.ServiceName,
             "all",
             new ScriptComposeServiceRolledOutEvent
-        {
-            StackId = request.StackId,
-            ServiceName = request.ServiceName,
-            ImageRef = resolvedImageDigest,
-            Generation = nextGeneration,
-        },
+            {
+                StackId = request.StackId,
+                ServiceName = request.ServiceName,
+                ImageRef = resolvedImageDigest,
+                Generation = nextGeneration,
+            },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["service_mode"] = serviceSnapshot.ServiceMode.ToString().ToLowerInvariant(),
+                ["replicas_desired"] = serviceSnapshot.ReplicasDesired.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["replicas_ready"] = serviceSnapshot.ReplicasReady.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            },
             ct);
-
-        await _readStore.UpsertComposeServiceAsync(serviceSnapshot with
-        {
-            ImageRef = resolvedImageDigest,
-            Generation = nextGeneration,
-            RolloutStatus = "RolledOut",
-        }, ct);
-
-        await _readStore.AppendComposeEventAsync(new ComposeEventSnapshot(
-            request.StackId,
-            nextGeneration,
-            "ComposeServiceRolledOut",
-            $"service={request.ServiceName},image={resolvedImageDigest}",
-            DateTime.UtcNow), ct);
 
         var etag = await AdvanceVersionAsync(serviceActorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(serviceActorId, "ROLLED_OUT", etag);
@@ -393,12 +377,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         var updatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var actorId = $"dynamic:service:{request.ServiceId}";
         var actor = await EnsureActorAsync<ScriptServiceDefinitionGAgent>(actorId, ct);
-        await PublishActorEventAsync(
-            actor,
-            stackId: "_services",
-            serviceName: request.ServiceId,
-            instanceSelector: "definition",
-            new ScriptServiceRegisteredEvent
+        var registeredEvent = new ScriptServiceRegisteredEvent
         {
             ServiceId = request.ServiceId,
             Version = request.Version,
@@ -407,9 +386,16 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             ServiceMode = request.ServiceMode.ToString().ToLowerInvariant(),
             CapabilitiesHash = request.CapabilitiesHash,
             UpdatedAtUnixMs = updatedAtUnixMs,
-        },
-            request.PublicEndpoints,
-            request.EventSubscriptions,
+        };
+        registeredEvent.PublicEndpoints.AddRange(request.PublicEndpoints);
+        registeredEvent.EventSubscriptions.AddRange(request.EventSubscriptions);
+        await PublishActorEventAsync(
+            actor,
+            stackId: "_services",
+            serviceName: request.ServiceId,
+            instanceSelector: "definition",
+            registeredEvent,
+            BuildCustomStateMetadata(request.CustomState),
             ct);
 
         var state = new ScriptServiceDefinitionState
@@ -427,8 +413,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         state.PublicEndpoints.AddRange(request.PublicEndpoints);
         state.EventSubscriptions.AddRange(request.EventSubscriptions);
         await _serviceDefinitionStateStore.SaveAsync(actorId, state, ct);
-
-        await _readStore.UpsertServiceDefinitionAsync(ToServiceSnapshot(state), ct);
         var etag = await AdvanceVersionAsync(actorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(actorId, "REGISTERED", etag);
         await CommitIdempotencyAsync("service.register", context.IdempotencyKey, result, ct);
@@ -446,12 +430,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         var updatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var actorId = $"dynamic:service:{request.ServiceId}";
         var actor = await EnsureActorAsync<ScriptServiceDefinitionGAgent>(actorId, ct);
-        await PublishActorEventAsync(
-            actor,
-            stackId: "_services",
-            serviceName: request.ServiceId,
-            instanceSelector: "definition",
-            new ScriptServiceUpdatedEvent
+        var updatedEvent = new ScriptServiceUpdatedEvent
         {
             ServiceId = request.ServiceId,
             Version = request.Version,
@@ -460,9 +439,16 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             ServiceMode = request.ServiceMode.ToString().ToLowerInvariant(),
             CapabilitiesHash = request.CapabilitiesHash,
             UpdatedAtUnixMs = updatedAtUnixMs,
-        },
-            request.PublicEndpoints,
-            request.EventSubscriptions,
+        };
+        updatedEvent.PublicEndpoints.AddRange(request.PublicEndpoints);
+        updatedEvent.EventSubscriptions.AddRange(request.EventSubscriptions);
+        await PublishActorEventAsync(
+            actor,
+            stackId: "_services",
+            serviceName: request.ServiceId,
+            instanceSelector: "definition",
+            updatedEvent,
+            BuildCustomStateMetadata(request.CustomState),
             ct);
 
         var existingState = await _serviceDefinitionStateStore.LoadAsync(actorId, ct);
@@ -483,8 +469,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         nextState.EventSubscriptions.Clear();
         nextState.EventSubscriptions.AddRange(request.EventSubscriptions);
         await _serviceDefinitionStateStore.SaveAsync(actorId, nextState, ct);
-
-        await _readStore.UpsertServiceDefinitionAsync(ToServiceSnapshot(nextState), ct);
         var etag = await AdvanceVersionAsync(actorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(actorId, "UPDATED", etag);
         await CommitIdempotencyAsync("service.update", context.IdempotencyKey, result, ct);
@@ -535,16 +519,11 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             ImageDigest = resolvedImageDigest,
             RoleActorId = request.RoleActorId,
         },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["service_id"] = request.ServiceId,
+            },
             ct);
-
-        await _readStore.UpsertContainerAsync(new ContainerSnapshot(
-            request.ContainerId,
-            request.StackId,
-            request.ServiceName,
-            request.ServiceId,
-            resolvedImageDigest,
-            "Created",
-            request.RoleActorId), ct);
 
         var etag = await AdvanceVersionAsync(actorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(actorId, "CREATED", etag);
@@ -563,7 +542,17 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
 
         var actorId = $"dynamic:container:{containerId}";
         var actor = await EnsureActorAsync<ScriptContainerGAgent>(actorId, ct);
-        await PublishActorEventAsync(actor, snapshot.StackId, snapshot.ServiceName, snapshot.ContainerId, new ScriptContainerStartedEvent { ContainerId = containerId }, ct);
+        await PublishActorEventAsync(
+            actor,
+            snapshot.StackId,
+            snapshot.ServiceName,
+            snapshot.ContainerId,
+            new ScriptContainerStartedEvent { ContainerId = containerId },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["service_id"] = snapshot.ServiceId,
+            },
+            ct);
 
         var roleActor = await EnsureActorAsync<ScriptRoleContainerAgent>(snapshot.RoleActorId, ct);
         await PublishActorEventAsync(
@@ -588,7 +577,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             generation: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             ct);
 
-        await _readStore.UpsertContainerAsync(snapshot with { Status = "Running" }, ct);
         var etag = await AdvanceVersionAsync(actorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(actorId, "RUNNING", etag);
         await CommitIdempotencyAsync("container.start", context.IdempotencyKey, result, ct);
@@ -605,9 +593,17 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
 
         var actorId = $"dynamic:container:{containerId}";
         var actor = await EnsureActorAsync<ScriptContainerGAgent>(actorId, ct);
-        await PublishActorEventAsync(actor, snapshot.StackId, snapshot.ServiceName, snapshot.ContainerId, new ScriptContainerStoppedEvent { ContainerId = containerId }, ct);
-
-        await _readStore.UpsertContainerAsync(snapshot with { Status = "Stopped" }, ct);
+        await PublishActorEventAsync(
+            actor,
+            snapshot.StackId,
+            snapshot.ServiceName,
+            snapshot.ContainerId,
+            new ScriptContainerStoppedEvent { ContainerId = containerId },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["service_id"] = snapshot.ServiceId,
+            },
+            ct);
         var etag = await AdvanceVersionAsync(actorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(actorId, "STOPPED", etag);
         await CommitIdempotencyAsync("container.stop", context.IdempotencyKey, result, ct);
@@ -624,9 +620,17 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
 
         var actorId = $"dynamic:container:{containerId}";
         var actor = await EnsureActorAsync<ScriptContainerGAgent>(actorId, ct);
-        await PublishActorEventAsync(actor, snapshot.StackId, snapshot.ServiceName, snapshot.ContainerId, new ScriptContainerDestroyedEvent { ContainerId = containerId }, ct);
-
-        await _readStore.UpsertContainerAsync(snapshot with { Status = "Destroyed" }, ct);
+        await PublishActorEventAsync(
+            actor,
+            snapshot.StackId,
+            snapshot.ServiceName,
+            snapshot.ContainerId,
+            new ScriptContainerDestroyedEvent { ContainerId = containerId },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["service_id"] = snapshot.ServiceId,
+            },
+            ct);
         var etag = await AdvanceVersionAsync(actorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(actorId, "DESTROYED", etag);
         await CommitIdempotencyAsync("container.destroy", context.IdempotencyKey, result, ct);
@@ -661,9 +665,11 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             RunId = runId,
             ContainerId = request.ContainerId,
         },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["service_id"] = request.ServiceId,
+            },
             ct);
-
-        await _readStore.UpsertRunAsync(new RunSnapshot(runId, request.ContainerId, request.ServiceId, "Running", string.Empty, string.Empty, string.Empty), ct);
 
         var scriptEnvelope = BuildScriptExecutionEnvelope(
             request.Envelope,
@@ -677,7 +683,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             new DynamicScriptExecutionRequest(service.ScriptCode, scriptEnvelope, service.EntrypointType, service.CustomState?.Clone()),
             ct);
 
-        RunSnapshot finalSnapshot;
         string status;
 
         if (scriptResult.Success)
@@ -707,9 +712,12 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
                     RunId = runId,
                     Result = scriptResult.Output,
                 },
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["service_id"] = request.ServiceId,
+                    },
                     ct);
 
-                finalSnapshot = new RunSnapshot(runId, request.ContainerId, request.ServiceId, "Succeeded", scriptResult.Output, string.Empty, string.Empty);
                 status = "SUCCEEDED";
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -724,9 +732,12 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
                     RunId = runId,
                     Error = $"SCRIPT_SIDE_EFFECT_FAILED: {ex.Message}",
                 },
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["service_id"] = request.ServiceId,
+                    },
                     ct);
 
-                finalSnapshot = new RunSnapshot(runId, request.ContainerId, request.ServiceId, "Failed", string.Empty, $"SCRIPT_SIDE_EFFECT_FAILED: {ex.Message}", string.Empty);
                 status = "FAILED";
             }
         }
@@ -742,13 +753,15 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
                 RunId = runId,
                 Error = scriptResult.Error ?? "Unknown script failure.",
             },
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["service_id"] = request.ServiceId,
+                },
                 ct);
 
-            finalSnapshot = new RunSnapshot(runId, request.ContainerId, request.ServiceId, "Failed", string.Empty, scriptResult.Error ?? "Unknown script failure.", string.Empty);
             status = "FAILED";
         }
 
-        await _readStore.UpsertRunAsync(finalSnapshot, ct);
         var etag = await AdvanceVersionAsync(runActorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(runActorId, status, etag);
         await CommitIdempotencyAsync("container.exec", context.IdempotencyKey, result, ct);
@@ -773,19 +786,15 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             serviceName: snapshot.ServiceId,
             instanceSelector: snapshot.ContainerId,
             new ScriptRunCanceledEvent
-        {
-            RunId = runId,
-            Reason = reason ?? string.Empty,
-        },
+            {
+                RunId = runId,
+                Reason = reason ?? string.Empty,
+            },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["service_id"] = snapshot.ServiceId,
+            },
             ct);
-
-        await _readStore.UpsertRunAsync(snapshot with
-        {
-            Status = "Canceled",
-            CancellationReason = reason ?? string.Empty,
-            Error = string.Empty,
-            Result = string.Empty,
-        }, ct);
 
         var etag = await AdvanceVersionAsync(actorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(actorId, "CANCELED", etag);
@@ -816,19 +825,13 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             ServiceName = request.ServiceName,
             SourceBundleDigest = request.SourceBundleDigest,
         },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["build_plan_digest"] = plan.BuildPlanDigest,
+                ["requested_by_agent_id"] = request.RequestedByAgentId ?? string.Empty,
+                ["requires_manual_approval"] = bool.FalseString,
+            },
             ct);
-
-        await _readStore.UpsertBuildJobAsync(new BuildJobSnapshot(
-            request.BuildJobId,
-            request.StackId,
-            request.ServiceName,
-            request.SourceBundleDigest,
-            plan.BuildPlanDigest,
-            "Planned",
-            string.Empty,
-            "Planned",
-            RequiresManualApproval: false,
-            request.RequestedByAgentId), ct);
 
         var etag = await AdvanceVersionAsync(actorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(actorId, "PLANNED", etag);
@@ -870,12 +873,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             ct);
 
         var status = policyDecision.RequiresManualApproval ? "ApprovalRequired" : "Validated";
-        await _readStore.UpsertBuildJobAsync(build with
-        {
-            PolicyDecision = policyDecision.PolicyDecision,
-            RequiresManualApproval = policyDecision.RequiresManualApproval,
-            Status = status,
-        }, ct);
 
         var etag = await AdvanceVersionAsync(actorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(actorId, status.ToUpperInvariant(), etag);
@@ -906,13 +903,11 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         {
             BuildJobId = buildJobId,
         },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["requires_manual_approval"] = approval.RequiresManualApproval ? bool.TrueString : bool.FalseString,
+            },
             ct);
-
-        await _readStore.UpsertBuildJobAsync(build with
-        {
-            RequiresManualApproval = approval.RequiresManualApproval,
-            Status = "Approved",
-        }, ct);
 
         var etag = await AdvanceVersionAsync(actorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(actorId, "APPROVED", etag);
@@ -943,9 +938,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
 
         var publishResult = await PublishBuildResultInternalAsync(new PublishBuildResultRequest(buildJobId, executionResult.ResultImageDigest), context.IfMatch, ct);
         await TryDeployBuildResultToComposeAsync(build.StackId, build.ServiceName, executionResult.ResultImageDigest, ct);
-        var updated = await _readStore.GetBuildJobAsync(buildJobId, ct)
-            ?? throw new InvalidOperationException($"Build job '{buildJobId}' does not exist.");
-        await _readStore.UpsertBuildJobAsync(updated with { Status = "Executed" }, ct);
 
         var actorId = $"dynamic:build:{buildJobId}";
         var result = new DynamicCommandResult(actorId, "EXECUTED", publishResult.ETag);
@@ -970,7 +962,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             build.BuildJobId,
             new ScriptBuildRolledBackEvent { BuildJobId = buildJobId },
             ct);
-        await _readStore.UpsertBuildJobAsync(build with { Status = "RolledBack" }, ct);
         var etag = await AdvanceVersionAsync(actorId, context.IfMatch, ct);
         var result = new DynamicCommandResult(actorId, "ROLLEDBACK", etag);
         await CommitIdempotencyAsync("build.rollback", context.IdempotencyKey, result, ct);
@@ -1060,7 +1051,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         await _serviceDefinitionStateStore.SaveAsync(actorId, existing, ct);
 
         var snapshot = ToServiceSnapshot(existing);
-        await _readStore.UpsertServiceDefinitionAsync(snapshot, ct);
         if (status == DynamicServiceStatus.Active)
         {
             await EnsureServiceEnvelopeSubscriptionAsync(
@@ -1170,19 +1160,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             },
             ct);
 
-        var existing = await _readStore.GetImageAsync(imageName, ct);
-        var tags = existing?.Tags is null
-            ? new Dictionary<string, string>(StringComparer.Ordinal)
-            : new Dictionary<string, string>(existing.Tags, StringComparer.Ordinal);
-        tags[tag] = digest;
-
-        var digests = existing?.Digests is null
-            ? new List<string>()
-            : [.. existing.Digests];
-        if (!digests.Contains(digest, StringComparer.Ordinal))
-            digests.Add(digest);
-
-        await _readStore.UpsertImageAsync(new ImageSnapshot(imageName, tags, digests), ct);
         return actorId;
     }
 
@@ -1256,21 +1233,13 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
                 ImageRef = imageDigest,
                 Generation = nextGeneration,
             },
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["service_mode"] = target.ServiceMode.ToString().ToLowerInvariant(),
+                ["replicas_desired"] = target.ReplicasDesired.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["replicas_ready"] = target.ReplicasReady.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            },
             ct);
-
-        await _readStore.UpsertComposeServiceAsync(target with
-        {
-            ImageRef = imageDigest,
-            Generation = nextGeneration,
-            RolloutStatus = "RolledOut",
-        }, ct);
-
-        await _readStore.AppendComposeEventAsync(new ComposeEventSnapshot(
-            stackId,
-            nextGeneration,
-            "ComposeServiceRolledOut",
-            $"service={serviceName},image={imageDigest}",
-            DateTime.UtcNow), ct);
 
         await EnsureServiceEnvelopeSubscriptionAsync(stackId, serviceName, target.ServiceMode, nextGeneration, ct);
     }
@@ -1293,12 +1262,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
                 ResultImageDigest = request.ResultImageDigest,
             },
             ct);
-
-        await _readStore.UpsertBuildJobAsync(existing with
-        {
-            ResultImageDigest = request.ResultImageDigest,
-            Status = "Published",
-        }, ct);
 
         var imageName = $"{existing.StackId}/{existing.ServiceName}";
         await PublishImageInternalAsync(imageName, "latest", request.ResultImageDigest, ct);
@@ -1323,8 +1286,18 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         string instanceSelector,
         Google.Protobuf.IMessage payload,
         CancellationToken ct)
+        => await PublishActorEventAsync(actor, stackId, serviceName, instanceSelector, payload, metadata: null, ct);
+
+    private async Task PublishActorEventAsync(
+        IActor actor,
+        string stackId,
+        string serviceName,
+        string instanceSelector,
+        Google.Protobuf.IMessage payload,
+        IReadOnlyDictionary<string, string>? metadata,
+        CancellationToken ct)
     {
-        var envelope = CreateEnvelope(stackId, serviceName, instanceSelector, payload);
+        var envelope = CreateEnvelope(stackId, serviceName, instanceSelector, payload, metadata);
         var dedup = await _eventEnvelopeDedupPort.CheckAndRecordAsync(
             scope: actor.Id,
             dedupKey: envelope.Metadata["dedup_key"],
@@ -1334,49 +1307,25 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             throw new InvalidOperationException(dedup.ErrorCode ?? "ENVELOPE_DUPLICATE");
 
         await actor.HandleEventAsync(envelope, ct);
+        await _eventProjector.ProjectAsync(envelope, ct);
         await _eventEnvelopePublisherPort.PublishAsync(
             new ScriptEventEnvelope(envelope.Id, stackId, serviceName, instanceSelector, envelope),
             ct);
     }
 
-    private async Task PublishActorEventAsync(
-        IActor actor,
+    private static EventEnvelope CreateEnvelope(
         string stackId,
         string serviceName,
         string instanceSelector,
-        ScriptServiceRegisteredEvent payload,
-        IEnumerable<string> publicEndpoints,
-        IEnumerable<string> eventSubscriptions,
-        CancellationToken ct)
-    {
-        payload.PublicEndpoints.AddRange(publicEndpoints);
-        payload.EventSubscriptions.AddRange(eventSubscriptions);
-        await PublishActorEventAsync(actor, stackId, serviceName, instanceSelector, (Google.Protobuf.IMessage)payload, ct);
-    }
-
-    private async Task PublishActorEventAsync(
-        IActor actor,
-        string stackId,
-        string serviceName,
-        string instanceSelector,
-        ScriptServiceUpdatedEvent payload,
-        IEnumerable<string> publicEndpoints,
-        IEnumerable<string> eventSubscriptions,
-        CancellationToken ct)
-    {
-        payload.PublicEndpoints.AddRange(publicEndpoints);
-        payload.EventSubscriptions.AddRange(eventSubscriptions);
-        await PublishActorEventAsync(actor, stackId, serviceName, instanceSelector, (Google.Protobuf.IMessage)payload, ct);
-    }
-
-    private static EventEnvelope CreateEnvelope(string stackId, string serviceName, string instanceSelector, Google.Protobuf.IMessage payload)
+        Google.Protobuf.IMessage payload,
+        IReadOnlyDictionary<string, string>? metadata = null)
     {
         var eventId = Guid.NewGuid().ToString("N");
         var now = DateTime.UtcNow;
         var traceId = Guid.NewGuid().ToString("N");
         var correlationId = Guid.NewGuid().ToString("N");
         var packedPayload = Any.Pack(payload);
-        return new EventEnvelope
+        var envelope = new EventEnvelope
         {
             Id = eventId,
             Timestamp = Timestamp.FromDateTime(now),
@@ -1397,6 +1346,18 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
                 ["occurred_at"] = now.ToString("O"),
             },
         };
+
+        if (metadata == null || metadata.Count == 0)
+            return envelope;
+
+        foreach (var pair in metadata)
+        {
+            if (string.IsNullOrWhiteSpace(pair.Key))
+                continue;
+            envelope.Metadata[pair.Key] = pair.Value ?? string.Empty;
+        }
+
+        return envelope;
     }
 
     private async Task<DynamicCommandResult?> EnsureIdempotentAsync(string scope, string key, object requestPayload, CancellationToken ct)
@@ -1452,6 +1413,18 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             throw new InvalidOperationException("SERVICE_DEFINITION_INVALID: script_code is required.");
         if (string.IsNullOrWhiteSpace(entrypointType))
             throw new InvalidOperationException("SERVICE_DEFINITION_INVALID: entrypoint_type is required.");
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildCustomStateMetadata(Any? customState)
+    {
+        if (customState == null || string.IsNullOrWhiteSpace(customState.TypeUrl))
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["custom_state_type_url"] = customState.TypeUrl,
+            ["custom_state_value_b64"] = Convert.ToBase64String(customState.Value.Span),
+        };
     }
 
     private static bool IsRunTerminal(string status) =>
@@ -1551,7 +1524,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             serviceState.CustomState = sideEffects.CustomState.Clone();
             serviceState.UpdatedAtUnixMs = sideEffects.CustomStateUpdatedAtUnixMs;
             await _serviceDefinitionStateStore.SaveAsync(serviceActorId, serviceState, ct);
-            await _readStore.UpsertServiceDefinitionAsync(ToServiceSnapshot(serviceState), ct);
         }
     }
 
