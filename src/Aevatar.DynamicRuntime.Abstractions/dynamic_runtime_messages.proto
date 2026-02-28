@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package aevatar.dynamicruntime;
+option csharp_namespace = "Aevatar.DynamicRuntime.Abstractions";
+
+message ScriptImageCatalogState {
+  string image_name = 1;
+  map<string, string> tags = 2;
+  repeated string digests = 3;
+}
+
+message ScriptComposeStackState {
+  string stack_id = 1;
+  string compose_spec_digest = 2;
+  int64 desired_generation = 3;
+  int64 observed_generation = 4;
+  string reconcile_status = 5;
+}
+
+message ScriptComposeServiceState {
+  string stack_id = 1;
+  string service_name = 2;
+  int32 replicas_desired = 3;
+  int32 replicas_ready = 4;
+  string service_mode = 5;
+}
+
+message ScriptContainerState {
+  string container_id = 1;
+  string stack_id = 2;
+  string service_name = 3;
+  string image_digest = 4;
+  string status = 5;
+  string role_actor_id = 6;
+}
+
+message ScriptRunState {
+  string run_id = 1;
+  string container_id = 2;
+  string status = 3;
+  string result = 4;
+  string error = 5;
+}
+
+message ScriptBuildJobState {
+  string build_job_id = 1;
+  string stack_id = 2;
+  string service_name = 3;
+  string source_bundle_digest = 4;
+  string result_image_digest = 5;
+  string status = 6;
+}
+
+message ScriptImagePublishedEvent {
+  string image_name = 1;
+  string tag = 2;
+  string digest = 3;
+}
+
+message ScriptComposeAppliedEvent {
+  string stack_id = 1;
+  string compose_spec_digest = 2;
+  int64 desired_generation = 3;
+}
+
+message ScriptComposeConvergedEvent {
+  string stack_id = 1;
+  int64 observed_generation = 2;
+}
+
+message ScriptComposeServiceScaledEvent {
+  string stack_id = 1;
+  string service_name = 2;
+  int32 replicas_desired = 3;
+  string service_mode = 4;
+}
+
+message ScriptContainerCreatedEvent {
+  string container_id = 1;
+  string stack_id = 2;
+  string service_name = 3;
+  string image_digest = 4;
+  string role_actor_id = 5;
+}
+
+message ScriptContainerStartedEvent { string container_id = 1; }
+message ScriptContainerStoppedEvent { string container_id = 1; }
+message ScriptContainerDestroyedEvent { string container_id = 1; }
+
+message ScriptRunStartedEvent {
+  string run_id = 1;
+  string container_id = 2;
+}
+
+message ScriptRunCompletedEvent {
+  string run_id = 1;
+  string result = 2;
+}
+
+message ScriptRunFailedEvent {
+  string run_id = 1;
+  string error = 2;
+}
+
+message ScriptBuildPlanSubmittedEvent {
+  string build_job_id = 1;
+  string stack_id = 2;
+  string service_name = 3;
+  string source_bundle_digest = 4;
+}
+
+message ScriptBuildApprovedEvent { string build_job_id = 1; }
+
+message ScriptBuildPublishedEvent {
+  string build_job_id = 1;
+  string result_image_digest = 2;
+}

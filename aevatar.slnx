@@ -59,6 +59,13 @@
     <Project Path="src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     <Project Path="src\Aevatar.Hosting\Aevatar.Hosting.csproj" />
     <Project Path="src\Aevatar.Mainnet.Host.Api\Aevatar.Mainnet.Host.Api.csproj" />
+    <Project Path="src\Aevatar.DynamicRuntime.Abstractions\Aevatar.DynamicRuntime.Abstractions.csproj" />
+    <Project Path="src\Aevatar.DynamicRuntime.Core\Aevatar.DynamicRuntime.Core.csproj" />
+    <Project Path="src\Aevatar.DynamicRuntime.Application\Aevatar.DynamicRuntime.Application.csproj" />
+    <Project Path="src\Aevatar.DynamicRuntime.Infrastructure\Aevatar.DynamicRuntime.Infrastructure.csproj" />
+    <Project Path="src\Aevatar.DynamicRuntime.Hosting\Aevatar.DynamicRuntime.Hosting.csproj" />
+    <Project Path="src\Aevatar.DynamicRuntime.Extensions.Hosting\Aevatar.DynamicRuntime.Extensions.Hosting.csproj" />
+    <Project Path="src\Aevatar.DynamicRuntime.Projection\Aevatar.DynamicRuntime.Projection.csproj" />
     <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
   </Folder>
   <Folder Name="/src/workflow/">
@@ -91,6 +98,7 @@
     <Project Path="test\Aevatar.Workflow.Core.Tests\Aevatar.Workflow.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Extensions.Maker.Tests\Aevatar.Workflow.Extensions.Maker.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
+    <Project Path="test\Aevatar.DynamicRuntime.Application.Tests\Aevatar.DynamicRuntime.Application.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />

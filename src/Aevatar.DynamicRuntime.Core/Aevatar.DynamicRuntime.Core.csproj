@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.DynamicRuntime.Core</AssemblyName>
+    <RootNamespace>Aevatar.DynamicRuntime.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.DynamicRuntime.Abstractions\Aevatar.DynamicRuntime.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+  </ItemGroup>
+</Project>

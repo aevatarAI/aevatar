@@ -1,0 +1,16 @@
+{
+  "solution": {
+    "path": "aevatar.slnx",
+    "projects": [
+      "src\\Aevatar.DynamicRuntime.Abstractions\\Aevatar.DynamicRuntime.Abstractions.csproj",
+      "src\\Aevatar.DynamicRuntime.Core\\Aevatar.DynamicRuntime.Core.csproj",
+      "src\\Aevatar.DynamicRuntime.Application\\Aevatar.DynamicRuntime.Application.csproj",
+      "src\\Aevatar.DynamicRuntime.Infrastructure\\Aevatar.DynamicRuntime.Infrastructure.csproj",
+      "src\\Aevatar.DynamicRuntime.Hosting\\Aevatar.DynamicRuntime.Hosting.csproj",
+      "src\\Aevatar.DynamicRuntime.Extensions.Hosting\\Aevatar.DynamicRuntime.Extensions.Hosting.csproj",
+      "src\\Aevatar.DynamicRuntime.Projection\\Aevatar.DynamicRuntime.Projection.csproj",
+      "src\\Aevatar.Mainnet.Host.Api\\Aevatar.Mainnet.Host.Api.csproj",
+      "test\\Aevatar.DynamicRuntime.Application.Tests\\Aevatar.DynamicRuntime.Application.Tests.csproj"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.DynamicRuntime.Hosting</AssemblyName>
+    <RootNamespace>Aevatar.DynamicRuntime.Hosting</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.DynamicRuntime.Abstractions\Aevatar.DynamicRuntime.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.DynamicRuntime.Infrastructure\Aevatar.DynamicRuntime.Infrastructure.csproj" />
+    <ProjectReference Include="..\Aevatar.DynamicRuntime.Projection\Aevatar.DynamicRuntime.Projection.csproj" />
+    <ProjectReference Include="..\Aevatar.Hosting\Aevatar.Hosting.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>

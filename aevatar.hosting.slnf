@@ -14,7 +14,9 @@
       "tools\\Aevatar.Tools.Config\\Aevatar.Tools.Config.csproj",
       "test\\Aevatar.Hosting.Tests\\Aevatar.Hosting.Tests.csproj",
       "test\\Aevatar.Foundation.Runtime.Hosting.Tests\\Aevatar.Foundation.Runtime.Hosting.Tests.csproj",
-      "test\\Aevatar.Bootstrap.Tests\\Aevatar.Bootstrap.Tests.csproj"
+      "test\\Aevatar.Bootstrap.Tests\\Aevatar.Bootstrap.Tests.csproj",
+      "src\\Aevatar.DynamicRuntime.Hosting\\Aevatar.DynamicRuntime.Hosting.csproj",
+      "src\\Aevatar.DynamicRuntime.Extensions.Hosting\\Aevatar.DynamicRuntime.Extensions.Hosting.csproj"
     ]
   }
 }
