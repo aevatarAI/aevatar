@@ -253,6 +253,25 @@ public sealed class ProjectionBackedDynamicRuntimeReadStore : IDynamicRuntimeRea
                 model.RoleActorId);
     }
 
+    public async Task<IReadOnlyList<ContainerSnapshot>> GetServiceContainersAsync(string stackId, string serviceName, CancellationToken ct = default)
+    {
+        var models = await _containers.ListAsync(10_000, ct);
+        return models
+            .Where(model =>
+                string.Equals(model.StackId, stackId, StringComparison.Ordinal) &&
+                string.Equals(model.ServiceName, serviceName, StringComparison.Ordinal))
+            .OrderBy(model => model.ContainerId, StringComparer.Ordinal)
+            .Select(model => new ContainerSnapshot(
+                model.ContainerId,
+                model.StackId,
+                model.ServiceName,
+                model.ServiceId,
+                model.ImageDigest,
+                model.Status,
+                model.RoleActorId))
+            .ToArray();
+    }
+
     public async Task<IReadOnlyList<RunSnapshot>> GetContainerRunsAsync(string containerId, CancellationToken ct = default)
     {
         var models = await _runs.ListAsync(10_000, ct);

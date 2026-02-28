@@ -5,7 +5,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.DynamicRuntime.Application;
 
-internal interface IScriptSideEffectPlanner
+public interface IScriptSideEffectPlanner
 {
     Task<ScriptSideEffectPlan> BuildAsync(
         string runId,
@@ -16,12 +16,12 @@ internal interface IScriptSideEffectPlanner
         CancellationToken ct = default);
 }
 
-internal sealed record ScriptSideEffectPlan(
+public sealed record ScriptSideEffectPlan(
     Any? CustomState,
     long CustomStateUpdatedAtUnixMs,
     IReadOnlyList<IMessage> Events);
 
-internal sealed class ScriptSideEffectPlanner : IScriptSideEffectPlanner
+public sealed class ScriptSideEffectPlanner : IScriptSideEffectPlanner
 {
     public Task<ScriptSideEffectPlan> BuildAsync(
         string runId,

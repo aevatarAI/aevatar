@@ -243,6 +243,10 @@ services:
         var runtime = new FakeActorRuntime();
         var readStore = new InMemoryDynamicRuntimeReadStore();
         var serviceStateStore = new InMemoryScriptServiceDefinitionStateStore();
+        var busState = new InMemoryEventEnvelopeBusState();
+        var deliveryPort = new InMemoryEventEnvelopeDeliveryPort(busState);
+        var eventProjector = new DynamicRuntimeEventProjector(readStore);
+        var sideEffectPlanner = new ScriptSideEffectPlanner();
         var chatClient = new ScriptRoleAgentChatClient(llmProviderFactory);
         var app = new DynamicRuntimeApplicationService(
             runtime,
@@ -252,7 +256,7 @@ services:
             new InMemoryConcurrencyTokenPort(),
             new DefaultImageReferenceResolver(),
             new DefaultScriptComposeSpecValidator(),
-            new DefaultScriptComposeReconcilePort(),
+            new DefaultScriptComposeReconcilePort(readStore),
             new DefaultAgentBuildPlanPort(),
             new DefaultAgentBuildPolicyPort(),
             new DefaultAgentBuildExecutionPort(),
@@ -261,12 +265,15 @@ services:
             envelopePublisherPort,
             envelopeSubscriberPort,
             new InMemoryEventEnvelopeDedupPort(),
+            deliveryPort,
             new RoslynDynamicScriptExecutionService(
                 new DefaultScriptCompilationPolicy(),
                 new DefaultScriptAssemblyLoadPolicy(),
                 new DefaultScriptSandboxPolicy(),
                 new DefaultScriptResourceQuotaPolicy(),
-                chatClient));
+                chatClient),
+            sideEffectPlanner,
+            eventProjector);
         return (app, serviceStateStore);
     }
 

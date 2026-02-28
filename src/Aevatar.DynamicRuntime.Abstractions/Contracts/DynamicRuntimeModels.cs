@@ -73,7 +73,10 @@ public sealed record ExecuteContainerRequest(
     string ContainerId,
     string ServiceId,
     EventEnvelope Envelope,
-    string? RunId = null);
+    string? RunId = null,
+    int? TimeoutMs = null,
+    int MaxRetries = 0,
+    int RetryBackoffMs = 100);
 
 public sealed record SubmitBuildPlanRequest(
     string BuildJobId,
@@ -268,6 +271,15 @@ public sealed record EnvelopeSubscribeRequest(string StackId, string ServiceName
 public sealed record EnvelopeLeaseResult(bool Success, string LeaseId, string? ErrorCode = null, string? Reason = null);
 
 public sealed record EnvelopeDedupResult(bool Allowed, bool IsDuplicate, string? ErrorCode = null, string? Reason = null);
+
+public sealed record EnvelopeDeliverySnapshot(
+    string DeliveryId,
+    string LeaseId,
+    int Attempt,
+    ScriptEventEnvelope Envelope,
+    DateTime FirstSeenAtUtc);
+
+public sealed record EnvelopeRetryResult(bool Accepted, bool IsTerminalFailure, string? ErrorCode = null, string? Reason = null);
 
 public sealed record ServiceModePolicyRequest(
     string StackId,

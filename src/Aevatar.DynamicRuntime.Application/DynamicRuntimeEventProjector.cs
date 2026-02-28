@@ -6,12 +6,12 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.DynamicRuntime.Application;
 
-internal interface IDynamicRuntimeEventProjector
+public interface IDynamicRuntimeEventProjector
 {
     Task ProjectAsync(EventEnvelope envelope, CancellationToken ct = default);
 }
 
-internal sealed class DynamicRuntimeEventProjector : IDynamicRuntimeEventProjector
+public sealed class DynamicRuntimeEventProjector : IDynamicRuntimeEventProjector
 {
     private const string CustomStateTypeUrlMetadataKey = "custom_state_type_url";
     private const string CustomStateValueB64MetadataKey = "custom_state_value_b64";
@@ -154,6 +154,18 @@ internal sealed class DynamicRuntimeEventProjector : IDynamicRuntimeEventProject
         if (payload.Is(ScriptRunTimedOutEvent.Descriptor))
         {
             await ProjectRunTimedOutAsync(payload.Unpack<ScriptRunTimedOutEvent>(), ct);
+            return;
+        }
+
+        if (payload.Is(ScriptRunAttemptTimedOutEvent.Descriptor))
+        {
+            await ProjectRunAttemptTimedOutAsync(payload.Unpack<ScriptRunAttemptTimedOutEvent>(), ct);
+            return;
+        }
+
+        if (payload.Is(ScriptRunRetryScheduledEvent.Descriptor))
+        {
+            await ProjectRunRetryScheduledAsync(payload.Unpack<ScriptRunRetryScheduledEvent>(), ct);
             return;
         }
 
@@ -542,6 +554,36 @@ internal sealed class DynamicRuntimeEventProjector : IDynamicRuntimeEventProject
         await _readStore.UpsertRunAsync((existing ?? new RunSnapshot(evt.RunId, string.Empty, string.Empty, "Running", string.Empty, string.Empty, string.Empty)) with
         {
             Status = "TimedOut",
+            Result = string.Empty,
+            Error = evt.Reason ?? string.Empty,
+            CancellationReason = string.Empty,
+        }, ct);
+    }
+
+    private async Task ProjectRunAttemptTimedOutAsync(ScriptRunAttemptTimedOutEvent evt, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(evt.RunId))
+            return;
+
+        var existing = await _readStore.GetRunAsync(evt.RunId, ct);
+        await _readStore.UpsertRunAsync((existing ?? new RunSnapshot(evt.RunId, string.Empty, string.Empty, "Running", string.Empty, string.Empty, string.Empty)) with
+        {
+            Status = "Running",
+            Result = string.Empty,
+            Error = evt.Reason ?? string.Empty,
+            CancellationReason = string.Empty,
+        }, ct);
+    }
+
+    private async Task ProjectRunRetryScheduledAsync(ScriptRunRetryScheduledEvent evt, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(evt.RunId))
+            return;
+
+        var existing = await _readStore.GetRunAsync(evt.RunId, ct);
+        await _readStore.UpsertRunAsync((existing ?? new RunSnapshot(evt.RunId, string.Empty, string.Empty, "Running", string.Empty, string.Empty, string.Empty)) with
+        {
+            Status = "RetryScheduled",
             Result = string.Empty,
             Error = evt.Reason ?? string.Empty,
             CancellationReason = string.Empty,

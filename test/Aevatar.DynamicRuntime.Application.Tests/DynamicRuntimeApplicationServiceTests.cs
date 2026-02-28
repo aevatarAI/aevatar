@@ -21,6 +21,7 @@ public sealed class DynamicRuntimeApplicationServiceTests
         var (service, serviceStateStore) = CreateService();
 
         var script = """
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
@@ -138,6 +139,208 @@ var entrypoint = new ScriptEntrypoint();
         var run = await service.GetRunAsync("run-meta");
         run.Should().NotBeNull();
         run!.Result.Should().Be("""{"text":"hello"}|run-meta|svc.meta||run-meta""");
+    }
+
+    [Fact]
+    public async Task ExecuteContainer_WithRetryPolicy_ShouldSucceedAfterTransientFailure()
+    {
+        var (service, _) = CreateService();
+
+        var script = """
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.DynamicRuntime.Abstractions.Contracts;
+
+public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
+{
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        var attempt = envelope.Metadata.TryGetValue("run_attempt", out var value) ? value : "0";
+        if (attempt == "1")
+            throw new InvalidOperationException("transient");
+        return Task.FromResult(new ScriptRoleExecutionResult("retry-ok"));
+    }
+}
+
+var entrypoint = new ScriptEntrypoint();
+""";
+
+        await service.RegisterServiceAsync(
+            new RegisterServiceDefinitionRequest(
+                "svc.retry",
+                "v1",
+                script,
+                "ScriptEntrypoint",
+                DynamicServiceMode.Hybrid,
+                [],
+                [],
+                "cap:retry"),
+            new DynamicCommandContext("idem-retry-register"));
+        await service.ActivateServiceAsync("svc.retry", new DynamicCommandContext("idem-retry-activate", "1"));
+        await service.CreateContainerAsync(
+            new CreateContainerRequest("container.retry.1", "stack.retry", "retry", "svc.retry", "sha256:retry", "role.retry.1"),
+            new DynamicCommandContext("idem-retry-create"));
+        await service.StartContainerAsync("container.retry.1", new DynamicCommandContext("idem-retry-start"));
+
+        var execute = await service.ExecuteContainerAsync(
+            new ExecuteContainerRequest(
+                "container.retry.1",
+                "svc.retry",
+                CreateJsonEnvelope("""{"ticket":"r1"}"""),
+                TimeoutMs: 5_000,
+                MaxRetries: 1,
+                RetryBackoffMs: 10),
+            new DynamicCommandContext("idem-retry-exec"));
+
+        var run = await service.GetRunAsync(execute.AggregateId.Replace("dynamic:run:", string.Empty, StringComparison.Ordinal));
+        execute.Status.Should().Be("SUCCEEDED");
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("Succeeded");
+        run.Result.Should().Be("retry-ok");
+    }
+
+    [Fact]
+    public async Task ExecuteContainer_WithTimeoutPolicy_ShouldEmitTimedOutStatus()
+    {
+        var (service, _) = CreateService(scriptExecutionService: new BlockingScriptExecutionService());
+
+        var script = """
+using System.Threading.Tasks;
+using Aevatar.DynamicRuntime.Abstractions.Contracts;
+
+public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
+{
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        => Task.FromResult(new ScriptRoleExecutionResult("noop"));
+}
+
+var entrypoint = new ScriptEntrypoint();
+""";
+
+        await service.RegisterServiceAsync(
+            new RegisterServiceDefinitionRequest(
+                "svc.timeout",
+                "v1",
+                script,
+                "ScriptEntrypoint",
+                DynamicServiceMode.Hybrid,
+                [],
+                [],
+                "cap:timeout"),
+            new DynamicCommandContext("idem-timeout-register"));
+        await service.ActivateServiceAsync("svc.timeout", new DynamicCommandContext("idem-timeout-activate", "1"));
+        await service.CreateContainerAsync(
+            new CreateContainerRequest("container.timeout.1", "stack.timeout", "timeout", "svc.timeout", "sha256:timeout", "role.timeout.1"),
+            new DynamicCommandContext("idem-timeout-create"));
+        await service.StartContainerAsync("container.timeout.1", new DynamicCommandContext("idem-timeout-start"));
+
+        var execute = await service.ExecuteContainerAsync(
+            new ExecuteContainerRequest(
+                "container.timeout.1",
+                "svc.timeout",
+                CreateJsonEnvelope("""{"ticket":"t1"}"""),
+                TimeoutMs: 50,
+                MaxRetries: 0,
+                RetryBackoffMs: 10),
+            new DynamicCommandContext("idem-timeout-exec"));
+
+        var run = await service.GetRunAsync(execute.AggregateId.Replace("dynamic:run:", string.Empty, StringComparison.Ordinal));
+        execute.Status.Should().Be("TIMED_OUT");
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("TimedOut");
+    }
+
+    [Fact]
+    public async Task ExecuteContainer_ShouldDispatchScriptOutputEnvelopeToEventService()
+    {
+        var (service, _) = CreateService();
+
+        var producerScript = """
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
+{
+    public async Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        await ScriptRoleAgentContext.Current.PublishAsync(
+            new StringValue { Value = "ping" },
+            ct: ct);
+        return new ScriptRoleExecutionResult("producer");
+    }
+}
+
+var entrypoint = new ScriptEntrypoint();
+""";
+
+        var consumerScript = """
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
+{
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        return Task.FromResult(new ScriptRoleExecutionResult($"consumer:{text}"));
+    }
+}
+
+var entrypoint = new ScriptEntrypoint();
+""";
+
+        await service.RegisterServiceAsync(
+            new RegisterServiceDefinitionRequest(
+                "svc.dispatch.producer",
+                "v1",
+                producerScript,
+                "ScriptEntrypoint",
+                DynamicServiceMode.Hybrid,
+                [],
+                [],
+                "cap:dispatch:producer"),
+            new DynamicCommandContext("idem-dispatch-register-producer"));
+        await service.RegisterServiceAsync(
+            new RegisterServiceDefinitionRequest(
+                "svc.dispatch.consumer",
+                "v1",
+                consumerScript,
+                "ScriptEntrypoint",
+                DynamicServiceMode.Event,
+                [],
+                ["evt.dispatch.consumer"],
+                "cap:dispatch:consumer"),
+            new DynamicCommandContext("idem-dispatch-register-consumer"));
+
+        await service.ActivateServiceAsync("svc.dispatch.producer", new DynamicCommandContext("idem-dispatch-activate-producer", "1"));
+        await service.ActivateServiceAsync("svc.dispatch.consumer", new DynamicCommandContext("idem-dispatch-activate-consumer", "1"));
+
+        await service.CreateContainerAsync(
+            new CreateContainerRequest("ctr.dispatch.producer.1", "stack.dispatch", "producer", "svc.dispatch.producer", "sha256:dispatch-producer", "role.dispatch.producer.1"),
+            new DynamicCommandContext("idem-dispatch-create-producer"));
+        await service.CreateContainerAsync(
+            new CreateContainerRequest("ctr.dispatch.consumer.1", "stack.dispatch", "consumer", "svc.dispatch.consumer", "sha256:dispatch-consumer", "role.dispatch.consumer.1"),
+            new DynamicCommandContext("idem-dispatch-create-consumer"));
+
+        await service.StartContainerAsync("ctr.dispatch.producer.1", new DynamicCommandContext("idem-dispatch-start-producer"));
+        await service.StartContainerAsync("ctr.dispatch.consumer.1", new DynamicCommandContext("idem-dispatch-start-consumer"));
+
+        var producerRun = await service.ExecuteContainerAsync(
+            new ExecuteContainerRequest("ctr.dispatch.producer.1", "svc.dispatch.producer", CreateJsonEnvelope("""{"request":"dispatch"}""")),
+            new DynamicCommandContext("idem-dispatch-exec-producer"));
+        producerRun.Status.Should().Be("SUCCEEDED");
+
+        var consumerRuns = await service.GetContainerRunsAsync("ctr.dispatch.consumer.1");
+        consumerRuns.Should().NotBeEmpty();
+        consumerRuns.Should().Contain(item => string.Equals(item.Status, "Succeeded", StringComparison.Ordinal));
+        consumerRuns.Should().Contain(item => item.Result == "consumer:ping");
     }
 
     [Fact]
@@ -1004,13 +1207,23 @@ services:
 
     private static (DynamicRuntimeApplicationService Service, IStateStore<ScriptServiceDefinitionState> ServiceStateStore) CreateService(
         IEventEnvelopeSubscriberPort? envelopeSubscriberPort = null,
-        IEventEnvelopePublisherPort? envelopePublisherPort = null)
+        IEventEnvelopePublisherPort? envelopePublisherPort = null,
+        IDynamicScriptExecutionService? scriptExecutionService = null)
     {
         var runtime = new FakeActorRuntime();
         var store = new InMemoryDynamicRuntimeReadStore();
         var serviceStateStore = new InMemoryScriptServiceDefinitionStateStore();
-        envelopeSubscriberPort ??= new InMemoryEventEnvelopeSubscriberPort();
-        envelopePublisherPort ??= new InMemoryEventEnvelopePublisherPort();
+        var busState = new InMemoryEventEnvelopeBusState();
+        envelopeSubscriberPort ??= new InMemoryEventEnvelopeSubscriberPort(busState);
+        envelopePublisherPort ??= new InMemoryEventEnvelopePublisherPort(busState);
+        scriptExecutionService ??= new RoslynDynamicScriptExecutionService(
+            new DefaultScriptCompilationPolicy(),
+            new DefaultScriptAssemblyLoadPolicy(),
+            new DefaultScriptSandboxPolicy(),
+            new DefaultScriptResourceQuotaPolicy());
+        var deliveryPort = new InMemoryEventEnvelopeDeliveryPort(busState);
+        var eventProjector = new DynamicRuntimeEventProjector(store);
+        var sideEffectPlanner = new ScriptSideEffectPlanner();
         return (
             new DynamicRuntimeApplicationService(
                 runtime,
@@ -1020,7 +1233,7 @@ services:
                 new InMemoryConcurrencyTokenPort(),
                 new DefaultImageReferenceResolver(),
                 new DefaultScriptComposeSpecValidator(),
-                new DefaultScriptComposeReconcilePort(),
+                new DefaultScriptComposeReconcilePort(store),
                 new DefaultAgentBuildPlanPort(),
                 new DefaultAgentBuildPolicyPort(),
                 new DefaultAgentBuildExecutionPort(),
@@ -1029,23 +1242,32 @@ services:
                 envelopePublisherPort,
                 envelopeSubscriberPort,
                 new InMemoryEventEnvelopeDedupPort(),
-                new RoslynDynamicScriptExecutionService(
-                    new DefaultScriptCompilationPolicy(),
-                    new DefaultScriptAssemblyLoadPolicy(),
-                    new DefaultScriptSandboxPolicy(),
-                    new DefaultScriptResourceQuotaPolicy())),
+                deliveryPort,
+                scriptExecutionService,
+                sideEffectPlanner,
+                eventProjector),
             serviceStateStore);
     }
 
     private static (DynamicRuntimeApplicationService Service, IStateStore<ScriptServiceDefinitionState> ServiceStateStore, InMemoryDynamicRuntimeReadStore ReadStore) CreateServiceWithReadStore(
         IEventEnvelopeSubscriberPort? envelopeSubscriberPort = null,
-        IEventEnvelopePublisherPort? envelopePublisherPort = null)
+        IEventEnvelopePublisherPort? envelopePublisherPort = null,
+        IDynamicScriptExecutionService? scriptExecutionService = null)
     {
         var runtime = new FakeActorRuntime();
         var store = new InMemoryDynamicRuntimeReadStore();
         var serviceStateStore = new InMemoryScriptServiceDefinitionStateStore();
-        envelopeSubscriberPort ??= new InMemoryEventEnvelopeSubscriberPort();
-        envelopePublisherPort ??= new InMemoryEventEnvelopePublisherPort();
+        var busState = new InMemoryEventEnvelopeBusState();
+        envelopeSubscriberPort ??= new InMemoryEventEnvelopeSubscriberPort(busState);
+        envelopePublisherPort ??= new InMemoryEventEnvelopePublisherPort(busState);
+        scriptExecutionService ??= new RoslynDynamicScriptExecutionService(
+            new DefaultScriptCompilationPolicy(),
+            new DefaultScriptAssemblyLoadPolicy(),
+            new DefaultScriptSandboxPolicy(),
+            new DefaultScriptResourceQuotaPolicy());
+        var deliveryPort = new InMemoryEventEnvelopeDeliveryPort(busState);
+        var eventProjector = new DynamicRuntimeEventProjector(store);
+        var sideEffectPlanner = new ScriptSideEffectPlanner();
         var service = new DynamicRuntimeApplicationService(
             runtime,
             store,
@@ -1054,7 +1276,7 @@ services:
             new InMemoryConcurrencyTokenPort(),
             new DefaultImageReferenceResolver(),
             new DefaultScriptComposeSpecValidator(),
-            new DefaultScriptComposeReconcilePort(),
+            new DefaultScriptComposeReconcilePort(store),
             new DefaultAgentBuildPlanPort(),
             new DefaultAgentBuildPolicyPort(),
             new DefaultAgentBuildExecutionPort(),
@@ -1063,12 +1285,23 @@ services:
             envelopePublisherPort,
             envelopeSubscriberPort,
             new InMemoryEventEnvelopeDedupPort(),
-            new RoslynDynamicScriptExecutionService(
-                new DefaultScriptCompilationPolicy(),
-                new DefaultScriptAssemblyLoadPolicy(),
-                new DefaultScriptSandboxPolicy(),
-                new DefaultScriptResourceQuotaPolicy()));
+            deliveryPort,
+            scriptExecutionService,
+            sideEffectPlanner,
+            eventProjector);
         return (service, serviceStateStore, store);
+    }
+
+    private sealed class BlockingScriptExecutionService : IDynamicScriptExecutionService
+    {
+        public async Task<DynamicScriptExecutionResult> ExecuteAsync(DynamicScriptExecutionRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            var wait = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(() => wait.TrySetCanceled(ct));
+            await wait.Task;
+            return new DynamicScriptExecutionResult(false, string.Empty, Error: "UNREACHABLE");
+        }
     }
 
     private sealed class RecordingEnvelopePublisherPort : IEventEnvelopePublisherPort

@@ -24,6 +24,12 @@ public sealed class ScriptRunGAgent : GAgentBase<ScriptRunState>
     public Task HandleTimedOutAsync(ScriptRunTimedOutEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
 
     [EventHandler]
+    public Task HandleAttemptTimedOutAsync(ScriptRunAttemptTimedOutEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
+
+    [EventHandler]
+    public Task HandleRetryScheduledAsync(ScriptRunRetryScheduledEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
+
+    [EventHandler]
     public Task HandleCustomStateUpdatedAsync(ScriptCustomStateUpdatedEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
 
     [EventHandler]
@@ -42,6 +48,8 @@ public sealed class ScriptRunGAgent : GAgentBase<ScriptRunState>
             .On<ScriptRunFailedEvent>(ApplyFailed)
             .On<ScriptRunCanceledEvent>(ApplyCanceled)
             .On<ScriptRunTimedOutEvent>(ApplyTimedOut)
+            .On<ScriptRunAttemptTimedOutEvent>(ApplyAttemptTimedOut)
+            .On<ScriptRunRetryScheduledEvent>(ApplyRetryScheduled)
             .OrCurrent();
 
     private static ScriptRunState ApplyStarted(ScriptRunState current, ScriptRunStartedEvent evt)
@@ -50,6 +58,9 @@ public sealed class ScriptRunGAgent : GAgentBase<ScriptRunState>
         next.RunId = evt.RunId ?? string.Empty;
         next.ContainerId = evt.ContainerId ?? string.Empty;
         next.Status = "Running";
+        next.Attempt = evt.Attempt <= 0 ? 1 : evt.Attempt;
+        next.MaxAttempts = evt.MaxAttempts <= 0 ? 1 : evt.MaxAttempts;
+        next.LastTransitionUnixMs = evt.StartedAtUnixMs;
         return next;
     }
 
@@ -60,6 +71,7 @@ public sealed class ScriptRunGAgent : GAgentBase<ScriptRunState>
         next.Status = "Succeeded";
         next.Result = evt.Result ?? string.Empty;
         next.Error = string.Empty;
+        next.LastTransitionUnixMs = evt.CompletedAtUnixMs;
         return next;
     }
 
@@ -69,6 +81,7 @@ public sealed class ScriptRunGAgent : GAgentBase<ScriptRunState>
         next.RunId = evt.RunId ?? current.RunId;
         next.Status = "Failed";
         next.Error = evt.Error ?? string.Empty;
+        next.LastTransitionUnixMs = evt.CompletedAtUnixMs;
         return next;
     }
 
@@ -78,6 +91,7 @@ public sealed class ScriptRunGAgent : GAgentBase<ScriptRunState>
         next.RunId = evt.RunId ?? current.RunId;
         next.Status = "Canceled";
         next.Error = evt.Reason ?? string.Empty;
+        next.LastTransitionUnixMs = evt.CompletedAtUnixMs;
         return next;
     }
 
@@ -87,6 +101,31 @@ public sealed class ScriptRunGAgent : GAgentBase<ScriptRunState>
         next.RunId = evt.RunId ?? current.RunId;
         next.Status = "TimedOut";
         next.Error = evt.Reason ?? string.Empty;
+        next.LastTransitionUnixMs = evt.CompletedAtUnixMs;
+        return next;
+    }
+
+    private static ScriptRunState ApplyAttemptTimedOut(ScriptRunState current, ScriptRunAttemptTimedOutEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = evt.RunId ?? current.RunId;
+        next.Attempt = evt.Attempt <= 0 ? current.Attempt : evt.Attempt;
+        next.MaxAttempts = evt.MaxAttempts <= 0 ? current.MaxAttempts : evt.MaxAttempts;
+        next.Status = "Running";
+        next.Error = evt.Reason ?? string.Empty;
+        next.LastTransitionUnixMs = evt.OccurredAtUnixMs;
+        return next;
+    }
+
+    private static ScriptRunState ApplyRetryScheduled(ScriptRunState current, ScriptRunRetryScheduledEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = evt.RunId ?? current.RunId;
+        next.Attempt = evt.Attempt <= 0 ? current.Attempt : evt.Attempt;
+        next.MaxAttempts = evt.MaxAttempts <= 0 ? current.MaxAttempts : evt.MaxAttempts;
+        next.Status = "RetryScheduled";
+        next.Error = evt.Reason ?? string.Empty;
+        next.LastTransitionUnixMs = evt.OccurredAtUnixMs;
         return next;
     }
 }

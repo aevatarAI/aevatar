@@ -182,6 +182,14 @@ public interface IEventEnvelopeDedupPort
     Task<EnvelopeDedupResult> CheckAndRecordAsync(string scope, string dedupKey, TimeSpan ttl, CancellationToken ct = default);
 }
 
+public interface IEventEnvelopeDeliveryPort
+{
+    Task<IReadOnlyList<EnvelopeSubscribeRequest>> ListLeasesAsync(string stackId, CancellationToken ct = default);
+    Task<IReadOnlyList<EnvelopeDeliverySnapshot>> PullAsync(string leaseId, int maxCount, CancellationToken ct = default);
+    Task AckAsync(string leaseId, string deliveryId, CancellationToken ct = default);
+    Task<EnvelopeRetryResult> RetryAsync(string leaseId, string deliveryId, TimeSpan delay, string reason, CancellationToken ct = default);
+}
+
 public interface IDynamicRuntimeReadStore
 {
     Task UpsertImageAsync(ImageSnapshot snapshot, CancellationToken ct = default);
@@ -202,6 +210,7 @@ public interface IDynamicRuntimeReadStore
     Task<IReadOnlyList<ComposeEventSnapshot>> GetComposeEventsAsync(string stackId, CancellationToken ct = default);
     Task<ServiceDefinitionSnapshot?> GetServiceDefinitionAsync(string serviceId, CancellationToken ct = default);
     Task<ContainerSnapshot?> GetContainerAsync(string containerId, CancellationToken ct = default);
+    Task<IReadOnlyList<ContainerSnapshot>> GetServiceContainersAsync(string stackId, string serviceName, CancellationToken ct = default);
     Task<IReadOnlyList<RunSnapshot>> GetContainerRunsAsync(string containerId, CancellationToken ct = default);
     Task<RunSnapshot?> GetRunAsync(string runId, CancellationToken ct = default);
     Task<BuildJobSnapshot?> GetBuildJobAsync(string buildJobId, CancellationToken ct = default);

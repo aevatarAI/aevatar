@@ -1,11 +1,15 @@
-using System.Collections.Concurrent;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 
 namespace Aevatar.DynamicRuntime.Infrastructure;
 
 public sealed class InMemoryEventEnvelopeSubscriberPort : IEventEnvelopeSubscriberPort
 {
-    private readonly ConcurrentDictionary<string, EnvelopeSubscribeRequest> _leases = new(StringComparer.Ordinal);
+    private readonly InMemoryEventEnvelopeBusState _state;
+
+    public InMemoryEventEnvelopeSubscriberPort(InMemoryEventEnvelopeBusState state)
+    {
+        _state = state;
+    }
 
     public Task<EnvelopeLeaseResult> SubscribeAsync(EnvelopeSubscribeRequest request, CancellationToken ct = default)
     {
@@ -15,7 +19,7 @@ public sealed class InMemoryEventEnvelopeSubscriberPort : IEventEnvelopeSubscrib
         if (string.IsNullOrWhiteSpace(request.StackId) || string.IsNullOrWhiteSpace(request.ServiceName))
             return Task.FromResult(new EnvelopeLeaseResult(false, request.LeaseId, "ENVELOPE_LEASE_INVALID", "stack_id/service_name is required"));
 
-        _leases[request.LeaseId] = request;
+        _state.Leases[request.LeaseId] = request;
         return Task.FromResult(new EnvelopeLeaseResult(true, request.LeaseId));
     }
 }

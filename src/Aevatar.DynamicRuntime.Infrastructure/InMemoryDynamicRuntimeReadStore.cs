@@ -142,6 +142,18 @@ public sealed class InMemoryDynamicRuntimeReadStore : IDynamicRuntimeReadStore
         return Task.FromResult(snapshot);
     }
 
+    public Task<IReadOnlyList<ContainerSnapshot>> GetServiceContainersAsync(string stackId, string serviceName, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var snapshots = _containers.Values
+            .Where(item =>
+                string.Equals(item.StackId, stackId, StringComparison.Ordinal) &&
+                string.Equals(item.ServiceName, serviceName, StringComparison.Ordinal))
+            .OrderBy(item => item.ContainerId, StringComparer.Ordinal)
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<ContainerSnapshot>>(snapshots);
+    }
+
     public Task<RunSnapshot?> GetRunAsync(string runId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

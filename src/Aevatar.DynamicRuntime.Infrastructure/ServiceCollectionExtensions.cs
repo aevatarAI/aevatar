@@ -11,6 +11,7 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddDynamicRuntime(this IServiceCollection services)
     {
+        services.TryAddSingleton<InMemoryEventEnvelopeBusState>();
         services.TryAddSingleton<IDynamicRuntimeReadStore, InMemoryDynamicRuntimeReadStore>();
         services.TryAddSingleton<IStateStore<ScriptServiceDefinitionState>, InMemoryScriptServiceDefinitionStateStore>();
         services.TryAddSingleton<IIdempotencyPort, InMemoryIdempotencyPort>();
@@ -31,6 +32,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEventEnvelopePublisherPort, InMemoryEventEnvelopePublisherPort>();
         services.TryAddSingleton<IEventEnvelopeSubscriberPort, InMemoryEventEnvelopeSubscriberPort>();
         services.TryAddSingleton<IEventEnvelopeDedupPort, InMemoryEventEnvelopeDedupPort>();
+        services.TryAddSingleton<IEventEnvelopeDeliveryPort, InMemoryEventEnvelopeDeliveryPort>();
+        services.TryAddSingleton<IScriptSideEffectPlanner, ScriptSideEffectPlanner>();
+        services.TryAddSingleton<IDynamicRuntimeEventProjector, DynamicRuntimeEventProjector>();
         services.TryAddSingleton<ScriptRoleAgentChatClient>();
         services.TryAddSingleton<IDynamicScriptExecutionService, RoslynDynamicScriptExecutionService>();
         services.TryAddSingleton<DynamicRuntimeApplicationService>();
