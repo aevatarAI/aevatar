@@ -17,11 +17,19 @@ public sealed class ScriptRunGAgent : GAgentBase<ScriptRunState>
     [EventHandler]
     public Task HandleFailedAsync(ScriptRunFailedEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
 
+    [EventHandler]
+    public Task HandleCanceledAsync(ScriptRunCanceledEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
+
+    [EventHandler]
+    public Task HandleTimedOutAsync(ScriptRunTimedOutEvent evt, CancellationToken ct = default) => PersistDomainEventAsync(evt, ct);
+
     protected override ScriptRunState TransitionState(ScriptRunState current, IMessage evt) =>
         StateTransitionMatcher.Match(current, evt)
             .On<ScriptRunStartedEvent>(ApplyStarted)
             .On<ScriptRunCompletedEvent>(ApplyCompleted)
             .On<ScriptRunFailedEvent>(ApplyFailed)
+            .On<ScriptRunCanceledEvent>(ApplyCanceled)
+            .On<ScriptRunTimedOutEvent>(ApplyTimedOut)
             .OrCurrent();
 
     private static ScriptRunState ApplyStarted(ScriptRunState current, ScriptRunStartedEvent evt)
@@ -49,6 +57,24 @@ public sealed class ScriptRunGAgent : GAgentBase<ScriptRunState>
         next.RunId = evt.RunId ?? current.RunId;
         next.Status = "Failed";
         next.Error = evt.Error ?? string.Empty;
+        return next;
+    }
+
+    private static ScriptRunState ApplyCanceled(ScriptRunState current, ScriptRunCanceledEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = evt.RunId ?? current.RunId;
+        next.Status = "Canceled";
+        next.Error = evt.Reason ?? string.Empty;
+        return next;
+    }
+
+    private static ScriptRunState ApplyTimedOut(ScriptRunState current, ScriptRunTimedOutEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = evt.RunId ?? current.RunId;
+        next.Status = "TimedOut";
+        next.Error = evt.Reason ?? string.Empty;
         return next;
     }
 }

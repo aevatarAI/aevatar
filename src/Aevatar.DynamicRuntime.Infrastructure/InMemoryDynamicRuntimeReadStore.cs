@@ -7,6 +7,9 @@ public sealed class InMemoryDynamicRuntimeReadStore : IDynamicRuntimeReadStore
 {
     private readonly ConcurrentDictionary<string, ImageSnapshot> _images = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, StackSnapshot> _stacks = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ComposeServiceSnapshot>> _composeServices = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ConcurrentQueue<ComposeEventSnapshot>> _composeEvents = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ServiceDefinitionSnapshot> _services = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ContainerSnapshot> _containers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, RunSnapshot> _runs = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, BuildJobSnapshot> _buildJobs = new(StringComparer.Ordinal);
@@ -22,6 +25,29 @@ public sealed class InMemoryDynamicRuntimeReadStore : IDynamicRuntimeReadStore
     {
         ct.ThrowIfCancellationRequested();
         _stacks[snapshot.StackId] = snapshot;
+        return Task.CompletedTask;
+    }
+
+    public Task UpsertComposeServiceAsync(ComposeServiceSnapshot snapshot, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var services = _composeServices.GetOrAdd(snapshot.StackId, _ => new ConcurrentDictionary<string, ComposeServiceSnapshot>(StringComparer.Ordinal));
+        services[snapshot.ServiceName] = snapshot;
+        return Task.CompletedTask;
+    }
+
+    public Task AppendComposeEventAsync(ComposeEventSnapshot snapshot, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var events = _composeEvents.GetOrAdd(snapshot.StackId, _ => new ConcurrentQueue<ComposeEventSnapshot>());
+        events.Enqueue(snapshot);
+        return Task.CompletedTask;
+    }
+
+    public Task UpsertServiceDefinitionAsync(ServiceDefinitionSnapshot snapshot, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _services[snapshot.ServiceId] = snapshot;
         return Task.CompletedTask;
     }
 
@@ -60,6 +86,31 @@ public sealed class InMemoryDynamicRuntimeReadStore : IDynamicRuntimeReadStore
         return Task.FromResult(snapshot);
     }
 
+    public Task<ServiceDefinitionSnapshot?> GetServiceDefinitionAsync(string serviceId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _services.TryGetValue(serviceId, out var snapshot);
+        return Task.FromResult(snapshot);
+    }
+
+    public Task<IReadOnlyList<ComposeServiceSnapshot>> GetComposeServicesAsync(string stackId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!_composeServices.TryGetValue(stackId, out var snapshots))
+            return Task.FromResult<IReadOnlyList<ComposeServiceSnapshot>>([]);
+
+        return Task.FromResult<IReadOnlyList<ComposeServiceSnapshot>>(snapshots.Values.OrderBy(item => item.ServiceName, StringComparer.Ordinal).ToArray());
+    }
+
+    public Task<IReadOnlyList<ComposeEventSnapshot>> GetComposeEventsAsync(string stackId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!_composeEvents.TryGetValue(stackId, out var events))
+            return Task.FromResult<IReadOnlyList<ComposeEventSnapshot>>([]);
+
+        return Task.FromResult<IReadOnlyList<ComposeEventSnapshot>>(events.ToArray());
+    }
+
     public Task<ContainerSnapshot?> GetContainerAsync(string containerId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -74,10 +125,25 @@ public sealed class InMemoryDynamicRuntimeReadStore : IDynamicRuntimeReadStore
         return Task.FromResult(snapshot);
     }
 
+    public Task<IReadOnlyList<RunSnapshot>> GetContainerRunsAsync(string containerId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var runs = _runs.Values.Where(item => string.Equals(item.ContainerId, containerId, StringComparison.Ordinal))
+            .OrderBy(item => item.RunId, StringComparer.Ordinal)
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<RunSnapshot>>(runs);
+    }
+
     public Task<BuildJobSnapshot?> GetBuildJobAsync(string buildJobId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         _buildJobs.TryGetValue(buildJobId, out var snapshot);
         return Task.FromResult(snapshot);
+    }
+
+    public Task<IReadOnlyList<BuildJobSnapshot>> GetBuildJobsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<BuildJobSnapshot>>(_buildJobs.Values.OrderBy(item => item.BuildJobId, StringComparer.Ordinal).ToArray());
     }
 }

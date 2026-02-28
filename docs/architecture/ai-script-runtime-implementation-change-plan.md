@@ -666,6 +666,13 @@ public interface IBuildApprovalPort
 - [ ] WP-9 Guards + Tests + SLO
 
 ## 19. 当前快照（2026-02-28）
-- 已完成：实施文档修订到 v1.4（补齐 Compose 编排模型、Autonomous Build 闭环、daemon/event/hybrid 服务模式、Event Envelope 合同、API/WBS/SLO 同步）。
-- 未完成：代码实施与测试落地。
+- 已完成：
+1. 实施文档修订到 v1.4（补齐 Compose 编排模型、Autonomous Build 闭环、daemon/event/hybrid 服务模式、Event Envelope 合同、API/WBS/SLO 同步）。
+2. DynamicRuntime 代码主链路已落地（Image/Compose/Service/Container/Run/BuildJob、Adapter-only、脚本执行、基础策略端口）。
+3. 多智能体业务仿真测试已落地并通过：`MultiAgentBusinessSimulation_ShouldAlignDockerLikeSemantics`。
+4. 本轮业务对齐审计已新增：`docs/audit-scorecard/dynamic-runtime-docker-alignment-business-test-2026-02-28.md`。
+- 未完成：
+1. Envelope 端到端投递执行闭环（订阅 -> 投递 -> run 消费 -> ack/retry）尚需完善。
+2. 生产级 Compose Reconcile 策略（依赖拓扑、分批滚动、失败回滚）尚需完善。
+3. SLO 长稳压测（availability/resilience/perf）尚需纳入正式门禁。
 - 当前阻塞：无。

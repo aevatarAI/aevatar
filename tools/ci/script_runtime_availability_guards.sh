@@ -10,7 +10,7 @@ metrics_file="${SCRIPT_RUNTIME_AVAILABILITY_METRICS_FILE:-artifacts/script-runti
 run_success_rate="${SCRIPT_RUNTIME_RUN_SUCCESS_RATE_30M:-}"
 
 runtime_present=0
-if rg --files src test -g 'Aevatar.AI.Script.*.csproj' | rg -q '.'; then
+if rg --files src test -g 'Aevatar.DynamicRuntime.*.csproj' | rg -q '.'; then
   runtime_present=1
 fi
 

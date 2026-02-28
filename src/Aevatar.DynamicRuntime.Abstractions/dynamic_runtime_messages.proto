@@ -23,6 +23,20 @@ message ScriptComposeServiceState {
   int32 replicas_desired = 3;
   int32 replicas_ready = 4;
   string service_mode = 5;
+  string image_ref = 6;
+}
+
+message ScriptServiceDefinitionState {
+  string service_id = 1;
+  string version = 2;
+  string status = 3;
+  string script_code = 4;
+  string entrypoint_type = 5;
+  string service_mode = 6;
+  repeated string public_endpoints = 7;
+  repeated string event_subscriptions = 8;
+  string capabilities_hash = 9;
+  int64 updated_at_unix_ms = 10;
 }
 
 message ScriptContainerState {
@@ -49,6 +63,18 @@ message ScriptBuildJobState {
   string source_bundle_digest = 4;
   string result_image_digest = 5;
   string status = 6;
+  string build_plan_digest = 7;
+  string policy_decision = 8;
+  bool requires_manual_approval = 9;
+  string requested_by_agent_id = 10;
+}
+
+message ScriptRoleContainerState {
+  string service_id = 1;
+  string version = 2;
+  string image_digest = 3;
+  string entrypoint_type = 4;
+  string capabilities_hash = 5;
 }
 
 message ScriptImagePublishedEvent {
@@ -73,6 +99,20 @@ message ScriptComposeServiceScaledEvent {
   string service_name = 2;
   int32 replicas_desired = 3;
   string service_mode = 4;
+  string image_ref = 5;
+}
+
+message ScriptComposeServiceRolledOutEvent {
+  string stack_id = 1;
+  string service_name = 2;
+  string image_ref = 3;
+  int64 generation = 4;
+}
+
+message ScriptComposeServiceDependencyBlockedEvent {
+  string stack_id = 1;
+  string service_name = 2;
+  string dependency_service_name = 3;
 }
 
 message ScriptContainerCreatedEvent {
@@ -86,6 +126,40 @@ message ScriptContainerCreatedEvent {
 message ScriptContainerStartedEvent { string container_id = 1; }
 message ScriptContainerStoppedEvent { string container_id = 1; }
 message ScriptContainerDestroyedEvent { string container_id = 1; }
+
+message ScriptServiceRegisteredEvent {
+  string service_id = 1;
+  string version = 2;
+  string script_code = 3;
+  string entrypoint_type = 4;
+  string service_mode = 5;
+  repeated string public_endpoints = 6;
+  repeated string event_subscriptions = 7;
+  string capabilities_hash = 8;
+  int64 updated_at_unix_ms = 9;
+}
+
+message ScriptServiceUpdatedEvent {
+  string service_id = 1;
+  string version = 2;
+  string script_code = 3;
+  string entrypoint_type = 4;
+  string service_mode = 5;
+  repeated string public_endpoints = 6;
+  repeated string event_subscriptions = 7;
+  string capabilities_hash = 8;
+  int64 updated_at_unix_ms = 9;
+}
+
+message ScriptServiceActivatedEvent {
+  string service_id = 1;
+  int64 updated_at_unix_ms = 2;
+}
+
+message ScriptServiceDeactivatedEvent {
+  string service_id = 1;
+  int64 updated_at_unix_ms = 2;
+}
 
 message ScriptRunStartedEvent {
   string run_id = 1;
@@ -102,6 +176,16 @@ message ScriptRunFailedEvent {
   string error = 2;
 }
 
+message ScriptRunCanceledEvent {
+  string run_id = 1;
+  string reason = 2;
+}
+
+message ScriptRunTimedOutEvent {
+  string run_id = 1;
+  string reason = 2;
+}
+
 message ScriptBuildPlanSubmittedEvent {
   string build_job_id = 1;
   string stack_id = 2;
@@ -109,9 +193,25 @@ message ScriptBuildPlanSubmittedEvent {
   string source_bundle_digest = 4;
 }
 
+message ScriptBuildPolicyValidatedEvent {
+  string build_job_id = 1;
+  string policy_decision = 2;
+  bool requires_manual_approval = 3;
+}
+
 message ScriptBuildApprovedEvent { string build_job_id = 1; }
 
 message ScriptBuildPublishedEvent {
   string build_job_id = 1;
   string result_image_digest = 2;
+}
+
+message ScriptBuildRolledBackEvent { string build_job_id = 1; }
+
+message ConfigureScriptRoleCapabilitiesEvent {
+  string service_id = 1;
+  string version = 2;
+  string image_digest = 3;
+  string entrypoint_type = 4;
+  string capabilities_hash = 5;
 }

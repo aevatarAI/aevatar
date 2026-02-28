@@ -15,7 +15,7 @@ reclaim_time_p95_ms="${SCRIPT_RUNTIME_CONTAINER_RECLAIM_TIME_P95_MS:-}"
 alc_unload_success_rate="${SCRIPT_RUNTIME_ALC_UNLOAD_SUCCESS_RATE:-}"
 
 runtime_present=0
-if rg --files src test -g 'Aevatar.AI.Script.*.csproj' | rg -q '.'; then
+if rg --files src test -g 'Aevatar.DynamicRuntime.*.csproj' | rg -q '.'; then
   runtime_present=1
 fi
 

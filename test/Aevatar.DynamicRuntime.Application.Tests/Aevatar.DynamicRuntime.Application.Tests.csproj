@@ -11,6 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.DynamicRuntime.Application\Aevatar.DynamicRuntime.Application.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.DynamicRuntime.Infrastructure\Aevatar.DynamicRuntime.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.DynamicRuntime.Projection\Aevatar.DynamicRuntime.Projection.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.DynamicRuntime.Abstractions\Aevatar.DynamicRuntime.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
   </ItemGroup>

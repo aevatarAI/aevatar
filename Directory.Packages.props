@@ -201,6 +201,7 @@
     <!-- ════════════════════════════════════════════════════════════ -->
     <PackageVersion Include="Microsoft.CodeAnalysis.Common" Version="$(RoslynVersion)" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="$(RoslynVersion)" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="$(RoslynVersion)" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Workspaces.Common" Version="$(RoslynVersion)" />
 
     <!-- ════════════════════════════════════════════════════════════ -->

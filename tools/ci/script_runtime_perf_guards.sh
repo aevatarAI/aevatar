@@ -11,7 +11,7 @@ exec_p95="${SCRIPT_RUNTIME_EXEC_START_P95_MS:-}"
 first_token_p95="${SCRIPT_RUNTIME_FIRST_TOKEN_P95_MS:-}"
 
 runtime_present=0
-if rg --files src test -g 'Aevatar.AI.Script.*.csproj' | rg -q '.'; then
+if rg --files src test -g 'Aevatar.DynamicRuntime.*.csproj' | rg -q '.'; then
   runtime_present=1
 fi
 
