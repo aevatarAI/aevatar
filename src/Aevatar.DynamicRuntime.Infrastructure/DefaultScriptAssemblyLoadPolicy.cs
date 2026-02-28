@@ -13,12 +13,19 @@ public sealed class DefaultScriptAssemblyLoadPolicy : IScriptAssemblyLoadPolicy
             throw new InvalidOperationException("SCRIPT_COMPILE_FAILED");
 
         var options = ScriptOptions.Default
-            .WithReferences(typeof(IScriptRoleEntrypoint).Assembly)
+            .WithReferences(
+                typeof(IScriptRoleEntrypoint).Assembly,
+                typeof(Aevatar.Foundation.Abstractions.EventEnvelope).Assembly,
+                typeof(Google.Protobuf.WellKnownTypes.Any).Assembly)
             .WithImports(
                 "System",
                 "System.Threading",
                 "System.Threading.Tasks",
-                "Aevatar.DynamicRuntime.Abstractions.Contracts");
+                "Aevatar.DynamicRuntime.Abstractions",
+                "Aevatar.DynamicRuntime.Abstractions.Contracts",
+                "Aevatar.Foundation.Abstractions",
+                "Google.Protobuf",
+                "Google.Protobuf.WellKnownTypes");
 
         try
         {

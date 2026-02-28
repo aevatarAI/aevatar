@@ -1,7 +1,10 @@
+using Aevatar.DynamicRuntime.Abstractions;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 using Aevatar.DynamicRuntime.Infrastructure;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Xunit;
 
 namespace Aevatar.DynamicRuntime.Application.Tests;
@@ -21,56 +24,65 @@ public sealed class RoslynDynamicScriptExecutionServiceTests
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Google.Protobuf.WellKnownTypes;
 
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
-        => Task.FromResult($""echo:{input.Text}"");
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        return Task.FromResult(new ScriptRoleExecutionResult($""echo:{text}""));
+    }
 }
 
 var entrypoint = new ScriptEntrypoint();
 ";
 
-        var result = await sut.ExecuteAsync(new DynamicScriptExecutionRequest(script, "hello"));
+        var result = await sut.ExecuteAsync(new DynamicScriptExecutionRequest(script, CreateExecutionEnvelope("""{"text":"hello"}""")));
 
         result.Success.Should().BeTrue();
-        result.Output.Should().Be("echo:hello");
+        result.Output.Should().Be("""echo:{"text":"hello"}""");
         result.Error.Should().BeNull();
     }
 
     [Fact]
     public async Task ExecuteAsync_ShouldAllowScriptToCallInjectedLlmClient()
     {
-        var llmClient = new ScriptRoleAgentLlmClient(new FakeProviderFactory());
-        var capabilities = new ScriptRoleAgentCapabilities(llmClient);
+        var llmClient = new ScriptRoleAgentChatClient(new FakeProviderFactory());
         var sut = new RoslynDynamicScriptExecutionService(
             new DefaultScriptCompilationPolicy(),
             new DefaultScriptAssemblyLoadPolicy(),
             new DefaultScriptSandboxPolicy(),
             new DefaultScriptResourceQuotaPolicy(),
-            capabilities);
+            llmClient);
 
         var script = @"
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Google.Protobuf.WellKnownTypes;
 
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public async Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+    public async Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
-        var llm = await ScriptRoleAgentContext.Current.RoleAgent.ChatAsync(""classify:"" + input.Text, systemPrompt: ""refund-router"", ct: ct);
-        return ""llm=>"" + llm;
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        var llm = await ScriptRoleAgentContext.Current.ChatAsync(""classify:"" + text, systemPrompt: ""refund-router"", ct: ct);
+        return new ScriptRoleExecutionResult(""llm=>"" + llm);
     }
 }
 
 var entrypoint = new ScriptEntrypoint();
 ";
 
-        var result = await sut.ExecuteAsync(new DynamicScriptExecutionRequest(script, "order-42"));
+        var result = await sut.ExecuteAsync(new DynamicScriptExecutionRequest(script, CreateExecutionEnvelope("""{"order_id":"42"}""")));
 
         result.Success.Should().BeTrue();
-        result.Output.Should().Be("llm=>provider:default|system:refund-router|prompt:classify:order-42");
+        result.Output.Should().Be("""llm=>provider:default|system:refund-router|prompt:classify:{"order_id":"42"}""");
         result.Error.Should().BeNull();
     }
 
@@ -87,30 +99,30 @@ var entrypoint = new ScriptEntrypoint();
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Google.Protobuf.WellKnownTypes;
 
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
-        var source = input.Metadata != null && input.Metadata.TryGetValue(""source"", out var from) ? from : string.Empty;
-        return Task.FromResult($""text={input.Text};json={input.Json};source={source};type={input.MessageType};correlation={input.CorrelationId}"");
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        var source = envelope.Metadata.TryGetValue(""source"", out var from) ? from : string.Empty;
+        var messageType = envelope.Metadata.TryGetValue(""message_type"", out var type) ? type : string.Empty;
+        return Task.FromResult(new ScriptRoleExecutionResult($""text={text};source={source};type={messageType};correlation={envelope.CorrelationId}""));
     }
 }
 
 var entrypoint = new ScriptEntrypoint();
 ";
 
-        var input = new ScriptRoleRequest(
-            "hello",
-            "{\"orderId\":42}",
-            new Dictionary<string, string> { ["source"] = "api" },
-            CorrelationId: "corr-42",
-            CausationId: "cause-42",
-            MessageType: "order.created");
-        var result = await sut.ExecuteAsync(new DynamicScriptExecutionRequest(script, input));
+        var result = await sut.ExecuteAsync(new DynamicScriptExecutionRequest(
+            script,
+            CreateExecutionEnvelope("""{"text":"hello"}""", correlationId: "corr-42", causationId: "cause-42", messageType: "order.created", metadata: new Dictionary<string, string> { ["source"] = "api" })));
 
         result.Success.Should().BeTrue();
-        result.Output.Should().Be("text=hello;json={\"orderId\":42};source=api;type=order.created;correlation=corr-42");
+        result.Output.Should().Be("""text={"text":"hello"};source=api;type=order.created;correlation=corr-42""");
         result.Error.Should().BeNull();
     }
 
@@ -154,5 +166,42 @@ var entrypoint = new ScriptEntrypoint();
                 IsLast = true,
             };
         }
+    }
+
+    private static EventEnvelope CreateExecutionEnvelope(
+        string text,
+        string? correlationId = null,
+        string? causationId = null,
+        string? messageType = null,
+        IReadOnlyDictionary<string, string>? metadata = null)
+    {
+        var payload = Any.Pack(new StringValue { Value = text ?? string.Empty });
+        var corr = string.IsNullOrWhiteSpace(correlationId) ? Guid.NewGuid().ToString("N") : correlationId;
+        var cause = string.IsNullOrWhiteSpace(causationId) ? Guid.NewGuid().ToString("N") : causationId;
+
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = payload,
+            PublisherId = "dynamic-runtime.test",
+            Direction = EventDirection.Self,
+            CorrelationId = corr,
+            Metadata =
+            {
+                ["type_url"] = payload.TypeUrl,
+                ["correlation_id"] = corr,
+                ["causation_id"] = cause,
+                ["message_type"] = messageType ?? string.Empty,
+            },
+        };
+
+        if (metadata != null)
+        {
+            foreach (var pair in metadata)
+                envelope.Metadata[pair.Key] = pair.Value;
+        }
+
+        return envelope;
     }
 }

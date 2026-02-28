@@ -660,8 +660,8 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
 
         await _readStore.UpsertRunAsync(new RunSnapshot(runId, request.ContainerId, request.ServiceId, "Running", string.Empty, string.Empty, string.Empty), ct);
 
-        var scriptInput = BuildScriptInput(
-            request.Input ?? ScriptRoleRequest.FromText(string.Empty),
+        var scriptEnvelope = BuildScriptExecutionEnvelope(
+            request.Envelope,
             runId,
             request.ContainerId,
             request.ServiceId,
@@ -669,7 +669,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             container.ServiceName);
 
         var scriptResult = await _scriptExecutionService.ExecuteAsync(
-            new DynamicScriptExecutionRequest(service.ScriptCode, scriptInput, service.EntrypointType),
+            new DynamicScriptExecutionRequest(service.ScriptCode, scriptEnvelope, service.EntrypointType),
             ct);
 
         RunSnapshot finalSnapshot;
@@ -677,6 +677,8 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
 
         if (scriptResult.Success)
         {
+            await PublishScriptOutputEnvelopesAsync(container.StackId, container.ServiceName, container.ContainerId, scriptResult.PublishedEvents, ct);
+
             await PublishActorEventAsync(
                 runActor,
                 container.StackId,
@@ -1416,30 +1418,68 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         string.Equals(status, "Canceled", StringComparison.Ordinal) ||
         string.Equals(status, "TimedOut", StringComparison.Ordinal);
 
-    private static ScriptRoleRequest BuildScriptInput(
-        ScriptRoleRequest input,
+    private static EventEnvelope BuildScriptExecutionEnvelope(
+        EventEnvelope envelope,
         string runId,
         string containerId,
         string serviceId,
         string stackId,
         string serviceName)
     {
-        var metadata = input.Metadata == null
-            ? new Dictionary<string, string>(StringComparer.Ordinal)
-            : new Dictionary<string, string>(input.Metadata, StringComparer.Ordinal);
+        var next = envelope?.Clone() ?? new EventEnvelope();
+        if (next.Payload == null)
+            next.Payload = Any.Pack(new StringValue());
+        if (next.Timestamp == null)
+            next.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
+        if (string.IsNullOrWhiteSpace(next.PublisherId))
+            next.PublisherId = PublisherId;
+        if (string.IsNullOrWhiteSpace(next.Id))
+            next.Id = Guid.NewGuid().ToString("N");
 
-        metadata["run_id"] = runId;
-        metadata["container_id"] = containerId;
-        metadata["service_id"] = serviceId;
-        metadata["stack_id"] = stackId;
-        metadata["service_name"] = serviceName;
+        var now = DateTime.UtcNow;
+        var correlationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? runId : next.CorrelationId;
+        var causationId = next.Metadata.TryGetValue("causation_id", out var existingCausation)
+            ? existingCausation
+            : Guid.NewGuid().ToString("N");
 
-        return input with
+        next.CorrelationId = correlationId;
+        next.Metadata["trace_id"] = next.Metadata.TryGetValue("trace_id", out var traceId) && !string.IsNullOrWhiteSpace(traceId)
+            ? traceId
+            : Guid.NewGuid().ToString("N");
+        next.Metadata["correlation_id"] = correlationId;
+        next.Metadata["causation_id"] = causationId;
+        next.Metadata["dedup_key"] = next.Metadata.TryGetValue("dedup_key", out var dedup) && !string.IsNullOrWhiteSpace(dedup)
+            ? dedup
+            : $"{next.Payload.TypeUrl}:{runId}";
+        next.Metadata["type_url"] = next.Payload.TypeUrl;
+        next.Metadata["stack_id"] = stackId;
+        next.Metadata["service_name"] = serviceName;
+        next.Metadata["instance_selector"] = containerId;
+        next.Metadata["run_id"] = runId;
+        next.Metadata["container_id"] = containerId;
+        next.Metadata["service_id"] = serviceId;
+        next.Metadata["occurred_at"] = now.ToString("O");
+
+        return next;
+    }
+
+    private async Task PublishScriptOutputEnvelopesAsync(
+        string stackId,
+        string serviceName,
+        string instanceSelector,
+        IReadOnlyList<EventEnvelope>? envelopes,
+        CancellationToken ct)
+    {
+        if (envelopes == null || envelopes.Count == 0)
+            return;
+
+        foreach (var envelope in envelopes)
         {
-            Metadata = metadata,
-            CorrelationId = string.IsNullOrWhiteSpace(input.CorrelationId) ? runId : input.CorrelationId,
-            MessageType = string.IsNullOrWhiteSpace(input.MessageType) ? "container.exec" : input.MessageType,
-        };
+            ct.ThrowIfCancellationRequested();
+            await _eventEnvelopePublisherPort.PublishAsync(
+                new ScriptEventEnvelope(envelope.Id, stackId, serviceName, instanceSelector, envelope),
+                ct);
+        }
     }
 
     private static string BuildDigest(string imageName, string sourceBundleDigest)

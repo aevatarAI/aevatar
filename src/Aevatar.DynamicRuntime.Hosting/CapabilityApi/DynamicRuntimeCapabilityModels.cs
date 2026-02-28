@@ -1,4 +1,5 @@
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.DynamicRuntime.Hosting.CapabilityApi;
 
@@ -52,13 +53,8 @@ public sealed record CreateContainerInput(
 public sealed record ExecuteContainerInput(
     string ContainerId,
     string ServiceId,
-    string Input,
-    string? RunId = null,
-    string? InputJson = null,
-    IReadOnlyDictionary<string, string>? InputMetadata = null,
-    string? CorrelationId = null,
-    string? CausationId = null,
-    string? MessageType = null);
+    EventEnvelope Envelope,
+    string? RunId = null);
 
 public sealed record CancelRunInput(string Reason);
 

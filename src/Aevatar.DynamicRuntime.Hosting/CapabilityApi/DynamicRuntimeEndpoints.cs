@@ -1,7 +1,9 @@
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Aevatar.Foundation.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.DynamicRuntime.Hosting.CapabilityApi;
 
@@ -144,14 +146,11 @@ public static class DynamicRuntimeEndpoints
 
     private static Task<IResult> ExecuteContainer(HttpContext http, string containerId, ExecuteContainerInput input, IDynamicRuntimeCommandService commandService, CancellationToken ct)
     {
-        var scriptInput = new ScriptRoleRequest(
-            input.Input ?? string.Empty,
-            input.InputJson,
-            input.InputMetadata,
-            input.CorrelationId,
-            input.CausationId,
-            input.MessageType);
-        var request = new ExecuteContainerRequest(containerId, input.ServiceId, scriptInput, input.RunId);
+        if (input.Envelope == null || input.Envelope.Payload == null)
+            return Task.FromResult<IResult>(Results.BadRequest(new { code = "EVENT_ENVELOPE_INVALID", message = "Envelope and payload are required." }));
+
+        var envelope = NormalizeExecuteEnvelope(input.Envelope);
+        var request = new ExecuteContainerRequest(containerId, input.ServiceId, envelope, input.RunId);
         return ExecuteCommand(http, context => commandService.ExecuteContainerAsync(request, context, ct));
     }
 
@@ -224,6 +223,43 @@ public static class DynamicRuntimeEndpoints
         if (!string.IsNullOrWhiteSpace(result.ETag))
             http.Response.Headers.ETag = result.ETag;
         return Results.Ok(result);
+    }
+
+    private static EventEnvelope NormalizeExecuteEnvelope(EventEnvelope envelope)
+    {
+        var now = DateTime.UtcNow;
+        var normalized = envelope.Clone();
+        if (string.IsNullOrWhiteSpace(normalized.Id))
+            normalized.Id = Guid.NewGuid().ToString("N");
+        if (normalized.Timestamp == null)
+            normalized.Timestamp = Timestamp.FromDateTime(now);
+        if (string.IsNullOrWhiteSpace(normalized.PublisherId))
+            normalized.PublisherId = "dynamic-runtime.api";
+        if (normalized.Direction == 0)
+            normalized.Direction = EventDirection.Self;
+
+        var correlationId = string.IsNullOrWhiteSpace(normalized.CorrelationId)
+            ? Guid.NewGuid().ToString("N")
+            : normalized.CorrelationId;
+        normalized.CorrelationId = correlationId;
+        normalized.Metadata["type_url"] = normalized.Payload.TypeUrl;
+        normalized.Metadata["trace_id"] = normalized.Metadata.TryGetValue("trace_id", out var traceId) && !string.IsNullOrWhiteSpace(traceId)
+            ? traceId
+            : Guid.NewGuid().ToString("N");
+        normalized.Metadata["correlation_id"] = normalized.Metadata.TryGetValue("correlation_id", out var metadataCorrelation) && !string.IsNullOrWhiteSpace(metadataCorrelation)
+            ? metadataCorrelation
+            : correlationId;
+        normalized.Metadata["causation_id"] = normalized.Metadata.TryGetValue("causation_id", out var causationId) && !string.IsNullOrWhiteSpace(causationId)
+            ? causationId
+            : normalized.Id;
+        normalized.Metadata["dedup_key"] = normalized.Metadata.TryGetValue("dedup_key", out var dedupKey) && !string.IsNullOrWhiteSpace(dedupKey)
+            ? dedupKey
+            : $"{normalized.Payload.TypeUrl}:{normalized.Id}";
+        normalized.Metadata["occurred_at"] = normalized.Metadata.TryGetValue("occurred_at", out var occurredAt) && !string.IsNullOrWhiteSpace(occurredAt)
+            ? occurredAt
+            : now.ToString("O");
+
+        return normalized;
     }
 
     private static bool TryCreateContext(HttpContext http, bool requireIfMatch, out DynamicCommandContext context, out IResult? failure)

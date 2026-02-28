@@ -7,6 +7,9 @@ using Aevatar.DynamicRuntime.Infrastructure;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
+using Any = Google.Protobuf.WellKnownTypes.Any;
+using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
+using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
 using Xunit;
 
 namespace Aevatar.DynamicRuntime.Application.Tests;
@@ -14,8 +17,8 @@ namespace Aevatar.DynamicRuntime.Application.Tests;
 public sealed class DynamicRuntimeScriptBusinessOrchestrationTests
 {
     [Theory]
-    [InlineData("ticket_id=R-1001;amount=299;reason=size_mismatch;tier=gold", "auto_refund", "refund_approved")]
-    [InlineData("ticket_id=R-1002;amount=1899;reason=fraud_suspected;tier=silver", "manual_review", "manual_review_required")]
+    [InlineData("{\"ticket_id\":\"R-1001\",\"amount\":299,\"reason\":\"size_mismatch\",\"tier\":\"gold\"}", "auto_refund", "refund_approved")]
+    [InlineData("{\"ticket_id\":\"R-1002\",\"amount\":1899,\"reason\":\"fraud_suspected\",\"tier\":\"silver\"}", "manual_review", "manual_review_required")]
     public async Task RefundBusiness_ShouldRunWithPureScripts_AndRoleAgentLlmCapability(
         string businessInput,
         string expectedDecision,
@@ -124,7 +127,7 @@ services:
         await service.StartContainerAsync("ctr.refund.notify.1", new DynamicCommandContext("idem-refund-container-start-notify-1"));
 
         var intakeRun = await service.ExecuteContainerAsync(
-            new ExecuteContainerRequest("ctr.refund.intake.1", "svc.refund.intake", businessInput, "run.refund.intake"),
+            new ExecuteContainerRequest("ctr.refund.intake.1", "svc.refund.intake", CreateJsonEnvelope(businessInput), "run.refund.intake"),
             new DynamicCommandContext("idem-refund-run-intake"));
         intakeRun.Status.Should().Be("SUCCEEDED");
         var intakeSnapshot = await service.GetRunAsync("run.refund.intake");
@@ -134,7 +137,7 @@ services:
         intakeJson.GetProperty("llm_result").GetString().Should().NotBeNullOrWhiteSpace();
 
         var policyRun = await service.ExecuteContainerAsync(
-            new ExecuteContainerRequest("ctr.refund.policy.1", "svc.refund.policy", intakeSnapshot.Result, "run.refund.policy"),
+            new ExecuteContainerRequest("ctr.refund.policy.1", "svc.refund.policy", CreateJsonEnvelope(intakeSnapshot.Result), "run.refund.policy"),
             new DynamicCommandContext("idem-refund-run-policy"));
         policyRun.Status.Should().Be("SUCCEEDED");
         var policySnapshot = await service.GetRunAsync("run.refund.policy");
@@ -148,7 +151,7 @@ services:
             ? "ctr.refund.settlement.1"
             : "ctr.refund.settlement.2";
         var settlementRun = await service.ExecuteContainerAsync(
-            new ExecuteContainerRequest(settlementContainerId, "svc.refund.settlement", policySnapshot.Result, "run.refund.settlement"),
+            new ExecuteContainerRequest(settlementContainerId, "svc.refund.settlement", CreateJsonEnvelope(policySnapshot.Result), "run.refund.settlement"),
             new DynamicCommandContext("idem-refund-run-settlement"));
         settlementRun.Status.Should().Be("SUCCEEDED");
         var settlementSnapshot = await service.GetRunAsync("run.refund.settlement");
@@ -159,7 +162,7 @@ services:
         settlementJson.GetProperty("llm_result").GetString().Should().NotBeNullOrWhiteSpace();
 
         var notifyRun = await service.ExecuteContainerAsync(
-            new ExecuteContainerRequest("ctr.refund.notify.1", "svc.refund.notify", settlementSnapshot.Result, "run.refund.notify"),
+            new ExecuteContainerRequest("ctr.refund.notify.1", "svc.refund.notify", CreateJsonEnvelope(settlementSnapshot.Result), "run.refund.notify"),
             new DynamicCommandContext("idem-refund-run-notify"));
         notifyRun.Status.Should().Be("SUCCEEDED");
         var notifySnapshot = await service.GetRunAsync("run.refund.notify");
@@ -192,6 +195,9 @@ services:
         publisher.Published.Any(item =>
             item.Envelope.Metadata.TryGetValue("type_url", out var typeUrl) &&
             typeUrl.EndsWith("ScriptRunCompletedEvent", StringComparison.Ordinal)).Should().BeTrue();
+        publisher.Published.Any(item =>
+            item.Envelope.Metadata.TryGetValue("type_url", out var typeUrl) &&
+            typeUrl.EndsWith("ScriptBuildApprovedEvent", StringComparison.Ordinal)).Should().BeTrue();
         llmProviderFactory.ChatCallCount.Should().BeGreaterThan(0);
     }
 
@@ -199,6 +205,30 @@ services:
     {
         using var document = JsonDocument.Parse(value);
         return document.RootElement.Clone();
+    }
+
+    private static EventEnvelope CreateJsonEnvelope(string value)
+    {
+        var payload = Any.Pack(new StringValue { Value = value ?? string.Empty });
+        var correlationId = Guid.NewGuid().ToString("N");
+        return new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = payload,
+            PublisherId = "dynamic-runtime.test",
+            Direction = EventDirection.Self,
+            CorrelationId = correlationId,
+            Metadata =
+            {
+                ["type_url"] = payload.TypeUrl,
+                ["trace_id"] = Guid.NewGuid().ToString("N"),
+                ["correlation_id"] = correlationId,
+                ["causation_id"] = Guid.NewGuid().ToString("N"),
+                ["dedup_key"] = $"{payload.TypeUrl}:{Guid.NewGuid():N}",
+                ["occurred_at"] = DateTime.UtcNow.ToString("O"),
+            },
+        };
     }
 
     private static (DynamicRuntimeApplicationService Service, IStateStore<ScriptServiceDefinitionState> ServiceStateStore) CreateService(
@@ -213,7 +243,7 @@ services:
         var runtime = new FakeActorRuntime();
         var readStore = new InMemoryDynamicRuntimeReadStore();
         var serviceStateStore = new InMemoryScriptServiceDefinitionStateStore();
-        var capabilities = new ScriptRoleAgentCapabilities(new ScriptRoleAgentLlmClient(llmProviderFactory));
+        var chatClient = new ScriptRoleAgentChatClient(llmProviderFactory);
         var app = new DynamicRuntimeApplicationService(
             runtime,
             readStore,
@@ -236,7 +266,7 @@ services:
                 new DefaultScriptAssemblyLoadPolicy(),
                 new DefaultScriptSandboxPolicy(),
                 new DefaultScriptResourceQuotaPolicy(),
-                capabilities));
+                chatClient));
         return (app, serviceStateStore);
     }
 
@@ -325,6 +355,8 @@ services:
             {
                 var raw = prompt["intake|".Length..];
                 var isHigh = raw.Contains("amount=1899", StringComparison.OrdinalIgnoreCase) ||
+                             raw.Contains("\"amount\":1899", StringComparison.OrdinalIgnoreCase) ||
+                             raw.Contains("\"reason\":\"fraud_suspected\"", StringComparison.OrdinalIgnoreCase) ||
                              raw.Contains("fraud", StringComparison.OrdinalIgnoreCase);
                 return isHigh
                     ? "risk_hint=high;llm_result=llm_refund_risk_high"
@@ -489,16 +521,19 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Google.Protobuf.WellKnownTypes;
 
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public async Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+    public async Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
-        var text = input.Text ?? string.Empty;
-        var llm = await ScriptRoleAgentContext.Current.RoleAgent.ChatAsync("intake|" + text, systemPrompt: "refund-intake", ct: ct);
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        var llm = await ScriptRoleAgentContext.Current.ChatAsync("intake|" + text, systemPrompt: "refund-intake", ct: ct);
         var riskHint = ParseField(llm, "risk_hint");
         var llmResult = ParseField(llm, "llm_result");
-        return "{\"stage\":\"intake\",\"llm_result\":\"" + Escape(llmResult) + "\",\"risk_hint\":\"" + Escape(riskHint) + "\",\"raw\":\"" + Escape(text) + "\"}";
+        return new ScriptRoleExecutionResult("{\"stage\":\"intake\",\"llm_result\":\"" + Escape(llmResult) + "\",\"risk_hint\":\"" + Escape(riskHint) + "\",\"raw\":\"" + Escape(text) + "\"}");
     }
 
     private static string ParseField(string input, string key)
@@ -528,16 +563,19 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Google.Protobuf.WellKnownTypes;
 
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public async Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+    public async Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
-        var text = input.Text ?? string.Empty;
-        var llm = await ScriptRoleAgentContext.Current.RoleAgent.ChatAsync("policy|" + text, systemPrompt: "refund-policy", ct: ct);
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        var llm = await ScriptRoleAgentContext.Current.ChatAsync("policy|" + text, systemPrompt: "refund-policy", ct: ct);
         var decision = ParseField(llm, "decision");
         var llmResult = ParseField(llm, "llm_result");
-        return "{\"stage\":\"policy\",\"llm_result\":\"" + Escape(llmResult) + "\",\"decision\":\"" + Escape(decision) + "\",\"upstream\":\"" + Escape(text) + "\"}";
+        return new ScriptRoleExecutionResult("{\"stage\":\"policy\",\"llm_result\":\"" + Escape(llmResult) + "\",\"decision\":\"" + Escape(decision) + "\",\"upstream\":\"" + Escape(text) + "\"}");
     }
 
     private static string ParseField(string input, string key)
@@ -565,16 +603,19 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Google.Protobuf.WellKnownTypes;
 
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public async Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+    public async Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
-        var text = input.Text ?? string.Empty;
-        var llm = await ScriptRoleAgentContext.Current.RoleAgent.ChatAsync("settlement|" + text, systemPrompt: "refund-settlement", ct: ct);
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        var llm = await ScriptRoleAgentContext.Current.ChatAsync("settlement|" + text, systemPrompt: "refund-settlement", ct: ct);
         var action = ParseField(llm, "action");
         var llmResult = ParseField(llm, "llm_result");
-        return "{\"stage\":\"settlement\",\"llm_result\":\"" + Escape(llmResult) + "\",\"action\":\"" + Escape(action) + "\",\"upstream\":\"" + Escape(text) + "\"}";
+        return new ScriptRoleExecutionResult("{\"stage\":\"settlement\",\"llm_result\":\"" + Escape(llmResult) + "\",\"action\":\"" + Escape(action) + "\",\"upstream\":\"" + Escape(text) + "\"}");
     }
 
     private static string ParseField(string input, string key)
@@ -602,16 +643,20 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Google.Protobuf.WellKnownTypes;
 
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public async Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+    public async Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
-        var text = input.Text ?? string.Empty;
-        var llm = await ScriptRoleAgentContext.Current.RoleAgent.ChatAsync("notify|" + text, systemPrompt: "refund-notify", ct: ct);
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        var llm = await ScriptRoleAgentContext.Current.ChatAsync("notify|" + text, systemPrompt: "refund-notify", ct: ct);
         var message = ParseField(llm, "customer_message");
         var llmResult = ParseField(llm, "llm_result");
-        return "{\"stage\":\"notify\",\"llm_result\":\"" + Escape(llmResult) + "\",\"customer_message\":\"" + Escape(message) + "\"}";
+        await ScriptRoleAgentContext.Current.PublishAsync(new ScriptBuildApprovedEvent { BuildJobId = "script-notify-approved" }, ct: ct);
+        return new ScriptRoleExecutionResult("{\"stage\":\"notify\",\"llm_result\":\"" + Escape(llmResult) + "\",\"customer_message\":\"" + Escape(message) + "\"}");
     }
 
     private static string ParseField(string input, string key)

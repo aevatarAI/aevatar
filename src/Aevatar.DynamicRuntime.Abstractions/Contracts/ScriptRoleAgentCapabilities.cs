@@ -1,48 +1,42 @@
 using System.Threading;
+using Aevatar.Foundation.Abstractions;
+using Google.Protobuf;
 
 namespace Aevatar.DynamicRuntime.Abstractions.Contracts;
 
-public interface IScriptRoleAgentLlmClient
+public interface IScriptRoleAgentRuntime
 {
+    EventEnvelope CurrentEnvelope { get; }
+    IReadOnlyList<EventEnvelope> PublishedEnvelopes { get; }
     Task<string> ChatAsync(
         string prompt,
         string? systemPrompt = null,
         string? providerName = null,
         string? model = null,
         CancellationToken ct = default);
-}
 
-public interface IScriptRoleAgentClient
-{
-    Task<string> ChatAsync(
-        string prompt,
-        string? systemPrompt = null,
-        string? providerName = null,
-        string? model = null,
+    Task PublishAsync(
+        IMessage payload,
+        EventDirection direction = EventDirection.Self,
+        IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default);
-}
-
-public interface IScriptRoleAgentCapabilities
-{
-    IScriptRoleAgentClient RoleAgent { get; }
-    IScriptRoleAgentLlmClient LLM { get; }
 }
 
 public static class ScriptRoleAgentContext
 {
-    private static readonly AsyncLocal<IScriptRoleAgentCapabilities?> AmbientCapabilities = new();
+    private static readonly AsyncLocal<IScriptRoleAgentRuntime?> AmbientRuntime = new();
 
-    public static IScriptRoleAgentCapabilities Current =>
-        AmbientCapabilities.Value ?? throw new InvalidOperationException("Script role agent capabilities are not available in current execution context.");
+    public static IScriptRoleAgentRuntime Current =>
+        AmbientRuntime.Value ?? throw new InvalidOperationException("Script role agent runtime is not available in current execution context.");
 
-    public static IDisposable BeginScope(IScriptRoleAgentCapabilities capabilities)
+    public static IDisposable BeginScope(IScriptRoleAgentRuntime runtime)
     {
-        if (capabilities == null)
-            throw new ArgumentNullException(nameof(capabilities));
+        if (runtime == null)
+            throw new ArgumentNullException(nameof(runtime));
 
-        var previous = AmbientCapabilities.Value;
-        AmbientCapabilities.Value = capabilities;
-        return new Scope(() => AmbientCapabilities.Value = previous);
+        var previous = AmbientRuntime.Value;
+        AmbientRuntime.Value = runtime;
+        return new Scope(() => AmbientRuntime.Value = previous);
     }
 
     private sealed class Scope : IDisposable

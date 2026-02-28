@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.Agents;
+using Aevatar.DynamicRuntime.Abstractions;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 using Aevatar.Foundation.Abstractions;
 
@@ -32,17 +33,19 @@ public sealed class ScriptRoleCapabilityAdapter : IScriptRoleCapabilityAdapter
         return Task.CompletedTask;
     }
 
-    public Task<string> ExecuteAsync(ScriptRoleRequest input, CancellationToken ct = default)
-        => _entrypoint.HandleAsync(input ?? ScriptRoleRequest.FromText(string.Empty), ct);
+    public Task<string> ExecuteAsync(EventEnvelope envelope, CancellationToken ct = default)
+        => ExecuteEnvelopeAsync(envelope ?? throw new ArgumentNullException(nameof(envelope)), ct);
 
-    public Task<string> ExecuteAsync(string input, CancellationToken ct = default)
-        => ExecuteAsync(ScriptRoleRequest.FromText(input), ct);
-
-    public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    public async Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        _ = envelope;
-        return Task.CompletedTask;
+        _ = await _entrypoint.HandleEventAsync(envelope, ct);
+    }
+
+    private async Task<string> ExecuteEnvelopeAsync(EventEnvelope envelope, CancellationToken ct)
+    {
+        var result = await _entrypoint.HandleEventAsync(envelope, ct);
+        return result.Output ?? string.Empty;
     }
 
     public Task<string> GetDescriptionAsync() => Task.FromResult($"ScriptRoleCapabilityAdapter[{_roleName}]");

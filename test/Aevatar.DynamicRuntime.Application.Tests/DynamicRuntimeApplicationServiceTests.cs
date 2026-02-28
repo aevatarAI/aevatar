@@ -5,6 +5,9 @@ using Aevatar.DynamicRuntime.Infrastructure;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
+using Any = Google.Protobuf.WellKnownTypes.Any;
+using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
+using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
 using Xunit;
 
 namespace Aevatar.DynamicRuntime.Application.Tests;
@@ -23,8 +26,13 @@ using Aevatar.DynamicRuntime.Abstractions.Contracts;
 
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
-        => Task.FromResult($"echo:{input.Text}");
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        return Task.FromResult(new ScriptRoleExecutionResult($"echo:{text}"));
+    }
 }
 
 var entrypoint = new ScriptEntrypoint();
@@ -57,7 +65,7 @@ var entrypoint = new ScriptEntrypoint();
         await service.StartContainerAsync("container.echo.1", new DynamicCommandContext("idem-container-start"));
 
         var execResult = await service.ExecuteContainerAsync(
-            new ExecuteContainerRequest("container.echo.1", "svc.echo", "hello"),
+            new ExecuteContainerRequest("container.echo.1", "svc.echo", CreateJsonEnvelope("""{"text":"hello"}""")),
             new DynamicCommandContext("idem-container-exec"));
 
         var serviceSnapshot = await service.GetServiceDefinitionAsync("svc.echo");
@@ -71,7 +79,7 @@ var entrypoint = new ScriptEntrypoint();
 
         runSnapshot.Should().NotBeNull();
         runSnapshot!.Status.Should().Be("Succeeded");
-        runSnapshot.Result.Should().Be("echo:hello");
+        runSnapshot.Result.Should().Be("""echo:{"text":"hello"}""");
 
         state.Should().NotBeNull();
         state!.ScriptCode.Should().Contain("ScriptEntrypoint");
@@ -90,11 +98,15 @@ using Aevatar.DynamicRuntime.Abstractions.Contracts;
 
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
-        var runId = input.Metadata != null && input.Metadata.TryGetValue("run_id", out var run) ? run : string.Empty;
-        var serviceId = input.Metadata != null && input.Metadata.TryGetValue("service_id", out var service) ? service : string.Empty;
-        return Task.FromResult($"{input.Text}|{runId}|{serviceId}|{input.MessageType}|{input.CorrelationId}");
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        var runId = envelope.Metadata.TryGetValue("run_id", out var run) ? run : string.Empty;
+        var serviceId = envelope.Metadata.TryGetValue("service_id", out var service) ? service : string.Empty;
+        var messageType = envelope.Metadata.TryGetValue("message_type", out var type) ? type : string.Empty;
+        return Task.FromResult(new ScriptRoleExecutionResult($"{text}|{runId}|{serviceId}|{messageType}|{envelope.CorrelationId}"));
     }
 }
 
@@ -119,12 +131,12 @@ var entrypoint = new ScriptEntrypoint();
         await service.StartContainerAsync("container.meta.1", new DynamicCommandContext("idem-meta-start"));
 
         await service.ExecuteContainerAsync(
-            new ExecuteContainerRequest("container.meta.1", "svc.meta", ScriptRoleRequest.FromText("hello"), "run-meta"),
+            new ExecuteContainerRequest("container.meta.1", "svc.meta", CreateJsonEnvelope("""{"text":"hello"}""", "run-meta"), "run-meta"),
             new DynamicCommandContext("idem-meta-exec"));
 
         var run = await service.GetRunAsync("run-meta");
         run.Should().NotBeNull();
-        run!.Result.Should().Be("hello|run-meta|svc.meta|container.exec|run-meta");
+        run!.Result.Should().Be("""{"text":"hello"}|run-meta|svc.meta||run-meta""");
     }
 
     [Fact]
@@ -191,7 +203,7 @@ using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default) => Task.FromResult("ok");
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.FromResult(new ScriptRoleExecutionResult("ok"));
 }
 var entrypoint = new ScriptEntrypoint();
 """,
@@ -208,7 +220,7 @@ var entrypoint = new ScriptEntrypoint();
         await service.StartContainerAsync("container.cancel", new DynamicCommandContext("idem-cancel-start"));
 
         var runResult = await service.ExecuteContainerAsync(
-            new ExecuteContainerRequest("container.cancel", "svc.cancel", "any", "run-cancel"),
+            new ExecuteContainerRequest("container.cancel", "svc.cancel", CreateJsonEnvelope("""{"command":"cancel"}"""), "run-cancel"),
             new DynamicCommandContext("idem-cancel-exec"));
         runResult.Status.Should().Be("SUCCEEDED");
 
@@ -407,7 +419,13 @@ using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default) => Task.FromResult(input.Text);
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        return Task.FromResult(new ScriptRoleExecutionResult(text));
+    }
 }
 var entrypoint = new ScriptEntrypoint();
 """,
@@ -438,8 +456,13 @@ using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
-        => Task.FromResult($"{{\"agent\":\"gateway\",\"llm\":\"intent_parsed\",\"input\":\"{input.Text}\"}}");
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        return Task.FromResult(new ScriptRoleExecutionResult($"{{\"agent\":\"gateway\",\"llm\":\"intent_parsed\",\"input\":{text}}}"));
+    }
 }
 var entrypoint = new ScriptEntrypoint();
 """;
@@ -450,8 +473,13 @@ using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
-        => Task.FromResult($"{{\"agent\":\"planner\",\"llm\":\"plan_created\",\"upstream\":{input.Text}}}");
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        return Task.FromResult(new ScriptRoleExecutionResult($"{{\"agent\":\"planner\",\"llm\":\"plan_created\",\"upstream\":{text}}}"));
+    }
 }
 var entrypoint = new ScriptEntrypoint();
 """;
@@ -462,8 +490,13 @@ using System.Threading.Tasks;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 public sealed class ScriptEntrypoint : IScriptRoleEntrypoint
 {
-    public Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default)
-        => Task.FromResult($"{{\"agent\":\"worker\",\"llm\":\"task_executed\",\"payload\":{input.Text}}}");
+    public Task<ScriptRoleExecutionResult> HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        var text = envelope.Payload.Is(StringValue.Descriptor)
+            ? envelope.Payload.Unpack<StringValue>().Value
+            : string.Empty;
+        return Task.FromResult(new ScriptRoleExecutionResult($"{{\"agent\":\"worker\",\"llm\":\"task_executed\",\"payload\":{text}}}"));
+    }
 }
 var entrypoint = new ScriptEntrypoint();
 """;
@@ -554,7 +587,7 @@ services:
         await service.StartContainerAsync("ctr.worker.2", new DynamicCommandContext("idem-start-ctr-worker-2"));
 
         var gatewayRun = await service.ExecuteContainerAsync(
-            new ExecuteContainerRequest("ctr.gateway.1", "svc.gateway", "order_id=1001&user=alice"),
+            new ExecuteContainerRequest("ctr.gateway.1", "svc.gateway", CreateJsonEnvelope("""{"order_id":"1001","user":"alice"}""")),
             new DynamicCommandContext("idem-run-gateway"));
         var gatewaySnapshot = await service.GetRunAsync(gatewayRun.AggregateId.Replace("dynamic:run:", string.Empty, StringComparison.Ordinal));
         gatewaySnapshot.Should().NotBeNull();
@@ -562,7 +595,7 @@ services:
         gatewaySnapshot.Result.Should().Contain("\"agent\":\"gateway\"");
 
         var plannerRun = await service.ExecuteContainerAsync(
-            new ExecuteContainerRequest("ctr.planner.1", "svc.planner", gatewaySnapshot.Result),
+            new ExecuteContainerRequest("ctr.planner.1", "svc.planner", CreateJsonEnvelope(gatewaySnapshot.Result)),
             new DynamicCommandContext("idem-run-planner"));
         var plannerSnapshot = await service.GetRunAsync(plannerRun.AggregateId.Replace("dynamic:run:", string.Empty, StringComparison.Ordinal));
         plannerSnapshot.Should().NotBeNull();
@@ -570,10 +603,10 @@ services:
         plannerSnapshot.Result.Should().Contain("\"agent\":\"planner\"");
 
         var workerRun1 = await service.ExecuteContainerAsync(
-            new ExecuteContainerRequest("ctr.worker.1", "svc.worker", plannerSnapshot.Result),
+            new ExecuteContainerRequest("ctr.worker.1", "svc.worker", CreateJsonEnvelope(plannerSnapshot.Result)),
             new DynamicCommandContext("idem-run-worker-1"));
         var workerRun2 = await service.ExecuteContainerAsync(
-            new ExecuteContainerRequest("ctr.worker.2", "svc.worker", plannerSnapshot.Result),
+            new ExecuteContainerRequest("ctr.worker.2", "svc.worker", CreateJsonEnvelope(plannerSnapshot.Result)),
             new DynamicCommandContext("idem-run-worker-2"));
 
         var workerSnapshot1 = await service.GetRunAsync(workerRun1.AggregateId.Replace("dynamic:run:", string.Empty, StringComparison.Ordinal));
@@ -621,6 +654,32 @@ services:
         publisher.Published.Should().NotBeEmpty();
         publisher.Published.Select(item => item.Envelope.Metadata["type_url"]).Should().Contain(typeUrl => typeUrl.Contains("ScriptBuildPublishedEvent", StringComparison.Ordinal));
         publisher.Published.Select(item => item.Envelope.Metadata["type_url"]).Should().Contain(typeUrl => typeUrl.Contains("ScriptComposeServiceRolledOutEvent", StringComparison.Ordinal));
+    }
+
+    private static EventEnvelope CreateJsonEnvelope(string value, string? correlationId = null)
+    {
+        var payload = Any.Pack(new StringValue { Value = value ?? string.Empty });
+        var resolvedCorrelationId = string.IsNullOrWhiteSpace(correlationId)
+            ? Guid.NewGuid().ToString("N")
+            : correlationId;
+        return new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = payload,
+            PublisherId = "dynamic-runtime.test",
+            Direction = EventDirection.Self,
+            CorrelationId = resolvedCorrelationId,
+            Metadata =
+            {
+                ["type_url"] = payload.TypeUrl,
+                ["trace_id"] = Guid.NewGuid().ToString("N"),
+                ["correlation_id"] = resolvedCorrelationId,
+                ["causation_id"] = Guid.NewGuid().ToString("N"),
+                ["dedup_key"] = $"{payload.TypeUrl}:{Guid.NewGuid():N}",
+                ["occurred_at"] = DateTime.UtcNow.ToString("O"),
+            },
+        };
     }
 
     private static (DynamicRuntimeApplicationService Service, IStateStore<ScriptServiceDefinitionState> ServiceStateStore) CreateService(

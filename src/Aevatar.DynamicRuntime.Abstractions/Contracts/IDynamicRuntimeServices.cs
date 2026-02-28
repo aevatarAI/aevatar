@@ -49,18 +49,24 @@ public interface IDynamicRuntimeQueryService
 
 public interface IScriptRoleEntrypoint
 {
-    Task<string> HandleAsync(ScriptRoleRequest input, CancellationToken ct = default);
+    Task<ScriptRoleExecutionResult> HandleEventAsync(Aevatar.Foundation.Abstractions.EventEnvelope envelope, CancellationToken ct = default);
 }
 
-public sealed record DynamicScriptExecutionRequest(string ScriptCode, ScriptRoleRequest Input, string EntrypointType = "ScriptEntrypoint")
+public sealed record ScriptRoleExecutionResult(string Output)
 {
-    public DynamicScriptExecutionRequest(string scriptCode, string input, string entrypointType = "ScriptEntrypoint")
-        : this(scriptCode, ScriptRoleRequest.FromText(input), entrypointType)
-    {
-    }
+    public static readonly ScriptRoleExecutionResult Empty = new(string.Empty);
 }
 
-public sealed record DynamicScriptExecutionResult(bool Success, string Output, string? Error = null);
+public sealed record DynamicScriptExecutionRequest(
+    string ScriptCode,
+    Aevatar.Foundation.Abstractions.EventEnvelope Envelope,
+    string EntrypointType = "ScriptEntrypoint");
+
+public sealed record DynamicScriptExecutionResult(
+    bool Success,
+    string Output,
+    IReadOnlyList<Aevatar.Foundation.Abstractions.EventEnvelope>? PublishedEvents = null,
+    string? Error = null);
 
 public interface IDynamicScriptExecutionService
 {
@@ -70,8 +76,7 @@ public interface IDynamicScriptExecutionService
 public interface IScriptRoleCapabilityAdapter : Aevatar.AI.Abstractions.Agents.IRoleAgent
 {
     ScriptRoleCapabilitySnapshot Snapshot { get; }
-    Task<string> ExecuteAsync(ScriptRoleRequest input, CancellationToken ct = default);
-    Task<string> ExecuteAsync(string input, CancellationToken ct = default);
+    Task<string> ExecuteAsync(Aevatar.Foundation.Abstractions.EventEnvelope envelope, CancellationToken ct = default);
 }
 
 public interface IIdempotencyPort

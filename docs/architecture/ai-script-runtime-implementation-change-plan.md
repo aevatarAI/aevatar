@@ -489,6 +489,7 @@ public interface IBuildApprovalPort
 11. `POST /api/script-runtime/compose/{stackId}/services/{serviceName}:scale`
 12. `POST /api/script-runtime/compose/{stackId}/services/{serviceName}:rollout`
 13. `POST /api/script-runtime/containers/{containerId}/exec`
+   `exec` 请求体采用 `service_id + envelope`，`envelope` 为 `EventEnvelope`（protobuf JSON）；payload 业务语义在脚本内解析 `Any`，编排层不引入 `ScriptRoleRequest` 等中间语义模型。
 14. `POST /api/script-runtime/runs/{runId}:cancel`
 15. `POST /api/script-runtime/containers/{containerId}:stop`
 16. `DELETE /api/script-runtime/containers/{containerId}`

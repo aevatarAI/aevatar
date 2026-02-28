@@ -147,7 +147,7 @@ flowchart LR
 1. `run_id`
 2. `container_id`
 3. `entrypoint`
-4. `input`
+4. `input_envelope`（`EventEnvelope`，payload 为 protobuf `Any`）
 5. `status`（Pending/Running/Succeeded/Failed/Canceled/TimedOut）
 6. `result`
 
@@ -304,6 +304,7 @@ sequenceDiagram
 
 ### 12.3 Exec API
 1. `POST /api/script-runtime/containers/{containerId}/exec`
+   请求体必须包含 `service_id + envelope`，其中 `envelope` 为 `EventEnvelope`（protobuf JSON），编排层不解析业务 payload，只透传与补齐元数据。
 2. `POST /api/script-runtime/runs/{runId}:cancel`
 3. `GET /api/script-runtime/runs/{runId}`
 4. `GET /api/script-runtime/containers/{containerId}/runs`
