@@ -12,6 +12,10 @@ This directory keeps CI gate scripts and smoke tests.
 - `tools/ci/projection_route_mapping_guard.sh`: projection reducer routing static guard.
 - `tools/ci/restore_and_build.sh`: shared restore/build entry used by CI jobs.
 - `tools/ci/event_sourcing_regression.sh`: EventSourcing regression entry (core tests + Orleans/Garnet + architecture guards).
+- `tools/ci/architecture_doc_consistency_guards.sh`: architecture document consistency guard for Adapter-only and host strategy.
+- `tools/ci/script_runtime_perf_guards.sh`: script runtime performance SLO guard (`exec_start_latency_p95_ms`, `first_token_latency_p95_ms`).
+- `tools/ci/script_runtime_availability_guards.sh`: script runtime availability SLO guard (`run_success_rate_30m`).
+- `tools/ci/script_runtime_resilience_guards.sh`: script runtime resilience SLO guard (cancel/timeout/restart consistency + reclaim/unload thresholds).
 
 ## Integration/Smoke Scripts
 

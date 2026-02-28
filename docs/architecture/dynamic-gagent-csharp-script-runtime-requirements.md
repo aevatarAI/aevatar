@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 - 状态：Proposed
-- 版本：v3.0
+- 版本：v3.1
 - 日期：2026-02-28
 - 适用范围：`src/`、`test/`、`docs/architecture/`、`tools/ci/`
 - 目标：构建一套独立于 `src/workflow/*` 的 C# Script AI Agent 体系，并在概念与实现上对齐 Docker/OCI 最佳实践
@@ -69,7 +69,7 @@
 3. `ILLMProviderFactory` 与 `IAgentToolSource`：Provider 与 Tool 生态接入。
 
 ### 6.2 兼容等级（冻结）
-1. Adapter-only：脚本仅允许导出 `IScriptRoleAgentEntrypoint`，由平台适配为 `IRoleAgent`。
+1. Adapter-only：脚本仅允许导出 `IScriptRoleEntrypoint`，由平台适配为 `IRoleAgent`。
 2. 平台宿主（`ScriptRoleContainerAgent : RoleGAgent`）负责承接 `AIGAgentBase` 能力，不对脚本开放继承路径。
 3. 发布门禁：未通过 Adapter 能力合同测试的 image 禁止发布。
 
@@ -201,7 +201,7 @@ flowchart LR
 - DoD：create/start/exec/stop/destroy 可回放恢复。
 
 ### WP-3：IRoleAgent 兼容层（P0）
-- 交付：Adapter-only 契约（`IScriptRoleAgentEntrypoint -> ScriptRoleCapabilityAdapter -> IRoleAgent`）。
+- 交付：Adapter-only 契约（`IScriptRoleEntrypoint -> ScriptRoleCapabilityAdapter -> IRoleAgent`）。
 - DoD：脚本 agent 能力可被平台以 `IRoleAgent` 语义稳定调用。
 
 ### WP-4：Script Runtime + IOC（P0）
@@ -216,19 +216,34 @@ flowchart LR
 - 交付：架构守卫、稳定性守卫、合同测试矩阵。
 - DoD：违规提交可自动阻断。
 
-## 15. 验证矩阵
+## 15. 验证矩阵（与实施文档同口径）
 
 | 范围 | 命令 | 通过标准 |
 |---|---|---|
 | 架构守卫 | `bash tools/ci/architecture_guards.sh` | 通过且无 workflow 依赖回流 |
+| 文档一致性守卫 | `bash tools/ci/architecture_doc_consistency_guards.sh` | `Adapter-only` 与 Host 策略口径一致 |
 | 投影路由 | `bash tools/ci/projection_route_mapping_guard.sh` | TypeUrl 精确路由通过 |
 | 分片构建 | `bash tools/ci/solution_split_guards.sh` | Foundation/AI/CQRS/Hosting 通过 |
+| 分片测试 | `bash tools/ci/solution_split_test_guards.sh` | Foundation/CQRS/Workflow 分片测试通过 |
 | 稳定性守卫 | `bash tools/ci/test_stability_guards.sh` | 无违规轮询等待 |
 | Script Core | `dotnet test test/Aevatar.AI.Script.Core.Tests/Aevatar.AI.Script.Core.Tests.csproj --nologo` | Image/Container/Run 合同通过 |
 | Script Infra | `dotnet test test/Aevatar.AI.Script.Infrastructure.Tests/Aevatar.AI.Script.Infrastructure.Tests.csproj --nologo` | 沙箱与 IOC 隔离通过 |
-| Script API | `dotnet test test/Aevatar.AI.Script.Host.Api.Tests/Aevatar.AI.Script.Host.Api.Tests.csproj --nologo` | API 生命周期测试通过 |
+| Script API | `dotnet test test/Aevatar.AI.Script.Hosting.Tests/Aevatar.AI.Script.Hosting.Tests.csproj --nologo` | capability-only API 生命周期测试通过 |
+| 性能基线 | `bash tools/ci/script_runtime_perf_guards.sh` | P95 `exec start` < 200ms；P95 首 token < 800ms |
+| 可用性基线 | `bash tools/ci/script_runtime_availability_guards.sh` | 30 分钟稳定性场景成功率 >= 99.5% |
+| 故障恢复 | `bash tools/ci/script_runtime_resilience_guards.sh` | cancel/timeout/restart 后状态一致，且回收与卸载达标 |
 
-## 16. 风险与应对
+## 16. SLO 门槛（上线前必须达标）
+
+| 指标 | 门槛 |
+|---|---|
+| `exec_start_latency_p95` | < 200ms |
+| `first_token_latency_p95` | < 800ms |
+| `run_success_rate_30m` | >= 99.5% |
+| `container_reclaim_time_p95` | < 5s |
+| `script_alc_unload_success_rate` | >= 99.9% |
+
+## 17. 风险与应对
 1. 风险：tag 漂移导致运行不可复现。
 - 应对：生产创建容器只允许 digest；tag 仅用于解析。
 
@@ -241,7 +256,7 @@ flowchart LR
 4. 风险：与 AI 主干契约分叉。
 - 应对：`IRoleAgent` 兼容性合同测试作为强制门禁。
 
-## 17. 执行清单与快照（2026-02-28）
+## 18. 执行清单与快照（2026-02-28）
 - [ ] WP-1 Image/Registry
 - [ ] WP-2 Container/Exec
 - [ ] WP-3 IRoleAgent 兼容层

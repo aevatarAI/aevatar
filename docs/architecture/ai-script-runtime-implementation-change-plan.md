@@ -1,8 +1,8 @@
-# AI Script Runtime 架构实施变更文档（Best Implementation v1.1）
+# AI Script Runtime 架构实施变更文档（Best Implementation v1.2）
 
 ## 1. 文档元信息
 - 状态：Planned
-- 版本：v1.1
+- 版本：v1.2
 - 日期：2026-02-28
 - 适用分支：`feat/dynamic-gagent-script-runtime`
 - 目标：在不依赖 `src/workflow/*` 的前提下，落地 Docker 语义对齐的 AI Script Runtime，并复用 `RoleGAgent` 执行内核
@@ -40,6 +40,11 @@
 1. 沙箱策略不是原则文本，必须以接口合同 + 测试门禁落地。
 2. 编译、装载、执行、网络、资源配额必须分别可替换且可测。
 
+### ADR-7：Host 承载策略采用 capability-only（冻结）
+1. P0/P1 仅允许通过 `Aevatar.Bootstrap` capability 装配接入 Script Runtime。
+2. 不创建独立 `Script Host API` 交付面，避免同版本双承载形态分叉。
+3. 若后续需要独立 Host，必须新增 ADR 并在单一版本中明确唯一模式。
+
 ## 3. 口径一致性修复（Blocking Fix）
 
 ### 3.1 单一口径
@@ -51,6 +56,13 @@
 2. 守卫规则：
 - 若实施文档出现 `Adapter-only`，则需求文档不得出现 `Native 模式`。
 - 若任一文档出现 `双模式契约`，CI 失败。
+- 若文档出现“独立 Host 可选”语义，CI 失败。
+
+### 3.3 守卫资产落地状态（Closed）
+1. 已落地 `tools/ci/architecture_doc_consistency_guards.sh`。
+2. 已落地 `tools/ci/script_runtime_perf_guards.sh`。
+3. 已落地 `tools/ci/script_runtime_availability_guards.sh`。
+4. 已落地 `tools/ci/script_runtime_resilience_guards.sh`。
 
 ## 4. 基线与差距（与代码现状对照）
 
@@ -232,6 +244,43 @@ public interface IScriptNetworkPolicy
 2. 默认拒绝出站网络，按 `IScriptNetworkPolicy` 放行。
 3. 禁止反射访问平台私有核心服务。
 
+### 9.4 Projection ownership/lifecycle 合同（新增）
+1. Projection 会话必须通过显式 lease 句柄流转，禁止 `actor_id -> context` 反查模型。
+2. 会话推进必须携带 `run_id + step_id + lease_id` 进行陈旧事件对账。
+3. Checkpoint 提交与 lease 完成必须在 Actor 事件处理链路内确认。
+4. 取消与超时只发布内部触发事件，最终状态推进由 Actor 串行处理。
+
+```csharp
+public interface IScriptProjectionSessionPort
+{
+    Task<ProjectionLeaseOpenResult> OpenAsync(ProjectionLeaseOpenRequest request, CancellationToken ct);
+    Task<ProjectionLeaseRenewResult> RenewAsync(string leaseId, string expectedEtag, CancellationToken ct);
+    Task<ProjectionLeaseCloseResult> CompleteAsync(string leaseId, string expectedEtag, CancellationToken ct);
+    Task<ProjectionLeaseCloseResult> AbortAsync(string leaseId, string expectedEtag, string reason, CancellationToken ct);
+}
+
+public interface IScriptProjectionDispatchPort
+{
+    Task<ProjectionDispatchResult> DispatchAsync(
+        string leaseId,
+        string runId,
+        string stepId,
+        string eventTypeUrl,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken ct);
+}
+
+public interface IScriptProjectionCheckpointPort
+{
+    Task<ProjectionCheckpointResult> CommitAsync(
+        string leaseId,
+        string streamId,
+        long eventSequence,
+        string expectedEtag,
+        CancellationToken ct);
+}
+```
+
 ## 10. API 变更设计（含一致性字段）
 
 ### 10.1 Command API
@@ -281,7 +330,7 @@ public interface IScriptNetworkPolicy
 ### WP-5（P1）：Application + API
 1. 新增应用服务（Image/Container/Run）。
 2. 新增 capability endpoint。
-3. 接入默认 host 组合扩展。
+3. 仅接入现有 host 的 capability 组合扩展，不创建独立 Script Host。
 
 ### WP-6（P1）：Projection + Query
 1. 新增 `Aevatar.AI.Script.Projection`。
@@ -291,7 +340,7 @@ public interface IScriptNetworkPolicy
 ### WP-7（P1）：Guards + Tests + SLO
 1. 新增 script 架构守卫与文档一致性守卫。
 2. 新增 replay/adapter/sandbox 合同测试。
-3. 新增性能与可用性验收门槛。
+3. 新增性能、可用性、韧性验收门槛。
 
 ## 12. 文件级变更清单（首批）
 
@@ -303,7 +352,7 @@ public interface IScriptNetworkPolicy
 5. `src/Aevatar.AI.Script.Projection/`
 6. `test/Aevatar.AI.Script.Core.Tests/`
 7. `test/Aevatar.AI.Script.Infrastructure.Tests/`
-8. `test/Aevatar.AI.Script.Host.Api.Tests/`
+8. `test/Aevatar.AI.Script.Hosting.Tests/`
 
 ### 12.2 修改现有装配点
 1. `src/Aevatar.Bootstrap/Hosting/WebApplicationBuilderExtensions.cs`（新增 Script Runtime capability 装配入口）
@@ -312,6 +361,9 @@ public interface IScriptNetworkPolicy
 4. `tools/ci/solution_split_guards.sh`（加入 script 子解）
 5. `tools/ci/solution_split_test_guards.sh`（加入 script 子解测试）
 6. `tools/ci/architecture_doc_consistency_guards.sh`（新增）
+7. `tools/ci/script_runtime_perf_guards.sh`（新增）
+8. `tools/ci/script_runtime_availability_guards.sh`（新增）
+9. `tools/ci/script_runtime_resilience_guards.sh`（新增）
 
 ## 13. 测试与验收矩阵（含性能/可用性）
 
@@ -324,7 +376,7 @@ public interface IScriptNetworkPolicy
 | 稳定性守卫 | `bash tools/ci/test_stability_guards.sh` | 无违规轮询等待 |
 | Script Core | `dotnet test test/Aevatar.AI.Script.Core.Tests/Aevatar.AI.Script.Core.Tests.csproj --nologo` | replay 合同通过 |
 | Script Infra | `dotnet test test/Aevatar.AI.Script.Infrastructure.Tests/Aevatar.AI.Script.Infrastructure.Tests.csproj --nologo` | 编译/沙箱/缓存测试通过 |
-| Script API | `dotnet test test/Aevatar.AI.Script.Host.Api.Tests/Aevatar.AI.Script.Host.Api.Tests.csproj --nologo` | 生命周期 API 测试通过 |
+| Script API | `dotnet test test/Aevatar.AI.Script.Hosting.Tests/Aevatar.AI.Script.Hosting.Tests.csproj --nologo` | capability-only API 生命周期测试通过 |
 | 性能基线 | `bash tools/ci/script_runtime_perf_guards.sh` | P95 `exec start` < 200ms；P95 首 token < 800ms |
 | 可用性基线 | `bash tools/ci/script_runtime_availability_guards.sh` | 30 分钟稳定性场景成功率 >= 99.5% |
 | 故障恢复 | `bash tools/ci/script_runtime_resilience_guards.sh` | 强制 cancel/timeout/actor restart 后状态一致 |
@@ -365,6 +417,8 @@ public interface IScriptNetworkPolicy
 4. 幂等、并发冲突、错误码协议已落地并通过测试。
 5. 沙箱 5 策略接口已落地并通过安全测试。
 6. API、Projection、测试、门禁、SLO 全部达标。
+7. Projection lease/session/checkpoint 端口实现与合同测试达标。
+8. Host 承载策略保持 capability-only，无版本内双承载模式。
 
 ## 18. 执行清单
 - [ ] WP-1 Contracts + Core Skeleton
@@ -376,6 +430,6 @@ public interface IScriptNetworkPolicy
 - [ ] WP-7 Guards + Tests + SLO
 
 ## 19. 当前快照（2026-02-28）
-- 已完成：实施文档修订到 v1.1（修复口径冲突、并发协议、沙箱合同、SLO 验收缺口）。
+- 已完成：实施文档修订到 v1.2（补齐 projection 生命周期合同、Host 策略冻结、4 个 CI 脚本资产落地）。
 - 未完成：代码实施与测试落地。
 - 当前阻塞：无。
