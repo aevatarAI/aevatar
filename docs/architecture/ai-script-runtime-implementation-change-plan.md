@@ -1,11 +1,11 @@
-# AI Script Runtime 架构实施变更文档（Best Implementation v1.2）
+# AI Script Runtime 架构实施变更文档（Best Implementation v1.3）
 
 ## 1. 文档元信息
 - 状态：Planned
-- 版本：v1.2
+- 版本：v1.3
 - 日期：2026-02-28
 - 适用分支：`feat/dynamic-gagent-script-runtime`
-- 目标：在不依赖 `src/workflow/*` 的前提下，落地 Docker 语义对齐的 AI Script Runtime，并复用 `RoleGAgent` 执行内核
+- 目标：在不依赖 `src/workflow/*` 的前提下，落地 Docker + Compose 语义对齐的 AI Script Runtime，复用 `RoleGAgent` 执行内核，并以 Actor 树 + Event Envelope 完成动态编排
 - 上位蓝图：`docs/architecture/dynamic-gagent-csharp-script-runtime-requirements.md`
 
 ## 2. 最终决策（ADR 摘要）
@@ -27,7 +27,7 @@
 4. `Registry`：tag/digest 解析与存储。
 
 ### ADR-4：事实源坚持 Actor 化
-1. `Image/Container/Run` 事实分别由 Actor 持有。
+1. `Image/Compose/Service/Container/Run` 事实分别由 Actor 持有。
 2. 中间层禁止 `id -> context` 事实态映射。
 3. 回调线程只发内部事件，不直接改运行态。
 
@@ -45,11 +45,17 @@
 2. 不创建独立 `Script Host API` 交付面，避免同版本双承载形态分叉。
 3. 若后续需要独立 Host，必须新增 ADR 并在单一版本中明确唯一模式。
 
+### ADR-8：编排策略采用 Script Compose + Actor 树收敛（冻结）
+1. 编排单位为 `Compose Stack`，以声明式 spec 定义服务树。
+2. 运行时由 `desired_generation -> observed_generation` 的 reconcile 流程收敛，不使用命令式串行工作流。
+3. 跨 service/instance 消息统一走 `Event Envelope`，禁止服务间直接持有对方运行态引用。
+
 ## 3. 口径一致性修复（Blocking Fix）
 
 ### 3.1 单一口径
 1. 本文与上位蓝图统一为 `Adapter-only`。
 2. `Native + Adapter` 双模式定义被废弃，不再进入 WBS 与验收矩阵。
+3. 编排层口径统一为 `Compose + Actor Reconcile`，不引入 workflow 依赖。
 
 ### 3.2 文档一致性守卫（新增）
 1. 新增脚本：`tools/ci/architecture_doc_consistency_guards.sh`。
@@ -73,23 +79,30 @@
 4. `GAgentBase<TState>` 事件溯源恢复：`src/Aevatar.Foundation.Core/GAgentBase.TState.cs`。
 
 ### 4.2 当前缺口
-1. 无 `Image/Container/Run` 领域 Actor 与事件。
+1. 无 `Image/Compose/Service/Container/Run` 领域 Actor 与事件。
 2. 无脚本编译、审计、缓存、执行基础设施。
 3. 无 Script Runtime 独立 API 与 Query 模型。
-4. 无 Adapter-only 的强制治理与测试门禁。
+4. 无 Envelope 协议与路由端口。
+5. 无 Adapter-only 的强制治理与测试门禁。
 
 ## 5. 目标架构（To-Be）
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
     API["Script Runtime API"] --> APP["Application Control Plane"]
-    APP --> IMG["ScriptImageCatalogGAgent"]
-    APP --> CTR["ScriptContainerGAgent"]
-    APP --> RUN["ScriptRunGAgent"]
+    APP --> CMP["ScriptComposeStackGAgent"]
+    CMP --> SVC["ScriptComposeServiceGAgent"]
+    SVC --> CTR["ScriptContainerGAgent"]
+    CTR --> RUN["ScriptRunGAgent"]
     CTR --> ROLE["ScriptRoleContainerAgent : RoleGAgent"]
     ROLE --> ADP["ScriptRoleCapabilityAdapter"]
     ADP --> ENT["IScriptRoleEntrypoint"]
+    APP --> IMG["ScriptImageCatalogGAgent"]
+    SVC --> ENV["ScriptEventEnvelope"]
+    ENV --> RUN
     IMG --> EVT["Domain Events"]
+    CMP --> EVT
+    SVC --> EVT
     CTR --> EVT
     RUN --> EVT
     EVT --> PROJ["Unified Projection Pipeline"]
@@ -110,10 +123,45 @@ flowchart LR
 - `ScriptImageDeprecatedEvent`
 - `ScriptImageRevokedEvent`
 
-### 6.2 Container 领域
+### 6.2 Compose Stack 领域
+1. Actor：`ScriptComposeStackGAgent`（一 stack 一 actor）。
+2. 状态：
+- `stack_id`
+- `compose_spec_digest`
+- `desired_generation`
+- `observed_generation`
+- `services[service_name]`
+- `reconcile_status`
+3. 事件：
+- `ScriptComposeAppliedEvent`
+- `ScriptComposeUpRequestedEvent`
+- `ScriptComposeReconcileStartedEvent`
+- `ScriptComposeConvergedEvent`
+- `ScriptComposeDownRequestedEvent`
+- `ScriptComposeFailedEvent`
+
+### 6.3 Compose Service 领域
+1. Actor：`ScriptComposeServiceGAgent`（一 service 一 actor）。
+2. 状态：
+- `stack_id`
+- `service_name`
+- `replicas_desired`
+- `replicas_ready`
+- `depends_on`
+- `rollout_generation`
+- `last_reconcile_result`
+3. 事件：
+- `ScriptComposeServiceScaledEvent`
+- `ScriptComposeServiceInstanceStartedEvent`
+- `ScriptComposeServiceInstanceStoppedEvent`
+- `ScriptComposeServiceRolledOutEvent`
+- `ScriptComposeServiceDependencyBlockedEvent`
+
+### 6.4 Container 领域
 1. Actor：`ScriptContainerGAgent`（一容器一 actor）。
 2. 状态：
 - `container_id`
+- `stack_id/service_name`
 - `image_digest`
 - `runtime_profile`
 - `status`
@@ -125,11 +173,11 @@ flowchart LR
 - `ScriptContainerStoppedEvent`
 - `ScriptContainerDestroyedEvent`
 
-### 6.3 Run 领域
+### 6.5 Run 领域
 1. Actor：`ScriptRunGAgent`（一 run 一 actor）。
 2. 状态：
 - `run_id`
-- `container_id`
+- `stack_id/service_name/container_id`
 - `status`
 - `result/error`
 - `started_at/completed_at`
@@ -149,17 +197,20 @@ flowchart LR
 4. 同 key + 不同请求体返回 `IDEMPOTENCY_PAYLOAD_MISMATCH`。
 
 ### 7.2 乐观并发规范
-1. 对 tag 覆盖、container 状态迁移等写操作必须携带 `If-Match`。
+1. 对 compose apply、tag 覆盖、service scale 等写操作必须携带 `If-Match`。
 2. 版本不匹配返回 `VERSION_CONFLICT`。
 3. 所有状态变更返回新 `ETag`。
 
 ### 7.3 冲突错误码（固定）
 1. `IMAGE_TAG_CONFLICT`
 2. `IMAGE_NOT_PUBLISHED`
-3. `CONTAINER_STATE_CONFLICT`
-4. `RUN_ALREADY_TERMINAL`
-5. `IDEMPOTENCY_PAYLOAD_MISMATCH`
-6. `VERSION_CONFLICT`
+3. `COMPOSE_SPEC_INVALID`
+4. `COMPOSE_GENERATION_CONFLICT`
+5. `SERVICE_DEPENDENCY_NOT_READY`
+6. `CONTAINER_STATE_CONFLICT`
+7. `RUN_ALREADY_TERMINAL`
+8. `IDEMPOTENCY_PAYLOAD_MISMATCH`
+9. `VERSION_CONFLICT`
 
 ### 7.4 必须落地的接口合同
 ```csharp
@@ -177,6 +228,16 @@ public interface IConcurrencyTokenPort
 public interface IImageReferenceResolver
 {
     Task<ImageDigestResolveResult> ResolveAsync(string imageName, string tagOrDigest, CancellationToken ct);
+}
+
+public interface IScriptComposeSpecValidator
+{
+    Task<ComposeSpecValidationResult> ValidateAsync(ScriptComposeSpec spec, CancellationToken ct);
+}
+
+public interface IScriptComposeReconcilePort
+{
+    Task<ComposeReconcileResult> ReconcileAsync(string stackId, long desiredGeneration, CancellationToken ct);
 }
 ```
 
@@ -201,7 +262,7 @@ public interface IImageReferenceResolver
 2. 脚本不得直接操作 `IActorRuntime`。
 3. 所有脚本能力输出必须可序列化并入状态。
 
-## 9. 编译、装载与沙箱技术合同（可执行级）
+## 9. 编译、装载、沙箱与 Envelope 技术合同（可执行级）
 
 ### 9.1 强制接口
 ```csharp
@@ -232,6 +293,21 @@ public interface IScriptNetworkPolicy
 {
     Task<NetworkAccessDecision> AuthorizeAsync(ScriptNetworkRequest request, CancellationToken ct);
 }
+
+public interface IEventEnvelopePublisherPort
+{
+    Task PublishAsync(ScriptEventEnvelope envelope, CancellationToken ct);
+}
+
+public interface IEventEnvelopeSubscriberPort
+{
+    Task<EnvelopeLeaseResult> SubscribeAsync(EnvelopeSubscribeRequest request, CancellationToken ct);
+}
+
+public interface IEventEnvelopeDedupPort
+{
+    Task<EnvelopeDedupResult> CheckAndRecordAsync(string scope, string dedupKey, TimeSpan ttl, CancellationToken ct);
+}
 ```
 
 ### 9.2 装载与卸载硬约束
@@ -244,7 +320,7 @@ public interface IScriptNetworkPolicy
 2. 默认拒绝出站网络，按 `IScriptNetworkPolicy` 放行。
 3. 禁止反射访问平台私有核心服务。
 
-### 9.4 Projection ownership/lifecycle 合同（新增）
+### 9.4 Projection ownership/lifecycle 合同
 1. Projection 会话必须通过显式 lease 句柄流转，禁止 `actor_id -> context` 反查模型。
 2. 会话推进必须携带 `run_id + step_id + lease_id` 进行陈旧事件对账。
 3. Checkpoint 提交与 lease 完成必须在 Actor 事件处理链路内确认。
@@ -281,17 +357,26 @@ public interface IScriptProjectionCheckpointPort
 }
 ```
 
+### 9.5 Event Envelope 硬约束
+1. Envelope 必须包含 `trace_id/correlation_id/causation_id/dedup_key/type_url`。
+2. Envelope 路由目标必须使用 `stack_id + service_name + instance_selector`，禁止运行时反查上下文字典。
+3. 过期或陈旧 envelope 必须在 Actor 内显式拒绝，并记录拒绝事件。
+4. 重试仅通过内部触发事件推进，不允许回调线程直接写状态。
+
 ## 10. API 变更设计（含一致性字段）
 
 ### 10.1 Command API
 1. `POST /api/script-runtime/images:build`
 2. `POST /api/script-runtime/images/{imageName}/tags/{tag}:publish`
-3. `POST /api/script-runtime/containers:create`
-4. `POST /api/script-runtime/containers/{containerId}:start`
-5. `POST /api/script-runtime/containers/{containerId}/exec`
-6. `POST /api/script-runtime/runs/{runId}:cancel`
-7. `POST /api/script-runtime/containers/{containerId}:stop`
-8. `DELETE /api/script-runtime/containers/{containerId}`
+3. `POST /api/script-runtime/compose:apply`
+4. `POST /api/script-runtime/compose/{stackId}:up`
+5. `POST /api/script-runtime/compose/{stackId}:down`
+6. `POST /api/script-runtime/compose/{stackId}/services/{serviceName}:scale`
+7. `POST /api/script-runtime/compose/{stackId}/services/{serviceName}:rollout`
+8. `POST /api/script-runtime/containers/{containerId}/exec`
+9. `POST /api/script-runtime/runs/{runId}:cancel`
+10. `POST /api/script-runtime/containers/{containerId}:stop`
+11. `DELETE /api/script-runtime/containers/{containerId}`
 
 ### 10.2 一致性 Header 约定
 1. 所有写接口：`Idempotency-Key` 必填。
@@ -301,16 +386,19 @@ public interface IScriptProjectionCheckpointPort
 ### 10.3 Query API
 1. `GET /api/script-runtime/images/{imageName}/tags/{tag}`
 2. `GET /api/script-runtime/images/{imageName}/digests/{digest}`
-3. `GET /api/script-runtime/containers/{containerId}`
-4. `GET /api/script-runtime/containers/{containerId}/runs`
-5. `GET /api/script-runtime/runs/{runId}`
+3. `GET /api/script-runtime/compose/{stackId}`
+4. `GET /api/script-runtime/compose/{stackId}/services`
+5. `GET /api/script-runtime/compose/{stackId}/events`
+6. `GET /api/script-runtime/containers/{containerId}`
+7. `GET /api/script-runtime/containers/{containerId}/runs`
+8. `GET /api/script-runtime/runs/{runId}`
 
 ## 11. 分阶段实施包（WBS）
 
 ### WP-1（P0）：Contracts + Core Skeleton
 1. 新建 `Abstractions/Core`。
-2. 落地 Image/Container/Run 事件与状态。
-3. 新建三类 GAgent 骨架。
+2. 落地 Image/Compose/Service/Container/Run 事件与状态。
+3. 新建核心 GAgent 骨架。
 
 ### WP-2（P0）：RoleGAgent 复用 + Adapter-only
 1. 新增 `ScriptRoleContainerAgent : RoleGAgent`。
@@ -327,19 +415,24 @@ public interface IScriptProjectionCheckpointPort
 2. 落地 5 个沙箱策略接口与默认实现。
 3. 落地 registry 与 digest 解析。
 
-### WP-5（P1）：Application + API
-1. 新增应用服务（Image/Container/Run）。
-2. 新增 capability endpoint。
+### WP-5（P0）：Compose Reconcile + Envelope
+1. 新增 `ScriptComposeStackGAgent` 与 `ScriptComposeServiceGAgent`。
+2. 落地 `IScriptComposeSpecValidator` 与 `IScriptComposeReconcilePort`。
+3. 落地 Envelope 发布/订阅/去重端口与默认实现。
+
+### WP-6（P1）：Application + API
+1. 新增应用服务（Image/Compose/Container/Run）。
+2. 新增 compose lifecycle endpoint。
 3. 仅接入现有 host 的 capability 组合扩展，不创建独立 Script Host。
 
-### WP-6（P1）：Projection + Query
+### WP-7（P1）：Projection + Query
 1. 新增 `Aevatar.AI.Script.Projection`。
 2. 落地 reducer/projector/read model。
 3. 接入统一 projection pipeline。
 
-### WP-7（P1）：Guards + Tests + SLO
+### WP-8（P1）：Guards + Tests + SLO
 1. 新增 script 架构守卫与文档一致性守卫。
-2. 新增 replay/adapter/sandbox 合同测试。
+2. 新增 replay/adapter/sandbox/compose/envelope 合同测试。
 3. 新增性能、可用性、韧性验收门槛。
 
 ## 12. 文件级变更清单（首批）
@@ -347,12 +440,14 @@ public interface IScriptProjectionCheckpointPort
 ### 12.1 新增目录
 1. `src/Aevatar.AI.Script.Abstractions/`
 2. `src/Aevatar.AI.Script.Core/`
-3. `src/Aevatar.AI.Script.Application/`
-4. `src/Aevatar.AI.Script.Infrastructure/`
-5. `src/Aevatar.AI.Script.Projection/`
-6. `test/Aevatar.AI.Script.Core.Tests/`
-7. `test/Aevatar.AI.Script.Infrastructure.Tests/`
-8. `test/Aevatar.AI.Script.Hosting.Tests/`
+3. `src/Aevatar.AI.Script.Compose/`
+4. `src/Aevatar.AI.Script.Application/`
+5. `src/Aevatar.AI.Script.Infrastructure/`
+6. `src/Aevatar.AI.Script.Projection/`
+7. `test/Aevatar.AI.Script.Compose.Tests/`
+8. `test/Aevatar.AI.Script.Core.Tests/`
+9. `test/Aevatar.AI.Script.Infrastructure.Tests/`
+10. `test/Aevatar.AI.Script.Hosting.Tests/`
 
 ### 12.2 修改现有装配点
 1. `src/Aevatar.Bootstrap/Hosting/WebApplicationBuilderExtensions.cs`（新增 Script Runtime capability 装配入口）
@@ -370,16 +465,17 @@ public interface IScriptProjectionCheckpointPort
 | 目标 | 命令 | 通过标准 |
 |---|---|---|
 | 架构守卫 | `bash tools/ci/architecture_guards.sh` | 无 script->workflow 依赖、无中间层事实态映射 |
-| 文档一致性守卫 | `bash tools/ci/architecture_doc_consistency_guards.sh` | `Adapter-only` 口径无冲突 |
+| 文档一致性守卫 | `bash tools/ci/architecture_doc_consistency_guards.sh` | `Adapter-only`、Compose、Host 策略口径无冲突 |
 | 分片构建 | `bash tools/ci/solution_split_guards.sh` | 含 script 子解构建通过 |
 | 分片测试 | `bash tools/ci/solution_split_test_guards.sh` | 含 script 子解测试通过 |
 | 稳定性守卫 | `bash tools/ci/test_stability_guards.sh` | 无违规轮询等待 |
+| Script Compose | `dotnet test test/Aevatar.AI.Script.Compose.Tests/Aevatar.AI.Script.Compose.Tests.csproj --nologo` | reconcile/envelope 合同通过 |
 | Script Core | `dotnet test test/Aevatar.AI.Script.Core.Tests/Aevatar.AI.Script.Core.Tests.csproj --nologo` | replay 合同通过 |
 | Script Infra | `dotnet test test/Aevatar.AI.Script.Infrastructure.Tests/Aevatar.AI.Script.Infrastructure.Tests.csproj --nologo` | 编译/沙箱/缓存测试通过 |
-| Script API | `dotnet test test/Aevatar.AI.Script.Hosting.Tests/Aevatar.AI.Script.Hosting.Tests.csproj --nologo` | capability-only API 生命周期测试通过 |
+| Script API | `dotnet test test/Aevatar.AI.Script.Hosting.Tests/Aevatar.AI.Script.Hosting.Tests.csproj --nologo` | compose + lifecycle API 测试通过 |
 | 性能基线 | `bash tools/ci/script_runtime_perf_guards.sh` | P95 `exec start` < 200ms；P95 首 token < 800ms |
 | 可用性基线 | `bash tools/ci/script_runtime_availability_guards.sh` | 30 分钟稳定性场景成功率 >= 99.5% |
-| 故障恢复 | `bash tools/ci/script_runtime_resilience_guards.sh` | 强制 cancel/timeout/actor restart 后状态一致 |
+| 故障恢复 | `bash tools/ci/script_runtime_resilience_guards.sh` | 强制 cancel/timeout/restart 后状态一致 |
 
 ## 14. SLO 与容量门槛（上线前必须达标）
 
@@ -388,14 +484,16 @@ public interface IScriptProjectionCheckpointPort
 | `exec_start_latency_p95` | < 200ms |
 | `first_token_latency_p95` | < 800ms |
 | `run_success_rate_30m` | >= 99.5% |
+| `compose_reconcile_latency_p95` | < 2s |
+| `envelope_delivery_success_rate_30m` | >= 99.9% |
 | `container_reclaim_time_p95` | < 5s |
 | `script_alc_unload_success_rate` | >= 99.9% |
 
 ## 15. 发布与迁移策略
-1. 阶段 1（影子发布）：开放 image build/publish + 只读 query。
-2. 阶段 2（受控运行）：开放 container create/start/exec，仅 allowlist 租户。
+1. 阶段 1（影子发布）：开放 image build/publish + compose apply + 只读 query。
+2. 阶段 2（受控运行）：开放 compose up/scale/exec，仅 allowlist 租户。
 3. 阶段 3（全面放开）：默认 capability 打开并发布迁移指南。
-4. 回滚策略：按 capability 开关禁用写接口；保留 image/container/run 审计事实。
+4. 回滚策略：按 capability 开关禁用写接口；保留 image/compose/container/run 审计事实。
 
 ## 16. 风险与缓解
 1. 风险：脚本越权。
@@ -407,29 +505,34 @@ public interface IScriptProjectionCheckpointPort
 3. 风险：adapter 行为漂移。
 - 缓解：`IRoleAgent` 合同测试 + golden snapshot 回归。
 
-4. 风险：容器泄漏。
+4. 风险：Envelope 乱序或重复导致错误推进。
+- 缓解：`dedup_key + causation_id + generation` 对账，Actor 内拒绝陈旧 envelope。
+
+5. 风险：容器泄漏。
 - 缓解：ALC 可回收 + 强制卸载 + 回收时间门槛。
 
 ## 17. 完成定义（DoD）
 1. Script Runtime 不依赖 workflow 即可独立运行。
 2. 执行面复用 `RoleGAgent` 且脚本仅通过 Adapter 注入能力。
-3. Image/Container/Run 事实可回放恢复。
-4. 幂等、并发冲突、错误码协议已落地并通过测试。
-5. 沙箱 5 策略接口已落地并通过安全测试。
-6. API、Projection、测试、门禁、SLO 全部达标。
-7. Projection lease/session/checkpoint 端口实现与合同测试达标。
-8. Host 承载策略保持 capability-only，无版本内双承载模式。
+3. Compose actor 树可从事件流回放恢复。
+4. Compose `desired_generation -> observed_generation` 收敛可验证。
+5. 幂等、并发冲突、错误码协议已落地并通过测试。
+6. Envelope 协议、去重与路由合同已落地并通过测试。
+7. 沙箱 5 策略接口已落地并通过安全测试。
+8. API、Projection、测试、门禁、SLO 全部达标。
+9. Host 承载策略保持 capability-only，无版本内双承载模式。
 
 ## 18. 执行清单
 - [ ] WP-1 Contracts + Core Skeleton
 - [ ] WP-2 RoleGAgent Reuse + Adapter-only
 - [ ] WP-3 Consistency Protocol
 - [ ] WP-4 Compiler + Sandbox + Registry
-- [ ] WP-5 Application + API
-- [ ] WP-6 Projection + Query
-- [ ] WP-7 Guards + Tests + SLO
+- [ ] WP-5 Compose Reconcile + Envelope
+- [ ] WP-6 Application + API
+- [ ] WP-7 Projection + Query
+- [ ] WP-8 Guards + Tests + SLO
 
 ## 19. 当前快照（2026-02-28）
-- 已完成：实施文档修订到 v1.2（补齐 projection 生命周期合同、Host 策略冻结、4 个 CI 脚本资产落地）。
+- 已完成：实施文档修订到 v1.3（补齐 Compose 编排模型、Actor 树收敛机制、Event Envelope 合同、API/WBS/SLO 同步）。
 - 未完成：代码实施与测试落地。
 - 当前阻塞：无。
