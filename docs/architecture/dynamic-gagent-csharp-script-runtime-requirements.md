@@ -68,10 +68,10 @@
 2. `AIGAgentBase<TState>`：LLM、Tool、History、Hook、Middleware 能力组合。
 3. `ILLMProviderFactory` 与 `IAgentToolSource`：Provider 与 Tool 生态接入。
 
-### 6.2 兼容等级（推荐）
-1. Native 模式：脚本导出类型直接实现 `IRoleAgent`（可继承 `AIGAgentBase<TState>`）。
-2. Adapter 模式：脚本导出 `IScriptRoleAgentEntrypoint`，由平台适配为 `IRoleAgent`。
-3. 发布门禁：两种模式至少满足一种，否则 image 不可发布。
+### 6.2 兼容等级（冻结）
+1. Adapter-only：脚本仅允许导出 `IScriptRoleAgentEntrypoint`，由平台适配为 `IRoleAgent`。
+2. 平台宿主（`ScriptRoleContainerAgent : RoleGAgent`）负责承接 `AIGAgentBase` 能力，不对脚本开放继承路径。
+3. 发布门禁：未通过 Adapter 能力合同测试的 image 禁止发布。
 
 ## 7. 目标架构（Docker 对齐）
 ```mermaid
@@ -184,7 +184,7 @@ flowchart LR
 | R-CTR-01 | Container 生命周期完整 | create/start/stop/destroy 事件闭环 | Planned | 缺 container actor |
 | R-CTR-02 | Digest 绑定运行 | 运行容器必须绑定 digest | Planned | 缺 pull policy |
 | R-RUN-01 | Exec 可控 | cancel/timeout/retry 事件化生效 | Planned | 缺 run actor |
-| R-AI-01 | IRoleAgent 兼容 | Native/Adapter 至少一种达标 | Planned | 缺适配层 |
+| R-AI-01 | IRoleAgent 兼容 | Adapter-only 合同达标（脚本不可直接实现 IRoleAgent） | Planned | 缺适配层 |
 | R-IOC-01 | 子容器隔离 | 跨容器服务无污染 | Planned | 缺容器工厂 |
 | R-SEC-01 | 安全白名单 | 非白名单 API 可阻断发布或运行 | Planned | 缺审计器 |
 | R-PROJ-01 | 统一投影 | Image/Container/Run 事件可查询 | Planned | 缺 reducer/projector |
@@ -201,8 +201,8 @@ flowchart LR
 - DoD：create/start/exec/stop/destroy 可回放恢复。
 
 ### WP-3：IRoleAgent 兼容层（P0）
-- 交付：Native + Adapter 双模式契约。
-- DoD：脚本 agent 可被平台以 `IRoleAgent` 能力调用。
+- 交付：Adapter-only 契约（`IScriptRoleAgentEntrypoint -> ScriptRoleCapabilityAdapter -> IRoleAgent`）。
+- DoD：脚本 agent 能力可被平台以 `IRoleAgent` 语义稳定调用。
 
 ### WP-4：Script Runtime + IOC（P0）
 - 交付：编译器、沙箱、子容器工厂、缓存。
