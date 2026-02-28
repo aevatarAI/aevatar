@@ -1,11 +1,11 @@
-# AI Script Runtime 架构实施变更文档（Best Implementation v1.3）
+# AI Script Runtime 架构实施变更文档（Best Implementation v1.4）
 
 ## 1. 文档元信息
 - 状态：Planned
-- 版本：v1.3
+- 版本：v1.4
 - 日期：2026-02-28
 - 适用分支：`feat/dynamic-gagent-script-runtime`
-- 目标：在不依赖 `src/workflow/*` 的前提下，落地 Docker + Compose 语义对齐的 AI Script Runtime，复用 `RoleGAgent` 执行内核，并以 Actor 树 + Event Envelope 完成动态编排
+- 目标：在不依赖 `src/workflow/*` 的前提下，落地 Docker + Compose + Autonomous Build 语义对齐的 AI Script Runtime，复用 `RoleGAgent` 执行内核，并以 Actor 树 + Event Envelope 完成动态编排
 - 上位蓝图：`docs/architecture/dynamic-gagent-csharp-script-runtime-requirements.md`
 
 ## 2. 最终决策（ADR 摘要）
@@ -50,12 +50,23 @@
 2. 运行时由 `desired_generation -> observed_generation` 的 reconcile 流程收敛，不使用命令式串行工作流。
 3. 跨 service/instance 消息统一走 `Event Envelope`，禁止服务间直接持有对方运行态引用。
 
+### ADR-9：Autonomous Build Operator 受策略门禁约束（冻结）
+1. 智能体可发起 `Plan -> Validate -> Approve -> Build -> Publish -> Deploy` 全流程。
+2. 未通过策略校验的 build job 禁止进入 compose apply。
+3. build 结果必须产出不可变 `image digest`，不得以 tag 直接发布到运行面。
+
+### ADR-10：服务运行模式采用 daemon/event/hybrid 三态（冻结）
+1. 每个 compose service 必须显式声明 `service_mode`。
+2. daemon 模式负责长期对外服务，event 模式负责事件触发执行，hybrid 同时具备两种能力。
+3. 模式切换必须通过 generation 变更收敛，不允许进程内直接热改事实态。
+
 ## 3. 口径一致性修复（Blocking Fix）
 
 ### 3.1 单一口径
 1. 本文与上位蓝图统一为 `Adapter-only`。
 2. `Native + Adapter` 双模式定义被废弃，不再进入 WBS 与验收矩阵。
 3. 编排层口径统一为 `Compose + Actor Reconcile`，不引入 workflow 依赖。
+4. 服务运行口径统一为 `daemon/event/hybrid`，自构建流程统一为 `build job` 闭环。
 
 ### 3.2 文档一致性守卫（新增）
 1. 新增脚本：`tools/ci/architecture_doc_consistency_guards.sh`。
@@ -83,30 +94,70 @@
 2. 无脚本编译、审计、缓存、执行基础设施。
 3. 无 Script Runtime 独立 API 与 Query 模型。
 4. 无 Envelope 协议与路由端口。
-5. 无 Adapter-only 的强制治理与测试门禁。
+5. 无 Autonomous Build Operator（plan/validate/approve/build/deploy）端口与事件。
+6. 无 daemon/event/hybrid 运行模式治理与验收。
+7. 无 Adapter-only 的强制治理与测试门禁。
 
 ## 5. 目标架构（To-Be）
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
     API["Script Runtime API"] --> APP["Application Control Plane"]
-    APP --> CMP["ScriptComposeStackGAgent"]
+    APP --> BLD["ScriptBuildJobGAgent"]
+    BLD --> POL["Build + ServiceMode Policy"]
+    BLD --> IMG["ScriptImageCatalogGAgent"]
+    BLD --> CMP["ScriptComposeStackGAgent"]
     CMP --> SVC["ScriptComposeServiceGAgent"]
+    SVC --> MOD["Service Mode: Daemon/Event/Hybrid"]
+    MOD --> PUB["Public Endpoint"]
+    MOD --> SUB["Event Subscription"]
     SVC --> CTR["ScriptContainerGAgent"]
     CTR --> RUN["ScriptRunGAgent"]
     CTR --> ROLE["ScriptRoleContainerAgent : RoleGAgent"]
     ROLE --> ADP["ScriptRoleCapabilityAdapter"]
     ADP --> ENT["IScriptRoleEntrypoint"]
-    APP --> IMG["ScriptImageCatalogGAgent"]
     SVC --> ENV["ScriptEventEnvelope"]
+    SUB --> ENV
     ENV --> RUN
     IMG --> EVT["Domain Events"]
+    BLD --> EVT
     CMP --> EVT
     SVC --> EVT
     CTR --> EVT
     RUN --> EVT
     EVT --> PROJ["Unified Projection Pipeline"]
     PROJ --> RM["ReadModels / Query"]
+```
+
+### 5.1 主链路时序（Autonomous Build + Reconcile）
+```mermaid
+%%{init: {"maxTextSize": 100000, "sequence": {"useMaxWidth": false, "actorMargin": 20, "messageMargin": 12, "diagramMarginX": 8, "diagramMarginY": 8}, "themeVariables": {"fontSize": "10px"}}}%%
+sequenceDiagram
+    participant AG as "Agent Builder"
+    participant API as "Runtime API"
+    participant BJ as "ScriptBuildJobGAgent"
+    participant PL as "Policy Port"
+    participant RG as "Registry"
+    participant ST as "ScriptComposeStackGAgent"
+    participant SV as "ScriptComposeServiceGAgent"
+    participant EB as "Envelope Bus"
+    participant RN as "ScriptRunGAgent"
+
+    AG->>API: "POST /build-jobs:plan"
+    API->>BJ: "Submit Build Plan"
+    BJ->>PL: "Validate Plan + Service Mode"
+    PL-->>BJ: "Decision"
+    alt "Approved"
+        BJ->>RG: "Publish Digest"
+        BJ->>ST: "Apply Compose Generation"
+        ST->>SV: "Reconcile"
+        SV->>SV: "Activate daemon/event/hybrid"
+        SV->>EB: "Subscribe Routes"
+        EB->>RN: "Deliver Envelope"
+        RN-->>EB: "Ack + Result"
+    else "Rejected"
+        BJ-->>API: "BUILD_POLICY_REJECTED"
+    end
 ```
 
 ## 6. 领域模型与权威状态归属
@@ -188,6 +239,29 @@ flowchart LR
 - `ScriptRunCanceledEvent`
 - `ScriptRunTimedOutEvent`
 
+### 6.6 Build Job 领域
+1. Actor：`ScriptBuildJobGAgent`（一 build job 一 actor）。
+2. 状态：
+- `build_job_id`
+- `requested_by_agent_id`
+- `target_stack_id/service_name`
+- `build_plan_digest`
+- `policy_decision`
+- `result_image_digest`
+- `status`
+3. 事件：
+- `ScriptBuildPlanSubmittedEvent`
+- `ScriptBuildPolicyValidatedEvent`
+- `ScriptBuildApprovedEvent`
+- `ScriptBuildPublishedEvent`
+- `ScriptBuildRolledBackEvent`
+
+### 6.7 Service Mode 运行约束
+1. `Daemon`：service actor 维持最小副本并对外提供 endpoint。
+2. `Event`：service actor 仅在 envelope 到达后触发 run。
+3. `Hybrid`：同一 service 同时维护 endpoint 与 event subscription。
+4. 所有模式统一由 service actor 事实态驱动，不允许中间层进程内状态补丁。
+
 ## 7. 一致性、幂等与冲突协议（接口级）
 
 ### 7.1 幂等键规范
@@ -207,10 +281,13 @@ flowchart LR
 3. `COMPOSE_SPEC_INVALID`
 4. `COMPOSE_GENERATION_CONFLICT`
 5. `SERVICE_DEPENDENCY_NOT_READY`
-6. `CONTAINER_STATE_CONFLICT`
-7. `RUN_ALREADY_TERMINAL`
-8. `IDEMPOTENCY_PAYLOAD_MISMATCH`
-9. `VERSION_CONFLICT`
+6. `SERVICE_MODE_CONFLICT`
+7. `BUILD_POLICY_REJECTED`
+8. `BUILD_APPROVAL_REQUIRED`
+9. `CONTAINER_STATE_CONFLICT`
+10. `RUN_ALREADY_TERMINAL`
+11. `IDEMPOTENCY_PAYLOAD_MISMATCH`
+12. `VERSION_CONFLICT`
 
 ### 7.4 必须落地的接口合同
 ```csharp
@@ -238,6 +315,21 @@ public interface IScriptComposeSpecValidator
 public interface IScriptComposeReconcilePort
 {
     Task<ComposeReconcileResult> ReconcileAsync(string stackId, long desiredGeneration, CancellationToken ct);
+}
+
+public interface IAgentBuildPlanPort
+{
+    Task<BuildPlanResult> PlanAsync(BuildPlanRequest request, CancellationToken ct);
+}
+
+public interface IAgentBuildPolicyPort
+{
+    Task<BuildPolicyDecision> ValidateAsync(BuildPolicyRequest request, CancellationToken ct);
+}
+
+public interface IAgentBuildExecutionPort
+{
+    Task<BuildExecutionResult> ExecuteAsync(BuildExecutionRequest request, CancellationToken ct);
 }
 ```
 
@@ -363,20 +455,43 @@ public interface IScriptProjectionCheckpointPort
 3. 过期或陈旧 envelope 必须在 Actor 内显式拒绝，并记录拒绝事件。
 4. 重试仅通过内部触发事件推进，不允许回调线程直接写状态。
 
+### 9.6 Service Mode 与 Autonomous Build 合同
+1. service mode 切换必须通过 compose generation 更新触发，不允许直接修改运行态。
+2. daemon/hybrid 模式必须声明健康检查与最小副本门槛。
+3. event/hybrid 模式必须声明 subscription 与并发上限。
+4. build job 必须在策略通过后方可执行 publish/deploy。
+
+```csharp
+public interface IServiceModePolicyPort
+{
+    Task<ServiceModeDecision> ValidateAsync(ServiceModePolicyRequest request, CancellationToken ct);
+}
+
+public interface IBuildApprovalPort
+{
+    Task<BuildApprovalDecision> DecideAsync(BuildApprovalRequest request, CancellationToken ct);
+}
+```
+
 ## 10. API 变更设计（含一致性字段）
 
 ### 10.1 Command API
 1. `POST /api/script-runtime/images:build`
 2. `POST /api/script-runtime/images/{imageName}/tags/{tag}:publish`
-3. `POST /api/script-runtime/compose:apply`
-4. `POST /api/script-runtime/compose/{stackId}:up`
-5. `POST /api/script-runtime/compose/{stackId}:down`
-6. `POST /api/script-runtime/compose/{stackId}/services/{serviceName}:scale`
-7. `POST /api/script-runtime/compose/{stackId}/services/{serviceName}:rollout`
-8. `POST /api/script-runtime/containers/{containerId}/exec`
-9. `POST /api/script-runtime/runs/{runId}:cancel`
-10. `POST /api/script-runtime/containers/{containerId}:stop`
-11. `DELETE /api/script-runtime/containers/{containerId}`
+3. `POST /api/script-runtime/build-jobs:plan`
+4. `POST /api/script-runtime/build-jobs/{buildJobId}:validate`
+5. `POST /api/script-runtime/build-jobs/{buildJobId}:approve`
+6. `POST /api/script-runtime/build-jobs/{buildJobId}:execute`
+7. `POST /api/script-runtime/build-jobs/{buildJobId}:rollback`
+8. `POST /api/script-runtime/compose:apply`
+9. `POST /api/script-runtime/compose/{stackId}:up`
+10. `POST /api/script-runtime/compose/{stackId}:down`
+11. `POST /api/script-runtime/compose/{stackId}/services/{serviceName}:scale`
+12. `POST /api/script-runtime/compose/{stackId}/services/{serviceName}:rollout`
+13. `POST /api/script-runtime/containers/{containerId}/exec`
+14. `POST /api/script-runtime/runs/{runId}:cancel`
+15. `POST /api/script-runtime/containers/{containerId}:stop`
+16. `DELETE /api/script-runtime/containers/{containerId}`
 
 ### 10.2 一致性 Header 约定
 1. 所有写接口：`Idempotency-Key` 必填。
@@ -389,15 +504,17 @@ public interface IScriptProjectionCheckpointPort
 3. `GET /api/script-runtime/compose/{stackId}`
 4. `GET /api/script-runtime/compose/{stackId}/services`
 5. `GET /api/script-runtime/compose/{stackId}/events`
-6. `GET /api/script-runtime/containers/{containerId}`
-7. `GET /api/script-runtime/containers/{containerId}/runs`
-8. `GET /api/script-runtime/runs/{runId}`
+6. `GET /api/script-runtime/build-jobs/{buildJobId}`
+7. `GET /api/script-runtime/build-jobs`
+8. `GET /api/script-runtime/containers/{containerId}`
+9. `GET /api/script-runtime/containers/{containerId}/runs`
+10. `GET /api/script-runtime/runs/{runId}`
 
 ## 11. 分阶段实施包（WBS）
 
 ### WP-1（P0）：Contracts + Core Skeleton
 1. 新建 `Abstractions/Core`。
-2. 落地 Image/Compose/Service/Container/Run 事件与状态。
+2. 落地 Image/BuildJob/Compose/Service/Container/Run 事件与状态。
 3. 新建核心 GAgent 骨架。
 
 ### WP-2（P0）：RoleGAgent 复用 + Adapter-only
@@ -420,19 +537,24 @@ public interface IScriptProjectionCheckpointPort
 2. 落地 `IScriptComposeSpecValidator` 与 `IScriptComposeReconcilePort`。
 3. 落地 Envelope 发布/订阅/去重端口与默认实现。
 
-### WP-6（P1）：Application + API
-1. 新增应用服务（Image/Compose/Container/Run）。
-2. 新增 compose lifecycle endpoint。
+### WP-6（P0）：Autonomous Build Operator
+1. 新增 `ScriptBuildJobGAgent` 与 build job 生命周期事件。
+2. 落地 `IAgentBuildPlanPort/IAgentBuildPolicyPort/IAgentBuildExecutionPort`。
+3. 落地 `IServiceModePolicyPort/IBuildApprovalPort` 并串接自动/人工批准分流。
+
+### WP-7（P1）：Application + API
+1. 新增应用服务（Image/BuildJob/Compose/Container/Run）。
+2. 新增 build-job + compose lifecycle endpoint。
 3. 仅接入现有 host 的 capability 组合扩展，不创建独立 Script Host。
 
-### WP-7（P1）：Projection + Query
+### WP-8（P1）：Projection + Query
 1. 新增 `Aevatar.AI.Script.Projection`。
 2. 落地 reducer/projector/read model。
 3. 接入统一 projection pipeline。
 
-### WP-8（P1）：Guards + Tests + SLO
+### WP-9（P1）：Guards + Tests + SLO
 1. 新增 script 架构守卫与文档一致性守卫。
-2. 新增 replay/adapter/sandbox/compose/envelope 合同测试。
+2. 新增 replay/adapter/sandbox/build/compose/envelope 合同测试。
 3. 新增性能、可用性、韧性验收门槛。
 
 ## 12. 文件级变更清单（首批）
@@ -440,14 +562,16 @@ public interface IScriptProjectionCheckpointPort
 ### 12.1 新增目录
 1. `src/Aevatar.AI.Script.Abstractions/`
 2. `src/Aevatar.AI.Script.Core/`
-3. `src/Aevatar.AI.Script.Compose/`
-4. `src/Aevatar.AI.Script.Application/`
-5. `src/Aevatar.AI.Script.Infrastructure/`
-6. `src/Aevatar.AI.Script.Projection/`
-7. `test/Aevatar.AI.Script.Compose.Tests/`
-8. `test/Aevatar.AI.Script.Core.Tests/`
-9. `test/Aevatar.AI.Script.Infrastructure.Tests/`
-10. `test/Aevatar.AI.Script.Hosting.Tests/`
+3. `src/Aevatar.AI.Script.Build/`
+4. `src/Aevatar.AI.Script.Compose/`
+5. `src/Aevatar.AI.Script.Application/`
+6. `src/Aevatar.AI.Script.Infrastructure/`
+7. `src/Aevatar.AI.Script.Projection/`
+8. `test/Aevatar.AI.Script.Build.Tests/`
+9. `test/Aevatar.AI.Script.Compose.Tests/`
+10. `test/Aevatar.AI.Script.Core.Tests/`
+11. `test/Aevatar.AI.Script.Infrastructure.Tests/`
+12. `test/Aevatar.AI.Script.Hosting.Tests/`
 
 ### 12.2 修改现有装配点
 1. `src/Aevatar.Bootstrap/Hosting/WebApplicationBuilderExtensions.cs`（新增 Script Runtime capability 装配入口）
@@ -469,10 +593,11 @@ public interface IScriptProjectionCheckpointPort
 | 分片构建 | `bash tools/ci/solution_split_guards.sh` | 含 script 子解构建通过 |
 | 分片测试 | `bash tools/ci/solution_split_test_guards.sh` | 含 script 子解测试通过 |
 | 稳定性守卫 | `bash tools/ci/test_stability_guards.sh` | 无违规轮询等待 |
+| Script Build | `dotnet test test/Aevatar.AI.Script.Build.Tests/Aevatar.AI.Script.Build.Tests.csproj --nologo` | build plan/policy/approval 合同通过 |
 | Script Compose | `dotnet test test/Aevatar.AI.Script.Compose.Tests/Aevatar.AI.Script.Compose.Tests.csproj --nologo` | reconcile/envelope 合同通过 |
 | Script Core | `dotnet test test/Aevatar.AI.Script.Core.Tests/Aevatar.AI.Script.Core.Tests.csproj --nologo` | replay 合同通过 |
 | Script Infra | `dotnet test test/Aevatar.AI.Script.Infrastructure.Tests/Aevatar.AI.Script.Infrastructure.Tests.csproj --nologo` | 编译/沙箱/缓存测试通过 |
-| Script API | `dotnet test test/Aevatar.AI.Script.Hosting.Tests/Aevatar.AI.Script.Hosting.Tests.csproj --nologo` | compose + lifecycle API 测试通过 |
+| Script API | `dotnet test test/Aevatar.AI.Script.Hosting.Tests/Aevatar.AI.Script.Hosting.Tests.csproj --nologo` | daemon/event/hybrid + compose API 测试通过 |
 | 性能基线 | `bash tools/ci/script_runtime_perf_guards.sh` | P95 `exec start` < 200ms；P95 首 token < 800ms |
 | 可用性基线 | `bash tools/ci/script_runtime_availability_guards.sh` | 30 分钟稳定性场景成功率 >= 99.5% |
 | 故障恢复 | `bash tools/ci/script_runtime_resilience_guards.sh` | 强制 cancel/timeout/restart 后状态一致 |
@@ -484,15 +609,17 @@ public interface IScriptProjectionCheckpointPort
 | `exec_start_latency_p95` | < 200ms |
 | `first_token_latency_p95` | < 800ms |
 | `run_success_rate_30m` | >= 99.5% |
+| `daemon_service_uptime_30m` | >= 99.95% |
+| `event_envelope_ack_latency_p95` | < 300ms |
 | `compose_reconcile_latency_p95` | < 2s |
 | `envelope_delivery_success_rate_30m` | >= 99.9% |
 | `container_reclaim_time_p95` | < 5s |
 | `script_alc_unload_success_rate` | >= 99.9% |
 
 ## 15. 发布与迁移策略
-1. 阶段 1（影子发布）：开放 image build/publish + compose apply + 只读 query。
-2. 阶段 2（受控运行）：开放 compose up/scale/exec，仅 allowlist 租户。
-3. 阶段 3（全面放开）：默认 capability 打开并发布迁移指南。
+1. 阶段 1（影子发布）：开放 image build/publish + build-job plan/validate + compose apply + 只读 query。
+2. 阶段 2（受控运行）：开放 build-job execute + compose up/scale/exec，仅 allowlist 租户。
+3. 阶段 3（全面放开）：开放 autonomous build 自动批准策略，默认 capability 打开并发布迁移指南。
 4. 回滚策略：按 capability 开关禁用写接口；保留 image/compose/container/run 审计事实。
 
 ## 16. 风险与缓解
@@ -508,7 +635,10 @@ public interface IScriptProjectionCheckpointPort
 4. 风险：Envelope 乱序或重复导致错误推进。
 - 缓解：`dedup_key + causation_id + generation` 对账，Actor 内拒绝陈旧 envelope。
 
-5. 风险：容器泄漏。
+5. 风险：智能体自构建误发布高风险变更。
+- 缓解：build plan 风险分级 + 策略门禁 + 自动/人工批准分流 + 一键回滚。
+
+6. 风险：容器泄漏。
 - 缓解：ALC 可回收 + 强制卸载 + 回收时间门槛。
 
 ## 17. 完成定义（DoD）
@@ -516,11 +646,13 @@ public interface IScriptProjectionCheckpointPort
 2. 执行面复用 `RoleGAgent` 且脚本仅通过 Adapter 注入能力。
 3. Compose actor 树可从事件流回放恢复。
 4. Compose `desired_generation -> observed_generation` 收敛可验证。
-5. 幂等、并发冲突、错误码协议已落地并通过测试。
-6. Envelope 协议、去重与路由合同已落地并通过测试。
-7. 沙箱 5 策略接口已落地并通过安全测试。
-8. API、Projection、测试、门禁、SLO 全部达标。
-9. Host 承载策略保持 capability-only，无版本内双承载模式。
+5. Build Job `plan/validate/approve/execute/rollback` 闭环已落地并可审计回放。
+6. daemon/event/hybrid 三种服务模式已落地并通过合同测试。
+7. 幂等、并发冲突、错误码协议已落地并通过测试。
+8. Envelope 协议、去重与路由合同已落地并通过测试。
+9. 沙箱 5 策略接口已落地并通过安全测试。
+10. API、Projection、测试、门禁、SLO 全部达标。
+11. Host 承载策略保持 capability-only，无版本内双承载模式。
 
 ## 18. 执行清单
 - [ ] WP-1 Contracts + Core Skeleton
@@ -528,11 +660,12 @@ public interface IScriptProjectionCheckpointPort
 - [ ] WP-3 Consistency Protocol
 - [ ] WP-4 Compiler + Sandbox + Registry
 - [ ] WP-5 Compose Reconcile + Envelope
-- [ ] WP-6 Application + API
-- [ ] WP-7 Projection + Query
-- [ ] WP-8 Guards + Tests + SLO
+- [ ] WP-6 Autonomous Build Operator
+- [ ] WP-7 Application + API
+- [ ] WP-8 Projection + Query
+- [ ] WP-9 Guards + Tests + SLO
 
 ## 19. 当前快照（2026-02-28）
-- 已完成：实施文档修订到 v1.3（补齐 Compose 编排模型、Actor 树收敛机制、Event Envelope 合同、API/WBS/SLO 同步）。
+- 已完成：实施文档修订到 v1.4（补齐 Compose 编排模型、Autonomous Build 闭环、daemon/event/hybrid 服务模式、Event Envelope 合同、API/WBS/SLO 同步）。
 - 未完成：代码实施与测试落地。
 - 当前阻塞：无。
