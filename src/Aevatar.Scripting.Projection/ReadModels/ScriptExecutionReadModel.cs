@@ -4,6 +4,7 @@ public sealed class ScriptExecutionReadModel : IProjectionReadModel
 {
     public string Id { get; set; } = string.Empty;
     public string ScriptId { get; set; } = string.Empty;
+    public string DefinitionActorId { get; set; } = string.Empty;
     public string Revision { get; set; } = string.Empty;
     public string LastRunId { get; set; } = string.Empty;
     public string LastEventType { get; set; } = string.Empty;

@@ -12,7 +12,7 @@ public class RunScriptCommandAdapterTests
         var adapter = new RunScriptCommandAdapter();
 
         var envelope = adapter.Map(
-            new RunScriptCommand("run-1", "{}", "r1"),
+            new RunScriptCommand("run-1", "{}", "r1", "definition-1"),
             "actor-1");
 
         envelope.Payload.Should().NotBeNull();
@@ -20,5 +20,10 @@ public class RunScriptCommandAdapterTests
         envelope.Direction.Should().Be(EventDirection.Self);
         envelope.PublisherId.Should().Be("scripting.application");
         envelope.TargetActorId.Should().Be("actor-1");
+
+        var payload = envelope.Payload.Unpack<RunScriptRequestedEvent>();
+        payload.RunId.Should().Be("run-1");
+        payload.ScriptRevision.Should().Be("r1");
+        payload.DefinitionActorId.Should().Be("definition-1");
     }
 }

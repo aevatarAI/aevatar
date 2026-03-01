@@ -4,19 +4,20 @@ using Aevatar.Scripting.Projection.ReadModels;
 
 namespace Aevatar.Scripting.Projection.Reducers;
 
-public sealed class ScriptDomainEventCommittedReducer
-    : ScriptEventReducerBase<ScriptDomainEventCommitted>
+public sealed class ScriptRunDomainEventCommittedReducer
+    : ScriptEventReducerBase<ScriptRunDomainEventCommitted>
 {
     protected override bool ReduceTyped(
         ScriptExecutionReadModel readModel,
         ScriptProjectionContext context,
         EventEnvelope envelope,
-        ScriptDomainEventCommitted evt,
+        ScriptRunDomainEventCommitted evt,
         DateTimeOffset now)
     {
         _ = now;
         readModel.Id = context.RootActorId;
-        readModel.ScriptId = string.IsNullOrWhiteSpace(evt.ScriptId) ? context.ScriptId : evt.ScriptId;
+        readModel.ScriptId = context.ScriptId;
+        readModel.DefinitionActorId = evt.DefinitionActorId ?? string.Empty;
         readModel.Revision = evt.ScriptRevision ?? string.Empty;
         readModel.LastRunId = evt.RunId ?? string.Empty;
         readModel.LastEventType = evt.EventType ?? string.Empty;

@@ -21,7 +21,7 @@ public class ScriptExecutionReadModelProjectorTests
         var projector = new ScriptExecutionReadModelProjector(
             dispatcher,
             new FixedProjectionClock(DateTimeOffset.UtcNow),
-            [new ScriptDomainEventCommittedReducer()]);
+            [new ScriptRunDomainEventCommittedReducer()]);
         var context = new ScriptProjectionContext
         {
             ProjectionId = "projection-1",
@@ -32,11 +32,11 @@ public class ScriptExecutionReadModelProjectorTests
         await projector.InitializeAsync(context, CancellationToken.None);
         await projector.ProjectAsync(
             context,
-            Wrap(new ScriptDomainEventCommitted
+            Wrap(new ScriptRunDomainEventCommitted
             {
                 RunId = "run-1",
-                ScriptId = "script-1",
                 ScriptRevision = "rev-1",
+                DefinitionActorId = "definition-1",
                 EventType = "script.run.completed",
                 PayloadJson = "{\"ok\":true}",
             }),
@@ -45,6 +45,7 @@ public class ScriptExecutionReadModelProjectorTests
         var readModel = await dispatcher.GetAsync("script-host-1", CancellationToken.None);
         readModel.Should().NotBeNull();
         readModel!.ScriptId.Should().Be("script-1");
+        readModel.DefinitionActorId.Should().Be("definition-1");
         readModel.Revision.Should().Be("rev-1");
         readModel.LastRunId.Should().Be("run-1");
         readModel.LastEventType.Should().Be("script.run.completed");
@@ -59,7 +60,7 @@ public class ScriptExecutionReadModelProjectorTests
         var projector = new ScriptExecutionReadModelProjector(
             dispatcher,
             new FixedProjectionClock(DateTimeOffset.UtcNow),
-            [new ScriptDomainEventCommittedReducer()]);
+            [new ScriptRunDomainEventCommittedReducer()]);
         var context = new ScriptProjectionContext
         {
             ProjectionId = "projection-2",
@@ -75,6 +76,7 @@ public class ScriptExecutionReadModelProjectorTests
                 RunId = "run-2",
                 InputJson = "{}",
                 ScriptRevision = "rev-2",
+                DefinitionActorId = "definition-2",
             }),
             CancellationToken.None);
 
