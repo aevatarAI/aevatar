@@ -10,13 +10,17 @@ namespace Aevatar.Scripting.Core.Tests.Runtime;
 public class ScriptEvolutionManagerGAgentTests
 {
     [Fact]
-    public async Task Propose_ShouldPromote_WhenPolicyAndValidationPass()
+    public async Task Propose_ShouldPromote_WhenFlowReturnsPromoted()
     {
-        var policyPort = new FakePolicyGatePort(ScriptPolicyGateDecision.Allow);
-        var validationPort = new FakeValidationPort(new ScriptEvolutionValidationReport(true, ["compile-ok"]));
-        var promotionPort = new FakePromotionPort();
+        var flowPort = new FakeEvolutionFlowPort(
+            ScriptEvolutionFlowResult.Promoted(
+                new ScriptEvolutionValidationReport(true, ["compile-ok"]),
+                new ScriptPromotionResult(
+                    DefinitionActorId: "definition-1",
+                    CatalogActorId: "catalog-1",
+                    PromotedRevision: "rev-2")));
 
-        var agent = new ScriptEvolutionManagerGAgent(policyPort, validationPort, promotionPort)
+        var agent = new ScriptEvolutionManagerGAgent(flowPort, new StaticAddressResolver())
         {
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptEvolutionManagerState>(
                 new InMemoryEventStore()),
@@ -35,6 +39,9 @@ public class ScriptEvolutionManagerGAgentTests
             RequestedByActorId = "runtime-1",
         });
 
+        flowPort.ExecutedProposals.Should().ContainSingle();
+        flowPort.ExecutedProposals[0].ProposalId.Should().Be("proposal-1");
+
         agent.State.Proposals.Should().ContainKey("proposal-1");
         var proposal = agent.State.Proposals["proposal-1"];
         proposal.Status.Should().Be("promoted");
@@ -45,19 +52,15 @@ public class ScriptEvolutionManagerGAgentTests
         decision.Should().NotBeNull();
         decision!.Accepted.Should().BeTrue();
         decision.Status.Should().Be("promoted");
-
-        promotionPort.Promotions.Should().ContainSingle();
-        promotionPort.Promotions[0].CandidateRevision.Should().Be("rev-2");
     }
 
     [Fact]
-    public async Task Propose_ShouldReject_WhenPolicyDenied()
+    public async Task Propose_ShouldReject_WhenFlowReturnsPolicyRejected()
     {
-        var policyPort = new FakePolicyGatePort(ScriptPolicyGateDecision.Deny("policy-denied"));
-        var validationPort = new FakeValidationPort(new ScriptEvolutionValidationReport(true, ["compile-ok"]));
-        var promotionPort = new FakePromotionPort();
+        var flowPort = new FakeEvolutionFlowPort(
+            ScriptEvolutionFlowResult.PolicyRejected("policy-denied"));
 
-        var agent = new ScriptEvolutionManagerGAgent(policyPort, validationPort, promotionPort)
+        var agent = new ScriptEvolutionManagerGAgent(flowPort, new StaticAddressResolver())
         {
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptEvolutionManagerState>(
                 new InMemoryEventStore()),
@@ -80,45 +83,20 @@ public class ScriptEvolutionManagerGAgentTests
         var proposal = agent.State.Proposals["proposal-denied"];
         proposal.Status.Should().Be("rejected");
         proposal.FailureReason.Should().Contain("policy-denied");
-
-        promotionPort.Promotions.Should().BeEmpty();
+        proposal.ValidationSucceeded.Should().BeFalse();
     }
 
-    private sealed class FakePolicyGatePort(ScriptPolicyGateDecision decision) : IScriptPolicyGatePort
+    private sealed class FakeEvolutionFlowPort(ScriptEvolutionFlowResult result) : IScriptEvolutionFlowPort
     {
-        public Task<ScriptPolicyGateDecision> EvaluateAsync(ScriptEvolutionProposal proposal, CancellationToken ct)
-        {
-            _ = proposal;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(decision);
-        }
-    }
+        public List<ScriptEvolutionProposal> ExecutedProposals { get; } = [];
 
-    private sealed class FakeValidationPort(ScriptEvolutionValidationReport report) : IScriptValidationPipelinePort
-    {
-        public Task<ScriptEvolutionValidationReport> ValidateAsync(
+        public Task<ScriptEvolutionFlowResult> ExecuteAsync(
             ScriptEvolutionProposal proposal,
             CancellationToken ct)
         {
-            _ = proposal;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(report);
-        }
-    }
-
-    private sealed class FakePromotionPort : IScriptPromotionPort
-    {
-        public List<ScriptPromotionRequest> Promotions { get; } = [];
-
-        public Task<ScriptPromotionResult> PromoteAsync(ScriptPromotionRequest request, CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            Promotions.Add(request);
-            return Task.FromResult(
-                new ScriptPromotionResult(
-                    DefinitionActorId: request.DefinitionActorId,
-                    CatalogActorId: request.CatalogActorId,
-                    PromotedRevision: request.CandidateRevision));
+            ExecutedProposals.Add(proposal);
+            return Task.FromResult(result);
         }
 
         public Task RollbackAsync(ScriptRollbackRequest request, CancellationToken ct)
@@ -127,5 +105,14 @@ public class ScriptEvolutionManagerGAgentTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class StaticAddressResolver : IScriptingActorAddressResolver
+    {
+        public string GetEvolutionManagerActorId() => "script-evolution-manager";
+
+        public string GetCatalogActorId() => "script-catalog";
+
+        public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
     }
 }

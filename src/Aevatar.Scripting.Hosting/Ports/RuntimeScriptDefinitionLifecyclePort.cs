@@ -8,11 +8,15 @@ namespace Aevatar.Scripting.Hosting.Ports;
 public sealed class RuntimeScriptDefinitionLifecyclePort : IScriptDefinitionLifecyclePort
 {
     private readonly IActorRuntime _runtime;
+    private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly UpsertScriptDefinitionCommandAdapter _adapter = new();
 
-    public RuntimeScriptDefinitionLifecyclePort(IActorRuntime runtime)
+    public RuntimeScriptDefinitionLifecyclePort(
+        IActorRuntime runtime,
+        IScriptingActorAddressResolver addressResolver)
     {
-        _runtime = runtime;
+        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }
 
     public async Task<string> UpsertAsync(
@@ -28,7 +32,7 @@ public sealed class RuntimeScriptDefinitionLifecyclePort : IScriptDefinitionLife
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceText);
 
         var actorId = string.IsNullOrWhiteSpace(definitionActorId)
-            ? $"script-definition:{scriptId}"
+            ? _addressResolver.GetDefinitionActorId(scriptId)
             : definitionActorId;
 
         IActor actor;

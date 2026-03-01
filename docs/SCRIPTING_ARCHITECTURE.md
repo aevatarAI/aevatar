@@ -103,22 +103,26 @@ flowchart LR
 Core 端口（`src/Aevatar.Scripting.Core/Ports`）：
 
 1. `IScriptEvolutionPort`
-2. `IScriptPolicyGatePort`
-3. `IScriptValidationPipelinePort`
-4. `IScriptPromotionPort`
-5. `IScriptCatalogPort`
-6. `IScriptDefinitionLifecyclePort`
-7. `IScriptRuntimeLifecyclePort`
+2. `IScriptEvolutionFlowPort`
+3. `IScriptPolicyGatePort`
+4. `IScriptValidationPipelinePort`
+5. `IScriptPromotionPort`
+6. `IScriptCatalogPort`
+7. `IScriptDefinitionLifecyclePort`
+8. `IScriptRuntimeLifecyclePort`
+9. `IScriptingActorAddressResolver`
 
 Hosting 实现（`src/Aevatar.Scripting.Hosting/Ports`）：
 
-1. `RuntimeScriptEvolutionPort`
-2. `RuntimeScriptPolicyGatePort`
-3. `RuntimeScriptValidationPipelinePort`
-4. `RuntimeScriptPromotionPort`
-5. `RuntimeScriptCatalogPort`
-6. `RuntimeScriptDefinitionLifecyclePort`
-7. `RuntimeScriptRuntimeLifecyclePort`
+1. `DefaultScriptingActorAddressResolver`
+2. `RuntimeScriptEvolutionPort`
+3. `RuntimeScriptEvolutionFlowPort`
+4. `RuntimeScriptPolicyGatePort`
+5. `RuntimeScriptValidationPipelinePort`
+6. `RuntimeScriptPromotionPort`
+7. `RuntimeScriptCatalogPort`
+8. `RuntimeScriptDefinitionLifecyclePort`
+9. `RuntimeScriptRuntimeLifecyclePort`
 
 DI 统一装配文件：
 
@@ -171,21 +175,21 @@ DI 统一装配文件：
 
 两条入口合流到同一治理路径：`Policy -> Validation -> Promotion/Rollback -> Projection`
 
+实现上由 `ScriptEvolutionManagerGAgent -> IScriptEvolutionFlowPort` 统一承接治理流程，`FlowPort` 内部组合 `Policy/Validation/Promotion`。
+
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
     participant EXT as "External Adapter"
     participant RT as "ScriptRuntime Capabilities"
     participant EVO as "ScriptEvolutionManagerGAgent"
-    participant VAL as "ValidationPipelinePort"
-    participant PRO as "PromotionPort"
+    participant FLOW as "EvolutionFlowPort"
     participant CAT as "ScriptCatalogGAgent"
 
     EXT->>EVO: "ProposeScriptEvolutionRequestedEvent(origin=external)"
     RT->>EVO: "ProposeScriptEvolutionRequestedEvent(origin=self)"
-    EVO->>VAL: "Validate(candidate source)"
-    EVO->>PRO: "PromoteAsync"
-    PRO->>CAT: "PromoteScriptRevisionRequestedEvent"
+    EVO->>FLOW: "ExecuteAsync(proposal)"
+    FLOW->>CAT: "PromoteScriptRevisionRequestedEvent"
     CAT-->>EVO: "ScriptCatalogRevisionPromotedEvent"
     EVO-->>RT: "ScriptPromotionDecision"
 ```

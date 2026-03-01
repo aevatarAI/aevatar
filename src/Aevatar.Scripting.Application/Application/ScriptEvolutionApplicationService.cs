@@ -7,14 +7,15 @@ namespace Aevatar.Scripting.Application;
 
 public sealed class ScriptEvolutionApplicationService : IScriptEvolutionApplicationService
 {
-    private const string DefaultManagerActorId = "script-evolution-manager";
-    private const string DefaultCatalogActorId = "script-catalog";
-
     private readonly IScriptEvolutionPort _evolutionPort;
+    private readonly IScriptingActorAddressResolver _addressResolver;
 
-    public ScriptEvolutionApplicationService(IScriptEvolutionPort evolutionPort)
+    public ScriptEvolutionApplicationService(
+        IScriptEvolutionPort evolutionPort,
+        IScriptingActorAddressResolver addressResolver)
     {
         _evolutionPort = evolutionPort ?? throw new ArgumentNullException(nameof(evolutionPort));
+        _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }
 
     public Task<ScriptPromotionDecision> ProposeAsync(
@@ -38,13 +39,13 @@ public sealed class ScriptEvolutionApplicationService : IScriptEvolutionApplicat
             ? ComputeSourceHash(request.CandidateSource)
             : request.CandidateSourceHash;
         var definitionActorId = string.IsNullOrWhiteSpace(request.DefinitionActorId)
-            ? $"script-definition:{normalizedScriptId}"
+            ? _addressResolver.GetDefinitionActorId(normalizedScriptId)
             : request.DefinitionActorId;
         var catalogActorId = string.IsNullOrWhiteSpace(request.CatalogActorId)
-            ? DefaultCatalogActorId
+            ? _addressResolver.GetCatalogActorId()
             : request.CatalogActorId;
         var managerActorId = string.IsNullOrWhiteSpace(request.ManagerActorId)
-            ? DefaultManagerActorId
+            ? _addressResolver.GetEvolutionManagerActorId()
             : request.ManagerActorId;
 
         var proposal = new ScriptEvolutionProposal(

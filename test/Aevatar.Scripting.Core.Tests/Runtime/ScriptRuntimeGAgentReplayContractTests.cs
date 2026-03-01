@@ -106,7 +106,8 @@ public class ScriptRuntimeGAgentReplayContractTests
             new NullEvolutionPort(),
             new NullDefinitionLifecyclePort(),
             new NullRuntimeLifecyclePort(),
-            new NullCatalogPort());
+            new NullCatalogPort(),
+            new NullAddressResolver());
 
         var orchestrator = new ScriptRuntimeExecutionOrchestrator(
             new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
@@ -393,5 +394,14 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<ScriptCatalogEntrySnapshot?>(null);
         }
+    }
+
+    private sealed class NullAddressResolver : IScriptingActorAddressResolver
+    {
+        public string GetEvolutionManagerActorId() => "script-evolution-manager";
+
+        public string GetCatalogActorId() => "script-catalog";
+
+        public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
     }
 }

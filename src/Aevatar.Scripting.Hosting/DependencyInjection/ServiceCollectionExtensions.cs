@@ -20,6 +20,7 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.TryAddSingleton<ScriptSandboxPolicy>();
+        services.TryAddSingleton<IScriptingActorAddressResolver, DefaultScriptingActorAddressResolver>();
         services.TryAddSingleton<IScriptExecutionEngine, RoslynScriptExecutionEngine>();
         services.TryAddSingleton<IScriptPackageCompiler, RoslynScriptPackageCompiler>();
         services.TryAddSingleton<IScriptReadModelSchemaActivationPolicy, DefaultScriptReadModelSchemaActivationPolicy>();
@@ -33,6 +34,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptPolicyGatePort, RuntimeScriptPolicyGatePort>();
         services.TryAddSingleton<IScriptValidationPipelinePort, RuntimeScriptValidationPipelinePort>();
         services.TryAddSingleton<IScriptPromotionPort, RuntimeScriptPromotionPort>();
+        services.TryAddSingleton<IScriptEvolutionFlowPort, RuntimeScriptEvolutionFlowPort>();
         services.TryAddSingleton<IScriptEvolutionPort, RuntimeScriptEvolutionPort>();
         services.TryAddSingleton<IGAgentEventRoutingPort, RuntimeGAgentEventRoutingPort>();
         services.TryAddSingleton<IGAgentInvocationPort, RuntimeGAgentInvocationPort>();

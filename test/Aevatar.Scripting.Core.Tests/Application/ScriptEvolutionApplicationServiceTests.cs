@@ -11,7 +11,8 @@ public class ScriptEvolutionApplicationServiceTests
     public async Task ProposeAsync_ShouldNormalizeDefaults_AndForwardToEvolutionPort()
     {
         var port = new FakeScriptEvolutionPort();
-        var service = new ScriptEvolutionApplicationService(port);
+        var resolver = new StaticAddressResolver();
+        var service = new ScriptEvolutionApplicationService(port, resolver);
 
         var decision = await service.ProposeAsync(
             new ProposeScriptEvolutionRequest(
@@ -29,12 +30,12 @@ public class ScriptEvolutionApplicationServiceTests
             CancellationToken.None);
 
         decision.Accepted.Should().BeTrue();
-        port.CapturedManagerActorId.Should().Be("script-evolution-manager");
+        port.CapturedManagerActorId.Should().Be("resolver:evolution");
         port.CapturedProposal.Should().NotBeNull();
         port.CapturedProposal!.ScriptId.Should().Be("inventory-script");
         port.CapturedProposal.CandidateRevision.Should().Be("rev-2");
-        port.CapturedProposal.DefinitionActorId.Should().Be("script-definition:inventory-script");
-        port.CapturedProposal.CatalogActorId.Should().Be("script-catalog");
+        port.CapturedProposal.DefinitionActorId.Should().Be("resolver:definition:inventory-script");
+        port.CapturedProposal.CatalogActorId.Should().Be("resolver:catalog");
         port.CapturedProposal.RequestedByActorId.Should().Be("ops-user");
         port.CapturedProposal.ProposalId.Should().NotBeNullOrWhiteSpace();
         port.CapturedProposal.CandidateSourceHash.Should().MatchRegex("^[0-9A-F]{64}$");
@@ -44,7 +45,7 @@ public class ScriptEvolutionApplicationServiceTests
     public async Task ProposeAsync_WhenScriptIdMissing_ShouldThrow()
     {
         var port = new FakeScriptEvolutionPort();
-        var service = new ScriptEvolutionApplicationService(port);
+        var service = new ScriptEvolutionApplicationService(port, new StaticAddressResolver());
 
         var act = () => service.ProposeAsync(
             new ProposeScriptEvolutionRequest(
@@ -92,5 +93,14 @@ public class ScriptEvolutionApplicationServiceTests
                 CatalogActorId: proposal.CatalogActorId,
                 ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
         }
+    }
+
+    private sealed class StaticAddressResolver : IScriptingActorAddressResolver
+    {
+        public string GetEvolutionManagerActorId() => "resolver:evolution";
+
+        public string GetCatalogActorId() => "resolver:catalog";
+
+        public string GetDefinitionActorId(string scriptId) => $"resolver:definition:{scriptId}";
     }
 }

@@ -8,6 +8,7 @@ using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Scripting.Hosting.Ports;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
@@ -55,6 +56,9 @@ public class ScriptCapabilityHostExtensionsTests
             x.ServiceType == typeof(IScriptRuntimeCapabilityComposer) &&
             x.ImplementationType == typeof(ScriptRuntimeCapabilityComposer));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptingActorAddressResolver) &&
+            x.ImplementationType == typeof(DefaultScriptingActorAddressResolver));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptDefinitionSnapshotPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptDefinitionLifecyclePort));
@@ -68,6 +72,9 @@ public class ScriptCapabilityHostExtensionsTests
             x.ServiceType == typeof(IScriptValidationPipelinePort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptPromotionPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptEvolutionFlowPort) &&
+            x.ImplementationType == typeof(RuntimeScriptEvolutionFlowPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptEvolutionPort));
         services.Should().Contain(x =>

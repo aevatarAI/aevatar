@@ -6,13 +6,16 @@ public sealed class RuntimeScriptPromotionPort : IScriptPromotionPort
 {
     private readonly IScriptDefinitionLifecyclePort _definitionLifecyclePort;
     private readonly IScriptCatalogPort _catalogPort;
+    private readonly IScriptingActorAddressResolver _addressResolver;
 
     public RuntimeScriptPromotionPort(
         IScriptDefinitionLifecyclePort definitionLifecyclePort,
-        IScriptCatalogPort catalogPort)
+        IScriptCatalogPort catalogPort,
+        IScriptingActorAddressResolver addressResolver)
     {
-        _definitionLifecyclePort = definitionLifecyclePort;
-        _catalogPort = catalogPort;
+        _definitionLifecyclePort = definitionLifecyclePort ?? throw new ArgumentNullException(nameof(definitionLifecyclePort));
+        _catalogPort = catalogPort ?? throw new ArgumentNullException(nameof(catalogPort));
+        _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }
 
     public async Task<ScriptPromotionResult> PromoteAsync(
@@ -30,7 +33,7 @@ public sealed class RuntimeScriptPromotionPort : IScriptPromotionPort
             ct);
 
         var catalogActorId = string.IsNullOrWhiteSpace(request.CatalogActorId)
-            ? "script-catalog"
+            ? _addressResolver.GetCatalogActorId()
             : request.CatalogActorId;
 
         await _catalogPort.PromoteAsync(
@@ -55,7 +58,7 @@ public sealed class RuntimeScriptPromotionPort : IScriptPromotionPort
         ArgumentNullException.ThrowIfNull(request);
 
         var catalogActorId = string.IsNullOrWhiteSpace(request.CatalogActorId)
-            ? "script-catalog"
+            ? _addressResolver.GetCatalogActorId()
             : request.CatalogActorId;
 
         return _catalogPort.RollbackAsync(

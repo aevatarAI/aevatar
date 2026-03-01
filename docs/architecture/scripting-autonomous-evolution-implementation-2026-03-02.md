@@ -40,12 +40,14 @@
 新增端口：
 
 1. `src/Aevatar.Scripting.Core/Ports/IScriptEvolutionPort.cs`
-2. `src/Aevatar.Scripting.Core/Ports/IScriptPolicyGatePort.cs`
-3. `src/Aevatar.Scripting.Core/Ports/IScriptValidationPipelinePort.cs`
-4. `src/Aevatar.Scripting.Core/Ports/IScriptPromotionPort.cs`
-5. `src/Aevatar.Scripting.Core/Ports/IScriptCatalogPort.cs`
-6. `src/Aevatar.Scripting.Core/Ports/IScriptDefinitionLifecyclePort.cs`
-7. `src/Aevatar.Scripting.Core/Ports/IScriptRuntimeLifecyclePort.cs`
+2. `src/Aevatar.Scripting.Core/Ports/IScriptEvolutionFlowPort.cs`
+3. `src/Aevatar.Scripting.Core/Ports/IScriptPolicyGatePort.cs`
+4. `src/Aevatar.Scripting.Core/Ports/IScriptValidationPipelinePort.cs`
+5. `src/Aevatar.Scripting.Core/Ports/IScriptPromotionPort.cs`
+6. `src/Aevatar.Scripting.Core/Ports/IScriptCatalogPort.cs`
+7. `src/Aevatar.Scripting.Core/Ports/IScriptDefinitionLifecyclePort.cs`
+8. `src/Aevatar.Scripting.Core/Ports/IScriptRuntimeLifecyclePort.cs`
+9. `src/Aevatar.Scripting.Core/Ports/IScriptingActorAddressResolver.cs`
 
 新增快照源接口：
 
@@ -78,13 +80,15 @@
 
 新增端口实现：
 
-1. `RuntimeScriptEvolutionPort`
-2. `RuntimeScriptPolicyGatePort`
-3. `RuntimeScriptValidationPipelinePort`
-4. `RuntimeScriptPromotionPort`
-5. `RuntimeScriptCatalogPort`
-6. `RuntimeScriptDefinitionLifecyclePort`
-7. `RuntimeScriptRuntimeLifecyclePort`
+1. `DefaultScriptingActorAddressResolver`
+2. `RuntimeScriptEvolutionPort`
+3. `RuntimeScriptEvolutionFlowPort`
+4. `RuntimeScriptPolicyGatePort`
+5. `RuntimeScriptValidationPipelinePort`
+6. `RuntimeScriptPromotionPort`
+7. `RuntimeScriptCatalogPort`
+8. `RuntimeScriptDefinitionLifecyclePort`
+9. `RuntimeScriptRuntimeLifecyclePort`
 
 DI 装配更新：
 
@@ -108,8 +112,10 @@ DI 装配更新：
 
 1. 保持 `ScriptRuntimeGAgent` 作为运行入口，不新增旁路执行主干。
 2. 让升级事实进入 Actor 状态（Manager/Catalog），不在中间层保留 `proposalId -> context` 字典事实态。
-3. 策略门禁与验证流水线通过端口抽象，Core 不依赖具体实现。
-4. Catalog 维护 active revision/rollback 指针，避免发布状态散落在多个中间服务。
+3. 用 `IScriptingActorAddressResolver` 统一 actor 地址命名，不在多层散落字符串常量。
+4. 用 `IScriptEvolutionFlowPort` 下沉 `policy/validation/promotion` 串行流程，降低 EvolutionManager 直接依赖面。
+5. 策略门禁与验证流水线通过端口抽象，Core 不依赖具体实现。
+6. Catalog 维护 active revision/rollback 指针，避免发布状态散落在多个中间服务。
 
 ## 4. 脚本内场景落地
 

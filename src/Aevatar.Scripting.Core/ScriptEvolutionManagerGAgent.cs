@@ -18,18 +18,15 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
     private const string StatusRollbackRequested = "rollback_requested";
     private const string StatusRolledBack = "rolled_back";
 
-    private readonly IScriptPolicyGatePort _policyGatePort;
-    private readonly IScriptValidationPipelinePort _validationPipelinePort;
-    private readonly IScriptPromotionPort _promotionPort;
+    private readonly IScriptEvolutionFlowPort _evolutionFlowPort;
+    private readonly IScriptingActorAddressResolver _addressResolver;
 
     public ScriptEvolutionManagerGAgent(
-        IScriptPolicyGatePort policyGatePort,
-        IScriptValidationPipelinePort validationPipelinePort,
-        IScriptPromotionPort promotionPort)
+        IScriptEvolutionFlowPort evolutionFlowPort,
+        IScriptingActorAddressResolver addressResolver)
     {
-        _policyGatePort = policyGatePort ?? throw new ArgumentNullException(nameof(policyGatePort));
-        _validationPipelinePort = validationPipelinePort ?? throw new ArgumentNullException(nameof(validationPipelinePort));
-        _promotionPort = promotionPort ?? throw new ArgumentNullException(nameof(promotionPort));
+        _evolutionFlowPort = evolutionFlowPort ?? throw new ArgumentNullException(nameof(evolutionFlowPort));
+        _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
         InitializeId();
     }
 
@@ -38,7 +35,7 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
     {
         ArgumentNullException.ThrowIfNull(evt);
 
-        var proposal = NormalizeProposal(evt);
+        var proposal = NormalizeProposal(evt, _addressResolver);
         await PersistDomainEventAsync(new ScriptEvolutionProposedEvent
         {
             ProposalId = proposal.ProposalId,
@@ -59,22 +56,20 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             CandidateRevision = proposal.CandidateRevision,
         });
 
-        var policyDecision = await _policyGatePort.EvaluateAsync(proposal, CancellationToken.None);
-        if (!policyDecision.IsAllowed)
+        var flowResult = await _evolutionFlowPort.ExecuteAsync(proposal, CancellationToken.None);
+        if (flowResult.Status == ScriptEvolutionFlowStatus.PolicyRejected)
         {
             await PersistDomainEventAsync(new ScriptEvolutionRejectedEvent
             {
                 ProposalId = proposal.ProposalId,
                 ScriptId = proposal.ScriptId,
                 CandidateRevision = proposal.CandidateRevision,
-                FailureReason = string.IsNullOrWhiteSpace(policyDecision.FailureReason)
-                    ? "Policy gate denied the proposal."
-                    : policyDecision.FailureReason,
+                FailureReason = flowResult.FailureReason ?? string.Empty,
             });
             return;
         }
 
-        var validation = await _validationPipelinePort.ValidateAsync(proposal, CancellationToken.None);
+        var validation = flowResult.ValidationReport ?? ScriptEvolutionValidationReport.Empty;
         await PersistDomainEventAsync(new ScriptEvolutionValidatedEvent
         {
             ProposalId = proposal.ProposalId,
@@ -84,30 +79,22 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             Diagnostics = { validation.Diagnostics },
         });
 
-        if (!validation.IsSuccess)
+        if (flowResult.Status == ScriptEvolutionFlowStatus.ValidationFailed)
         {
             await PersistDomainEventAsync(new ScriptEvolutionRejectedEvent
             {
                 ProposalId = proposal.ProposalId,
                 ScriptId = proposal.ScriptId,
                 CandidateRevision = proposal.CandidateRevision,
-                FailureReason = string.Join("; ", validation.Diagnostics),
+                FailureReason = flowResult.FailureReason ?? string.Empty,
             });
             return;
         }
 
-        try
+        if (flowResult.Status == ScriptEvolutionFlowStatus.Promoted)
         {
-            var promotion = await _promotionPort.PromoteAsync(
-                new ScriptPromotionRequest(
-                    ProposalId: proposal.ProposalId,
-                    ScriptId: proposal.ScriptId,
-                    CandidateRevision: proposal.CandidateRevision,
-                    CandidateSource: proposal.CandidateSource,
-                    CandidateSourceHash: proposal.CandidateSourceHash,
-                    DefinitionActorId: proposal.DefinitionActorId,
-                    CatalogActorId: proposal.CatalogActorId),
-                CancellationToken.None);
+            var promotion = flowResult.Promotion
+                ?? throw new InvalidOperationException("Promotion result is required when flow is promoted.");
 
             await PersistDomainEventAsync(new ScriptEvolutionPromotedEvent
             {
@@ -117,17 +104,16 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
                 DefinitionActorId = promotion.DefinitionActorId,
                 CatalogActorId = promotion.CatalogActorId,
             });
+            return;
         }
-        catch (Exception ex)
+
+        await PersistDomainEventAsync(new ScriptEvolutionRejectedEvent
         {
-            await PersistDomainEventAsync(new ScriptEvolutionRejectedEvent
-            {
-                ProposalId = proposal.ProposalId,
-                ScriptId = proposal.ScriptId,
-                CandidateRevision = proposal.CandidateRevision,
-                FailureReason = ex.Message,
-            });
-        }
+            ProposalId = proposal.ProposalId,
+            ScriptId = proposal.ScriptId,
+            CandidateRevision = proposal.CandidateRevision,
+            FailureReason = flowResult.FailureReason ?? string.Empty,
+        });
     }
 
     [EventHandler]
@@ -135,7 +121,7 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
     {
         ArgumentNullException.ThrowIfNull(evt);
 
-        await _promotionPort.RollbackAsync(
+        await _evolutionFlowPort.RollbackAsync(
             new ScriptRollbackRequest(
                 ProposalId: evt.ProposalId ?? string.Empty,
                 ScriptId: evt.ScriptId ?? string.Empty,
@@ -195,8 +181,12 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             ValidationReport: validation);
     }
 
-    private static ScriptEvolutionProposal NormalizeProposal(ProposeScriptEvolutionRequestedEvent evt)
+    private static ScriptEvolutionProposal NormalizeProposal(
+        ProposeScriptEvolutionRequestedEvent evt,
+        IScriptingActorAddressResolver addressResolver)
     {
+        ArgumentNullException.ThrowIfNull(addressResolver);
+
         var proposalId = string.IsNullOrWhiteSpace(evt.ProposalId)
             ? Guid.NewGuid().ToString("N")
             : evt.ProposalId;
@@ -212,10 +202,10 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             throw new InvalidOperationException("CandidateSource is required.");
 
         var definitionActorId = string.IsNullOrWhiteSpace(evt.DefinitionActorId)
-            ? $"script-definition:{scriptId}"
+            ? addressResolver.GetDefinitionActorId(scriptId)
             : evt.DefinitionActorId;
         var catalogActorId = string.IsNullOrWhiteSpace(evt.CatalogActorId)
-            ? "script-catalog"
+            ? addressResolver.GetCatalogActorId()
             : evt.CatalogActorId;
 
         return new ScriptEvolutionProposal(
