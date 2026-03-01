@@ -1,5 +1,9 @@
 using Aevatar.Scripting.Core.AI;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core.Compilation;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.AI;
 
@@ -23,6 +27,75 @@ public class ClaimRoleIntegrationTests
         rolePort.Prompt.Should().Be("extract claim facts");
     }
 
+    [Fact]
+    public async Task Should_map_ai_output_to_ClaimFactsExtractedEvent()
+    {
+        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
+        var compilation = await compiler.CompileAsync(
+            new ScriptPackageCompilationRequest(
+                ScriptId: "claim-role-script",
+                Revision: "rev-role-1",
+                Source: """
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class ClaimRoleScript : IScriptPackageRuntime
+{
+    public async Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
+    {
+        _ = requestedEvent;
+        var aiOutput = await context.Capabilities!.AskAIAsync("extract-claim-facts", ct);
+        var mapped = string.IsNullOrWhiteSpace(aiOutput)
+            ? "ClaimFactsExtractionFailedEvent"
+            : "ClaimFactsExtractedEvent";
+        return new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = mapped } });
+    }
+
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(new Dictionary<string, Any>());
+
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(new Dictionary<string, Any>());
+}
+"""),
+            CancellationToken.None);
+        compilation.IsSuccess.Should().BeTrue();
+
+        var result = await compilation.CompiledDefinition!.HandleRequestedEventAsync(
+            new ScriptRequestedEventEnvelope(
+                EventType: "claim.role.analysis.requested",
+                Payload: Any.Pack(new Struct()),
+                EventId: "evt-role-1",
+                CorrelationId: "corr-role-1",
+                CausationId: "cause-role-1"),
+            new ScriptExecutionContext(
+                ActorId: "claim-role-runtime",
+                ScriptId: "claim-role-script",
+                Revision: "rev-role-1",
+                RunId: "run-role-1",
+                CorrelationId: "corr-role-1",
+                Capabilities: new FakeCapabilities("facts-ready")),
+            CancellationToken.None);
+
+        result.DomainEvents.Should().ContainSingle();
+        ((StringValue)result.DomainEvents[0]).Value.Should().Be("ClaimFactsExtractedEvent");
+    }
+
     private sealed class RecordingRoleAgentPort : IRoleAgentPort
     {
         public string RunId { get; private set; } = string.Empty;
@@ -41,5 +114,36 @@ public class ClaimRoleIntegrationTests
             Prompt = prompt;
             return Task.FromResult("structured-facts");
         }
+    }
+
+    private sealed class FakeCapabilities(string aiResult) : IScriptRuntimeCapabilities
+    {
+        public Task<string> AskAIAsync(string prompt, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            _ = prompt;
+            return Task.FromResult(aiResult);
+        }
+
+        public Task PublishAsync(IMessage eventPayload, Aevatar.Foundation.Abstractions.EventDirection direction, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task InvokeAgentAsync(string targetAgentId, IMessage eventPayload, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) =>
+            Task.FromResult(actorId ?? "created");
+
+        public Task DestroyAgentAsync(string actorId, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) =>
+            Task.CompletedTask;
     }
 }

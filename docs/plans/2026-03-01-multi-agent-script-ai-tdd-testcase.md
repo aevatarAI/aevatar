@@ -98,7 +98,8 @@ sequenceDiagram
 `ScriptRuntimeState` 关注字段:
 1. `script_id`
 2. `revision`
-3. `state_payload_json`（含 `claim_case_id`、`risk_level`、`decision_status`、`review_path`）
+3. `state_payloads["claim_case"]`（`Any<Struct>`，含 `case_id`、`risk_score`、`decision_status`、`manual_review_required`）
+4. `read_model_payloads["claim_case"]`（`Any<Struct>`，用于投影透传）
 4. `last_applied_event_version`
 5. `last_event_id`
 
@@ -192,6 +193,8 @@ sequenceDiagram
 1. `test/Aevatar.Integration.Tests/Fixtures/ScriptDocuments/ClaimScriptScenarioDocument.cs`（测试内嵌字符串常量）
 2. `test/Aevatar.Integration.Tests/ClaimScriptDocumentDrivenFlexibilityTests.cs`
 3. `test/Aevatar.Integration.Tests/ScriptGAgentEndToEndTests.cs`
+4. `test/Aevatar.Integration.Tests/ClaimComplexBusinessScenarioTests.cs`
+5. `test/Aevatar.CQRS.Projection.Core.Tests/ClaimReadModelProjectorTests.cs`
 
 扩展候选测试文件:
 1. `test/Aevatar.Scripting.Core.Tests/Business/ClaimScriptDecisionTests.cs`
@@ -218,6 +221,7 @@ sequenceDiagram
 ## 11. 当前落地结果（2026-03-01）
 1. 已落地“测试内嵌字符串常量 -> 脚本字符串 -> 编译 -> DefinitionState 持久化”测试闭环。
 2. 已落地复杂场景内嵌脚本驱动测试，覆盖脚本集合完整性、编译与持久化。
-3. 已落地 `Claim*` 编排/回放/投影/生命周期测试集，并通过运行。
-4. 已落地脚本能力上下文：脚本可通过 `ScriptExecutionContext.Capabilities` 调用 AI/跨 GAgent 调用与创建能力。
-5. 已落地脚本状态回传：脚本可返回 `ScriptHandlerResult.StatePayloadJson`，运行态与投影均按脚本状态载荷推进。
+3. 已补齐文档清单中的缺口测试（事件顺序、AI 输出映射、禁止脚本直连 `IServiceProvider`、定义源重编译、Claim 投影专项）。
+4. 已落地完整 A/B/C 复杂业务端到端测试：`ScriptDefinitionGAgent + ScriptRuntimeGAgent + IAICapability + Invocation/Factory 端口 + Projection + Replay`。
+5. 已落地脚本能力上下文：脚本可通过 `ScriptExecutionContext.Capabilities` 调用 AI/跨 GAgent 调用与创建能力。
+6. 已落地脚本状态回传：脚本可返回 `ScriptHandlerResult.StatePayloads/ReadModelPayloads`，运行态与投影均按强类型 `Any` 载荷推进。

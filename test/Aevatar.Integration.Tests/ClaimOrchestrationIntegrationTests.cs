@@ -1,4 +1,5 @@
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
@@ -10,6 +11,17 @@ namespace Aevatar.Integration.Tests;
 
 public class ClaimOrchestrationIntegrationTests
 {
+    [Fact]
+    public void Should_not_resolve_agents_from_IServiceProvider()
+    {
+        typeof(ScriptExecutionContext).GetProperty("Services").Should().BeNull();
+        typeof(IScriptRuntimeCapabilities).GetMethod(
+            "GetRequiredService",
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Static).Should().BeNull();
+    }
+
     [Fact]
     public async Task Should_call_agents_via_invocation_and_factory_ports_only()
     {

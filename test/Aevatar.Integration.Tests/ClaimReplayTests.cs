@@ -19,6 +19,128 @@ namespace Aevatar.Integration.Tests;
 public class ClaimReplayTests
 {
     [Fact]
+    public async Task Should_recompile_from_definition_source_without_external_repository()
+    {
+        var services = new ServiceCollection();
+        services.AddAevatarRuntime();
+        services.AddScriptCapability();
+        using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<IActorRuntime>();
+
+        const string definitionActorId = "claim-recompile-definition";
+        const string runtimeActorId = "claim-recompile-runtime";
+        const string scriptRevision = "rev-claim-recompile-1";
+        var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
+        var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
+
+        var persistedDefinitionSource = """
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class PersistedDefinitionSourceScript : IScriptPackageRuntime
+{
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
+    {
+        _ = requestedEvent;
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = "ClaimApprovedEvent" } },
+            new Dictionary<string, Any>
+            {
+                ["claim"] = Any.Pack(new Struct
+                {
+                    Fields = { ["source_marker"] = Google.Protobuf.WellKnownTypes.Value.ForString("definition-source-v1") },
+                }),
+            },
+            new Dictionary<string, Any>
+            {
+                ["claim_case"] = Any.Pack(new Struct
+                {
+                    Fields = { ["decision_status"] = Google.Protobuf.WellKnownTypes.Value.ForString("Approved") },
+                }),
+            }));
+    }
+
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(new Dictionary<string, Any>());
+
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(new Dictionary<string, Any>());
+}
+""";
+
+        var upsert = new UpsertScriptDefinitionCommandAdapter();
+        await definitionActor.HandleEventAsync(
+            upsert.Map(
+                new UpsertScriptDefinitionCommand(
+                    ScriptId: "claim-recompile-script",
+                    ScriptRevision: scriptRevision,
+                    SourceText: persistedDefinitionSource,
+                    SourceHash: "hash-claim-recompile-v1"),
+                definitionActorId),
+            CancellationToken.None);
+
+        var run = new RunScriptCommandAdapter();
+        await runtimeActor.HandleEventAsync(
+            run.Map(
+                new RunScriptCommand(
+                    RunId: "run-recompile-1",
+                    InputPayload: Any.Pack(new Struct()),
+                    ScriptRevision: scriptRevision,
+                    DefinitionActorId: definitionActorId),
+                runtimeActorId),
+            CancellationToken.None);
+
+        var firstRunState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
+        firstRunState.StatePayloads.Should().ContainKey("claim");
+        firstRunState.StatePayloads["claim"]
+            .Unpack<Struct>()
+            .Fields["source_marker"]
+            .StringValue
+            .Should()
+            .Be("definition-source-v1");
+
+        var externalUpdatedSourceButNotPersisted = persistedDefinitionSource.Replace(
+            "definition-source-v1",
+            "definition-source-v2",
+            StringComparison.Ordinal);
+        externalUpdatedSourceButNotPersisted.Should().Contain("definition-source-v2");
+
+        await runtimeActor.HandleEventAsync(
+            run.Map(
+                new RunScriptCommand(
+                    RunId: "run-recompile-2",
+                    InputPayload: Any.Pack(new Struct()),
+                    ScriptRevision: scriptRevision,
+                    DefinitionActorId: definitionActorId),
+                runtimeActorId),
+            CancellationToken.None);
+
+        var secondRunState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
+        secondRunState.StatePayloads.Should().ContainKey("claim");
+        secondRunState.StatePayloads["claim"]
+            .Unpack<Struct>()
+            .Fields["source_marker"]
+            .StringValue
+            .Should()
+            .Be("definition-source-v1");
+    }
+
+    [Fact]
     public async Task Should_rebuild_same_state_from_event_stream()
     {
         var services = new ServiceCollection();

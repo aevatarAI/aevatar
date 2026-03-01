@@ -9,6 +9,35 @@ namespace Aevatar.Scripting.Core.Tests.Business;
 public class ClaimScriptDecisionTests
 {
     [Fact]
+    public async Task Should_emit_facts_risk_and_compliance_requests_in_order()
+    {
+        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
+
+        var compileResult = await compiler.CompileAsync(
+            new ScriptPackageCompilationRequest("claim_orchestrator", "rev-claim-1", ClaimOrchestratorSource),
+            CancellationToken.None);
+
+        var decision = await compileResult.CompiledDefinition!.HandleRequestedEventAsync(
+            new ScriptRequestedEventEnvelope("claim.submitted", BuildClaimPayload("Case-A", 0.12, true)),
+            new ScriptExecutionContext(
+                ActorId: "claim-runtime-1",
+                ScriptId: "claim_orchestrator",
+                Revision: "rev-claim-1",
+                RunId: "run-order-case-a",
+                CorrelationId: "corr-order-case-a",
+                InputPayload: BuildClaimPayload("Case-A", 0.12, true)),
+            CancellationToken.None);
+
+        var eventNames = decision.DomainEvents
+            .Select(x => ((StringValue)x).Value)
+            .ToArray();
+        eventNames.Should().ContainInOrder(
+            "ClaimFactsExtractionRequestedEvent",
+            "ClaimRiskScoringRequestedEvent",
+            "ClaimComplianceValidationRequestedEvent");
+    }
+
+    [Fact]
     public async Task Should_require_manual_review_when_high_risk()
     {
         var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
