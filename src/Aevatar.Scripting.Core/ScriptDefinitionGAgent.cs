@@ -15,11 +15,15 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>, 
     private const string SchemaStatusDeclared = "declared";
     private const string SchemaStatusValidated = "validated";
     private const string SchemaStatusActivationFailed = "activation_failed";
-    private static readonly IScriptReadModelSchemaActivationPolicy FallbackSchemaActivationPolicy =
-        new DefaultScriptReadModelSchemaActivationPolicy();
+    private readonly IScriptPackageCompiler _compiler;
+    private readonly IScriptReadModelSchemaActivationPolicy _schemaActivationPolicy;
 
-    public ScriptDefinitionGAgent()
+    public ScriptDefinitionGAgent(
+        IScriptPackageCompiler compiler,
+        IScriptReadModelSchemaActivationPolicy schemaActivationPolicy)
     {
+        _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
+        _schemaActivationPolicy = schemaActivationPolicy ?? throw new ArgumentNullException(nameof(schemaActivationPolicy));
         InitializeId();
     }
 
@@ -28,7 +32,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>, 
     {
         ArgumentNullException.ThrowIfNull(evt);
         var sourceText = evt.SourceText ?? string.Empty;
-        var compilation = await ResolveCompiler().CompileAsync(
+        var compilation = await _compiler.CompileAsync(
             new ScriptPackageCompilationRequest(
                 evt.ScriptId ?? string.Empty,
                 evt.ScriptRevision ?? string.Empty,
@@ -80,8 +84,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>, 
             ReadModelSchemaStoreKinds = { readModelSchemaStoreKinds },
         });
 
-        var activationPolicy = ResolveSchemaActivationPolicy();
-        var activation = activationPolicy.ValidateActivation(new ScriptReadModelSchemaActivationRequest(
+        var activation = _schemaActivationPolicy.ValidateActivation(new ScriptReadModelSchemaActivationRequest(
             RequiresDocumentStore: extracted.Definition.Fields.Count > 0 || extracted.Definition.Indexes.Count > 0,
             RequiresGraphStore: extracted.Definition.Relations.Count > 0,
             DeclaredProviderHints: extracted.StoreCapabilities));
@@ -177,21 +180,6 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>, 
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = string.Concat(evt.ScriptRevision ?? string.Empty, ":schema-activation-failed");
         return next;
-    }
-
-    private IScriptReadModelSchemaActivationPolicy ResolveSchemaActivationPolicy()
-    {
-        if (Services.GetService(typeof(IScriptReadModelSchemaActivationPolicy))
-            is IScriptReadModelSchemaActivationPolicy registeredPolicy)
-            return registeredPolicy;
-        return FallbackSchemaActivationPolicy;
-    }
-
-    private IScriptPackageCompiler ResolveCompiler()
-    {
-        if (Services.GetService(typeof(IScriptPackageCompiler)) is IScriptPackageCompiler compiler)
-            return compiler;
-        throw new InvalidOperationException("IScriptPackageCompiler is required for ScriptDefinitionGAgent.");
     }
 
     public ScriptDefinitionSnapshot GetSnapshot()

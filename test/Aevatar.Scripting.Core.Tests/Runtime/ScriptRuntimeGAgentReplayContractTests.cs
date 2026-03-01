@@ -2,14 +2,15 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Scripting.Application.Runtime;
+using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Schema;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
@@ -18,12 +19,7 @@ public class ScriptRuntimeGAgentReplayContractTests
     [Fact]
     public async Task HandleRunRequested_ShouldPersistDomainEvent_AndMutateViaTransitionOnly()
     {
-        var definition = new ScriptDefinitionGAgent
-        {
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
-                new InMemoryEventStore()),
-            Services = BuildDefinitionServices(),
-        };
+        var definition = CreateDefinitionAgent();
         await definition.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
         {
             ScriptId = "script-1",
@@ -32,12 +28,7 @@ public class ScriptRuntimeGAgentReplayContractTests
             SourceHash = "hash-1",
         });
 
-        var agent = new ScriptRuntimeGAgent
-        {
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(
-                new InMemoryEventStore()),
-        };
-        agent.Services = BuildServices(definition);
+        var agent = CreateRuntimeAgent(definition);
 
         await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
         {
@@ -62,12 +53,7 @@ public class ScriptRuntimeGAgentReplayContractTests
     [Fact]
     public async Task HandleRunRequested_ShouldCarryStateAndReadModelPayloadBetweenRuns_ByScriptApplyAndReduce()
     {
-        var definition = new ScriptDefinitionGAgent
-        {
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
-                new InMemoryEventStore()),
-            Services = BuildDefinitionServices(),
-        };
+        var definition = CreateDefinitionAgent();
         await definition.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
         {
             ScriptId = "script-stateful-1",
@@ -76,12 +62,7 @@ public class ScriptRuntimeGAgentReplayContractTests
             SourceHash = "hash-stateful-1",
         });
 
-        var agent = new ScriptRuntimeGAgent
-        {
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(
-                new InMemoryEventStore()),
-        };
-        agent.Services = BuildServices(definition);
+        var agent = CreateRuntimeAgent(definition);
 
         await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
         {
@@ -114,27 +95,31 @@ public class ScriptRuntimeGAgentReplayContractTests
         agent.State.LastAppliedSchemaVersion.Should().Be("7");
     }
 
-    private static IServiceProvider BuildServices(ScriptDefinitionGAgent definition)
+    private static ScriptRuntimeGAgent CreateRuntimeAgent(ScriptDefinitionGAgent definition)
     {
-        var services = new ServiceCollection();
-        services.AddSingleton<IScriptExecutionEngine, RoslynScriptExecutionEngine>();
-        services.AddSingleton<IScriptPackageCompiler>(new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()));
-        services.AddSingleton<IScriptCapabilityFactory, DefaultScriptCapabilityFactory>();
-        services.AddSingleton<IScriptRuntimeExecutionOrchestrator, ScriptRuntimeExecutionOrchestrator>();
-        services.AddSingleton<IScriptDefinitionSnapshotPort>(new StaticSnapshotPort(definition));
-        services.AddSingleton<Aevatar.Scripting.Core.Ports.IGAgentEventRoutingPort, NullEventRoutingPort>();
-        services.AddSingleton<Aevatar.Scripting.Core.Ports.IGAgentInvocationPort, NullInvocationPort>();
-        services.AddSingleton<Aevatar.Scripting.Core.Ports.IGAgentFactoryPort, NullFactoryPort>();
-        return services.BuildServiceProvider();
+        var orchestrator = new ScriptRuntimeExecutionOrchestrator(
+            new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
+            new NullAICapability(),
+            new NullEventRoutingPort(),
+            new NullInvocationPort(),
+            new NullFactoryPort());
+
+        return new ScriptRuntimeGAgent(orchestrator, new StaticSnapshotPort(definition))
+        {
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(
+                new InMemoryEventStore()),
+        };
     }
 
-    private static IServiceProvider BuildDefinitionServices()
+    private static ScriptDefinitionGAgent CreateDefinitionAgent()
     {
-        var services = new ServiceCollection();
-        services.AddSingleton<ScriptSandboxPolicy>();
-        services.AddSingleton<IScriptExecutionEngine, RoslynScriptExecutionEngine>();
-        services.AddSingleton<IScriptPackageCompiler, RoslynScriptPackageCompiler>();
-        return services.BuildServiceProvider();
+        return new ScriptDefinitionGAgent(
+            new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
+            new DefaultScriptReadModelSchemaActivationPolicy())
+        {
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
+                new InMemoryEventStore()),
+        };
     }
 
     private static string BuildStatefulRuntimeSource()
@@ -237,6 +222,15 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(snapshot);
         }
+    }
+
+    private sealed class NullAICapability : IAICapability
+    {
+        public Task<string> AskAsync(
+            string runId,
+            string correlationId,
+            string prompt,
+            CancellationToken ct) => Task.FromResult("noop");
     }
 
     private sealed class NullEventRoutingPort : Aevatar.Scripting.Core.Ports.IGAgentEventRoutingPort

@@ -22,14 +22,18 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptExecutionEngine, RoslynScriptExecutionEngine>();
         services.TryAddSingleton<IScriptPackageCompiler, RoslynScriptPackageCompiler>();
         services.TryAddSingleton<IScriptReadModelSchemaActivationPolicy, DefaultScriptReadModelSchemaActivationPolicy>();
-        services.TryAddSingleton<IScriptCapabilityFactory, DefaultScriptCapabilityFactory>();
         services.TryAddSingleton<IScriptRuntimeExecutionOrchestrator, ScriptRuntimeExecutionOrchestrator>();
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, RuntimeScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IGAgentEventRoutingPort, RuntimeGAgentEventRoutingPort>();
         services.TryAddSingleton<IGAgentInvocationPort, RuntimeGAgentInvocationPort>();
         services.TryAddSingleton<IGAgentFactoryPort, RuntimeGAgentFactoryPort>();
         services.TryAddSingleton<IAICapability>(sp =>
-            new RoleAgentDelegateAICapability(sp.GetRequiredService<IRoleAgentPort>()));
+        {
+            var roleAgentPort = sp.GetService<IRoleAgentPort>();
+            return roleAgentPort == null
+                ? new NoopAICapability()
+                : new RoleAgentDelegateAICapability(roleAgentPort);
+        });
 
         return services;
     }

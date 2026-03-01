@@ -1,5 +1,7 @@
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
@@ -13,14 +15,23 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
         new Dictionary<string, Any>(StringComparer.Ordinal);
 
     private readonly IScriptPackageCompiler _compiler;
-    private readonly IScriptCapabilityFactory _capabilityFactory;
+    private readonly IAICapability _aiCapability;
+    private readonly IGAgentEventRoutingPort _eventRoutingPort;
+    private readonly IGAgentInvocationPort _invocationPort;
+    private readonly IGAgentFactoryPort _factoryPort;
 
     public ScriptRuntimeExecutionOrchestrator(
         IScriptPackageCompiler compiler,
-        IScriptCapabilityFactory capabilityFactory)
+        IAICapability aiCapability,
+        IGAgentEventRoutingPort eventRoutingPort,
+        IGAgentInvocationPort invocationPort,
+        IGAgentFactoryPort factoryPort)
     {
         _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
-        _capabilityFactory = capabilityFactory ?? throw new ArgumentNullException(nameof(capabilityFactory));
+        _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
+        _eventRoutingPort = eventRoutingPort ?? throw new ArgumentNullException(nameof(eventRoutingPort));
+        _invocationPort = invocationPort ?? throw new ArgumentNullException(nameof(invocationPort));
+        _factoryPort = factoryPort ?? throw new ArgumentNullException(nameof(factoryPort));
     }
 
     public async Task<IReadOnlyList<IMessage>> ExecuteRunAsync(
@@ -41,11 +52,14 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
 
         var runId = request.RunEvent.RunId ?? string.Empty;
         var correlationId = runId;
-        var capabilities = _capabilityFactory.Create(
+        var capabilities = new ScriptRuntimeCapabilities(
             request.RuntimeActorId,
             runId,
             correlationId,
-            request.Services);
+            _aiCapability,
+            _eventRoutingPort,
+            _invocationPort,
+            _factoryPort);
 
         var context = new ScriptExecutionContext(
             ActorId: request.RuntimeActorId,

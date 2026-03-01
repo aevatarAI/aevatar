@@ -5,6 +5,9 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Schema;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
@@ -61,11 +64,12 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             compilation.IsSuccess.Should().BeTrue(
                 $"script `{script.ScriptId}` should compile from script document");
 
-            var definition = new ScriptDefinitionGAgent
+            var definition = new ScriptDefinitionGAgent(
+                new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
+                new DefaultScriptReadModelSchemaActivationPolicy())
             {
                 EventSourcingBehaviorFactory =
                     new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(new InMemoryEventStore()),
-                Services = BuildDefinitionServices(),
             };
 
             await definition.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
@@ -108,7 +112,9 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
                 orchestrator.Revision),
             CancellationToken.None);
 
-        var runtimeWithoutDependencies = new ScriptRuntimeGAgent
+        var runtimeWithoutDependencies = new ScriptRuntimeGAgent(
+            new NeverCalledRuntimeExecutionOrchestrator(),
+            new ThrowingSnapshotPort())
         {
             EventSourcingBehaviorFactory =
                 new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(new InMemoryEventStore()),
@@ -243,12 +249,28 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
         });
     }
 
-    private static IServiceProvider BuildDefinitionServices()
+    private sealed class ThrowingSnapshotPort : IScriptDefinitionSnapshotPort
     {
-        var services = new ServiceCollection();
-        services.AddSingleton<ScriptSandboxPolicy>();
-        services.AddSingleton<IScriptExecutionEngine, RoslynScriptExecutionEngine>();
-        services.AddSingleton<IScriptPackageCompiler, RoslynScriptPackageCompiler>();
-        return services.BuildServiceProvider();
+        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
+            string definitionActorId,
+            string requestedRevision,
+            CancellationToken ct)
+        {
+            _ = requestedRevision;
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException($"Definition snapshot not found: {definitionActorId}");
+        }
+    }
+
+    private sealed class NeverCalledRuntimeExecutionOrchestrator : IScriptRuntimeExecutionOrchestrator
+    {
+        public Task<IReadOnlyList<Google.Protobuf.IMessage>> ExecuteRunAsync(
+            ScriptRuntimeExecutionRequest request,
+            CancellationToken ct)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("Runtime execution should not be called when definition snapshot lookup fails.");
+        }
     }
 }

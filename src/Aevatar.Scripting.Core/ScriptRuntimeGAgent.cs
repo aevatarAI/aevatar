@@ -11,8 +11,15 @@ namespace Aevatar.Scripting.Core;
 
 public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
 {
-    public ScriptRuntimeGAgent()
+    private readonly IScriptRuntimeExecutionOrchestrator _orchestrator;
+    private readonly IScriptDefinitionSnapshotPort _snapshotPort;
+
+    public ScriptRuntimeGAgent(
+        IScriptRuntimeExecutionOrchestrator orchestrator,
+        IScriptDefinitionSnapshotPort snapshotPort)
     {
+        _orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
+        _snapshotPort = snapshotPort ?? throw new ArgumentNullException(nameof(snapshotPort));
         InitializeId();
     }
 
@@ -36,10 +43,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             evt.ScriptRevision,
             CancellationToken.None);
 
-        var orchestrator = Services.GetService(typeof(IScriptRuntimeExecutionOrchestrator))
-            as IScriptRuntimeExecutionOrchestrator
-            ?? throw new InvalidOperationException("IScriptRuntimeExecutionOrchestrator is required for ScriptRuntimeGAgent.");
-        var committedEvents = await orchestrator.ExecuteRunAsync(
+        var committedEvents = await _orchestrator.ExecuteRunAsync(
             new ScriptRuntimeExecutionRequest(
                 RuntimeActorId: Id,
                 CurrentState: ClonePayloads(State.StatePayloads),
@@ -49,8 +53,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
                 ScriptRevision: snapshot.Revision,
                 SourceText: snapshot.SourceText,
                 ReadModelSchemaVersion: snapshot.ReadModelSchemaVersion,
-                ReadModelSchemaHash: snapshot.ReadModelSchemaHash,
-                Services: Services),
+                ReadModelSchemaHash: snapshot.ReadModelSchemaHash),
             CancellationToken.None);
         await PersistDomainEventsAsync(committedEvents, CancellationToken.None);
 
@@ -90,10 +93,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         string requestedRevision,
         CancellationToken ct)
     {
-        var snapshotPort = Services.GetService(typeof(IScriptDefinitionSnapshotPort)) as IScriptDefinitionSnapshotPort
-            ?? throw new InvalidOperationException(
-                "IScriptDefinitionSnapshotPort is required for loading script definition snapshot.");
-        return await snapshotPort.GetRequiredAsync(definitionActorId, requestedRevision, ct);
+        return await _snapshotPort.GetRequiredAsync(definitionActorId, requestedRevision, ct);
     }
 
     private static IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any> ClonePayloads(
