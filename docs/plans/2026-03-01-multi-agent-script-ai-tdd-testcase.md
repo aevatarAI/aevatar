@@ -9,6 +9,11 @@
   - `docs/architecture/csharp-script-gagent-detailed-architecture.md`
   - `docs/plans/2026-03-01-csharp-script-gagent-implementation-plan.md`
 
+## 1.1 实现边界（强约束）
+1. 本场景测试逻辑必须由开发者自定义脚本实现（建议 `.csx`），不允许为场景测试改动任何 `src/` 基础生产代码。
+2. 允许改动范围仅限 `test/` 与 `docs/`。
+3. 若基础能力缺失，测试应先失败并记录缺口，不得通过改基础代码“临时补路”。
+
 ## 2. 业务场景
 场景名称: 保险理赔反欺诈自动审核
 
@@ -28,21 +33,24 @@
 3. 查询侧 `ClaimCaseReadModel`（前端与运营后台统一读取）。
 
 ## 3. 多智能体拓扑
-1. `ScriptHostGAgent`（理赔编排脚本宿主）:
-负责流程推进、事件提交、状态迁移与回放一致性。
-2. `RoleGAgent`（Claim Analyst）:
+1. `ScriptDefinitionGAgent`（脚本定义宿主）:
+负责接收脚本字符串定义、持久化 `source_text/source_hash/revision`，作为定义事实权威源。
+2. `ScriptRuntimeGAgent`（理赔编排脚本运行宿主）:
+负责流程推进、事件提交、状态迁移与回放一致性；运行前从 Definition 读取脚本定义快照。
+3. `RoleGAgent`（Claim Analyst）:
 通过 `IAICapability`/`IRoleAgentPort` 对理赔描述进行结构化事实提取与初步判断。
-3. `FraudRiskGAgent`（反欺诈评分）:
+4. `FraudRiskGAgent`（反欺诈评分）:
 结合历史行为输出风险分与风险标签。
-4. `ComplianceRuleGAgent`（合规校验）:
+5. `ComplianceRuleGAgent`（合规校验）:
 校验保单条款、等待期、除外责任等规则。
-5. `HumanReviewGAgent`（人工复核工作台适配）:
+6. `HumanReviewGAgent`（人工复核工作台适配）:
 仅在高风险或规则冲突时触发。
 
 边界约束:
 1. 所有 agent 调用必须通过 `IGAgentInvocationPort`。
 2. 动态创建/销毁/链接子 agent 必须通过 `IGAgentFactoryPort` + `IActorRuntime`。
 3. 脚本不得直接注入 `IServiceProvider` 获取具体 agent 实例。
+4. 脚本必须以字符串形式传入 Definition GAgent 并持久化，运行与回放只能从定义事实读取源码。
 
 ## 4. 端到端事件主链
 ```mermaid
@@ -50,32 +58,44 @@
 sequenceDiagram
     participant API as "Claim API"
     participant APP as "Application Service"
-    participant SH as "ScriptHostGAgent"
+    participant DEF as "ScriptDefinitionGAgent"
+    participant RUN as "ScriptRuntimeGAgent"
     participant ROLE as "RoleGAgent(Claim Analyst)"
     participant FR as "FraudRiskGAgent"
     participant CR as "ComplianceRuleGAgent"
     participant HR as "HumanReviewGAgent"
     participant PJ as "Projection Pipeline"
 
+    API->>APP: "UpsertScriptDefinitionCommand(source_text)"
+    APP->>DEF: "EventEnvelope(UpsertScriptDefinitionRequestedEvent)"
     API->>APP: "SubmitClaimCommand"
-    APP->>SH: "EventEnvelope(SubmitClaimRequestedEvent)"
-    SH->>ROLE: "Invoke: AnalyzeClaimNarrativeEvent"
-    ROLE-->>SH: "ClaimFactsExtractedEvent"
-    SH->>FR: "Invoke: ScoreFraudRiskEvent"
-    FR-->>SH: "ClaimRiskScoredEvent"
-    SH->>CR: "Invoke: ValidateClaimComplianceEvent"
-    CR-->>SH: "ClaimComplianceCheckedEvent"
+    APP->>RUN: "EventEnvelope(SubmitClaimRequestedEvent)"
+    RUN->>DEF: "Load Definition Snapshot"
+    RUN->>ROLE: "Invoke: AnalyzeClaimNarrativeEvent"
+    ROLE-->>RUN: "ClaimFactsExtractedEvent"
+    RUN->>FR: "Invoke: ScoreFraudRiskEvent"
+    FR-->>RUN: "ClaimRiskScoredEvent"
+    RUN->>CR: "Invoke: ValidateClaimComplianceEvent"
+    CR-->>RUN: "ClaimComplianceCheckedEvent"
     alt "High Risk Or Rule Conflict"
-        SH->>HR: "Invoke: RequestManualReviewEvent"
-        HR-->>SH: "ClaimManualReviewedEvent"
+        RUN->>HR: "Invoke: RequestManualReviewEvent"
+        HR-->>RUN: "ClaimManualReviewedEvent"
     end
-    SH-->>SH: "PersistDomainEvents + TransitionState"
-    SH->>PJ: "EventEnvelope stream"
+    RUN-->>RUN: "PersistDomainEvents + TransitionState"
+    RUN->>PJ: "EventEnvelope stream"
     PJ-->>API: "ClaimCaseReadModel updated"
 ```
 
 ## 5. 状态与读模型定义（测试关注）
-`ScriptHostState` 关注字段:
+`ScriptDefinitionState` 关注字段:
+1. `script_id`
+2. `revision`
+3. `source_text`
+4. `source_hash`
+5. `last_applied_event_version`
+6. `last_event_id`
+
+`ScriptRuntimeState` 关注字段:
 1. `script_id`
 2. `revision`
 3. `state_payload_json`（含 `claim_case_id`、`risk_level`、`decision_status`、`review_path`）
@@ -125,6 +145,7 @@ sequenceDiagram
 1. `ClaimReplayTests.Should_rebuild_same_state_from_event_stream`
 2. `ClaimReplayTests.Should_rebuild_same_readmodel_from_event_stream`
 3. `ClaimReplayTests.Should_reject_stale_internal_events`
+4. `ClaimReplayTests.Should_recompile_from_definition_source_without_external_repository`
 
 先写失败断言:
 1. `last_applied_event_version` 与最终状态哈希一致。
@@ -161,15 +182,22 @@ sequenceDiagram
 3. 任何分支都不得绕开 EventEnvelope 或直接改宿主状态。
 4. 回放测试证明相同事件流产生相同状态和读模型。
 5. 生命周期测试证明 Runtime 是唯一生命周期权威来源。
+6. `git diff --name-only -- src` 为空（本场景不改生产代码）。
+7. 脚本源码字符串在 Definition 状态可完整重建，回放不依赖外部脚本仓库。
 
 ## 9. 推荐测试文件与命令
 推荐测试文件:
-1. `test/Aevatar.Scripting.Core.Tests/Business/ClaimScriptDecisionTests.cs`
-2. `test/Aevatar.Scripting.Core.Tests/AI/ClaimRoleIntegrationTests.cs`
-3. `test/Aevatar.Integration.Tests/ClaimOrchestrationIntegrationTests.cs`
-4. `test/Aevatar.Integration.Tests/ClaimReplayTests.cs`
-5. `test/Aevatar.CQRS.Projection.Core.Tests/ClaimReadModelProjectorTests.cs`
-6. `test/Aevatar.Integration.Tests/ClaimLifecycleBoundaryTests.cs`
+1. `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/claim_orchestrator.csx`
+2. `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/role_claim_analyst.csx`
+3. `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/fraud_risk.csx`
+4. `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/compliance_rule.csx`
+5. `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/human_review.csx`
+6. `test/Aevatar.Scripting.Core.Tests/Business/ClaimScriptDecisionTests.cs`
+7. `test/Aevatar.Scripting.Core.Tests/AI/ClaimRoleIntegrationTests.cs`
+8. `test/Aevatar.Integration.Tests/ClaimOrchestrationIntegrationTests.cs`
+9. `test/Aevatar.Integration.Tests/ClaimReplayTests.cs`
+10. `test/Aevatar.CQRS.Projection.Core.Tests/ClaimReadModelProjectorTests.cs`
+11. `test/Aevatar.Integration.Tests/ClaimLifecycleBoundaryTests.cs`
 
 推荐验证命令:
 1. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --filter "*Claim*"`
@@ -178,6 +206,7 @@ sequenceDiagram
 4. `bash tools/ci/architecture_guards.sh`
 5. `bash tools/ci/projection_route_mapping_guard.sh`
 6. `bash tools/ci/test_stability_guards.sh`
+7. `test -z "$(git diff --name-only -- src)"`
 
 ## 10. 非目标
 1. 不在本测试用例中实现新的外部 DSL。

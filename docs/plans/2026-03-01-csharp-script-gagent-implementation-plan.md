@@ -4,9 +4,11 @@
 
 **Goal:** Implement C# Script GAgent capability with strict EventEnvelope event handling, Event Sourcing replay consistency, unified Projection Pipeline, composition-only AI/GAgent reuse, and a business-meaningful multi-agent regression scenario.
 
-**Architecture:** Build a new scripting vertical (`Abstractions -> Core -> Projection -> Hosting`) centered on `ScriptHostGAgent : GAgentBase<ScriptHostState>`. Application commands are adapted to requested events wrapped in `EventEnvelope`; ScriptHost handles only events and persists domain events. Read-side plugs into existing projection coordinator by exact `TypeUrl` routing. Script-to-agent calls/creation must go through runtime-backed ports (`IGAgentInvocationPort` / `IGAgentFactoryPort`) with `IActorRuntime` as lifecycle authority; IOC scope is not a lifecycle manager. Business scenario baseline is the insurance-claim anti-fraud workflow defined in `docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md`.
+**Architecture:** Build a new scripting vertical (`Abstractions -> Core -> Projection -> Hosting`) with two GAgents: `ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>` and `ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>`. `ScriptDefinitionGAgent` persists self-contained script source string (`source_text`) and revision/hash metadata; `ScriptRuntimeGAgent` handles run events and compiles from definition snapshot. Application commands are adapted to requested events wrapped in `EventEnvelope`; read-side plugs into existing projection coordinator by exact `TypeUrl` routing. Script-to-agent calls/creation must go through runtime-backed ports (`IGAgentInvocationPort` / `IGAgentFactoryPort`) with `IActorRuntime` as lifecycle authority; IOC scope is not a lifecycle manager. Business scenario baseline is the insurance-claim anti-fraud workflow defined in `docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md`.
 
 **Tech Stack:** .NET 9, xUnit, FluentAssertions, Google.Protobuf, existing Aevatar Foundation/CQRS/Workflow runtime and CI guards.
+
+> Supersession Note (2026-03-01): dual-GAgent architecture is now authoritative. Historical tasks mentioning `ScriptHostGAgent` represent baseline implementation history; new work must follow `ScriptDefinitionGAgent + ScriptRuntimeGAgent` and self-contained `source_text` persistence.
 
 ---
 
@@ -841,6 +843,11 @@ git commit -m "feat: add runtime-authoritative gagent factory port and lifecycle
 ### Task 13: Add Business-meaningful Multi-agent Script TDD Scenario (Claim Anti-fraud)
 
 **Files:**
+- Create: `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/claim_orchestrator.csx`
+- Create: `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/role_claim_analyst.csx`
+- Create: `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/fraud_risk.csx`
+- Create: `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/compliance_rule.csx`
+- Create: `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/human_review.csx`
 - Create: `test/Aevatar.Scripting.Core.Tests/Business/ClaimScriptDecisionTests.cs`
 - Create: `test/Aevatar.Scripting.Core.Tests/AI/ClaimRoleIntegrationTests.cs`
 - Create: `test/Aevatar.Integration.Tests/ClaimOrchestrationIntegrationTests.cs`
@@ -848,6 +855,10 @@ git commit -m "feat: add runtime-authoritative gagent factory port and lifecycle
 - Create: `test/Aevatar.CQRS.Projection.Core.Tests/ClaimReadModelProjectorTests.cs`
 - Create: `test/Aevatar.Integration.Tests/ClaimLifecycleBoundaryTests.cs`
 - Modify: `docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md`
+
+**Boundary Rule:**
+- Do not modify any file under `src/` in this task.
+- Scripts must be passed as string content, compiled in runtime, and persisted as self-contained definition facts (source text/hash/revision) in the test scenario model.
 
 **Step 1: Write the failing tests**
 
@@ -896,11 +907,11 @@ Expected: FAIL with missing read model projector tests.
 **Step 3: Write minimal implementation**
 
 ```csharp
-// 1) Add deterministic scenario fixtures for Case-A/B/C (Approve/ManualReview/Reject).
-// 2) Wire RoleGAgent AI output into ClaimFactsExtractedEvent mapping.
-// 3) Use IGAgentInvocationPort for FraudRisk/Compliance calls.
-// 4) Use IGAgentFactoryPort only on high-risk branch to create HumanReviewGAgent.
-// 5) Persist domain events and assert replay gives same state/read model.
+// 1) Implement claim scenario logic entirely in developer-authored .csx scripts under test fixtures.
+// 2) Upsert script source strings into ScriptDefinitionGAgent-equivalent test fixture state.
+// 3) Execute runs via ScriptRuntimeGAgent-equivalent test fixture logic; do not touch production source code.
+// 4) Keep assertions on IGAgentInvocationPort/IGAgentFactoryPort behavior in test doubles/harnesses.
+// 5) Validate replay and read model determinism from emitted events only.
 ```
 
 **Step 4: Run tests to verify they pass**
@@ -917,11 +928,69 @@ Expected: PASS.
 Run: `bash tools/ci/test_stability_guards.sh`
 Expected: PASS.
 
+Run: `test -z "$(git diff --name-only -- src)"`
+Expected: PASS (no production source changes).
+
 **Step 5: Commit**
 
 ```bash
-git add test/Aevatar.Scripting.Core.Tests/Business/ClaimScriptDecisionTests.cs test/Aevatar.Scripting.Core.Tests/AI/ClaimRoleIntegrationTests.cs test/Aevatar.Integration.Tests/ClaimOrchestrationIntegrationTests.cs test/Aevatar.Integration.Tests/ClaimReplayTests.cs test/Aevatar.CQRS.Projection.Core.Tests/ClaimReadModelProjectorTests.cs test/Aevatar.Integration.Tests/ClaimLifecycleBoundaryTests.cs docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md
+git add test/Aevatar.Integration.Tests/Fixtures/Scripts/claim test/Aevatar.Scripting.Core.Tests/Business/ClaimScriptDecisionTests.cs test/Aevatar.Scripting.Core.Tests/AI/ClaimRoleIntegrationTests.cs test/Aevatar.Integration.Tests/ClaimOrchestrationIntegrationTests.cs test/Aevatar.Integration.Tests/ClaimReplayTests.cs test/Aevatar.CQRS.Projection.Core.Tests/ClaimReadModelProjectorTests.cs test/Aevatar.Integration.Tests/ClaimLifecycleBoundaryTests.cs docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md
 git commit -m "test: add claim anti-fraud multi-agent script tdd scenario"
+```
+
+### Task 14: Document and Verify Dual-GAgent Self-contained Contract (Planned)
+
+**Files:**
+- Modify: `docs/architecture/csharp-script-gagent-requirements.md`
+- Modify: `docs/architecture/csharp-script-gagent-detailed-architecture.md`
+- Modify: `docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md`
+- Create: `test/Aevatar.Integration.Tests/ScriptDefinitionRuntimeContractTests.cs`
+
+**Step 1: Write the failing tests**
+
+```csharp
+public class ScriptDefinitionRuntimeContractTests
+{
+    [Fact]
+    public async Task Runtime_should_compile_from_definition_snapshot_only()
+    {
+        // Assert runtime compile input comes from persisted source_text in definition facts.
+    }
+
+    [Fact]
+    public async Task Replay_should_succeed_without_external_script_repository()
+    {
+        // Assert source_text + source_hash + revision is sufficient for replay.
+    }
+}
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --filter "*ScriptDefinitionRuntimeContractTests*"`
+Expected: FAIL with missing dual-GAgent contract coverage.
+
+**Step 3: Write minimal implementation**
+
+```csharp
+// 1) Build test fixture with separated Definition and Runtime actors.
+// 2) Persist source_text as definition facts.
+// 3) Execute/replay by loading source from definition facts only.
+```
+
+**Step 4: Run tests to verify they pass**
+
+Run: `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --filter "*ScriptDefinitionRuntimeContractTests*"`
+Expected: PASS.
+
+Run: `test -z "$(git diff --name-only -- src)"`
+Expected: PASS (no production source changes).
+
+**Step 5: Commit**
+
+```bash
+git add test/Aevatar.Integration.Tests/ScriptDefinitionRuntimeContractTests.cs docs/architecture/csharp-script-gagent-requirements.md docs/architecture/csharp-script-gagent-detailed-architecture.md docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md
+git commit -m "test: add dual-gagent self-contained contract coverage"
 ```
 
 ## Cross-Task Rules
@@ -931,7 +1000,7 @@ git commit -m "test: add claim anti-fraud multi-agent script tdd scenario"
 3. Keep one task per commit and keep tests green.
 4. Do not introduce `TypeUrl.Contains(...)`.
 5. Do not let any GAgent process Command directly.
-6. Do not let `ScriptHostGAgent` inherit `RoleGAgent` or `AIGAgentBase<TState>`.
+6. Do not let `ScriptRuntimeGAgent` inherit `RoleGAgent` or `AIGAgentBase<TState>`.
 7. Do not resolve concrete GAgent instances from `IServiceProvider` in script execution path.
 8. Ensure create/destroy/link/unlink/restore operations go through `IActorRuntime`.
 
@@ -942,3 +1011,4 @@ git commit -m "test: add claim anti-fraud multi-agent script tdd scenario"
 3. M3: AI composition + generic invocation + projection integration (Tasks 7-8)
 4. M4: Hosting/guards/e2e/docs complete and lifecycle boundary planned (Tasks 9-12)
 5. M5: Claim anti-fraud multi-agent business scenario integrated into TDD regression (Task 13)
+6. M6: Dual-GAgent self-contained contract coverage completed (Task 14)
