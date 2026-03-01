@@ -31,6 +31,20 @@
 4. 统一 `Command -> Event -> Projection -> ReadModel`，不增加旁路。
 5. 全流程可自动化验证并受 CI 守卫约束。
 
+## 3.1 Script-Only Iteration 终态定义（强制）
+
+在“框架完全定义后”，系统进入 `Script-Only Iteration Mode`，满足以下约束：
+
+1. 新脚本定义发布只能由脚本能力接口触发（`Propose -> Validate -> Promote`），禁止人工直写发布通道。
+2. 运行中新增实例只能走脚本能力接口（`SpawnScriptRuntimeAsync` / `RunScriptInstanceAsync`）。
+3. 主链路不允许“脚本外编排器”直接推进业务演化状态机。
+4. 所有升级必须产生完整事件链与审计读模型记录。
+5. 任一门禁失败必须自动拒绝或回滚，不允许“人工跳过继续上线”。
+
+说明：
+
+1. 人工运维仍可执行“停机/恢复/容量操作”，但不得绕过脚本演化协议直接改业务脚本事实版本。
+
 ## 4. 范围与非范围
 
 范围内：
@@ -283,6 +297,12 @@ sequenceDiagram
 5. 每次发布必须保留可回滚 revision 指针。
 6. 发布失败自动回滚到上一个稳定 revision。
 
+Script-Only 模式附加禁止项：
+
+1. 禁止通过 Host/API 直接调用“发布某脚本 revision”为最终动作（必须经演化协议事件链）。
+2. 禁止新增非脚本入口的业务升级 endpoint。
+3. 禁止在 Application/Hosting 放置“临时人工开关”绕过策略门禁。
+
 ## 11. 数据与状态模型
 
 事实源：
@@ -372,6 +392,7 @@ sequenceDiagram
 3. 失败路径可自动回滚且有事件证据。
 4. 架构守卫覆盖新增规则并稳定通过。
 5. 文档、代码、测试三者一致。
+6. 达成 `Script-Only Iteration Mode`：无脚本外业务演化入口可绕过主链路。
 
 ## 17. 实施后验证命令
 
