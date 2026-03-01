@@ -30,11 +30,13 @@ public class ScriptProtoContractsTests
             Revision = "rev-1",
             LastRunId = "run-1",
             StatePayloadJson = "{\"ok\":true}",
+            ReadModelPayloadJson = "{\"status\":\"ok\"}",
         };
 
         state.DefinitionActorId.Should().Be("definition-1");
         state.Revision.Should().Be("rev-1");
         state.LastRunId.Should().Be("run-1");
         state.StatePayloadJson.Should().Be("{\"ok\":true}");
+        state.ReadModelPayloadJson.Should().Be("{\"status\":\"ok\"}");
     }
 }

@@ -18,8 +18,9 @@ message ScriptRuntimeState {
   string revision = 2;
   string last_run_id = 3;
   string state_payload_json = 4;
-  int64 last_applied_event_version = 5;
-  string last_event_id = 6;
+  string read_model_payload_json = 5;
+  int64 last_applied_event_version = 6;
+  string last_event_id = 7;
 }
 
 message UpsertScriptDefinitionRequestedEvent {
@@ -41,6 +42,7 @@ message RunScriptRequestedEvent {
   string input_json = 2;
   string script_revision = 3;
   string definition_actor_id = 4;
+  string requested_event_type = 5;
 }
 
 message ScriptRunDomainEventCommitted {
@@ -50,4 +52,5 @@ message ScriptRunDomainEventCommitted {
   string event_type = 4;
   string payload_json = 5;
   string state_payload_json = 6;
+  string read_model_payload_json = 7;
 }

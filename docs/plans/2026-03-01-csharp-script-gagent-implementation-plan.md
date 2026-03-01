@@ -2,6 +2,10 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+> Superseded (2026-03-01): This V1 implementation plan is replaced by `docs/plans/2026-03-01-csharp-script-gagent-v2-replan.md`.
+>
+> Audit update (2026-03-01): current implementation is still not equivalent to static GAgent capability surface. Do not execute this V1 plan for new work; use V2 replan sections "11. 现状能力差距审计" and "12. V2 强制验收门槛" as hard gate.
+
 **Goal:** Implement C# Script GAgent capability with strict EventEnvelope event handling, Event Sourcing replay consistency, unified Projection Pipeline, composition-only AI/GAgent reuse, and a business-meaningful multi-agent regression scenario.
 
 **Architecture:** Build a new scripting vertical (`Abstractions -> Core -> Projection -> Hosting`) with two GAgents: `ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>` and `ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>`. `ScriptDefinitionGAgent` persists self-contained script source string (`source_text`) and revision/hash metadata; `ScriptRuntimeGAgent` handles run events and compiles from definition snapshot. Application commands are adapted to requested events wrapped in `EventEnvelope`; read-side plugs into existing projection coordinator by exact `TypeUrl` routing. Script-to-agent calls/creation must go through runtime-backed ports (`IGAgentInvocationPort` / `IGAgentFactoryPort`) with `IActorRuntime` as lifecycle authority; IOC scope is not a lifecycle manager. Business scenario baseline is the insurance-claim anti-fraud workflow defined in `docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md`.
@@ -139,9 +143,9 @@ git commit -m "feat: add script host protobuf contracts"
 
 **Files:**
 - Create: `src/Aevatar.Scripting.Abstractions/GlobalUsings.cs`
-- Create: `src/Aevatar.Scripting.Abstractions/Definitions/IScriptAgentDefinition.cs`
+- Create: `src/Aevatar.Scripting.Abstractions/Definitions/IScriptPackageDefinition.cs`
 - Create: `src/Aevatar.Scripting.Abstractions/Definitions/ScriptExecutionContext.cs`
-- Create: `src/Aevatar.Scripting.Abstractions/Definitions/ScriptDecisionResult.cs`
+- Create: `src/Aevatar.Scripting.Abstractions/Definitions/ScriptHandlerResult.cs`
 - Test: `test/Aevatar.Scripting.Core.Tests/Contract/ScriptDefinitionContractsTests.cs`
 
 **Step 1: Write the failing test**
@@ -150,10 +154,10 @@ git commit -m "feat: add script host protobuf contracts"
 public class ScriptDefinitionContractsTests
 {
     [Fact]
-    public async Task DecideAsync_ShouldReturnDomainEvents()
+    public async Task HandleRequestedEventAsync_ShouldReturnDomainEvents()
     {
         var definition = new FakeScriptDefinition();
-        var result = await definition.DecideAsync(new ScriptExecutionContext("actor-1", "script-1", "r1"), CancellationToken.None);
+        var result = await definition.HandleRequestedEventAsync(new ScriptExecutionContext("actor-1", "script-1", "r1"), CancellationToken.None);
 
         result.DomainEvents.Should().NotBeEmpty();
     }
@@ -168,15 +172,15 @@ Expected: FAIL with missing contract types.
 **Step 3: Write minimal implementation**
 
 ```csharp
-public interface IScriptAgentDefinition
+public interface IScriptPackageDefinition
 {
     string ScriptId { get; }
     string Revision { get; }
-    Task<ScriptDecisionResult> DecideAsync(ScriptExecutionContext context, CancellationToken ct);
+    Task<ScriptHandlerResult> HandleRequestedEventAsync(ScriptExecutionContext context, CancellationToken ct);
 }
 
 public sealed record ScriptExecutionContext(string ActorId, string ScriptId, string Revision);
-public sealed record ScriptDecisionResult(IReadOnlyList<IMessage> DomainEvents);
+public sealed record ScriptHandlerResult(IReadOnlyList<IMessage> DomainEvents);
 ```
 
 **Step 4: Run test to verify it passes**
@@ -337,8 +341,8 @@ git commit -m "feat: implement script host event handling and replay-safe transi
 ### Task 6: Implement Script Compiler and Sandbox Policy
 
 **Files:**
-- Create: `src/Aevatar.Scripting.Core/Compilation/IScriptAgentCompiler.cs`
-- Create: `src/Aevatar.Scripting.Core/Compilation/RoslynScriptAgentCompiler.cs`
+- Create: `src/Aevatar.Scripting.Core/Compilation/IScriptPackageCompiler.cs`
+- Create: `src/Aevatar.Scripting.Core/Compilation/RoslynScriptPackageCompiler.cs`
 - Create: `src/Aevatar.Scripting.Core/Compilation/ScriptSandboxPolicy.cs`
 - Test: `test/Aevatar.Scripting.Core.Tests/Compilation/ScriptSandboxPolicyTests.cs`
 
@@ -568,7 +572,7 @@ public class ScriptCapabilityHostExtensionsTests
         var services = new ServiceCollection();
         services.AddScriptCapability();
 
-        services.Any(x => x.ServiceType == typeof(IScriptAgentCompiler)).Should().BeTrue();
+        services.Any(x => x.ServiceType == typeof(IScriptPackageCompiler)).Should().BeTrue();
         services.Any(x => x.ServiceType == typeof(IAICapability)).Should().BeTrue();
         services.Any(x => x.ServiceType == typeof(IGAgentInvocationPort)).Should().BeTrue();
     }
@@ -587,7 +591,7 @@ public static class ScriptCapabilityServiceCollectionExtensions
 {
     public static IServiceCollection AddScriptCapability(this IServiceCollection services)
     {
-        services.TryAddSingleton<IScriptAgentCompiler, RoslynScriptAgentCompiler>();
+        services.TryAddSingleton<IScriptPackageCompiler, RoslynScriptPackageCompiler>();
         services.TryAddSingleton<IGAgentInvocationPort, RuntimeGAgentInvocationPort>();
         services.TryAddSingleton<IAICapability, RoleAgentDelegateAICapability>();
         // IGAgentFactoryPort planned for lifecycle-authoritative create/destroy APIs.

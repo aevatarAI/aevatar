@@ -41,8 +41,10 @@ public class ScriptCapabilityHostExtensionsTests
             x.ServiceType == typeof(ScriptSandboxPolicy) &&
             x.ImplementationType == typeof(ScriptSandboxPolicy));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptAgentCompiler) &&
-            x.ImplementationType == typeof(RoslynScriptAgentCompiler));
+            x.ServiceType == typeof(IScriptPackageCompiler) &&
+            x.ImplementationType == typeof(RoslynScriptPackageCompiler));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IGAgentEventRoutingPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IGAgentInvocationPort));
         services.Should().Contain(x =>

@@ -33,10 +33,31 @@ public class ScriptDefinitionRuntimeContractTests
                     ScriptId: "script-contract",
                     ScriptRevision: "rev-contract-1",
                     SourceText: """
-using System.Collections.Generic;
-public static class ContractScript
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class ContractScript : IScriptPackageRuntime
 {
-    public static IReadOnlyList<string> Decide(string inputJson) => new[] { "FromDefinitionSnapshotEvent" };
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
+    {
+        _ = requestedEvent;
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = "FromDefinitionSnapshotEvent" } }));
+    }
+
+    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+
+    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
 }
 """,
                     SourceHash: "hash-contract-1"),
@@ -86,10 +107,31 @@ public static class ContractScript
                     ScriptId: "script-self-contained",
                     ScriptRevision: "rev-self-contained",
                     SourceText: """
-using System.Collections.Generic;
-public static class ReplayScript
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class ReplayScript : IScriptPackageRuntime
 {
-    public static IReadOnlyList<string> Decide(string inputJson) => new[] { "ReplaySelfContainedEvent" };
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
+    {
+        _ = requestedEvent;
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = "ReplaySelfContainedEvent" } }));
+    }
+
+    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+
+    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
 }
 """,
                     SourceHash: "hash-self-contained"),
@@ -145,10 +187,31 @@ public static class ReplayScript
                     ScriptId: "script-revision-check",
                     ScriptRevision: "rev-actual",
                     SourceText: """
-using System.Collections.Generic;
-public static class RevisionScript
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class RevisionScript : IScriptPackageRuntime
 {
-    public static IReadOnlyList<string> Decide(string inputJson) => new[] { "RevisionEvent" };
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
+    {
+        _ = requestedEvent;
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = "RevisionEvent" } }));
+    }
+
+    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+
+    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
 }
 """,
                     SourceHash: "hash-revision"),

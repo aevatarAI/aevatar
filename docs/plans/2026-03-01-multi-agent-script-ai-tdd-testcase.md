@@ -118,7 +118,7 @@ sequenceDiagram
 1. `ClaimScriptDecisionTests.Should_emit_facts_risk_and_compliance_requests_in_order`
 2. `ClaimScriptDecisionTests.Should_require_manual_review_when_high_risk`
 3. `ClaimScriptDecisionTests.Should_emit_approve_when_low_risk_and_compliant`
-4. `RoslynScriptAgentCompilerTests.DecideAsync_ShouldAllowScriptToUseCapabilities_AndReturnStatePayload`
+4. `RoslynScriptPackageCompilerTests.HandleRequestedEvent_ShouldAllowScriptToUseCapabilities_IncludingPublishAndSendTo`
 
 先写失败断言:
 1. 事件类型与顺序必须精确匹配。
@@ -220,4 +220,4 @@ sequenceDiagram
 2. 已落地复杂场景内嵌脚本驱动测试，覆盖脚本集合完整性、编译与持久化。
 3. 已落地 `Claim*` 编排/回放/投影/生命周期测试集，并通过运行。
 4. 已落地脚本能力上下文：脚本可通过 `ScriptExecutionContext.Capabilities` 调用 AI/跨 GAgent 调用与创建能力。
-5. 已落地脚本状态回传：脚本可返回 `ScriptDecisionResult.StatePayloadJson`，运行态与投影均按脚本状态载荷推进。
+5. 已落地脚本状态回传：脚本可返回 `ScriptHandlerResult.StatePayloadJson`，运行态与投影均按脚本状态载荷推进。

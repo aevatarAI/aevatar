@@ -1,13 +1,14 @@
 # C# Script GAgent 详细架构设计（基于需求文档）
 
 ## 1. 文档元信息
-- 状态: Done
+- 状态: Superseded-By-V2
 - 版本: v0.5
 - 日期: 2026-03-01
 - 需求基线: `docs/architecture/csharp-script-gagent-requirements.md`
 - 适用范围: `Foundation/Core/CQRS/Workflow/Host` 相关子系统
 - 文档目标: 将需求文档转化为可落地的详细架构设计与实施边界
 - 最近实现快照: 双 GAgent 写侧主链、定义快照强制加载、脚本能力上下文（AI/Invocation/Factory）、脚本状态回传链路、投影路由与 Host 装配已落地
+- V2 接管文档: `docs/plans/2026-03-01-csharp-script-gagent-v2-replan.md`
 
 ## 2. 设计目标与不可妥协约束
 
@@ -28,6 +29,16 @@
 8. GAgent 生命周期的 create/destroy/link/replay 只能由 `IActorRuntime` 管理；IOC `Scope` 仅用于依赖解析，不承担生命周期事实管理。
 9. 完全自包含: 脚本源码字符串必须持久化在定义事实（事件/状态）中，回放不得依赖外部脚本仓库。
 10. 编译产物不持久化；运行时可缓存，回放按 `revision + source_hash` 重编译。
+
+## 2.3 V2 审计结论（2026-03-01）
+本文件保留 V1 详细设计脉络，但当前实现审计显示以下问题仍未达成 V2 目标：
+1. 脚本入口仍偏 `Decide` 单入口，未形成“多事件处理器 + 显式 Apply + ReadModel Reducer”完整契约。
+2. 运行态事实事件被 `ScriptRunDomainEventCommitted` 统一封装，脚本领域语义表达仍偏弱。
+3. 状态演进主要依赖 `state_payload_json`，未建立强类型状态演进治理边界。
+4. 能力面仍未覆盖静态 GAgent 的完整能力集合（尤其 `Publish/Send/Hook/Module`）。
+5. 沙箱治理仍偏黑名单策略，需升级为语义分析和权限双层模型。
+
+后续详细架构与实施基线以 `docs/plans/2026-03-01-csharp-script-gagent-v2-replan.md` 的第 11、12 节为准。
 
 ## 3. 架构总览
 
@@ -138,7 +149,7 @@ sequenceDiagram
     APP->>ADA: "Map Command -> RunScriptRequestedEvent"
     ADA->>RUN: "Handle EventEnvelope(RunEvent)"
     RUN->>DEF: "Read Definition Snapshot(source_text/revision)"
-    RUN->>RUN: "Compile + Script Business Logic(Decide)"
+    RUN->>RUN: "Compile + Script Runtime(Handle/Apply/Reduce)"
     RUN->>ES: "Append Runtime Domain Events"
     RUN->>RUN: "TransitionState via matcher"
     RUN-->>API: "Ack/Event-driven response"
@@ -176,8 +187,8 @@ sequenceDiagram
 4. 反射逃逸与动态加载非白名单程序集。
 
 允许能力示例:
-1. 通过 `IScriptAgentDefinition` 的脚本业务入口输出 `ScriptDecisionResult`（领域事件 + 状态载荷）。
-2. 通过 `ScriptExecutionContext.Capabilities` 发起 `AskAI/InvokeAgent/CreateAgent/DestroyAgent/Link/Unlink`。
+1. 通过 `IScriptPackageRuntime` 的脚本业务入口输出 `ScriptHandlerResult`（领域事件 + state/readmodel 载荷）。
+2. 通过 `ScriptExecutionContext.Capabilities` 发起 `AskAI/Publish/SendTo/InvokeAgent/CreateAgent/DestroyAgent/Link/Unlink`。
 3. 通过框架事件化机制触发延迟与内部事件，不允许脚本线程回调直接改状态。
 
 ## 8. AI 与通用 GAgent 复用架构（组合，不继承）

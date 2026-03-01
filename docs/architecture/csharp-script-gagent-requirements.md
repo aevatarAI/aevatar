@@ -1,12 +1,13 @@
 # C# Script GAgent Requirements
 
 ## 1. 文档元信息
-- 状态: Done
+- 状态: Superseded-By-V2
 - 版本: v0.5
 - 日期: 2026-03-01
 - 适用范围: `src/Aevatar.Foundation.*`、`src/Aevatar.CQRS.Projection.*`、`src/workflow/*`、Host 装配层
 - 文档定位: 定义“可由 C# 脚本构建的 GAgent”需求基线，确保与静态 GAgent/YAML Workflow GAgent 同主链语义
 - 最近一次验证结果: `dotnet build aevatar.slnx`、`dotnet test aevatar.slnx`、`architecture_guards.sh`、`projection_route_mapping_guard.sh`、`test_stability_guards.sh` 通过
+- V2 接管文档: `docs/plans/2026-03-01-csharp-script-gagent-v2-replan.md`
 
 ## 2. 背景与关键决策（统一认知）
 现有体系已具备两类能力：
@@ -26,6 +27,18 @@
 8. IOC `Scope` 只能用于依赖解析与短生命周期资源，不作为 GAgent 生命周期管理边界。
 9. 脚本必须“完全自包含”：源码字符串（及其 hash/revision）须可由事件与状态重建，不依赖外部脚本仓库可用性。
 10. 编译产物不持久化；回放时按 `script_revision + source_hash` 从定义态重编译，保证可重放与跨节点一致性。
+
+## 2.1 V2 审计更新（2026-03-01）
+基于代码审计，当前脚本实现与“静态 GAgent 能力等价”仍存在明显差距，本文件第 7 节状态矩阵仅代表 V1 阶段交付快照，不再代表 V2 最终能力结论。
+
+关键审计结论：
+1. 当前仍是 `Decide` 主入口模型，非多事件处理器模型。
+2. 运行事实事件存在封装层，领域语义表达不足。
+3. 状态演进主要依赖 `state_payload_json`，缺少强契约化 `Apply` 能力。
+4. 能力面未覆盖静态 GAgent 关键能力（发布/发送/hook/module/lifecycle）。
+5. 安全治理仍以正则黑名单为主，需升级为语义分析 + 权限控制。
+
+权威审计与整改主线以 `docs/plans/2026-03-01-csharp-script-gagent-v2-replan.md` 为准。
 
 ## 3. 重构目标
 1. 支持用 C# 脚本定义 GAgent 行为，覆盖静态类核心能力面（请求事件处理、状态迁移、读模型投影）。
@@ -88,14 +101,14 @@
 ## 7. 需求分解与状态矩阵
 | ID | 需求 | 验收标准 | 当前状态 | 证据 | 差距 |
 |---|---|---|---|---|---|
-| R-SG-01 | 脚本定义模型 | 提供 `IScriptAgentDefinition` 契约，覆盖请求事件决策/事件处理/状态迁移/投影 reducer 声明 | Done | `src/Aevatar.Scripting.Abstractions/Definitions/*`、`src/Aevatar.Scripting.Core/Compilation/*`、`RoslynScriptAgentCompilerTests` | 动态脚本 reducer 声明机制待扩展 |
+| R-SG-01 | 脚本定义模型 | 提供 `IScriptPackageDefinition` / `IScriptPackageRuntime` 契约，覆盖请求事件处理/状态演进/读模型 reducer 声明 | Done | `src/Aevatar.Scripting.Abstractions/Definitions/*`、`src/Aevatar.Scripting.Core/Compilation/*`、`RoslynScriptPackageCompilerTests` | 动态脚本 reducer 声明机制待扩展 |
 | R-SG-02 | 执行宿主 | 运行态由 `ScriptRuntimeGAgent` 承载执行，不直接耦合脚本定义事实 | Done | `src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs`、`test/Aevatar.Scripting.Core.Tests/Runtime/ScriptRuntimeGAgentReplayContractTests.cs` | 无 |
 | R-SG-03 | 严格 ES | 脚本写侧仅输出领域事件，由宿主调用 `PersistDomainEvent(s)` 提交并 apply | Done | `ScriptDefinitionGAgent`、`ScriptRuntimeGAgent`、`ScriptGAgentEndToEndTests` | 无 |
-| R-SG-04 | 自定义 State | 支持脚本声明状态 schema 与默认值，定义/运行分别维护 `ScriptDefinitionState` 与 `ScriptRuntimeState` | Done | `script_host_messages.proto(state_payload_json)`、`ScriptRuntimeGAgentReplayContractTests.ShouldCarryStatePayloadBetweenRuns`、`RoslynScriptAgentCompilerTests.ShouldAllowScriptToUseCapabilities_AndReturnStatePayload` | schema 演进策略作为后续治理项 |
+| R-SG-04 | 自定义 State | 支持脚本声明状态 schema 与默认值，定义/运行分别维护 `ScriptDefinitionState` 与 `ScriptRuntimeState` | Done | `script_host_messages.proto(state_payload_json)`、`ScriptRuntimeGAgentReplayContractTests.ShouldCarryStatePayloadBetweenRuns`、`RoslynScriptPackageCompilerTests.HandleRequestedEvent_ShouldAllowScriptToUseCapabilities_IncludingPublishAndSendTo` | schema 演进策略作为后续治理项 |
 | R-SG-05 | 自定义 ReadModel | 支持脚本 reducer 定义 read model 结构并接入统一 projector 路由 | Done | `Aevatar.Scripting.Projection/*` + `ScriptExecutionReadModelProjectorTests` | 跨存储 provider 装配待补 |
 | R-SG-06 | 路由确定性 | reducer 路由必须 `TypeUrl` 精确键 + Ordinal 命中 | Done | `ScriptEventReducerBase` + `ScriptExecutionReadModelProjector` + `architecture_guards.sh` | 无 |
 | R-SG-07 | Actor 运行态一致性 | 超时/重试/延迟仅能发布内部事件，不得回调改状态 | In Progress | `ScriptDefinitionGAgent`、`ScriptRuntimeGAgent` 遵守事件处理主线程模型 | timeout/retry 内部事件模型未落地 |
-| R-SG-08 | 安全沙箱 | 禁止 `Task.Run/Timer/Thread/lock/IO 直连/反射逃逸` 等危险能力 | In Progress | `ScriptSandboxPolicy` + `RoslynScriptAgentCompilerTests` | IO/反射白名单治理待补齐 |
+| R-SG-08 | 安全沙箱 | 禁止 `Task.Run/Timer/Thread/lock/IO 直连/反射逃逸` 等危险能力 | In Progress | `ScriptSandboxPolicy` + `RoslynScriptPackageCompilerTests` | IO/反射白名单治理待补齐 |
 | R-SG-09 | 可观测性 | 每次脚本执行包含 `script_id/revision/event_id/correlation_id` 日志与指标维度 | Planned | 本文档 | 观测埋点未实现 |
 | R-SG-10 | 版本治理 | 支持脚本 revision 固化回放；升级默认“新实例生效”，在位升级需显式迁移 | Done | `RunScriptRequestedEvent.script_revision`、`ScriptRunDomainEventCommitted.script_revision`、`ScriptDefinitionRuntimeContractTests` | 在位迁移策略文档化待持续完善 |
 | R-SG-11 | Host 装配 | Host 仅注册脚本 capability，不承载脚本业务逻辑 | Done | `Aevatar.Scripting.Hosting/*` + `ScriptCapabilityHostExtensionsTests` | 主程序默认接入策略待确认 |

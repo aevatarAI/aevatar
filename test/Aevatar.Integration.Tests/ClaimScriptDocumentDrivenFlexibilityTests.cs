@@ -45,12 +45,12 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
     public async Task EmbeddedScripts_ShouldCompile_AndPersistIntoDefinitionState()
     {
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
-        var compiler = new RoslynScriptAgentCompiler(new ScriptSandboxPolicy());
+        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
 
         foreach (var script in document.Scripts)
         {
             var compilation = await compiler.CompileAsync(
-                new ScriptCompilationRequest(
+                new ScriptPackageCompilationRequest(
                     script.ScriptId,
                     script.Revision,
                     script.Source),
@@ -85,14 +85,20 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
     {
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
         var orchestrator = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
-        var compiler = new RoslynScriptAgentCompiler(new ScriptSandboxPolicy());
+        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
 
         var compilation = await compiler.CompileAsync(
-            new ScriptCompilationRequest(orchestrator.ScriptId, orchestrator.Revision, orchestrator.Source),
+            new ScriptPackageCompilationRequest(orchestrator.ScriptId, orchestrator.Revision, orchestrator.Source),
             CancellationToken.None);
         compilation.IsSuccess.Should().BeTrue();
 
-        var decision = await compilation.CompiledDefinition!.DecideAsync(
+        var decision = await compilation.CompiledDefinition!.HandleRequestedEventAsync(
+            new Aevatar.Scripting.Abstractions.Definitions.ScriptRequestedEventEnvelope(
+                "claim.submitted",
+                "{}",
+                "evt-flex-1",
+                "corr-flex-1",
+                "cause-flex-1"),
             new Aevatar.Scripting.Abstractions.Definitions.ScriptExecutionContext(
                 "runtime-1",
                 orchestrator.ScriptId,
@@ -170,15 +176,21 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
     {
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
         var orchestrator = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
-        var compiler = new RoslynScriptAgentCompiler(new ScriptSandboxPolicy());
+        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
 
         var compilation = await compiler.CompileAsync(
-            new ScriptCompilationRequest(orchestrator.ScriptId, orchestrator.Revision, orchestrator.Source),
+            new ScriptPackageCompilationRequest(orchestrator.ScriptId, orchestrator.Revision, orchestrator.Source),
             CancellationToken.None);
 
         compilation.IsSuccess.Should().BeTrue();
 
-        var decision = await compilation.CompiledDefinition!.DecideAsync(
+        var decision = await compilation.CompiledDefinition!.HandleRequestedEventAsync(
+            new Aevatar.Scripting.Abstractions.Definitions.ScriptRequestedEventEnvelope(
+                EventType: "claim.submitted",
+                PayloadJson: "{\"caseId\":\"Case-B\",\"riskScore\":0.91,\"compliancePassed\":true}",
+                EventId: "evt-case-b-1",
+                CorrelationId: "corr-case-b",
+                CausationId: "cause-case-b"),
             new Aevatar.Scripting.Abstractions.Definitions.ScriptExecutionContext(
                 ActorId: "runtime-claim",
                 ScriptId: orchestrator.ScriptId,

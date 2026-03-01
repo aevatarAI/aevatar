@@ -49,100 +49,212 @@ public sealed class ClaimScriptScenarioDocument
     private const string ClaimOrchestratorSource = """
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
-public sealed record ClaimCaseInput(string CaseId, decimal RiskScore, bool CompliancePassed);
-
-public static class ClaimOrchestratorScript
+public sealed class ClaimOrchestratorScript : IScriptPackageRuntime
 {
-    public static IReadOnlyList<string> Decide(ClaimCaseInput input)
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
     {
-        var events = new List<string>
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+
+        var input = JsonSerializer.Deserialize<ClaimCaseInput>(
+            requestedEvent.PayloadJson,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? new ClaimCaseInput();
+
+        var events = new List<IMessage>
         {
-            "ClaimFactsExtractionRequestedEvent",
-            "ClaimRiskScoringRequestedEvent",
-            "ClaimComplianceValidationRequestedEvent"
+            new StringValue { Value = "ClaimFactsExtractionRequestedEvent" },
+            new StringValue { Value = "ClaimRiskScoringRequestedEvent" },
+            new StringValue { Value = "ClaimComplianceValidationRequestedEvent" }
         };
 
         // Case-A: low risk + compliant => approved
         if (string.Equals(input.CaseId, "Case-A", StringComparison.Ordinal))
         {
-            events.Add("ClaimApprovedEvent");
-            return events;
+            events.Add(new StringValue { Value = "ClaimApprovedEvent" });
+            return Task.FromResult(new ScriptHandlerResult(events));
         }
 
         // Case-B: high risk => manual review
         if (string.Equals(input.CaseId, "Case-B", StringComparison.Ordinal) || input.RiskScore >= 0.85m)
         {
-            events.Add("ClaimManualReviewRequestedEvent");
-            return events;
+            events.Add(new StringValue { Value = "ClaimManualReviewRequestedEvent" });
+            return Task.FromResult(new ScriptHandlerResult(events));
         }
 
         // Case-C: compliance fail => rejected
         if (string.Equals(input.CaseId, "Case-C", StringComparison.Ordinal) || !input.CompliancePassed)
         {
-            events.Add("ClaimRejectedEvent");
-            return events;
+            events.Add(new StringValue { Value = "ClaimRejectedEvent" });
+            return Task.FromResult(new ScriptHandlerResult(events));
         }
 
-        events.Add("ClaimApprovedEvent");
-        return events;
+        events.Add(new StringValue { Value = "ClaimApprovedEvent" });
+        return Task.FromResult(new ScriptHandlerResult(events));
+    }
+
+    public ValueTask<string> ApplyDomainEventAsync(
+        string currentStateJson,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+    }
+
+    public ValueTask<string> ReduceReadModelAsync(
+        string currentReadModelJson,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+    }
+
+    private sealed class ClaimCaseInput
+    {
+        public string CaseId { get; set; } = string.Empty;
+        public decimal RiskScore { get; set; }
+        public bool CompliancePassed { get; set; }
     }
 }
 """;
 
     private const string RoleClaimAnalystSource = """
-using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
-public static class ClaimAnalystRoleScript
+public sealed class ClaimAnalystRoleScript : IScriptPackageRuntime
 {
-    public static string BuildPrompt(string claimNarrative, string policySummary)
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
     {
-        return
-            "Extract structured claim facts for anti-fraud and compliance review. " +
-            "Narrative=" + claimNarrative + "; Policy=" + policySummary;
+        _ = requestedEvent;
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = "ClaimFactsExtractedEvent" } }));
     }
+
+    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"role\":\"analyst\",\"last_event\":\"" + domainEvent.EventType + "\"}");
+
+    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
 }
 """;
 
     private const string FraudRiskSource = """
-using System;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
-public static class FraudRiskScript
+public sealed class FraudRiskScript : IScriptPackageRuntime
 {
-    public static decimal Score(string caseId)
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
     {
-        if (string.Equals(caseId, "Case-B", StringComparison.Ordinal))
-            return 0.91m;
-        if (string.Equals(caseId, "Case-A", StringComparison.Ordinal))
-            return 0.12m;
-        return 0.35m;
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+
+        var riskScore = requestedEvent.PayloadJson.Contains("Case-B")
+            ? 0.91m
+            : requestedEvent.PayloadJson.Contains("Case-A")
+                ? 0.12m
+                : 0.35m;
+
+        return Task.FromResult(new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = "FraudRiskScoreCalculatedEvent" } },
+            "{\"risk_score\":" + riskScore.ToString(System.Globalization.CultureInfo.InvariantCulture) + "}"));
     }
+
+    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"fraud\":\"" + domainEvent.EventType + "\"}");
+
+    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
 }
 """;
 
     private const string ComplianceRuleSource = """
-using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
-public static class ComplianceRuleScript
+public sealed class ComplianceRuleScript : IScriptPackageRuntime
 {
-    public static bool Validate(string caseId)
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
     {
-        if (string.Equals(caseId, "Case-C", StringComparison.Ordinal))
-            return false;
-        return true;
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+
+        var evt = requestedEvent.PayloadJson.Contains("Case-C")
+            ? "ComplianceValidationFailedEvent"
+            : "ComplianceValidationPassedEvent";
+
+        return Task.FromResult(new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = evt } }));
     }
+
+    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"compliance\":\"" + domainEvent.EventType + "\"}");
+
+    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
 }
 """;
 
     private const string HumanReviewSource = """
-using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
-public static class HumanReviewScript
+public sealed class HumanReviewScript : IScriptPackageRuntime
 {
-    public static string RequestTicket(string claimCaseId, string reason)
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
     {
-        return "MANUAL-REVIEW:" + claimCaseId + ":" + reason;
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = "HumanReviewTicketRequestedEvent" } },
+            "{\"ticket\":\"MANUAL-REVIEW\"}"));
     }
+
+    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"human_review\":\"" + domainEvent.EventType + "\"}");
+
+    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
 }
 """;
 }

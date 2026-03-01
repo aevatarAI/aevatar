@@ -7,14 +7,33 @@ namespace Aevatar.Scripting.Core.Tests.Contract;
 public class ScriptDefinitionContractsTests
 {
     [Fact]
-    public async Task DecideAsync_ShouldReturnDomainEvents()
+    public async Task HandleRequestedEventAsync_ShouldReturnDomainEvents()
     {
         var definition = new FakeScriptDefinition();
-        var result = await definition.DecideAsync(
+        var result = await definition.HandleRequestedEventAsync(
+            new ScriptRequestedEventEnvelope("claim.submitted", "{}", "evt-1", "corr-1", "cause-1"),
             new ScriptExecutionContext("actor-1", "script-1", "r1"),
             CancellationToken.None);
 
         result.DomainEvents.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task ApplyAndReduce_ShouldReturnJsonSnapshots()
+    {
+        var definition = new FakeScriptDefinition();
+
+        var nextState = await definition.ApplyDomainEventAsync(
+            "{}",
+            new ScriptDomainEventEnvelope("ClaimApprovedEvent", "{}", "evt-2", "corr-1", "cause-1"),
+            CancellationToken.None);
+        var nextReadModel = await definition.ReduceReadModelAsync(
+            "{}",
+            new ScriptDomainEventEnvelope("ClaimApprovedEvent", "{}", "evt-2", "corr-1", "cause-1"),
+            CancellationToken.None);
+
+        nextState.Should().Be("{\"state\":\"ClaimApprovedEvent\"}");
+        nextReadModel.Should().Be("{\"projection\":\"ClaimApprovedEvent\"}");
     }
 
     [Fact]
@@ -36,21 +55,43 @@ public class ScriptDefinitionContractsTests
         context.InputJson.Should().Be("{\"amount\": 100}");
     }
 
-    private sealed class FakeScriptDefinition : IScriptAgentDefinition
+    private sealed class FakeScriptDefinition : IScriptPackageDefinition
     {
         public string ScriptId => "script-1";
         public string Revision => "r1";
         public ScriptContractManifest ContractManifest { get; } =
             new("fake-input", ["FakeEvent"], "fake-state", "fake-readmodel");
 
-        public Task<ScriptDecisionResult> DecideAsync(
+        public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+            ScriptRequestedEventEnvelope requestedEvent,
             ScriptExecutionContext context,
             CancellationToken ct)
         {
+            _ = requestedEvent;
             _ = context;
             _ = ct;
             return Task.FromResult(
-                new ScriptDecisionResult([new StringValue { Value = "evt" }]));
+                new ScriptHandlerResult([new StringValue { Value = "evt" }]));
+        }
+
+        public ValueTask<string> ApplyDomainEventAsync(
+            string currentStateJson,
+            ScriptDomainEventEnvelope domainEvent,
+            CancellationToken ct)
+        {
+            _ = currentStateJson;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult("{\"state\":\"" + domainEvent.EventType + "\"}");
+        }
+
+        public ValueTask<string> ReduceReadModelAsync(
+            string currentReadModelJson,
+            ScriptDomainEventEnvelope domainEvent,
+            CancellationToken ct)
+        {
+            _ = currentReadModelJson;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult("{\"projection\":\"" + domainEvent.EventType + "\"}");
         }
     }
 }

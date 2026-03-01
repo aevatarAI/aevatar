@@ -22,6 +22,7 @@ public sealed class RunScriptCommandAdapter
                 InputJson = command.InputJson ?? string.Empty,
                 ScriptRevision = command.ScriptRevision ?? string.Empty,
                 DefinitionActorId = command.DefinitionActorId ?? string.Empty,
+                RequestedEventType = command.RequestedEventType ?? string.Empty,
             }),
             PublisherId = CommandPublisherId,
             Direction = EventDirection.Self,

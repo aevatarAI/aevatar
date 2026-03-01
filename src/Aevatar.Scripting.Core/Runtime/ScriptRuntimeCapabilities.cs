@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Ports;
@@ -8,15 +9,18 @@ namespace Aevatar.Scripting.Core.Runtime;
 
 public sealed class ScriptRuntimeCapabilities : IScriptRuntimeCapabilities
 {
+    private readonly string _runtimeActorId;
     private readonly string _runId;
     private readonly string _correlationId;
     private readonly IServiceProvider _services;
 
     public ScriptRuntimeCapabilities(
+        string runtimeActorId,
         string runId,
         string correlationId,
         IServiceProvider services)
     {
+        _runtimeActorId = runtimeActorId ?? string.Empty;
         _runId = runId ?? string.Empty;
         _correlationId = correlationId ?? string.Empty;
         _services = services ?? throw new ArgumentNullException(nameof(services));
@@ -29,6 +33,24 @@ public sealed class ScriptRuntimeCapabilities : IScriptRuntimeCapabilities
             throw new InvalidOperationException("IAICapability is not registered for script runtime.");
 
         return aiCapability.AskAsync(_runId, _correlationId, prompt ?? string.Empty, ct);
+    }
+
+    public Task PublishAsync(IMessage eventPayload, EventDirection direction, CancellationToken ct)
+    {
+        var eventRoutingPort = _services.GetService<IGAgentEventRoutingPort>();
+        if (eventRoutingPort == null)
+            throw new InvalidOperationException("IGAgentEventRoutingPort is not registered for script runtime.");
+
+        return eventRoutingPort.PublishAsync(_runtimeActorId, eventPayload, direction, _correlationId, ct);
+    }
+
+    public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct)
+    {
+        var eventRoutingPort = _services.GetService<IGAgentEventRoutingPort>();
+        if (eventRoutingPort == null)
+            throw new InvalidOperationException("IGAgentEventRoutingPort is not registered for script runtime.");
+
+        return eventRoutingPort.SendToAsync(_runtimeActorId, targetActorId, eventPayload, _correlationId, ct);
     }
 
     public Task InvokeAgentAsync(string targetAgentId, IMessage eventPayload, CancellationToken ct)

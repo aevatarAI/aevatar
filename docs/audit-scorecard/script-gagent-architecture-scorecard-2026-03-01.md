@@ -25,7 +25,7 @@
 ## 4. 需求状态快照
 | 需求 | 状态 | 证据 |
 |---|---|---|
-| R-SG-01 | Done | `IScriptAgentDefinition`、`RoslynScriptAgentCompiler` |
+| R-SG-01 | Done | `IScriptPackageDefinition`、`IScriptPackageRuntime`、`RoslynScriptPackageCompiler` |
 | R-SG-02 | Done | `ScriptRuntimeGAgent` + 运行链路测试已落地 |
 | R-SG-03 | Done | `ScriptDefinitionGAgent/ScriptRuntimeGAgent` ES 回放契约测试通过 |
 | R-SG-04 | In Progress | 已演进到 Definition/Runtime 双状态；动态 schema 迁移策略待补 |

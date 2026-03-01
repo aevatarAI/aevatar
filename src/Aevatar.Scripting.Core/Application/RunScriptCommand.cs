@@ -4,4 +4,5 @@ public sealed record RunScriptCommand(
     string RunId,
     string InputJson,
     string ScriptRevision,
-    string DefinitionActorId);
+    string DefinitionActorId,
+    string RequestedEventType = "");

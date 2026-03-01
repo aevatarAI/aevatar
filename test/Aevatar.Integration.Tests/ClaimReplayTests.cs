@@ -38,11 +38,34 @@ public class ClaimReplayTests
                     ScriptId: "claim-script",
                     ScriptRevision: "rev-claim-replay",
                     SourceText: """
-using System.Collections.Generic;
-public static class ClaimReplayScript
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class ClaimReplayScript : IScriptPackageRuntime
 {
-    public static IReadOnlyList<string> Decide(string inputJson) =>
-        inputJson.Contains("Case-B") ? new[] { "ClaimManualReviewRequestedEvent" } : new[] { "ClaimApprovedEvent" };
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
+    {
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+        var evt = requestedEvent.PayloadJson.Contains("Case-B", StringComparison.Ordinal)
+            ? "ClaimManualReviewRequestedEvent"
+            : "ClaimApprovedEvent";
+        return Task.FromResult(new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = evt } }));
+    }
+
+    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+
+    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
 }
 """,
                     SourceHash: "hash-claim-replay"),
@@ -95,10 +118,31 @@ public static class ClaimReplayScript
                     ScriptId: "claim-script-rm",
                     ScriptRevision: "rev-claim-rm",
                     SourceText: """
-using System.Collections.Generic;
-public static class ClaimReadModelScript
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class ClaimReadModelScript : IScriptPackageRuntime
 {
-    public static IReadOnlyList<string> Decide(string inputJson) => new[] { "ClaimManualReviewRequestedEvent" };
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
+    {
+        _ = requestedEvent;
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = "ClaimManualReviewRequestedEvent" } }));
+    }
+
+    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+
+    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
 }
 """,
                     SourceHash: "hash-claim-rm"),

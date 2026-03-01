@@ -15,9 +15,9 @@ public class ClaimOrchestrationIntegrationTests
     {
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
         var orchestratorScript = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
-        var compiler = new RoslynScriptAgentCompiler(new ScriptSandboxPolicy());
+        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
         var compilation = await compiler.CompileAsync(
-            new ScriptCompilationRequest(orchestratorScript.ScriptId, orchestratorScript.Revision, orchestratorScript.Source),
+            new ScriptPackageCompilationRequest(orchestratorScript.ScriptId, orchestratorScript.Revision, orchestratorScript.Source),
             CancellationToken.None);
 
         var invocationPort = new RecordingInvocationPort();
@@ -42,9 +42,9 @@ public class ClaimOrchestrationIntegrationTests
     {
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
         var orchestratorScript = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
-        var compiler = new RoslynScriptAgentCompiler(new ScriptSandboxPolicy());
+        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
         var compilation = await compiler.CompileAsync(
-            new ScriptCompilationRequest(orchestratorScript.ScriptId, orchestratorScript.Revision, orchestratorScript.Source),
+            new ScriptPackageCompilationRequest(orchestratorScript.ScriptId, orchestratorScript.Revision, orchestratorScript.Source),
             CancellationToken.None);
 
         var invocationPort = new RecordingInvocationPort();
@@ -62,7 +62,7 @@ public class ClaimOrchestrationIntegrationTests
     }
 
     private sealed class ClaimRuntimeOrchestrator(
-        Aevatar.Scripting.Abstractions.Definitions.IScriptAgentDefinition definition,
+        Aevatar.Scripting.Abstractions.Definitions.IScriptPackageDefinition definition,
         IGAgentInvocationPort invocationPort,
         IGAgentFactoryPort factoryPort)
     {
@@ -72,7 +72,13 @@ public class ClaimOrchestrationIntegrationTests
             string inputJson,
             CancellationToken ct)
         {
-            var decision = await definition.DecideAsync(
+            var decision = await definition.HandleRequestedEventAsync(
+                new Aevatar.Scripting.Abstractions.Definitions.ScriptRequestedEventEnvelope(
+                    EventType: "claim.submitted",
+                    PayloadJson: inputJson,
+                    EventId: "evt-" + runId,
+                    CorrelationId: correlationId,
+                    CausationId: "cause-" + runId),
                 new Aevatar.Scripting.Abstractions.Definitions.ScriptExecutionContext(
                     ActorId: "orchestrator-runtime",
                     ScriptId: definition.ScriptId,

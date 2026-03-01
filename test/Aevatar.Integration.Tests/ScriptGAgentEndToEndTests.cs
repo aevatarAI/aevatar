@@ -38,7 +38,34 @@ public class ScriptGAgentEndToEndTests
             new UpsertScriptDefinitionCommand(
                 ScriptId: "script-1",
                 ScriptRevision: "rev-1",
-                SourceText: "return 1;",
+                SourceText: """
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class EndToEndScript : IScriptPackageRuntime
+{
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
+    {
+        _ = requestedEvent;
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new ScriptHandlerResult(
+            new IMessage[] { new StringValue { Value = "script.run.completed" } }));
+    }
+
+    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"result\":\"ok\",\"event\":\"" + domainEvent.EventType + "\"}");
+
+    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
+        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+}
+""",
                 SourceHash: "hash-1"),
             definitionActor.Id);
         await definitionActor.HandleEventAsync(definitionEnvelope, CancellationToken.None);
@@ -89,7 +116,8 @@ public class ScriptGAgentEndToEndTests
         committedEvent.ScriptRevision.Should().Be("rev-1");
         committedEvent.DefinitionActorId.Should().Be(definitionActor.Id);
         committedEvent.EventType.Should().Be("script.run.completed");
-        committedEvent.PayloadJson.Should().Contain("result");
+        committedEvent.PayloadJson.Should().Contain("event_type");
+        committedEvent.StatePayloadJson.Should().Contain("result");
 
         readModel.Should().NotBeNull();
         readModel!.Id.Should().Be(runtimeActor.Id);
