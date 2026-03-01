@@ -8,6 +8,7 @@ using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
 
@@ -95,7 +96,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
         var decision = await compilation.CompiledDefinition!.HandleRequestedEventAsync(
             new Aevatar.Scripting.Abstractions.Definitions.ScriptRequestedEventEnvelope(
                 "claim.submitted",
-                "{}",
+                Any.Pack(new Struct()),
                 "evt-flex-1",
                 "corr-flex-1",
                 "cause-flex-1"),
@@ -113,7 +114,10 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
         Func<Task> missingDefinitionAct = () => runtimeWithoutDependencies.HandleRunScriptRequested(new RunScriptRequestedEvent
         {
             RunId = "run-snapshot-check",
-            InputJson = "{\"case\":\"Case-B\"}",
+            InputPayload = Any.Pack(new Struct
+            {
+                Fields = { ["case"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
+            }),
             ScriptRevision = orchestrator.Revision,
             DefinitionActorId = "missing-definition-actor",
         });
@@ -121,7 +125,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
 
         var supportsDynamicDecisionEvents = decision.DomainEvents.Count > 0;
         var enforcesDefinitionSnapshotLookup = true;
-        var hasFactoryPort = Type.GetType(
+        var hasFactoryPort = System.Type.GetType(
                 "Aevatar.Scripting.Core.Ports.IGAgentFactoryPort, Aevatar.Scripting.Core",
                 throwOnError: false,
                 ignoreCase: false) != null;
@@ -152,16 +156,22 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             runAdapter.Map(
                 new RunScriptCommand(
                     RunId: "run-flex",
-                    InputJson: "{\"caseId\":\"Case-B\",\"riskScore\":0.91,\"compliancePassed\":true}",
+                    InputPayload: BuildClaimPayload("Case-B", 0.91, true),
                     ScriptRevision: orchestrator.Revision,
                     DefinitionActorId: definitionActorId),
                 runtimeActorId),
             CancellationToken.None);
 
         var runtimeState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
-        var supportsCustomRuntimeState = runtimeState.StatePayloadJson.Contains(
-            "ClaimManualReviewRequestedEvent",
-            StringComparison.Ordinal);
+        var supportsCustomRuntimeState =
+            runtimeState.StatePayloads.TryGetValue("state", out var statePayload) &&
+            statePayload != null &&
+            statePayload.Is(Struct.Descriptor) &&
+            statePayload.Unpack<Struct>().Fields.TryGetValue("last_event", out var lastEvent) &&
+            string.Equals(
+                lastEvent.StringValue,
+                "ClaimManualReviewRequestedEvent",
+                StringComparison.Ordinal);
 
         supportsDynamicDecisionEvents.Should().BeTrue();
         enforcesDefinitionSnapshotLookup.Should().BeTrue();
@@ -187,7 +197,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
         var decision = await compilation.CompiledDefinition!.HandleRequestedEventAsync(
             new Aevatar.Scripting.Abstractions.Definitions.ScriptRequestedEventEnvelope(
                 EventType: "claim.submitted",
-                PayloadJson: "{\"caseId\":\"Case-B\",\"riskScore\":0.91,\"compliancePassed\":true}",
+                Payload: BuildClaimPayload("Case-B", 0.91, true),
                 EventId: "evt-case-b-1",
                 CorrelationId: "corr-case-b",
                 CausationId: "cause-case-b"),
@@ -197,7 +207,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
                 Revision: orchestrator.Revision,
                 RunId: "run-case-b",
                 CorrelationId: "corr-case-b",
-                InputJson: "{\"caseId\":\"Case-B\",\"riskScore\":0.91,\"compliancePassed\":true}"),
+                InputPayload: BuildClaimPayload("Case-B", 0.91, true)),
             CancellationToken.None);
 
         var eventNames = decision.DomainEvents
@@ -216,5 +226,18 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
 
         document.DocumentPath.Should().Be("embedded://claim-anti-fraud");
+    }
+
+    private static Any BuildClaimPayload(string caseId, double riskScore, bool compliancePassed)
+    {
+        return Any.Pack(new Struct
+        {
+            Fields =
+            {
+                ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString(caseId),
+                ["riskScore"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(riskScore),
+                ["compliancePassed"] = Google.Protobuf.WellKnownTypes.Value.ForBool(compliancePassed),
+            },
+        });
     }
 }

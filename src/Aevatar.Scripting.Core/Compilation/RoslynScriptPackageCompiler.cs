@@ -1,6 +1,10 @@
 using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using System.Reflection;
+using System.Runtime.Loader;
 using System.Text.RegularExpressions;
 
 namespace Aevatar.Scripting.Core.Compilation;
@@ -75,7 +79,7 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
                 [runtimeDiagnostic]));
         }
 
-        var contractManifest = ExtractContractManifest(request.Source);
+        var contractManifest = ExtractContractManifest(request.Source, semanticCompilation);
         IScriptPackageDefinition compiledDefinition = new CompiledScriptPackageDefinition(
             request.ScriptId,
             request.Revision,
@@ -89,7 +93,21 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
             Array.Empty<string>()));
     }
 
-    private static ScriptContractManifest ExtractContractManifest(string source)
+    private static ScriptContractManifest ExtractContractManifest(
+        string source,
+        CSharpCompilation compilation)
+    {
+        var fallback = ExtractAnnotatedContractManifest(source);
+        if (!TryLoadProviderManifest(compilation, out var providerManifest))
+            return fallback;
+
+        if (providerManifest == null)
+            return fallback;
+
+        return NormalizeManifest(providerManifest);
+    }
+
+    private static ScriptContractManifest ExtractAnnotatedContractManifest(string source)
     {
         var inputSchema = MatchSingle(source, @"^\s*//\s*contract\.input\s*:\s*(?<value>.+)\s*$");
         var outputsRaw = MatchSingle(source, @"^\s*//\s*contract\.outputs\s*:\s*(?<value>.+)\s*$");
@@ -105,6 +123,100 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
             outputs,
             string.IsNullOrWhiteSpace(stateSchema) ? "unspecified" : stateSchema,
             string.IsNullOrWhiteSpace(readModelSchema) ? "unspecified" : readModelSchema);
+    }
+
+    private static bool TryLoadProviderManifest(
+        CSharpCompilation compilation,
+        out ScriptContractManifest? providerManifest)
+    {
+        providerManifest = null;
+
+        using var assemblyStream = new MemoryStream();
+        var emitResult = compilation.Emit(assemblyStream);
+        if (!emitResult.Success)
+            return false;
+
+        assemblyStream.Position = 0;
+        var loadContext = new AssemblyLoadContext(
+            "Aevatar.DynamicScript.ContractManifest." + Guid.NewGuid().ToString("N"),
+            isCollectible: true);
+        loadContext.Resolving += ResolveFromDefault;
+
+        try
+        {
+            var assembly = loadContext.LoadFromStream(assemblyStream);
+            var runtimeType = assembly
+                .GetTypes()
+                .Where(type =>
+                    !type.IsAbstract &&
+                    !type.IsInterface &&
+                    typeof(IScriptPackageRuntime).IsAssignableFrom(type))
+                .OrderBy(type => type.FullName, StringComparer.Ordinal)
+                .FirstOrDefault();
+            if (runtimeType == null)
+                return false;
+
+            var instance = Activator.CreateInstance(runtimeType);
+            if (instance is IScriptContractProvider provider)
+            {
+                providerManifest = provider.ContractManifest;
+            }
+
+            if (instance is IDisposable disposable)
+                disposable.Dispose();
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            loadContext.Resolving -= ResolveFromDefault;
+            loadContext.Unload();
+        }
+    }
+
+    private static ScriptContractManifest NormalizeManifest(ScriptContractManifest manifest)
+    {
+        var inputSchema = string.IsNullOrWhiteSpace(manifest.InputSchema)
+            ? "unspecified"
+            : manifest.InputSchema;
+        var stateSchema = string.IsNullOrWhiteSpace(manifest.StateSchema)
+            ? "unspecified"
+            : manifest.StateSchema;
+        var readModelSchema = string.IsNullOrWhiteSpace(manifest.ReadModelSchema)
+            ? string.IsNullOrWhiteSpace(manifest.ReadModelDefinition?.SchemaId)
+                ? "unspecified"
+                : manifest.ReadModelDefinition!.SchemaId
+            : manifest.ReadModelSchema;
+        var outputEvents = manifest.OutputEvents?
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray() ?? Array.Empty<string>();
+        var readModelStoreCapabilities = manifest.ReadModelStoreCapabilities?
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? Array.Empty<string>();
+
+        return new ScriptContractManifest(
+            inputSchema,
+            outputEvents,
+            stateSchema,
+            readModelSchema,
+            manifest.ReadModelDefinition,
+            readModelStoreCapabilities);
+    }
+
+    private static Assembly? ResolveFromDefault(AssemblyLoadContext context, AssemblyName assemblyName)
+    {
+        _ = context;
+        return AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(
+            x => string.Equals(x.GetName().Name, assemblyName.Name, StringComparison.Ordinal));
     }
 
     private static string MatchSingle(string source, string pattern)
@@ -198,20 +310,20 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
             return _executionEngine.HandleRequestedEventAsync(_source, requestedEvent, context, ct);
         }
 
-        public ValueTask<string> ApplyDomainEventAsync(
-            string currentStateJson,
+        public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+            IReadOnlyDictionary<string, Any> currentState,
             ScriptDomainEventEnvelope domainEvent,
             CancellationToken ct)
         {
-            return _executionEngine.ApplyDomainEventAsync(_source, currentStateJson, domainEvent, ct);
+            return _executionEngine.ApplyDomainEventAsync(_source, currentState, domainEvent, ct);
         }
 
-        public ValueTask<string> ReduceReadModelAsync(
-            string currentReadModelJson,
+        public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+            IReadOnlyDictionary<string, Any> currentReadModel,
             ScriptDomainEventEnvelope domainEvent,
             CancellationToken ct)
         {
-            return _executionEngine.ReduceReadModelAsync(_source, currentReadModelJson, domainEvent, ct);
+            return _executionEngine.ReduceReadModelAsync(_source, currentReadModel, domainEvent, ct);
         }
     }
 }

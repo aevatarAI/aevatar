@@ -13,7 +13,8 @@ public class ScriptPackageRuntimeContractTests
     public async Task PackageRuntime_ShouldSupport_Handle_Apply_And_Reduce()
     {
         var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
-        var source = """
+var source = """
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -32,22 +33,30 @@ public sealed class ContractDrivenScript : IScriptPackageRuntime
             new IMessage[] { new StringValue { Value = requestedEvent.EventType } }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(
-        string currentStateJson,
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult("{\"state\":\"" + domainEvent.EventType + "\"}");
+        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new StringValue { Value = "state:" + domainEvent.EventType }),
+            });
     }
 
-    public ValueTask<string> ReduceReadModelAsync(
-        string currentReadModelJson,
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult("{\"projection\":\"" + domainEvent.EventType + "\"}");
+        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new StringValue { Value = "projection:" + domainEvent.EventType }),
+            });
     }
 }
 """;
@@ -65,7 +74,7 @@ public sealed class ContractDrivenScript : IScriptPackageRuntime
 
         var requestedEvent = new ScriptRequestedEventEnvelope(
             EventType: "claim.submitted",
-            PayloadJson: "{\"caseId\":\"C-1\"}",
+            Payload: Any.Pack(new Struct { Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("C-1") } }),
             EventId: "evt-1",
             CorrelationId: "corr-1",
             CausationId: "cause-1");
@@ -80,23 +89,40 @@ public sealed class ContractDrivenScript : IScriptPackageRuntime
 
         var domainEvent = new ScriptDomainEventEnvelope(
             EventType: "ClaimApprovedEvent",
-            PayloadJson: "{}",
+            Payload: Any.Pack(new Struct()),
             EventId: "evt-2",
             CorrelationId: "corr-1",
             CausationId: "cause-1");
 
-        var nextState = await compiled.CompiledDefinition.ApplyDomainEventAsync("{}", domainEvent, CancellationToken.None);
-        nextState.Should().Be("{\"state\":\"ClaimApprovedEvent\"}");
+        var nextState = await compiled.CompiledDefinition.ApplyDomainEventAsync(
+            new Dictionary<string, Any>(StringComparer.Ordinal)
+            {
+                ["seed"] = Any.Pack(new StringValue { Value = "seed-state" }),
+            },
+            domainEvent,
+            CancellationToken.None);
+        nextState.Should().NotBeNull();
+        nextState!.Should().ContainKey("state");
+        nextState["state"].Unpack<StringValue>().Value.Should().Be("state:ClaimApprovedEvent");
 
-        var nextReadModel = await compiled.CompiledDefinition.ReduceReadModelAsync("{}", domainEvent, CancellationToken.None);
-        nextReadModel.Should().Be("{\"projection\":\"ClaimApprovedEvent\"}");
+        var nextReadModel = await compiled.CompiledDefinition.ReduceReadModelAsync(
+            new Dictionary<string, Any>(StringComparer.Ordinal)
+            {
+                ["seed"] = Any.Pack(new StringValue { Value = "seed-readmodel" }),
+            },
+            domainEvent,
+            CancellationToken.None);
+        nextReadModel.Should().NotBeNull();
+        nextReadModel!.Should().ContainKey("view");
+        nextReadModel["view"].Unpack<StringValue>().Value.Should().Be("projection:ClaimApprovedEvent");
     }
 
     [Fact]
     public async Task PackageRuntime_ShouldAllowScriptToPublishAndSendViaCapabilities()
     {
         var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
-        var source = """
+var source = """
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Foundation.Abstractions;
@@ -116,11 +142,17 @@ public sealed class CapabilityScript : IScriptPackageRuntime
         return new ScriptHandlerResult(new IMessage[] { new StringValue { Value = requestedEvent.EventType } });
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
-        => ValueTask.FromResult(currentStateJson);
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct)
+        => ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
-        => ValueTask.FromResult(currentReadModelJson);
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct)
+        => ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
 }
 """;
 
@@ -139,7 +171,12 @@ public sealed class CapabilityScript : IScriptPackageRuntime
             Capabilities: capabilities);
 
         var result = await compiled.CompiledDefinition!.HandleRequestedEventAsync(
-            new ScriptRequestedEventEnvelope("claim.submitted", "{}", "evt-1", "corr-1", "cause-1"),
+            new ScriptRequestedEventEnvelope(
+                "claim.submitted",
+                Any.Pack(new Struct()),
+                "evt-1",
+                "corr-1",
+                "cause-1"),
             context,
             CancellationToken.None);
 

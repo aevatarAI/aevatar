@@ -3,6 +3,38 @@ syntax = "proto3";
 package aevatar.scripting;
 
 option csharp_namespace = "Aevatar.Scripting.Core";
+import "google/protobuf/any.proto";
+
+message ScriptReadModelFieldSpec {
+  string name = 1;
+  string type = 2;
+  string path = 3;
+  bool nullable = 4;
+}
+
+message ScriptReadModelIndexSpec {
+  string name = 1;
+  repeated string paths = 2;
+  bool unique = 3;
+  string provider = 4;
+}
+
+message ScriptReadModelRelationSpec {
+  string name = 1;
+  string source_path = 2;
+  string target_schema_id = 3;
+  string target_path = 4;
+  string cardinality = 5;
+  string provider = 6;
+}
+
+message ScriptReadModelSchemaSpec {
+  string schema_id = 1;
+  string schema_version = 2;
+  repeated ScriptReadModelFieldSpec fields = 3;
+  repeated ScriptReadModelIndexSpec indexes = 4;
+  repeated ScriptReadModelRelationSpec relations = 5;
+}
 
 message ScriptDefinitionState {
   string script_id = 1;
@@ -11,16 +43,24 @@ message ScriptDefinitionState {
   string source_hash = 4;
   int64 last_applied_event_version = 5;
   string last_event_id = 6;
+  google.protobuf.Any read_model_schema = 7;
+  string read_model_schema_hash = 8;
+  string read_model_schema_version = 9;
+  repeated string read_model_schema_store_kinds = 10;
+  string read_model_schema_status = 11;
+  string read_model_schema_failure_reason = 12;
 }
 
 message ScriptRuntimeState {
   string definition_actor_id = 1;
   string revision = 2;
   string last_run_id = 3;
-  string state_payload_json = 4;
-  string read_model_payload_json = 5;
+  map<string, google.protobuf.Any> state_payloads = 4;
+  map<string, google.protobuf.Any> read_model_payloads = 5;
   int64 last_applied_event_version = 6;
   string last_event_id = 7;
+  string last_applied_schema_version = 8;
+  string last_schema_hash = 9;
 }
 
 message UpsertScriptDefinitionRequestedEvent {
@@ -35,11 +75,38 @@ message ScriptDefinitionUpsertedEvent {
   string script_revision = 2;
   string source_text = 3;
   string source_hash = 4;
+  google.protobuf.Any read_model_schema = 5;
+  string read_model_schema_hash = 6;
+  string read_model_schema_version = 7;
+  repeated string read_model_schema_store_kinds = 8;
+}
+
+message ScriptReadModelSchemaDeclaredEvent {
+  string script_id = 1;
+  string script_revision = 2;
+  google.protobuf.Any read_model_schema = 3;
+  string read_model_schema_hash = 4;
+  string read_model_schema_version = 5;
+  repeated string read_model_schema_store_kinds = 6;
+}
+
+message ScriptReadModelSchemaValidatedEvent {
+  string script_id = 1;
+  string script_revision = 2;
+  string read_model_schema_version = 3;
+  repeated string validated_store_kinds = 4;
+}
+
+message ScriptReadModelSchemaActivationFailedEvent {
+  string script_id = 1;
+  string script_revision = 2;
+  string read_model_schema_version = 3;
+  string failure_reason = 4;
 }
 
 message RunScriptRequestedEvent {
   string run_id = 1;
-  string input_json = 2;
+  google.protobuf.Any input_payload = 2;
   string script_revision = 3;
   string definition_actor_id = 4;
   string requested_event_type = 5;
@@ -50,7 +117,9 @@ message ScriptRunDomainEventCommitted {
   string script_revision = 2;
   string definition_actor_id = 3;
   string event_type = 4;
-  string payload_json = 5;
-  string state_payload_json = 6;
-  string read_model_payload_json = 7;
+  google.protobuf.Any payload = 5;
+  map<string, google.protobuf.Any> state_payloads = 6;
+  map<string, google.protobuf.Any> read_model_payloads = 7;
+  string read_model_schema_version = 8;
+  string read_model_schema_hash = 9;
 }

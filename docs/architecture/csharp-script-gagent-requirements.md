@@ -34,7 +34,7 @@
 关键审计结论：
 1. 当前仍是 `Decide` 主入口模型，非多事件处理器模型。
 2. 运行事实事件存在封装层，领域语义表达不足。
-3. 状态演进主要依赖 `state_payload_json`，缺少强契约化 `Apply` 能力。
+3. （已整改）状态演进已切换为 `map<string, Any>` 强类型载荷，并由 `Apply/Reduce` 契约驱动。
 4. 能力面未覆盖静态 GAgent 关键能力（发布/发送/hook/module/lifecycle）。
 5. 安全治理仍以正则黑名单为主，需升级为语义分析 + 权限控制。
 
@@ -104,7 +104,7 @@
 | R-SG-01 | 脚本定义模型 | 提供 `IScriptPackageDefinition` / `IScriptPackageRuntime` 契约，覆盖请求事件处理/状态演进/读模型 reducer 声明 | Done | `src/Aevatar.Scripting.Abstractions/Definitions/*`、`src/Aevatar.Scripting.Core/Compilation/*`、`RoslynScriptPackageCompilerTests` | 动态脚本 reducer 声明机制待扩展 |
 | R-SG-02 | 执行宿主 | 运行态由 `ScriptRuntimeGAgent` 承载执行，不直接耦合脚本定义事实 | Done | `src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs`、`test/Aevatar.Scripting.Core.Tests/Runtime/ScriptRuntimeGAgentReplayContractTests.cs` | 无 |
 | R-SG-03 | 严格 ES | 脚本写侧仅输出领域事件，由宿主调用 `PersistDomainEvent(s)` 提交并 apply | Done | `ScriptDefinitionGAgent`、`ScriptRuntimeGAgent`、`ScriptGAgentEndToEndTests` | 无 |
-| R-SG-04 | 自定义 State | 支持脚本声明状态 schema 与默认值，定义/运行分别维护 `ScriptDefinitionState` 与 `ScriptRuntimeState` | Done | `script_host_messages.proto(state_payload_json)`、`ScriptRuntimeGAgentReplayContractTests.ShouldCarryStatePayloadBetweenRuns`、`RoslynScriptPackageCompilerTests.HandleRequestedEvent_ShouldAllowScriptToUseCapabilities_IncludingPublishAndSendTo` | schema 演进策略作为后续治理项 |
+| R-SG-04 | 自定义 State | 支持脚本声明状态 schema 与默认值，定义/运行分别维护 `ScriptDefinitionState` 与 `ScriptRuntimeState` | Done | `script_host_messages.proto(state_payloads/read_model_payloads)`、`ScriptRuntimeGAgentReplayContractTests.ShouldCarryStateAndReadModelPayloadBetweenRuns_ByScriptApplyAndReduce`、`RoslynScriptPackageCompilerTests.HandleRequestedEvent_ShouldAllowScriptToUseCapabilities_IncludingPublishAndSendTo` | schema 演进策略作为后续治理项 |
 | R-SG-05 | 自定义 ReadModel | 支持脚本 reducer 定义 read model 结构并接入统一 projector 路由 | Done | `Aevatar.Scripting.Projection/*` + `ScriptExecutionReadModelProjectorTests` | 跨存储 provider 装配待补 |
 | R-SG-06 | 路由确定性 | reducer 路由必须 `TypeUrl` 精确键 + Ordinal 命中 | Done | `ScriptEventReducerBase` + `ScriptExecutionReadModelProjector` + `architecture_guards.sh` | 无 |
 | R-SG-07 | Actor 运行态一致性 | 超时/重试/延迟仅能发布内部事件，不得回调改状态 | In Progress | `ScriptDefinitionGAgent`、`ScriptRuntimeGAgent` 遵守事件处理主线程模型 | timeout/retry 内部事件模型未落地 |

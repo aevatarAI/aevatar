@@ -11,6 +11,7 @@ using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Scripting.Projection.Reducers;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
@@ -39,6 +40,7 @@ public class ScriptGAgentEndToEndTests
                 ScriptId: "script-1",
                 ScriptRevision: "rev-1",
                 SourceText: """
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -59,11 +61,25 @@ public sealed class EndToEndScript : IScriptPackageRuntime
             new IMessage[] { new StringValue { Value = "script.run.completed" } }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"result\":\"ok\",\"event\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct { Fields = { ["result"] = Google.Protobuf.WellKnownTypes.Value.ForString("ok"), ["event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 }
 """,
                 SourceHash: "hash-1"),
@@ -87,7 +103,10 @@ public sealed class EndToEndScript : IScriptPackageRuntime
         var runEnvelope = runAdapter.Map(
             new RunScriptCommand(
                 RunId: "run-1",
-                InputJson: "{\"name\":\"alice\"}",
+                InputPayload: Any.Pack(new Struct
+                {
+                    Fields = { ["name"] = Google.Protobuf.WellKnownTypes.Value.ForString("alice") },
+                }),
                 ScriptRevision: "rev-1",
                 DefinitionActorId: definitionActor.Id),
             runtimeActor.Id);
@@ -116,8 +135,11 @@ public sealed class EndToEndScript : IScriptPackageRuntime
         committedEvent.ScriptRevision.Should().Be("rev-1");
         committedEvent.DefinitionActorId.Should().Be(definitionActor.Id);
         committedEvent.EventType.Should().Be("script.run.completed");
-        committedEvent.PayloadJson.Should().Contain("event_type");
-        committedEvent.StatePayloadJson.Should().Contain("result");
+        committedEvent.Payload.Should().NotBeNull();
+        committedEvent.Payload!.TypeUrl.Should().Contain("StringValue");
+        committedEvent.StatePayloads.Should().ContainKey("state");
+        committedEvent.StatePayloads["state"].Is(Struct.Descriptor).Should().BeTrue();
+        committedEvent.StatePayloads["state"].Unpack<Struct>().Fields["result"].StringValue.Should().Be("ok");
 
         readModel.Should().NotBeNull();
         readModel!.Id.Should().Be(runtimeActor.Id);
@@ -126,7 +148,9 @@ public sealed class EndToEndScript : IScriptPackageRuntime
         readModel.Revision.Should().Be("rev-1");
         readModel.LastRunId.Should().Be("run-1");
         readModel.LastEventType.Should().Be("script.run.completed");
-        readModel.StatePayloadJson.Should().Contain("result");
+        readModel.StatePayloads.Should().ContainKey("state");
+        readModel.StatePayloads["state"].Is(Struct.Descriptor).Should().BeTrue();
+        readModel.StatePayloads["state"].Unpack<Struct>().Fields["result"].StringValue.Should().Be("ok");
         readModel.StateVersion.Should().Be(1);
 
         await runtime.DestroyAsync(definitionActor.Id, CancellationToken.None);

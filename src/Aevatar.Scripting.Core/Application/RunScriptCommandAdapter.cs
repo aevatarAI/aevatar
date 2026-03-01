@@ -19,7 +19,7 @@ public sealed class RunScriptCommandAdapter
             Payload = Any.Pack(new RunScriptRequestedEvent
             {
                 RunId = command.RunId ?? string.Empty,
-                InputJson = command.InputJson ?? string.Empty,
+                InputPayload = command.InputPayload?.Clone(),
                 ScriptRevision = command.ScriptRevision ?? string.Empty,
                 DefinitionActorId = command.DefinitionActorId ?? string.Empty,
                 RequestedEventType = command.RequestedEventType ?? string.Empty,

@@ -1,8 +1,9 @@
+using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Scripting.Core.Application;
 
 public sealed record RunScriptCommand(
     string RunId,
-    string InputJson,
+    Any? InputPayload,
     string ScriptRevision,
     string DefinitionActorId,
     string RequestedEventType = "");

@@ -4,6 +4,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Core.Runtime;
 using Google.Protobuf;
+using Google.Protobuf.Collections;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Scripting.Core;
@@ -41,12 +42,14 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         var committedEvents = await orchestrator.ExecuteRunAsync(
             new ScriptRuntimeExecutionRequest(
                 RuntimeActorId: Id,
-                CurrentStateJson: State.StatePayloadJson ?? string.Empty,
-                CurrentReadModelJson: State.ReadModelPayloadJson ?? string.Empty,
+                CurrentState: ClonePayloads(State.StatePayloads),
+                CurrentReadModel: ClonePayloads(State.ReadModelPayloads),
                 RunEvent: evt,
                 ScriptId: snapshot.ScriptId,
                 ScriptRevision: snapshot.Revision,
                 SourceText: snapshot.SourceText,
+                ReadModelSchemaVersion: snapshot.ReadModelSchemaVersion,
+                ReadModelSchemaHash: snapshot.ReadModelSchemaHash,
                 Services: Services,
                 EventPublisher: EventPublisher),
             CancellationToken.None);
@@ -74,10 +77,10 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         next.DefinitionActorId = committed.DefinitionActorId ?? string.Empty;
         next.Revision = committed.ScriptRevision ?? string.Empty;
         next.LastRunId = committed.RunId ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(committed.StatePayloadJson))
-            next.StatePayloadJson = committed.StatePayloadJson ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(committed.ReadModelPayloadJson))
-            next.ReadModelPayloadJson = committed.ReadModelPayloadJson ?? string.Empty;
+        CopyPayloads(committed.StatePayloads, next.StatePayloads);
+        CopyPayloads(committed.ReadModelPayloads, next.ReadModelPayloads);
+        next.LastAppliedSchemaVersion = committed.ReadModelSchemaVersion ?? string.Empty;
+        next.LastSchemaHash = committed.ReadModelSchemaHash ?? string.Empty;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = committed.RunId ?? string.Empty;
         return next;
@@ -110,11 +113,49 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         return new ScriptDefinitionSnapshot(
             state.ScriptId ?? string.Empty,
             state.Revision ?? string.Empty,
-            state.SourceText ?? string.Empty);
+            state.SourceText ?? string.Empty,
+            state.ReadModelSchemaVersion ?? string.Empty,
+            state.ReadModelSchemaHash ?? string.Empty);
+    }
+
+    private static IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any> ClonePayloads(
+        MapField<string, Google.Protobuf.WellKnownTypes.Any> payloads)
+    {
+        if (payloads.Count == 0)
+            return new Dictionary<string, Google.Protobuf.WellKnownTypes.Any>(StringComparer.Ordinal);
+
+        var clone = new Dictionary<string, Google.Protobuf.WellKnownTypes.Any>(
+            payloads.Count,
+            StringComparer.Ordinal);
+        foreach (var (key, value) in payloads)
+        {
+            if (string.IsNullOrWhiteSpace(key) || value == null)
+                continue;
+
+            clone[key] = value.Clone();
+        }
+
+        return clone;
+    }
+
+    private static void CopyPayloads(
+        MapField<string, Google.Protobuf.WellKnownTypes.Any> source,
+        MapField<string, Google.Protobuf.WellKnownTypes.Any> target)
+    {
+        target.Clear();
+        foreach (var (key, value) in source)
+        {
+            if (string.IsNullOrWhiteSpace(key) || value == null)
+                continue;
+
+            target[key] = value.Clone();
+        }
     }
 
     private sealed record ScriptDefinitionSnapshot(
         string ScriptId,
         string Revision,
-        string SourceText);
+        string SourceText,
+        string ReadModelSchemaVersion,
+        string ReadModelSchemaHash);
 }

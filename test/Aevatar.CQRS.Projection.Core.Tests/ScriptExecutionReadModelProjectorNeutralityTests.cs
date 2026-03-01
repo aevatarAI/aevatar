@@ -38,17 +38,19 @@ public class ScriptExecutionReadModelProjectorNeutralityTests
                 ScriptRevision = "rev-1",
                 DefinitionActorId = "definition-1",
                 EventType = "AnyDomainEvent",
-                PayloadJson = "{\"domain\":\"payload\"}",
-                StatePayloadJson = "{\"state\":\"snapshot\"}",
-                ReadModelPayloadJson = "{\"custom\":\"projection\"}",
+                Payload = Any.Pack(new StringValue { Value = "payload" }),
+                StatePayloads = { ["state"] = Any.Pack(new StringValue { Value = "snapshot" }) },
+                ReadModelPayloads = { ["view"] = Any.Pack(new StringValue { Value = "projection" }) },
             }),
             CancellationToken.None);
 
         var readModel = await dispatcher.GetAsync(context.RootActorId, CancellationToken.None);
         readModel.Should().NotBeNull();
         readModel!.LastEventType.Should().Be("AnyDomainEvent");
-        readModel.StatePayloadJson.Should().Be("{\"state\":\"snapshot\"}");
-        readModel.ReadModelPayloadJson.Should().Be("{\"custom\":\"projection\"}");
+        readModel.StatePayloads.Should().ContainKey("state");
+        readModel.StatePayloads["state"].Unpack<StringValue>().Value.Should().Be("snapshot");
+        readModel.ReadModelPayloads.Should().ContainKey("view");
+        readModel.ReadModelPayloads["view"].Unpack<StringValue>().Value.Should().Be("projection");
     }
 
     [Fact]
@@ -75,16 +77,14 @@ public class ScriptExecutionReadModelProjectorNeutralityTests
                 ScriptRevision = "rev-2",
                 DefinitionActorId = "definition-2",
                 EventType = "AnotherDomainEvent",
-                PayloadJson = "{\"domain\":\"payload\"}",
-                StatePayloadJson = "",
-                ReadModelPayloadJson = "",
+                Payload = Any.Pack(new StringValue { Value = "payload" }),
             }),
             CancellationToken.None);
 
         var readModel = await dispatcher.GetAsync(context.RootActorId, CancellationToken.None);
         readModel.Should().NotBeNull();
-        readModel!.StatePayloadJson.Should().BeEmpty();
-        readModel.ReadModelPayloadJson.Should().BeEmpty();
+        readModel!.StatePayloads.Should().BeEmpty();
+        readModel.ReadModelPayloads.Should().BeEmpty();
     }
 
     [Fact]

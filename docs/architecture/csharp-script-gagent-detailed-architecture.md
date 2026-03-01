@@ -34,7 +34,7 @@
 本文件保留 V1 详细设计脉络，但当前实现审计显示以下问题仍未达成 V2 目标：
 1. 脚本入口仍偏 `Decide` 单入口，未形成“多事件处理器 + 显式 Apply + ReadModel Reducer”完整契约。
 2. 运行态事实事件被 `ScriptRunDomainEventCommitted` 统一封装，脚本领域语义表达仍偏弱。
-3. 状态演进主要依赖 `state_payload_json`，未建立强类型状态演进治理边界。
+3. （已整改）状态演进已改为 `map<string, Any>` 强类型载荷（`state_payloads/read_model_payloads`），并通过 `Apply/Reduce` 契约驱动。
 4. 能力面仍未覆盖静态 GAgent 的完整能力集合（尤其 `Publish/Send/Hook/Module`）。
 5. 沙箱治理仍偏黑名单策略，需升级为语义分析和权限双层模型。
 
@@ -104,7 +104,7 @@ flowchart LR
 建议字段:
 1. `script_id`
 2. `revision`
-3. `state_payload_json`
+3. `state_payloads`（`map<string, Any>`，支持多槽位与无状态空 map）
 4. `last_applied_event_version`
 5. `last_event_id`
 6. `definition_actor_id`
@@ -176,7 +176,7 @@ sequenceDiagram
 2. 静态策略校验（禁用 API、命名空间白名单、类型限制）。
 3. 生成可执行句柄（委托或受限 IR），并提取 `contract manifest`（input/output/state/readmodel）。
 4. 以 `script_id + revision + schema_hash` 作为缓存键。
-5. 执行时注入 `ScriptExecutionContext`（包含 `run_id/correlation_id/definition_actor_id/input_json/current_state_json`）和受控 `Capabilities` 端口。
+5. 执行时注入 `ScriptExecutionContext`（包含 `run_id/correlation_id/definition_actor_id/input_payload/current_state/current_read_model`）和受控 `Capabilities` 端口。
 6. 回放场景下按定义态重编译，不依赖外部脚本仓库。
 
 ### 7.2 沙箱策略

@@ -1,6 +1,7 @@
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Compilation;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Business;
@@ -17,14 +18,14 @@ public class ClaimScriptDecisionTests
             CancellationToken.None);
 
         var decision = await compileResult.CompiledDefinition!.HandleRequestedEventAsync(
-            new ScriptRequestedEventEnvelope("claim.submitted", "{\"caseId\":\"Case-B\",\"riskScore\":0.91,\"compliancePassed\":true}"),
+            new ScriptRequestedEventEnvelope("claim.submitted", BuildClaimPayload("Case-B", 0.91, true)),
             new ScriptExecutionContext(
                 ActorId: "claim-runtime-1",
                 ScriptId: "claim_orchestrator",
                 Revision: "rev-claim-1",
                 RunId: "run-case-b",
                 CorrelationId: "corr-case-b",
-                InputJson: "{\"caseId\":\"Case-B\",\"riskScore\":0.91,\"compliancePassed\":true}"),
+                InputPayload: BuildClaimPayload("Case-B", 0.91, true)),
             CancellationToken.None);
 
         decision.DomainEvents
@@ -43,14 +44,14 @@ public class ClaimScriptDecisionTests
             CancellationToken.None);
 
         var decision = await compileResult.CompiledDefinition!.HandleRequestedEventAsync(
-            new ScriptRequestedEventEnvelope("claim.submitted", "{\"caseId\":\"Case-A\",\"riskScore\":0.12,\"compliancePassed\":true}"),
+            new ScriptRequestedEventEnvelope("claim.submitted", BuildClaimPayload("Case-A", 0.12, true)),
             new ScriptExecutionContext(
                 ActorId: "claim-runtime-1",
                 ScriptId: "claim_orchestrator",
                 Revision: "rev-claim-1",
                 RunId: "run-case-a",
                 CorrelationId: "corr-case-a",
-                InputJson: "{\"caseId\":\"Case-A\",\"riskScore\":0.12,\"compliancePassed\":true}"),
+                InputPayload: BuildClaimPayload("Case-A", 0.12, true)),
             CancellationToken.None);
 
         decision.DomainEvents
@@ -69,14 +70,14 @@ public class ClaimScriptDecisionTests
             CancellationToken.None);
 
         var decision = await compileResult.CompiledDefinition!.HandleRequestedEventAsync(
-            new ScriptRequestedEventEnvelope("claim.submitted", "{\"caseId\":\"Case-C\",\"riskScore\":0.35,\"compliancePassed\":false}"),
+            new ScriptRequestedEventEnvelope("claim.submitted", BuildClaimPayload("Case-C", 0.35, false)),
             new ScriptExecutionContext(
                 ActorId: "claim-runtime-1",
                 ScriptId: "claim_orchestrator",
                 Revision: "rev-claim-1",
                 RunId: "run-case-c",
                 CorrelationId: "corr-case-c",
-                InputJson: "{\"caseId\":\"Case-C\",\"riskScore\":0.35,\"compliancePassed\":false}"),
+                InputPayload: BuildClaimPayload("Case-C", 0.35, false)),
             CancellationToken.None);
 
         decision.DomainEvents
@@ -88,7 +89,6 @@ public class ClaimScriptDecisionTests
     private const string ClaimOrchestratorSource = """
 using System;
 using System.Collections.Generic;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -104,10 +104,7 @@ public sealed class ClaimOrchestratorScript : IScriptPackageRuntime
     {
         ct.ThrowIfCancellationRequested();
 
-        var input = JsonSerializer.Deserialize<ClaimCaseInput>(
-            requestedEvent.PayloadJson,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-            ?? new ClaimCaseInput();
+        var input = ParseInput(requestedEvent.Payload);
 
         var events = new List<IMessage>
         {
@@ -138,16 +135,30 @@ public sealed class ClaimOrchestratorScript : IScriptPackageRuntime
         return Task.FromResult(new ScriptHandlerResult(events));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct { Fields = { ["last_event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
     }
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
     }
 
     private sealed class ClaimCaseInput
@@ -156,6 +167,35 @@ public sealed class ClaimOrchestratorScript : IScriptPackageRuntime
         public decimal RiskScore { get; set; }
         public bool CompliancePassed { get; set; }
     }
+
+    private static ClaimCaseInput ParseInput(Any payload)
+    {
+        if (payload != null && payload.Is(Struct.Descriptor))
+        {
+            var data = payload.Unpack<Struct>();
+            return new ClaimCaseInput
+            {
+                CaseId = data.Fields.TryGetValue("caseId", out var caseId) ? caseId.StringValue : string.Empty,
+                RiskScore = data.Fields.TryGetValue("riskScore", out var risk) ? (decimal)risk.NumberValue : 0m,
+                CompliancePassed = data.Fields.TryGetValue("compliancePassed", out var compliance) && compliance.BoolValue,
+            };
+        }
+
+        return new ClaimCaseInput();
+    }
 }
 """;
+
+    private static Any BuildClaimPayload(string caseId, double riskScore, bool compliancePassed)
+    {
+        return Any.Pack(new Struct
+        {
+            Fields =
+            {
+                ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString(caseId),
+                ["riskScore"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(riskScore),
+                ["compliancePassed"] = Google.Protobuf.WellKnownTypes.Value.ForBool(compliancePassed),
+            },
+        });
+    }
 }

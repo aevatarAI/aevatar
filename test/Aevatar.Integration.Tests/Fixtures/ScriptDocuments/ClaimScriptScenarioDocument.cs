@@ -49,7 +49,6 @@ public sealed class ClaimScriptScenarioDocument
     private const string ClaimOrchestratorSource = """
 using System;
 using System.Collections.Generic;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -66,10 +65,7 @@ public sealed class ClaimOrchestratorScript : IScriptPackageRuntime
         _ = context;
         ct.ThrowIfCancellationRequested();
 
-        var input = JsonSerializer.Deserialize<ClaimCaseInput>(
-            requestedEvent.PayloadJson,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-            ?? new ClaimCaseInput();
+        var input = ParseInput(requestedEvent.Payload);
 
         var events = new List<IMessage>
         {
@@ -103,22 +99,30 @@ public sealed class ClaimOrchestratorScript : IScriptPackageRuntime
         return Task.FromResult(new ScriptHandlerResult(events));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(
-        string currentStateJson,
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct { Fields = { ["last_event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
     }
 
-    public ValueTask<string> ReduceReadModelAsync(
-        string currentReadModelJson,
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
     }
 
     private sealed class ClaimCaseInput
@@ -127,10 +131,27 @@ public sealed class ClaimOrchestratorScript : IScriptPackageRuntime
         public decimal RiskScore { get; set; }
         public bool CompliancePassed { get; set; }
     }
+
+    private static ClaimCaseInput ParseInput(Any payload)
+    {
+        if (payload != null && payload.Is(Struct.Descriptor))
+        {
+            var root = payload.Unpack<Struct>();
+            return new ClaimCaseInput
+            {
+                CaseId = root.Fields.TryGetValue("caseId", out var caseId) ? caseId.StringValue : string.Empty,
+                RiskScore = root.Fields.TryGetValue("riskScore", out var riskScore) ? (decimal)riskScore.NumberValue : 0m,
+                CompliancePassed = root.Fields.TryGetValue("compliancePassed", out var compliance) && compliance.BoolValue,
+            };
+        }
+
+        return new ClaimCaseInput();
+    }
 }
 """;
 
     private const string RoleClaimAnalystSource = """
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -151,16 +172,30 @@ public sealed class ClaimAnalystRoleScript : IScriptPackageRuntime
             new IMessage[] { new StringValue { Value = "ClaimFactsExtractedEvent" } }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"role\":\"analyst\",\"last_event\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct { Fields = { ["role"] = Google.Protobuf.WellKnownTypes.Value.ForString("analyst"), ["last_event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 }
 """;
 
     private const string FraudRiskSource = """
-using System.Text.Json;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -177,26 +212,59 @@ public sealed class FraudRiskScript : IScriptPackageRuntime
         _ = context;
         ct.ThrowIfCancellationRequested();
 
-        var riskScore = requestedEvent.PayloadJson.Contains("Case-B")
+        var caseId = requestedEvent.Payload != null && requestedEvent.Payload.Is(Struct.Descriptor)
+            ? requestedEvent.Payload.Unpack<Struct>().Fields.TryGetValue("caseId", out var caseValue) ? caseValue.StringValue : string.Empty
+            : string.Empty;
+        var riskScore = string.Equals(caseId, "Case-B", System.StringComparison.Ordinal)
             ? 0.91m
-            : requestedEvent.PayloadJson.Contains("Case-A")
+            : string.Equals(caseId, "Case-A", System.StringComparison.Ordinal)
                 ? 0.12m
                 : 0.35m;
 
         return Task.FromResult(new ScriptHandlerResult(
             new IMessage[] { new StringValue { Value = "FraudRiskScoreCalculatedEvent" } },
-            "{\"risk_score\":" + riskScore.ToString(System.Globalization.CultureInfo.InvariantCulture) + "}"));
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct
+                {
+                    Fields =
+                    {
+                        ["risk_score"] = Google.Protobuf.WellKnownTypes.Value.ForNumber((double)riskScore),
+                    },
+                }),
+            }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"fraud\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct
+                {
+                    Fields =
+                    {
+                        ["fraud"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType),
+                    },
+                }),
+            });
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 }
 """;
 
     private const string ComplianceRuleSource = """
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -213,7 +281,10 @@ public sealed class ComplianceRuleScript : IScriptPackageRuntime
         _ = context;
         ct.ThrowIfCancellationRequested();
 
-        var evt = requestedEvent.PayloadJson.Contains("Case-C")
+        var caseId = requestedEvent.Payload != null && requestedEvent.Payload.Is(Struct.Descriptor)
+            ? requestedEvent.Payload.Unpack<Struct>().Fields.TryGetValue("caseId", out var caseValue) ? caseValue.StringValue : string.Empty
+            : string.Empty;
+        var evt = string.Equals(caseId, "Case-C", System.StringComparison.Ordinal)
             ? "ComplianceValidationFailedEvent"
             : "ComplianceValidationPassedEvent";
 
@@ -221,15 +292,36 @@ public sealed class ComplianceRuleScript : IScriptPackageRuntime
             new IMessage[] { new StringValue { Value = evt } }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"compliance\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct
+                {
+                    Fields =
+                    {
+                        ["compliance"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType),
+                    },
+                }),
+            });
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 }
 """;
 
     private const string HumanReviewSource = """
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -247,14 +339,43 @@ public sealed class HumanReviewScript : IScriptPackageRuntime
         ct.ThrowIfCancellationRequested();
         return Task.FromResult(new ScriptHandlerResult(
             new IMessage[] { new StringValue { Value = "HumanReviewTicketRequestedEvent" } },
-            "{\"ticket\":\"MANUAL-REVIEW\"}"));
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct
+                {
+                    Fields =
+                    {
+                        ["ticket"] = Google.Protobuf.WellKnownTypes.Value.ForString("MANUAL-REVIEW"),
+                    },
+                }),
+            }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"human_review\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct
+                {
+                    Fields =
+                    {
+                        ["human_review"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType),
+                    },
+                }),
+            });
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 }
 """;
 }

@@ -27,7 +27,7 @@ public class ClaimOrchestrationIntegrationTests
         await orchestrator.ExecuteAsync(
             runId: "run-claim-b",
             correlationId: "corr-claim-b",
-            inputJson: "{\"caseId\":\"Case-B\",\"riskScore\":0.91,\"compliancePassed\":true}",
+            inputPayload: BuildClaimPayload("Case-B", 0.91, true),
             CancellationToken.None);
 
         invocationPort.Calls.Should().Contain(x => x.PayloadValue == "ClaimFactsExtractionRequestedEvent");
@@ -54,7 +54,7 @@ public class ClaimOrchestrationIntegrationTests
         await orchestrator.ExecuteAsync(
             runId: "run-claim-a",
             correlationId: "corr-claim-a",
-            inputJson: "{\"caseId\":\"Case-A\",\"riskScore\":0.12,\"compliancePassed\":true}",
+            inputPayload: BuildClaimPayload("Case-A", 0.12, true),
             CancellationToken.None);
 
         invocationPort.Calls.Should().Contain(x => x.PayloadValue == "ClaimApprovedEvent");
@@ -69,13 +69,13 @@ public class ClaimOrchestrationIntegrationTests
         public async Task ExecuteAsync(
             string runId,
             string correlationId,
-            string inputJson,
+            Any inputPayload,
             CancellationToken ct)
         {
             var decision = await definition.HandleRequestedEventAsync(
                 new Aevatar.Scripting.Abstractions.Definitions.ScriptRequestedEventEnvelope(
                     EventType: "claim.submitted",
-                    PayloadJson: inputJson,
+                    Payload: inputPayload,
                     EventId: "evt-" + runId,
                     CorrelationId: correlationId,
                     CausationId: "cause-" + runId),
@@ -85,7 +85,7 @@ public class ClaimOrchestrationIntegrationTests
                     Revision: definition.Revision,
                     RunId: runId,
                     CorrelationId: correlationId,
-                    InputJson: inputJson),
+                    InputPayload: inputPayload),
                 ct);
 
             foreach (var evt in decision.DomainEvents.OfType<StringValue>())
@@ -150,5 +150,18 @@ public class ClaimOrchestrationIntegrationTests
         public Task LinkAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
 
         public Task UnlinkAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private static Any BuildClaimPayload(string caseId, double riskScore, bool compliancePassed)
+    {
+        return Any.Pack(new Struct
+        {
+            Fields =
+            {
+                ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString(caseId),
+                ["riskScore"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(riskScore),
+                ["compliancePassed"] = Google.Protobuf.WellKnownTypes.Value.ForBool(compliancePassed),
+            },
+        });
     }
 }

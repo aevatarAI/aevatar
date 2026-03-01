@@ -1,5 +1,6 @@
 using Aevatar.Scripting.Abstractions.Definitions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using System.Reflection;
@@ -23,38 +24,36 @@ public sealed class RoslynScriptExecutionEngine : IScriptExecutionEngine
             .ConfigureAwait(false);
     }
 
-    public async ValueTask<string> ApplyDomainEventAsync(
+    public async ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
         string source,
-        string currentStateJson,
+        IReadOnlyDictionary<string, Any> currentState,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(source))
-            return currentStateJson ?? string.Empty;
+            return currentState;
 
         await using var loaded = await LoadRuntimeAsync(source, ct);
-        var next = await loaded.Runtime.ApplyDomainEventAsync(
-            currentStateJson ?? string.Empty,
+        return await loaded.Runtime.ApplyDomainEventAsync(
+            currentState,
             domainEvent,
             ct).ConfigureAwait(false);
-        return next ?? string.Empty;
     }
 
-    public async ValueTask<string> ReduceReadModelAsync(
+    public async ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
         string source,
-        string currentReadModelJson,
+        IReadOnlyDictionary<string, Any> currentReadModel,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(source))
-            return currentReadModelJson ?? string.Empty;
+            return currentReadModel;
 
         await using var loaded = await LoadRuntimeAsync(source, ct);
-        var next = await loaded.Runtime.ReduceReadModelAsync(
-            currentReadModelJson ?? string.Empty,
+        return await loaded.Runtime.ReduceReadModelAsync(
+            currentReadModel,
             domainEvent,
             ct).ConfigureAwait(false);
-        return next ?? string.Empty;
     }
 
     private static async Task<LoadedRuntime> LoadRuntimeAsync(string source, CancellationToken ct)

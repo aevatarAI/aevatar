@@ -11,6 +11,7 @@ using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Scripting.Projection.Reducers;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
@@ -39,6 +40,7 @@ public class ClaimReplayTests
                     ScriptRevision: "rev-claim-replay",
                     SourceText: """
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -54,18 +56,35 @@ public sealed class ClaimReplayScript : IScriptPackageRuntime
     {
         _ = context;
         ct.ThrowIfCancellationRequested();
-        var evt = requestedEvent.PayloadJson.Contains("Case-B", StringComparison.Ordinal)
+        var caseId = requestedEvent.Payload != null && requestedEvent.Payload.Is(Struct.Descriptor)
+            ? requestedEvent.Payload.Unpack<Struct>().Fields.TryGetValue("caseId", out var field) ? field.StringValue : string.Empty
+            : string.Empty;
+        var evt = string.Equals(caseId, "Case-B", StringComparison.Ordinal)
             ? "ClaimManualReviewRequestedEvent"
             : "ClaimApprovedEvent";
         return Task.FromResult(new ScriptHandlerResult(
             new IMessage[] { new StringValue { Value = evt } }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct { Fields = { ["last_event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 }
 """,
                     SourceHash: "hash-claim-replay"),
@@ -77,7 +96,10 @@ public sealed class ClaimReplayScript : IScriptPackageRuntime
             run.Map(
                 new RunScriptCommand(
                     RunId: "run-replay-case-b",
-                    InputJson: "{\"caseId\":\"Case-B\"}",
+                    InputPayload: Any.Pack(new Struct
+                    {
+                        Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
+                    }),
                     ScriptRevision: "rev-claim-replay",
                     DefinitionActorId: definitionActorId),
                 runtimeActorId),
@@ -92,7 +114,7 @@ public sealed class ClaimReplayScript : IScriptPackageRuntime
 
         replayed.State.Revision.Should().Be(beforeState.Revision);
         replayed.State.LastRunId.Should().Be(beforeState.LastRunId);
-        replayed.State.StatePayloadJson.Should().Be(beforeState.StatePayloadJson);
+        replayed.State.StatePayloads.Should().BeEquivalentTo(beforeState.StatePayloads);
         replayed.State.LastAppliedEventVersion.Should().Be(beforeState.LastAppliedEventVersion);
     }
 
@@ -118,6 +140,7 @@ public sealed class ClaimReplayScript : IScriptPackageRuntime
                     ScriptId: "claim-script-rm",
                     ScriptRevision: "rev-claim-rm",
                     SourceText: """
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -138,11 +161,25 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
             new IMessage[] { new StringValue { Value = "ClaimManualReviewRequestedEvent" } }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct { Fields = { ["last_event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 }
 """,
                     SourceHash: "hash-claim-rm"),
@@ -154,7 +191,10 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
             run.Map(
                 new RunScriptCommand(
                     RunId: "run-readmodel",
-                    InputJson: "{\"caseId\":\"Case-B\"}",
+                    InputPayload: Any.Pack(new Struct
+                    {
+                        Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
+                    }),
                     ScriptRevision: "rev-claim-rm",
                     DefinitionActorId: definitionActorId),
                 runtimeActorId),

@@ -1,3 +1,4 @@
+using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Scripting.Abstractions.Definitions;
 
 public interface IScriptPackageDefinition
@@ -11,13 +12,13 @@ public interface IScriptPackageDefinition
         ScriptExecutionContext context,
         CancellationToken ct);
 
-    ValueTask<string> ApplyDomainEventAsync(
-        string currentStateJson,
+    ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct);
 
-    ValueTask<string> ReduceReadModelAsync(
-        string currentReadModelJson,
+    ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct);
 }

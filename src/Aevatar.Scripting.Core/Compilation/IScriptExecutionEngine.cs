@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Compilation;
 
@@ -10,15 +11,15 @@ public interface IScriptExecutionEngine
         ScriptExecutionContext context,
         CancellationToken ct);
 
-    ValueTask<string> ApplyDomainEventAsync(
+    ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
         string source,
-        string currentStateJson,
+        IReadOnlyDictionary<string, Any> currentState,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct);
 
-    ValueTask<string> ReduceReadModelAsync(
+    ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
         string source,
-        string currentReadModelJson,
+        IReadOnlyDictionary<string, Any> currentReadModel,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct);
 }

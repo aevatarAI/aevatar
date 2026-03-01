@@ -53,6 +53,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 public sealed class PlainScript : IScriptPackageRuntime
 {
@@ -62,11 +63,11 @@ public sealed class PlainScript : IScriptPackageRuntime
         CancellationToken ct)
         => Task.FromResult(new ScriptHandlerResult(System.Array.Empty<IMessage>()));
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
-        => ValueTask.FromResult(currentStateJson);
+    public ValueTask<System.Collections.Generic.IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(System.Collections.Generic.IReadOnlyDictionary<string, Any> currentState, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
+        => ValueTask.FromResult<System.Collections.Generic.IReadOnlyDictionary<string, Any>?>(currentState);
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
-        => ValueTask.FromResult(currentReadModelJson);
+    public ValueTask<System.Collections.Generic.IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(System.Collections.Generic.IReadOnlyDictionary<string, Any> currentReadModel, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
+        => ValueTask.FromResult<System.Collections.Generic.IReadOnlyDictionary<string, Any>?>(currentReadModel);
 }
 """);
 
@@ -107,35 +108,38 @@ public sealed class InvalidRuntimeScript
     }
 
     [Fact]
-    public async Task CompileAsync_ShouldExtractContractManifest_FromSourceAnnotations()
+    public async Task CompileAsync_ShouldExtractContractManifest_FromScriptContractProvider()
     {
         var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
         var request = new ScriptPackageCompilationRequest(
             ScriptId: "script-claim",
             Revision: "rev-contract",
             Source: """
-// contract.input: claim_case_v1
-// contract.outputs: ClaimApprovedEvent,ClaimManualReviewRequestedEvent,ClaimRejectedEvent
-// contract.state: claim_runtime_state_v1
-// contract.readmodel: claim_case_readmodel_v1
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
-public sealed class ContractOnlyScript : IScriptPackageRuntime
+public sealed class ContractOnlyScript : IScriptPackageRuntime, IScriptContractProvider
 {
+    public ScriptContractManifest ContractManifest => new(
+        "claim_case_v1",
+        new [] { "ClaimApprovedEvent", "ClaimManualReviewRequestedEvent", "ClaimRejectedEvent" },
+        "claim_runtime_state_v1",
+        "claim_case_readmodel_v1");
+
     public Task<ScriptHandlerResult> HandleRequestedEventAsync(
         ScriptRequestedEventEnvelope requestedEvent,
         ScriptExecutionContext context,
         CancellationToken ct)
         => Task.FromResult(new ScriptHandlerResult(System.Array.Empty<IMessage>()));
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
-        => ValueTask.FromResult(currentStateJson);
+    public ValueTask<System.Collections.Generic.IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(System.Collections.Generic.IReadOnlyDictionary<string, Any> currentState, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
+        => ValueTask.FromResult<System.Collections.Generic.IReadOnlyDictionary<string, Any>?>(currentState);
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
-        => ValueTask.FromResult(currentReadModelJson);
+    public ValueTask<System.Collections.Generic.IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(System.Collections.Generic.IReadOnlyDictionary<string, Any> currentReadModel, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
+        => ValueTask.FromResult<System.Collections.Generic.IReadOnlyDictionary<string, Any>?>(currentReadModel);
 }
 """);
 
@@ -153,6 +157,80 @@ public sealed class ContractOnlyScript : IScriptPackageRuntime
     }
 
     [Fact]
+    public async Task CompileAsync_ShouldExtractReadModelSchemaDefinition_FromScriptContractProvider()
+    {
+        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
+        var request = new ScriptPackageCompilationRequest(
+            ScriptId: "script-schema",
+            Revision: "rev-schema-1",
+            Source: """
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class SchemaScript : IScriptPackageRuntime, IScriptContractProvider
+{
+    public ScriptContractManifest ContractManifest => new(
+        "claim_case_v1",
+        new[] { "ClaimApprovedEvent" },
+        "claim_runtime_state_v1",
+        "claim_case_readmodel_v2",
+        new ScriptReadModelDefinition(
+            "claim_case",
+            "2",
+            new[]
+            {
+                new ScriptReadModelFieldDefinition("claim_case_id", "keyword", "claim_case_id", false),
+                new ScriptReadModelFieldDefinition("risk_score", "double", "risk_score", false),
+                new ScriptReadModelFieldDefinition("decision", "keyword", "decision", false),
+            },
+            new[]
+            {
+                new ScriptReadModelIndexDefinition("idx_claim_case_id", new[] { "claim_case_id" }, true, "elasticsearch"),
+                new ScriptReadModelIndexDefinition("idx_decision", new[] { "decision" }, false, "elasticsearch"),
+            },
+            new[]
+            {
+                new ScriptReadModelRelationDefinition(
+                    "rel_policy",
+                    "policy_id",
+                    "policy",
+                    "policy_id",
+                    "many_to_one",
+                    "neo4j"),
+            }),
+        new[] { "elasticsearch", "neo4j" });
+
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct)
+        => Task.FromResult(new ScriptHandlerResult(System.Array.Empty<IMessage>()));
+
+    public ValueTask<System.Collections.Generic.IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(System.Collections.Generic.IReadOnlyDictionary<string, Any> currentState, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
+        => ValueTask.FromResult<System.Collections.Generic.IReadOnlyDictionary<string, Any>?>(currentState);
+
+    public ValueTask<System.Collections.Generic.IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(System.Collections.Generic.IReadOnlyDictionary<string, Any> currentReadModel, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
+        => ValueTask.FromResult<System.Collections.Generic.IReadOnlyDictionary<string, Any>?>(currentReadModel);
+}
+""");
+
+        var result = await compiler.CompileAsync(request, CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        result.ContractManifest.Should().NotBeNull();
+        result.ContractManifest!.ReadModelDefinition.Should().NotBeNull();
+        result.ContractManifest.ReadModelDefinition!.SchemaId.Should().Be("claim_case");
+        result.ContractManifest.ReadModelDefinition.SchemaVersion.Should().Be("2");
+        result.ContractManifest.ReadModelDefinition.Fields.Should().HaveCount(3);
+        result.ContractManifest.ReadModelDefinition.Indexes.Should().HaveCount(2);
+        result.ContractManifest.ReadModelDefinition.Relations.Should().ContainSingle(x => x.Name == "rel_policy");
+        result.ContractManifest.ReadModelStoreCapabilities.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
     public async Task HandleApplyReduce_ShouldExecuteScriptPackageRuntimeContract()
     {
         var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
@@ -160,6 +238,7 @@ public sealed class ContractOnlyScript : IScriptPackageRuntime
             ScriptId: "script-contract",
             Revision: "rev-runtime-1",
             Source: """
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -178,22 +257,30 @@ public sealed class ContractRuntimeScript : IScriptPackageRuntime
             new IMessage[] { new StringValue { Value = requestedEvent.EventType } }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(
-        string currentStateJson,
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult("{\"state\":\"" + domainEvent.EventType + "\"}");
+        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new StringValue { Value = "state:" + domainEvent.EventType }),
+            });
     }
 
-    public ValueTask<string> ReduceReadModelAsync(
-        string currentReadModelJson,
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult("{\"projection\":\"" + domainEvent.EventType + "\"}");
+        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new StringValue { Value = "projection:" + domainEvent.EventType }),
+            });
     }
 }
 """);
@@ -202,12 +289,17 @@ public sealed class ContractRuntimeScript : IScriptPackageRuntime
         compileResult.IsSuccess.Should().BeTrue();
 
         var decision = await compileResult.CompiledDefinition!.HandleRequestedEventAsync(
-            new ScriptRequestedEventEnvelope("claim.submitted", "{\"caseId\":\"C-1\"}", "evt-1", "corr-1", "cause-1"),
+            new ScriptRequestedEventEnvelope(
+                "claim.submitted",
+                Any.Pack(new Struct { Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("C-1") } }),
+                "evt-1",
+                "corr-1",
+                "cause-1"),
             new ScriptExecutionContext(
                 ActorId: "runtime-1",
                 ScriptId: "script-contract",
                 Revision: "rev-runtime-1",
-                InputJson: "{\"caseId\":\"C-1\"}"),
+                InputPayload: Any.Pack(new Struct { Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("C-1") } })),
             CancellationToken.None);
 
         decision.DomainEvents.Should().ContainSingle();
@@ -215,16 +307,32 @@ public sealed class ContractRuntimeScript : IScriptPackageRuntime
 
         var domainEvent = new ScriptDomainEventEnvelope(
             EventType: "ClaimApprovedEvent",
-            PayloadJson: "{}",
+            Payload: Any.Pack(new Struct()),
             EventId: "evt-2",
             CorrelationId: "corr-1",
             CausationId: "cause-1");
 
-        var state = await compileResult.CompiledDefinition.ApplyDomainEventAsync("{}", domainEvent, CancellationToken.None);
-        state.Should().Be("{\"state\":\"ClaimApprovedEvent\"}");
+        var state = await compileResult.CompiledDefinition.ApplyDomainEventAsync(
+            new Dictionary<string, Any>(StringComparer.Ordinal)
+            {
+                ["seed"] = Any.Pack(new StringValue { Value = "seed-state" }),
+            },
+            domainEvent,
+            CancellationToken.None);
+        state.Should().NotBeNull();
+        state!.Should().ContainKey("state");
+        state["state"].Unpack<StringValue>().Value.Should().Be("state:ClaimApprovedEvent");
 
-        var readModel = await compileResult.CompiledDefinition.ReduceReadModelAsync("{}", domainEvent, CancellationToken.None);
-        readModel.Should().Be("{\"projection\":\"ClaimApprovedEvent\"}");
+        var readModel = await compileResult.CompiledDefinition.ReduceReadModelAsync(
+            new Dictionary<string, Any>(StringComparer.Ordinal)
+            {
+                ["seed"] = Any.Pack(new StringValue { Value = "seed-read-model" }),
+            },
+            domainEvent,
+            CancellationToken.None);
+        readModel.Should().NotBeNull();
+        readModel!.Should().ContainKey("view");
+        readModel["view"].Unpack<StringValue>().Value.Should().Be("projection:ClaimApprovedEvent");
     }
 
     [Fact]
@@ -236,6 +344,7 @@ public sealed class ContractRuntimeScript : IScriptPackageRuntime
             Revision: "rev-capability-1",
             Source: """
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Foundation.Abstractions;
@@ -261,21 +370,33 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
 
             return new ScriptHandlerResult(
                 new IMessage[] { new StringValue { Value = requestedEvent.EventType } },
-                "{\"decision\":\"manual-review\"}",
-                "{\"projection\":\"manual-review\"}");
+                new Dictionary<string, Any>
+                {
+                    ["state"] = Any.Pack(new StringValue { Value = "manual-review" }),
+                },
+                new Dictionary<string, Any>
+                {
+                    ["view"] = Any.Pack(new StringValue { Value = "manual-review" }),
+                });
         }
 
         return new ScriptHandlerResult(
             new IMessage[] { new StringValue { Value = "ClaimApprovedEvent" } },
-            "{\"decision\":\"approved\"}",
-            "{\"projection\":\"approved\"}");
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new StringValue { Value = "approved" }),
+            },
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new StringValue { Value = "approved" }),
+            });
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
-        => ValueTask.FromResult(currentStateJson);
+    public ValueTask<System.Collections.Generic.IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(System.Collections.Generic.IReadOnlyDictionary<string, Any> currentState, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
+        => ValueTask.FromResult<System.Collections.Generic.IReadOnlyDictionary<string, Any>?>(currentState);
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
-        => ValueTask.FromResult(currentReadModelJson);
+    public ValueTask<System.Collections.Generic.IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(System.Collections.Generic.IReadOnlyDictionary<string, Any> currentReadModel, ScriptDomainEventEnvelope domainEvent, CancellationToken ct)
+        => ValueTask.FromResult<System.Collections.Generic.IReadOnlyDictionary<string, Any>?>(currentReadModel);
 }
 """);
 
@@ -284,22 +405,50 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
 
         var capabilities = new RecordingScriptRuntimeCapabilities("manual-review");
         var decision = await compileResult.CompiledDefinition!.HandleRequestedEventAsync(
-            new ScriptRequestedEventEnvelope("claim.submitted", "{\"caseId\":\"Case-B\"}", "evt-1", "corr-1", "cause-1"),
+            new ScriptRequestedEventEnvelope(
+                "claim.submitted",
+                Any.Pack(new Struct
+                {
+                    Fields =
+                    {
+                        ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B"),
+                        ["riskScore"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(0.91),
+                        ["compliancePassed"] = Google.Protobuf.WellKnownTypes.Value.ForBool(true),
+                    },
+                }),
+                "evt-1",
+                "corr-1",
+                "cause-1"),
             new ScriptExecutionContext(
                 ActorId: "runtime-1",
                 ScriptId: "script-capability-1",
                 Revision: "rev-capability-1",
                 RunId: "run-capability-1",
                 CorrelationId: "corr-capability-1",
-                CurrentStateJson: "{}",
-                InputJson: "{\"caseId\":\"Case-B\"}",
+                CurrentState: new Dictionary<string, Any>(StringComparer.Ordinal)
+                {
+                    ["seed"] = Any.Pack(new StringValue { Value = "seed" }),
+                },
+                InputPayload: Any.Pack(new Struct
+                {
+                    Fields =
+                    {
+                        ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B"),
+                        ["riskScore"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(0.91),
+                        ["compliancePassed"] = Google.Protobuf.WellKnownTypes.Value.ForBool(true),
+                    },
+                }),
                 Capabilities: capabilities),
             CancellationToken.None);
 
         decision.DomainEvents.Select(x => ((StringValue)x).Value)
             .Should().ContainSingle(x => x == "claim.submitted");
-        decision.StatePayloadJson.Should().Be("{\"decision\":\"manual-review\"}");
-        decision.ReadModelPayloadJson.Should().Be("{\"projection\":\"manual-review\"}");
+        decision.StatePayloads.Should().NotBeNull();
+        decision.StatePayloads!.Should().ContainKey("state");
+        decision.StatePayloads["state"].Unpack<StringValue>().Value.Should().Be("manual-review");
+        decision.ReadModelPayloads.Should().NotBeNull();
+        decision.ReadModelPayloads!.Should().ContainKey("view");
+        decision.ReadModelPayloads["view"].Unpack<StringValue>().Value.Should().Be("manual-review");
         capabilities.AskPrompts.Should().ContainSingle(x => x == "risk-assessment");
         capabilities.Published.Should().ContainSingle(x => x.Direction == EventDirection.Up && x.EventName == "PublishedEvent");
         capabilities.Sent.Should().ContainSingle(x => x.TargetActorId == "target-1" && x.EventName == "SentEvent");

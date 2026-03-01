@@ -5,6 +5,7 @@ using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Application;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
@@ -33,6 +34,7 @@ public class ScriptDefinitionRuntimeContractTests
                     ScriptId: "script-contract",
                     ScriptRevision: "rev-contract-1",
                     SourceText: """
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -53,11 +55,25 @@ public sealed class ContractScript : IScriptPackageRuntime
             new IMessage[] { new StringValue { Value = "FromDefinitionSnapshotEvent" } }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct { Fields = { ["last_event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 }
 """,
                     SourceHash: "hash-contract-1"),
@@ -69,7 +85,10 @@ public sealed class ContractScript : IScriptPackageRuntime
             run.Map(
                 new RunScriptCommand(
                     RunId: "run-contract-1",
-                    InputJson: "{\"caseId\":\"Case-A\"}",
+                    InputPayload: Any.Pack(new Struct
+                    {
+                        Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-A") },
+                    }),
                     ScriptRevision: "rev-contract-1",
                     DefinitionActorId: definitionActorId),
                 runtimeActorId),
@@ -107,6 +126,7 @@ public sealed class ContractScript : IScriptPackageRuntime
                     ScriptId: "script-self-contained",
                     ScriptRevision: "rev-self-contained",
                     SourceText: """
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -127,11 +147,25 @@ public sealed class ReplayScript : IScriptPackageRuntime
             new IMessage[] { new StringValue { Value = "ReplaySelfContainedEvent" } }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct { Fields = { ["last_event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 }
 """,
                     SourceHash: "hash-self-contained"),
@@ -143,14 +177,21 @@ public sealed class ReplayScript : IScriptPackageRuntime
             run.Map(
                 new RunScriptCommand(
                     RunId: "run-self-contained",
-                    InputJson: "{\"caseId\":\"Case-B\"}",
+                    InputPayload: Any.Pack(new Struct
+                    {
+                        Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
+                    }),
                     ScriptRevision: "rev-self-contained",
                     DefinitionActorId: definitionActorId),
                 runtimeActorId),
             CancellationToken.None);
 
         var before = (ScriptRuntimeGAgent)runtimeActor.Agent;
-        var beforeStateJson = before.State.StatePayloadJson;
+        var beforeStatePayloads = before.State.StatePayloads
+            .ToDictionary(
+                x => x.Key,
+                x => x.Value.Clone(),
+                StringComparer.Ordinal);
         var beforeRevision = before.State.Revision;
         var beforeRunId = before.State.LastRunId;
 
@@ -162,7 +203,7 @@ public sealed class ReplayScript : IScriptPackageRuntime
 
         replayed.State.Revision.Should().Be(beforeRevision);
         replayed.State.LastRunId.Should().Be(beforeRunId);
-        replayed.State.StatePayloadJson.Should().Be(beforeStateJson);
+        replayed.State.StatePayloads.Should().BeEquivalentTo(beforeStatePayloads);
     }
 
     [Fact]
@@ -187,6 +228,7 @@ public sealed class ReplayScript : IScriptPackageRuntime
                     ScriptId: "script-revision-check",
                     ScriptRevision: "rev-actual",
                     SourceText: """
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -207,11 +249,25 @@ public sealed class RevisionScript : IScriptPackageRuntime
             new IMessage[] { new StringValue { Value = "RevisionEvent" } }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(string currentStateJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"last_event\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Struct { Fields = { ["last_event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 
-    public ValueTask<string> ReduceReadModelAsync(string currentReadModelJson, ScriptDomainEventEnvelope domainEvent, CancellationToken ct) =>
-        ValueTask.FromResult("{\"decision\":\"" + domainEvent.EventType + "\"}");
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
+            });
 }
 """,
                     SourceHash: "hash-revision"),
@@ -223,7 +279,7 @@ public sealed class RevisionScript : IScriptPackageRuntime
             run.Map(
                 new RunScriptCommand(
                     RunId: "run-revision-check",
-                    InputJson: "{}",
+                    InputPayload: Any.Pack(new Struct()),
                     ScriptRevision: "rev-requested-mismatch",
                     DefinitionActorId: definitionActorId),
                 runtimeActorId),

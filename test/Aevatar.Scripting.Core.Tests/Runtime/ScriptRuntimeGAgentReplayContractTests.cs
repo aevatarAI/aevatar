@@ -5,6 +5,7 @@ using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Runtime;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
@@ -37,7 +38,7 @@ public class ScriptRuntimeGAgentReplayContractTests
         await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
         {
             RunId = "run-1",
-            InputJson = "{}",
+            InputPayload = Any.Pack(new Struct()),
             ScriptRevision = "rev-1",
             DefinitionActorId = "definition-1",
             RequestedEventType = "claim.submitted",
@@ -46,8 +47,11 @@ public class ScriptRuntimeGAgentReplayContractTests
         agent.State.LastRunId.Should().Be("run-1");
         agent.State.Revision.Should().Be("rev-1");
         agent.State.DefinitionActorId.Should().Be("definition-1");
-        agent.State.StatePayloadJson.Should().Be("{\"step\":1,\"last_event\":\"RuntimeContractEvent\"}");
-        agent.State.ReadModelPayloadJson.Should().Be("{\"status\":\"RuntimeContractEvent\"}");
+        agent.State.StatePayloads.Should().ContainKey("state");
+        agent.State.StatePayloads["state"].Unpack<Int32Value>().Value.Should().Be(1);
+        agent.State.ReadModelPayloads.Should().ContainKey("view");
+        agent.State.ReadModelPayloads["view"].Unpack<StringValue>().Value.Should().Be("RuntimeContractEvent");
+        agent.State.LastAppliedSchemaVersion.Should().Be("7");
         agent.State.LastAppliedEventVersion.Should().BeGreaterThan(0);
     }
 
@@ -77,26 +81,32 @@ public class ScriptRuntimeGAgentReplayContractTests
         await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
         {
             RunId = "run-state-1",
-            InputJson = "{}",
+            InputPayload = Any.Pack(new Struct()),
             ScriptRevision = "rev-stateful-1",
             DefinitionActorId = "definition-1",
             RequestedEventType = "claim.submitted",
         });
 
-        agent.State.StatePayloadJson.Should().Be("{\"step\":1,\"last_event\":\"RuntimeContractEvent\"}");
-        agent.State.ReadModelPayloadJson.Should().Be("{\"status\":\"RuntimeContractEvent\"}");
+        agent.State.StatePayloads.Should().ContainKey("state");
+        agent.State.StatePayloads["state"].Unpack<Int32Value>().Value.Should().Be(1);
+        agent.State.ReadModelPayloads.Should().ContainKey("view");
+        agent.State.ReadModelPayloads["view"].Unpack<StringValue>().Value.Should().Be("RuntimeContractEvent");
+        agent.State.LastAppliedSchemaVersion.Should().Be("7");
 
         await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
         {
             RunId = "run-state-2",
-            InputJson = "{}",
+            InputPayload = Any.Pack(new Struct()),
             ScriptRevision = "rev-stateful-1",
             DefinitionActorId = "definition-1",
             RequestedEventType = "claim.submitted",
         });
 
-        agent.State.StatePayloadJson.Should().Be("{\"step\":2,\"last_event\":\"RuntimeContractEvent\"}");
-        agent.State.ReadModelPayloadJson.Should().Be("{\"status\":\"RuntimeContractEvent\"}");
+        agent.State.StatePayloads.Should().ContainKey("state");
+        agent.State.StatePayloads["state"].Unpack<Int32Value>().Value.Should().Be(2);
+        agent.State.ReadModelPayloads.Should().ContainKey("view");
+        agent.State.ReadModelPayloads["view"].Unpack<StringValue>().Value.Should().Be("RuntimeContractEvent");
+        agent.State.LastAppliedSchemaVersion.Should().Be("7");
     }
 
     private static IServiceProvider BuildServices(ScriptDefinitionGAgent definition)
@@ -117,15 +127,34 @@ public class ScriptRuntimeGAgentReplayContractTests
     {
         return """
 using System;
-using System.Text.Json;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
-public sealed class StatefulRuntimeScript : IScriptPackageRuntime
+public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContractProvider
 {
+    public ScriptContractManifest ContractManifest => new(
+        "runtime_case_v1",
+        new[] { "RuntimeContractEvent" },
+        "runtime_state_v1",
+        "runtime_case_readmodel_v7",
+        new ScriptReadModelDefinition(
+            "runtime_case",
+            "7",
+            new[]
+            {
+                new ScriptReadModelFieldDefinition("status", "keyword", "status", false),
+            },
+            new[]
+            {
+                new ScriptReadModelIndexDefinition("idx_status", new[] { "status" }, false, "elasticsearch"),
+            },
+            new ScriptReadModelRelationDefinition[] { }),
+        new[] { "elasticsearch" });
+
     public Task<ScriptHandlerResult> HandleRequestedEventAsync(
         ScriptRequestedEventEnvelope requestedEvent,
         ScriptExecutionContext context,
@@ -136,21 +165,19 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime
             new IMessage[] { new StringValue { Value = "RuntimeContractEvent" } }));
     }
 
-    public ValueTask<string> ApplyDomainEventAsync(
-        string currentStateJson,
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        IReadOnlyDictionary<string, Any> currentState,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 
         var step = 0;
-        if (!string.IsNullOrWhiteSpace(currentStateJson))
+        if (currentState.TryGetValue("state", out var statePayload) && statePayload != null)
         {
             try
             {
-                using var doc = JsonDocument.Parse(currentStateJson);
-                if (doc.RootElement.TryGetProperty("step", out var stepElement) && stepElement.ValueKind == JsonValueKind.Number)
-                    step = stepElement.GetInt32();
+                step = statePayload.Unpack<Int32Value>().Value;
             }
             catch
             {
@@ -158,17 +185,24 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime
             }
         }
 
-        step += 1;
-        return ValueTask.FromResult("{\"step\":" + step + ",\"last_event\":\"" + domainEvent.EventType + "\"}");
+        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["state"] = Any.Pack(new Int32Value { Value = step + 1 }),
+            });
     }
 
-    public ValueTask<string> ReduceReadModelAsync(
-        string currentReadModelJson,
+    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        IReadOnlyDictionary<string, Any> currentReadModel,
         ScriptDomainEventEnvelope domainEvent,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult("{\"status\":\"" + domainEvent.EventType + "\"}");
+        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+            new Dictionary<string, Any>
+            {
+                ["view"] = Any.Pack(new StringValue { Value = domainEvent.EventType }),
+            });
     }
 }
 """;
@@ -181,7 +215,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
             throw new NotSupportedException();
 
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;

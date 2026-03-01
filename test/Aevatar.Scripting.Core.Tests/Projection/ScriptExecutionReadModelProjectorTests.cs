@@ -37,10 +37,11 @@ public class ScriptExecutionReadModelProjectorTests
                 RunId = "run-1",
                 ScriptRevision = "rev-1",
                 DefinitionActorId = "definition-1",
+                ReadModelSchemaVersion = "7",
                 EventType = "script.run.completed",
-                PayloadJson = "{\"ok\":true}",
-                StatePayloadJson = "{\"state\":{\"ok\":true}}",
-                ReadModelPayloadJson = "{\"view\":{\"ok\":true}}",
+                Payload = Any.Pack(new StringValue { Value = "domain-ok" }),
+                StatePayloads = { ["state"] = Any.Pack(new Int32Value { Value = 42 }) },
+                ReadModelPayloads = { ["view"] = Any.Pack(new StringValue { Value = "view-ok" }) },
             }),
             CancellationToken.None);
 
@@ -49,11 +50,15 @@ public class ScriptExecutionReadModelProjectorTests
         readModel!.ScriptId.Should().Be("script-1");
         readModel.DefinitionActorId.Should().Be("definition-1");
         readModel.Revision.Should().Be("rev-1");
+        readModel.ReadModelSchemaVersion.Should().Be("7");
         readModel.LastRunId.Should().Be("run-1");
         readModel.LastEventType.Should().Be("script.run.completed");
-        readModel.LastDomainEventPayloadJson.Should().Be("{\"ok\":true}");
-        readModel.StatePayloadJson.Should().Be("{\"state\":{\"ok\":true}}");
-        readModel.ReadModelPayloadJson.Should().Be("{\"view\":{\"ok\":true}}");
+        readModel.LastDomainEventPayload.Should().NotBeNull();
+        readModel.LastDomainEventPayload!.Unpack<StringValue>().Value.Should().Be("domain-ok");
+        readModel.StatePayloads.Should().ContainKey("state");
+        readModel.StatePayloads["state"].Unpack<Int32Value>().Value.Should().Be(42);
+        readModel.ReadModelPayloads.Should().ContainKey("view");
+        readModel.ReadModelPayloads["view"].Unpack<StringValue>().Value.Should().Be("view-ok");
         readModel.StateVersion.Should().Be(1);
     }
 
@@ -78,7 +83,7 @@ public class ScriptExecutionReadModelProjectorTests
             Wrap(new RunScriptRequestedEvent
             {
                 RunId = "run-2",
-                InputJson = "{}",
+                InputPayload = Any.Pack(new Struct()),
                 ScriptRevision = "rev-2",
                 DefinitionActorId = "definition-2",
             }),

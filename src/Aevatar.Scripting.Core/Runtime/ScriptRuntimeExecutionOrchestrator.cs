@@ -1,13 +1,16 @@
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Compilation;
 using Google.Protobuf;
+using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
-using System.Text.Json;
 
 namespace Aevatar.Scripting.Core.Runtime;
 
 public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecutionOrchestrator
 {
+    private static readonly IReadOnlyDictionary<string, Any> EmptyPayloads =
+        new Dictionary<string, Any>(StringComparer.Ordinal);
+
     private readonly IScriptPackageCompiler _compiler;
     private readonly IScriptCapabilityFactory _capabilityFactory;
 
@@ -50,16 +53,16 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
             RunId: runId,
             CorrelationId: correlationId,
             DefinitionActorId: request.RunEvent.DefinitionActorId ?? string.Empty,
-            CurrentStateJson: request.CurrentStateJson ?? string.Empty,
-            CurrentReadModelJson: request.CurrentReadModelJson ?? string.Empty,
-            InputJson: request.RunEvent.InputJson ?? string.Empty,
+            CurrentState: NormalizePayloads(request.CurrentState),
+            CurrentReadModel: NormalizePayloads(request.CurrentReadModel),
+            InputPayload: request.RunEvent.InputPayload?.Clone(),
             Capabilities: capabilities);
 
         var requestedEvent = new ScriptRequestedEventEnvelope(
             EventType: string.IsNullOrWhiteSpace(request.RunEvent.RequestedEventType)
                 ? "script.run.requested"
                 : request.RunEvent.RequestedEventType,
-            PayloadJson: request.RunEvent.InputJson ?? string.Empty,
+            Payload: request.RunEvent.InputPayload?.Clone() ?? Any.Pack(new Empty()),
             EventId: runId,
             CorrelationId: correlationId,
             CausationId: runId);
@@ -70,8 +73,10 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
             compilation.CompiledDefinition,
             request.RunEvent,
             request.ScriptRevision,
-            request.CurrentStateJson ?? string.Empty,
-            request.CurrentReadModelJson ?? string.Empty,
+            request.ReadModelSchemaVersion,
+            request.ReadModelSchemaHash,
+            request.CurrentState,
+            request.CurrentReadModel,
             decision,
             ct);
     }
@@ -80,8 +85,10 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
         IScriptPackageDefinition definition,
         RunScriptRequestedEvent run,
         string revision,
-        string initialStateJson,
-        string initialReadModelJson,
+        string readModelSchemaVersion,
+        string readModelSchemaHash,
+        IReadOnlyDictionary<string, Any>? initialState,
+        IReadOnlyDictionary<string, Any>? initialReadModel,
         ScriptHandlerResult decision,
         CancellationToken ct)
     {
@@ -90,46 +97,49 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
             domainEvents = [new StringValue { Value = "script.run.completed" }];
 
         var committed = new List<IMessage>(domainEvents.Count);
-        var currentState = initialStateJson ?? string.Empty;
-        var currentReadModel = initialReadModelJson ?? string.Empty;
+        var currentState = NormalizePayloads(initialState);
+        var currentReadModel = NormalizePayloads(initialReadModel);
+        var decisionStatePayloads = NormalizePayloads(decision.StatePayloads);
+        var decisionReadModelPayloads = NormalizePayloads(decision.ReadModelPayloads);
 
         for (var i = 0; i < domainEvents.Count; i++)
         {
             var domainEvent = domainEvents[i];
             var eventType = ResolveEventType(domainEvent);
-            var payloadJson = ResolvePayloadJson(domainEvent);
+            var payload = ResolvePayload(domainEvent);
             var domainEnvelope = new ScriptDomainEventEnvelope(
                 EventType: eventType,
-                PayloadJson: payloadJson,
+                Payload: payload,
                 EventId: BuildEventId(run.RunId ?? string.Empty, i),
                 CorrelationId: run.RunId ?? string.Empty,
                 CausationId: run.RunId ?? string.Empty);
 
             var appliedState = await definition.ApplyDomainEventAsync(currentState, domainEnvelope, ct);
-            if (string.IsNullOrWhiteSpace(appliedState))
-                appliedState = currentState;
-            if (string.IsNullOrWhiteSpace(appliedState) && !string.IsNullOrWhiteSpace(decision.StatePayloadJson))
-                appliedState = decision.StatePayloadJson;
+            appliedState ??= currentState;
+            if (appliedState.Count == 0 && decisionStatePayloads.Count > 0)
+                appliedState = decisionStatePayloads;
 
             var reducedReadModel = await definition.ReduceReadModelAsync(currentReadModel, domainEnvelope, ct);
-            if (string.IsNullOrWhiteSpace(reducedReadModel))
-                reducedReadModel = currentReadModel;
-            if (string.IsNullOrWhiteSpace(reducedReadModel) && !string.IsNullOrWhiteSpace(decision.ReadModelPayloadJson))
-                reducedReadModel = decision.ReadModelPayloadJson;
+            reducedReadModel ??= currentReadModel;
+            if (reducedReadModel.Count == 0 && decisionReadModelPayloads.Count > 0)
+                reducedReadModel = decisionReadModelPayloads;
 
-            currentState = appliedState ?? string.Empty;
-            currentReadModel = reducedReadModel ?? string.Empty;
+            currentState = NormalizePayloads(appliedState);
+            currentReadModel = NormalizePayloads(reducedReadModel);
 
-            committed.Add(new ScriptRunDomainEventCommitted
+            var committedEvent = new ScriptRunDomainEventCommitted
             {
                 RunId = run.RunId ?? string.Empty,
                 ScriptRevision = revision,
                 DefinitionActorId = run.DefinitionActorId ?? string.Empty,
                 EventType = eventType,
-                PayloadJson = payloadJson,
-                StatePayloadJson = currentState,
-                ReadModelPayloadJson = currentReadModel,
-            });
+                Payload = payload,
+                ReadModelSchemaVersion = readModelSchemaVersion ?? string.Empty,
+                ReadModelSchemaHash = readModelSchemaHash ?? string.Empty,
+            };
+            CopyPayloads(currentState, committedEvent.StatePayloads);
+            CopyPayloads(currentReadModel, committedEvent.ReadModelPayloads);
+            committed.Add(committedEvent);
         }
 
         return committed;
@@ -151,16 +161,40 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
         return domainEvent.Descriptor?.Name ?? domainEvent.GetType().Name;
     }
 
-    private static string ResolvePayloadJson(IMessage domainEvent)
+    private static Any ResolvePayload(IMessage domainEvent)
     {
-        if (domainEvent is StringValue namedEvent)
+        return Any.Pack(domainEvent);
+    }
+
+    private static IReadOnlyDictionary<string, Any> NormalizePayloads(
+        IReadOnlyDictionary<string, Any>? payloads)
+    {
+        if (payloads == null || payloads.Count == 0)
+            return EmptyPayloads;
+
+        var normalized = new Dictionary<string, Any>(payloads.Count, StringComparer.Ordinal);
+        foreach (var (key, value) in payloads)
         {
-            return JsonSerializer.Serialize(new
-            {
-                event_type = namedEvent.Value ?? string.Empty,
-            });
+            if (string.IsNullOrWhiteSpace(key) || value == null)
+                continue;
+
+            normalized[key] = value.Clone();
         }
 
-        return JsonFormatter.Default.Format(domainEvent);
+        return normalized;
+    }
+
+    private static void CopyPayloads(
+        IReadOnlyDictionary<string, Any> source,
+        MapField<string, Any> target)
+    {
+        target.Clear();
+        foreach (var (key, value) in source)
+        {
+            if (string.IsNullOrWhiteSpace(key) || value == null)
+                continue;
+
+            target[key] = value.Clone();
+        }
     }
 }

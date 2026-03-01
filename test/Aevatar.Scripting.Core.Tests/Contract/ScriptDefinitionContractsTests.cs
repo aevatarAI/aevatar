@@ -11,7 +11,12 @@ public class ScriptDefinitionContractsTests
     {
         var definition = new FakeScriptDefinition();
         var result = await definition.HandleRequestedEventAsync(
-            new ScriptRequestedEventEnvelope("claim.submitted", "{}", "evt-1", "corr-1", "cause-1"),
+            new ScriptRequestedEventEnvelope(
+                "claim.submitted",
+                Any.Pack(new Struct()),
+                "evt-1",
+                "corr-1",
+                "cause-1"),
             new ScriptExecutionContext("actor-1", "script-1", "r1"),
             CancellationToken.None);
 
@@ -19,21 +24,41 @@ public class ScriptDefinitionContractsTests
     }
 
     [Fact]
-    public async Task ApplyAndReduce_ShouldReturnJsonSnapshots()
+    public async Task ApplyAndReduce_ShouldReturnTypedSnapshots()
     {
         var definition = new FakeScriptDefinition();
 
         var nextState = await definition.ApplyDomainEventAsync(
-            "{}",
-            new ScriptDomainEventEnvelope("ClaimApprovedEvent", "{}", "evt-2", "corr-1", "cause-1"),
+            new Dictionary<string, Any>(StringComparer.Ordinal)
+            {
+                ["counter"] = Any.Pack(new Int32Value { Value = 0 }),
+            },
+            new ScriptDomainEventEnvelope(
+                "ClaimApprovedEvent",
+                Any.Pack(new Struct()),
+                "evt-2",
+                "corr-1",
+                "cause-1"),
             CancellationToken.None);
         var nextReadModel = await definition.ReduceReadModelAsync(
-            "{}",
-            new ScriptDomainEventEnvelope("ClaimApprovedEvent", "{}", "evt-2", "corr-1", "cause-1"),
+            new Dictionary<string, Any>(StringComparer.Ordinal)
+            {
+                ["summary"] = Any.Pack(new StringValue { Value = "init" }),
+            },
+            new ScriptDomainEventEnvelope(
+                "ClaimApprovedEvent",
+                Any.Pack(new Struct()),
+                "evt-2",
+                "corr-1",
+                "cause-1"),
             CancellationToken.None);
 
-        nextState.Should().Be("{\"state\":\"ClaimApprovedEvent\"}");
-        nextReadModel.Should().Be("{\"projection\":\"ClaimApprovedEvent\"}");
+        nextState.Should().NotBeNull();
+        nextReadModel.Should().NotBeNull();
+        nextState!.Should().ContainKey("state");
+        nextState["state"].Unpack<StringValue>().Value.Should().Be("ClaimApprovedEvent");
+        nextReadModel!.Should().ContainKey("view");
+        nextReadModel["view"].Unpack<StringValue>().Value.Should().Be("projection:ClaimApprovedEvent");
     }
 
     [Fact]
@@ -46,13 +71,15 @@ public class ScriptDefinitionContractsTests
             RunId: "run-1",
             CorrelationId: "corr-1",
             DefinitionActorId: "definition-1",
-            InputJson: "{\"amount\": 100}");
+            InputPayload: Any.Pack(new Struct { Fields = { ["amount"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(100) } }));
 
         context.ActorId.Should().Be("runtime-1");
         context.RunId.Should().Be("run-1");
         context.CorrelationId.Should().Be("corr-1");
         context.DefinitionActorId.Should().Be("definition-1");
-        context.InputJson.Should().Be("{\"amount\": 100}");
+        context.InputPayload.Should().NotBeNull();
+        context.InputPayload!.Is(Struct.Descriptor).Should().BeTrue();
+        context.InputPayload.Unpack<Struct>().Fields["amount"].NumberValue.Should().Be(100);
     }
 
     private sealed class FakeScriptDefinition : IScriptPackageDefinition
@@ -74,24 +101,32 @@ public class ScriptDefinitionContractsTests
                 new ScriptHandlerResult([new StringValue { Value = "evt" }]));
         }
 
-        public ValueTask<string> ApplyDomainEventAsync(
-            string currentStateJson,
+        public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+            IReadOnlyDictionary<string, Any> currentState,
             ScriptDomainEventEnvelope domainEvent,
             CancellationToken ct)
         {
-            _ = currentStateJson;
+            _ = currentState;
             ct.ThrowIfCancellationRequested();
-            return ValueTask.FromResult("{\"state\":\"" + domainEvent.EventType + "\"}");
+            return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+                new Dictionary<string, Any>(StringComparer.Ordinal)
+                {
+                    ["state"] = Any.Pack(new StringValue { Value = domainEvent.EventType }),
+                });
         }
 
-        public ValueTask<string> ReduceReadModelAsync(
-            string currentReadModelJson,
+        public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+            IReadOnlyDictionary<string, Any> currentReadModel,
             ScriptDomainEventEnvelope domainEvent,
             CancellationToken ct)
         {
-            _ = currentReadModelJson;
+            _ = currentReadModel;
             ct.ThrowIfCancellationRequested();
-            return ValueTask.FromResult("{\"projection\":\"" + domainEvent.EventType + "\"}");
+            return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
+                new Dictionary<string, Any>(StringComparer.Ordinal)
+                {
+                    ["view"] = Any.Pack(new StringValue { Value = "projection:" + domainEvent.EventType }),
+                });
         }
     }
 }

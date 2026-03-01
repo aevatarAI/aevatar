@@ -2,6 +2,7 @@ using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Schema;
 using Aevatar.Scripting.Hosting.Ports;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -17,6 +18,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScriptSandboxPolicy>();
         services.TryAddSingleton<IScriptExecutionEngine, RoslynScriptExecutionEngine>();
         services.TryAddSingleton<IScriptPackageCompiler, RoslynScriptPackageCompiler>();
+        services.TryAddSingleton<IScriptReadModelSchemaActivationPolicy, DefaultScriptReadModelSchemaActivationPolicy>();
         services.TryAddSingleton<IScriptCapabilityFactory, DefaultScriptCapabilityFactory>();
         services.TryAddSingleton<IScriptRuntimeExecutionOrchestrator, ScriptRuntimeExecutionOrchestrator>();
         services.TryAddSingleton<IGAgentEventRoutingPort, RuntimeGAgentEventRoutingPort>();
