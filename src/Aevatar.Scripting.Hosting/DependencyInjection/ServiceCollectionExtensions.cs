@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Application.AI;
+using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
@@ -22,8 +23,17 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptExecutionEngine, RoslynScriptExecutionEngine>();
         services.TryAddSingleton<IScriptPackageCompiler, RoslynScriptPackageCompiler>();
         services.TryAddSingleton<IScriptReadModelSchemaActivationPolicy, DefaultScriptReadModelSchemaActivationPolicy>();
+        services.TryAddSingleton<IScriptEvolutionApplicationService, ScriptEvolutionApplicationService>();
+        services.TryAddSingleton<IScriptRuntimeCapabilityComposer, ScriptRuntimeCapabilityComposer>();
         services.TryAddSingleton<IScriptRuntimeExecutionOrchestrator, ScriptRuntimeExecutionOrchestrator>();
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, RuntimeScriptDefinitionSnapshotPort>();
+        services.TryAddSingleton<IScriptDefinitionLifecyclePort, RuntimeScriptDefinitionLifecyclePort>();
+        services.TryAddSingleton<IScriptRuntimeLifecyclePort, RuntimeScriptRuntimeLifecyclePort>();
+        services.TryAddSingleton<IScriptCatalogPort, RuntimeScriptCatalogPort>();
+        services.TryAddSingleton<IScriptPolicyGatePort, RuntimeScriptPolicyGatePort>();
+        services.TryAddSingleton<IScriptValidationPipelinePort, RuntimeScriptValidationPipelinePort>();
+        services.TryAddSingleton<IScriptPromotionPort, RuntimeScriptPromotionPort>();
+        services.TryAddSingleton<IScriptEvolutionPort, RuntimeScriptEvolutionPort>();
         services.TryAddSingleton<IGAgentEventRoutingPort, RuntimeGAgentEventRoutingPort>();
         services.TryAddSingleton<IGAgentInvocationPort, RuntimeGAgentInvocationPort>();
         services.TryAddSingleton<IGAgentFactoryPort, RuntimeGAgentFactoryPort>();

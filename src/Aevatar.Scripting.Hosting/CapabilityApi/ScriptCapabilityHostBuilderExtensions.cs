@@ -13,6 +13,6 @@ public static class ScriptCapabilityHostBuilderExtensions
         return builder.AddAevatarCapability(
             name: "script",
             configureServices: static (services, _) => services.AddScriptCapability(),
-            mapEndpoints: static _ => { });
+            mapEndpoints: static app => app.MapScriptCapabilityEndpoints());
     }
 }

@@ -1,108 +1,122 @@
-# Aevatar.Scripting 自治进化架构变更蓝图（2026-03-02）
+# Aevatar.Scripting 双通道演化架构变更蓝图（2026-03-01）
 
 ## 1. 文档元信息
 
-- 状态：`Draft -> Ready for Implementation`
-- 版本：`v1`
-- 日期：`2026-03-02`
-- 范围：`Aevatar.Scripting.*` + 与 Runtime/CQRS/Hosting 的集成边界
-- 目标：让 AI Agents 在脚本内完成“自升级代码 + 自改脚本 + 自创建更多脚本运行”，同时满足可控、安全、可回滚
-
-## 2. 背景与关键决策
-
-你提出的目标是：
-
-1. Agent 能自己升级代码。
-2. Agent 能自己改自己的代码。
-3. Agent 能自己构建更多脚本运行。
-
-关键决策：
-
-1. 支持“自治进化”，但不支持“无治理自改写”。
-2. 所有自修改必须事件化、可审计、可回滚。
-3. 脚本内可发起变更，但最终生效必须经过策略门禁与自动验证。
-4. 事实源只放在 Actor 持久态/分布式状态，不放进程内字典。
-
-## 3. 变更目标
-
-1. 将脚本能力从“执行型”升级为“执行 + 演化型”。
-2. 新增脚本原生演化协议：提案、构建、验证、发布、回滚。
-3. 支持脚本在运行中创建临时脚本 Agent 与新脚本 Agent。
-4. 统一 `Command -> Event -> Projection -> ReadModel`，不增加旁路。
-5. 全流程可自动化验证并受 CI 守卫约束。
-
-## 3.1 Script-Only Iteration 终态定义（强制）
-
-在“框架完全定义后”，系统进入 `Script-Only Iteration Mode`，满足以下约束：
-
-1. 新脚本定义发布只能由脚本能力接口触发（`Propose -> Validate -> Promote`），禁止人工直写发布通道。
-2. 运行中新增实例只能走脚本能力接口（`SpawnScriptRuntimeAsync` / `RunScriptInstanceAsync`）。
-3. 主链路不允许“脚本外编排器”直接推进业务演化状态机。
-4. 所有升级必须产生完整事件链与审计读模型记录。
-5. 任一门禁失败必须自动拒绝或回滚，不允许“人工跳过继续上线”。
+- 状态：`Revised`
+- 版本：`v2`
+- 日期：`2026-03-01`
+- 范围：`Aevatar.Scripting.*` + Runtime/CQRS/Hosting 集成边界
+- 目标：同时支持“外部更新（Ops/API/CI）”与“脚本自我演化（AI Agent）”，并统一在同一治理主链路中生效
 
 说明：
 
-1. 人工运维仍可执行“停机/恢复/容量操作”，但不得绕过脚本演化协议直接改业务脚本事实版本。
+1. 本版替代上一版 `Script-Only Iteration` 终态定义。
+2. 新终态要求“双通道可用，但单主链路治理”。
 
-## 4. 范围与非范围
+## 2. 背景与问题
 
-范围内：
+当前诉求已明确为两件事同时成立：
 
-1. Scripting 抽象、Core、Application、Hosting、Projection 的自治演化能力。
-2. 自治演化事件协议与状态机。
-3. 脚本侧能力接口扩展与 E2E 测试体系。
+1. 可以由外部系统对脚本进行更新与发布。
+2. 脚本运行过程中也可以自我演化并发布新版本。
 
-范围外：
+上一版问题：
 
-1. 直接开放脚本执行任意宿主 Shell/系统命令。
-2. 绕过门禁直接改主分支源码。
-3. 依赖人工内存状态完成升级流程。
+1. 过度收紧为 `Script-Only`，外部入口被定义为禁止项。
+2. 与实际运维/治理场景不匹配（人工、CI、批量治理需要外部入口）。
 
-## 5. 现状基线（代码事实）
+## 3. 关键决策
 
-当前已具备：
+1. 采用“`双入口 + 单主链路`”模型。
+2. 外部更新与自我演化都必须落入同一协议：`Propose -> Policy -> Validate -> Promote/Rollback`。
+3. 任何入口都不得绕过 `ScriptEvolutionManagerGAgent` 与 `ScriptCatalogGAgent`。
+4. 事实源仍由 Actor 持久态承载，禁止中间层进程内事实态映射。
 
-1. `ScriptDefinitionGAgent` + `ScriptRuntimeGAgent` 双 Actor 主链路。
-2. 脚本可通过 `IScriptRuntimeCapabilities` 调用 AI、事件路由、Agent 生命周期端口。
-3. 运行中可调用 `CreateAgentAsync`（测试已覆盖调用路径）。
+## 4. 终态定义（Dual-Source Iteration Mode）
 
-当前缺口：
+系统进入 `Dual-Source Iteration Mode` 后满足：
 
-1. 缺少“脚本源码自升级”的正式协议与状态机。
-2. 缺少“脚本生成新脚本定义并发布”的受控管道。
-3. 缺少“从提案到发布”的审计读模型与回滚机制。
-4. 现有动态创建覆盖偏向端口调用，缺少完整“创建后绑定定义并运行”的统一 E2E 套件。
+1. 外部入口可发起升级提案。
+2. 脚本入口可发起升级提案。
+3. 两条入口使用同一事件协议与状态机。
+4. 发布结果都写入统一审计读模型。
+5. 回滚策略对两条入口完全一致。
+6. 禁止任何“直写定义+直接生效”的旁路发布。
 
-## 6. 目标架构总览
+## 5. 目标架构总览
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    SRT["ScriptRuntimeGAgent"] --> CAP["Script Evolution Capabilities"]
-    CAP --> EVA["ScriptEvolutionManagerGAgent"]
-    EVA --> CAT["ScriptCatalogGAgent"]
-    EVA --> VAL["BuildTestValidation Port"]
-    EVA --> POL["PolicyGate Port"]
-    EVA --> PUB["Promotion Port"]
-    CAT --> DEF["ScriptDefinitionGAgent"]
-    DEF --> RNT["ScriptRuntimeGAgent (new or temp)"]
+    EXT["External Update API/CI"] --> EXA["External Evolution Adapter"]
+    SRT["ScriptRuntimeGAgent"] --> CAP["Script Runtime Capabilities"]
+
+    EXA --> EVA["ScriptEvolutionManagerGAgent"]
+    CAP --> EVA
+
+    EVA --> POL["Policy Gate Port"]
+    EVA --> VAL["Validation Pipeline Port"]
+    EVA --> PRO["Promotion Port"]
+    PRO --> CAT["ScriptCatalogGAgent"]
+    PRO --> DEF["ScriptDefinitionGAgent"]
+
+    DEF --> RNT["ScriptRuntimeGAgent"]
     EVA --> EV["Evolution Events"]
     EV --> PRJ["Projection Pipeline"]
     PRJ --> RM["ScriptEvolutionReadModel"]
 ```
 
-## 7. 分层改造方案
+## 6. 双入口设计
 
-### 7.1 Abstractions 改造
+### 6.1 外部更新入口（External Channel）
 
-新增自治演化契约（建议放在 `Aevatar.Scripting.Abstractions`）：
+入口形式：
 
-1. `ScriptEvolutionProposal`（脚本提案：目标 scriptId、baseRevision、candidateSource、reason）。
-2. `ScriptEvolutionValidationReport`（编译、静态规则、测试结果）。
-3. `ScriptPromotionDecision`（批准/拒绝/回滚）。
+1. Host/API 命令入口。
+2. CI/CD 任务入口。
+3. 运维批量发布入口。
 
-新增事件：
+入口职责：
+
+1. 接收变更请求并规范化为 `ScriptEvolutionProposal`。
+2. 发布 `ProposeScriptEvolutionRequestedEvent` 到 EvolutionManager。
+3. 不直接调用 Definition/Catalog 做最终发布动作。
+
+### 6.2 自我演化入口（Self-Evolution Channel）
+
+入口形式：
+
+1. 脚本通过 `IScriptRuntimeCapabilities.ProposeScriptEvolutionAsync(...)` 发起提案。
+
+入口职责：
+
+1. 与外部入口共用同一提案协议。
+2. 可在运行中继续调用 `Spawn/Run` 能力执行验证型或新版本实例化流程。
+
+## 7. 协议与抽象改造
+
+### 7.1 Abstractions
+
+保留并扩展：
+
+1. `ScriptEvolutionProposal`
+2. `ScriptEvolutionValidationReport`
+3. `ScriptPromotionDecision`
+
+新增建议字段：
+
+1. `Origin`：`external | self`
+2. `RequesterId`：调用者身份
+3. `ChangeTicket`：外部治理单号（可选）
+4. `ChannelMetadata`：可扩展审计字段
+
+说明：
+
+1. 外部入口和脚本入口必须都写 `Origin`，用于审计与策略分流。
+
+### 7.2 Event 协议
+
+继续使用统一演化事件链：
 
 1. `ScriptEvolutionProposedEvent`
 2. `ScriptEvolutionBuildRequestedEvent`
@@ -112,305 +126,129 @@ flowchart LR
 6. `ScriptEvolutionRollbackRequestedEvent`
 7. `ScriptEvolutionRolledBackEvent`
 
-扩展能力接口（脚本内原生）：
+新增建议：
 
-1. `ProposeScriptEvolutionAsync(...)`
-2. `SpawnScriptRuntimeAsync(...)`
-3. `UpsertScriptDefinitionAsync(...)`
-4. `RunScriptInstanceAsync(...)`
-5. `PromoteRevisionAsync(...)`
-6. `RollbackRevisionAsync(...)`
+1. 在上述事件中补充 `Origin/RequesterId` 投影字段。
 
-说明：
+## 8. Core / Application / Hosting 分层职责
 
-1. 这些接口是“脚本语义能力”，不是裸露 Git/Shell 能力。
-2. 内部实现可调用宿主端口，但对脚本保持语义抽象。
+### 8.1 Core
 
-### 7.2 Core 改造
+1. `ScriptEvolutionManagerGAgent`：演化状态机与一致性推进。
+2. `ScriptCatalogGAgent`：版本目录、激活指针、回滚指针。
+3. Core 只依赖端口，不感知外部入口是 API 还是脚本。
 
-新增 Actor：
+### 8.2 Application
 
-1. `ScriptEvolutionManagerGAgent`
-2. `ScriptCatalogGAgent`
+新增/调整：
 
-职责：
+1. 外部命令适配器（建议）：
+   `ProposeExternalScriptEvolutionCommandAdapter`
+2. 统一编排器：
+   `ScriptEvolutionOrchestrator`（外部与脚本均调用）
 
-1. EvolutionManager 持有每个提案的生命周期状态。
-2. Catalog 持有脚本版本目录、发布通道、回滚指针。
-3. 所有状态转换必须通过事件处理推进。
+### 8.3 Hosting
 
-Core 新端口：
+新增/调整：
 
-1. `IScriptPolicyGatePort`
-2. `IScriptValidationPipelinePort`
-3. `IScriptPromotionPort`
-4. `IScriptCatalogPort`
-
-### 7.3 Application 改造
-
-新增编排器：
-
-1. `ScriptEvolutionOrchestrator`（提案到发布完整流程）。
-2. `ScriptRuntimeProvisioningOrchestrator`（定义创建 + Runtime 创建 + 首次运行）。
-
-新增命令适配：
-
-1. `ProposeScriptEvolutionCommandAdapter`
-2. `PromoteScriptRevisionCommandAdapter`
-3. `RollbackScriptRevisionCommandAdapter`
-
-### 7.4 Infrastructure 改造
-
-新增能力实现：
-
-1. `RoslynDiffAwareValidator`（编译 + AST 规则 + 变更风险检查）。
-2. `ScriptTestRunner`（白名单测试集执行）。
-3. `SignedArtifactStore`（候选脚本产物签名与溯源）。
-
-安全增强：
-
-1. Sandbox 规则从“禁止危险 API”扩展到“禁止危险升级路径”。
-2. 增加 `self-rewrite` 限制：禁止脚本直接写本地文件系统源码。
-
-### 7.5 Hosting 改造
-
-`AddScriptCapability()` 增加：
-
-1. 演化端口默认实现注册。
-2. 策略门禁默认实现注册。
-3. 审计事件发布器注册。
-
-外部系统集成：
-
-1. 可以接入 CI 服务，但通过 `IScriptValidationPipelinePort` 抽象，不向 Core 泄露细节。
-
-### 7.6 Projection 改造
-
-新增投影：
-
-1. `ScriptEvolutionReadModelProjector`
-2. `ScriptEvolutionTimelineReducer`
-
-读模型字段建议：
-
-1. `ProposalId`
-2. `ScriptId`
-3. `BaseRevision`
-4. `CandidateRevision`
-5. `ValidationStatus`
-6. `PromotionStatus`
-7. `RollbackStatus`
-8. `FailureReason`
-9. `UpdatedAt`
-
-## 8. 三类核心场景目标形态
-
-### 场景 A：多个自定义脚本 GAgent 协作
-
-目标：
-
-1. 一个 Orchestrator 脚本通过脚本能力编排多个子脚本 Runtime。
-2. 子脚本之间通过事件通信，不通过进程内共享状态。
-
-### 场景 B：运行中动态创建临时已定义脚本 Agent
-
-目标：
-
-1. 脚本在满足条件时创建临时 Runtime。
-2. 临时 Runtime 绑定已有定义 revision。
-3. 任务完成后可回收，生命周期有审计记录。
-
-### 场景 C：运行中创建新的脚本 Agent（含新定义）
-
-目标：
-
-1. 脚本生成候选源码并发起演化提案。
-2. 通过编译/测试/策略后自动发布新 revision。
-3. 脚本创建并启动该新 revision 的 Runtime。
+1. 提供外部入口 endpoint/handler。
+2. 外部入口只做鉴权、审计元数据补全、命令投递。
+3. 禁止在 Hosting 直接“写 definition + 切 catalog”为最终发布动作。
 
 ## 9. 关键时序
 
-### 9.1 自治升级时序
+### 9.1 外部更新时序
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
-    participant SRC as "ScriptRuntime"
-    participant EVO as "ScriptEvolutionManagerGAgent"
-    participant POL as "PolicyGatePort"
-    participant VAL as "ValidationPipelinePort"
-    participant CAT as "ScriptCatalogGAgent"
-    participant PRJ as "Projection"
-
-    SRC->>EVO: "ProposeScriptEvolutionAsync(proposal)"
-    EVO->>POL: "Evaluate(proposal)"
-    POL-->>EVO: "allow/deny"
-    EVO->>VAL: "BuildAndTest(candidateSource)"
-    VAL-->>EVO: "ValidationReport"
-    EVO->>CAT: "Promote(candidateRevision)"
-    CAT-->>EVO: "Promoted"
-    EVO-->>SRC: "PromotionResult"
-    EVO->>PRJ: "Emit evolution events"
-```
-
-### 9.2 运行中创建临时已定义脚本 Agent
-
-```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
-sequenceDiagram
-    participant ORC as "Orchestrator ScriptRuntime"
-    participant CAP as "Script Capabilities"
-    participant DEF as "ScriptDefinitionGAgent"
-    participant TMP as "Temp ScriptRuntimeGAgent"
-
-    ORC->>CAP: "SpawnScriptRuntimeAsync(existingScriptId, revision, tempActorId)"
-    CAP->>DEF: "Resolve definition snapshot"
-    CAP->>TMP: "Create runtime actor"
-    ORC->>CAP: "RunScriptInstanceAsync(tempActorId, input)"
-    CAP->>TMP: "RunScriptRequestedEvent"
-    TMP-->>ORC: "domain events / result"
-```
-
-### 9.3 运行中创建全新脚本 Agent
-
-```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
-sequenceDiagram
-    participant ORC as "Orchestrator ScriptRuntime"
+    participant API as "External API"
+    participant ADP as "External Adapter"
     participant EVO as "EvolutionManager"
-    participant DEF as "ScriptDefinitionGAgent(new)"
-    participant RT as "ScriptRuntimeGAgent(new)"
+    participant POL as "Policy"
+    participant VAL as "Validation"
+    participant CAT as "Catalog"
 
-    ORC->>EVO: "ProposeScriptEvolutionAsync(new script source)"
-    EVO-->>ORC: "Validated + Promoted revision"
-    ORC->>DEF: "UpsertScriptDefinitionAsync(newScriptId, revision, source)"
-    ORC->>RT: "SpawnScriptRuntimeAsync(newScriptId, revision, newActorId)"
-    ORC->>RT: "RunScriptInstanceAsync(newActorId, input)"
+    API->>ADP: "UpdateRequest(scriptId, source, revision)"
+    ADP->>EVO: "ProposeScriptEvolutionRequestedEvent(origin=external)"
+    EVO->>POL: "Evaluate"
+    EVO->>VAL: "Validate"
+    EVO->>CAT: "Promote"
+    EVO-->>API: "Decision(promoted/rejected)"
 ```
 
-## 10. 安全与治理（强制）
+### 9.2 自我演化时序
 
-1. 自治升级必须经过 `PolicyGate -> Validation -> Promotion` 三段式。
-2. 禁止脚本直接写本地仓库源码文件。
-3. 禁止脚本绕过事件链路直接调用非抽象实现。
-4. 每次升级必须产生审计事件和可追踪 ProposalId。
-5. 每次发布必须保留可回滚 revision 指针。
-6. 发布失败自动回滚到上一个稳定 revision。
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
+sequenceDiagram
+    participant RT as "ScriptRuntime"
+    participant CAP as "Capabilities"
+    participant EVO as "EvolutionManager"
+    participant CAT as "Catalog"
 
-Script-Only 模式附加禁止项：
+    RT->>CAP: "ProposeScriptEvolutionAsync(origin=self)"
+    CAP->>EVO: "ProposeScriptEvolutionRequestedEvent"
+    EVO->>CAT: "Promote/Rollback"
+    EVO-->>RT: "ScriptPromotionDecision"
+```
 
-1. 禁止通过 Host/API 直接调用“发布某脚本 revision”为最终动作（必须经演化协议事件链）。
-2. 禁止新增非脚本入口的业务升级 endpoint。
-3. 禁止在 Application/Hosting 放置“临时人工开关”绕过策略门禁。
+## 10. 安全与治理
 
-## 11. 数据与状态模型
+1. 两条入口统一执行 `Policy -> Validation -> Promotion`。
+2. 两条入口统一写审计事件与投影。
+3. 外部入口需鉴权与来源标记。
+4. 自我演化入口需策略限流与沙箱限制。
+5. 允许外部更新，但不允许外部“旁路发布”。
+6. 允许自我演化，但不允许脚本直接操作宿主文件系统源码。
 
-事实源：
+## 11. 测试矩阵（必须覆盖双入口）
 
-1. `ScriptEvolutionManagerGAgent.State`：提案生命周期。
-2. `ScriptCatalogGAgent.State`：脚本版本目录与通道指针。
-3. `ScriptDefinitionGAgent.State`：定义源码与 schema 信息。
-4. `ScriptRuntimeGAgent.State`：运行态 payload 与最后事件。
+新增/调整测试要求：
 
-禁止：
+1. `ExternalEvolutionE2ETests`：外部入口提案到发布闭环。
+2. `SelfEvolutionE2ETests`：脚本入口提案到发布闭环。
+3. `DualSourceParityTests`：同一输入在 external/self 两入口输出一致状态机结果。
+4. `BypassForbiddenTests`：验证外部入口不能绕过主链路直接发布。
+5. `RollbackConsistencyTests`：双入口回滚行为一致。
 
-1. 在 Application/Hosting 中维护 `proposalId -> context` 进程内事实字典。
-2. 通过 `actorId` 反查上下文模型作为事实源。
+## 12. 实施计划
 
-## 12. 迁移步骤（无兼容包袱）
+### Phase 1：协议统一
 
-### Phase 1：协议落地
+1. 在 proposal/event/readmodel 增加 `Origin/RequesterId`。
+2. 更新契约测试与投影测试。
 
-1. 在 Abstractions 增加自治演化事件与能力接口。
-2. 更新 proto 与契约测试。
+### Phase 2：外部入口接入（已完成）
 
-### Phase 2：Core/Application 实现
+1. 增加外部命令适配器与 API handler。
+2. 外部请求统一投递到 EvolutionManager。
+3. 已落地文件：
+   `src/Aevatar.Scripting.Hosting/CapabilityApi/ScriptCapabilityEndpoints.cs`
+4. 已落地文件：
+   `src/Aevatar.Scripting.Application/Application/ScriptEvolutionApplicationService.cs`
 
-1. 引入 EvolutionManager/Catalog Actor。
-2. 实现演化编排器与命令适配。
+### Phase 3：一致性治理
 
-### Phase 3：Infrastructure/Hosting
+1. 增加旁路发布守卫与测试。
+2. 将外部与自我两条链路纳入统一审计面板。
 
-1. 增加策略门禁与验证流水线端口实现。
-2. 加入发布、回滚、签名产物支持。
+## 13. 完成定义（DoD）
 
-### Phase 4：Projection 与审计
+1. 外部更新与自我演化两条链路均可用。
+2. 两条链路经过同一治理主链路，禁止旁路。
+3. 统一投影能区分并查询 `Origin`。
+4. 双入口 E2E 与一致性测试通过。
+5. 架构守卫通过。
 
-1. 增加 Evolution 投影与读模型。
-2. 打通查询接口与时间线展示。
-
-### Phase 5：测试与守卫
-
-1. 增加三类 E2E 场景。
-2. 增加禁止绕过策略的架构守卫。
-
-## 13. 测试矩阵
-
-新增测试建议：
-
-1. `ScriptAutonomousEvolutionE2ETests`：脚本提案升级并自动发布。
-2. `ScriptAutonomousRollbackE2ETests`：验证失败触发自动回滚。
-3. `ScriptTempRuntimeSpawnE2ETests`：运行时创建临时已定义 Runtime 并回收。
-4. `ScriptNewAgentProvisionE2ETests`：脚本生成新定义并启动新 Runtime。
-5. `ScriptPolicyGateDenialTests`：策略拒绝路径与审计事件校验。
-
-当前已有可复用基础测试：
-
-1. `ClaimComplexBusinessScenarioTests`（能力端口调用 + 动态创建请求）。
-2. `ScriptGAgentFactoryLifecycleBoundaryTests`（真实 Runtime 生命周期）。
-3. `ClaimLifecycleBoundaryTests`（Create/Destroy/Link/Unlink）。
-
-## 14. CI 与守卫增强
-
-新增守卫规则建议：
-
-1. 禁止脚本能力接口暴露裸 `IServiceProvider`。
-2. 禁止演化流程直接调用基础设施具体类。
-3. 要求新增演化事件类型必须有对应 reducer 测试引用。
-4. 要求升级流程必须写入 `ScriptEvolution*` 事件链。
-
-继续保留现有守卫：
-
-1. `tools/ci/architecture_guards.sh`
-2. `tools/ci/projection_route_mapping_guard.sh`
-3. `tools/ci/solution_split_guards.sh`
-4. `tools/ci/solution_split_test_guards.sh`
-
-## 15. 风险与对策
-
-1. 风险：自治升级引入错误脚本。
-   对策：强制验证流水线 + 灰度发布 + 自动回滚。
-2. 风险：升级链路被滥用。
-   对策：策略门禁与签名产物校验。
-3. 风险：状态一致性丢失。
-   对策：Actor 持久态作为唯一事实源，禁止中间层字典事实态。
-
-## 16. 完成定义（DoD）
-
-1. 三类场景全部具备 E2E 自动化测试并通过。
-2. 演化流程具备可审计读模型与查询能力。
-3. 失败路径可自动回滚且有事件证据。
-4. 架构守卫覆盖新增规则并稳定通过。
-5. 文档、代码、测试三者一致。
-6. 达成 `Script-Only Iteration Mode`：无脚本外业务演化入口可绕过主链路。
-
-## 17. 实施后验证命令
-
-1. `dotnet build aevatar.slnx --nologo`
-2. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo`
-3. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo`
-4. `bash tools/ci/architecture_guards.sh`
-5. `bash tools/ci/projection_route_mapping_guard.sh`
-6. `bash tools/ci/solution_split_guards.sh`
-7. `bash tools/ci/solution_split_test_guards.sh`
-
-## 18. 关键文件建议索引
+## 14. 关键文件索引（落地锚点）
 
 1. `src/Aevatar.Scripting.Abstractions/script_host_messages.proto`
-2. `src/Aevatar.Scripting.Core/ScriptDefinitionGAgent.cs`
-3. `src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs`
-4. `src/Aevatar.Scripting.Application/Runtime/ScriptRuntimeExecutionOrchestrator.cs`
+2. `src/Aevatar.Scripting.Abstractions/Definitions/IScriptRuntimeCapabilities.cs`
+3. `src/Aevatar.Scripting.Core/ScriptEvolutionManagerGAgent.cs`
+4. `src/Aevatar.Scripting.Core/ScriptCatalogGAgent.cs`
 5. `src/Aevatar.Scripting.Hosting/DependencyInjection/ServiceCollectionExtensions.cs`
-6. `src/Aevatar.Scripting.Projection/Projectors/ScriptExecutionReadModelProjector.cs`
-7. `test/Aevatar.Integration.Tests/ClaimComplexBusinessScenarioTests.cs`
-8. `test/Aevatar.Integration.Tests/ScriptGAgentFactoryLifecycleBoundaryTests.cs`
+6. `src/Aevatar.Scripting.Projection/Projectors/ScriptEvolutionReadModelProjector.cs`
+7. `src/Aevatar.Scripting.Hosting/CapabilityApi/ScriptCapabilityEndpoints.cs`
+8. `test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionE2ETests.cs`
+9. `test/Aevatar.Integration.Tests/ScriptExternalEvolutionE2ETests.cs`

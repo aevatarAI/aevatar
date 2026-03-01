@@ -3,53 +3,46 @@
 ## 1. 文档元信息
 
 - 文档状态：`Active`
-- 文档版本：`v1`
+- 文档版本：`v4`
 - 更新时间：`2026-03-02`
-- 适用范围：`src/Aevatar.Scripting.*` 与其在 Runtime/CQRS 中的集成边界
-- 读者对象：Scripting、Workflow、CQRS、Hosting 维护者
+- 适用范围：`src/Aevatar.Scripting.*` 与其 Runtime/CQRS 集成边界
 
-## 2. 目标与定位
+## 2. 终态目标
 
-`Aevatar.Scripting` 是 Aevatar 的脚本能力子系统，目标是让“脚本定义”和“脚本执行”在 Actor 语义内稳定运行，并通过统一 Projection 链路输出 ReadModel。
+`Aevatar.Scripting` 目标终态是 `Dual-Source Iteration`（外部更新 + 自我演化）：
 
-核心定位：
+1. 外部入口可发起脚本升级提案并进入统一治理链路。
+2. 脚本入口可在运行中发起自我演化提案并进入同一治理链路。
+3. 升级发布通过统一事件链审计（EvolutionManager + Catalog + Projection），不存在直写旁路。
+4. 两条入口在策略、验证、发布、回滚上的语义一致。
 
-1. 使用 C# 脚本实现可编译、可执行、可投影的运行逻辑。
-2. 保持 `Command -> Event -> Projection -> ReadModel` 单主链路。
-3. 用端口抽象隔离 Runtime/IO 细节，避免 Core 绑定具体宿主实现。
-4. 严格遵循 Actor 单线程事实源，不在中间层维护跨请求事实态。
+### 2.1 当前实现状态
 
-## 3. 架构硬约束
+1. 自我演化主链路已实现并验证。
+2. 外部更新入口已实现为标准化 Host/API + Application Service，并复用同一演化主链路。
 
-1. 严格分层：`Abstractions / Core / Application / Infrastructure / Hosting / Projection`。
-2. Core 只依赖抽象与领域语义，不依赖具体运行时实现。
-3. Runtime 事实状态只能由 Actor 状态推进，不允许中间层 `Dictionary<id, context>` 事实态。
-4. CQRS 与 AGUI 必须走统一 Projection Pipeline，不允许 scripting 双轨投影。
-5. 无业务价值中间层必须删除，不保留兼容空壳。
+## 3. 分层与模块映射
 
-## 4. 分层与项目映射
-
-| 分层 | 项目 | 职责 |
+| 分层 | 项目 | 核心职责 |
 |---|---|---|
-| Abstractions | `Aevatar.Scripting.Abstractions` | proto 契约、脚本接口、执行上下文、能力接口 |
-| Domain/Core | `Aevatar.Scripting.Core` | `ScriptDefinitionGAgent`、`ScriptRuntimeGAgent`、核心端口与领域规则 |
-| Application | `Aevatar.Scripting.Application` | 命令适配、运行编排器、AI 能力组合策略 |
-| Infrastructure | `Aevatar.Scripting.Infrastructure` | Roslyn 编译/执行、沙箱策略、元数据解析 |
-| Hosting | `Aevatar.Scripting.Hosting` | DI 装配、Runtime 端口实现、能力接入扩展 |
-| Projection | `Aevatar.Scripting.Projection` | projector/reducer/readmodel，接入 CQRS Runtime 抽象 |
+| Abstractions | `Aevatar.Scripting.Abstractions` | proto 状态/事件契约、脚本运行接口、演化模型 |
+| Core | `Aevatar.Scripting.Core` | `ScriptDefinitionGAgent` / `ScriptRuntimeGAgent` / `ScriptEvolutionManagerGAgent` / `ScriptCatalogGAgent` |
+| Application | `Aevatar.Scripting.Application` | 命令适配器、运行编排器 |
+| Infrastructure | `Aevatar.Scripting.Infrastructure` | Roslyn 编译执行、沙箱策略 |
+| Hosting | `Aevatar.Scripting.Hosting` | 端口实现、DI 装配、运行时接入 |
+| Projection | `Aevatar.Scripting.Projection` | 脚本执行读模型 + 演化审计读模型 |
 
-依赖方向图：
+依赖方向：
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    ABS["Aevatar.Scripting.Abstractions"]
-    CORE["Aevatar.Scripting.Core"]
-    APP["Aevatar.Scripting.Application"]
-    INFRA["Aevatar.Scripting.Infrastructure"]
-    HOST["Aevatar.Scripting.Hosting"]
-    PROJ["Aevatar.Scripting.Projection"]
-    CQRS["Aevatar.CQRS.Projection.*"]
+    ABS["Abstractions"]
+    CORE["Core"]
+    APP["Application"]
+    INFRA["Infrastructure"]
+    HOST["Hosting"]
+    PROJ["Projection"]
 
     CORE --> ABS
     APP --> CORE
@@ -59,313 +52,195 @@ flowchart LR
     HOST --> CORE
     HOST --> INFRA
     PROJ --> ABS
-    PROJ --> CQRS
 ```
 
-## 5. 核心领域对象
+## 4. 领域 Actor 主干
 
-### 5.1 ScriptDefinitionGAgent
+### 4.1 ScriptDefinitionGAgent
 
-文件：`src/Aevatar.Scripting.Core/ScriptDefinitionGAgent.cs`
+- 文件：`src/Aevatar.Scripting.Core/ScriptDefinitionGAgent.cs`
+- 职责：脚本定义上载、编译校验、schema 声明与激活状态推进。
+- 事实状态：`ScriptDefinitionState`。
 
-职责：
+### 4.2 ScriptRuntimeGAgent
 
-1. 接收 `UpsertScriptDefinitionRequestedEvent`。
-2. 调用 `IScriptPackageCompiler` 编译脚本并提取契约。
-3. 提取并验证 ReadModel Schema 能力。
-4. 持久化定义事件与 schema 事件。
-5. 维护 `ScriptDefinitionState`（revision/source/schema 状态）。
+- 文件：`src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs`
+- 职责：加载定义快照、执行脚本、提交 `ScriptRunDomainEventCommitted`。
+- 事实状态：`ScriptRuntimeState`。
 
-状态推进事件：
+### 4.3 ScriptEvolutionManagerGAgent
 
-1. `ScriptDefinitionUpsertedEvent`
-2. `ScriptReadModelSchemaDeclaredEvent`
-3. `ScriptReadModelSchemaValidatedEvent`
-4. `ScriptReadModelSchemaActivationFailedEvent`
+- 文件：`src/Aevatar.Scripting.Core/ScriptEvolutionManagerGAgent.cs`
+- 职责：提案生命周期状态机（Proposed -> Validated -> Promoted/Rejected）。
+- 事实状态：`ScriptEvolutionManagerState`。
 
-### 5.2 ScriptRuntimeGAgent
+### 4.4 ScriptCatalogGAgent
 
-文件：`src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs`
+- 文件：`src/Aevatar.Scripting.Core/ScriptCatalogGAgent.cs`
+- 职责：脚本版本目录、激活 revision 指针、回滚指针。
+- 事实状态：`ScriptCatalogState`。
 
-职责：
+## 5. 脚本能力接口（统一语义）
 
-1. 接收 `RunScriptRequestedEvent`。
-2. 通过 `IScriptDefinitionSnapshotPort` 拉取定义快照。
-3. 调用 `IScriptRuntimeExecutionOrchestrator` 生成 committed domain events。
-4. 持久化 `ScriptRunDomainEventCommitted` 事件流。
-5. 维护 `ScriptRuntimeState`（state/readmodel payload 与 schema 对账信息）。
+文件：`src/Aevatar.Scripting.Abstractions/Definitions/IScriptRuntimeCapabilities.cs`
 
-## 6. 契约模型与事件模型
+保留执行期能力：
 
-proto 文件：`src/Aevatar.Scripting.Abstractions/script_host_messages.proto`
+1. `AskAIAsync` / `PublishAsync` / `SendToAsync` / `InvokeAgentAsync`
+2. `CreateAgentAsync` / `DestroyAgentAsync` / `LinkAgentsAsync` / `UnlinkAgentAsync`
 
-关键状态：
+新增演化与供给能力：
 
-1. `ScriptDefinitionState`
-2. `ScriptRuntimeState`
+1. `ProposeScriptEvolutionAsync`
+2. `UpsertScriptDefinitionAsync`
+3. `SpawnScriptRuntimeAsync`
+4. `RunScriptInstanceAsync`
+5. `PromoteRevisionAsync`
+6. `RollbackRevisionAsync`
 
-关键命令事件：
+## 6. 核心端口与 Hosting 实现
 
-1. `UpsertScriptDefinitionRequestedEvent`
-2. `RunScriptRequestedEvent`
+Core 端口（`src/Aevatar.Scripting.Core/Ports`）：
 
-关键领域事件：
+1. `IScriptEvolutionPort`
+2. `IScriptPolicyGatePort`
+3. `IScriptValidationPipelinePort`
+4. `IScriptPromotionPort`
+5. `IScriptCatalogPort`
+6. `IScriptDefinitionLifecyclePort`
+7. `IScriptRuntimeLifecyclePort`
 
-1. `ScriptDefinitionUpsertedEvent`
-2. `ScriptReadModelSchemaDeclaredEvent`
-3. `ScriptReadModelSchemaValidatedEvent`
-4. `ScriptReadModelSchemaActivationFailedEvent`
-5. `ScriptRunDomainEventCommitted`
+Hosting 实现（`src/Aevatar.Scripting.Hosting/Ports`）：
 
-脚本运行抽象：
+1. `RuntimeScriptEvolutionPort`
+2. `RuntimeScriptPolicyGatePort`
+3. `RuntimeScriptValidationPipelinePort`
+4. `RuntimeScriptPromotionPort`
+5. `RuntimeScriptCatalogPort`
+6. `RuntimeScriptDefinitionLifecyclePort`
+7. `RuntimeScriptRuntimeLifecyclePort`
 
-1. `IScriptPackageRuntime`
-2. `IScriptPackageDefinition`
-3. `IScriptContractProvider`
-4. `ScriptExecutionContext`
-5. `IScriptRuntimeCapabilities`
+DI 统一装配文件：
 
-## 7. 端口与依赖反转
+- `src/Aevatar.Scripting.Hosting/DependencyInjection/ServiceCollectionExtensions.cs`
 
-Core 端口（由 Hosting 提供实现）：
+外部入口文件：
 
-1. `IScriptDefinitionSnapshotPort`
-2. `IGAgentEventRoutingPort`
-3. `IGAgentInvocationPort`
-4. `IGAgentFactoryPort`
+1. `src/Aevatar.Scripting.Hosting/CapabilityApi/ScriptCapabilityEndpoints.cs`
+2. `src/Aevatar.Scripting.Application/Application/IScriptEvolutionApplicationService.cs`
+3. `src/Aevatar.Scripting.Application/Application/ScriptEvolutionApplicationService.cs`
 
-编译与策略端口：
+## 7. 协议模型（proto）
 
-1. `IScriptPackageCompiler`
-2. `IScriptExecutionEngine`
-3. `IScriptReadModelSchemaActivationPolicy`
+文件：`src/Aevatar.Scripting.Abstractions/script_host_messages.proto`
 
-运行编排端口：
+新增核心状态：
 
-1. `IScriptRuntimeExecutionOrchestrator`
+1. `ScriptEvolutionManagerState`
+2. `ScriptEvolutionProposalState`
+3. `ScriptCatalogState`
+4. `ScriptCatalogEntryState`
 
-关键点：
+新增核心事件：
 
-1. Actor 已完全改为构造注入，不使用 `Services.GetService(...)`。
-2. `ScriptRuntimeExecutionRequest` 不再透传 `IServiceProvider`。
-3. Application 层已删除冗余 capability factory，运行能力直接按端口组合。
+1. `ProposeScriptEvolutionRequestedEvent`
+2. `ScriptEvolutionProposedEvent`
+3. `ScriptEvolutionBuildRequestedEvent`
+4. `ScriptEvolutionValidatedEvent`
+5. `ScriptEvolutionRejectedEvent`
+6. `ScriptEvolutionPromotedEvent`
+7. `ScriptEvolutionRollbackRequestedEvent`
+8. `ScriptEvolutionRolledBackEvent`
+9. `PromoteScriptRevisionRequestedEvent`
+10. `RollbackScriptRevisionRequestedEvent`
+11. `ScriptCatalogRevisionPromotedEvent`
+12. `ScriptCatalogRollbackRequestedEvent`
+13. `ScriptCatalogRolledBackEvent`
 
-## 8. Application 编排
+## 8. 执行与演化主链路
 
-### 8.1 命令适配
+### 8.1 Script Run 链路
 
-1. `UpsertScriptDefinitionCommandAdapter` 将命令映射到 `UpsertScriptDefinitionRequestedEvent`。
-2. `RunScriptCommandAdapter` 将命令映射到 `RunScriptRequestedEvent`。
-3. 适配器只负责宿主协议输入到领域事件输入，不承载业务流程。
+`RunScriptRequestedEvent -> ScriptRuntimeExecutionOrchestrator -> ScriptRunDomainEventCommitted* -> Projection`
 
-### 8.2 运行编排器
+### 8.2 Script Evolution 链路（统一治理）
 
-文件：`src/Aevatar.Scripting.Application/Runtime/ScriptRuntimeExecutionOrchestrator.cs`
+入口 A（Self）：`ScriptRuntimeCapabilities -> ScriptEvolutionManagerGAgent`
 
-流程：
+入口 B（External）：`Host/API/CI Adapter -> ScriptEvolutionManagerGAgent`
 
-1. 编译脚本定义（按 snapshot source）。
-2. 构建 `ScriptExecutionContext`（状态、输入、能力端口）。
-3. 调用脚本 `HandleRequestedEventAsync` 产生 domain decisions。
-4. 循环调用脚本 `ApplyDomainEventAsync` 与 `ReduceReadModelAsync`。
-5. 生成 `ScriptRunDomainEventCommitted` 列表返回 Runtime Actor 持久化。
-
-默认行为：
-
-1. 若脚本未返回任何 domain event，系统补一条 `script.run.completed`。
-
-## 9. Infrastructure（Roslyn + Sandbox）
-
-### 9.1 编译与契约提取
-
-文件：`src/Aevatar.Scripting.Infrastructure/Compilation/RoslynScriptPackageCompiler.cs`
-
-步骤：
-
-1. 参数校验（scriptId/revision/source）。
-2. 沙箱规则校验。
-3. 语法与语义编译校验。
-4. 强制脚本实现 `IScriptPackageRuntime`。
-5. 提取 `ScriptContractManifest`。
-
-契约提取优先级：
-
-1. 优先 `IScriptContractProvider.ContractManifest`。
-2. 回退到源码注释 `contract.*` 元数据。
-
-### 9.2 脚本执行引擎
-
-文件：`src/Aevatar.Scripting.Infrastructure/Compilation/RoslynScriptExecutionEngine.cs`
-
-特点：
-
-1. 按调用动态编译并加载到 collectible `AssemblyLoadContext`。
-2. 查找脚本 runtime 类型并实例化执行。
-3. 执行结束即释放 load context。
-
-### 9.3 沙箱规则
-
-文件：`src/Aevatar.Scripting.Infrastructure/Compilation/ScriptSandboxPolicy.cs`
-
-默认禁止：
-
-1. 并发与线程 API：`Task.Run`、`new Thread`、`new Timer`、`lock`。
-2. 文件与 IO API：`File.*`、`Directory.*`、`System.IO`。
-3. 反射与动态装载 API。
-4. 直接网络访问 API：`HttpClient`、`WebRequest`、`Socket`。
-
-## 10. Hosting 装配与外部适配
-
-文件：`src/Aevatar.Scripting.Hosting/DependencyInjection/ServiceCollectionExtensions.cs`
-
-`AddScriptCapability()` 注册内容：
-
-1. 编译执行：`ScriptSandboxPolicy`、`IScriptExecutionEngine`、`IScriptPackageCompiler`。
-2. 运行编排：`IScriptRuntimeExecutionOrchestrator`。
-3. 核心端口实现：snapshot/event routing/invocation/factory。
-4. schema 激活策略：`IScriptReadModelSchemaActivationPolicy`。
-5. AI 能力：优先 `IRoleAgentPort` 委托，否则 `NoopAICapability`。
-
-说明：
-
-1. `IRoleAgentPort` 是可选外部能力，不再是 scripting 主链路硬依赖。
-2. 端口实现全部放在 Hosting，Core 保持无宿主细节。
-
-## 11. Projection 架构
-
-文件：
-
-1. `src/Aevatar.Scripting.Projection/Projectors/ScriptExecutionReadModelProjector.cs`
-2. `src/Aevatar.Scripting.Projection/Reducers/ScriptRunDomainEventCommittedReducer.cs`
-3. `src/Aevatar.Scripting.Projection/ReadModels/ScriptExecutionReadModel.cs`
-
-机制：
-
-1. Projector 按 `payload.TypeUrl` 路由到 reducer 列表。
-2. reducer 将 `ScriptRunDomainEventCommitted` 映射到 `ScriptExecutionReadModel`。
-3. 投影通过 `IProjectionStoreDispatcher` 落库，复用 CQRS Runtime 抽象。
-
-ReadModel 核心字段：
-
-1. `ScriptId`、`DefinitionActorId`、`Revision`。
-2. `StatePayloads`、`ReadModelPayloads`。
-3. `ReadModelSchemaVersion`、`ReadModelSchemaHash`。
-4. `LastRunId`、`LastEventType`、`StateVersion`、`UpdatedAt`。
-
-## 12. 关键链路时序
-
-### 12.1 定义上载链路（Upsert）
+两条入口合流到同一治理路径：`Policy -> Validation -> Promotion/Rollback -> Projection`
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
-    participant APP as "Application Adapter"
-    participant DEF as "ScriptDefinitionGAgent"
-    participant CMP as "IScriptPackageCompiler"
-    participant POL as "IScriptReadModelSchemaActivationPolicy"
-    participant ES as "EventStore"
+    participant EXT as "External Adapter"
+    participant RT as "ScriptRuntime Capabilities"
+    participant EVO as "ScriptEvolutionManagerGAgent"
+    participant VAL as "ValidationPipelinePort"
+    participant PRO as "PromotionPort"
+    participant CAT as "ScriptCatalogGAgent"
 
-    APP->>DEF: "UpsertScriptDefinitionRequestedEvent"
-    DEF->>CMP: "CompileAsync(scriptId, revision, source)"
-    CMP-->>DEF: "CompilationResult + ContractManifest"
-    DEF->>POL: "ValidateActivation(schema requirements)"
-    POL-->>DEF: "ActivationResult"
-    DEF->>ES: "Persist ScriptDefinitionUpsertedEvent"
-    DEF->>ES: "Persist SchemaDeclared/Validated/Failed"
+    EXT->>EVO: "ProposeScriptEvolutionRequestedEvent(origin=external)"
+    RT->>EVO: "ProposeScriptEvolutionRequestedEvent(origin=self)"
+    EVO->>VAL: "Validate(candidate source)"
+    EVO->>PRO: "PromoteAsync"
+    PRO->>CAT: "PromoteScriptRevisionRequestedEvent"
+    CAT-->>EVO: "ScriptCatalogRevisionPromotedEvent"
+    EVO-->>RT: "ScriptPromotionDecision"
 ```
 
-### 12.2 运行执行链路（Run）
+## 9. Projection 统一读模型
 
-```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
-sequenceDiagram
-    participant APP as "Application Adapter"
-    participant RT as "ScriptRuntimeGAgent"
-    participant SNAP as "IScriptDefinitionSnapshotPort"
-    participant ORCH as "IScriptRuntimeExecutionOrchestrator"
-    participant SCR as "IScriptPackageDefinition"
-    participant ES as "EventStore"
-    participant PRJ as "Projection Pipeline"
+### 9.1 执行读模型
 
-    APP->>RT: "RunScriptRequestedEvent"
-    RT->>SNAP: "GetRequiredAsync(definitionActorId, revision)"
-    SNAP-->>RT: "ScriptDefinitionSnapshot"
-    RT->>ORCH: "ExecuteRunAsync(request)"
-    ORCH->>SCR: "HandleRequestedEventAsync(requestedEvent, context)"
-    ORCH->>SCR: "ApplyDomainEventAsync / ReduceReadModelAsync"
-    ORCH-->>RT: "IReadOnlyList<ScriptRunDomainEventCommitted>"
-    RT->>ES: "PersistDomainEventsAsync(committedEvents)"
-    ES-->>PRJ: "EventEnvelope stream"
-    PRJ-->>PRJ: "Reducer mutate ScriptExecutionReadModel"
-```
+- `ScriptExecutionReadModelProjector`
+- `ScriptRunDomainEventCommittedReducer`
+- `ScriptExecutionReadModel`
 
-### 12.3 投影统一链路（Scripting 与 CQRS）
+### 9.2 演化审计读模型
 
-```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
-flowchart LR
-    EV["ScriptRunDomainEventCommitted"] --> PP["Projection Pipeline Entry"]
-    PP --> PJ["ScriptExecutionReadModelProjector"]
-    PJ --> RD["ScriptRunDomainEventCommittedReducer"]
-    RD --> RM["ScriptExecutionReadModel"]
-    RM --> ST["Projection Store Dispatcher"]
-```
+- `ScriptEvolutionReadModelProjector`
+- `ScriptEvolutionProposedEventReducer`
+- `ScriptEvolutionValidatedEventReducer`
+- `ScriptEvolutionRejectedEventReducer`
+- `ScriptEvolutionPromotedEventReducer`
+- `ScriptEvolutionRolledBackEventReducer`
+- `ScriptEvolutionReadModel`
 
-## 13. 一致性与并发模型
+这两类读模型都使用相同 `TypeUrl` 精确路由策略，符合 `projection_route_mapping_guard` 门禁。
 
-1. Actor 运行态只通过事件处理路径变更。
-2. 不在中间层持有 `run/session/actor` 跨请求事实映射。
-3. snapshot 读取由端口抽象提供，revision 不匹配直接失败。
-4. 运行态 `StatePayloads/ReadModelPayloads` 始终以 committed 事件为事实源。
+## 10. 场景覆盖（双入口）
 
-## 14. 错误语义与失败处理
+关键验证用例：
 
-1. 定义编译失败：`ScriptDefinitionGAgent` 抛出 `InvalidOperationException`，不写入成功定义事件。
-2. schema 能力不足：写入 `ScriptReadModelSchemaActivationFailedEvent`，状态标记 `activation_failed`。
-3. 运行找不到定义 actor 或 revision 不匹配：snapshot 端口直接失败。
-4. 运行编译失败：orchestrator 失败，runtime 不提交 committed 事件。
+1. `test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionE2ETests.cs`
+2. `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptEvolutionManagerGAgentTests.cs`
+3. `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptCatalogGAgentTests.cs`
+4. `test/Aevatar.Scripting.Core.Tests/Projection/ScriptEvolutionReadModelProjectorTests.cs`
 
-## 15. 测试与质量门禁
+覆盖能力：
 
-测试项目：
+1. 自我演化链路：多脚本协作、临时 runtime、新定义创建、提案发布。
+2. 外部演化链路：`POST /api/scripts/evolutions/proposals` -> Application Service -> EvolutionManager -> Catalog 闭环已覆盖。
 
-1. `test/Aevatar.Scripting.Core.Tests`
-2. `test/Aevatar.Integration.Tests`（含 scripting 端到端路径）
+## 11. 质量与门禁结果
 
-建议回归命令：
+本次重构已通过：
 
 1. `dotnet build aevatar.slnx --nologo`
 2. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo`
-3. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo`
-4. `bash tools/ci/architecture_guards.sh`
-5. `bash tools/ci/solution_split_guards.sh`
-6. `bash tools/ci/solution_split_test_guards.sh`
+3. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptAutonomousEvolutionE2ETests|FullyQualifiedName~ScriptExternalEvolutionE2ETests"`
+4. `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptCapabilityHostExtensionsTests"`
+5. `bash tools/ci/architecture_guards.sh`
+6. `bash tools/ci/projection_route_mapping_guard.sh`
+7. `bash tools/ci/test_stability_guards.sh`
+8. `bash tools/ci/solution_split_guards.sh`
+9. `bash tools/ci/solution_split_test_guards.sh`
+10. `dotnet test aevatar.slnx --nologo`
 
-## 16. 扩展指南
+## 12. 限制与后续
 
-新增脚本能力扩展时，按以下顺序执行：
-
-1. 在 `Abstractions` 增加稳定契约或上下文字段。
-2. 在 `Core` 增加端口抽象，不引入宿主实现。
-3. 在 `Application` 做编排组合，不直连基础设施细节。
-4. 在 `Hosting` 提供端口实现与 DI 注册。
-5. 在 `Projection` 增加 reducer/projector，复用统一 pipeline。
-6. 补齐单测与集成测试，并通过 CI 守卫。
-
-## 17. 已知限制与后续演进
-
-1. 当前执行引擎是“按调用动态编译”，高吞吐场景会有额外编译开销。
-2. 后续可在 Application 层引入“可替换的编译结果缓存端口”，前提是不破坏 Actor 事实源与中间层状态约束。
-3. 若引入分布式快照缓存，必须由 Actor 持久态或分布式状态服务承载，不允许进程内事实缓存。
-
-## 18. 关键文件索引
-
-1. `src/Aevatar.Scripting.Abstractions/script_host_messages.proto`
-2. `src/Aevatar.Scripting.Core/ScriptDefinitionGAgent.cs`
-3. `src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs`
-4. `src/Aevatar.Scripting.Application/Runtime/ScriptRuntimeExecutionOrchestrator.cs`
-5. `src/Aevatar.Scripting.Infrastructure/Compilation/RoslynScriptPackageCompiler.cs`
-6. `src/Aevatar.Scripting.Infrastructure/Compilation/RoslynScriptExecutionEngine.cs`
-7. `src/Aevatar.Scripting.Hosting/DependencyInjection/ServiceCollectionExtensions.cs`
-8. `src/Aevatar.Scripting.Projection/Projectors/ScriptExecutionReadModelProjector.cs`
-9. `src/Aevatar.Scripting.Projection/Reducers/ScriptRunDomainEventCommittedReducer.cs`
+1. 当前 `RuntimeScriptPolicyGatePort` 是默认策略实现（规则简化），可在不改 Core 的情况下扩展更严格治理。
+2. 当前 `RuntimeScriptValidationPipelinePort` 以编译校验为主，可扩展灰度回放和回归测试白名单。
+3. 如需跨节点强一致审批，可将策略/验证结果额外投影到分布式审计存储，但事实源仍保持 Actor 状态。

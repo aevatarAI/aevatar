@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
@@ -97,12 +98,19 @@ public class ScriptRuntimeGAgentReplayContractTests
 
     private static ScriptRuntimeGAgent CreateRuntimeAgent(ScriptDefinitionGAgent definition)
     {
-        var orchestrator = new ScriptRuntimeExecutionOrchestrator(
-            new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
+        var capabilityComposer = new ScriptRuntimeCapabilityComposer(
             new NullAICapability(),
             new NullEventRoutingPort(),
             new NullInvocationPort(),
-            new NullFactoryPort());
+            new NullFactoryPort(),
+            new NullEvolutionPort(),
+            new NullDefinitionLifecyclePort(),
+            new NullRuntimeLifecyclePort(),
+            new NullCatalogPort());
+
+        var orchestrator = new ScriptRuntimeExecutionOrchestrator(
+            new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
+            capabilityComposer);
 
         return new ScriptRuntimeGAgent(orchestrator, new StaticSnapshotPort(definition))
         {
@@ -258,5 +266,132 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
         public Task LinkAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
 
         public Task UnlinkAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class NullEvolutionPort : IScriptEvolutionPort
+    {
+        public Task<ScriptPromotionDecision> ProposeAsync(
+            string managerActorId,
+            ScriptEvolutionProposal proposal,
+            CancellationToken ct)
+        {
+            _ = managerActorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                new ScriptPromotionDecision(
+                    Accepted: true,
+                    ProposalId: proposal.ProposalId,
+                    ScriptId: proposal.ScriptId,
+                    BaseRevision: proposal.BaseRevision,
+                    CandidateRevision: proposal.CandidateRevision,
+                    Status: "promoted",
+                    FailureReason: string.Empty,
+                    DefinitionActorId: proposal.DefinitionActorId,
+                    CatalogActorId: proposal.CatalogActorId,
+                    ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
+        }
+    }
+
+    private sealed class NullDefinitionLifecyclePort : IScriptDefinitionLifecyclePort
+    {
+        public Task<string> UpsertAsync(
+            string scriptId,
+            string scriptRevision,
+            string sourceText,
+            string sourceHash,
+            string? definitionActorId,
+            CancellationToken ct)
+        {
+            _ = scriptId;
+            _ = scriptRevision;
+            _ = sourceText;
+            _ = sourceHash;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(definitionActorId ?? "definition-1");
+        }
+    }
+
+    private sealed class NullRuntimeLifecyclePort : IScriptRuntimeLifecyclePort
+    {
+        public Task<string> SpawnAsync(
+            string definitionActorId,
+            string scriptRevision,
+            string? runtimeActorId,
+            CancellationToken ct)
+        {
+            _ = definitionActorId;
+            _ = scriptRevision;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(runtimeActorId ?? "runtime-1");
+        }
+
+        public Task RunAsync(
+            string runtimeActorId,
+            string runId,
+            Any? inputPayload,
+            string scriptRevision,
+            string definitionActorId,
+            string requestedEventType,
+            CancellationToken ct)
+        {
+            _ = runtimeActorId;
+            _ = runId;
+            _ = inputPayload;
+            _ = scriptRevision;
+            _ = definitionActorId;
+            _ = requestedEventType;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NullCatalogPort : IScriptCatalogPort
+    {
+        public Task PromoteAsync(
+            string catalogActorId,
+            string scriptId,
+            string revision,
+            string definitionActorId,
+            string sourceHash,
+            string proposalId,
+            CancellationToken ct)
+        {
+            _ = catalogActorId;
+            _ = scriptId;
+            _ = revision;
+            _ = definitionActorId;
+            _ = sourceHash;
+            _ = proposalId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task RollbackAsync(
+            string catalogActorId,
+            string scriptId,
+            string targetRevision,
+            string reason,
+            string proposalId,
+            CancellationToken ct)
+        {
+            _ = catalogActorId;
+            _ = scriptId;
+            _ = targetRevision;
+            _ = reason;
+            _ = proposalId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<ScriptCatalogEntrySnapshot?> GetEntryAsync(
+            string catalogActorId,
+            string scriptId,
+            CancellationToken ct)
+        {
+            _ = catalogActorId;
+            _ = scriptId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<ScriptCatalogEntrySnapshot?>(null);
+        }
     }
 }

@@ -1,12 +1,16 @@
 using Aevatar.Hosting;
+using Aevatar.Scripting.Application;
+using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Hosting.Tests;
@@ -45,7 +49,27 @@ public class ScriptCapabilityHostExtensionsTests
             x.ServiceType == typeof(IScriptPackageCompiler) &&
             x.ImplementationType == typeof(RoslynScriptPackageCompiler));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptEvolutionApplicationService) &&
+            x.ImplementationType == typeof(ScriptEvolutionApplicationService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptRuntimeCapabilityComposer) &&
+            x.ImplementationType == typeof(ScriptRuntimeCapabilityComposer));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptDefinitionSnapshotPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptDefinitionLifecyclePort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptRuntimeLifecyclePort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptCatalogPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptPolicyGatePort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptValidationPipelinePort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptPromotionPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptEvolutionPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IGAgentEventRoutingPort));
         services.Should().Contain(x =>
@@ -54,5 +78,24 @@ public class ScriptCapabilityHostExtensionsTests
             x.ServiceType == typeof(IGAgentFactoryPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IAICapability));
+    }
+
+    [Fact]
+    public void AddScriptCapability_ShouldMapEvolutionProposalEndpoint()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.AddScriptCapability();
+
+        var app = builder.Build();
+        app.MapAevatarCapabilities();
+
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        var routeEndpoints = routeBuilder.DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
+            .ToList();
+
+        routeEndpoints.Should().Contain("/api/scripts/evolutions/proposals");
     }
 }

@@ -1,76 +1,90 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Core.AI;
-using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Runtime;
 
 public sealed class ScriptRuntimeCapabilities : IScriptRuntimeCapabilities
 {
-    private readonly string _runtimeActorId;
-    private readonly string _runId;
-    private readonly string _correlationId;
-    private readonly IAICapability _aiCapability;
-    private readonly IGAgentEventRoutingPort _eventRoutingPort;
-    private readonly IGAgentInvocationPort _invocationPort;
-    private readonly IGAgentFactoryPort _factoryPort;
+    private readonly IScriptInteractionCapabilities _interaction;
+    private readonly IScriptAgentLifecycleCapabilities _agentLifecycle;
+    private readonly IScriptEvolutionCapabilities _evolution;
 
     public ScriptRuntimeCapabilities(
+        IScriptInteractionCapabilities interaction,
+        IScriptAgentLifecycleCapabilities agentLifecycle,
+        IScriptEvolutionCapabilities evolution)
+    {
+        _interaction = interaction ?? throw new ArgumentNullException(nameof(interaction));
+        _agentLifecycle = agentLifecycle ?? throw new ArgumentNullException(nameof(agentLifecycle));
+        _evolution = evolution ?? throw new ArgumentNullException(nameof(evolution));
+    }
+
+    public Task<string> AskAIAsync(string prompt, CancellationToken ct) =>
+        _interaction.AskAIAsync(prompt, ct);
+
+    public Task PublishAsync(IMessage eventPayload, Aevatar.Foundation.Abstractions.EventDirection direction, CancellationToken ct) =>
+        _interaction.PublishAsync(eventPayload, direction, ct);
+
+    public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) =>
+        _interaction.SendToAsync(targetActorId, eventPayload, ct);
+
+    public Task InvokeAgentAsync(string targetAgentId, IMessage eventPayload, CancellationToken ct) =>
+        _agentLifecycle.InvokeAgentAsync(targetAgentId, eventPayload, ct);
+
+    public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) =>
+        _agentLifecycle.CreateAgentAsync(agentTypeAssemblyQualifiedName, actorId, ct);
+
+    public Task DestroyAgentAsync(string actorId, CancellationToken ct) =>
+        _agentLifecycle.DestroyAgentAsync(actorId, ct);
+
+    public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) =>
+        _agentLifecycle.LinkAgentsAsync(parentActorId, childActorId, ct);
+
+    public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) =>
+        _agentLifecycle.UnlinkAgentAsync(childActorId, ct);
+
+    public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct) =>
+        _evolution.ProposeScriptEvolutionAsync(proposal, ct);
+
+    public Task<string> UpsertScriptDefinitionAsync(
+        string scriptId,
+        string scriptRevision,
+        string sourceText,
+        string sourceHash,
+        string? definitionActorId,
+        CancellationToken ct) =>
+        _evolution.UpsertScriptDefinitionAsync(scriptId, scriptRevision, sourceText, sourceHash, definitionActorId, ct);
+
+    public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) =>
+        _evolution.SpawnScriptRuntimeAsync(definitionActorId, scriptRevision, runtimeActorId, ct);
+
+    public Task RunScriptInstanceAsync(
         string runtimeActorId,
         string runId,
-        string correlationId,
-        IAICapability aiCapability,
-        IGAgentEventRoutingPort eventRoutingPort,
-        IGAgentInvocationPort invocationPort,
-        IGAgentFactoryPort factoryPort)
-    {
-        _runtimeActorId = runtimeActorId ?? string.Empty;
-        _runId = runId ?? string.Empty;
-        _correlationId = correlationId ?? string.Empty;
-        _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
-        _eventRoutingPort = eventRoutingPort ?? throw new ArgumentNullException(nameof(eventRoutingPort));
-        _invocationPort = invocationPort ?? throw new ArgumentNullException(nameof(invocationPort));
-        _factoryPort = factoryPort ?? throw new ArgumentNullException(nameof(factoryPort));
-    }
+        Any? inputPayload,
+        string scriptRevision,
+        string definitionActorId,
+        string requestedEventType,
+        CancellationToken ct) =>
+        _evolution.RunScriptInstanceAsync(runtimeActorId, runId, inputPayload, scriptRevision, definitionActorId, requestedEventType, ct);
 
-    public Task<string> AskAIAsync(string prompt, CancellationToken ct)
-    {
-        return _aiCapability.AskAsync(_runId, _correlationId, prompt ?? string.Empty, ct);
-    }
+    public Task PromoteRevisionAsync(
+        string catalogActorId,
+        string scriptId,
+        string revision,
+        string definitionActorId,
+        string sourceHash,
+        string proposalId,
+        CancellationToken ct) =>
+        _evolution.PromoteRevisionAsync(catalogActorId, scriptId, revision, definitionActorId, sourceHash, proposalId, ct);
 
-    public Task PublishAsync(IMessage eventPayload, EventDirection direction, CancellationToken ct)
-    {
-        return _eventRoutingPort.PublishAsync(_runtimeActorId, eventPayload, direction, _correlationId, ct);
-    }
-
-    public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct)
-    {
-        return _eventRoutingPort.SendToAsync(_runtimeActorId, targetActorId, eventPayload, _correlationId, ct);
-    }
-
-    public Task InvokeAgentAsync(string targetAgentId, IMessage eventPayload, CancellationToken ct)
-    {
-        return _invocationPort.InvokeAsync(targetAgentId, eventPayload, _correlationId, ct);
-    }
-
-    public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct)
-    {
-        return _factoryPort.CreateAsync(agentTypeAssemblyQualifiedName, actorId, ct);
-    }
-
-    public Task DestroyAgentAsync(string actorId, CancellationToken ct)
-    {
-        return _factoryPort.DestroyAsync(actorId, ct);
-    }
-
-    public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct)
-    {
-        return _factoryPort.LinkAsync(parentActorId, childActorId, ct);
-    }
-
-    public Task UnlinkAgentAsync(string childActorId, CancellationToken ct)
-    {
-        return _factoryPort.UnlinkAsync(childActorId, ct);
-    }
+    public Task RollbackRevisionAsync(
+        string catalogActorId,
+        string scriptId,
+        string targetRevision,
+        string reason,
+        string proposalId,
+        CancellationToken ct) =>
+        _evolution.RollbackRevisionAsync(catalogActorId, scriptId, targetRevision, reason, proposalId, ct);
 }

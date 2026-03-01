@@ -508,5 +508,66 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
         public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
 
         public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
+
+        public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
+            ScriptEvolutionProposal proposal,
+            CancellationToken ct) =>
+            Task.FromResult(
+                new ScriptPromotionDecision(
+                    Accepted: true,
+                    ProposalId: proposal.ProposalId,
+                    ScriptId: proposal.ScriptId,
+                    BaseRevision: proposal.BaseRevision,
+                    CandidateRevision: proposal.CandidateRevision,
+                    Status: "promoted",
+                    FailureReason: string.Empty,
+                    DefinitionActorId: proposal.DefinitionActorId,
+                    CatalogActorId: proposal.CatalogActorId,
+                    ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
+
+        public Task<string> UpsertScriptDefinitionAsync(
+            string scriptId,
+            string scriptRevision,
+            string sourceText,
+            string sourceHash,
+            string? definitionActorId,
+            CancellationToken ct) =>
+            Task.FromResult(definitionActorId ?? "definition-1");
+
+        public Task<string> SpawnScriptRuntimeAsync(
+            string definitionActorId,
+            string scriptRevision,
+            string? runtimeActorId,
+            CancellationToken ct) =>
+            Task.FromResult(runtimeActorId ?? "runtime-1");
+
+        public Task RunScriptInstanceAsync(
+            string runtimeActorId,
+            string runId,
+            Any? inputPayload,
+            string scriptRevision,
+            string definitionActorId,
+            string requestedEventType,
+            CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task PromoteRevisionAsync(
+            string catalogActorId,
+            string scriptId,
+            string revision,
+            string definitionActorId,
+            string sourceHash,
+            string proposalId,
+            CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task RollbackRevisionAsync(
+            string catalogActorId,
+            string scriptId,
+            string targetRevision,
+            string reason,
+            string proposalId,
+            CancellationToken ct) =>
+            Task.CompletedTask;
     }
 }
