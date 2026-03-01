@@ -9,8 +9,6 @@ public sealed class ScriptExecutionReadModel : IProjectionReadModel
     public string LastRunId { get; set; } = string.Empty;
     public string LastEventType { get; set; } = string.Empty;
     public string LastDomainEventPayloadJson { get; set; } = string.Empty;
-    public string DecisionStatus { get; set; } = string.Empty;
-    public bool ManualReviewRequired { get; set; }
     public string StatePayloadJson { get; set; } = string.Empty;
     public string ReadModelPayloadJson { get; set; } = string.Empty;
     public long StateVersion { get; set; }

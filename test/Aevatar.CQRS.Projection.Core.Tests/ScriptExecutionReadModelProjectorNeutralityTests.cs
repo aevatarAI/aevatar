@@ -12,10 +12,10 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
-public class ClaimReadModelProjectorTests
+public class ScriptExecutionReadModelProjectorNeutralityTests
 {
     [Fact]
-    public async Task Should_route_by_exact_type_url()
+    public async Task Should_project_snapshot_payloads_without_domain_specific_inference()
     {
         var dispatcher = new InMemoryScriptProjectionStoreDispatcher();
         var projector = new ScriptExecutionReadModelProjector(
@@ -24,9 +24,9 @@ public class ClaimReadModelProjectorTests
             [new ScriptRunDomainEventCommittedReducer()]);
         var context = new ScriptProjectionContext
         {
-            ProjectionId = "claim-projection-1",
-            RootActorId = "claim-runtime-1",
-            ScriptId = "claim-script-1",
+            ProjectionId = "script-projection-1",
+            RootActorId = "script-runtime-1",
+            ScriptId = "script-1",
         };
 
         await projector.InitializeAsync(context, CancellationToken.None);
@@ -34,23 +34,25 @@ public class ClaimReadModelProjectorTests
             context,
             Wrap(new ScriptRunDomainEventCommitted
             {
-                RunId = "run-claim-1",
-                ScriptRevision = "rev-claim-1",
+                RunId = "run-1",
+                ScriptRevision = "rev-1",
                 DefinitionActorId = "definition-1",
-                EventType = "ClaimManualReviewRequestedEvent",
-                PayloadJson = "{\"caseId\":\"Case-B\"}",
+                EventType = "AnyDomainEvent",
+                PayloadJson = "{\"domain\":\"payload\"}",
+                StatePayloadJson = "{\"state\":\"snapshot\"}",
+                ReadModelPayloadJson = "{\"custom\":\"projection\"}",
             }),
             CancellationToken.None);
 
         var readModel = await dispatcher.GetAsync(context.RootActorId, CancellationToken.None);
         readModel.Should().NotBeNull();
-        readModel!.LastEventType.Should().Be("ClaimManualReviewRequestedEvent");
-        readModel.DecisionStatus.Should().Be("ManualReview");
-        readModel.ManualReviewRequired.Should().BeTrue();
+        readModel!.LastEventType.Should().Be("AnyDomainEvent");
+        readModel.StatePayloadJson.Should().Be("{\"state\":\"snapshot\"}");
+        readModel.ReadModelPayloadJson.Should().Be("{\"custom\":\"projection\"}");
     }
 
     [Fact]
-    public async Task Should_update_decision_status_on_manual_review()
+    public async Task Should_not_fallback_domain_payload_to_state_snapshot_when_state_snapshot_is_empty()
     {
         var dispatcher = new InMemoryScriptProjectionStoreDispatcher();
         var projector = new ScriptExecutionReadModelProjector(
@@ -59,9 +61,9 @@ public class ClaimReadModelProjectorTests
             [new ScriptRunDomainEventCommittedReducer()]);
         var context = new ScriptProjectionContext
         {
-            ProjectionId = "claim-projection-2",
-            RootActorId = "claim-runtime-2",
-            ScriptId = "claim-script-2",
+            ProjectionId = "script-projection-2",
+            RootActorId = "script-runtime-2",
+            ScriptId = "script-2",
         };
 
         await projector.InitializeAsync(context, CancellationToken.None);
@@ -69,18 +71,20 @@ public class ClaimReadModelProjectorTests
             context,
             Wrap(new ScriptRunDomainEventCommitted
             {
-                RunId = "run-claim-2",
-                ScriptRevision = "rev-claim-2",
+                RunId = "run-2",
+                ScriptRevision = "rev-2",
                 DefinitionActorId = "definition-2",
-                EventType = "ClaimApprovedEvent",
-                PayloadJson = "{\"caseId\":\"Case-A\"}",
+                EventType = "AnotherDomainEvent",
+                PayloadJson = "{\"domain\":\"payload\"}",
+                StatePayloadJson = "",
+                ReadModelPayloadJson = "",
             }),
             CancellationToken.None);
 
         var readModel = await dispatcher.GetAsync(context.RootActorId, CancellationToken.None);
         readModel.Should().NotBeNull();
-        readModel!.DecisionStatus.Should().Be("Approved");
-        readModel.ManualReviewRequired.Should().BeFalse();
+        readModel!.StatePayloadJson.Should().BeEmpty();
+        readModel.ReadModelPayloadJson.Should().BeEmpty();
     }
 
     [Fact]
@@ -93,9 +97,9 @@ public class ClaimReadModelProjectorTests
             [new ScriptRunDomainEventCommittedReducer()]);
         var context = new ScriptProjectionContext
         {
-            ProjectionId = "claim-projection-3",
-            RootActorId = "claim-runtime-3",
-            ScriptId = "claim-script-3",
+            ProjectionId = "script-projection-3",
+            RootActorId = "script-runtime-3",
+            ScriptId = "script-3",
         };
 
         await projector.InitializeAsync(context, CancellationToken.None);
@@ -107,7 +111,7 @@ public class ClaimReadModelProjectorTests
         var readModel = await dispatcher.GetAsync(context.RootActorId, CancellationToken.None);
         readModel.Should().NotBeNull();
         readModel!.StateVersion.Should().Be(0);
-        readModel.DecisionStatus.Should().BeEmpty();
+        readModel.LastEventType.Should().BeEmpty();
     }
 
     private static EventEnvelope Wrap(IMessage evt) => new()
@@ -115,7 +119,7 @@ public class ClaimReadModelProjectorTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        PublisherId = "claim-runtime",
+        PublisherId = "script-runtime",
         Direction = EventDirection.Self,
     };
 

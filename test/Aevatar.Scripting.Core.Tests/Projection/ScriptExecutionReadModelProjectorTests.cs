@@ -39,6 +39,8 @@ public class ScriptExecutionReadModelProjectorTests
                 DefinitionActorId = "definition-1",
                 EventType = "script.run.completed",
                 PayloadJson = "{\"ok\":true}",
+                StatePayloadJson = "{\"state\":{\"ok\":true}}",
+                ReadModelPayloadJson = "{\"view\":{\"ok\":true}}",
             }),
             CancellationToken.None);
 
@@ -49,7 +51,9 @@ public class ScriptExecutionReadModelProjectorTests
         readModel.Revision.Should().Be("rev-1");
         readModel.LastRunId.Should().Be("run-1");
         readModel.LastEventType.Should().Be("script.run.completed");
-        readModel.StatePayloadJson.Should().Be("{\"ok\":true}");
+        readModel.LastDomainEventPayloadJson.Should().Be("{\"ok\":true}");
+        readModel.StatePayloadJson.Should().Be("{\"state\":{\"ok\":true}}");
+        readModel.ReadModelPayloadJson.Should().Be("{\"view\":{\"ok\":true}}");
         readModel.StateVersion.Should().Be(1);
     }
 
