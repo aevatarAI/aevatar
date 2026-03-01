@@ -11,7 +11,7 @@
 - 总分: `88/100`
 - 结论: 已完成首批可运行架构落地，满足“事件主链、继承边界、投影精确路由、端到端闭环”核心要求。
 - 阻断项: 无。
-- 未闭环项: `IGAgentFactoryPort` 与生命周期边界测试、脚本运行观测、revision->编译句柄绑定。
+- 未闭环项: `IGAgentFactoryPort` 与生命周期边界测试、复杂业务多智能体回归用例、脚本运行观测、revision->编译句柄绑定。
 
 ## 3. 维度评分
 | 维度 | 分值 | 说明 |
@@ -40,6 +40,7 @@
 | R-SG-13 | Done | `script_inheritance_guard.sh` + 测试 |
 | R-SG-14 | In Progress | `IGAgentInvocationPort` + `RuntimeGAgentInvocationPort` + `RuntimeGAgentInvocationPortTests`；通用创建端口待补 |
 | R-SG-15 | In Progress | 已明确 `IActorRuntime` 生命周期权威边界；缺 `IGAgentFactoryPort` 与 Scope 非生命周期测试证据 |
+| R-SG-16 | Planned | `docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md` 已定义；自动化测试待落地 |
 
 ## 5. 验证证据（已执行命令）
 | 命令 | 结果 |
@@ -54,11 +55,13 @@
 ## 6. 风险与后续
 1. `IGAgentFactoryPort` 暂未落地，脚本“受控创建任意 GAgent”能力未闭环。
 2. 生命周期边界测试尚未补齐，尚缺“IOC Scope 不托管 GAgent 生命周期”的自动化证据。
-3. 脚本观测维度（`script_id/revision/correlation_id`）尚未统一注入日志与指标。
-4. revision 回放治理尚未实现“revision -> 编译缓存句柄”强绑定。
+3. 复杂业务多智能体回归（Claim 场景）尚未实装，当前缺高业务语义强度回归保障。
+4. 脚本观测维度（`script_id/revision/correlation_id`）尚未统一注入日志与指标。
+5. revision 回放治理尚未实现“revision -> 编译缓存句柄”强绑定。
 
 ## 7. 建议下一里程碑
 1. M2.1: 落地 `IGAgentFactoryPort` 与 Runtime 生命周期实现（create/destroy/link/unlink/restore）。
 2. M2.2: 补齐生命周期边界测试（证明 Scope 仅依赖解析，不托管 GAgent 生命周期）。
-3. M2.3: 增加脚本执行 observability 埋点与审计事件。
-4. M2.4: 实现 revision 绑定执行句柄与升级/迁移策略。
+3. M2.3: 落地 Claim 场景多智能体回归测试（RoleGAgent/AI + 编排 + 回放 + 投影）。
+4. M2.4: 增加脚本执行 observability 埋点与审计事件。
+5. M2.5: 实现 revision 绑定执行句柄与升级/迁移策略。

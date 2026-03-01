@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Implement C# Script GAgent capability with strict EventEnvelope event handling, Event Sourcing replay consistency, unified Projection Pipeline, and composition-only AI/GAgent reuse.
+**Goal:** Implement C# Script GAgent capability with strict EventEnvelope event handling, Event Sourcing replay consistency, unified Projection Pipeline, composition-only AI/GAgent reuse, and a business-meaningful multi-agent regression scenario.
 
-**Architecture:** Build a new scripting vertical (`Abstractions -> Core -> Projection -> Hosting`) centered on `ScriptHostGAgent : GAgentBase<ScriptHostState>`. Application commands are adapted to requested events wrapped in `EventEnvelope`; ScriptHost handles only events and persists domain events. Read-side plugs into existing projection coordinator by exact `TypeUrl` routing. Script-to-agent calls/creation must go through runtime-backed ports (`IGAgentInvocationPort` / `IGAgentFactoryPort`) with `IActorRuntime` as lifecycle authority; IOC scope is not a lifecycle manager.
+**Architecture:** Build a new scripting vertical (`Abstractions -> Core -> Projection -> Hosting`) centered on `ScriptHostGAgent : GAgentBase<ScriptHostState>`. Application commands are adapted to requested events wrapped in `EventEnvelope`; ScriptHost handles only events and persists domain events. Read-side plugs into existing projection coordinator by exact `TypeUrl` routing. Script-to-agent calls/creation must go through runtime-backed ports (`IGAgentInvocationPort` / `IGAgentFactoryPort`) with `IActorRuntime` as lifecycle authority; IOC scope is not a lifecycle manager. Business scenario baseline is the insurance-claim anti-fraud workflow defined in `docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md`.
 
 **Tech Stack:** .NET 9, xUnit, FluentAssertions, Google.Protobuf, existing Aevatar Foundation/CQRS/Workflow runtime and CI guards.
 
@@ -838,6 +838,92 @@ git add src/Aevatar.Scripting.Core/Ports src/Aevatar.Scripting.Hosting/Ports tes
 git commit -m "feat: add runtime-authoritative gagent factory port and lifecycle boundary tests"
 ```
 
+### Task 13: Add Business-meaningful Multi-agent Script TDD Scenario (Claim Anti-fraud)
+
+**Files:**
+- Create: `test/Aevatar.Scripting.Core.Tests/Business/ClaimScriptDecisionTests.cs`
+- Create: `test/Aevatar.Scripting.Core.Tests/AI/ClaimRoleIntegrationTests.cs`
+- Create: `test/Aevatar.Integration.Tests/ClaimOrchestrationIntegrationTests.cs`
+- Create: `test/Aevatar.Integration.Tests/ClaimReplayTests.cs`
+- Create: `test/Aevatar.CQRS.Projection.Core.Tests/ClaimReadModelProjectorTests.cs`
+- Create: `test/Aevatar.Integration.Tests/ClaimLifecycleBoundaryTests.cs`
+- Modify: `docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md`
+
+**Step 1: Write the failing tests**
+
+```csharp
+public class ClaimScriptDecisionTests
+{
+    [Fact]
+    public async Task Should_require_manual_review_when_high_risk()
+    {
+        // Arrange scenario input
+        // Act script decision
+        // Assert event sequence contains ClaimManualReviewRequestedEvent
+    }
+}
+
+public class ClaimRoleIntegrationTests
+{
+    [Fact]
+    public async Task Should_delegate_to_role_agent_capability_with_correlation()
+    {
+        // Assert run_id/correlation_id are propagated to IAICapability/IRoleAgentPort
+    }
+}
+
+public class ClaimOrchestrationIntegrationTests
+{
+    [Fact]
+    public async Task Should_call_agents_via_invocation_and_factory_ports_only()
+    {
+        // Assert no direct concrete-agent resolution path
+    }
+}
+```
+
+**Step 2: Run tests to verify they fail**
+
+Run: `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --filter "*Claim*"`
+Expected: FAIL with missing scenario tests/implementations.
+
+Run: `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --filter "*Claim*"`
+Expected: FAIL with missing orchestration/replay/lifecycle coverage.
+
+Run: `dotnet test test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj --filter "*Claim*"`
+Expected: FAIL with missing read model projector tests.
+
+**Step 3: Write minimal implementation**
+
+```csharp
+// 1) Add deterministic scenario fixtures for Case-A/B/C (Approve/ManualReview/Reject).
+// 2) Wire RoleGAgent AI output into ClaimFactsExtractedEvent mapping.
+// 3) Use IGAgentInvocationPort for FraudRisk/Compliance calls.
+// 4) Use IGAgentFactoryPort only on high-risk branch to create HumanReviewGAgent.
+// 5) Persist domain events and assert replay gives same state/read model.
+```
+
+**Step 4: Run tests to verify they pass**
+
+Run: `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --filter "*Claim*"`
+Expected: PASS.
+
+Run: `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --filter "*Claim*"`
+Expected: PASS.
+
+Run: `dotnet test test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj --filter "*Claim*"`
+Expected: PASS.
+
+Run: `bash tools/ci/test_stability_guards.sh`
+Expected: PASS.
+
+**Step 5: Commit**
+
+```bash
+git add test/Aevatar.Scripting.Core.Tests/Business/ClaimScriptDecisionTests.cs test/Aevatar.Scripting.Core.Tests/AI/ClaimRoleIntegrationTests.cs test/Aevatar.Integration.Tests/ClaimOrchestrationIntegrationTests.cs test/Aevatar.Integration.Tests/ClaimReplayTests.cs test/Aevatar.CQRS.Projection.Core.Tests/ClaimReadModelProjectorTests.cs test/Aevatar.Integration.Tests/ClaimLifecycleBoundaryTests.cs docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md
+git commit -m "test: add claim anti-fraud multi-agent script tdd scenario"
+```
+
 ## Cross-Task Rules
 
 1. Use `@test-driven-development` in every task.
@@ -855,3 +941,4 @@ git commit -m "feat: add runtime-authoritative gagent factory port and lifecycle
 2. M2: Application adapter + host write path + sandbox (Tasks 4-6)
 3. M3: AI composition + generic invocation + projection integration (Tasks 7-8)
 4. M4: Hosting/guards/e2e/docs complete and lifecycle boundary planned (Tasks 9-12)
+5. M5: Claim anti-fraud multi-agent business scenario integrated into TDD regression (Task 13)

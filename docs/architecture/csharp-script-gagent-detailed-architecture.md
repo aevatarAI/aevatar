@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 - 状态: In Progress
-- 版本: v0.3
+- 版本: v0.4
 - 日期: 2026-03-01
 - 需求基线: `docs/architecture/csharp-script-gagent-requirements.md`
 - 适用范围: `Foundation/Core/CQRS/Workflow/Host` 相关子系统
@@ -266,6 +266,7 @@ sequenceDiagram
 4. 组合复用测试: AI delegate 路径可用且无继承耦合。
 5. 生命周期边界测试: 验证 Scope 不托管 GAgent 生命周期，create/destroy/replay 仅经 `IActorRuntime`。
 6. 集成测试: Host/Application/Actor/Projection 端到端闭环。
+7. 复杂业务场景测试: 多智能体脚本编排 + RoleGAgent/AI 集成 + 分支决策回归。
 
 ### 14.3 最低验证命令
 1. `bash tools/ci/architecture_guards.sh`
@@ -283,6 +284,7 @@ sequenceDiagram
 6. 再落 AI 复用: `Role delegate/IAICapability`。
 7. 再落通用创建端口与生命周期护栏: `IGAgentFactoryPort + lifecycle tests`。
 8. 最后落 Host 装配与全量验证。
+9. 补齐复杂业务场景（保险理赔反欺诈）TDD 回归套件。
 
 ## 16. 风险清单
 
@@ -296,10 +298,12 @@ sequenceDiagram
 缓解: 继承守卫脚本 + 组合端口测试用例。
 5. 风险: 误用 IOC Scope 托管 GAgent 生命周期导致回放与一致性语义破坏。
 缓解: `IActorRuntime` 生命周期权威约束 + `IGAgentFactoryPort` 抽象 + 生命周期边界测试。
+6. 风险: 缺乏复杂业务回归场景导致多智能体编排语义在重构中回退。
+缓解: 固化业务场景测试设计并纳入 CI 回归。
 
 ## 17. 与需求文档对照关系
 
-1. 本文对应需求文档中的 `R-SG-01 ~ R-SG-15`。
+1. 本文对应需求文档中的 `R-SG-01 ~ R-SG-16`。
 2. 关键新增细化:
 - Command 与 EventEnvelope 的边界落位
 - ScriptHost 与 AI/通用 GAgent 组合复用端口分层
@@ -307,3 +311,30 @@ sequenceDiagram
 - revision 回放绑定细节
 - 运行态内部事件对账模型
 - 安全与审计的可验证指标
+
+## 18. 复杂业务多智能体测试场景（TDD）
+
+场景: 保险理赔反欺诈自动审核（Claim Case）
+
+核心参与者:
+1. `ScriptHostGAgent`：编排与状态权威。
+2. `RoleGAgent`：理赔文本结构化与 AI 判断（通过 `IAICapability`）。
+3. `FraudRiskGAgent`：反欺诈评分。
+4. `ComplianceRuleGAgent`：条款合规校验。
+5. `HumanReviewGAgent`：高风险人工复核。
+
+场景链路要求:
+1. 所有跨 agent 调用通过 `IGAgentInvocationPort`。
+2. 仅在高风险/规则冲突分支使用 `IGAgentFactoryPort` 创建人工复核 agent。
+3. 所有状态变化仍由领域事件驱动并可 replay 同态。
+4. 读侧必须走统一 Projection Pipeline 更新 `ClaimCaseReadModel`。
+
+测试覆盖要点:
+1. 业务路径 A: 低风险 + 合规 -> Approve。
+2. 业务路径 B: 高风险 -> ManualReview。
+3. 业务路径 C: 合规失败 -> Reject。
+4. 回放路径: 在线执行结果与 replay 结果完全一致。
+5. 边界路径: Scope 释放不影响 Runtime 管理的 actor 生命周期事实。
+
+详细测试设计见:
+`docs/plans/2026-03-01-multi-agent-script-ai-tdd-testcase.md`
