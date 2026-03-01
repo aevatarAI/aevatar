@@ -22,6 +22,8 @@
 4. 脚本读侧必须接入统一 Projection Pipeline，CQRS 与 AGUI 不允许双轨。
 5. `ScriptHostGAgent` 主干继承必须是 `GAgentBase<ScriptHostState>`。
 6. `RoleGAgent/AIGAgentBase` 能力复用必须采用组合与子 Actor 委托，不得作为脚本主干继承链。
+7. 脚本可“动态调用/创建任意 GAgent 能力”，但必须经由能力端口调用 `IActorRuntime`；脚本不得直接访问 IOC 容器创建 GAgent。
+8. IOC `Scope` 只能用于依赖解析与短生命周期资源，不作为 GAgent 生命周期管理边界。
 
 ## 3. 重构目标
 1. 支持用 C# 脚本定义 GAgent 行为，覆盖静态类核心能力面（请求事件处理、状态迁移、读模型投影）。
@@ -54,6 +56,8 @@
 10. Host 层仅做装配与协议，禁止承载脚本业务编排。
 11. `ScriptHostGAgent` 必须直接继承 `GAgentBase<ScriptHostState>`，不允许改为 `RoleGAgent` 或 `AIGAgentBase<TState>` 继承链。
 12. AI 能力复用必须通过 `IRoleAgent` 子 Actor 或 `IAICapability` 端口组合，不允许以继承方式耦合脚本主干。
+13. 脚本层若需调用其他 GAgent，必须通过 `IGAgentInvocationPort`/`IGAgentFactoryPort` 等受控端口完成，不得直接注入 `IServiceProvider` 获取具体 GAgent 实例。
+14. `IActorRuntime` 是 GAgent 生命周期唯一权威来源；IOC `Scope` 不得承担 `actor create/destroy/replay` 生命周期职责。
 
 ## 6. 当前基线（代码事实）
 1. 有状态 GAgent 基线由 `GAgentBase<TState>` 提供，已强制 Event Sourcing 生命周期。
@@ -72,6 +76,8 @@
 证据: `src/workflow/Aevatar.Workflow.Core/WorkflowGAgent.cs`
 8. `RoleGAgent` 继承 `AIGAgentBase<RoleGAgentState>`，属于 AI 专用角色 agent。
 证据: `src/Aevatar.AI.Core/RoleGAgent.cs`
+9. 脚本通用调用端口已落地，调用通过运行时封装的 EventEnvelope 进行。
+证据: `src/Aevatar.Scripting.Core/Ports/IGAgentInvocationPort.cs`、`src/Aevatar.Scripting.Hosting/Ports/RuntimeGAgentInvocationPort.cs`
 
 ## 7. 需求分解与状态矩阵
 | ID | 需求 | 验收标准 | 当前状态 | 证据 | 差距 |
@@ -89,7 +95,8 @@
 | R-SG-11 | Host 装配 | Host 仅注册脚本 capability，不承载脚本业务逻辑 | Done | `Aevatar.Scripting.Hosting/*` + `ScriptCapabilityHostExtensionsTests` | 主程序默认接入策略待确认 |
 | R-SG-12 | 验证门禁 | 新增测试与守卫后，`build/test/guards` 全部通过 | In Progress | `dotnet build aevatar.slnx`、脚本专项测试、`architecture_guards.sh` | 全量 `dotnet test aevatar.slnx` 尚未执行 |
 | R-SG-13 | 继承边界 | `ScriptHostGAgent` 继承 `GAgentBase<ScriptHostState>`；不得继承 `RoleGAgent/AIGAgentBase` | Done | `script_inheritance_guard.sh` + `ScriptInheritanceGuardTests` | 无 |
-| R-SG-14 | AI 复用方式 | AI 复用仅通过子 Actor/能力端口组合，不通过继承复用 | In Progress | `IAICapability`、`RoleAgentDelegateAICapability` | `IRoleAgentPort` 生产实现未完成 |
+| R-SG-14 | 组合调用边界 | 脚本对其他 GAgent 的调用必须经由能力端口，不直接依赖具体 GAgent/IOC 实例 | In Progress | `IGAgentInvocationPort`、`RuntimeGAgentInvocationPort` | 通用创建端口 `IGAgentFactoryPort` 未完成 |
+| R-SG-15 | 生命周期边界 | GAgent 生命周期由 Actor Runtime 管理；IOC Scope 不承担 GAgent 生命周期 | In Progress | 本文档、现有 Runtime 架构基线 | 需补 `IGAgentFactoryPort` 与对应集成测试 |
 
 ## 8. 差距详解
 1. 缺脚本契约层: 当前缺“定义-编译-执行”的统一抽象，容易出现脚本直接耦合运行时实现。
@@ -98,6 +105,8 @@
 4. 缺脚本安全策略: 当前无系统化能力白名单，存在脚本逃逸风险。
 5. 缺版本回放治理: 当前无 `script revision` 固化语义，回放一致性不可保证。
 6. 缺 AI 复用边界实现: 当前尚无“脚本主干不继承 AI 基类”的自动化守卫与端口实现。
+7. 缺通用创建端口: 尚未提供 `IGAgentFactoryPort` 来让脚本在受控白名单内动态创建任意 GAgent。
+8. 缺生命周期护栏测试: 需补“Scope 仅依赖解析，不托管 GAgent 生命周期”的显式测试证据。
 
 ## 9. 目标架构
 目标组件：
@@ -113,11 +122,16 @@
 仅做 DI 装配与能力开关，不承载业务编排。
 6. `ScriptAICapabilityAdapter`（Application/Infrastructure）:
 以组合方式复用 `RoleGAgent` 或 AI runtime 能力，向脚本暴露稳定 AI 能力端口。
+7. `IGAgentInvocationPort`（Application/Infrastructure）:
+向脚本暴露“调用任意 GAgent”的统一端口，内部封装 EventEnvelope + Runtime 调用。
+8. `IGAgentFactoryPort`（Application/Infrastructure）:
+向脚本暴露“按白名单动态创建/销毁/链接 GAgent”的统一端口，生命周期由 Runtime 管理。
 
 关键链路：
 1. Application Command -> Adapter -> EventEnvelope(RunScriptRequestedEvent) -> ScriptHostGAgent -> Script Decide -> Domain Events -> PersistDomainEvents -> Apply -> State
 2. EventEnvelope -> ProjectionCoordinator -> ScriptProjectionProjector + 其他 Projector -> ReadModel Store + AGUI Sink
 3. ScriptHostGAgent -> RoleGAgent(or IAICapability) -> AI Events -> Unified Projection Pipeline
+4. Script -> `IGAgentInvocationPort/IGAgentFactoryPort` -> `IActorRuntime` -> Target GAgent
 
 ## 10. 重构工作包（WBS）
 1. WP-01 契约与边界
@@ -145,10 +159,10 @@ DoD: route mapping 守卫与投影集成测试通过。
 产物: DI 扩展、运行手册、CI 守卫补充。
 DoD: build/test/guards 全绿。
 
-6. WP-06 AI 能力组合复用
-目标: 通过组合端口复用 RoleGAgent/AIGAgent 能力，不引入继承耦合。
-产物: `IAICapability` 接口、`RoleAgentDelegate` 适配器、继承边界守卫测试。
-DoD: 继承边界测试通过，AI 组合复用集成测试通过。
+6. WP-06 AI 与通用 GAgent 组合复用
+目标: 通过组合端口复用 RoleGAgent/AIGAgent 与任意 GAgent 能力，不引入继承耦合。
+产物: `IAICapability`、`IGAgentInvocationPort`、`IGAgentFactoryPort`、继承边界守卫与端口测试。
+DoD: 继承边界测试通过，通用调用/创建端口集成测试通过，生命周期边界不依赖 IOC Scope。
 
 ## 11. 里程碑与依赖
 1. M1（契约冻结）: 完成 WP-01，冻结脚本能力面和状态模型。
@@ -168,7 +182,8 @@ DoD: 继承边界测试通过，AI 组合复用集成测试通过。
 | R-SG-03~R-SG-12 | `bash tools/ci/architecture_guards.sh` | 无 ES 回退、无中间层事实态映射、无字符串路由 |
 | R-SG-13 | `rg -n "class\\s+ScriptHostGAgent\\s*:\\s*GAgentBase<ScriptHostState>" src` | 精确命中 `ScriptHostGAgent` 主继承链 |
 | R-SG-13 | `rg -n "class\\s+ScriptHostGAgent\\s*:\\s*(RoleGAgent|AIGAgentBase<)" src` | 命中结果为空 |
-| R-SG-14 | `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --filter "*Script*AI*Delegate*" --nologo` | 组合复用路径测试通过 |
+| R-SG-14 | `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --filter "*RuntimeGAgentInvocationPortTests*" --nologo` | 通用调用端口行为测试通过 |
+| R-SG-15 | `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --filter "*Script*Factory*"` | 生命周期由 Runtime 托管，Scope 不托管 GAgent（待补） |
 | R-SG-12 | `dotnet build aevatar.slnx --nologo` | 全量编译通过 |
 | R-SG-12 | `dotnet test aevatar.slnx --nologo` | 全量测试通过 |
 
@@ -178,7 +193,8 @@ DoD: 继承边界测试通过，AI 组合复用集成测试通过。
 3. 所有读侧输出均来自统一 Projection Pipeline。
 4. Actor 运行态约束得到代码与测试双重保证。
 5. AI 能力复用路径仅为组合/委托，不存在脚本主干继承 AI 基类。
-6. 文档、门禁、测试、代码一致且可复核。
+6. 脚本调用/创建其他 GAgent 仅通过受控端口，且生命周期由 Runtime 权威管理。
+7. 文档、门禁、测试、代码一致且可复核。
 
 ## 14. 风险与应对
 1. 风险: 脚本能力过宽导致沙箱逃逸。
@@ -191,6 +207,8 @@ DoD: 继承边界测试通过，AI 组合复用集成测试通过。
 应对: 代码审查 + 守卫脚本明确禁止第二投影链路与旁路写入。
 5. 风险: 通过继承复用 AI 造成脚本主干语义漂移与依赖反转破坏。
 应对: 继承边界守卫 + 组合端口规范 + 集成测试强约束。
+6. 风险: 误用 IOC Scope 管理 GAgent 生命周期导致回放/一致性语义破坏。
+应对: Runtime 生命周期唯一权威约束 + 工厂端口抽象 + 生命周期边界测试。
 
 ## 15. 执行清单（可勾选）
 - [ ] 完成脚本契约定义与评审（WP-01）
@@ -198,13 +216,13 @@ DoD: 继承边界测试通过，AI 组合复用集成测试通过。
 - [ ] 完成 `ScriptHostGAgent` 写侧链路（WP-03）
 - [ ] 完成脚本 projection 集成（WP-04）
 - [ ] 补齐测试、门禁、文档与 Host 装配（WP-05）
-- [ ] 完成 AI 组合复用与继承边界守卫（WP-06）
+- [ ] 完成 AI/通用 GAgent 组合复用与继承边界守卫（WP-06）
 
 ## 16. 当前执行快照（2026-03-01）
 1. 已完成:
 脚本项目骨架、`ScriptHostGAgent` 写侧、沙箱编译器、投影链路、Host 装配、继承守卫与端到端测试已落地。
 2. 部分完成:
-状态 schema 迁移、AI 组合复用生产实现、观测埋点与版本治理策略仍在进行中。
+状态 schema 迁移、通用创建端口、观测埋点与版本治理策略仍在进行中。
 3. 阻塞项:
 无硬阻塞。
 
@@ -213,4 +231,4 @@ DoD: 继承边界测试通过，AI 组合复用集成测试通过。
 2. 任何架构规则新增必须同步补门禁脚本与测试。
 3. 若实现与本文档冲突，以“单主干、严格 ES、统一投影、Actor 事实源”原则优先，文档需同日更新。
 4. 删除优于兼容；无业务价值的过渡层不得保留空壳。
-5. 涉及 AI 复用变更时，必须先证明“组合可行”，不得以继承捷径破坏主干边界。
+5. 涉及 AI/GAgent 复用变更时，必须先证明“组合端口可行”，不得以继承或 IOC 直接实例化捷径破坏主干边界。

@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 - 状态: In Progress
-- 版本: v0.2
+- 版本: v0.3
 - 日期: 2026-03-01
 - 需求基线: `docs/architecture/csharp-script-gagent-requirements.md`
 - 适用范围: `Foundation/Core/CQRS/Workflow/Host` 相关子系统
@@ -24,6 +24,8 @@
 4. `ScriptHostGAgent` 必须继承 `GAgentBase<ScriptHostState>`。
 5. AI 复用只能组合，不允许 `ScriptHostGAgent` 继承 `RoleGAgent` 或 `AIGAgentBase<TState>`。
 6. 运行态事实状态只能在 Actor 内或分布式状态中承载，禁止中间层字典事实态。
+7. 脚本调用/创建任意 GAgent 必须经由 `IGAgentInvocationPort`/`IGAgentFactoryPort` 等受控端口，不得直接注入 `IServiceProvider` 获取具体 GAgent 实例。
+8. GAgent 生命周期的 create/destroy/link/replay 只能由 `IActorRuntime` 管理；IOC `Scope` 仅用于依赖解析，不承担生命周期事实管理。
 
 ## 3. 架构总览
 
@@ -41,6 +43,9 @@ flowchart LR
     C8 --> C9["Script ReadModel Projector"]
     C8 --> C10["AGUI/Event Projector"]
     C9 --> C11["ReadModel Store(Document/Graph)"]
+    C4 --> C12["IGAgentInvocationPort / IGAgentFactoryPort"]
+    C12 --> C13["IActorRuntime"]
+    C13 --> C14["Target GAgent Tree"]
 ```
 
 ## 4. 分层与项目结构设计
@@ -115,6 +120,8 @@ sequenceDiagram
 2. GAgent 层仅处理事件，不接受 Command 类型输入。
 3. `PersistDomainEvent(s)` 是唯一写事实入口。
 4. `TransitionState` 是唯一状态变化入口。
+5. 脚本调用其他 GAgent 仅能经由 `IGAgentInvocationPort`/`IGAgentFactoryPort`，不能直接解析具体 GAgent 实例。
+6. 生命周期控制由 `IActorRuntime` 负责，IOC `Scope` 仅承担依赖解析与短生命周期资源。
 
 ### 6.2 一致性语义
 1. 写入成功后再 apply。
@@ -142,21 +149,30 @@ sequenceDiagram
 2. 通过 `IAICapability` 发起 AI 调用请求。
 3. 通过框架提供的时钟与内部事件调度端口触发延迟行为。
 
-## 8. AI 能力复用架构（组合，不继承）
+## 8. AI 与通用 GAgent 复用架构（组合，不继承）
 
 ### 8.1 设计原则
 1. `ScriptHostGAgent` 不继承任何 AI 基类。
-2. 复用 `RoleGAgent/AIGAgent` 能力通过组合端口完成。
+2. 复用 `RoleGAgent/AIGAgent` 与其他 GAgent 能力一律通过组合端口完成。
+3. 端口实现可使用 IOC 解析依赖，但 GAgent 生命周期事实必须委托 `IActorRuntime`。
 
-### 8.2 两种复用模式
-1. 子 Actor 委托模式:
-`ScriptHostGAgent` 创建或解析 `IRoleAgent` 子 actor，发送请求事件并消费返回事件。
-2. 能力适配模式:
-通过 `IAICapability` 抽象包裹现有 AI runtime，实现脚本可调用端口。
+### 8.2 复用端口分层
+1. AI 能力端口:
+`IAICapability` 负责统一 AI 调用语义，内部可委托 `IRoleAgentPort` 对接 `RoleGAgent` 能力。
+2. 通用调用端口:
+`IGAgentInvocationPort` 负责向任意已存在 GAgent 发送事件（EventEnvelope 封装 + Runtime 调用）。
+3. 通用创建端口:
+`IGAgentFactoryPort` 负责按白名单创建/销毁/链接 GAgent，并把生命周期控制委托给 `IActorRuntime`。
 
-### 8.3 选择建议
-1. 先落地子 Actor 委托模式，语义最贴近现有 `WorkflowGAgent`。
-2. 再补 `IAICapability` 统一端口，降低脚本对角色实现细节耦合。
+### 8.3 生命周期边界
+1. 端口实现禁止把 GAgent 实例缓存在 IOC `Scope` 并以其作为跨请求事实状态。
+2. `IServiceProvider` 只用于解析端口依赖，不作为创建/恢复 GAgent 的权威入口。
+3. 所有跨 actor 生命周期操作（create/destroy/link/unlink/restore）必须由 `IActorRuntime` 发起。
+
+### 8.4 选择建议
+1. 先落地 `IGAgentInvocationPort`，优先满足“调用任意 GAgent”能力并保持事件主链语义。
+2. 再落地 `IGAgentFactoryPort`，补齐“受控创建任意 GAgent”与生命周期边界测试。
+3. AI 侧持续通过 `IAICapability` 封装细节，不把 `RoleGAgent` 类型泄露到脚本契约面。
 
 ## 9. 读侧投影架构
 
@@ -248,7 +264,8 @@ sequenceDiagram
 2. 回放测试: 写入事件后重启恢复同态。
 3. 投影测试: TypeUrl 精确路由与 no-op 语义。
 4. 组合复用测试: AI delegate 路径可用且无继承耦合。
-5. 集成测试: Host/Application/Actor/Projection 端到端闭环。
+5. 生命周期边界测试: 验证 Scope 不托管 GAgent 生命周期，create/destroy/replay 仅经 `IActorRuntime`。
+6. 集成测试: Host/Application/Actor/Projection 端到端闭环。
 
 ### 14.3 最低验证命令
 1. `bash tools/ci/architecture_guards.sh`
@@ -262,8 +279,10 @@ sequenceDiagram
 2. 再落写侧: `ScriptHostGAgent + replay contract`。
 3. 再落沙箱: `compiler + policy`。
 4. 再落读侧: `projection/reducer/projector`。
-5. 再落 AI 复用: `Role delegate/IAICapability`。
-6. 最后落 Host 装配与全量验证。
+5. 再落通用调用端口: `IGAgentInvocationPort`。
+6. 再落 AI 复用: `Role delegate/IAICapability`。
+7. 再落通用创建端口与生命周期护栏: `IGAgentFactoryPort + lifecycle tests`。
+8. 最后落 Host 装配与全量验证。
 
 ## 16. 风险清单
 
@@ -275,13 +294,16 @@ sequenceDiagram
 缓解: 文档硬约束 + 应用层适配门禁 + 代码审查模板。
 4. 风险: AI 复用通过继承快速实现导致边界污染。
 缓解: 继承守卫脚本 + 组合端口测试用例。
+5. 风险: 误用 IOC Scope 托管 GAgent 生命周期导致回放与一致性语义破坏。
+缓解: `IActorRuntime` 生命周期权威约束 + `IGAgentFactoryPort` 抽象 + 生命周期边界测试。
 
 ## 17. 与需求文档对照关系
 
-1. 本文对应需求文档中的 `R-SG-01 ~ R-SG-14`。
+1. 本文对应需求文档中的 `R-SG-01 ~ R-SG-15`。
 2. 关键新增细化:
 - Command 与 EventEnvelope 的边界落位
-- ScriptHost 与 AI 组合复用的双模式
+- ScriptHost 与 AI/通用 GAgent 组合复用端口分层
+- `IActorRuntime` 生命周期权威与 IOC Scope 非生命周期边界
 - revision 回放绑定细节
 - 运行态内部事件对账模型
 - 安全与审计的可验证指标

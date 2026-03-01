@@ -11,7 +11,7 @@
 - 总分: `88/100`
 - 结论: 已完成首批可运行架构落地，满足“事件主链、继承边界、投影精确路由、端到端闭环”核心要求。
 - 阻断项: 无。
-- 未闭环项: AI 组合复用生产端口实现、脚本运行观测、revision->编译句柄绑定。
+- 未闭环项: `IGAgentFactoryPort` 与生命周期边界测试、脚本运行观测、revision->编译句柄绑定。
 
 ## 3. 维度评分
 | 维度 | 分值 | 说明 |
@@ -38,23 +38,27 @@
 | R-SG-11 | Done | `AddScriptCapability` Host 装配 |
 | R-SG-12 | In Progress | 专项验证通过，全量测试未执行 |
 | R-SG-13 | Done | `script_inheritance_guard.sh` + 测试 |
-| R-SG-14 | In Progress | `IAICapability` 组合接口已落地，`IRoleAgentPort` 生产实现待补 |
+| R-SG-14 | In Progress | `IGAgentInvocationPort` + `RuntimeGAgentInvocationPort` + `RuntimeGAgentInvocationPortTests`；通用创建端口待补 |
+| R-SG-15 | In Progress | 已明确 `IActorRuntime` 生命周期权威边界；缺 `IGAgentFactoryPort` 与 Scope 非生命周期测试证据 |
 
 ## 5. 验证证据（已执行命令）
 | 命令 | 结果 |
 |---|---|
 | `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo` | 通过（16/16） |
+| `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --filter "*RuntimeGAgentInvocationPortTests*" --nologo` | 通过（2/2） |
 | `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --nologo` | 通过（6/6） |
 | `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --filter "FullyQualifiedName~ScriptGAgentEndToEndTests" --nologo` | 通过（1/1） |
 | `dotnet build aevatar.slnx --nologo` | 通过 |
 | `bash tools/ci/architecture_guards.sh` | 通过（含 projection route / closed-world / run-id / script inheritance） |
 
 ## 6. 风险与后续
-1. `IRoleAgentPort` 暂无生产实现，当前 AI 组合复用仍为“接口 + 委托适配器”阶段。
-2. 脚本观测维度（`script_id/revision/correlation_id`）尚未统一注入日志与指标。
-3. revision 回放治理尚未实现“revision -> 编译缓存句柄”强绑定。
+1. `IGAgentFactoryPort` 暂未落地，脚本“受控创建任意 GAgent”能力未闭环。
+2. 生命周期边界测试尚未补齐，尚缺“IOC Scope 不托管 GAgent 生命周期”的自动化证据。
+3. 脚本观测维度（`script_id/revision/correlation_id`）尚未统一注入日志与指标。
+4. revision 回放治理尚未实现“revision -> 编译缓存句柄”强绑定。
 
 ## 7. 建议下一里程碑
-1. M2.1: 落地 `IRoleAgentPort` 运行时实现与集成测试。
-2. M2.2: 增加脚本执行 observability 埋点与审计事件。
-3. M2.3: 实现 revision 绑定执行句柄与升级/迁移策略。
+1. M2.1: 落地 `IGAgentFactoryPort` 与 Runtime 生命周期实现（create/destroy/link/unlink/restore）。
+2. M2.2: 补齐生命周期边界测试（证明 Scope 仅依赖解析，不托管 GAgent 生命周期）。
+3. M2.3: 增加脚本执行 observability 埋点与审计事件。
+4. M2.4: 实现 revision 绑定执行句柄与升级/迁移策略。

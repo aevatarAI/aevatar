@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Implement C# Script GAgent capability with strict EventEnvelope event handling, Event Sourcing replay consistency, unified Projection Pipeline, and composition-only AI reuse.
+**Goal:** Implement C# Script GAgent capability with strict EventEnvelope event handling, Event Sourcing replay consistency, unified Projection Pipeline, and composition-only AI/GAgent reuse.
 
-**Architecture:** Build a new scripting vertical (`Abstractions -> Core -> Projection -> Hosting`) centered on `ScriptHostGAgent : GAgentBase<ScriptHostState>`. Application commands are adapted to requested events wrapped in `EventEnvelope`; ScriptHost handles only events and persists domain events. Read-side plugs into existing projection coordinator by exact `TypeUrl` routing.
+**Architecture:** Build a new scripting vertical (`Abstractions -> Core -> Projection -> Hosting`) centered on `ScriptHostGAgent : GAgentBase<ScriptHostState>`. Application commands are adapted to requested events wrapped in `EventEnvelope`; ScriptHost handles only events and persists domain events. Read-side plugs into existing projection coordinator by exact `TypeUrl` routing. Script-to-agent calls/creation must go through runtime-backed ports (`IGAgentInvocationPort` / `IGAgentFactoryPort`) with `IActorRuntime` as lifecycle authority; IOC scope is not a lifecycle manager.
 
 **Tech Stack:** .NET 9, xUnit, FluentAssertions, Google.Protobuf, existing Aevatar Foundation/CQRS/Workflow runtime and CI guards.
 
@@ -389,15 +389,18 @@ git add src/Aevatar.Scripting.Core/Compilation test/Aevatar.Scripting.Core.Tests
 git commit -m "feat: add script compiler sandbox policy"
 ```
 
-### Task 7: Implement Composition-only AI Capability Adapter
+### Task 7: Implement Composition-only AI and Generic GAgent Invocation Ports
 
 **Files:**
 - Create: `src/Aevatar.Scripting.Core/AI/IAICapability.cs`
 - Create: `src/Aevatar.Scripting.Core/AI/IRoleAgentPort.cs`
 - Create: `src/Aevatar.Scripting.Core/AI/RoleAgentDelegateAICapability.cs`
+- Create: `src/Aevatar.Scripting.Core/Ports/IGAgentInvocationPort.cs`
+- Create: `src/Aevatar.Scripting.Hosting/Ports/RuntimeGAgentInvocationPort.cs`
 - Test: `test/Aevatar.Scripting.Core.Tests/AI/RoleAgentDelegateAICapabilityTests.cs`
+- Test: `test/Aevatar.Hosting.Tests/RuntimeGAgentInvocationPortTests.cs`
 
-**Step 1: Write the failing test**
+**Step 1: Write the failing tests**
 
 ```csharp
 public class RoleAgentDelegateAICapabilityTests
@@ -410,12 +413,26 @@ public class RoleAgentDelegateAICapabilityTests
         output.Should().Be("ok");
     }
 }
+
+public class RuntimeGAgentInvocationPortTests
+{
+    [Fact]
+    public async Task InvokeAsync_ShouldDispatchEventEnvelope_ToTargetActor()
+    {
+        // Arrange runtime + actor fake
+        // Act invoke
+        // Assert envelope target/payload/correlation
+    }
+}
 ```
 
-**Step 2: Run test to verify it fails**
+**Step 2: Run tests to verify they fail**
 
 Run: `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --filter "*RoleAgentDelegateAICapabilityTests*" --nologo`
 Expected: FAIL with missing adapter.
+
+Run: `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --filter "*RuntimeGAgentInvocationPortTests*" --nologo`
+Expected: FAIL with missing invocation port.
 
 **Step 3: Write minimal implementation**
 
@@ -436,18 +453,36 @@ public sealed class RoleAgentDelegateAICapability : IAICapability
     public RoleAgentDelegateAICapability(IRoleAgentPort port) => _port = port;
     public Task<string> AskAsync(string runId, string prompt, CancellationToken ct) => _port.RunAsync(runId, prompt, ct);
 }
+
+public interface IGAgentInvocationPort
+{
+    Task InvokeAsync(string targetAgentId, IMessage eventPayload, string correlationId, CancellationToken ct);
+}
+
+public sealed class RuntimeGAgentInvocationPort(IActorRuntime runtime) : IGAgentInvocationPort
+{
+    public async Task InvokeAsync(string targetAgentId, IMessage eventPayload, string correlationId, CancellationToken ct)
+    {
+        var actor = await runtime.GetAsync(targetAgentId)
+            ?? throw new InvalidOperationException("Target GAgent not found.");
+        await actor.HandleEventAsync(new EventEnvelope { TargetActorId = targetAgentId, CorrelationId = correlationId }, ct);
+    }
+}
 ```
 
-**Step 4: Run test to verify it passes**
+**Step 4: Run tests to verify they pass**
 
 Run: `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --filter "*RoleAgentDelegateAICapabilityTests*" --nologo`
+Expected: PASS.
+
+Run: `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --filter "*RuntimeGAgentInvocationPortTests*" --nologo`
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add src/Aevatar.Scripting.Core/AI test/Aevatar.Scripting.Core.Tests/AI/RoleAgentDelegateAICapabilityTests.cs
-git commit -m "feat: add composition-only ai capability adapter"
+git add src/Aevatar.Scripting.Core/AI src/Aevatar.Scripting.Core/Ports src/Aevatar.Scripting.Hosting/Ports test/Aevatar.Scripting.Core.Tests/AI/RoleAgentDelegateAICapabilityTests.cs test/Aevatar.Hosting.Tests/RuntimeGAgentInvocationPortTests.cs
+git commit -m "feat: add composition ai adapter and runtime gagent invocation port"
 ```
 
 ### Task 8: Add Script Projection Reducer and Projector
@@ -533,6 +568,7 @@ public class ScriptCapabilityHostExtensionsTests
 
         services.Any(x => x.ServiceType == typeof(IScriptAgentCompiler)).Should().BeTrue();
         services.Any(x => x.ServiceType == typeof(IAICapability)).Should().BeTrue();
+        services.Any(x => x.ServiceType == typeof(IGAgentInvocationPort)).Should().BeTrue();
     }
 }
 ```
@@ -550,7 +586,9 @@ public static class ScriptCapabilityServiceCollectionExtensions
     public static IServiceCollection AddScriptCapability(this IServiceCollection services)
     {
         services.TryAddSingleton<IScriptAgentCompiler, RoslynScriptAgentCompiler>();
+        services.TryAddSingleton<IGAgentInvocationPort, RuntimeGAgentInvocationPort>();
         services.TryAddSingleton<IAICapability, RoleAgentDelegateAICapability>();
+        // IGAgentFactoryPort planned for lifecycle-authoritative create/destroy APIs.
         return services;
     }
 }
@@ -680,10 +718,11 @@ git commit -m "test: add script gagent end-to-end event envelope coverage"
 **Step 1: Write failing manual checklist**
 
 ```text
-- R-SG-01..R-SG-14 status updated
+- R-SG-01..R-SG-15 status updated
 - Command/EventEnvelope boundary evidence added
 - Inheritance guard evidence added
 - Projection exact TypeUrl route evidence added
+- Runtime lifecycle authority and Scope boundary evidence added
 ```
 
 **Step 2: Run verification commands**
@@ -706,6 +745,7 @@ Expected: PASS.
 - Update requirement status matrix
 - Add executed command evidence table
 - Confirm "GAgent handles events only" is enforced
+- Confirm "GAgent lifecycle is runtime-authoritative, not IOC-scope-authoritative"
 ```
 
 **Step 4: Re-run guard subset**
@@ -720,6 +760,84 @@ git add docs/architecture/csharp-script-gagent-requirements.md docs/architecture
 git commit -m "docs: finalize script gagent implementation evidence and verification"
 ```
 
+### Task 12.5: Implement Runtime-authoritative GAgent Factory Port (Planned)
+
+**Files:**
+- Create: `src/Aevatar.Scripting.Core/Ports/IGAgentFactoryPort.cs`
+- Create: `src/Aevatar.Scripting.Hosting/Ports/RuntimeGAgentFactoryPort.cs`
+- Test: `test/Aevatar.Hosting.Tests/RuntimeGAgentFactoryPortTests.cs`
+- Test: `test/Aevatar.Integration.Tests/ScriptGAgentFactoryLifecycleBoundaryTests.cs`
+
+**Step 1: Write the failing tests**
+
+```csharp
+public class RuntimeGAgentFactoryPortTests
+{
+    [Fact]
+    public async Task CreateAsync_ShouldDelegateToActorRuntime()
+    {
+        // Arrange fake runtime
+        // Act create
+        // Assert runtime.CreateAsync called
+    }
+}
+
+public class ScriptGAgentFactoryLifecycleBoundaryTests
+{
+    [Fact]
+    public async Task Lifecycle_ShouldBeRuntimeAuthoritative_NotScopeAuthoritative()
+    {
+        // Validate create/destroy/replay through runtime;
+        // no direct service-provider-resolved GAgent instance lifecycle.
+    }
+}
+```
+
+**Step 2: Run tests to verify they fail**
+
+Run: `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --filter "*RuntimeGAgentFactoryPortTests*" --nologo`
+Expected: FAIL with missing factory port.
+
+Run: `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --filter "*Script*Factory*Lifecycle*"`
+Expected: FAIL with missing lifecycle-boundary coverage.
+
+**Step 3: Write minimal implementation**
+
+```csharp
+public interface IGAgentFactoryPort
+{
+    Task<string> CreateAsync(Type agentType, string? actorId, CancellationToken ct);
+    Task DestroyAsync(string actorId, CancellationToken ct);
+    Task LinkAsync(string parentId, string childId, CancellationToken ct);
+    Task UnlinkAsync(string childId, CancellationToken ct);
+}
+
+public sealed class RuntimeGAgentFactoryPort(IActorRuntime runtime) : IGAgentFactoryPort
+{
+    public async Task<string> CreateAsync(Type agentType, string? actorId, CancellationToken ct) =>
+        (await runtime.CreateAsync(agentType, actorId, ct)).Id;
+
+    public Task DestroyAsync(string actorId, CancellationToken ct) => runtime.DestroyAsync(actorId, ct);
+    public Task LinkAsync(string parentId, string childId, CancellationToken ct) => runtime.LinkAsync(parentId, childId, ct);
+    public Task UnlinkAsync(string childId, CancellationToken ct) => runtime.UnlinkAsync(childId, ct);
+}
+```
+
+**Step 4: Run tests to verify they pass**
+
+Run: `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --filter "*RuntimeGAgentFactoryPortTests*" --nologo`
+Expected: PASS.
+
+Run: `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --filter "*Script*Factory*Lifecycle*"`
+Expected: PASS.
+
+**Step 5: Commit**
+
+```bash
+git add src/Aevatar.Scripting.Core/Ports src/Aevatar.Scripting.Hosting/Ports test/Aevatar.Hosting.Tests/RuntimeGAgentFactoryPortTests.cs test/Aevatar.Integration.Tests/ScriptGAgentFactoryLifecycleBoundaryTests.cs
+git commit -m "feat: add runtime-authoritative gagent factory port and lifecycle boundary tests"
+```
+
 ## Cross-Task Rules
 
 1. Use `@test-driven-development` in every task.
@@ -728,11 +846,12 @@ git commit -m "docs: finalize script gagent implementation evidence and verifica
 4. Do not introduce `TypeUrl.Contains(...)`.
 5. Do not let any GAgent process Command directly.
 6. Do not let `ScriptHostGAgent` inherit `RoleGAgent` or `AIGAgentBase<TState>`.
+7. Do not resolve concrete GAgent instances from `IServiceProvider` in script execution path.
+8. Ensure create/destroy/link/unlink/restore operations go through `IActorRuntime`.
 
 ## Milestones
 
 1. M1: Contracts and projects ready (Tasks 1-3)
 2. M2: Application adapter + host write path + sandbox (Tasks 4-6)
-3. M3: AI composition and projection integration (Tasks 7-8)
-4. M4: Hosting/guards/e2e/docs complete (Tasks 9-12)
-
+3. M3: AI composition + generic invocation + projection integration (Tasks 7-8)
+4. M4: Hosting/guards/e2e/docs complete and lifecycle boundary planned (Tasks 9-12)
