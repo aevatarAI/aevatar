@@ -87,18 +87,6 @@ public interface IScriptRoleCapabilityAdapter : Aevatar.AI.Abstractions.Agents.I
     Task<string> ExecuteAsync(Aevatar.Foundation.Abstractions.EventEnvelope envelope, CancellationToken ct = default);
 }
 
-public interface IIdempotencyPort
-{
-    Task<IdempotencyAcquireResult> AcquireAsync(string scope, string key, byte[] requestHash, CancellationToken ct = default);
-    Task CommitAsync(string scope, string key, byte[] responseHash, string responsePayload, CancellationToken ct = default);
-    Task<string?> GetCommittedResponseAsync(string scope, string key, CancellationToken ct = default);
-}
-
-public interface IConcurrencyTokenPort
-{
-    Task<ConcurrencyCheckResult> CheckAndAdvanceAsync(string aggregateId, string? expectedVersion, CancellationToken ct = default);
-}
-
 public interface IImageReferenceResolver
 {
     Task<ImageDigestResolveResult> ResolveAsync(string imageName, string tagOrDigest, CancellationToken ct = default);
@@ -165,29 +153,6 @@ public interface IScriptResourceQuotaPolicy
 public interface IScriptNetworkPolicy
 {
     Task<NetworkAccessDecision> AuthorizeAsync(ScriptNetworkRequest request, CancellationToken ct = default);
-}
-
-public interface IEventEnvelopePublisherPort
-{
-    Task PublishAsync(ScriptEventEnvelope envelope, CancellationToken ct = default);
-}
-
-public interface IEventEnvelopeSubscriberPort
-{
-    Task<EnvelopeLeaseResult> SubscribeAsync(EnvelopeSubscribeRequest request, CancellationToken ct = default);
-}
-
-public interface IEventEnvelopeDedupPort
-{
-    Task<EnvelopeDedupResult> CheckAndRecordAsync(string scope, string dedupKey, TimeSpan ttl, CancellationToken ct = default);
-}
-
-public interface IEventEnvelopeDeliveryPort
-{
-    Task<IReadOnlyList<EnvelopeSubscribeRequest>> ListLeasesAsync(string stackId, CancellationToken ct = default);
-    Task<IReadOnlyList<EnvelopeDeliverySnapshot>> PullAsync(string leaseId, int maxCount, CancellationToken ct = default);
-    Task AckAsync(string leaseId, string deliveryId, CancellationToken ct = default);
-    Task<EnvelopeRetryResult> RetryAsync(string leaseId, string deliveryId, TimeSpan delay, string reason, CancellationToken ct = default);
 }
 
 public interface IDynamicRuntimeReadStore

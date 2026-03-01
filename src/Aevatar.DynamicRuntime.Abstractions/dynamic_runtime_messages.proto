@@ -278,3 +278,56 @@ message ConfigureScriptRoleCapabilitiesEvent {
   string entrypoint_type = 4;
   string capabilities_hash = 5;
 }
+
+message ScriptIdempotencyState {
+  string scope = 1;
+  string key = 2;
+  bytes request_hash = 3;
+  bytes response_hash = 4;
+  string response_payload = 5;
+}
+
+message ScriptAggregateVersionState {
+  string aggregate_id = 1;
+  int64 version = 2;
+}
+
+message ScriptEventEnvelopeState {
+  string envelope_id = 1;
+  string stack_id = 2;
+  string service_name = 3;
+  string instance_selector = 4;
+  google.protobuf.Any envelope = 5;
+}
+
+message ScriptEnvelopeLeaseState {
+  string stack_id = 1;
+  string service_name = 2;
+  string subscriber_id = 3;
+  string lease_id = 4;
+  int32 max_in_flight = 5;
+}
+
+message ScriptEnvelopeDeliveryState {
+  int32 attempt = 1;
+  bool acked = 2;
+  bool in_flight = 3;
+  int64 first_seen_unix_ms = 4;
+  int64 visible_at_unix_ms = 5;
+  int64 in_flight_deadline_unix_ms = 6;
+  string last_failure_reason = 7;
+}
+
+message ScriptEnvelopeDeliveryPointerState {
+  string lease_id = 1;
+  int64 sequence = 2;
+  int32 attempt = 3;
+}
+
+message ScriptEnvelopeBusState {
+  int64 next_sequence = 1;
+  map<string, ScriptEnvelopeLeaseState> leases = 2;
+  map<int64, ScriptEventEnvelopeState> envelopes = 3;
+  map<string, ScriptEnvelopeDeliveryState> delivery_states = 4;
+  map<string, ScriptEnvelopeDeliveryPointerState> delivery_pointers = 5;
+}

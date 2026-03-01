@@ -24,10 +24,8 @@ public sealed class DynamicRuntimeScriptBusinessOrchestrationTests
         string expectedDecision,
         string expectedAction)
     {
-        var subscriber = new RecordingEnvelopeSubscriberPort();
-        var publisher = new RecordingEnvelopePublisherPort();
         var llmProviderFactory = new RefundWorkflowFakeProviderFactory();
-        var (service, _) = CreateService(subscriber, publisher, llmProviderFactory);
+        var (service, _, envelopeBusStateStore) = CreateService(llmProviderFactory);
 
         var intakeRegistered = await service.RegisterServiceAsync(
             new RegisterServiceDefinitionRequest(
@@ -178,7 +176,8 @@ services:
         settlementContainer1!.ImageDigest.Should().StartWith("sha256:");
         settlementContainer2!.ImageDigest.Should().Be(settlementContainer1.ImageDigest);
 
-        var stackSubscriptions = subscriber.Requests
+        var leases = await GetEnvelopeLeasesAsync(envelopeBusStateStore);
+        var stackSubscriptions = leases
             .Where(item => string.Equals(item.StackId, "stack.refund", StringComparison.Ordinal))
             .Select(item => item.ServiceName)
             .Distinct(StringComparer.Ordinal)
@@ -188,14 +187,15 @@ services:
         stackSubscriptions.Should().Contain("notify");
         stackSubscriptions.Should().NotContain("settlement");
 
-        publisher.Published.Should().NotBeEmpty();
-        publisher.Published.Should().Contain(item =>
+        var published = await GetPublishedEnvelopesAsync(envelopeBusStateStore);
+        published.Should().NotBeEmpty();
+        published.Should().Contain(item =>
             string.Equals(item.StackId, "stack.refund", StringComparison.Ordinal) &&
             string.Equals(item.ServiceName, "intake", StringComparison.Ordinal));
-        publisher.Published.Any(item =>
+        published.Any(item =>
             item.Envelope.Metadata.TryGetValue("type_url", out var typeUrl) &&
             typeUrl.EndsWith("ScriptRunCompletedEvent", StringComparison.Ordinal)).Should().BeTrue();
-        publisher.Published.Any(item =>
+        published.Any(item =>
             item.Envelope.Metadata.TryGetValue("type_url", out var typeUrl) &&
             typeUrl.EndsWith("ScriptBuildApprovedEvent", StringComparison.Ordinal)).Should().BeTrue();
         llmProviderFactory.ChatCallCount.Should().BeGreaterThan(0);
@@ -231,20 +231,20 @@ services:
         };
     }
 
-    private static (DynamicRuntimeApplicationService Service, IStateStore<ScriptServiceDefinitionState> ServiceStateStore) CreateService(
-        IEventEnvelopeSubscriberPort? envelopeSubscriberPort = null,
-        IEventEnvelopePublisherPort? envelopePublisherPort = null,
+    private static (
+        DynamicRuntimeApplicationService Service,
+        IStateStore<ScriptServiceDefinitionState> ServiceStateStore,
+        IStateStore<ScriptEnvelopeBusState> EnvelopeBusStateStore) CreateService(
         ILLMProviderFactory? llmProviderFactory = null)
     {
-        envelopeSubscriberPort ??= new RecordingEnvelopeSubscriberPort();
-        envelopePublisherPort ??= new RecordingEnvelopePublisherPort();
         llmProviderFactory ??= new RefundWorkflowFakeProviderFactory();
 
         var runtime = new FakeActorRuntime();
         var readStore = new InMemoryDynamicRuntimeReadStore();
-        var serviceStateStore = new InMemoryScriptServiceDefinitionStateStore();
-        var busState = new InMemoryEventEnvelopeBusState();
-        var deliveryPort = new InMemoryEventEnvelopeDeliveryPort(busState);
+        var serviceStateStore = new TestStateStore<ScriptServiceDefinitionState>();
+        var idempotencyStateStore = new TestStateStore<ScriptIdempotencyState>();
+        var aggregateVersionStateStore = new TestStateStore<ScriptAggregateVersionState>();
+        var envelopeBusStateStore = new TestStateStore<ScriptEnvelopeBusState>();
         var eventProjector = new DynamicRuntimeEventProjector(readStore);
         var sideEffectPlanner = new ScriptSideEffectPlanner();
         var chatClient = new ScriptRoleAgentChatClient(llmProviderFactory);
@@ -252,8 +252,10 @@ services:
             runtime,
             readStore,
             serviceStateStore,
-            new InMemoryIdempotencyPort(),
-            new InMemoryConcurrencyTokenPort(),
+            idempotencyStateStore,
+            aggregateVersionStateStore,
+            envelopeBusStateStore,
+            new PassthroughEventDeduplicator(),
             new DefaultImageReferenceResolver(),
             new DefaultScriptComposeSpecValidator(),
             new DefaultScriptComposeReconcilePort(readStore),
@@ -262,10 +264,6 @@ services:
             new DefaultAgentBuildExecutionPort(),
             new DefaultServiceModePolicyPort(),
             new DefaultBuildApprovalPort(),
-            envelopePublisherPort,
-            envelopeSubscriberPort,
-            new InMemoryEventEnvelopeDedupPort(),
-            deliveryPort,
             new RoslynDynamicScriptExecutionService(
                 new DefaultScriptCompilationPolicy(),
                 new DefaultScriptAssemblyLoadPolicy(),
@@ -274,31 +272,48 @@ services:
                 chatClient),
             sideEffectPlanner,
             eventProjector);
-        return (app, serviceStateStore);
+        return (app, serviceStateStore, envelopeBusStateStore);
     }
 
-    private sealed class RecordingEnvelopeSubscriberPort : IEventEnvelopeSubscriberPort
+    private static async Task<IReadOnlyList<EnvelopeSubscribeRequest>> GetEnvelopeLeasesAsync(
+        IStateStore<ScriptEnvelopeBusState> envelopeBusStateStore)
     {
-        public List<EnvelopeSubscribeRequest> Requests { get; } = [];
-
-        public Task<EnvelopeLeaseResult> SubscribeAsync(EnvelopeSubscribeRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(new EnvelopeLeaseResult(true, request.LeaseId));
-        }
+        var state = await envelopeBusStateStore.LoadAsync("dynamic-runtime:envelope-bus")
+            ?? new ScriptEnvelopeBusState();
+        return state.Leases.Values
+            .Select(item => new EnvelopeSubscribeRequest(
+                item.StackId,
+                item.ServiceName,
+                item.SubscriberId,
+                item.LeaseId,
+                item.MaxInFlight))
+            .ToArray();
     }
 
-    private sealed class RecordingEnvelopePublisherPort : IEventEnvelopePublisherPort
+    private static async Task<IReadOnlyList<ScriptEventEnvelope>> GetPublishedEnvelopesAsync(
+        IStateStore<ScriptEnvelopeBusState> envelopeBusStateStore)
     {
-        public List<ScriptEventEnvelope> Published { get; } = [];
+        var state = await envelopeBusStateStore.LoadAsync("dynamic-runtime:envelope-bus")
+            ?? new ScriptEnvelopeBusState();
+        return state.Envelopes
+            .OrderBy(item => item.Key, Comparer<long>.Default)
+            .Select(item => TryHydrateEnvelope(item.Value))
+            .Where(item => item != null)
+            .Cast<ScriptEventEnvelope>()
+            .ToArray();
+    }
 
-        public Task PublishAsync(ScriptEventEnvelope envelope, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Published.Add(envelope);
-            return Task.CompletedTask;
-        }
+    private static ScriptEventEnvelope? TryHydrateEnvelope(ScriptEventEnvelopeState state)
+    {
+        if (state == null || state.Envelope == null || !state.Envelope.Is(EventEnvelope.Descriptor))
+            return null;
+
+        return new ScriptEventEnvelope(
+            state.EnvelopeId,
+            state.StackId,
+            state.ServiceName,
+            state.InstanceSelector,
+            state.Envelope.Unpack<EventEnvelope>());
     }
 
     private sealed class RefundWorkflowFakeProviderFactory : ILLMProviderFactory

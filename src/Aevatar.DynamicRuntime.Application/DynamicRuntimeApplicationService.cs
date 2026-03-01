@@ -4,7 +4,9 @@ using Aevatar.DynamicRuntime.Abstractions;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
 using Aevatar.DynamicRuntime.Core.Agents;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.DynamicRuntime.Application;
@@ -18,13 +20,19 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
     private const int DefaultRetryBackoffMs = 100;
     private const int MaxEnvelopeDispatchCycles = 64;
     private const int MaxDeliveryHop = 8;
-    private static readonly TimeSpan EnvelopeDedupTtl = TimeSpan.FromMinutes(10);
+    private const int MaxEnvelopeDeliveryAttempts = 8;
+    private static readonly TimeSpan EnvelopeInFlightLeaseTimeout = TimeSpan.FromSeconds(30);
+    private const string IdempotencyStatePrefix = "dynamic-runtime:idempotency";
+    private const string AggregateVersionStatePrefix = "dynamic-runtime:aggregate-version";
+    private const string EnvelopeBusStateId = "dynamic-runtime:envelope-bus";
 
     private readonly IActorRuntime _runtime;
     private readonly IDynamicRuntimeReadStore _readStore;
     private readonly IStateStore<ScriptServiceDefinitionState> _serviceDefinitionStateStore;
-    private readonly IIdempotencyPort _idempotencyPort;
-    private readonly IConcurrencyTokenPort _concurrencyTokenPort;
+    private readonly IStateStore<ScriptIdempotencyState> _idempotencyStateStore;
+    private readonly IStateStore<ScriptAggregateVersionState> _aggregateVersionStateStore;
+    private readonly IStateStore<ScriptEnvelopeBusState> _envelopeBusStateStore;
+    private readonly IEventDeduplicator _eventDeduplicator;
     private readonly IImageReferenceResolver _imageReferenceResolver;
     private readonly IScriptComposeSpecValidator _composeSpecValidator;
     private readonly IScriptComposeReconcilePort _composeReconcilePort;
@@ -33,10 +41,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
     private readonly IAgentBuildExecutionPort _buildExecutionPort;
     private readonly IServiceModePolicyPort _serviceModePolicyPort;
     private readonly IBuildApprovalPort _buildApprovalPort;
-    private readonly IEventEnvelopePublisherPort _eventEnvelopePublisherPort;
-    private readonly IEventEnvelopeSubscriberPort _eventEnvelopeSubscriberPort;
-    private readonly IEventEnvelopeDedupPort _eventEnvelopeDedupPort;
-    private readonly IEventEnvelopeDeliveryPort _eventEnvelopeDeliveryPort;
     private readonly IDynamicScriptExecutionService _scriptExecutionService;
     private readonly IScriptSideEffectPlanner _scriptSideEffectPlanner;
     private readonly IDynamicRuntimeEventProjector _eventProjector;
@@ -45,8 +49,10 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         IActorRuntime runtime,
         IDynamicRuntimeReadStore readStore,
         IStateStore<ScriptServiceDefinitionState> serviceDefinitionStateStore,
-        IIdempotencyPort idempotencyPort,
-        IConcurrencyTokenPort concurrencyTokenPort,
+        IStateStore<ScriptIdempotencyState> idempotencyStateStore,
+        IStateStore<ScriptAggregateVersionState> aggregateVersionStateStore,
+        IStateStore<ScriptEnvelopeBusState> envelopeBusStateStore,
+        IEventDeduplicator eventDeduplicator,
         IImageReferenceResolver imageReferenceResolver,
         IScriptComposeSpecValidator composeSpecValidator,
         IScriptComposeReconcilePort composeReconcilePort,
@@ -55,10 +61,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         IAgentBuildExecutionPort buildExecutionPort,
         IServiceModePolicyPort serviceModePolicyPort,
         IBuildApprovalPort buildApprovalPort,
-        IEventEnvelopePublisherPort eventEnvelopePublisherPort,
-        IEventEnvelopeSubscriberPort eventEnvelopeSubscriberPort,
-        IEventEnvelopeDedupPort eventEnvelopeDedupPort,
-        IEventEnvelopeDeliveryPort eventEnvelopeDeliveryPort,
         IDynamicScriptExecutionService scriptExecutionService,
         IScriptSideEffectPlanner scriptSideEffectPlanner,
         IDynamicRuntimeEventProjector eventProjector)
@@ -66,8 +68,10 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         _runtime = runtime;
         _readStore = readStore;
         _serviceDefinitionStateStore = serviceDefinitionStateStore;
-        _idempotencyPort = idempotencyPort;
-        _concurrencyTokenPort = concurrencyTokenPort;
+        _idempotencyStateStore = idempotencyStateStore;
+        _aggregateVersionStateStore = aggregateVersionStateStore;
+        _envelopeBusStateStore = envelopeBusStateStore;
+        _eventDeduplicator = eventDeduplicator;
         _imageReferenceResolver = imageReferenceResolver;
         _composeSpecValidator = composeSpecValidator;
         _composeReconcilePort = composeReconcilePort;
@@ -76,10 +80,6 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         _buildExecutionPort = buildExecutionPort;
         _serviceModePolicyPort = serviceModePolicyPort;
         _buildApprovalPort = buildApprovalPort;
-        _eventEnvelopePublisherPort = eventEnvelopePublisherPort;
-        _eventEnvelopeSubscriberPort = eventEnvelopeSubscriberPort;
-        _eventEnvelopeDedupPort = eventEnvelopeDedupPort;
-        _eventEnvelopeDeliveryPort = eventEnvelopeDeliveryPort;
         _scriptExecutionService = scriptExecutionService;
         _scriptSideEffectPlanner = scriptSideEffectPlanner;
         _eventProjector = eventProjector;
@@ -1382,7 +1382,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             return;
 
         var leaseId = $"{stackId}:{serviceName}:gen:{generation}";
-        var result = await _eventEnvelopeSubscriberPort.SubscribeAsync(
+        var result = await SubscribeEnvelopeAsync(
             new EnvelopeSubscribeRequest(
                 stackId,
                 serviceName,
@@ -1460,10 +1460,23 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
 
     private async Task<string> AdvanceVersionAsync(string aggregateId, string? expectedVersion, CancellationToken ct)
     {
-        var check = await _concurrencyTokenPort.CheckAndAdvanceAsync(aggregateId, expectedVersion, ct);
-        if (!check.Passed)
-            throw new InvalidOperationException(check.ErrorCode ?? "VERSION_CONFLICT");
-        return check.NextVersion;
+        var stateId = BuildAggregateVersionStateId(aggregateId);
+        var state = await _aggregateVersionStateStore.LoadAsync(stateId, ct)
+            ?? new ScriptAggregateVersionState
+            {
+                AggregateId = aggregateId,
+                Version = 0,
+            };
+        var currentVersion = state.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(expectedVersion) &&
+            !string.Equals(expectedVersion, currentVersion, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("VERSION_CONFLICT");
+        }
+
+        state.Version += 1;
+        await _aggregateVersionStateStore.SaveAsync(stateId, state, ct);
+        return state.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private async Task PublishActorEventAsync(
@@ -1485,17 +1498,13 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         CancellationToken ct)
     {
         var envelope = CreateEnvelope(stackId, serviceName, instanceSelector, payload, metadata);
-        var dedup = await _eventEnvelopeDedupPort.CheckAndRecordAsync(
-            scope: actor.Id,
-            dedupKey: envelope.Metadata["dedup_key"],
-            ttl: EnvelopeDedupTtl,
-            ct);
-        if (!dedup.Allowed)
-            throw new InvalidOperationException(dedup.ErrorCode ?? "ENVELOPE_DUPLICATE");
+        var dedupAllowed = await _eventDeduplicator.TryRecordAsync($"{actor.Id}:{envelope.Metadata["dedup_key"]}");
+        if (!dedupAllowed)
+            throw new InvalidOperationException("ENVELOPE_DUPLICATE");
 
         await actor.HandleEventAsync(envelope, ct);
         await _eventProjector.ProjectAsync(envelope, ct);
-        await _eventEnvelopePublisherPort.PublishAsync(
+        await PublishEnvelopeAsync(
             new ScriptEventEnvelope(envelope.Id, stackId, serviceName, instanceSelector, envelope),
             ct);
     }
@@ -1554,35 +1563,59 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
             throw new InvalidOperationException("Idempotency key is required.");
 
         var requestHash = ComputeHashBytes(requestPayload);
-        var acquire = await _idempotencyPort.AcquireAsync(scope, key, requestHash, ct);
-        if (acquire.Acquired)
+        var stateId = BuildIdempotencyStateId(scope, key);
+        var existing = await _idempotencyStateStore.LoadAsync(stateId, ct);
+        if (existing == null)
+        {
+            var created = new ScriptIdempotencyState
+            {
+                Scope = scope,
+                Key = key,
+                RequestHash = ByteString.CopyFrom(requestHash),
+            };
+            await _idempotencyStateStore.SaveAsync(stateId, created, ct);
             return null;
+        }
 
-        if (string.Equals(acquire.ErrorCode, "IDEMPOTENCY_PAYLOAD_MISMATCH", StringComparison.Ordinal))
+        if (!ByteStringEquals(existing.RequestHash, requestHash))
             throw new InvalidOperationException("IDEMPOTENCY_PAYLOAD_MISMATCH");
 
-        if (acquire.IsReplay)
+        var hasCommittedResponse = (existing.ResponseHash?.Length ?? 0) > 0 || !string.IsNullOrWhiteSpace(existing.ResponsePayload);
+        if (hasCommittedResponse)
         {
-            var responsePayload = await _idempotencyPort.GetCommittedResponseAsync(scope, key, ct);
+            var responsePayload = existing.ResponsePayload;
             if (!string.IsNullOrWhiteSpace(responsePayload))
             {
                 var replay = System.Text.Json.JsonSerializer.Deserialize<DynamicCommandResult>(responsePayload);
                 if (replay != null)
                     return replay;
             }
-
-            throw new InvalidOperationException($"Duplicate command detected for scope '{scope}'.");
         }
 
-        throw new InvalidOperationException(acquire.ErrorCode ?? "IDEMPOTENCY_CONFLICT");
+        throw new InvalidOperationException($"Duplicate command detected for scope '{scope}'.");
     }
 
     private async Task CommitIdempotencyAsync(string scope, string key, DynamicCommandResult result, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(key))
             return;
+
         var payload = System.Text.Json.JsonSerializer.Serialize(result);
-        await _idempotencyPort.CommitAsync(scope, key, ComputeHashBytes(result), payload, ct);
+        var stateId = BuildIdempotencyStateId(scope, key);
+        var state = await _idempotencyStateStore.LoadAsync(stateId, ct);
+        if (state == null)
+            return;
+
+        var responseHash = ComputeHashBytes(result);
+        if (ByteStringEquals(state.ResponseHash, responseHash) &&
+            string.Equals(state.ResponsePayload, payload, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        state.ResponseHash = ByteString.CopyFrom(responseHash);
+        state.ResponsePayload = payload;
+        await _idempotencyStateStore.SaveAsync(stateId, state, ct);
     }
 
     private static void RequireIfMatch(string? ifMatch)
@@ -1726,7 +1759,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         foreach (var envelope in envelopes)
         {
             ct.ThrowIfCancellationRequested();
-            await _eventEnvelopePublisherPort.PublishAsync(
+            await PublishEnvelopeAsync(
                 NormalizeScriptOutputEnvelope(envelope, stackId, serviceName, instanceSelector),
                 ct);
         }
@@ -1780,14 +1813,14 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         {
             ct.ThrowIfCancellationRequested();
             var madeProgress = false;
-            var leases = await _eventEnvelopeDeliveryPort.ListLeasesAsync(stackId, ct);
+            var leases = await ListEnvelopeLeasesAsync(stackId, ct);
             if (leases.Count == 0)
                 break;
 
             foreach (var lease in leases)
             {
                 var pullCount = Math.Clamp(lease.MaxInFlight, 1, 32);
-                var deliveries = await _eventEnvelopeDeliveryPort.PullAsync(lease.LeaseId, pullCount, ct);
+                var deliveries = await PullEnvelopeDeliveriesAsync(lease.LeaseId, pullCount, ct);
                 if (deliveries.Count == 0)
                     continue;
                 madeProgress = true;
@@ -1813,7 +1846,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
         var currentHop = ReadMetadataInt(input, "delivery_hop");
         if (currentHop >= MaxDeliveryHop)
         {
-            await _eventEnvelopeDeliveryPort.AckAsync(lease.LeaseId, delivery.DeliveryId, ct);
+            await AckEnvelopeDeliveryAsync(lease.LeaseId, delivery.DeliveryId, ct);
             return;
         }
 
@@ -1846,7 +1879,7 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
 
             if (string.Equals(result.Status, "SUCCEEDED", StringComparison.Ordinal))
             {
-                await _eventEnvelopeDeliveryPort.AckAsync(lease.LeaseId, delivery.DeliveryId, ct);
+                await AckEnvelopeDeliveryAsync(lease.LeaseId, delivery.DeliveryId, ct);
                 return;
             }
 
@@ -1893,12 +1926,267 @@ public sealed class DynamicRuntimeApplicationService : IDynamicRuntimeCommandSer
     private async Task RetryDeliveryAsync(string leaseId, EnvelopeDeliverySnapshot delivery, string reason, CancellationToken ct)
     {
         var backoffMs = ComputeDeliveryRetryBackoffMs(delivery.Attempt);
-        await _eventEnvelopeDeliveryPort.RetryAsync(
+        await RetryEnvelopeDeliveryAsync(
             leaseId,
             delivery.DeliveryId,
             TimeSpan.FromMilliseconds(backoffMs),
             reason,
             ct);
+    }
+
+    private async Task<EnvelopeLeaseResult> SubscribeEnvelopeAsync(EnvelopeSubscribeRequest request, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(request.LeaseId))
+            return new EnvelopeLeaseResult(false, string.Empty, "ENVELOPE_LEASE_INVALID", "lease_id is required");
+        if (string.IsNullOrWhiteSpace(request.StackId) || string.IsNullOrWhiteSpace(request.ServiceName))
+            return new EnvelopeLeaseResult(false, request.LeaseId, "ENVELOPE_LEASE_INVALID", "stack_id/service_name is required");
+
+        var busState = await LoadEnvelopeBusStateAsync(ct);
+        busState.Leases[request.LeaseId] = new ScriptEnvelopeLeaseState
+        {
+            StackId = request.StackId,
+            ServiceName = request.ServiceName,
+            SubscriberId = request.SubscriberId,
+            LeaseId = request.LeaseId,
+            MaxInFlight = request.MaxInFlight,
+        };
+        await SaveEnvelopeBusStateAsync(busState, ct);
+        return new EnvelopeLeaseResult(true, request.LeaseId);
+    }
+
+    private async Task PublishEnvelopeAsync(ScriptEventEnvelope envelope, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var busState = await LoadEnvelopeBusStateAsync(ct);
+        var sequence = busState.NextSequence + 1;
+        busState.NextSequence = sequence;
+        busState.Envelopes[sequence] = new ScriptEventEnvelopeState
+        {
+            EnvelopeId = envelope.EnvelopeId,
+            StackId = envelope.StackId,
+            ServiceName = envelope.ServiceName,
+            InstanceSelector = envelope.InstanceSelector,
+            Envelope = Any.Pack(envelope.Envelope),
+        };
+        await SaveEnvelopeBusStateAsync(busState, ct);
+    }
+
+    private async Task<IReadOnlyList<EnvelopeSubscribeRequest>> ListEnvelopeLeasesAsync(string stackId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var busState = await LoadEnvelopeBusStateAsync(ct);
+        var leases = busState.Leases.Values
+            .Where(item => string.Equals(item.StackId, stackId, StringComparison.Ordinal))
+            .OrderBy(item => item.ServiceName, StringComparer.Ordinal)
+            .ThenBy(item => item.LeaseId, StringComparer.Ordinal)
+            .Select(item => new EnvelopeSubscribeRequest(
+                item.StackId,
+                item.ServiceName,
+                item.SubscriberId,
+                item.LeaseId,
+                item.MaxInFlight))
+            .ToArray();
+        return leases;
+    }
+
+    private async Task<IReadOnlyList<EnvelopeDeliverySnapshot>> PullEnvelopeDeliveriesAsync(string leaseId, int maxCount, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (maxCount <= 0)
+            return [];
+
+        var busState = await LoadEnvelopeBusStateAsync(ct);
+        if (!busState.Leases.TryGetValue(leaseId, out var leaseState))
+            return [];
+
+        var lease = new EnvelopeSubscribeRequest(
+            leaseState.StackId,
+            leaseState.ServiceName,
+            leaseState.SubscriberId,
+            leaseState.LeaseId,
+            leaseState.MaxInFlight);
+        var now = DateTimeOffset.UtcNow;
+        var nowUnixMs = now.ToUnixTimeMilliseconds();
+        var deliveries = new List<EnvelopeDeliverySnapshot>(maxCount);
+
+        foreach (var envelopePair in busState.Envelopes.OrderBy(item => item.Key, Comparer<long>.Default))
+        {
+            if (deliveries.Count >= maxCount)
+                break;
+
+            var envelope = TryHydrateEnvelope(envelopePair.Value);
+            if (envelope == null || !ShouldDeliver(lease, envelope))
+                continue;
+
+            var stateKey = BuildDeliveryStateKey(lease.LeaseId, envelopePair.Key);
+            if (!busState.DeliveryStates.TryGetValue(stateKey, out var deliveryState))
+            {
+                deliveryState = new ScriptEnvelopeDeliveryState
+                {
+                    FirstSeenUnixMs = nowUnixMs,
+                    VisibleAtUnixMs = nowUnixMs,
+                };
+                busState.DeliveryStates[stateKey] = deliveryState;
+            }
+
+            if (deliveryState.Acked)
+                continue;
+            if (deliveryState.Attempt >= MaxEnvelopeDeliveryAttempts)
+                continue;
+            if (deliveryState.InFlight && deliveryState.InFlightDeadlineUnixMs > nowUnixMs)
+                continue;
+            if (deliveryState.VisibleAtUnixMs > nowUnixMs)
+                continue;
+
+            deliveryState.InFlight = true;
+            deliveryState.Attempt += 1;
+            deliveryState.InFlightDeadlineUnixMs = now.Add(EnvelopeInFlightLeaseTimeout).ToUnixTimeMilliseconds();
+
+            var deliveryId = Guid.NewGuid().ToString("N");
+            busState.DeliveryPointers[deliveryId] = new ScriptEnvelopeDeliveryPointerState
+            {
+                LeaseId = lease.LeaseId,
+                Sequence = envelopePair.Key,
+                Attempt = deliveryState.Attempt,
+            };
+
+            deliveries.Add(new EnvelopeDeliverySnapshot(
+                DeliveryId: deliveryId,
+                LeaseId: lease.LeaseId,
+                Attempt: deliveryState.Attempt,
+                Envelope: envelope,
+                FirstSeenAtUtc: FromUnixMilliseconds(deliveryState.FirstSeenUnixMs)));
+        }
+
+        if (deliveries.Count > 0)
+            await SaveEnvelopeBusStateAsync(busState, ct);
+
+        return deliveries;
+    }
+
+    private async Task AckEnvelopeDeliveryAsync(string leaseId, string deliveryId, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var busState = await LoadEnvelopeBusStateAsync(ct);
+        if (!busState.DeliveryPointers.TryGetValue(deliveryId, out var pointer))
+            return;
+        busState.DeliveryPointers.Remove(deliveryId);
+
+        if (!string.Equals(pointer.LeaseId, leaseId, StringComparison.Ordinal))
+        {
+            await SaveEnvelopeBusStateAsync(busState, ct);
+            return;
+        }
+
+        var stateKey = BuildDeliveryStateKey(pointer.LeaseId, pointer.Sequence);
+        if (busState.DeliveryStates.TryGetValue(stateKey, out var deliveryState))
+        {
+            deliveryState.Acked = true;
+            deliveryState.InFlight = false;
+            deliveryState.VisibleAtUnixMs = DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();
+        }
+
+        await SaveEnvelopeBusStateAsync(busState, ct);
+    }
+
+    private async Task<EnvelopeRetryResult> RetryEnvelopeDeliveryAsync(
+        string leaseId,
+        string deliveryId,
+        TimeSpan delay,
+        string reason,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var busState = await LoadEnvelopeBusStateAsync(ct);
+        if (!busState.DeliveryPointers.TryGetValue(deliveryId, out var pointer))
+            return new EnvelopeRetryResult(false, false, "ENVELOPE_DELIVERY_NOT_FOUND", "delivery pointer not found");
+        busState.DeliveryPointers.Remove(deliveryId);
+
+        if (!string.Equals(pointer.LeaseId, leaseId, StringComparison.Ordinal))
+        {
+            await SaveEnvelopeBusStateAsync(busState, ct);
+            return new EnvelopeRetryResult(false, false, "ENVELOPE_LEASE_INVALID", "lease mismatch");
+        }
+
+        var stateKey = BuildDeliveryStateKey(pointer.LeaseId, pointer.Sequence);
+        if (!busState.DeliveryStates.TryGetValue(stateKey, out var deliveryState))
+        {
+            await SaveEnvelopeBusStateAsync(busState, ct);
+            return new EnvelopeRetryResult(false, false, "ENVELOPE_DELIVERY_NOT_FOUND", "delivery state not found");
+        }
+
+        deliveryState.InFlight = false;
+        deliveryState.LastFailureReason = reason ?? string.Empty;
+        var boundedDelay = delay <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(50) : delay;
+        deliveryState.VisibleAtUnixMs = DateTimeOffset.UtcNow.Add(boundedDelay).ToUnixTimeMilliseconds();
+
+        var terminal = false;
+        if (deliveryState.Attempt >= MaxEnvelopeDeliveryAttempts)
+        {
+            terminal = true;
+            deliveryState.Acked = true;
+        }
+
+        await SaveEnvelopeBusStateAsync(busState, ct);
+        if (terminal)
+            return new EnvelopeRetryResult(false, true, "ENVELOPE_RETRY_EXHAUSTED", "retry attempts exhausted");
+        return new EnvelopeRetryResult(true, false);
+    }
+
+    private async Task<ScriptEnvelopeBusState> LoadEnvelopeBusStateAsync(CancellationToken ct)
+    {
+        return await _envelopeBusStateStore.LoadAsync(EnvelopeBusStateId, ct) ?? new ScriptEnvelopeBusState();
+    }
+
+    private Task SaveEnvelopeBusStateAsync(ScriptEnvelopeBusState busState, CancellationToken ct)
+    {
+        return _envelopeBusStateStore.SaveAsync(EnvelopeBusStateId, busState, ct);
+    }
+
+    private static ScriptEventEnvelope? TryHydrateEnvelope(ScriptEventEnvelopeState state)
+    {
+        if (state == null || state.Envelope == null || !state.Envelope.Is(EventEnvelope.Descriptor))
+            return null;
+
+        return new ScriptEventEnvelope(
+            state.EnvelopeId,
+            state.StackId,
+            state.ServiceName,
+            state.InstanceSelector,
+            state.Envelope.Unpack<EventEnvelope>());
+    }
+
+    private static bool ShouldDeliver(EnvelopeSubscribeRequest lease, ScriptEventEnvelope envelope)
+    {
+        if (!string.Equals(lease.StackId, envelope.StackId, StringComparison.Ordinal))
+            return false;
+        if (string.Equals(lease.ServiceName, envelope.ServiceName, StringComparison.Ordinal))
+            return false;
+
+        if (!envelope.Envelope.Metadata.TryGetValue("delivery_kind", out var deliveryKind))
+            return false;
+        return string.Equals(deliveryKind, ScriptOutputEventKind, StringComparison.Ordinal);
+    }
+
+    private static string BuildDeliveryStateKey(string leaseId, long sequence) => $"{leaseId}:{sequence}";
+
+    private static DateTime FromUnixMilliseconds(long unixMilliseconds)
+    {
+        if (unixMilliseconds <= 0)
+            return DateTime.UnixEpoch;
+        return DateTimeOffset.FromUnixTimeMilliseconds(unixMilliseconds).UtcDateTime;
+    }
+
+    private static string BuildIdempotencyStateId(string scope, string key) => $"{IdempotencyStatePrefix}:{scope}:{key}";
+
+    private static string BuildAggregateVersionStateId(string aggregateId) => $"{AggregateVersionStatePrefix}:{aggregateId}";
+
+    private static bool ByteStringEquals(ByteString? stored, byte[] raw)
+    {
+        if (stored == null || raw == null)
+            return false;
+        return stored.Span.SequenceEqual(raw);
     }
 
     private static int ComputeDeliveryRetryBackoffMs(int attempt)

@@ -455,8 +455,7 @@ var entrypoint = new ScriptEntrypoint();
     [Fact]
     public async Task ExecuteContainer_ShouldPersistAllScriptRuntimeCapabilitiesFromScript()
     {
-        var publisher = new RecordingEnvelopePublisherPort();
-        var (service, _) = CreateService(envelopePublisherPort: publisher);
+        var (service, _, envelopeBusStateStore) = CreateServiceWithDiagnostics();
 
         var script = """
 using System.Collections.Generic;
@@ -537,7 +536,8 @@ var entrypoint = new ScriptEntrypoint();
         customState.Fields["previous_state"].StringValue.Should().Be("seed-v1");
         customState.Fields["last_order_id"].StringValue.Should().Be("O-2001");
 
-        publisher.Published.Any(item =>
+        var published = await GetPublishedEnvelopesAsync(envelopeBusStateStore);
+        published.Any(item =>
             item.Envelope.Metadata.TryGetValue("script_event", out var scriptEvent) &&
             string.Equals(scriptEvent, "orders_indexed", StringComparison.Ordinal))
             .Should()
@@ -906,8 +906,7 @@ var entrypoint = new ScriptEntrypoint();
     [Fact]
     public async Task ApplyCompose_EventAndHybridModes_ShouldSubscribeEnvelopeLease()
     {
-        var subscriber = new RecordingEnvelopeSubscriberPort();
-        var (service, _) = CreateService(subscriber);
+        var (service, _, envelopeBusStateStore) = CreateServiceWithDiagnostics();
 
         await service.ApplyComposeAsync(
             new ComposeApplyYamlRequest(
@@ -922,15 +921,15 @@ var entrypoint = new ScriptEntrypoint();
                 ]),
             new DynamicCommandContext("idem-subscription", "0"));
 
-        subscriber.Requests.Should().HaveCount(2);
-        subscriber.Requests.Select(item => item.ServiceName).Should().BeEquivalentTo(["svc-event", "svc-hybrid"]);
+        var leases = await GetEnvelopeLeasesAsync(envelopeBusStateStore);
+        leases.Should().HaveCount(2);
+        leases.Select(item => item.ServiceName).Should().BeEquivalentTo(["svc-event", "svc-hybrid"]);
     }
 
     [Fact]
     public async Task ActivateService_EventMode_ShouldSubscribeEnvelopeLease()
     {
-        var subscriber = new RecordingEnvelopeSubscriberPort();
-        var (service, _) = CreateService(subscriber);
+        var (service, _, envelopeBusStateStore) = CreateServiceWithDiagnostics();
 
         await service.RegisterServiceAsync(
             new RegisterServiceDefinitionRequest(
@@ -961,7 +960,8 @@ var entrypoint = new ScriptEntrypoint();
 
         await service.ActivateServiceAsync("svc.subscription", new DynamicCommandContext("idem-service-subscription-activate", "1"));
 
-        subscriber.Requests.Should().ContainSingle(item =>
+        var leases = await GetEnvelopeLeasesAsync(envelopeBusStateStore);
+        leases.Should().ContainSingle(item =>
             string.Equals(item.StackId, "_services", StringComparison.Ordinal) &&
             string.Equals(item.ServiceName, "svc.subscription", StringComparison.Ordinal));
     }
@@ -969,9 +969,7 @@ var entrypoint = new ScriptEntrypoint();
     [Fact]
     public async Task MultiAgentBusinessSimulation_ShouldAlignDockerLikeSemantics()
     {
-        var subscriber = new RecordingEnvelopeSubscriberPort();
-        var publisher = new RecordingEnvelopePublisherPort();
-        var (service, _) = CreateService(subscriber, publisher);
+        var (service, _, envelopeBusStateStore) = CreateServiceWithDiagnostics();
 
         var gatewayScript = """
 using System.Threading;
@@ -1170,13 +1168,15 @@ services:
         workerImageLatest!.Digest.Should().Be(buildSnapshot.ResultImageDigest);
         workerImageBuildTag!.Digest.Should().Be(buildSnapshot.ResultImageDigest);
 
-        subscriber.Requests.Should().Contain(item => string.Equals(item.StackId, "stack.order", StringComparison.Ordinal) && string.Equals(item.ServiceName, "gateway", StringComparison.Ordinal));
-        subscriber.Requests.Should().Contain(item => string.Equals(item.StackId, "stack.order", StringComparison.Ordinal) && string.Equals(item.ServiceName, "planner", StringComparison.Ordinal));
-        subscriber.Requests.Should().NotContain(item => string.Equals(item.StackId, "stack.order", StringComparison.Ordinal) && string.Equals(item.ServiceName, "worker", StringComparison.Ordinal));
+        var leases = await GetEnvelopeLeasesAsync(envelopeBusStateStore);
+        leases.Should().Contain(item => string.Equals(item.StackId, "stack.order", StringComparison.Ordinal) && string.Equals(item.ServiceName, "gateway", StringComparison.Ordinal));
+        leases.Should().Contain(item => string.Equals(item.StackId, "stack.order", StringComparison.Ordinal) && string.Equals(item.ServiceName, "planner", StringComparison.Ordinal));
+        leases.Should().NotContain(item => string.Equals(item.StackId, "stack.order", StringComparison.Ordinal) && string.Equals(item.ServiceName, "worker", StringComparison.Ordinal));
 
-        publisher.Published.Should().NotBeEmpty();
-        publisher.Published.Select(item => item.Envelope.Metadata["type_url"]).Should().Contain(typeUrl => typeUrl.Contains("ScriptBuildPublishedEvent", StringComparison.Ordinal));
-        publisher.Published.Select(item => item.Envelope.Metadata["type_url"]).Should().Contain(typeUrl => typeUrl.Contains("ScriptComposeServiceRolledOutEvent", StringComparison.Ordinal));
+        var published = await GetPublishedEnvelopesAsync(envelopeBusStateStore);
+        published.Should().NotBeEmpty();
+        published.Select(item => item.Envelope.Metadata["type_url"]).Should().Contain(typeUrl => typeUrl.Contains("ScriptBuildPublishedEvent", StringComparison.Ordinal));
+        published.Select(item => item.Envelope.Metadata["type_url"]).Should().Contain(typeUrl => typeUrl.Contains("ScriptComposeServiceRolledOutEvent", StringComparison.Ordinal));
     }
 
     private static EventEnvelope CreateJsonEnvelope(string value, string? correlationId = null)
@@ -1206,74 +1206,61 @@ services:
     }
 
     private static (DynamicRuntimeApplicationService Service, IStateStore<ScriptServiceDefinitionState> ServiceStateStore) CreateService(
-        IEventEnvelopeSubscriberPort? envelopeSubscriberPort = null,
-        IEventEnvelopePublisherPort? envelopePublisherPort = null,
         IDynamicScriptExecutionService? scriptExecutionService = null)
     {
-        var runtime = new FakeActorRuntime();
-        var store = new InMemoryDynamicRuntimeReadStore();
-        var serviceStateStore = new InMemoryScriptServiceDefinitionStateStore();
-        var busState = new InMemoryEventEnvelopeBusState();
-        envelopeSubscriberPort ??= new InMemoryEventEnvelopeSubscriberPort(busState);
-        envelopePublisherPort ??= new InMemoryEventEnvelopePublisherPort(busState);
-        scriptExecutionService ??= new RoslynDynamicScriptExecutionService(
-            new DefaultScriptCompilationPolicy(),
-            new DefaultScriptAssemblyLoadPolicy(),
-            new DefaultScriptSandboxPolicy(),
-            new DefaultScriptResourceQuotaPolicy());
-        var deliveryPort = new InMemoryEventEnvelopeDeliveryPort(busState);
-        var eventProjector = new DynamicRuntimeEventProjector(store);
-        var sideEffectPlanner = new ScriptSideEffectPlanner();
-        return (
-            new DynamicRuntimeApplicationService(
-                runtime,
-                store,
-                serviceStateStore,
-                new InMemoryIdempotencyPort(),
-                new InMemoryConcurrencyTokenPort(),
-                new DefaultImageReferenceResolver(),
-                new DefaultScriptComposeSpecValidator(),
-                new DefaultScriptComposeReconcilePort(store),
-                new DefaultAgentBuildPlanPort(),
-                new DefaultAgentBuildPolicyPort(),
-                new DefaultAgentBuildExecutionPort(),
-                new DefaultServiceModePolicyPort(),
-                new DefaultBuildApprovalPort(),
-                envelopePublisherPort,
-                envelopeSubscriberPort,
-                new InMemoryEventEnvelopeDedupPort(),
-                deliveryPort,
-                scriptExecutionService,
-                sideEffectPlanner,
-                eventProjector),
-            serviceStateStore);
+        var (service, serviceStateStore, _, _) = CreateServiceCore(scriptExecutionService);
+        return (service, serviceStateStore);
     }
 
-    private static (DynamicRuntimeApplicationService Service, IStateStore<ScriptServiceDefinitionState> ServiceStateStore, InMemoryDynamicRuntimeReadStore ReadStore) CreateServiceWithReadStore(
-        IEventEnvelopeSubscriberPort? envelopeSubscriberPort = null,
-        IEventEnvelopePublisherPort? envelopePublisherPort = null,
+    private static (
+        DynamicRuntimeApplicationService Service,
+        IStateStore<ScriptServiceDefinitionState> ServiceStateStore,
+        IStateStore<ScriptEnvelopeBusState> EnvelopeBusStateStore) CreateServiceWithDiagnostics(
+        IDynamicScriptExecutionService? scriptExecutionService = null)
+    {
+        var (service, serviceStateStore, _, envelopeBusStateStore) = CreateServiceCore(scriptExecutionService);
+        return (service, serviceStateStore, envelopeBusStateStore);
+    }
+
+    private static (
+        DynamicRuntimeApplicationService Service,
+        IStateStore<ScriptServiceDefinitionState> ServiceStateStore,
+        InMemoryDynamicRuntimeReadStore ReadStore) CreateServiceWithReadStore(
+        IDynamicScriptExecutionService? scriptExecutionService = null)
+    {
+        var (service, serviceStateStore, readStore, _) = CreateServiceCore(scriptExecutionService);
+        return (service, serviceStateStore, readStore);
+    }
+
+    private static (
+        DynamicRuntimeApplicationService Service,
+        IStateStore<ScriptServiceDefinitionState> ServiceStateStore,
+        InMemoryDynamicRuntimeReadStore ReadStore,
+        TestStateStore<ScriptEnvelopeBusState> EnvelopeBusStateStore) CreateServiceCore(
         IDynamicScriptExecutionService? scriptExecutionService = null)
     {
         var runtime = new FakeActorRuntime();
         var store = new InMemoryDynamicRuntimeReadStore();
-        var serviceStateStore = new InMemoryScriptServiceDefinitionStateStore();
-        var busState = new InMemoryEventEnvelopeBusState();
-        envelopeSubscriberPort ??= new InMemoryEventEnvelopeSubscriberPort(busState);
-        envelopePublisherPort ??= new InMemoryEventEnvelopePublisherPort(busState);
+        var serviceStateStore = new TestStateStore<ScriptServiceDefinitionState>();
+        var idempotencyStateStore = new TestStateStore<ScriptIdempotencyState>();
+        var aggregateVersionStateStore = new TestStateStore<ScriptAggregateVersionState>();
+        var envelopeBusStateStore = new TestStateStore<ScriptEnvelopeBusState>();
+
         scriptExecutionService ??= new RoslynDynamicScriptExecutionService(
             new DefaultScriptCompilationPolicy(),
             new DefaultScriptAssemblyLoadPolicy(),
             new DefaultScriptSandboxPolicy(),
             new DefaultScriptResourceQuotaPolicy());
-        var deliveryPort = new InMemoryEventEnvelopeDeliveryPort(busState);
         var eventProjector = new DynamicRuntimeEventProjector(store);
         var sideEffectPlanner = new ScriptSideEffectPlanner();
         var service = new DynamicRuntimeApplicationService(
             runtime,
             store,
             serviceStateStore,
-            new InMemoryIdempotencyPort(),
-            new InMemoryConcurrencyTokenPort(),
+            idempotencyStateStore,
+            aggregateVersionStateStore,
+            envelopeBusStateStore,
+            new PassthroughEventDeduplicator(),
             new DefaultImageReferenceResolver(),
             new DefaultScriptComposeSpecValidator(),
             new DefaultScriptComposeReconcilePort(store),
@@ -1282,14 +1269,52 @@ services:
             new DefaultAgentBuildExecutionPort(),
             new DefaultServiceModePolicyPort(),
             new DefaultBuildApprovalPort(),
-            envelopePublisherPort,
-            envelopeSubscriberPort,
-            new InMemoryEventEnvelopeDedupPort(),
-            deliveryPort,
             scriptExecutionService,
             sideEffectPlanner,
             eventProjector);
-        return (service, serviceStateStore, store);
+
+        return (service, serviceStateStore, store, envelopeBusStateStore);
+    }
+
+    private static async Task<IReadOnlyList<EnvelopeSubscribeRequest>> GetEnvelopeLeasesAsync(
+        IStateStore<ScriptEnvelopeBusState> envelopeBusStateStore)
+    {
+        var state = await envelopeBusStateStore.LoadAsync("dynamic-runtime:envelope-bus")
+            ?? new ScriptEnvelopeBusState();
+        return state.Leases.Values
+            .Select(item => new EnvelopeSubscribeRequest(
+                item.StackId,
+                item.ServiceName,
+                item.SubscriberId,
+                item.LeaseId,
+                item.MaxInFlight))
+            .ToArray();
+    }
+
+    private static async Task<IReadOnlyList<ScriptEventEnvelope>> GetPublishedEnvelopesAsync(
+        IStateStore<ScriptEnvelopeBusState> envelopeBusStateStore)
+    {
+        var state = await envelopeBusStateStore.LoadAsync("dynamic-runtime:envelope-bus")
+            ?? new ScriptEnvelopeBusState();
+        return state.Envelopes
+            .OrderBy(item => item.Key, Comparer<long>.Default)
+            .Select(item => TryHydrateEnvelope(item.Value))
+            .Where(item => item != null)
+            .Cast<ScriptEventEnvelope>()
+            .ToArray();
+    }
+
+    private static ScriptEventEnvelope? TryHydrateEnvelope(ScriptEventEnvelopeState state)
+    {
+        if (state == null || state.Envelope == null || !state.Envelope.Is(EventEnvelope.Descriptor))
+            return null;
+
+        return new ScriptEventEnvelope(
+            state.EnvelopeId,
+            state.StackId,
+            state.ServiceName,
+            state.InstanceSelector,
+            state.Envelope.Unpack<EventEnvelope>());
     }
 
     private sealed class BlockingScriptExecutionService : IDynamicScriptExecutionService
@@ -1301,30 +1326,6 @@ services:
             using var registration = ct.Register(() => wait.TrySetCanceled(ct));
             await wait.Task;
             return new DynamicScriptExecutionResult(false, string.Empty, Error: "UNREACHABLE");
-        }
-    }
-
-    private sealed class RecordingEnvelopePublisherPort : IEventEnvelopePublisherPort
-    {
-        public List<ScriptEventEnvelope> Published { get; } = [];
-
-        public Task PublishAsync(ScriptEventEnvelope envelope, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Published.Add(envelope);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingEnvelopeSubscriberPort : IEventEnvelopeSubscriberPort
-    {
-        public List<EnvelopeSubscribeRequest> Requests { get; } = [];
-
-        public Task<EnvelopeLeaseResult> SubscribeAsync(EnvelopeSubscribeRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(new EnvelopeLeaseResult(true, request.LeaseId));
         }
     }
 

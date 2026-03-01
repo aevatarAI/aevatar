@@ -13,9 +13,9 @@ public static class DynamicRuntimeCapabilityHostBuilderExtensions
 
         return builder.AddAevatarCapability(
             name: "dynamic-runtime",
-            configureServices: static (services, _) =>
+            configureServices: static (services, configuration) =>
             {
-                services.AddDynamicRuntimeProjection();
+                services.AddDynamicRuntimeProjection(configuration);
                 services.AddDynamicRuntime();
             },
             mapEndpoints: static app => app.MapDynamicRuntimeCapabilityEndpoints());

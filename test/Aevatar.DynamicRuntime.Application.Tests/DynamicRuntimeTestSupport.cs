@@ -1,9 +1,58 @@
 using System.Collections.Concurrent;
 using Aevatar.DynamicRuntime.Abstractions.Contracts;
+using Aevatar.Foundation.Abstractions.Deduplication;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Google.Protobuf;
 
-namespace Aevatar.DynamicRuntime.Infrastructure;
+namespace Aevatar.DynamicRuntime.Application.Tests;
 
-public sealed class InMemoryDynamicRuntimeReadStore : IDynamicRuntimeReadStore
+internal sealed class TestStateStore<TState> : IStateStore<TState> where TState : class
+{
+    private readonly ConcurrentDictionary<string, TState> _states = new(StringComparer.Ordinal);
+
+    public Task<TState?> LoadAsync(string agentId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _states.TryGetValue(agentId, out var state);
+        return Task.FromResult(CloneIfPossible(state));
+    }
+
+    public Task SaveAsync(string agentId, TState state, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _states[agentId] = CloneIfPossible(state)!;
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteAsync(string agentId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _states.TryRemove(agentId, out _);
+        return Task.CompletedTask;
+    }
+
+    private static TState? CloneIfPossible(TState? state)
+    {
+        if (state == null)
+            return null;
+
+        if (state is IDeepCloneable<TState> typedCloneable)
+            return typedCloneable.Clone();
+
+        return state;
+    }
+}
+
+internal sealed class PassthroughEventDeduplicator : IEventDeduplicator
+{
+    public Task<bool> TryRecordAsync(string eventId)
+    {
+        _ = eventId;
+        return Task.FromResult(true);
+    }
+}
+
+internal sealed class InMemoryDynamicRuntimeReadStore : IDynamicRuntimeReadStore
 {
     private readonly ConcurrentDictionary<string, ImageSnapshot> _images = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, StackSnapshot> _stacks = new(StringComparer.Ordinal);

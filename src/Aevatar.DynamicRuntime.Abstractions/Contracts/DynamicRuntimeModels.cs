@@ -207,10 +207,6 @@ public sealed record ScriptReadModelDocumentSnapshot(
     IReadOnlyDictionary<string, Any> IndexValues,
     DateTime UpdatedAtUtc);
 
-public sealed record IdempotencyAcquireResult(bool Acquired, bool IsReplay, string? ErrorCode = null);
-
-public sealed record ConcurrencyCheckResult(bool Passed, string CurrentVersion, string NextVersion, string? ErrorCode = null);
-
 public sealed record ImageDigestResolveResult(bool Found, string Digest, string? ErrorCode = null);
 
 public sealed record ComposeSpecValidationResult(bool IsValid, string? ErrorCode = null, string? Reason = null);
@@ -269,8 +265,6 @@ public sealed record ScriptEventEnvelope(
 public sealed record EnvelopeSubscribeRequest(string StackId, string ServiceName, string SubscriberId, string LeaseId, int MaxInFlight);
 
 public sealed record EnvelopeLeaseResult(bool Success, string LeaseId, string? ErrorCode = null, string? Reason = null);
-
-public sealed record EnvelopeDedupResult(bool Allowed, bool IsDuplicate, string? ErrorCode = null, string? Reason = null);
 
 public sealed record EnvelopeDeliverySnapshot(
     string DeliveryId,
