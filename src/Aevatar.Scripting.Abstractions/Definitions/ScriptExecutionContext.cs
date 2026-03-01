@@ -7,4 +7,6 @@ public sealed record ScriptExecutionContext(
     string RunId = "",
     string CorrelationId = "",
     string DefinitionActorId = "",
-    string InputJson = "");
+    string CurrentStateJson = "",
+    string InputJson = "",
+    IScriptRuntimeCapabilities? Capabilities = null);

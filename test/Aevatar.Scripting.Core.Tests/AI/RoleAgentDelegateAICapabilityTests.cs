@@ -10,7 +10,7 @@ public class RoleAgentDelegateAICapabilityTests
     {
         var capability = new RoleAgentDelegateAICapability(new FakeRoleAgentPort("ok"));
 
-        var output = await capability.AskAsync("run-1", "hello", CancellationToken.None);
+        var output = await capability.AskAsync("run-1", "corr-1", "hello", CancellationToken.None);
 
         output.Should().Be("ok");
     }
@@ -19,10 +19,12 @@ public class RoleAgentDelegateAICapabilityTests
     {
         public Task<string> RunAsync(
             string runId,
+            string correlationId,
             string prompt,
             CancellationToken ct)
         {
             runId.Should().Be("run-1");
+            correlationId.Should().Be("corr-1");
             prompt.Should().Be("hello");
             return Task.FromResult(output);
         }

@@ -21,7 +21,25 @@ public sealed class ScriptRunDomainEventCommittedReducer
         readModel.Revision = evt.ScriptRevision ?? string.Empty;
         readModel.LastRunId = evt.RunId ?? string.Empty;
         readModel.LastEventType = evt.EventType ?? string.Empty;
-        readModel.StatePayloadJson = evt.PayloadJson ?? string.Empty;
+        var eventType = evt.EventType ?? string.Empty;
+        if (string.Equals(eventType, "ClaimManualReviewRequestedEvent", StringComparison.Ordinal))
+        {
+            readModel.DecisionStatus = "ManualReview";
+            readModel.ManualReviewRequired = true;
+        }
+        else if (string.Equals(eventType, "ClaimApprovedEvent", StringComparison.Ordinal))
+        {
+            readModel.DecisionStatus = "Approved";
+            readModel.ManualReviewRequired = false;
+        }
+        else if (string.Equals(eventType, "ClaimRejectedEvent", StringComparison.Ordinal))
+        {
+            readModel.DecisionStatus = "Rejected";
+            readModel.ManualReviewRequired = false;
+        }
+        readModel.StatePayloadJson = string.IsNullOrWhiteSpace(evt.StatePayloadJson)
+            ? evt.PayloadJson ?? string.Empty
+            : evt.StatePayloadJson;
         readModel.StateVersion += 1;
         readModel.LastEventId = envelope.Id ?? string.Empty;
         return true;

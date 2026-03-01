@@ -11,7 +11,8 @@ public sealed class RoleAgentDelegateAICapability : IAICapability
 
     public Task<string> AskAsync(
         string runId,
+        string correlationId,
         string prompt,
         CancellationToken ct) =>
-        _roleAgentPort.RunAsync(runId, prompt, ct);
+        _roleAgentPort.RunAsync(runId, correlationId, prompt, ct);
 }

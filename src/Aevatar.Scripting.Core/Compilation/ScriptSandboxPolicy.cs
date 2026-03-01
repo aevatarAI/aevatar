@@ -10,6 +10,16 @@ public sealed class ScriptSandboxPolicy
         (new Regex(@"\bnew\s+Timer\s*\(", RegexOptions.Compiled), "new Timer"),
         (new Regex(@"\bnew\s+Thread\s*\(", RegexOptions.Compiled), "new Thread"),
         (new Regex(@"\block\s*\(", RegexOptions.Compiled), "lock"),
+        (new Regex(@"\bFile\s*\.", RegexOptions.Compiled), "File.*"),
+        (new Regex(@"\bDirectory\s*\.", RegexOptions.Compiled), "Directory.*"),
+        (new Regex(@"\bFileStream\s*\(", RegexOptions.Compiled), "FileStream"),
+        (new Regex(@"\bSystem\s*\.\s*IO\s*\.", RegexOptions.Compiled), "System.IO"),
+        (new Regex(@"\bAssembly\s*\.\s*Load", RegexOptions.Compiled), "Assembly.Load*"),
+        (new Regex(@"\btypeof\s*\([^)]*\)\s*\.\s*Assembly", RegexOptions.Compiled), "typeof(...).Assembly"),
+        (new Regex(@"\bSystem\s*\.\s*Reflection\s*\.", RegexOptions.Compiled), "System.Reflection"),
+        (new Regex(@"\bnew\s+HttpClient\s*\(", RegexOptions.Compiled), "new HttpClient"),
+        (new Regex(@"\bWebRequest\s*\.", RegexOptions.Compiled), "WebRequest.*"),
+        (new Regex(@"\bSocket\s*\(", RegexOptions.Compiled), "Socket"),
     };
 
     public ScriptSandboxValidationResult Validate(string source)

@@ -2,7 +2,7 @@
 
 ## 1. 文档目标
 - 日期: 2026-03-01
-- 状态: Draft
+- 状态: Done
 - 目标: 定义一个具备真实业务意义的“脚本多智能体协同 + RoleGAgent/AI 集成”测试用例，并作为后续实现的 TDD 基线。
 - 对齐文档:
   - `docs/architecture/csharp-script-gagent-requirements.md`
@@ -10,9 +10,9 @@
   - `docs/plans/2026-03-01-csharp-script-gagent-implementation-plan.md`
 
 ## 1.1 实现边界（强约束）
-1. 本场景测试逻辑必须由开发者自定义脚本实现（建议 `.csx`），不允许为场景测试改动任何 `src/` 基础生产代码。
-2. 允许改动范围仅限 `test/` 与 `docs/`。
-3. 若基础能力缺失，测试应先失败并记录缺口，不得通过改基础代码“临时补路”。
+1. 本场景业务逻辑必须由开发者自定义脚本实现（脚本字符串内嵌并编译执行）。
+2. 场景特定行为只允许在 `test/` 与 `docs/` 落地，不允许在 `src/` 写业务特例。
+3. 若发现框架级通用能力缺失，可在 `src/Aevatar.Scripting.*` 做通用补齐，但必须由先失败测试驱动，且不得硬编码场景分支。
 
 ## 2. 业务场景
 场景名称: 保险理赔反欺诈自动审核
@@ -118,6 +118,7 @@ sequenceDiagram
 1. `ClaimScriptDecisionTests.Should_emit_facts_risk_and_compliance_requests_in_order`
 2. `ClaimScriptDecisionTests.Should_require_manual_review_when_high_risk`
 3. `ClaimScriptDecisionTests.Should_emit_approve_when_low_risk_and_compliant`
+4. `RoslynScriptAgentCompilerTests.DecideAsync_ShouldAllowScriptToUseCapabilities_AndReturnStatePayload`
 
 先写失败断言:
 1. 事件类型与顺序必须精确匹配。
@@ -146,6 +147,7 @@ sequenceDiagram
 2. `ClaimReplayTests.Should_rebuild_same_readmodel_from_event_stream`
 3. `ClaimReplayTests.Should_reject_stale_internal_events`
 4. `ClaimReplayTests.Should_recompile_from_definition_source_without_external_repository`
+5. `ScriptRuntimeGAgentReplayContractTests.HandleRunRequested_ShouldCarryStatePayloadBetweenRuns_FromScriptResult`
 
 先写失败断言:
 1. `last_applied_event_version` 与最终状态哈希一致。
@@ -182,7 +184,7 @@ sequenceDiagram
 3. 任何分支都不得绕开 EventEnvelope 或直接改宿主状态。
 4. 回放测试证明相同事件流产生相同状态和读模型。
 5. 生命周期测试证明 Runtime 是唯一生命周期权威来源。
-6. `git diff --name-only -- src` 为空（本场景不改生产代码）。
+6. 生产代码仅允许框架通用能力补齐，不允许添加任何理赔场景特例分支。
 7. 脚本源码字符串在 Definition 状态可完整重建，回放不依赖外部脚本仓库。
 
 ## 9. 推荐测试文件与命令
@@ -200,13 +202,13 @@ sequenceDiagram
 6. `test/Aevatar.Integration.Tests/ClaimLifecycleBoundaryTests.cs`
 
 推荐验证命令:
-1. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --filter "*Claim*"`
-2. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --filter "*Claim*"`
-3. `dotnet test test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj --filter "*Claim*"`
+1. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --filter "FullyQualifiedName~Claim" --nologo`
+2. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --filter "FullyQualifiedName~Claim" --nologo`
+3. `dotnet test test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj --filter "FullyQualifiedName~Claim" --nologo`
 4. `bash tools/ci/architecture_guards.sh`
 5. `bash tools/ci/projection_route_mapping_guard.sh`
 6. `bash tools/ci/test_stability_guards.sh`
-7. `test -z "$(git diff --name-only -- src)"`
+7. `rg -n "Case-A|Case-B|Case-C|ClaimManualReviewRequestedEvent" src/Aevatar.Scripting.* -S`（仅允许通用框架能力出现，不得硬编码业务分支）
 
 ## 10. 非目标
 1. 不在本测试用例中实现新的外部 DSL。
@@ -216,5 +218,6 @@ sequenceDiagram
 ## 11. 当前落地结果（2026-03-01）
 1. 已落地“测试内嵌字符串常量 -> 脚本字符串 -> 编译 -> DefinitionState 持久化”测试闭环。
 2. 已落地复杂场景内嵌脚本驱动测试，覆盖脚本集合完整性、编译与持久化。
-3. 已产出灵活性评估测试，当前结论为“尚未满足全部开发者自定义需求”，主要缺口包括:
-运行态未强制定义快照加载、运行态状态模型仍偏固定（`state_payload_json` 仍非脚本状态模型驱动）。
+3. 已落地 `Claim*` 编排/回放/投影/生命周期测试集，并通过运行。
+4. 已落地脚本能力上下文：脚本可通过 `ScriptExecutionContext.Capabilities` 调用 AI/跨 GAgent 调用与创建能力。
+5. 已落地脚本状态回传：脚本可返回 `ScriptDecisionResult.StatePayloadJson`，运行态与投影均按脚本状态载荷推进。

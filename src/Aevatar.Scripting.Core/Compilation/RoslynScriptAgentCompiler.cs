@@ -114,8 +114,7 @@ public sealed class RoslynScriptAgentCompiler : IScriptAgentCompiler
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            var domainEvents = await ExecuteScriptDecisionAsync(Source, context, ct);
-            return new ScriptDecisionResult(domainEvents);
+            return await ExecuteScriptDecisionAsync(Source, context, ct);
         }
 
         private static readonly JsonSerializerOptions JsonOptions = new()
@@ -123,17 +122,17 @@ public sealed class RoslynScriptAgentCompiler : IScriptAgentCompiler
             PropertyNameCaseInsensitive = true,
         };
 
-        private static async Task<IReadOnlyList<IMessage>> ExecuteScriptDecisionAsync(
+        private static async Task<ScriptDecisionResult> ExecuteScriptDecisionAsync(
             string source,
             ScriptExecutionContext context,
             CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(source))
-                return Array.Empty<IMessage>();
+                return new ScriptDecisionResult(Array.Empty<IMessage>());
 
             // Fast path for sources that do not define a decision entry point.
             if (!Regex.IsMatch(source, @"\bDecide\s*\(", RegexOptions.CultureInvariant))
-                return Array.Empty<IMessage>();
+                return new ScriptDecisionResult(Array.Empty<IMessage>());
 
             var syntaxTree = CSharpSyntaxTree.ParseText(source);
             var compilation = CSharpCompilation.Create(
@@ -164,7 +163,7 @@ public sealed class RoslynScriptAgentCompiler : IScriptAgentCompiler
                 var assembly = loadContext.LoadFromStream(assemblyStream);
                 var decideMethod = FindDecideMethod(assembly);
                 if (decideMethod == null)
-                    return Array.Empty<IMessage>();
+                    return new ScriptDecisionResult(Array.Empty<IMessage>());
 
                 var arguments = BuildArguments(decideMethod.GetParameters(), context, ct);
                 var invocationResult = decideMethod.Invoke(obj: null, parameters: arguments);
@@ -174,7 +173,7 @@ public sealed class RoslynScriptAgentCompiler : IScriptAgentCompiler
                     invocationResult = TryGetTaskResult(decisionTask);
                 }
 
-                return NormalizeDomainEvents(invocationResult);
+                return NormalizeDecisionResult(invocationResult);
             }
             finally
             {
@@ -212,6 +211,12 @@ public sealed class RoslynScriptAgentCompiler : IScriptAgentCompiler
                 if (parameterType == typeof(CancellationToken))
                 {
                     args[i] = ct;
+                    continue;
+                }
+
+                if (parameterType == typeof(IScriptRuntimeCapabilities))
+                {
+                    args[i] = context.Capabilities;
                     continue;
                 }
 
@@ -268,6 +273,14 @@ public sealed class RoslynScriptAgentCompiler : IScriptAgentCompiler
                     $"Failed to deserialize script input json into `{targetType.FullName}`.",
                     ex);
             }
+        }
+
+        private static ScriptDecisionResult NormalizeDecisionResult(object? invocationResult)
+        {
+            if (invocationResult is ScriptDecisionResult scriptDecisionResult)
+                return scriptDecisionResult;
+
+            return new ScriptDecisionResult(NormalizeDomainEvents(invocationResult));
         }
 
         private static IReadOnlyList<IMessage> NormalizeDomainEvents(object? invocationResult)

@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Application;
+using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -21,6 +22,7 @@ public class ScriptGAgentEndToEndTests
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
+        services.AddScriptCapability();
 
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();

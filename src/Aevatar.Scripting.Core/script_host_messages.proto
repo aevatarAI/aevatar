@@ -49,4 +49,5 @@ message ScriptRunDomainEventCommitted {
   string definition_actor_id = 3;
   string event_type = 4;
   string payload_json = 5;
+  string state_payload_json = 6;
 }

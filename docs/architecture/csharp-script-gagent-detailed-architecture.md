@@ -1,13 +1,13 @@
 # C# Script GAgent 详细架构设计（基于需求文档）
 
 ## 1. 文档元信息
-- 状态: In Progress
+- 状态: Done
 - 版本: v0.5
 - 日期: 2026-03-01
 - 需求基线: `docs/architecture/csharp-script-gagent-requirements.md`
 - 适用范围: `Foundation/Core/CQRS/Workflow/Host` 相关子系统
 - 文档目标: 将需求文档转化为可落地的详细架构设计与实施边界
-- 最近实现快照: 首批项目骨架、写侧主链、投影路由、Host 装配、继承守卫、脚本 `Decide` 动态执行与 `IGAgentFactoryPort` 已落地
+- 最近实现快照: 双 GAgent 写侧主链、定义快照强制加载、脚本能力上下文（AI/Invocation/Factory）、脚本状态回传链路、投影路由与 Host 装配已落地
 
 ## 2. 设计目标与不可妥协约束
 
@@ -138,7 +138,7 @@ sequenceDiagram
     APP->>ADA: "Map Command -> RunScriptRequestedEvent"
     ADA->>RUN: "Handle EventEnvelope(RunEvent)"
     RUN->>DEF: "Read Definition Snapshot(source_text/revision)"
-    RUN->>RUN: "Compile + Script Decide"
+    RUN->>RUN: "Compile + Script Business Logic(Decide)"
     RUN->>ES: "Append Runtime Domain Events"
     RUN->>RUN: "TransitionState via matcher"
     RUN-->>API: "Ack/Event-driven response"
@@ -165,7 +165,7 @@ sequenceDiagram
 2. 静态策略校验（禁用 API、命名空间白名单、类型限制）。
 3. 生成可执行句柄（委托或受限 IR），并提取 `contract manifest`（input/output/state/readmodel）。
 4. 以 `script_id + revision + schema_hash` 作为缓存键。
-5. 执行时注入 `ScriptExecutionContext`（至少包含 `run_id/correlation_id/definition_actor_id/input_json`），只暴露受限端口。
+5. 执行时注入 `ScriptExecutionContext`（包含 `run_id/correlation_id/definition_actor_id/input_json/current_state_json`）和受控 `Capabilities` 端口。
 6. 回放场景下按定义态重编译，不依赖外部脚本仓库。
 
 ### 7.2 沙箱策略
@@ -176,9 +176,9 @@ sequenceDiagram
 4. 反射逃逸与动态加载非白名单程序集。
 
 允许能力示例:
-1. 通过 `IScriptAgentDefinition` 的决策回调输出领域事件。
-2. 通过 `IAICapability` 发起 AI 调用请求。
-3. 通过框架提供的时钟与内部事件调度端口触发延迟行为。
+1. 通过 `IScriptAgentDefinition` 的脚本业务入口输出 `ScriptDecisionResult`（领域事件 + 状态载荷）。
+2. 通过 `ScriptExecutionContext.Capabilities` 发起 `AskAI/InvokeAgent/CreateAgent/DestroyAgent/Link/Unlink`。
+3. 通过框架事件化机制触发延迟与内部事件，不允许脚本线程回调直接改状态。
 
 ## 8. AI 与通用 GAgent 复用架构（组合，不继承）
 

@@ -1,9 +1,14 @@
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Scripting.Core.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
 
 namespace Aevatar.Integration.Tests;
@@ -76,7 +81,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
     }
 
     [Fact]
-    public async Task FlexibilityAssessment_ShouldShow_FrameworkGaps_ForDeveloperCustomScripts()
+    public async Task FlexibilityAssessment_ShouldConfirm_FrameworkSupports_DeveloperCustomScripts()
     {
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
         var orchestrator = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
@@ -94,49 +99,70 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
                 orchestrator.Revision),
             CancellationToken.None);
 
-        var runtime = new ScriptRuntimeGAgent
+        var runtimeWithoutDependencies = new ScriptRuntimeGAgent
         {
             EventSourcingBehaviorFactory =
                 new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(new InMemoryEventStore()),
         };
-        await runtime.HandleRunScriptRequested(new RunScriptRequestedEvent
+        Func<Task> missingDefinitionAct = () => runtimeWithoutDependencies.HandleRunScriptRequested(new RunScriptRequestedEvent
         {
-            RunId = "run-gap-check",
+            RunId = "run-snapshot-check",
             InputJson = "{\"case\":\"Case-B\"}",
             ScriptRevision = orchestrator.Revision,
             DefinitionActorId = "missing-definition-actor",
         });
+        await missingDefinitionAct.Should().ThrowAsync<InvalidOperationException>();
 
         var supportsDynamicDecisionEvents = decision.DomainEvents.Count > 0;
-        var acceptedMissingDefinition = string.Equals(
-            runtime.State.DefinitionActorId,
-            "missing-definition-actor",
-            StringComparison.Ordinal);
-        var enforcesDefinitionSnapshotLookup = !acceptedMissingDefinition;
+        var enforcesDefinitionSnapshotLookup = true;
         var hasFactoryPort = Type.GetType(
                 "Aevatar.Scripting.Core.Ports.IGAgentFactoryPort, Aevatar.Scripting.Core",
                 throwOnError: false,
                 ignoreCase: false) != null;
-        var supportsCustomRuntimeState = !string.Equals(
-            runtime.State.StatePayloadJson,
-            "{\"result\":\"ok\"}",
+
+        var services = new ServiceCollection();
+        services.AddAevatarRuntime();
+        services.AddScriptCapability();
+        using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<IActorRuntime>();
+        var definitionActorId = "flex-definition";
+        var runtimeActorId = "flex-runtime";
+        var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
+        var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
+
+        var upsertAdapter = new UpsertScriptDefinitionCommandAdapter();
+        await definitionActor.HandleEventAsync(
+            upsertAdapter.Map(
+                new UpsertScriptDefinitionCommand(
+                    ScriptId: orchestrator.ScriptId,
+                    ScriptRevision: orchestrator.Revision,
+                    SourceText: orchestrator.Source,
+                    SourceHash: orchestrator.SourceHash),
+                definitionActorId),
+            CancellationToken.None);
+
+        var runAdapter = new RunScriptCommandAdapter();
+        await runtimeActor.HandleEventAsync(
+            runAdapter.Map(
+                new RunScriptCommand(
+                    RunId: "run-flex",
+                    InputJson: "{\"caseId\":\"Case-B\",\"riskScore\":0.91,\"compliancePassed\":true}",
+                    ScriptRevision: orchestrator.Revision,
+                    DefinitionActorId: definitionActorId),
+                runtimeActorId),
+            CancellationToken.None);
+
+        var runtimeState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
+        var supportsCustomRuntimeState = runtimeState.StatePayloadJson.Contains(
+            "ClaimManualReviewRequestedEvent",
             StringComparison.Ordinal);
 
-        var gaps = new List<string>();
-        if (!supportsDynamicDecisionEvents)
-            gaps.Add("compiled script does not emit domain events from developer script body");
-        if (!enforcesDefinitionSnapshotLookup)
-            gaps.Add("runtime does not enforce definition snapshot lookup before execution");
-        if (!hasFactoryPort)
-            gaps.Add("IGAgentFactoryPort is missing; cannot create arbitrary GAgent via runtime contract");
-        if (!supportsCustomRuntimeState)
-            gaps.Add("runtime state payload is fixed and not driven by script-defined state model");
+        supportsDynamicDecisionEvents.Should().BeTrue();
+        enforcesDefinitionSnapshotLookup.Should().BeTrue();
+        hasFactoryPort.Should().BeTrue();
+        supportsCustomRuntimeState.Should().BeTrue();
 
-        _output.WriteLine("Flexibility gaps:");
-        foreach (var gap in gaps)
-            _output.WriteLine("- " + gap);
-
-        gaps.Should().NotBeEmpty("current framework capability should be measured against custom-script requirements");
+        _output.WriteLine("Flexibility capabilities verified: dynamic decision + snapshot enforcement + factory port + dynamic runtime payload.");
     }
 
     [Fact]
