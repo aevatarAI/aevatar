@@ -1,20 +1,38 @@
+using System.Text.RegularExpressions;
 using FluentAssertions;
 
 namespace Aevatar.Scripting.Core.Tests.Architecture;
 
 public class ScriptInheritanceGuardTests
 {
-    [Fact]
-    public void Pattern_ShouldDetectForbiddenInheritance_ForDefinitionAgent()
+    [Theory]
+    [InlineData("src/Aevatar.Scripting.Core/ScriptDefinitionGAgent.cs", "ScriptDefinitionGAgent")]
+    [InlineData("src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs", "ScriptRuntimeGAgent")]
+    public void ScriptAgents_ShouldInheritDirectlyFromGAgentBase(
+        string relativePath,
+        string agentName)
     {
-        const string line = "public class ScriptDefinitionGAgent : AIGAgentBase<MyState>";
-        line.Should().MatchRegex(@"ScriptDefinitionGAgent\s*:\s*(RoleGAgent|AIGAgentBase<)");
+        var repoRoot = FindRepoRoot();
+        var sourcePath = Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        File.Exists(sourcePath).Should().BeTrue("script inheritance guard needs real source file: {0}", sourcePath);
+
+        var source = File.ReadAllText(sourcePath);
+        source.Should().MatchRegex($@"class\s+{Regex.Escape(agentName)}\s*:\s*GAgentBase<");
+        source.Should().NotMatchRegex(
+            $@"class\s+{Regex.Escape(agentName)}\s*:\s*(RoleGAgent|AIGAgentBase<)");
     }
 
-    [Fact]
-    public void Pattern_ShouldDetectForbiddenInheritance_ForRuntimeAgent()
+    private static string FindRepoRoot()
     {
-        const string line = "public class ScriptRuntimeGAgent : RoleGAgent";
-        line.Should().MatchRegex(@"ScriptRuntimeGAgent\s*:\s*(RoleGAgent|AIGAgentBase<)");
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            var marker = Path.Combine(dir.FullName, "aevatar.slnx");
+            if (File.Exists(marker))
+                return dir.FullName;
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("Cannot locate repository root from test base directory.");
     }
 }

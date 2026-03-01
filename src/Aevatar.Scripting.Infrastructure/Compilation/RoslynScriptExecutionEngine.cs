@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core.Compilation;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.CodeAnalysis;
@@ -6,7 +7,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using System.Reflection;
 using System.Runtime.Loader;
 
-namespace Aevatar.Scripting.Core.Compilation;
+namespace Aevatar.Scripting.Infrastructure.Compilation;
 
 public sealed class RoslynScriptExecutionEngine : IScriptExecutionEngine
 {

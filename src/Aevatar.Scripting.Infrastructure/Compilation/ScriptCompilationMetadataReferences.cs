@@ -3,7 +3,7 @@ using Google.Protobuf;
 using Microsoft.CodeAnalysis;
 using System.Text.Json;
 
-namespace Aevatar.Scripting.Core.Compilation;
+namespace Aevatar.Scripting.Infrastructure.Compilation;
 
 internal static class ScriptCompilationMetadataReferences
 {

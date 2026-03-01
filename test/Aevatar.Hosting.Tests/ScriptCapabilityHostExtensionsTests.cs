@@ -1,6 +1,7 @@
 using Aevatar.Hosting;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Scripting.Hosting.DependencyInjection;
@@ -43,6 +44,8 @@ public class ScriptCapabilityHostExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptPackageCompiler) &&
             x.ImplementationType == typeof(RoslynScriptPackageCompiler));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptDefinitionSnapshotPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IGAgentEventRoutingPort));
         services.Should().Contain(x =>

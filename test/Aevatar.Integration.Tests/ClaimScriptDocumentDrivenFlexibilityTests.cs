@@ -2,9 +2,10 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.DependencyInjection;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Scripting.Core.Application;
+using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
 using FluentAssertions;
@@ -64,6 +65,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             {
                 EventSourcingBehaviorFactory =
                     new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(new InMemoryEventStore()),
+                Services = BuildDefinitionServices(),
             };
 
             await definition.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
@@ -239,5 +241,14 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
                 ["compliancePassed"] = Google.Protobuf.WellKnownTypes.Value.ForBool(compliancePassed),
             },
         });
+    }
+
+    private static IServiceProvider BuildDefinitionServices()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ScriptSandboxPolicy>();
+        services.AddSingleton<IScriptExecutionEngine, RoslynScriptExecutionEngine>();
+        services.AddSingleton<IScriptPackageCompiler, RoslynScriptPackageCompiler>();
+        return services.BuildServiceProvider();
     }
 }

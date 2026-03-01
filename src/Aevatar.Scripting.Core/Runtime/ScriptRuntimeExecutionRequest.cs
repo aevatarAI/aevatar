@@ -1,4 +1,3 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Core;
 using Google.Protobuf.WellKnownTypes;
 
@@ -14,5 +13,4 @@ public sealed record ScriptRuntimeExecutionRequest(
     string SourceText,
     string ReadModelSchemaVersion,
     string ReadModelSchemaHash,
-    IServiceProvider Services,
-    IEventPublisher EventPublisher);
+    IServiceProvider Services);

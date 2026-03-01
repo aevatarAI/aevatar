@@ -1,4 +1,4 @@
-using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
 

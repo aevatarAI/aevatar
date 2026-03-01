@@ -2,6 +2,7 @@ using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using FluentAssertions;
 using Google.Protobuf;

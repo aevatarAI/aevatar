@@ -1,6 +1,7 @@
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core.Runtime;
 
-namespace Aevatar.Scripting.Core.Runtime;
+namespace Aevatar.Scripting.Application.Runtime;
 
 public sealed class DefaultScriptCapabilityFactory : IScriptCapabilityFactory
 {

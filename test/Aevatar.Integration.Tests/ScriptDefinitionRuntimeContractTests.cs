@@ -1,8 +1,8 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
-using Aevatar.Scripting.Core.Application;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;

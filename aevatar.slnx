@@ -61,8 +61,10 @@
     <Project Path="src\Aevatar.Mainnet.Host.Api\Aevatar.Mainnet.Host.Api.csproj" />
 	    <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
 	    <Project Path="src\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
+	    <Project Path="src\Aevatar.Scripting.Application\Aevatar.Scripting.Application.csproj" />
 	    <Project Path="src\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
 	    <Project Path="src\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
+	    <Project Path="src\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
 	    <Project Path="src\Aevatar.Scripting.Projection\Aevatar.Scripting.Projection.csproj" />
 	  </Folder>
   <Folder Name="/src/workflow/">

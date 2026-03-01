@@ -7,8 +7,15 @@ public sealed class DefaultScriptReadModelSchemaActivationPolicy : IScriptReadMo
     public DefaultScriptReadModelSchemaActivationPolicy(
         IEnumerable<ScriptReadModelStoreKind>? supportedKinds = null)
     {
-        _supportedKinds = new HashSet<ScriptReadModelStoreKind>(
-            supportedKinds ?? [ScriptReadModelStoreKind.Document, ScriptReadModelStoreKind.Graph]);
+        var configuredKinds = supportedKinds?
+            .Distinct()
+            .ToArray();
+        if (configuredKinds == null || configuredKinds.Length == 0)
+        {
+            configuredKinds = [ScriptReadModelStoreKind.Document, ScriptReadModelStoreKind.Graph];
+        }
+
+        _supportedKinds = new HashSet<ScriptReadModelStoreKind>(configuredKinds);
     }
 
     public ScriptReadModelSchemaActivationResult ValidateActivation(

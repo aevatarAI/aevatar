@@ -1,7 +1,7 @@
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
@@ -50,8 +50,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
                 SourceText: snapshot.SourceText,
                 ReadModelSchemaVersion: snapshot.ReadModelSchemaVersion,
                 ReadModelSchemaHash: snapshot.ReadModelSchemaHash,
-                Services: Services,
-                EventPublisher: EventPublisher),
+                Services: Services),
             CancellationToken.None);
         await PersistDomainEventsAsync(committedEvents, CancellationToken.None);
 
@@ -91,31 +90,10 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         string requestedRevision,
         CancellationToken ct)
     {
-        var runtime = Services.GetService(typeof(IActorRuntime)) as IActorRuntime
-            ?? throw new InvalidOperationException("IActorRuntime is required for loading script definition snapshot.");
-        var definitionActor = await runtime.GetAsync(definitionActorId);
-        if (definitionActor == null)
-            throw new InvalidOperationException($"Script definition actor not found: {definitionActorId}");
-        if (definitionActor.Agent is not ScriptDefinitionGAgent definitionAgent)
-            throw new InvalidOperationException(
-                $"Actor `{definitionActorId}` is not a ScriptDefinitionGAgent.");
-
-        var state = definitionAgent.State;
-        if (string.IsNullOrWhiteSpace(state.SourceText))
-            throw new InvalidOperationException(
-                $"Script definition source_text is empty for actor `{definitionActorId}`.");
-        if (!string.IsNullOrWhiteSpace(requestedRevision) &&
-            !string.Equals(requestedRevision, state.Revision, StringComparison.Ordinal))
-            throw new InvalidOperationException(
-                $"Requested script revision `{requestedRevision}` does not match definition snapshot revision `{state.Revision}`.");
-
-        ct.ThrowIfCancellationRequested();
-        return new ScriptDefinitionSnapshot(
-            state.ScriptId ?? string.Empty,
-            state.Revision ?? string.Empty,
-            state.SourceText ?? string.Empty,
-            state.ReadModelSchemaVersion ?? string.Empty,
-            state.ReadModelSchemaHash ?? string.Empty);
+        var snapshotPort = Services.GetService(typeof(IScriptDefinitionSnapshotPort)) as IScriptDefinitionSnapshotPort
+            ?? throw new InvalidOperationException(
+                "IScriptDefinitionSnapshotPort is required for loading script definition snapshot.");
+        return await snapshotPort.GetRequiredAsync(definitionActorId, requestedRevision, ct);
     }
 
     private static IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any> ClonePayloads(
@@ -151,11 +129,4 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             target[key] = value.Clone();
         }
     }
-
-    private sealed record ScriptDefinitionSnapshot(
-        string ScriptId,
-        string Revision,
-        string SourceText,
-        string ReadModelSchemaVersion,
-        string ReadModelSchemaHash);
 }

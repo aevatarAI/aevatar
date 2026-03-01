@@ -1,10 +1,11 @@
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Runtime;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Scripting.Core.Runtime;
+namespace Aevatar.Scripting.Application.Runtime;
 
 public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecutionOrchestrator
 {

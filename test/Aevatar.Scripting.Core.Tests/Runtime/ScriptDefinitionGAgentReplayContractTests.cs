@@ -1,6 +1,8 @@
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Schema;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,6 +17,7 @@ public class ScriptDefinitionGAgentReplayContractTests
         var agent = new ScriptDefinitionGAgent();
         agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
             new InMemoryEventStore());
+        agent.Services = BuildServices();
 
         await agent.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
         {
@@ -98,10 +101,8 @@ public sealed class DefinitionReplayScript : IScriptPackageRuntime, IScriptContr
         var agent = new ScriptDefinitionGAgent();
         agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
             new InMemoryEventStore());
-        agent.Services = new ServiceCollection()
-            .AddSingleton<IScriptReadModelSchemaActivationPolicy>(
-                new DefaultScriptReadModelSchemaActivationPolicy([ScriptReadModelStoreKind.Document]))
-            .BuildServiceProvider();
+        agent.Services = BuildServices(
+            new DefaultScriptReadModelSchemaActivationPolicy([ScriptReadModelStoreKind.Document]));
 
         await agent.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
         {
@@ -172,5 +173,19 @@ public sealed class UnsupportedSchemaReplayScript : IScriptPackageRuntime, IScri
         agent.State.ReadModelSchemaStatus.Should().Be("activation_failed");
         agent.State.ReadModelSchemaFailureReason.Should().Contain("Graph");
         agent.State.LastAppliedEventVersion.Should().BeGreaterThan(0);
+    }
+
+    private static IServiceProvider BuildServices(
+        IScriptReadModelSchemaActivationPolicy? activationPolicy = null)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ScriptSandboxPolicy>();
+        services.AddSingleton<IScriptExecutionEngine, RoslynScriptExecutionEngine>();
+        services.AddSingleton<IScriptPackageCompiler, RoslynScriptPackageCompiler>();
+        if (activationPolicy == null)
+            services.AddSingleton<IScriptReadModelSchemaActivationPolicy, DefaultScriptReadModelSchemaActivationPolicy>();
+        else
+            services.AddSingleton(activationPolicy);
+        return services.BuildServiceProvider();
     }
 }

@@ -1,5 +1,5 @@
 using Google.Protobuf.WellKnownTypes;
-namespace Aevatar.Scripting.Core.Application;
+namespace Aevatar.Scripting.Application;
 
 public sealed record RunScriptCommand(
     string RunId,

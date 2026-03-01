@@ -78,11 +78,13 @@ flowchart LR
 
 ### 4.2 建议项目拆分
 1. `src/Aevatar.Scripting.Abstractions`
-2. `src/Aevatar.Scripting.Core`
-3. `src/Aevatar.Scripting.Projection`
-4. `src/Aevatar.Scripting.Hosting`
-5. `test/Aevatar.Scripting.Core.Tests`
-6. `test/Aevatar.Scripting.Projection.Tests` 或并入 `test/Aevatar.CQRS.Projection.Core.Tests`
+2. `src/Aevatar.Scripting.Application`
+3. `src/Aevatar.Scripting.Core`
+4. `src/Aevatar.Scripting.Infrastructure`
+5. `src/Aevatar.Scripting.Projection`
+6. `src/Aevatar.Scripting.Hosting`
+7. `test/Aevatar.Scripting.Core.Tests`
+8. `test/Aevatar.Scripting.Projection.Tests` 或并入 `test/Aevatar.CQRS.Projection.Core.Tests`
 
 ## 5. 核心模型设计
 

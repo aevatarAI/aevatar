@@ -2,13 +2,14 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Schema;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core;
 
-public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
+public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>, IScriptDefinitionSnapshotSource
 {
     private const string SchemaStatusPending = "pending";
     private const string SchemaStatusDeclared = "declared";
@@ -190,6 +191,16 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     {
         if (Services.GetService(typeof(IScriptPackageCompiler)) is IScriptPackageCompiler compiler)
             return compiler;
-        return new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
+        throw new InvalidOperationException("IScriptPackageCompiler is required for ScriptDefinitionGAgent.");
+    }
+
+    public ScriptDefinitionSnapshot GetSnapshot()
+    {
+        return new ScriptDefinitionSnapshot(
+            State.ScriptId ?? string.Empty,
+            State.Revision ?? string.Empty,
+            State.SourceText ?? string.Empty,
+            State.ReadModelSchemaVersion ?? string.Empty,
+            State.ReadModelSchemaHash ?? string.Empty);
     }
 }

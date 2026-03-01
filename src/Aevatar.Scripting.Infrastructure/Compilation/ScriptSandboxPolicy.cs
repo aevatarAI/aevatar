@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Aevatar.Scripting.Core.Compilation;
+namespace Aevatar.Scripting.Infrastructure.Compilation;
 
 public sealed class ScriptSandboxPolicy
 {

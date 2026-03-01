@@ -1,3 +1,4 @@
+using Aevatar.Scripting.Application.AI;
 using Aevatar.Scripting.Core.AI;
 using FluentAssertions;
 

@@ -1,13 +1,13 @@
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Scripting.Core.Application;
+namespace Aevatar.Scripting.Application;
 
-public sealed class UpsertScriptDefinitionCommandAdapter
+public sealed class RunScriptCommandAdapter
 {
     private const string CommandPublisherId = "scripting.application";
 
-    public EventEnvelope Map(UpsertScriptDefinitionCommand command, string actorId)
+    public EventEnvelope Map(RunScriptCommand command, string actorId)
     {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
@@ -16,17 +16,18 @@ public sealed class UpsertScriptDefinitionCommandAdapter
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new UpsertScriptDefinitionRequestedEvent
+            Payload = Any.Pack(new RunScriptRequestedEvent
             {
-                ScriptId = command.ScriptId ?? string.Empty,
+                RunId = command.RunId ?? string.Empty,
+                InputPayload = command.InputPayload?.Clone(),
                 ScriptRevision = command.ScriptRevision ?? string.Empty,
-                SourceText = command.SourceText ?? string.Empty,
-                SourceHash = command.SourceHash ?? string.Empty,
+                DefinitionActorId = command.DefinitionActorId ?? string.Empty,
+                RequestedEventType = command.RequestedEventType ?? string.Empty,
             }),
             PublisherId = CommandPublisherId,
             Direction = EventDirection.Self,
             TargetActorId = actorId,
-            CorrelationId = command.ScriptRevision ?? string.Empty,
+            CorrelationId = command.RunId ?? string.Empty,
         };
     }
 }

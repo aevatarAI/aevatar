@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core.Compilation;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.CodeAnalysis;
@@ -7,7 +8,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.RegularExpressions;
 
-namespace Aevatar.Scripting.Core.Compilation;
+namespace Aevatar.Scripting.Infrastructure.Compilation;
 
 public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
 {

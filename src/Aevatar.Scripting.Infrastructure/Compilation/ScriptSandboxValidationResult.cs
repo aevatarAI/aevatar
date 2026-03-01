@@ -1,4 +1,4 @@
-namespace Aevatar.Scripting.Core.Compilation;
+namespace Aevatar.Scripting.Infrastructure.Compilation;
 
 public sealed record ScriptSandboxValidationResult(
     bool IsValid,

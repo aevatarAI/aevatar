@@ -1,4 +1,6 @@
-namespace Aevatar.Scripting.Core.AI;
+using Aevatar.Scripting.Core.AI;
+
+namespace Aevatar.Scripting.Application.AI;
 
 public sealed class RoleAgentDelegateAICapability : IAICapability
 {

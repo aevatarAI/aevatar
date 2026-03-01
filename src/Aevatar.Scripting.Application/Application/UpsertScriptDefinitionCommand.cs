@@ -1,4 +1,4 @@
-namespace Aevatar.Scripting.Core.Application;
+namespace Aevatar.Scripting.Application;
 
 public sealed record UpsertScriptDefinitionCommand(
     string ScriptId,

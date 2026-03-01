@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using FluentAssertions;
 
 namespace Aevatar.Scripting.Core.Tests.Compilation;

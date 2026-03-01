@@ -101,7 +101,7 @@
 ## 7. 需求分解与状态矩阵
 | ID | 需求 | 验收标准 | 当前状态 | 证据 | 差距 |
 |---|---|---|---|---|---|
-| R-SG-01 | 脚本定义模型 | 提供 `IScriptPackageDefinition` / `IScriptPackageRuntime` 契约，覆盖请求事件处理/状态演进/读模型 reducer 声明 | Done | `src/Aevatar.Scripting.Abstractions/Definitions/*`、`src/Aevatar.Scripting.Core/Compilation/*`、`RoslynScriptPackageCompilerTests` | 动态脚本 reducer 声明机制待扩展 |
+| R-SG-01 | 脚本定义模型 | 提供 `IScriptPackageDefinition` / `IScriptPackageRuntime` 契约，覆盖请求事件处理/状态演进/读模型 reducer 声明 | Done | `src/Aevatar.Scripting.Abstractions/Definitions/*`、`src/Aevatar.Scripting.Core/Compilation/*`（抽象）+ `src/Aevatar.Scripting.Infrastructure/Compilation/*`（Roslyn 实现）、`RoslynScriptPackageCompilerTests` | 动态脚本 reducer 声明机制待扩展 |
 | R-SG-02 | 执行宿主 | 运行态由 `ScriptRuntimeGAgent` 承载执行，不直接耦合脚本定义事实 | Done | `src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs`、`test/Aevatar.Scripting.Core.Tests/Runtime/ScriptRuntimeGAgentReplayContractTests.cs` | 无 |
 | R-SG-03 | 严格 ES | 脚本写侧仅输出领域事件，由宿主调用 `PersistDomainEvent(s)` 提交并 apply | Done | `ScriptDefinitionGAgent`、`ScriptRuntimeGAgent`、`ScriptGAgentEndToEndTests` | 无 |
 | R-SG-04 | 自定义 State | 支持脚本声明状态 schema 与默认值，定义/运行分别维护 `ScriptDefinitionState` 与 `ScriptRuntimeState` | Done | `script_host_messages.proto(state_payloads/read_model_payloads)`、`ScriptRuntimeGAgentReplayContractTests.ShouldCarryStateAndReadModelPayloadBetweenRuns_ByScriptApplyAndReduce`、`RoslynScriptPackageCompilerTests.HandleRequestedEvent_ShouldAllowScriptToUseCapabilities_IncludingPublishAndSendTo` | schema 演进策略作为后续治理项 |
@@ -129,23 +129,25 @@
 目标组件：
 1. `ScriptAgentDefinitionRegistry`（Application/Infrastructure）:
 负责脚本定义的注册、版本解析、校验与查找。
-2. `ScriptAgentCompiler`（Infrastructure）:
+2. `Aevatar.Scripting.Application`（Application）:
+承载 `Run/Upsert` command 适配、`ScriptRuntimeExecutionOrchestrator` 与 `RoleAgentDelegateAICapability` 等应用编排实现，避免 Core 混入应用实现细节。
+3. `ScriptAgentCompiler`（Infrastructure）:
 将脚本编译为受限能力包（委托/表达式树/中间表示），输出可执行句柄。
-3. `ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>`（Domain）:
+4. `ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>`（Domain）:
 脚本定义事实源，负责源码字符串、版本、hash 与 schema 元数据持久化。
-4. `ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>`（Domain）:
+5. `ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>`（Domain）:
 脚本运行宿主，负责事件处理、编排推进、状态 apply 与内部事件对账。
-5. `ScriptProjectionProjector`（Projection）:
+6. `ScriptProjectionProjector`（Projection）:
 将脚本声明的 reducer 按 TypeUrl 精确路由接入既有 ProjectionCoordinator。
-6. `ScriptCapabilityHostExtensions`（Host）:
+7. `ScriptCapabilityHostExtensions`（Host）:
 仅做 DI 装配与能力开关，不承载业务编排。
-7. `ScriptAICapabilityAdapter`（Application/Infrastructure）:
+8. `ScriptAICapabilityAdapter`（Application/Infrastructure）:
 以组合方式复用 `RoleGAgent` 或 AI runtime 能力，向脚本暴露稳定 AI 能力端口。
-8. `IGAgentInvocationPort`（Application/Infrastructure）:
+9. `IGAgentInvocationPort`（Application/Infrastructure）:
 向脚本暴露“调用任意 GAgent”的统一端口，内部封装 EventEnvelope + Runtime 调用。
-9. `IGAgentFactoryPort`（Application/Infrastructure）:
+10. `IGAgentFactoryPort`（Application/Infrastructure）:
 向脚本暴露“按白名单动态创建/销毁/链接 GAgent”的统一端口，生命周期由 Runtime 管理。
-10. `ScriptBusinessScenarioTestHarness`（Application/Test）:
+11. `ScriptBusinessScenarioTestHarness`（Application/Test）:
 承载复杂业务场景（如保险理赔反欺诈）下的多智能体编排测试、回放测试和投影一致性测试。
 
 关键链路：

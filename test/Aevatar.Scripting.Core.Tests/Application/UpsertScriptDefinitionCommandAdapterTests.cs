@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Scripting.Core.Application;
+using Aevatar.Scripting.Application;
 using FluentAssertions;
 
 namespace Aevatar.Scripting.Core.Tests.Application;
