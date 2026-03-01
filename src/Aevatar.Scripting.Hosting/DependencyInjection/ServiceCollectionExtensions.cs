@@ -16,6 +16,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScriptSandboxPolicy>();
         services.TryAddSingleton<IScriptAgentCompiler, RoslynScriptAgentCompiler>();
         services.TryAddSingleton<IGAgentInvocationPort, RuntimeGAgentInvocationPort>();
+        services.TryAddSingleton<IGAgentFactoryPort, RuntimeGAgentFactoryPort>();
         services.TryAddSingleton<IAICapability>(sp =>
             new RoleAgentDelegateAICapability(sp.GetRequiredService<IRoleAgentPort>()));
 

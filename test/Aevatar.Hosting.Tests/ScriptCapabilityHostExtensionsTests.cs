@@ -46,6 +46,8 @@ public class ScriptCapabilityHostExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IGAgentInvocationPort));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(IGAgentFactoryPort));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(IAICapability));
     }
 }

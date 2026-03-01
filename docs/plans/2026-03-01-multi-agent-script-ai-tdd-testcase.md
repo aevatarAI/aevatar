@@ -187,17 +187,17 @@ sequenceDiagram
 
 ## 9. 推荐测试文件与命令
 推荐测试文件:
-1. `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/claim_orchestrator.csx`
-2. `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/role_claim_analyst.csx`
-3. `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/fraud_risk.csx`
-4. `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/compliance_rule.csx`
-5. `test/Aevatar.Integration.Tests/Fixtures/Scripts/claim/human_review.csx`
-6. `test/Aevatar.Scripting.Core.Tests/Business/ClaimScriptDecisionTests.cs`
-7. `test/Aevatar.Scripting.Core.Tests/AI/ClaimRoleIntegrationTests.cs`
-8. `test/Aevatar.Integration.Tests/ClaimOrchestrationIntegrationTests.cs`
-9. `test/Aevatar.Integration.Tests/ClaimReplayTests.cs`
-10. `test/Aevatar.CQRS.Projection.Core.Tests/ClaimReadModelProjectorTests.cs`
-11. `test/Aevatar.Integration.Tests/ClaimLifecycleBoundaryTests.cs`
+1. `test/Aevatar.Integration.Tests/Fixtures/ScriptDocuments/ClaimScriptScenarioDocument.cs`（测试内嵌字符串常量）
+2. `test/Aevatar.Integration.Tests/ClaimScriptDocumentDrivenFlexibilityTests.cs`
+3. `test/Aevatar.Integration.Tests/ScriptGAgentEndToEndTests.cs`
+
+扩展候选测试文件:
+1. `test/Aevatar.Scripting.Core.Tests/Business/ClaimScriptDecisionTests.cs`
+2. `test/Aevatar.Scripting.Core.Tests/AI/ClaimRoleIntegrationTests.cs`
+3. `test/Aevatar.Integration.Tests/ClaimOrchestrationIntegrationTests.cs`
+4. `test/Aevatar.Integration.Tests/ClaimReplayTests.cs`
+5. `test/Aevatar.CQRS.Projection.Core.Tests/ClaimReadModelProjectorTests.cs`
+6. `test/Aevatar.Integration.Tests/ClaimLifecycleBoundaryTests.cs`
 
 推荐验证命令:
 1. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --filter "*Claim*"`
@@ -212,3 +212,9 @@ sequenceDiagram
 1. 不在本测试用例中实现新的外部 DSL。
 2. 不放宽脚本沙箱能力。
 3. 不引入新的投影主链或读写双轨。
+
+## 11. 当前落地结果（2026-03-01）
+1. 已落地“测试内嵌字符串常量 -> 脚本字符串 -> 编译 -> DefinitionState 持久化”测试闭环。
+2. 已落地复杂场景内嵌脚本驱动测试，覆盖脚本集合完整性、编译与持久化。
+3. 已产出灵活性评估测试，当前结论为“尚未满足全部开发者自定义需求”，主要缺口包括:
+运行态未强制定义快照加载、运行态状态模型仍偏固定（`state_payload_json` 仍非脚本状态模型驱动）。

@@ -7,7 +7,7 @@
 - 需求基线: `docs/architecture/csharp-script-gagent-requirements.md`
 - 适用范围: `Foundation/Core/CQRS/Workflow/Host` 相关子系统
 - 文档目标: 将需求文档转化为可落地的详细架构设计与实施边界
-- 最近实现快照: 首批项目骨架、写侧主链、投影路由、Host 装配与继承守卫已落地
+- 最近实现快照: 首批项目骨架、写侧主链、投影路由、Host 装配、继承守卫、脚本 `Decide` 动态执行与 `IGAgentFactoryPort` 已落地
 
 ## 2. 设计目标与不可妥协约束
 
@@ -163,9 +163,9 @@ sequenceDiagram
 ### 7.1 编译执行流程
 1. 从 `ScriptDefinitionGAgent` 载入 `source_text + source_hash + revision`。
 2. 静态策略校验（禁用 API、命名空间白名单、类型限制）。
-3. 生成可执行句柄（委托或受限 IR）。
+3. 生成可执行句柄（委托或受限 IR），并提取 `contract manifest`（input/output/state/readmodel）。
 4. 以 `script_id + revision + schema_hash` 作为缓存键。
-5. 执行时注入 `ScriptExecutionContext`，只暴露受限端口。
+5. 执行时注入 `ScriptExecutionContext`（至少包含 `run_id/correlation_id/definition_actor_id/input_json`），只暴露受限端口。
 6. 回放场景下按定义态重编译，不依赖外部脚本仓库。
 
 ### 7.2 沙箱策略
