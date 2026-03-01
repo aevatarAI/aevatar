@@ -1,4 +1,5 @@
 using Aevatar.Bootstrap.Extensions.AI;
+using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Workflow.Extensions.AIProjection;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
@@ -22,6 +23,7 @@ public static class WorkflowCapabilityHostBuilderExtensions
         });
         builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
         builder.AddWorkflowCapability();
+        builder.AddScriptCapability();
         builder.Services.AddWorkflowAIProjectionExtensions();
 
         return builder;

@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.Hosting;
 using Aevatar.Workflow.Application.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
@@ -45,6 +46,12 @@ public class WorkflowHostingExtensionsCoverageTests
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunRequestExecutor)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>)).Should().BeTrue();
+        builder.Services
+            .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
+            .Select(x => x.ImplementationInstance)
+            .OfType<AevatarCapabilityRegistration>()
+            .Should()
+            .Contain(x => x.Name == "script");
 
         await using var provider = builder.Services.BuildServiceProvider();
         provider.GetService<ILLMProviderFactory>().Should().NotBeNull();

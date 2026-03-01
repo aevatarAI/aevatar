@@ -1,0 +1,31 @@
+using Aevatar.Foundation.Abstractions;
+using Google.Protobuf.WellKnownTypes;
+
+namespace Aevatar.Scripting.Core.Application;
+
+public sealed class RunScriptCommandAdapter
+{
+    private const string CommandPublisherId = "scripting.application";
+
+    public EventEnvelope Map(RunScriptCommand command, string actorId)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+
+        return new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new RunScriptRequestedEvent
+            {
+                RunId = command.RunId ?? string.Empty,
+                InputJson = command.InputJson ?? string.Empty,
+                ScriptRevision = command.ScriptRevision ?? string.Empty,
+            }),
+            PublisherId = CommandPublisherId,
+            Direction = EventDirection.Self,
+            TargetActorId = actorId,
+            CorrelationId = command.RunId ?? string.Empty,
+        };
+    }
+}

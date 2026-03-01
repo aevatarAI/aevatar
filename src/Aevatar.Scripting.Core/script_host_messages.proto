@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package aevatar.scripting;
+
+option csharp_namespace = "Aevatar.Scripting.Core";
+
+message ScriptHostState {
+  string script_id = 1;
+  string revision = 2;
+  string schema_hash = 3;
+  string state_payload_json = 4;
+  int64 last_applied_event_version = 5;
+  string last_event_id = 6;
+}
+
+message RunScriptRequestedEvent {
+  string run_id = 1;
+  string input_json = 2;
+  string script_revision = 3;
+}
+
+message ScriptDomainEventCommitted {
+  string run_id = 1;
+  string script_id = 2;
+  string script_revision = 3;
+  string event_type = 4;
+  string payload_json = 5;
+}

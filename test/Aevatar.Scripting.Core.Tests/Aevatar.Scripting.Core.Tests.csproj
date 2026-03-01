@@ -5,21 +5,22 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <AssemblyName>Aevatar.Hosting.Tests</AssemblyName>
-    <RootNamespace>Aevatar.Hosting.Tests</RootNamespace>
+    <AssemblyName>Aevatar.Scripting.Core.Tests</AssemblyName>
+    <RootNamespace>Aevatar.Scripting.Core.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Aevatar.Hosting\Aevatar.Hosting.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
-  </ItemGroup>
-  <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Projection\Aevatar.Scripting.Projection.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
-    <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
   </ItemGroup>
 </Project>

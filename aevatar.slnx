@@ -59,8 +59,12 @@
     <Project Path="src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     <Project Path="src\Aevatar.Hosting\Aevatar.Hosting.csproj" />
     <Project Path="src\Aevatar.Mainnet.Host.Api\Aevatar.Mainnet.Host.Api.csproj" />
-    <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
-  </Folder>
+	    <Project Path="src\Aevatar.Presentation.AGUI\Aevatar.Presentation.AGUI.csproj" />
+	    <Project Path="src\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
+	    <Project Path="src\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
+	    <Project Path="src\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
+	    <Project Path="src\Aevatar.Scripting.Projection\Aevatar.Scripting.Projection.csproj" />
+	  </Folder>
   <Folder Name="/src/workflow/">
     <Project Path="src/workflow/Aevatar.Workflow.Abstractions/Aevatar.Workflow.Abstractions.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Application.Abstractions/Aevatar.Workflow.Application.Abstractions.csproj" />
@@ -86,8 +90,9 @@
     <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Runtime.Hosting.Tests\Aevatar.Foundation.Runtime.Hosting.Tests.csproj" />
     <Project Path="test\Aevatar.Hosting.Tests\Aevatar.Hosting.Tests.csproj" />
-    <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
-    <Project Path="test\Aevatar.Workflow.Application.Tests\Aevatar.Workflow.Application.Tests.csproj" />
+	    <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
+	    <Project Path="test\Aevatar.Scripting.Core.Tests\Aevatar.Scripting.Core.Tests.csproj" />
+	    <Project Path="test\Aevatar.Workflow.Application.Tests\Aevatar.Workflow.Application.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Core.Tests\Aevatar.Workflow.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Extensions.Maker.Tests\Aevatar.Workflow.Extensions.Maker.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
