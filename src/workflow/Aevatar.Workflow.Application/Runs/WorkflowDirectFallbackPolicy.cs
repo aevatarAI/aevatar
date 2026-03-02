@@ -25,7 +25,7 @@ public sealed class WorkflowDirectFallbackPolicy
             return false;
         if (!IsWhitelistedException(ex))
             return false;
-        if (!string.IsNullOrWhiteSpace(request.WorkflowYaml))
+        if (request.WorkflowYamls is { Count: > 0 })
             return false;
 
         var workflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(request.WorkflowName);
@@ -52,6 +52,6 @@ public sealed class WorkflowDirectFallbackPolicy
         request with
         {
             WorkflowName = WorkflowRunBehaviorOptions.DirectWorkflowName,
-            WorkflowYaml = null,
+            WorkflowYamls = null,
         };
 }

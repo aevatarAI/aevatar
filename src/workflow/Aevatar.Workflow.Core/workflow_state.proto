@@ -33,4 +33,5 @@ message WorkflowState
 
   repeated SubWorkflowBinding sub_workflow_bindings = 9;
   repeated PendingSubWorkflowInvocation pending_sub_workflow_invocations = 10;
+  map<string, string> inline_workflow_yamls = 11;
 }

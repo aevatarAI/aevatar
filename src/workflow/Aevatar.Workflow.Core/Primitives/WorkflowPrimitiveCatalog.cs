@@ -49,6 +49,7 @@ public static class WorkflowPrimitiveCatalog
     [
         "transform", "assign", "retrieve_facts", "cache",
         "conditional", "switch", "checkpoint", "workflow_loop",
+        "workflow_yaml_validate",
     ];
 
     public static IReadOnlySet<string> BuiltInCanonicalTypes { get; } = DeriveBuiltInCanonicalTypes();

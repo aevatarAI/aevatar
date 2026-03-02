@@ -38,6 +38,7 @@ public static class ServiceCollectionExtensions
             services.Configure(configure);
 
         services.TryAddSingleton<WorkflowDefinitionFileLoader>();
+        services.TryAddSingleton<IFileBackedWorkflowNameCatalog, FileBackedWorkflowNameCatalog>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowDefinitionBootstrapHostedService>());
         return services;
     }

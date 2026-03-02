@@ -78,10 +78,11 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         IActor actor,
         string workflowYaml,
         string workflowName,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(actor);
-        var envelope = CreateConfigureWorkflowEnvelope(workflowYaml, workflowName);
+        var envelope = CreateConfigureWorkflowEnvelope(workflowYaml, workflowName, inlineWorkflowYamls);
         return actor.HandleEventAsync(envelope, ct);
     }
 
@@ -119,18 +120,37 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         }
     }
 
-    private static EventEnvelope CreateConfigureWorkflowEnvelope(string workflowYaml, string workflowName) =>
+    private static EventEnvelope CreateConfigureWorkflowEnvelope(
+        string workflowYaml,
+        string workflowName,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ConfigureWorkflowEvent
-            {
-                WorkflowYaml = workflowYaml ?? string.Empty,
-                WorkflowName = workflowName ?? string.Empty,
-            }),
+            Payload = Any.Pack(BuildConfigureWorkflowEvent(workflowYaml, workflowName, inlineWorkflowYamls)),
             PublisherId = WorkflowRunActorPortPublisherId,
             Direction = EventDirection.Self,
             CorrelationId = Guid.NewGuid().ToString("N"),
         };
+
+    private static ConfigureWorkflowEvent BuildConfigureWorkflowEvent(
+        string workflowYaml,
+        string workflowName,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls)
+    {
+        var configure = new ConfigureWorkflowEvent
+        {
+            WorkflowYaml = workflowYaml ?? string.Empty,
+            WorkflowName = workflowName ?? string.Empty,
+        };
+
+        if (inlineWorkflowYamls != null)
+        {
+            foreach (var (key, value) in inlineWorkflowYamls)
+                configure.InlineWorkflowYamls[key] = value;
+        }
+
+        return configure;
+    }
 }

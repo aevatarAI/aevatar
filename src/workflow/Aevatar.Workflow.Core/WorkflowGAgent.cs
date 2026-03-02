@@ -113,14 +113,22 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     public async Task ConfigureWorkflowAsync(
         string workflowYaml,
         string? workflowName,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         CancellationToken ct = default)
     {
         EnsureWorkflowNameCanBind(workflowName);
-        await PersistDomainEventAsync(new ConfigureWorkflowEvent
+        var configureWorkflowEvent = new ConfigureWorkflowEvent
         {
             WorkflowName = workflowName ?? string.Empty,
             WorkflowYaml = workflowYaml ?? string.Empty,
-        }, ct);
+        };
+        if (inlineWorkflowYamls != null)
+        {
+            foreach (var (key, value) in inlineWorkflowYamls)
+                configureWorkflowEvent.InlineWorkflowYamls[key] = value;
+        }
+
+        await PersistDomainEventAsync(configureWorkflowEvent, ct);
         RebuildCompiledWorkflowCache();
         _childAgentIds.Clear();
 
@@ -199,7 +207,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     [EventHandler]
     public async Task HandleConfigureWorkflow(ConfigureWorkflowEvent request)
     {
-        await ConfigureWorkflowAsync(request.WorkflowYaml, request.WorkflowName);
+        await ConfigureWorkflowAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls);
     }
 
     /// <summary>
@@ -316,7 +324,8 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         foreach (var role in _compiledWorkflow.Roles)
         {
             var childActorId = BuildChildActorId(role.Id);
-            var actor = await _runtime.CreateAsync(roleAgentType, childActorId);
+            var actor = await _runtime.GetAsync(childActorId)
+                        ?? await _runtime.CreateAsync(roleAgentType, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
 
             await actor.HandleEventAsync(CreateRoleAgentConfigureEnvelope(role));
@@ -393,6 +402,18 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     {
         var next = current.Clone();
         next.WorkflowYaml = evt.WorkflowYaml ?? string.Empty;
+        next.InlineWorkflowYamls.Clear();
+        foreach (var (workflowNameKey, workflowYamlValue) in evt.InlineWorkflowYamls)
+        {
+            var normalizedWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(workflowNameKey);
+            if (string.IsNullOrWhiteSpace(normalizedWorkflowName) ||
+                string.IsNullOrWhiteSpace(workflowYamlValue))
+            {
+                continue;
+            }
+
+            next.InlineWorkflowYamls[normalizedWorkflowName] = workflowYamlValue;
+        }
 
         var incomingWorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName)
             ? string.Empty

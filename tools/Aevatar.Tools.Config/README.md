@@ -10,6 +10,12 @@ dotnet pack tools/Aevatar.Tools.Config/Aevatar.Tools.Config.csproj -c Release
 dotnet tool install --global --add-source ./tools/Aevatar.Tools.Config/bin/Release aevatar-config
 ```
 
+一键重装（已安装则先卸载，未安装则跳过卸载）：
+
+```bash
+bash tools/Aevatar.Tools.Config/reinstall-tool.sh
+```
+
 ## 使用
 
 ```bash

@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -1666,10 +1667,75 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         reconfigure.Input.Should().Be("hello");
     }
 
+    [Fact]
+    public async Task DynamicWorkflowModule_WhenYamlValidationFails_ShouldEmitFailedStepAndSkipReconfigure()
+    {
+        var module = new DynamicWorkflowModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "dw-invalid",
+                StepType = "dynamic_workflow",
+                RunId = "run-dw-invalid",
+                Input = """
+                        ```yaml
+                        name: bad_flow
+                        roles: []
+                        steps:
+                          - id: bad_step
+                            type: unknown_step
+                        ```
+                        """,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<ReconfigureAndExecuteWorkflowEvent>().Should().BeEmpty();
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("Invalid workflow YAML");
+    }
+
+    [Fact]
+    public async Task WorkflowYamlValidateModule_WhenYamlIsValid_ShouldReturnCanonicalYamlFence()
+    {
+        var module = new WorkflowYamlValidateModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "validate-1",
+                StepType = "workflow_yaml_validate",
+                RunId = "run-validate-1",
+                Input = """
+                        ```yaml
+                        name: validate_ok
+                        roles: []
+                        steps:
+                          - id: done
+                            type: assign
+                            parameters:
+                              target: result
+                              value: "$input"
+                        ```
+                        """,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Contain("```yaml");
+        completed.Output.Should().Contain("name: validate_ok");
+    }
+
     private static RecordingEventHandlerContext CreateContext(IServiceProvider? services = null)
     {
         return new RecordingEventHandlerContext(
-            services ?? new ServiceCollection().BuildServiceProvider(),
+            services ?? new ServiceCollection().AddAevatarWorkflow().BuildServiceProvider(),
             new StubAgent("workflow-advanced-module-test-agent"),
             NullLogger.Instance);
     }

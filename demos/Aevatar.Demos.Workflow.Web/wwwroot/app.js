@@ -1466,10 +1466,10 @@
       pgSetAutoStatus("", "info");
     }
 
-    pgAutoCanRunFinal = snapshot.autoCanRunFinal === true;
+    pgAutoCanRunFinal = false;
     pgUpdateRunBarVisibility();
     if (pgCurrentYaml && pgParsedDef) {
-      $("#pg-run-btn").disabled = pgAutoMode ? !pgAutoCanRunFinal : false;
+      $("#pg-run-btn").disabled = pgAutoMode ? true : false;
     } else {
       $("#pg-run-btn").disabled = true;
     }
@@ -1539,6 +1539,8 @@
   let pgAutoMode = false;
   let pgAutoPhase = "idle";
   let pgAutoLlmContent = "";
+  let pgAutoValidatedYaml = "";
+  let pgAutoAbort = null;
   let pgAutoAssistantBubble = null;
   let pgAutoRunning = false;
   let pgAutoRound = 0;
@@ -1603,8 +1605,10 @@
       return;
     }
 
-    runBar.style.display = pgAutoCanRunFinal ? "" : "none";
-    $("#pg-run-btn").textContent = "Run Final Workflow";
+    // Auto mode executes final workflow in the same /api/chat run.
+    // Keep run bar hidden to avoid a second, demo-only execution path.
+    runBar.style.display = "none";
+    $("#pg-run-btn").textContent = "Run";
   }
 
   function pgSetAutoStatus(message, tone = "info") {
@@ -1743,6 +1747,8 @@
     el.querySelectorAll(".pg-msg-yaml").forEach((yamlEl) => {
       yamlEl.addEventListener("click", () => {
         const yaml = yamlEl.dataset.yaml;
+        if (!yaml) return;
+        if (pgAutoMode) return;
         pgApplyYaml(yaml);
       });
     });
@@ -1773,6 +1779,14 @@
     if (lastYaml) pgApplyYaml(lastYaml);
   }
 
+  function pgApplyValidatedAutoYaml(markdownText) {
+    const yaml = pgExtractLastYaml(markdownText || "");
+    if (!yaml) return false;
+    pgAutoValidatedYaml = yaml;
+    pgApplyYaml(yaml).catch(() => { });
+    return true;
+  }
+
   async function pgApplyYaml(yaml) {
     pgCurrentYaml = yaml;
     pgResetRun();
@@ -1790,7 +1804,7 @@
       if (data.valid && data.definition?.steps) {
         pgParsedDef = data;
         renderFlowInto($("#pg-graph"), data.definition.steps, data.edges, null);
-        $("#pg-run-btn").disabled = pgAutoMode ? !pgAutoCanRunFinal : false;
+        $("#pg-run-btn").disabled = pgAutoMode ? true : false;
       } else {
         pgParsedDef = null;
         $("#pg-run-btn").disabled = true;
@@ -1804,11 +1818,12 @@
     scheduleUiStatePersist();
   }
 
-  async function streamWorkflowChatRun(payload, onFrame) {
+  async function streamWorkflowChatRun(payload, onFrame, options = {}) {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal: options.signal,
     });
 
     if (!res.ok) {
@@ -2108,6 +2123,7 @@
     pgAutoRunId = "";
     pgAutoCommandId = "";
     pgAutoMessageBuffers = new Map();
+    pgAutoAbort = new AbortController();
     pgUpdateRunBarVisibility();
     pgSetAutoStatus("AI 正在分析需求并生成 workflow 草稿…", "info");
     $("#pg-send").disabled = true;
@@ -2117,9 +2133,9 @@
       await streamWorkflowChatRun(
         {
           prompt: text,
-          workflow: "auto_review",
         },
-        pgAutoHandleWorkflowFrame);
+        pgAutoHandleWorkflowFrame,
+        { signal: pgAutoAbort.signal });
     } catch (e) {
       if (e.name !== "AbortError") pgAddBubble("error", e.message);
     }
@@ -2131,6 +2147,7 @@
       $("#pg-send").disabled = false;
       scheduleUiStatePersist();
     }
+    pgAutoAbort = null;
   }
 
   function pgAutoHandleSseEvent(eventType, data) {
@@ -2146,6 +2163,9 @@
       pgAddLog(data.success ? "completed" : "failed",
         `${data.success ? "\u2713" : "\u2717"} ${data.stepId}`,
         data.success ? data.output : (data.error || "Failed"));
+      if (data.stepId === "validate_yaml" && data.success && data.output) {
+        pgApplyValidatedAutoYaml(data.output);
+      }
     } else if (eventType === "llm.response") {
       if (pgAutoPhase === "planning" || pgAutoPhase === "approval") {
         pgAutoLlmContent = data.content || "";
@@ -2153,7 +2173,6 @@
           pgAutoAssistantBubble = pgAddBubble("assistant", "");
         }
         pgUpdateAssistantBubble(pgAutoAssistantBubble, pgAutoLlmContent, false);
-        pgExtractAndRenderYaml(pgAutoLlmContent);
       } else {
         const finalContent = absorbInlineThinking(pgThinkingBuffers, data.role, data.content);
         flushThinkingToLog(pgThinkingBuffers, data.role, pgAddLog);
@@ -2171,7 +2190,7 @@
       if (data.suspensionType === "human_approval" && pgAutoPhase === "planning") {
         pgAutoPhase = "approval";
         pgAutoRound += 1;
-        pgSetAutoStatus(`进入人工确认（第 ${pgAutoRound} 轮）：可继续优化或确认定稿。`, "warn");
+        pgSetAutoStatus(`进入人工确认（第 ${pgAutoRound} 轮）：可继续优化，或同意后直接执行。`, "warn");
       }
       setPlaygroundInteraction({
         type: data.suspensionType || "human_input",
@@ -2206,25 +2225,16 @@
       pre.className = `result-pre ${data.success ? "success" : "failure"}`;
       if (data.success) {
         const finalText = data.output || "";
-        const finalYaml = pgExtractLastYaml(finalText) || pgExtractLastYaml(pgAutoLlmContent);
+        const finalYaml = pgAutoValidatedYaml;
         if (finalYaml) {
-          pgApplyYaml(finalYaml).then(() => {
-            pgAutoCanRunFinal = !!pgCurrentYaml && !!pgParsedDef;
-            pgUpdateRunBarVisibility();
-            $("#pg-run-btn").disabled = !pgAutoCanRunFinal;
-            if (pgAutoCanRunFinal) {
-              pgSetAutoStatus("已确认定稿。现在可点击 “Run Final Workflow” 执行。", "success");
-              pgAddBubble("assistant", "\u2705 Workflow 已定稿。确认后可运行最终版本。");
-            } else {
-              pgSetAutoStatus("已确认但 YAML 解析失败，请继续优化。", "error");
-            }
-          });
-        } else {
-          pgSetAutoStatus("本次是直接回答（无需运行 workflow）。", "info");
-          pgUpdateRunBarVisibility();
-          if (finalText) {
-            pgAddBubble("assistant", finalText);
-          }
+          pgApplyYaml(finalYaml).catch(() => { });
+        }
+        pgAutoCanRunFinal = false;
+        pgUpdateRunBarVisibility();
+        $("#pg-run-btn").disabled = true;
+        pgSetAutoStatus("执行完成：定稿 workflow 已自动运行。", "success");
+        if (finalText) {
+          pgAddBubble("assistant", finalText);
         }
       }
       setPlaygroundInteraction(null);
@@ -2246,6 +2256,7 @@
     pgLogEntries = [];
     pgThinkingBuffers = new Map();
     pgAutoLlmContent = "";
+    pgAutoValidatedYaml = "";
     pgAutoAssistantBubble = null;
     pgAutoPhase = "idle";
     pgAutoRunning = false;
@@ -2283,7 +2294,7 @@
           <strong>Review Generated Workflow</strong>
         </div>
         <div class="auto-approval-prompt">${esc(prompt)}</div>
-        <div class="auto-approval-hint">Review the YAML and flow graph in the panels above, then approve or reject with feedback.</div>
+        <div class="auto-approval-hint">Review the YAML and flow graph above. Approve to execute immediately, or reject with feedback to refine.</div>
         <textarea id="pg-auto-feedback" class="interaction-input" rows="2" placeholder="补充你的约束、偏好或修改建议…"></textarea>
         <div class="interaction-actions">
           <button id="pg-auto-approve" class="btn btn-primary">同意定稿</button>
@@ -2309,10 +2320,11 @@
           stepId,
           commandId,
           approved,
-          userInput: feedback,
+          // Approve should execute current draft directly; avoid replacing YAML with comment text.
+          userInput: approved ? "" : feedback,
         });
         if (approved) {
-          pgAddBubble("user", feedback || "同意，按这个版本定稿。");
+          pgAddBubble("user", feedback || "同意，直接执行这个版本。");
         } else {
           pgAddBubble("user", feedback || "继续优化这个 workflow。");
         }
@@ -2321,10 +2333,19 @@
           approved ? "\u270D 已同意定稿" : "\u270D 已提交优化建议",
           feedback || "(no feedback)");
         if (approved) {
-          pgAutoPhase = "finalizing";
+          if (pgAutoAbort) {
+            try { pgAutoAbort.abort(); } catch { }
+            pgAutoAbort = null;
+          }
+          pgAutoRunning = false;
+          pgAutoPhase = "executing";
           pgAutoCanRunFinal = false;
           pgUpdateRunBarVisibility();
-          pgSetAutoStatus("已同意，AI 正在产出定稿 YAML…", "info");
+          pgSetAutoStatus("已同意，正在运行定稿 workflow…", "info");
+          if (pgAutoValidatedYaml) {
+            pgCurrentYaml = pgAutoValidatedYaml;
+            await pgRunWorkflow({ forceAuto: true });
+          }
         } else {
           pgAutoPhase = "planning";
           pgAutoLlmContent = "";
@@ -2345,9 +2366,10 @@
 
   // ── Playground: Run Workflow ──
 
-  async function pgRunWorkflow() {
+  async function pgRunWorkflow(options = {}) {
+    const forceAuto = options.forceAuto === true;
     if (!pgCurrentYaml || pgRunning) return;
-    if (pgAutoMode && !pgAutoCanRunFinal) return;
+    if (pgAutoMode && !forceAuto) return;
     pgResetRun();
     pgRunning = true;
     pgRunActorId = "";
@@ -2374,7 +2396,7 @@
       await streamWorkflowChatRun(
         {
           prompt: input,
-          workflowYaml: pgCurrentYaml,
+          workflowYamls: [pgCurrentYaml],
         },
         pgHandleWorkflowFrame);
       if (pgRunning) {

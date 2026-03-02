@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
@@ -65,6 +66,7 @@ public class ChatEndpointsInternalTests
             http,
             new ChatInput { Prompt = "hello", Workflow = "missing" },
             service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
             CancellationToken.None);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
@@ -108,6 +110,7 @@ public class ChatEndpointsInternalTests
             http,
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
             CancellationToken.None);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
@@ -120,7 +123,7 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleChat_WhenWorkflowYamlProvided_ShouldForwardWorkflowYamlToRequest()
+    public async Task HandleChat_WhenWorkflowYamlsProvided_ShouldForwardWorkflowYamlsToRequest()
     {
         var http = CreateHttpContext();
         WorkflowChatRunRequest? captured = null;
@@ -142,26 +145,31 @@ public class ChatEndpointsInternalTests
             new ChatInput
             {
                 Prompt = "hello",
-                WorkflowYaml = """
-                               name: inline_direct
-                               roles:
-                                 - id: assistant
-                                   name: Assistant
-                               steps:
-                                 - id: reply
-                                   type: llm_call
-                                   role: assistant
-                               """,
+                WorkflowYamls =
+                [
+                    """
+                    name: inline_direct
+                    roles:
+                      - id: assistant
+                        name: Assistant
+                    steps:
+                      - id: reply
+                        type: llm_call
+                        role: assistant
+                    """,
+                ],
             },
             service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
             CancellationToken.None);
 
         captured.Should().NotBeNull();
-        captured!.WorkflowYaml.Should().Contain("name: inline_direct");
+        captured!.WorkflowYamls.Should().NotBeNull();
+        captured.WorkflowYamls![0].Should().Contain("name: inline_direct");
     }
 
     [Fact]
-    public async Task HandleChat_WhenWorkflowAndWorkflowYamlAreEmpty_ShouldForwardNullWorkflowFields()
+    public async Task HandleChat_WhenWorkflowAndWorkflowYamlsAreEmpty_ShouldDefaultWorkflowToAuto()
     {
         var http = CreateHttpContext();
         WorkflowChatRunRequest? captured = null;
@@ -185,11 +193,77 @@ public class ChatEndpointsInternalTests
                 Prompt = "hello",
             },
             service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
+            CancellationToken.None);
+
+        captured.Should().NotBeNull();
+        captured!.WorkflowName.Should().Be("auto");
+        captured.WorkflowYamls.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleChat_WhenWorkflowNotFileBacked_ShouldReturn404WithoutCallingService()
+    {
+        var http = CreateHttpContext();
+        var called = false;
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) =>
+            {
+                called = true;
+                return Task.FromResult(ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.None,
+                        null,
+                        null)));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello", Workflow = "non_file_workflow" },
+            service,
+            new FakeFileBackedWorkflowNameCatalog([]),
+            CancellationToken.None);
+
+        called.Should().BeFalse();
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
+    public async Task HandleChat_WhenWorkflowAndWorkflowYamlsProvided_ShouldPreferWorkflowYamls()
+    {
+        var http = CreateHttpContext();
+        WorkflowChatRunRequest? captured = null;
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (request, _, _, _) =>
+            {
+                captured = request;
+                return Task.FromResult(ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.WorkflowNotFound,
+                        null,
+                        null)));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput
+            {
+                Prompt = "hello",
+                Workflow = "missing_file",
+                WorkflowYamls = [BuildInlineWorkflowYaml("inline_from_bundle")],
+            },
+            service,
+            new FakeFileBackedWorkflowNameCatalog([]),
             CancellationToken.None);
 
         captured.Should().NotBeNull();
         captured!.WorkflowName.Should().BeNull();
-        captured.WorkflowYaml.Should().BeNull();
+        captured.WorkflowYamls.Should().NotBeNull();
+        captured.WorkflowYamls![0].Should().Contain("name: inline_from_bundle");
     }
 
     [Fact]
@@ -205,6 +279,7 @@ public class ChatEndpointsInternalTests
             http,
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
             CancellationToken.None);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status500InternalServerError);
@@ -231,6 +306,7 @@ public class ChatEndpointsInternalTests
             http,
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
             CancellationToken.None);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
@@ -369,6 +445,7 @@ public class ChatEndpointsInternalTests
         var result = await WorkflowCapabilityEndpoints.HandleCommand(
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
             CancellationToken.None);
 
@@ -377,6 +454,42 @@ public class ChatEndpointsInternalTests
 
         statusCode.Should().Be(StatusCodes.Status202Accepted);
         doc.RootElement.GetProperty("commandId").GetString().Should().Be("cmd-1");
+    }
+
+    [Fact]
+    public async Task HandleCommand_WhenWorkflowAndWorkflowYamlsAreEmpty_ShouldDefaultWorkflowToAuto()
+    {
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        WorkflowChatRunRequest? captured = null;
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = async (request, _, onStartedAsync, ct) =>
+            {
+                captured = request;
+                var started = new WorkflowChatRunStarted("actor-1", request.WorkflowName ?? "unknown", "cmd-1");
+                if (onStartedAsync != null)
+                    await onStartedAsync(started, ct);
+
+                return ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.None,
+                        started,
+                        new WorkflowChatRunFinalizeResult(
+                            WorkflowProjectionCompletionStatus.Completed,
+                            true)));
+            },
+        };
+
+        _ = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello" },
+            service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
+            loggerFactory,
+            CancellationToken.None);
+
+        captured.Should().NotBeNull();
+        captured!.WorkflowName.Should().Be("auto");
+        captured.WorkflowYamls.Should().BeNull();
     }
 
     [Fact]
@@ -389,6 +502,7 @@ public class ChatEndpointsInternalTests
             http,
             new ChatInput { Prompt = "  " },
             service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
             CancellationToken.None);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
@@ -403,6 +517,7 @@ public class ChatEndpointsInternalTests
         var result = await WorkflowCapabilityEndpoints.HandleCommand(
             new ChatInput { Prompt = "" },
             service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
             CancellationToken.None);
 
@@ -425,6 +540,7 @@ public class ChatEndpointsInternalTests
         var result = await WorkflowCapabilityEndpoints.HandleCommand(
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
             CancellationToken.None);
 
@@ -436,7 +552,7 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleCommand_WhenWorkflowYamlInvalid_ShouldReturn400WithStructuredCode()
+    public async Task HandleCommand_WhenWorkflowYamlsInvalid_ShouldReturn400WithStructuredCode()
     {
         using var loggerFactory = LoggerFactory.Create(_ => { });
         var service = new FakeChatRunApplicationService
@@ -452,9 +568,10 @@ public class ChatEndpointsInternalTests
             new ChatInput
             {
                 Prompt = "hello",
-                WorkflowYaml = "invalid",
+                WorkflowYamls = ["invalid"],
             },
             service,
+            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
             CancellationToken.None);
 
@@ -670,6 +787,18 @@ public class ChatEndpointsInternalTests
         return (http.Response.StatusCode, body);
     }
 
+    private static string BuildInlineWorkflowYaml(string workflowName) =>
+        $$"""
+        name: {{workflowName}}
+        roles:
+          - id: assistant
+            name: Assistant
+        steps:
+          - id: reply
+            type: llm_call
+            role: assistant
+        """;
+
     private sealed class FakeChatRunApplicationService : ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>
     {
         public Func<WorkflowChatRunRequest, Func<WorkflowOutputFrame, CancellationToken, ValueTask>, Func<WorkflowChatRunStarted, CancellationToken, ValueTask>?, CancellationToken, Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>>
@@ -794,9 +923,31 @@ public class ChatEndpointsInternalTests
         public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
         public Task<bool> IsWorkflowActorAsync(IActor actor, CancellationToken ct = default) => Task.FromResult(IsWorkflowActorValue);
         public Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default) => Task.FromResult<string?>(null);
-        public Task ConfigureWorkflowAsync(IActor actor, string workflowYaml, string workflowName, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ConfigureWorkflowAsync(
+            IActor actor,
+            string workflowYaml,
+            string workflowName,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            CancellationToken ct = default) => Task.CompletedTask;
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             Task.FromResult(WorkflowYamlParseResult.Success("test"));
+    }
+
+    private sealed class AllowAllFileBackedWorkflowNameCatalog : IFileBackedWorkflowNameCatalog
+    {
+        public bool Contains(string workflowName) => true;
+    }
+
+    private sealed class FakeFileBackedWorkflowNameCatalog : IFileBackedWorkflowNameCatalog
+    {
+        private readonly ISet<string> _names;
+
+        public FakeFileBackedWorkflowNameCatalog(IEnumerable<string> names)
+        {
+            _names = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+        }
+
+        public bool Contains(string workflowName) => _names.Contains(workflowName);
     }
 
     private sealed class RecordingActor : IActor

@@ -7,10 +7,23 @@ internal static class ChatCapabilityMessageTypes
 
 public sealed record ChatInput
 {
+    /// <summary>User prompt for this chat run.</summary>
     public required string Prompt { get; init; }
+
+    /// <summary>
+    /// File-backed workflow name lookup only.
+    /// This field does not accept inline YAML semantics.
+    /// </summary>
     public string? Workflow { get; init; }
+
     public string? AgentId { get; init; }
-    public string? WorkflowYaml { get; init; }
+
+    /// <summary>
+    /// Inline workflow YAML bundle for this request.
+    /// The first item is treated as the entry workflow.
+    /// If present, this field takes precedence over <see cref="Workflow"/>.
+    /// </summary>
+    public IReadOnlyList<string>? WorkflowYamls { get; init; }
 }
 
 public sealed record WorkflowResumeInput

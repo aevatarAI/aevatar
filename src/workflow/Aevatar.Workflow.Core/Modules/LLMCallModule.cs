@@ -23,7 +23,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>LLM call module. Sends ChatRequestEvent to a specific RoleGAgent by ID.</summary>
 public sealed class LLMCallModule : IEventModule
 {
-    private const int DefaultLlmTimeoutMs = 60_000;
+    private const int DefaultLlmTimeoutMs = 1_800_000;
     private const string LlmTimeoutMetadataKey = "aevatar.llm_timeout_ms";
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
 

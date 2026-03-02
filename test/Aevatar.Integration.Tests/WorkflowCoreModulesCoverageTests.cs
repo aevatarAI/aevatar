@@ -611,7 +611,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
         chat.Prompt.Should().Be("system\n\nquestion");
         chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1"));
-        chat.Metadata["aevatar.llm_timeout_ms"].Should().Be("60000");
+        chat.Metadata["aevatar.llm_timeout_ms"].Should().Be("1800000");
         ctx.Published.Last().direction.Should().Be(EventDirection.Self);
     }
 

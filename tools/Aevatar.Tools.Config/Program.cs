@@ -211,17 +211,47 @@ app.MapPost("/api/llm/instance", (UpsertLLMInstanceRequest req, ISecretsStore se
     var apiKeyPath = $"LLMProviders:Providers:{name}:ApiKey";
     var apiKey = (req.ApiKey ?? "").Trim();
     var copyFrom = (req.CopyApiKeyFrom ?? "").Trim();
-    if (!string.IsNullOrEmpty(apiKey)) secrets.Set(apiKeyPath, apiKey);
+    var forceCopyFrom = req.ForceCopyApiKeyFrom == true;
+    var hasExistingApiKey =
+        secrets.TryGet(apiKeyPath, out var existingApiKey) &&
+        !string.IsNullOrWhiteSpace(existingApiKey);
+    var apiKeyCopiedFrom = string.Empty;
+    var apiKeyCopySkipped = false;
+
+    if (!string.IsNullOrEmpty(apiKey))
+    {
+        secrets.Set(apiKeyPath, apiKey);
+    }
     else if (!string.IsNullOrEmpty(copyFrom))
     {
-        var fromPath = $"LLMProviders:Providers:{copyFrom}:ApiKey";
-        if (!secrets.TryGet(fromPath, out var fromKey) || string.IsNullOrWhiteSpace(fromKey))
-            return Results.BadRequest(new { ok = false, error = "copyApiKeyFrom has no configured apiKey" });
-        secrets.Set(apiKeyPath, fromKey!.Trim());
+        // Safety guard: do not overwrite an already configured key unless the UI
+        // explicitly opts in to a copy action (prevents accidental reuse).
+        if (hasExistingApiKey && !forceCopyFrom)
+        {
+            apiKeyCopySkipped = true;
+        }
+        else
+        {
+            var fromPath = $"LLMProviders:Providers:{copyFrom}:ApiKey";
+            if (!secrets.TryGet(fromPath, out var fromKey) || string.IsNullOrWhiteSpace(fromKey))
+                return Results.BadRequest(new { ok = false, error = "copyApiKeyFrom has no configured apiKey" });
+
+            secrets.Set(apiKeyPath, fromKey!.Trim());
+            apiKeyCopiedFrom = copyFrom;
+        }
     }
     EnsureDefaultProviderKeyBestEffort(secrets, name);
     var resolved = LLMProviderResolver.Resolve(secrets, name);
-    return Results.Json(new { ok = true, providerName = name, providerType, keyPaths = new[] { $"LLMProviders:Providers:{name}:ProviderType", $"LLMProviders:Providers:{name}:Model", endpointPath, apiKeyPath }, provider = resolved.Public });
+    return Results.Json(new
+    {
+        ok = true,
+        providerName = name,
+        providerType,
+        keyPaths = new[] { $"LLMProviders:Providers:{name}:ProviderType", $"LLMProviders:Providers:{name}:Model", endpointPath, apiKeyPath },
+        apiKeyCopiedFrom,
+        apiKeyCopySkipped,
+        provider = resolved.Public
+    });
 });
 app.MapDelete("/api/llm/api-key/{providerName}", (string providerName, ISecretsStore secrets, HttpContext http) =>
 {

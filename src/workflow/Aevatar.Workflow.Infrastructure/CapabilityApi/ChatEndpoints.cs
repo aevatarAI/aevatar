@@ -3,10 +3,12 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
 
@@ -53,6 +55,7 @@ public static class WorkflowCapabilityEndpoints
         HttpContext http,
         ChatInput input,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        [FromServices] IFileBackedWorkflowNameCatalog fileBackedWorkflowNames,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(input.Prompt))
@@ -68,8 +71,21 @@ public static class WorkflowCapabilityEndpoints
 
         try
         {
+            var normalizedRequest = ChatRunRequestNormalizer.Normalize(input, fileBackedWorkflowNames);
+            if (!normalizedRequest.Succeeded)
+            {
+                var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    ChatRunStartErrorMapper.ToHttpStatusCode(normalizedRequest.Error),
+                    code,
+                    message,
+                    ct);
+                return;
+            }
+
             var result = await chatRunService.ExecuteAsync(
-                new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId, input.WorkflowYaml),
+                normalizedRequest.Request!,
                 (frame, token) => writer.WriteAsync(frame, token),
                 onStartedAsync: async (started, token) =>
                 {
@@ -113,6 +129,7 @@ public static class WorkflowCapabilityEndpoints
     internal static async Task<IResult> HandleCommand(
         ChatInput input,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        [FromServices] IFileBackedWorkflowNameCatalog fileBackedWorkflowNames,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
@@ -131,8 +148,21 @@ public static class WorkflowCapabilityEndpoints
 
         try
         {
+            var normalizedRequest = ChatRunRequestNormalizer.Normalize(input, fileBackedWorkflowNames);
+            if (!normalizedRequest.Succeeded)
+            {
+                var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
+                return Results.Json(
+                    new
+                    {
+                        code,
+                        message,
+                    },
+                    statusCode: ChatRunStartErrorMapper.ToHttpStatusCode(normalizedRequest.Error));
+            }
+
             executionTask = chatRunService.ExecuteAsync(
-                new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId, input.WorkflowYaml),
+                normalizedRequest.Request!,
                 static (_, _) => ValueTask.CompletedTask,
                 onStartedAsync: (started, _) =>
                 {
@@ -403,6 +433,7 @@ public static class WorkflowCapabilityEndpoints
     internal static async Task HandleChatWebSocket(
         HttpContext http,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        [FromServices] IFileBackedWorkflowNameCatalog fileBackedWorkflowNames,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
@@ -435,7 +466,7 @@ public static class WorkflowCapabilityEndpoints
             }
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, ct);
+            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, fileBackedWorkflowNames, ct);
         }
         catch (OperationCanceledException)
         {

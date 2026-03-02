@@ -25,36 +25,26 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         CancellationToken ct = default)
     {
         var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(request.WorkflowName);
-        var hasInlineWorkflowYaml = !string.IsNullOrWhiteSpace(request.WorkflowYaml);
+        var inlineWorkflowYamls = request.WorkflowYamls?.ToList() ?? [];
+        var hasInlineWorkflowYamls = inlineWorkflowYamls.Count > 0;
         var hasRequestedWorkflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName);
-        var workflowNameForRun = hasRequestedWorkflowName
+        var workflowNameForRun = hasInlineWorkflowYamls
+            ? string.Empty
+            : hasRequestedWorkflowName
             ? requestedWorkflowName
-            : hasInlineWorkflowYaml
-                ? string.Empty
-                : ResolveDefaultWorkflowName();
+            : ResolveDefaultWorkflowName();
         var workflowYamlForRun = string.Empty;
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamlMapForRun = null;
 
-        if (hasInlineWorkflowYaml)
+        if (hasInlineWorkflowYamls)
         {
-            var parseResult = await _actorPort.ParseWorkflowYamlAsync(request.WorkflowYaml!, ct);
-            if (!parseResult.Succeeded)
+            var inlineBundle = await BuildInlineWorkflowBundleAsync(inlineWorkflowYamls, ct);
+            if (!inlineBundle.Succeeded)
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.InvalidWorkflowYaml);
 
-            var inlineWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(parseResult.WorkflowName);
-            if (string.IsNullOrWhiteSpace(inlineWorkflowName))
-                return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.InvalidWorkflowYaml);
-
-            if (hasRequestedWorkflowName &&
-                !string.Equals(requestedWorkflowName, inlineWorkflowName, StringComparison.OrdinalIgnoreCase))
-            {
-                return new WorkflowActorResolutionResult(
-                    null,
-                    inlineWorkflowName,
-                    WorkflowChatRunStartError.WorkflowNameMismatch);
-            }
-
-            workflowNameForRun = inlineWorkflowName;
-            workflowYamlForRun = request.WorkflowYaml!;
+            workflowNameForRun = inlineBundle.EntryWorkflowName;
+            workflowYamlForRun = inlineBundle.EntryWorkflowYaml;
+            inlineWorkflowYamlMapForRun = inlineBundle.WorkflowYamlsByName;
         }
 
         if (!string.IsNullOrWhiteSpace(request.ActorId))
@@ -69,7 +59,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             var boundWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(await _actorPort.GetBoundWorkflowNameAsync(existing, ct));
             if (string.IsNullOrWhiteSpace(boundWorkflowName))
             {
-                if (!hasInlineWorkflowYaml)
+                if (!hasInlineWorkflowYamls)
                 {
                     return new WorkflowActorResolutionResult(
                         null,
@@ -81,11 +71,12 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     existing,
                     workflowYamlForRun,
                     workflowNameForRun,
+                    inlineWorkflowYamlMapForRun,
                     ct);
                 return new WorkflowActorResolutionResult(existing, workflowNameForRun, WorkflowChatRunStartError.None);
             }
 
-            if (hasInlineWorkflowYaml &&
+            if (hasInlineWorkflowYamls &&
                 !string.Equals(workflowNameForRun, boundWorkflowName, StringComparison.OrdinalIgnoreCase))
             {
                 return new WorkflowActorResolutionResult(
@@ -94,7 +85,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     WorkflowChatRunStartError.WorkflowBindingMismatch);
             }
 
-            if (!hasInlineWorkflowYaml &&
+            if (!hasInlineWorkflowYamls &&
                 hasRequestedWorkflowName &&
                 !string.Equals(requestedWorkflowName, boundWorkflowName, StringComparison.OrdinalIgnoreCase))
             {
@@ -104,19 +95,20 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     WorkflowChatRunStartError.WorkflowBindingMismatch);
             }
 
-            if (hasInlineWorkflowYaml)
+            if (hasInlineWorkflowYamls)
             {
                 await ConfigureWorkflowForRunAsync(
                     existing,
                     workflowYamlForRun,
                     boundWorkflowName,
+                    inlineWorkflowYamlMapForRun,
                     ct);
             }
 
             return new WorkflowActorResolutionResult(existing, boundWorkflowName, WorkflowChatRunStartError.None);
         }
 
-        if (!hasInlineWorkflowYaml)
+        if (!hasInlineWorkflowYamls)
         {
             var yaml = _workflowRegistry.GetYaml(workflowNameForRun);
             if (yaml == null)
@@ -125,12 +117,13 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         }
 
         var actor = await _actorPort.CreateAsync(ct);
-        if (hasInlineWorkflowYaml)
+        if (hasInlineWorkflowYamls)
         {
             await ConfigureWorkflowForRunAsync(
                 actor,
                 workflowYamlForRun,
                 workflowNameForRun,
+                inlineWorkflowYamlMapForRun,
                 ct);
         }
         else
@@ -139,6 +132,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 actor,
                 workflowYamlForRun,
                 workflowNameForRun,
+                null,
                 ct);
         }
 
@@ -149,20 +143,22 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         IActor actor,
         string workflowYaml,
         string workflowName,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         CancellationToken ct)
     {
-        await _actorPort.ConfigureWorkflowAsync(actor, workflowYaml, workflowName, ct);
+        await _actorPort.ConfigureWorkflowAsync(actor, workflowYaml, workflowName, inlineWorkflowYamls, ct);
     }
 
     private async Task ConfigureWorkflowForRunWithFallbackWrapAsync(
         IActor actor,
         string workflowYaml,
         string workflowName,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         CancellationToken ct)
     {
         try
         {
-            await _actorPort.ConfigureWorkflowAsync(actor, workflowYaml, workflowName, ct);
+            await _actorPort.ConfigureWorkflowAsync(actor, workflowYaml, workflowName, inlineWorkflowYamls, ct);
         }
         catch (Exception ex) when (ex is not WorkflowDirectFallbackTriggerException)
         {
@@ -181,5 +177,62 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         return string.IsNullOrWhiteSpace(configuredDefault)
             ? WorkflowRunBehaviorOptions.DirectWorkflowName
             : configuredDefault;
+    }
+
+    private async Task<InlineWorkflowBundle> BuildInlineWorkflowBundleAsync(
+        IReadOnlyList<string> inlineWorkflowYamls,
+        CancellationToken ct)
+    {
+        if (inlineWorkflowYamls.Count == 0)
+            return InlineWorkflowBundle.Invalid;
+
+        var workflowByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string entryWorkflowName = string.Empty;
+        string entryWorkflowYaml = string.Empty;
+
+        for (var i = 0; i < inlineWorkflowYamls.Count; i++)
+        {
+            var yaml = inlineWorkflowYamls[i];
+            if (string.IsNullOrWhiteSpace(yaml))
+                return InlineWorkflowBundle.Invalid;
+
+            var parseResult = await _actorPort.ParseWorkflowYamlAsync(yaml, ct);
+            if (!parseResult.Succeeded)
+                return InlineWorkflowBundle.Invalid;
+
+            var workflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(parseResult.WorkflowName);
+            if (string.IsNullOrWhiteSpace(workflowName))
+                return InlineWorkflowBundle.Invalid;
+            if (!workflowByName.TryAdd(workflowName, yaml))
+                return InlineWorkflowBundle.Invalid;
+
+            if (i == 0)
+            {
+                entryWorkflowName = workflowName;
+                entryWorkflowYaml = yaml;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(entryWorkflowName) || string.IsNullOrWhiteSpace(entryWorkflowYaml))
+            return InlineWorkflowBundle.Invalid;
+
+        return new InlineWorkflowBundle(
+            true,
+            entryWorkflowName,
+            entryWorkflowYaml,
+            workflowByName);
+    }
+
+    private readonly record struct InlineWorkflowBundle(
+        bool Succeeded,
+        string EntryWorkflowName,
+        string EntryWorkflowYaml,
+        IReadOnlyDictionary<string, string> WorkflowYamlsByName)
+    {
+        public static InlineWorkflowBundle Invalid { get; } = new(
+            false,
+            string.Empty,
+            string.Empty,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
     }
 }

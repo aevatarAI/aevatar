@@ -324,6 +324,31 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task HandleReconfigureAndExecute_WhenRoleActorAlreadyExists_ShouldReuseExistingActor()
+    {
+        var publisher = new RecordingEventPublisher();
+        var runtime = new RecordingActorRuntime { ThrowOnDuplicateCreate = true };
+        var resolver = new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
+        var agent = CreateAgent(runtime, resolver);
+        agent.EventPublisher = publisher;
+
+        await agent.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_same", "RoleSame"), "wf_valid");
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
+        runtime.CreateCalls.Should().Be(1);
+
+        await agent.HandleReconfigureAndExecute(new ReconfigureAndExecuteWorkflowEvent
+        {
+            WorkflowYaml = BuildValidWorkflowYaml("role_same", "RoleSame"),
+            Input = "dynamic-input",
+        });
+
+        runtime.CreateCalls.Should().Be(1, "reconfigure should reuse existing role actor id instead of creating duplicate");
+        runtime.Linked.Should().Contain(x => x.parent == agent.Id && x.child.EndsWith(":role_same", StringComparison.Ordinal));
+        publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>()
+            .Should().Contain(x => x.Input == "dynamic-input");
+    }
+
+    [Fact]
     public async Task HandleReconfigureAndExecute_WhenSingletonBindingIsIdleAndUnreferenced_ShouldEvictBinding()
     {
         var runtime = new RecordingActorRuntime();
@@ -977,6 +1002,7 @@ public class WorkflowGAgentCoverageTests
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {
+        public bool ThrowOnDuplicateCreate { get; init; }
         public int CreateCalls { get; private set; }
         public List<IActor> CreatedActors { get; } = [];
         public List<(string parent, string child)> Linked { get; } = [];
@@ -990,8 +1016,17 @@ public class WorkflowGAgentCoverageTests
 
         public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
         {
+            var actorId = id ?? $"actor-{CreateCalls + 1}";
+            var existing = CreatedActors.FirstOrDefault(x => x.Id == actorId);
+            if (existing != null)
+            {
+                if (ThrowOnDuplicateCreate)
+                    throw new InvalidOperationException($"Actor {actorId} already exists");
+
+                return Task.FromResult(existing);
+            }
+
             CreateCalls++;
-            var actorId = id ?? $"actor-{CreateCalls}";
             IAgent agent = agentType == typeof(FakeRoleAgent)
                 ? new FakeRoleAgent(actorId)
                 : new FakeNonRoleAgent(actorId);

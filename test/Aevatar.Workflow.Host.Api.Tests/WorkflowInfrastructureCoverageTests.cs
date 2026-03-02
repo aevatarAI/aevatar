@@ -214,7 +214,7 @@ public sealed class WorkflowInfrastructureCoverageTests
         (await port.GetBoundWorkflowNameAsync(unknownActor, CancellationToken.None)).Should().BeNull();
 
         var recordingActor = new StubActor("wf-actor", new StubAgent("wf-agent"));
-        await port.ConfigureWorkflowAsync(recordingActor, "name: x", "x", CancellationToken.None);
+        await port.ConfigureWorkflowAsync(recordingActor, "name: x", "x", null, CancellationToken.None);
         recordingActor.LastHandledEnvelope.Should().NotBeNull();
         recordingActor.LastHandledEnvelope!.Payload.Should().NotBeNull();
         recordingActor.LastHandledEnvelope.Payload!.Is(ConfigureWorkflowEvent.Descriptor).Should().BeTrue();

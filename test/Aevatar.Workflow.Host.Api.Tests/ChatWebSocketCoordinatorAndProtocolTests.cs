@@ -5,6 +5,7 @@ using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -39,10 +40,11 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             {
                 Prompt = "hello",
                 Workflow = "direct",
-                WorkflowYaml = "name: direct",
+                WorkflowYamls = ["name: direct"],
                 AgentId = "actor-1",
             }, WebSocketMessageType.Text),
             service,
+            new FakeFileBackedWorkflowNameCatalog([]),
             CancellationToken.None);
 
         var types = socket.SentTexts
@@ -55,7 +57,9 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
         service.LastCommand.Should().NotBeNull();
         service.LastCommand!.Prompt.Should().Be("hello");
-        service.LastCommand.WorkflowYaml.Should().Be("name: direct");
+        service.LastCommand.WorkflowName.Should().BeNull();
+        service.LastCommand.WorkflowYamls.Should().NotBeNull();
+        service.LastCommand.WorkflowYamls![0].Should().Be("name: direct");
     }
 
     [Fact]
@@ -75,6 +79,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             socket,
             new ChatWebSocketCommandEnvelope("req-2", new ChatInput { Prompt = "hello" }, WebSocketMessageType.Text),
             service,
+            new FakeFileBackedWorkflowNameCatalog([]),
             CancellationToken.None);
 
         socket.SentTexts.Should().ContainSingle();
@@ -82,6 +87,8 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("WORKFLOW_NOT_FOUND");
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
+        service.LastCommand.Should().NotBeNull();
+        service.LastCommand!.WorkflowName.Should().Be("auto");
     }
 
     [Fact]
@@ -187,6 +194,18 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             LastCommand = command;
             return Handler(command, emitAsync, onStartedAsync, ct);
         }
+    }
+
+    private sealed class FakeFileBackedWorkflowNameCatalog : IFileBackedWorkflowNameCatalog
+    {
+        private readonly ISet<string> _names;
+
+        public FakeFileBackedWorkflowNameCatalog(IEnumerable<string> names)
+        {
+            _names = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+        }
+
+        public bool Contains(string workflowName) => _names.Contains(workflowName);
     }
 
     private sealed class FakeWebSocket : WebSocket

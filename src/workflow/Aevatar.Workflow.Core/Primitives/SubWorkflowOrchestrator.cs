@@ -300,7 +300,7 @@ internal sealed class SubWorkflowOrchestrator
         var normalizedWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(workflowName);
         var normalizedLifecycle = WorkflowCallLifecycle.Normalize(lifecycle);
         if (!string.Equals(normalizedLifecycle, WorkflowCallLifecycle.Singleton, StringComparison.OrdinalIgnoreCase))
-            return await CreateSubWorkflowActorAsync(normalizedWorkflowName, normalizedLifecycle, persistBinding: false, ct);
+            return await CreateSubWorkflowActorAsync(normalizedWorkflowName, normalizedLifecycle, state, persistBinding: false, ct);
 
         var existingBinding = state.SubWorkflowBindings.FirstOrDefault(x =>
             string.Equals(x.WorkflowName, normalizedWorkflowName, StringComparison.OrdinalIgnoreCase) &&
@@ -317,23 +317,24 @@ internal sealed class SubWorkflowOrchestrator
             }
         }
 
-        return await CreateSubWorkflowActorAsync(normalizedWorkflowName, normalizedLifecycle, persistBinding: true, ct);
+        return await CreateSubWorkflowActorAsync(normalizedWorkflowName, normalizedLifecycle, state, persistBinding: true, ct);
     }
 
     private async Task<IActor> CreateSubWorkflowActorAsync(
         string workflowName,
         string lifecycle,
+        WorkflowState state,
         bool persistBinding,
         CancellationToken ct)
     {
-        var workflowYaml = await ResolveWorkflowYamlAsync(workflowName, ct);
+        var workflowYaml = await ResolveWorkflowYamlAsync(workflowName, state, ct);
         if (string.IsNullOrWhiteSpace(workflowYaml))
             throw new InvalidOperationException($"workflow_call references unregistered workflow '{workflowName}'");
 
         var childActorId = BuildSubWorkflowActorId(workflowName, lifecycle);
         var childActor = await ResolveOrCreateWorkflowActorByIdAsync(childActorId);
         await _runtime.LinkAsync(_ownerActorIdAccessor(), childActor.Id);
-        await childActor.HandleEventAsync(CreateWorkflowConfigureEnvelope(workflowYaml, workflowName));
+        await childActor.HandleEventAsync(CreateWorkflowConfigureEnvelope(workflowYaml, workflowName, state));
 
         if (persistBinding)
         {
@@ -348,8 +349,12 @@ internal sealed class SubWorkflowOrchestrator
         return childActor;
     }
 
-    private async Task<string?> ResolveWorkflowYamlAsync(string workflowName, CancellationToken ct)
+    private async Task<string?> ResolveWorkflowYamlAsync(string workflowName, WorkflowState state, CancellationToken ct)
     {
+        var inlineYaml = TryResolveInlineWorkflowYaml(workflowName, state);
+        if (!string.IsNullOrWhiteSpace(inlineYaml))
+            return inlineYaml;
+
         var resolver = ResolveWorkflowDefinitionResolver();
         if (resolver == null)
         {
@@ -362,6 +367,20 @@ internal sealed class SubWorkflowOrchestrator
 
     private IWorkflowDefinitionResolver? ResolveWorkflowDefinitionResolver() =>
         _workflowDefinitionResolver ?? _serviceProviderAccessor()?.GetService<IWorkflowDefinitionResolver>();
+
+    private static string? TryResolveInlineWorkflowYaml(string workflowName, WorkflowState state)
+    {
+        if (state.InlineWorkflowYamls.Count == 0)
+            return null;
+
+        foreach (var (registeredName, yaml) in state.InlineWorkflowYamls)
+        {
+            if (string.Equals(registeredName, workflowName, StringComparison.OrdinalIgnoreCase))
+                return yaml;
+        }
+
+        return null;
+    }
 
     private async Task PublishWorkflowCallFailureAsync(
         string parentStepId,
@@ -444,12 +463,17 @@ internal sealed class SubWorkflowOrchestrator
         }
     }
 
-    private EventEnvelope CreateWorkflowConfigureEnvelope(string workflowYaml, string workflowName)
+    private EventEnvelope CreateWorkflowConfigureEnvelope(string workflowYaml, string workflowName, WorkflowState state)
     {
+        var inlineWorkflowYamls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in state.InlineWorkflowYamls)
+            inlineWorkflowYamls[key] = value;
+
         var configure = new ConfigureWorkflowEvent
         {
             WorkflowYaml = workflowYaml ?? string.Empty,
             WorkflowName = workflowName ?? string.Empty,
+            InlineWorkflowYamls = { inlineWorkflowYamls },
         };
 
         return new EventEnvelope
