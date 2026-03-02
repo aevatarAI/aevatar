@@ -4,7 +4,10 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Context;
 
 internal static class OrleansAgentContextRequestContext
 {
-    private static readonly string Prefix = AgentContextPropagator.MetadataPrefix;
+    // Orleans RequestContext uses reserved internal headers with leading "__".
+    // Use a dedicated non-reserved prefix for RPC propagation keys.
+    internal const string RequestContextPrefix = "aevatarac_";
+    private static readonly string Prefix = RequestContextPrefix;
 
     public static bool HasAnyContextKeys() => EnumerateContextKeys().Any();
 
@@ -40,6 +43,11 @@ internal static class OrleansAgentContextRequestContext
     public static void ReplaceFromContext(IAgentContext context)
     {
         ClearContextKeys();
+        UpsertFromContext(context);
+    }
+
+    public static void UpsertFromContext(IAgentContext context)
+    {
         foreach (var (key, value) in context.GetAll())
         {
             if (value == null)
@@ -61,7 +69,7 @@ internal static class OrleansAgentContextRequestContext
 
 internal sealed class RequestContextAgentContext : IAgentContext
 {
-    private static readonly string Prefix = AgentContextPropagator.MetadataPrefix;
+    private static readonly string Prefix = OrleansAgentContextRequestContext.RequestContextPrefix;
 
     public T? Get<T>(string key)
     {

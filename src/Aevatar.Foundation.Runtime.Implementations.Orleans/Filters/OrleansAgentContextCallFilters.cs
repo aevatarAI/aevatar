@@ -65,10 +65,8 @@ public sealed class OrleansAgentContextOutgoingFilter : IOutgoingGrainCallFilter
         try
         {
             var agentContext = _contextAccessor.Context;
-            if (agentContext == null)
-                OrleansAgentContextRequestContext.ClearContextKeys();
-            else
-                OrleansAgentContextRequestContext.ReplaceFromContext(agentContext);
+            if (agentContext != null)
+                OrleansAgentContextRequestContext.UpsertFromContext(agentContext);
         }
         catch (Exception ex)
         {

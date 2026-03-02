@@ -29,8 +29,8 @@ public sealed class AsyncLocalAgentContextAccessor : IAgentContextAccessor
 public static class AgentContextPropagator
 {
     /// <summary>
-    /// Metadata key prefix for AgentContext propagation (RequestContext / EventEnvelope.Metadata).
-    /// OrleansAgentContextAccessor and filters MUST use this constant for key-space isolation.
+    /// Metadata key prefix for AgentContext propagation in EventEnvelope.Metadata.
+    /// Orleans RPC RequestContext uses a dedicated non-reserved prefix.
     /// </summary>
     public const string MetadataPrefix = "__ctx_";
 
