@@ -103,7 +103,7 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
 
     ["16_cache"] = "What is the difference between SQL and NoSQL databases?",
 
-    ["48_workflow_call_multilevel"] = """
+    ["49_workflow_call_multilevel"] = """
           apple  
         banana
           apple
@@ -115,7 +115,7 @@ var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCas
 {
     "01_transform", "02_guard", "03_conditional", "04_switch",
     "05_assign", "06_retrieve_facts", "07_pipeline",
-    "48_workflow_call_multilevel",
+    "49_workflow_call_multilevel",
 };
 
 // ─── Parse CLI ───

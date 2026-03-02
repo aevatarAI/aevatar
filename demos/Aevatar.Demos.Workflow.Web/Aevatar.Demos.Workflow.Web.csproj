@@ -18,4 +18,7 @@
     <ProjectReference Include="..\..\src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Update="connectors\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -34,6 +34,9 @@
   const WORKFLOW_GROUP_ORDER = [
     "start-here",
     "custom-step-modules",
+    "connector-integration",
+    "ergonomic-aliases",
+    "integration-utility",
     "role-event-modules",
     "human-interaction-manual",
     "human-interaction-legacy",
@@ -45,6 +48,9 @@
   const WORKFLOW_GROUP_LABELS = {
     "start-here": "Start Here (Deterministic Basics)",
     "custom-step-modules": "Custom Step Modules",
+    "connector-integration": "Connector Integration",
+    "ergonomic-aliases": "Ergonomic Aliases",
+    "integration-utility": "Integration Utility",
     "role-event-modules": "Role Event Modules",
     "human-interaction-manual": "Human Interaction (Manual)",
     "human-interaction-legacy": "Human Interaction (Legacy Auto)",

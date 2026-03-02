@@ -22,6 +22,11 @@ message WorkflowState
     string lifecycle = 7;
   }
 
+  message ChildRunIdSet
+  {
+    repeated string child_run_ids = 1;
+  }
+
   string workflow_yaml = 1;
   string workflow_name = 2;
   int32 version = 3;
@@ -34,4 +39,6 @@ message WorkflowState
   repeated SubWorkflowBinding sub_workflow_bindings = 9;
   repeated PendingSubWorkflowInvocation pending_sub_workflow_invocations = 10;
   map<string, string> inline_workflow_yamls = 11;
+  map<string, int32> pending_sub_workflow_invocation_index_by_child_run_id = 12;
+  map<string, ChildRunIdSet> pending_child_run_ids_by_parent_run_id = 13;
 }

@@ -11,9 +11,11 @@ using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.LLMProviders.Tornado;
 using Aevatar.Bootstrap;
+using Aevatar.Bootstrap.Connectors;
 using Aevatar.Configuration;
 using Aevatar.Demos.Workflow.Web;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Runtime.DependencyInjection;
@@ -25,6 +27,7 @@ using Aevatar.Workflow.Core.Validation;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -50,17 +53,26 @@ builder.Services.Configure<JsonOptions>(o =>
     o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
 });
 
+var primaryYamlDir = ResolveYamlDir();
+var turingYamlDir = ResolveTuringYamlDir();
+var workflowSources = BuildWorkflowSources(primaryYamlDir, turingYamlDir);
+
 builder.Services.AddAevatarRuntime();
 builder.Services.AddAevatarConfig();
 builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
 builder.Services.AddWorkflowCapability(builder.Configuration);
+builder.Services.AddWorkflowDefinitionFileSource(options =>
+{
+    options.WorkflowDirectories.Add(primaryYamlDir);
+    if (!string.IsNullOrWhiteSpace(turingYamlDir))
+        options.WorkflowDirectories.Add(turingYamlDir);
+    options.DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override;
+});
+builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, HttpConnectorBuilder>());
+builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, CliConnectorBuilder>());
 builder.Services.AddSingleton<IWorkflowModulePack, DemoWorkflowModulePack>();
 builder.Services.Replace(ServiceDescriptor.Singleton<IEventModuleFactory, DemoWorkflowModuleFactory>());
 builder.Services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
-
-var primaryYamlDir = ResolveYamlDir();
-var turingYamlDir = ResolveTuringYamlDir();
-var workflowSources = BuildWorkflowSources(primaryYamlDir, turingYamlDir);
 
 var config = new ConfigurationBuilder()
     .AddAevatarConfig()
@@ -127,6 +139,7 @@ if (configuredProviders.Count > 0)
 }
 
 var app = builder.Build();
+var loadedConnectorNames = LoadNamedConnectors(app.Services);
 
 Console.WriteLine();
 Console.WriteLine("╔══════════════════════════════════════════════════════════╗");
@@ -138,6 +151,10 @@ var llmSummary = llmAvailable
     ? $"{providerName}/{modelName}" + (availableProviderNames.Count > 1 ? $" (+{availableProviderNames.Count} providers)" : string.Empty)
     : "not configured";
 Console.WriteLine($"║  LLM:    {llmSummary,-48}║");
+var connectorSummary = loadedConnectorNames.Count == 0 ? "-" : string.Join(", ", loadedConnectorNames);
+if (connectorSummary.Length > 48)
+    connectorSummary = connectorSummary[..45] + "...";
+Console.WriteLine($"║  Conn:   {connectorSummary,-48}║");
 Console.WriteLine("║  Press Ctrl+C to stop                                  ║");
 Console.WriteLine("╚══════════════════════════════════════════════════════════╝");
 Console.WriteLine();
@@ -177,7 +194,12 @@ var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCas
     "45_wait_signal_timeout_failure",
     "46_human_approval_release_gate",
     "47_mixed_human_approval_wait_signal",
-    "48_workflow_call_multilevel",
+    "50_connector_cli_demo",
+    "51_cli_call_alias",
+    "54_emit_publish_demo",
+    "55_tool_call_fallback_demo",
+    "56_delay_checkpoint_demo",
+    "49_workflow_call_multilevel",
 };
 var turingWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
@@ -236,6 +258,14 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
     ["45_wait_signal_timeout_failure"] = "database migration waiting for DBA ack",
     ["46_human_approval_release_gate"] = "change request CR-2026-021",
     ["47_mixed_human_approval_wait_signal"] = "deploy cache cluster patch-7",
+    ["49_workflow_call_multilevel"] = "apple\nbanana\napple\ncarrot",
+    ["50_connector_cli_demo"] = "Run connector demo (local CLI): execute dotnet --version through connector_call.",
+    ["51_cli_call_alias"] = "Run cli_call alias demo using local dotnet connector.",
+    ["52_foreach_llm_alias"] = "Kubernetes\n---\nDocker\n---\nTerraform",
+    ["53_map_reduce_llm_alias"] = "Topic: Caching strategy\n---\nTopic: Retry policy\n---\nTopic: Observability basics",
+    ["54_emit_publish_demo"] = "workflow event payload demo",
+    ["55_tool_call_fallback_demo"] = "tool_call fallback demo input",
+    ["56_delay_checkpoint_demo"] = "delay + checkpoint demo input",
     ["counter-addition"] = "Run the closed-world two-counter addition demo.",
     ["minsky-inc-dec-jz"] = "Run the closed-world INC/DEC/JZ transfer demo.",
     ["counter_addition"] = "Run the closed-world two-counter addition demo.",
@@ -1226,6 +1256,15 @@ static WorkflowListClassification ClassifyWorkflowForList(
     }
 
     var isDeterministic = deterministicWorkflows.Contains(name);
+    if (index is >= 51 and <= 53)
+    {
+        return new WorkflowListClassification(
+            Category: isDeterministic ? "deterministic" : "llm",
+            Group: "ergonomic-aliases",
+            GroupLabel: "Ergonomic Aliases",
+            SortOrder: index.Value);
+    }
+
     if (!isDeterministic)
     {
         return new WorkflowListClassification(
@@ -1250,6 +1289,24 @@ static WorkflowListClassification ClassifyWorkflowForList(
             Category: "deterministic",
             Group: "custom-step-modules",
             GroupLabel: "Custom Step Modules",
+            SortOrder: index.Value);
+    }
+
+    if (index == 50)
+    {
+        return new WorkflowListClassification(
+            Category: "deterministic",
+            Group: "connector-integration",
+            GroupLabel: "Connector Integration",
+            SortOrder: index.Value);
+    }
+
+    if (index is >= 54 and <= 56)
+    {
+        return new WorkflowListClassification(
+            Category: "deterministic",
+            Group: "integration-utility",
+            GroupLabel: "Integration Utility",
             SortOrder: index.Value);
     }
 
@@ -1480,6 +1537,55 @@ static string FormatProviderList(IReadOnlyList<string>? providers)
         .ToList();
 
     return names.Count == 0 ? "<none>" : string.Join(", ", names);
+}
+
+static IReadOnlyList<string> LoadNamedConnectors(IServiceProvider services)
+{
+    using var scope = services.CreateScope();
+    var scoped = scope.ServiceProvider;
+    var logger = scoped.GetRequiredService<ILoggerFactory>().CreateLogger("Workflow.Web.Connectors");
+    var registry = scoped.GetService<IConnectorRegistry>();
+    if (registry == null)
+    {
+        logger.LogWarning("IConnectorRegistry is not registered. Skip connector loading.");
+        return [];
+    }
+
+    var connectorBuilders = scoped.GetServices<IConnectorBuilder>().ToList();
+    if (connectorBuilders.Count == 0)
+    {
+        logger.LogWarning("No IConnectorBuilder registered. Skip connector loading.");
+        return registry.ListNames();
+    }
+
+    var loadedCount = ConnectorRegistration.RegisterConnectors(registry, connectorBuilders, logger);
+    if (loadedCount == 0)
+    {
+        var localConnectorPath = ResolveLocalConnectorConfigPath();
+        if (!string.IsNullOrWhiteSpace(localConnectorPath) && File.Exists(localConnectorPath))
+        {
+            logger.LogInformation("Loading demo connectors from {Path}", localConnectorPath);
+            ConnectorRegistration.RegisterConnectors(registry, connectorBuilders, logger, localConnectorPath);
+        }
+    }
+
+    var names = registry.ListNames();
+    logger.LogInformation(
+        "Connector registry loaded: {Count} connector(s) [{Names}]",
+        names.Count,
+        names.Count == 0 ? "-" : string.Join(", ", names));
+    return names;
+}
+
+static string? ResolveLocalConnectorConfigPath()
+{
+    var candidates = new[]
+    {
+        Path.Combine(AppContext.BaseDirectory, "connectors", "workflow_web.connectors.json"),
+        Path.Combine(Directory.GetCurrentDirectory(), "connectors", "workflow_web.connectors.json"),
+    };
+
+    return candidates.FirstOrDefault(File.Exists);
 }
 
 static List<LlmProviderRegistration> ResolveConfiguredProvidersFromSecrets(

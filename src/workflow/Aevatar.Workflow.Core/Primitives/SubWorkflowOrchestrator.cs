@@ -81,6 +81,16 @@ internal sealed class SubWorkflowOrchestrator
             return;
         }
 
+        if (!WorkflowCallLifecycle.IsSupported(request.Lifecycle))
+        {
+            await PublishWorkflowCallFailureAsync(
+                parentStepId,
+                parentRunId,
+                $"workflow_call lifecycle must be {WorkflowCallLifecycle.AllowedValuesText}",
+                ct);
+            return;
+        }
+
         var lifecycle = WorkflowCallLifecycle.Normalize(request.Lifecycle);
         var invocationId = string.IsNullOrWhiteSpace(request.InvocationId)
             ? WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId)
@@ -134,6 +144,7 @@ internal sealed class SubWorkflowOrchestrator
 
     public async Task<bool> TryHandleCompletionAsync(
         WorkflowCompletedEvent completed,
+        string? publisherActorId,
         WorkflowState state,
         CancellationToken ct)
     {
@@ -144,11 +155,29 @@ internal sealed class SubWorkflowOrchestrator
         if (string.IsNullOrWhiteSpace(childRunId))
             return false;
 
-        // Keep lookup state in persisted repeated fields first; optimize with explicit indexes in a follow-up change.
-        var pending = state.PendingSubWorkflowInvocations
-            .FirstOrDefault(x => string.Equals(x.ChildRunId, childRunId, StringComparison.Ordinal));
-        if (pending == null)
+        if (!TryGetPendingInvocationByChildRunId(state, childRunId, out var pending))
             return false;
+
+        var expectedChildActorId = pending.ChildActorId?.Trim() ?? string.Empty;
+        var completionPublisherId = publisherActorId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(expectedChildActorId) &&
+            !string.Equals(expectedChildActorId, completionPublisherId, StringComparison.Ordinal))
+        {
+            _loggerAccessor().LogWarning(
+                "Ignore workflow_call completion due to publisher mismatch. childRun={ChildRunId} expectedPublisher={ExpectedPublisherId} actualPublisher={ActualPublisherId}",
+                childRunId,
+                expectedChildActorId,
+                completionPublisherId);
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(expectedChildActorId))
+        {
+            _loggerAccessor().LogWarning(
+                "workflow_call completion matched by child run only because child actor id is missing. childRun={ChildRunId} publisher={PublisherId}",
+                childRunId,
+                completionPublisherId);
+        }
 
         await _persistDomainEventAsync(new SubWorkflowInvocationCompletedEvent
         {
@@ -186,22 +215,16 @@ internal sealed class SubWorkflowOrchestrator
         if (string.IsNullOrWhiteSpace(normalizedRunId))
             return;
 
-        var cleanupEvents = new List<IMessage>();
-        var staleInvocations = new List<WorkflowState.Types.PendingSubWorkflowInvocation>();
-        foreach (var pending in state.PendingSubWorkflowInvocations)
-        {
-            if (!string.Equals(pending.ParentRunId, normalizedRunId, StringComparison.Ordinal))
-                continue;
-
-            staleInvocations.Add(pending);
-            cleanupEvents.Add(new SubWorkflowInvocationCompletedEvent
+        var staleInvocations = CollectPendingInvocationsByParentRunId(state, normalizedRunId);
+        var cleanupEvents = staleInvocations
+            .Select(pending => (IMessage)new SubWorkflowInvocationCompletedEvent
             {
                 InvocationId = pending.InvocationId,
                 ChildRunId = pending.ChildRunId,
                 Success = false,
                 Error = "parent workflow completed before child workflow completion",
-            });
-        }
+            })
+            .ToList();
 
         if (cleanupEvents.Count == 0)
             return;
@@ -254,8 +277,7 @@ internal sealed class SubWorkflowOrchestrator
         if (string.IsNullOrWhiteSpace(invocationId) || string.IsNullOrWhiteSpace(childRunId))
             return next;
 
-        RemovePendingInvocation(next.PendingSubWorkflowInvocations, invocationId, childRunId);
-        next.PendingSubWorkflowInvocations.Add(new WorkflowState.Types.PendingSubWorkflowInvocation
+        var pending = new WorkflowState.Types.PendingSubWorkflowInvocation
         {
             InvocationId = invocationId,
             ParentRunId = WorkflowRunIdNormalizer.Normalize(evt.ParentRunId),
@@ -264,7 +286,9 @@ internal sealed class SubWorkflowOrchestrator
             ChildActorId = evt.ChildActorId?.Trim() ?? string.Empty,
             ChildRunId = childRunId,
             Lifecycle = WorkflowCallLifecycle.Normalize(evt.Lifecycle),
-        });
+        };
+        RemovePendingInvocation(next, invocationId, childRunId);
+        AddPendingInvocation(next, pending);
         return next;
     }
 
@@ -272,7 +296,7 @@ internal sealed class SubWorkflowOrchestrator
     {
         var next = current.Clone();
         RemovePendingInvocation(
-            next.PendingSubWorkflowInvocations,
+            next,
             evt.InvocationId?.Trim() ?? string.Empty,
             evt.ChildRunId?.Trim() ?? string.Empty);
         return next;
@@ -566,21 +590,219 @@ internal sealed class SubWorkflowOrchestrator
         });
     }
 
+    private static List<WorkflowState.Types.PendingSubWorkflowInvocation> CollectPendingInvocationsByParentRunId(
+        WorkflowState state,
+        string parentRunId)
+    {
+        var pendingByRun = new List<WorkflowState.Types.PendingSubWorkflowInvocation>();
+        var indexedChildRunIds = new HashSet<string>(StringComparer.Ordinal);
+        if (state.PendingChildRunIdsByParentRunId.TryGetValue(parentRunId, out var childRunIdSet) &&
+            childRunIdSet.ChildRunIds.Count > 0)
+        {
+            foreach (var childRunId in childRunIdSet.ChildRunIds)
+            {
+                if (TryGetPendingInvocationByChildRunId(state, childRunId, out var pending))
+                {
+                    pendingByRun.Add(pending);
+                    indexedChildRunIds.Add(pending.ChildRunId);
+                }
+            }
+        }
+
+        foreach (var pending in state.PendingSubWorkflowInvocations)
+        {
+            if (!string.Equals(pending.ParentRunId, parentRunId, StringComparison.Ordinal))
+                continue;
+
+            if (indexedChildRunIds.Contains(pending.ChildRunId))
+                continue;
+
+            pendingByRun.Add(pending);
+            indexedChildRunIds.Add(pending.ChildRunId);
+        }
+
+        return pendingByRun;
+    }
+
+    private static bool TryGetPendingInvocationByChildRunId(
+        WorkflowState state,
+        string childRunId,
+        out WorkflowState.Types.PendingSubWorkflowInvocation pending)
+    {
+        if (TryGetPendingInvocationIndexByChildRunId(state, childRunId, out var index))
+        {
+            pending = state.PendingSubWorkflowInvocations[index];
+            return true;
+        }
+
+        pending = null!;
+        return false;
+    }
+
+    private static bool TryGetPendingInvocationIndexByChildRunId(
+        WorkflowState state,
+        string childRunId,
+        out int index)
+    {
+        index = -1;
+        if (string.IsNullOrWhiteSpace(childRunId))
+            return false;
+
+        if (state.PendingSubWorkflowInvocationIndexByChildRunId.TryGetValue(childRunId, out var mappedIndex) &&
+            mappedIndex >= 0 &&
+            mappedIndex < state.PendingSubWorkflowInvocations.Count &&
+            string.Equals(state.PendingSubWorkflowInvocations[mappedIndex].ChildRunId, childRunId, StringComparison.Ordinal))
+        {
+            index = mappedIndex;
+            return true;
+        }
+
+        for (var i = 0; i < state.PendingSubWorkflowInvocations.Count; i++)
+        {
+            if (!string.Equals(state.PendingSubWorkflowInvocations[i].ChildRunId, childRunId, StringComparison.Ordinal))
+                continue;
+
+            index = i;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void AddPendingInvocation(
+        WorkflowState state,
+        WorkflowState.Types.PendingSubWorkflowInvocation pending)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(pending);
+
+        state.PendingSubWorkflowInvocations.Add(pending);
+        var addedIndex = state.PendingSubWorkflowInvocations.Count - 1;
+        var childRunId = pending.ChildRunId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(childRunId))
+            state.PendingSubWorkflowInvocationIndexByChildRunId[childRunId] = addedIndex;
+
+        AddChildRunIdToParentIndex(
+            state.PendingChildRunIdsByParentRunId,
+            pending.ParentRunId,
+            childRunId);
+    }
+
     private static void RemovePendingInvocation(
-        RepeatedField<WorkflowState.Types.PendingSubWorkflowInvocation> pendingInvocations,
+        WorkflowState state,
         string invocationId,
         string childRunId)
     {
-        for (var i = pendingInvocations.Count - 1; i >= 0; i--)
+        ArgumentNullException.ThrowIfNull(state);
+
+        if (!string.IsNullOrWhiteSpace(childRunId))
         {
-            var pending = pendingInvocations[i];
-            if ((!string.IsNullOrWhiteSpace(invocationId) &&
-                 string.Equals(pending.InvocationId, invocationId, StringComparison.Ordinal)) ||
-                (!string.IsNullOrWhiteSpace(childRunId) &&
-                 string.Equals(pending.ChildRunId, childRunId, StringComparison.Ordinal)))
-            {
-                pendingInvocations.RemoveAt(i);
-            }
+            while (TryGetPendingInvocationIndexByChildRunId(state, childRunId, out var index))
+                RemovePendingInvocationAt(state, index);
         }
+
+        if (string.IsNullOrWhiteSpace(invocationId))
+            return;
+
+        var scanIndex = 0;
+        while (scanIndex < state.PendingSubWorkflowInvocations.Count)
+        {
+            var pending = state.PendingSubWorkflowInvocations[scanIndex];
+            if (!string.Equals(pending.InvocationId, invocationId, StringComparison.Ordinal))
+            {
+                scanIndex++;
+                continue;
+            }
+
+            RemovePendingInvocationAt(state, scanIndex);
+        }
+    }
+
+    private static void RemovePendingInvocationAt(WorkflowState state, int index)
+    {
+        var pendingInvocations = state.PendingSubWorkflowInvocations;
+        if (index < 0 || index >= pendingInvocations.Count)
+            return;
+
+        var removed = pendingInvocations[index];
+        var removedChildRunId = removed.ChildRunId?.Trim() ?? string.Empty;
+        var removedParentRunId = removed.ParentRunId?.Trim() ?? string.Empty;
+        var lastIndex = pendingInvocations.Count - 1;
+        var movedTailChildRunId = string.Empty;
+        var movedTail = false;
+
+        if (index != lastIndex)
+        {
+            var tail = pendingInvocations[lastIndex];
+            pendingInvocations[index] = tail;
+            pendingInvocations.RemoveAt(lastIndex);
+
+            movedTail = true;
+            movedTailChildRunId = tail.ChildRunId?.Trim() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(movedTailChildRunId))
+                state.PendingSubWorkflowInvocationIndexByChildRunId[movedTailChildRunId] = index;
+        }
+        else
+        {
+            pendingInvocations.RemoveAt(lastIndex);
+        }
+
+        if (!string.IsNullOrWhiteSpace(removedChildRunId) &&
+            (!movedTail || !string.Equals(removedChildRunId, movedTailChildRunId, StringComparison.Ordinal)))
+        {
+            state.PendingSubWorkflowInvocationIndexByChildRunId.Remove(removedChildRunId);
+        }
+
+        RemoveChildRunIdFromParentIndex(
+            state.PendingChildRunIdsByParentRunId,
+            removedParentRunId,
+            removedChildRunId);
+    }
+
+    private static void AddChildRunIdToParentIndex(
+        MapField<string, WorkflowState.Types.ChildRunIdSet> parentIndex,
+        string parentRunId,
+        string childRunId)
+    {
+        var normalizedParentRunId = WorkflowRunIdNormalizer.Normalize(parentRunId);
+        var normalizedChildRunId = childRunId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedParentRunId) ||
+            string.IsNullOrWhiteSpace(normalizedChildRunId))
+        {
+            return;
+        }
+
+        if (!parentIndex.TryGetValue(normalizedParentRunId, out var childRuns))
+        {
+            childRuns = new WorkflowState.Types.ChildRunIdSet();
+            parentIndex[normalizedParentRunId] = childRuns;
+        }
+
+        if (!childRuns.ChildRunIds.Contains(normalizedChildRunId))
+            childRuns.ChildRunIds.Add(normalizedChildRunId);
+    }
+
+    private static void RemoveChildRunIdFromParentIndex(
+        MapField<string, WorkflowState.Types.ChildRunIdSet> parentIndex,
+        string parentRunId,
+        string childRunId)
+    {
+        var normalizedParentRunId = WorkflowRunIdNormalizer.Normalize(parentRunId);
+        var normalizedChildRunId = childRunId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedParentRunId) ||
+            string.IsNullOrWhiteSpace(normalizedChildRunId) ||
+            !parentIndex.TryGetValue(normalizedParentRunId, out var childRuns))
+        {
+            return;
+        }
+
+        for (var i = childRuns.ChildRunIds.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(childRuns.ChildRunIds[i], normalizedChildRunId, StringComparison.Ordinal))
+                childRuns.ChildRunIds.RemoveAt(i);
+        }
+
+        if (childRuns.ChildRunIds.Count == 0)
+            parentIndex.Remove(normalizedParentRunId);
     }
 }

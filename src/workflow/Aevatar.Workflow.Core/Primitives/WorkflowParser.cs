@@ -117,9 +117,11 @@ public sealed class WorkflowParser
     private static StepDefinition MapStep(RawStep s)
     {
         var rawType = s.Type ?? "llm_call";
+        var normalizedRawType = rawType.Trim().ToLowerInvariant();
         var canonicalType = WorkflowPrimitiveCatalog.ToCanonicalType(rawType);
         var parameters = NormalizeParameters(s.Parameters);
 
+        ApplyErgonomicDefaults(normalizedRawType, parameters);
         LiftRootPrimitiveParameters(canonicalType, s, parameters);
 
         return new StepDefinition
@@ -135,6 +137,45 @@ public sealed class WorkflowParser
             OnError = MapOnError(s.OnError),
             TimeoutMs = s.TimeoutMs,
         };
+    }
+
+    private static void ApplyErgonomicDefaults(string normalizedRawType, IDictionary<string, string> parameters)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedRawType))
+            return;
+
+        switch (normalizedRawType)
+        {
+            case "http_get":
+                AddIfMissing(parameters, "method", "GET");
+                break;
+            case "http_post":
+                AddIfMissing(parameters, "method", "POST");
+                break;
+            case "http_put":
+                AddIfMissing(parameters, "method", "PUT");
+                break;
+            case "http_delete":
+                AddIfMissing(parameters, "method", "DELETE");
+                break;
+            case "mcp_call":
+                // Accept mcp_call + tool, then forward as connector_call.operation for consistent metadata.
+                if (!parameters.ContainsKey("operation") &&
+                    !parameters.ContainsKey("action") &&
+                    parameters.TryGetValue("tool", out var toolName) &&
+                    !string.IsNullOrWhiteSpace(toolName))
+                {
+                    parameters["operation"] = toolName;
+                }
+                break;
+            case "foreach_llm":
+                AddIfMissing(parameters, "sub_step_type", "llm_call");
+                break;
+            case "map_reduce_llm":
+                AddIfMissing(parameters, "map_step_type", "llm_call");
+                AddIfMissing(parameters, "reduce_step_type", "llm_call");
+                break;
+        }
     }
 
     private static Dictionary<string, string> NormalizeParameters(

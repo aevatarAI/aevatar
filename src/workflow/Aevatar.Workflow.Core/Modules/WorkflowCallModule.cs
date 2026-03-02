@@ -60,6 +60,20 @@ public sealed class WorkflowCallModule : IEventModule
             return;
         }
 
+        var lifecycleRaw = request.Parameters.GetValueOrDefault("lifecycle", string.Empty);
+        if (!WorkflowCallLifecycle.IsSupported(lifecycleRaw))
+        {
+            var invalidLifecycle = lifecycleRaw?.Trim() ?? string.Empty;
+            await ctx.PublishAsync(new StepCompletedEvent
+            {
+                StepId = parentStepId,
+                RunId = parentRunId,
+                Success = false,
+                Error = $"workflow_call lifecycle must be {WorkflowCallLifecycle.AllowedValuesText}, got '{invalidLifecycle}'",
+            }, EventDirection.Self, ct);
+            return;
+        }
+
         var invocation = new SubWorkflowInvokeRequestedEvent
         {
             InvocationId = WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId),
@@ -67,7 +81,7 @@ public sealed class WorkflowCallModule : IEventModule
             ParentStepId = parentStepId,
             WorkflowName = workflowName,
             Input = request.Input ?? string.Empty,
-            Lifecycle = WorkflowCallLifecycle.Normalize(request.Parameters.GetValueOrDefault("lifecycle", string.Empty)),
+            Lifecycle = WorkflowCallLifecycle.Normalize(lifecycleRaw),
             RequestedByActorId = ctx.AgentId,
         };
 

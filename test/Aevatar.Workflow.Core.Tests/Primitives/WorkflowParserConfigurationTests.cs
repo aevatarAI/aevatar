@@ -148,6 +148,75 @@ public class WorkflowParserConfigurationTests
     }
 
     [Fact]
+    public void Parse_WhenUsingErgonomicAliases_ShouldCanonicalizeAndApplyDefaults()
+    {
+        var yaml = """
+            name: ergonomic_aliases
+            roles: []
+            steps:
+              - id: s_http_get
+                type: http_get
+                parameters:
+                  connector: demo_http
+              - id: s_http_post
+                type: http_post
+                parameters:
+                  connector: demo_http
+              - id: s_http_put
+                type: http_put
+                parameters:
+                  connector: demo_http
+              - id: s_http_delete
+                type: http_delete
+                parameters:
+                  connector: demo_http
+              - id: s_cli
+                type: cli_call
+                parameters:
+                  connector: demo_cli
+              - id: s_mcp
+                type: mcp_call
+                parameters:
+                  connector: demo_mcp
+                  tool: list_tools
+              - id: s_foreach
+                type: foreach_llm
+                parameters:
+                  delimiter: "\\n---\\n"
+              - id: s_map_reduce
+                type: map_reduce_llm
+                parameters:
+                  delimiter: "\\n---\\n"
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+
+        workflow.Steps.First(s => s.Id == "s_http_get").Type.Should().Be("connector_call");
+        workflow.Steps.First(s => s.Id == "s_http_get").Parameters["method"].Should().Be("GET");
+        workflow.Steps.First(s => s.Id == "s_http_post").Type.Should().Be("connector_call");
+        workflow.Steps.First(s => s.Id == "s_http_post").Parameters["method"].Should().Be("POST");
+        workflow.Steps.First(s => s.Id == "s_http_put").Type.Should().Be("connector_call");
+        workflow.Steps.First(s => s.Id == "s_http_put").Parameters["method"].Should().Be("PUT");
+        workflow.Steps.First(s => s.Id == "s_http_delete").Type.Should().Be("connector_call");
+        workflow.Steps.First(s => s.Id == "s_http_delete").Parameters["method"].Should().Be("DELETE");
+
+        workflow.Steps.First(s => s.Id == "s_cli").Type.Should().Be("connector_call");
+
+        var mcp = workflow.Steps.First(s => s.Id == "s_mcp");
+        mcp.Type.Should().Be("connector_call");
+        mcp.Parameters["operation"].Should().Be("list_tools");
+
+        var forEach = workflow.Steps.First(s => s.Id == "s_foreach");
+        forEach.Type.Should().Be("foreach");
+        forEach.Parameters["sub_step_type"].Should().Be("llm_call");
+
+        var mapReduce = workflow.Steps.First(s => s.Id == "s_map_reduce");
+        mapReduce.Type.Should().Be("map_reduce");
+        mapReduce.Parameters["map_step_type"].Should().Be("llm_call");
+        mapReduce.Parameters["reduce_step_type"].Should().Be("llm_call");
+    }
+
+    [Fact]
     public void Parse_WhenParametersContainNestedObjects_ShouldSerializeToJsonString()
     {
         var yaml = """
@@ -263,7 +332,7 @@ public class WorkflowParserConfigurationTests
               - id: call_root
                 type: workflow_call
                 workflow: demo_flow
-                lifecycle: isolate
+                lifecycle: scope
               - id: done
                 type: assign
                 parameters:
@@ -286,7 +355,7 @@ public class WorkflowParserConfigurationTests
 
         var call = workflow.Steps.First(s => s.Id == "call_root");
         call.Parameters["workflow"].Should().Be("demo_flow");
-        call.Parameters["lifecycle"].Should().Be("isolate");
+        call.Parameters["lifecycle"].Should().Be("scope");
     }
 
     [Fact]

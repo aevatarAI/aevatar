@@ -10,17 +10,45 @@ public class WorkflowCallLifecycleTests
         typeof(WorkflowGAgent).Assembly.GetType("Aevatar.Workflow.Core.Primitives.WorkflowCallLifecycle")!;
     private static readonly MethodInfo NormalizeMethod =
         WorkflowCallLifecycleType.GetMethod("Normalize", BindingFlags.Public | BindingFlags.Static)!;
+    private static readonly MethodInfo IsSupportedMethod =
+        WorkflowCallLifecycleType.GetMethod("IsSupported", BindingFlags.Public | BindingFlags.Static)!;
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData(" ")]
-    [InlineData("unknown")]
-    public void Normalize_WhenLifecycleMissingOrUnknown_ShouldDefaultToSingleton(string? lifecycle)
+    public void Normalize_WhenLifecycleMissing_ShouldDefaultToSingleton(string? lifecycle)
     {
         var normalized = Normalize(lifecycle);
 
         normalized.Should().Be("singleton");
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("isolate")]
+    public void IsSupported_WhenLifecycleUnknown_ShouldReturnFalse(string lifecycle)
+    {
+        var supported = IsSupported(lifecycle);
+
+        supported.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("singleton")]
+    [InlineData("SINGLETON")]
+    [InlineData("transient")]
+    [InlineData("TRANSIENT")]
+    [InlineData("scope")]
+    [InlineData("SCOPE")]
+    public void IsSupported_WhenLifecycleMissingOrKnown_ShouldReturnTrue(string? lifecycle)
+    {
+        var supported = IsSupported(lifecycle);
+
+        supported.Should().BeTrue();
     }
 
     [Theory]
@@ -60,5 +88,11 @@ public class WorkflowCallLifecycleTests
     {
         var normalized = NormalizeMethod.Invoke(null, [lifecycle]);
         return normalized.Should().BeOfType<string>().Subject;
+    }
+
+    private static bool IsSupported(string? lifecycle)
+    {
+        var supported = IsSupportedMethod.Invoke(null, [lifecycle]);
+        return supported.Should().BeOfType<bool>().Subject;
     }
 }

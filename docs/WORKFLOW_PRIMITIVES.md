@@ -296,10 +296,11 @@ steps:
 
 ## 5. Composition 原语
 
-### `foreach`（别名：`for_each`）
+### `foreach`（别名：`for_each`、`foreach_llm`）
 
 - 作用：按分隔符拆分输入，对每个条目执行子步骤，再合并结果。
 - 常用参数：`delimiter`、`sub_step_type`、`sub_target_role`、`sub_param_{key}`。
+- Ergonomic 说明：`foreach_llm` 会在解析期归一化为 `foreach`，并在未显式指定时自动补 `sub_step_type=llm_call`。
 
 ```yaml
 steps:
@@ -340,10 +341,11 @@ steps:
       count: "2"
 ```
 
-### `map_reduce`（别名：`mapreduce`）
+### `map_reduce`（别名：`mapreduce`、`map_reduce_llm`）
 
 - 作用：先 map（分片并行处理），再 reduce（汇总归并）。
 - 常用参数：`delimiter`、`map_step_type`、`map_target_role`、`reduce_step_type`、`reduce_target_role`、`reduce_prompt_prefix`。
+- Ergonomic 说明：`map_reduce_llm` 会在解析期归一化为 `map_reduce`，并在未显式指定时自动补 `map_step_type=llm_call`、`reduce_step_type=llm_call`。
 
 ```yaml
 steps:
@@ -366,6 +368,9 @@ steps:
   - `singleton`（默认）：复用同名子工作流 actor；
   - `transient`：每次调用独立 actor，子流程完成后销毁；
   - `scope`：与 `transient` 相同生命周期策略（保留语义别名，便于上层配置表达）。
+- `lifecycle` 校验：
+  - 仅允许 `singleton/transient/scope`；
+  - 非法值会在校验阶段或模块执行阶段直接失败，不再回落到默认值。
 - 运行时关联语义：
   - `workflow_call` 调用会生成统一格式的 invocation id：`<parent_run_id>:workflow_call:<parent_step_id|step>:<guidN>`；
   - 该规则由共享工厂统一生成，模块层与 actor 编排层保持一致；
@@ -407,10 +412,14 @@ steps:
 
 ## 6. Integration 原语
 
-### `connector_call`（别名：`bridge_call`）
+### `connector_call`（别名：`bridge_call`、`cli_call`、`mcp_call`、`http_get`、`http_post`、`http_put`、`http_delete`）
 
 - 作用：调用外部 connector（HTTP/CLI/MCP 等），支持重试和降级策略。
 - 常用参数：`connector`、`operation`、`retry`、`timeout_ms`、`optional`、`on_missing`、`on_error`。
+- Ergonomic 说明（统一归一化到 `connector_call`）：
+  - `http_get`/`http_post`/`http_put`/`http_delete`：自动补 `method=GET/POST/PUT/DELETE`（若未显式提供）。
+  - `mcp_call`：若只写 `tool` 且未写 `operation/action`，会自动补 `operation=<tool>`。
+  - `cli_call`：仅语义别名，不改变执行语义。
 
 ```yaml
 steps:
@@ -423,6 +432,16 @@ steps:
       retry: "2"
       timeout_ms: "10000"
       on_error: "continue"
+```
+
+```yaml
+steps:
+  - id: get_health
+    type: http_get
+    target_role: coordinator
+    parameters:
+      connector: "internal_http"
+      path: "/healthz"
 ```
 
 ### `emit`（别名：`publish`）

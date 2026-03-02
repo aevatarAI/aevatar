@@ -261,7 +261,11 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             return;
 
         var completed = envelope.Payload.Unpack<WorkflowCompletedEvent>();
-        if (await _subWorkflowOrchestrator.TryHandleCompletionAsync(completed, State, CancellationToken.None))
+        if (await _subWorkflowOrchestrator.TryHandleCompletionAsync(
+                completed,
+                envelope.PublisherId,
+                State,
+                CancellationToken.None))
             return;
 
         if (!string.Equals(envelope.PublisherId, Id, StringComparison.Ordinal))

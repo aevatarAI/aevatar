@@ -524,6 +524,28 @@ public sealed class WorkflowCoreModulesCoverageTests
         await module.HandleAsync(
             Envelope(new StepRequestEvent
             {
+                StepId = "wf-invalid-lifecycle",
+                StepType = "workflow_call",
+                Input = "payload-invalid",
+                Parameters =
+                {
+                    ["workflow"] = "sub_flow",
+                    ["lifecycle"] = "isolate",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var invalidLifecycleFailure = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        invalidLifecycleFailure.Success.Should().BeFalse();
+        invalidLifecycleFailure.Error.Should().Contain("lifecycle must be singleton/transient/scope");
+        ctx.Published.Select(x => x.evt).OfType<SubWorkflowInvokeRequestedEvent>().Should().BeEmpty();
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
                 StepId = "",
                 StepType = "workflow_call",
                 Input = "payload-3",

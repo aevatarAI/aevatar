@@ -437,6 +437,11 @@ public class WorkflowGAgentCoverageTests
         binding.Lifecycle.Should().Be("singleton");
 
         agent.State.PendingSubWorkflowInvocations.Should().HaveCount(2);
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().HaveCount(2);
+        foreach (var pending in agent.State.PendingSubWorkflowInvocations)
+            agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().ContainKey(pending.ChildRunId);
+        agent.State.PendingChildRunIdsByParentRunId.Should().ContainKey("parent-run");
+        agent.State.PendingChildRunIdsByParentRunId["parent-run"].ChildRunIds.Should().HaveCount(2);
         publisher.Sent.Should().HaveCount(2);
         publisher.Sent.Select(x => x.targetActorId).Distinct().Should().ContainSingle(binding.ChildActorId);
     }
@@ -598,6 +603,36 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task HandleSubWorkflowInvokeRequested_WhenLifecycleInvalid_ShouldPublishFailureAndKeepPendingEmpty()
+    {
+        var publisher = new RecordingEventPublisher();
+        var runtime = new RecordingActorRuntime();
+        var resolver = new StaticWorkflowDefinitionResolver(new Dictionary<string, string>
+        {
+            ["sub_flow"] = BuildValidWorkflowYaml("sub_role", "SubRole"),
+        });
+        var agent = CreateAgent(runtime: runtime, workflowResolver: resolver);
+        agent.EventPublisher = publisher;
+
+        await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
+        {
+            InvocationId = "invoke-invalid-lifecycle",
+            ParentRunId = "run-invalid-lifecycle",
+            ParentStepId = "step-invalid-lifecycle",
+            WorkflowName = "sub_flow",
+            Input = "payload",
+            Lifecycle = "isolate",
+        });
+
+        runtime.CreateCalls.Should().Be(0);
+        agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
+        var failure = publisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        failure.Success.Should().BeFalse();
+        failure.RunId.Should().Be("run-invalid-lifecycle");
+        failure.Error.Should().Contain("lifecycle must be singleton/transient/scope");
+    }
+
+    [Fact]
     public async Task HandleWorkflowCompletionEnvelope_WhenChildCompletion_ShouldTranslateToParentStepCompleted()
     {
         var publisher = new RecordingEventPublisher();
@@ -632,6 +667,8 @@ public class WorkflowGAgentCoverageTests
             direction: EventDirection.Both));
 
         agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().BeEmpty();
+        agent.State.PendingChildRunIdsByParentRunId.Should().BeEmpty();
         var parentCompletion = publisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         parentCompletion.StepId.Should().Be("step-child");
         parentCompletion.RunId.Should().Be("parent-run");
@@ -639,6 +676,97 @@ public class WorkflowGAgentCoverageTests
         parentCompletion.Output.Should().Be("child-done");
         parentCompletion.Metadata["workflow_call.child_run_id"].Should().Be(pending.ChildRunId);
         publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleWorkflowCompletionEnvelope_WhenRunMatchesPendingButPublisherMismatch_ShouldIgnoreAndKeepPending()
+    {
+        var publisher = new RecordingEventPublisher();
+        var runtime = new RecordingActorRuntime();
+        var resolver = new StaticWorkflowDefinitionResolver(new Dictionary<string, string>
+        {
+            ["sub_flow"] = BuildValidWorkflowYaml("sub_role", "SubRole"),
+        });
+        var agent = CreateAgent(runtime: runtime, workflowResolver: resolver);
+        agent.EventPublisher = publisher;
+
+        await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
+        {
+            InvocationId = "invoke-mismatch",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-child",
+            WorkflowName = "sub_flow",
+            Input = "payload",
+            Lifecycle = "singleton",
+        });
+
+        var pending = agent.State.PendingSubWorkflowInvocations.Single();
+        await agent.HandleWorkflowCompletionEnvelope(Envelope(
+            new WorkflowCompletedEvent
+            {
+                WorkflowName = "sub_flow",
+                RunId = pending.ChildRunId,
+                Success = true,
+                Output = "child-done",
+            },
+            publisherId: "untrusted-child",
+            direction: EventDirection.Both));
+
+        agent.State.PendingSubWorkflowInvocations.Should().ContainSingle();
+        agent.State.PendingSubWorkflowInvocations.Single().InvocationId.Should().Be(pending.InvocationId);
+        publisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Should().BeEmpty();
+        publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleWorkflowCompletionEnvelope_WhenPublisherMismatchThenValidCompletion_ShouldProcessOnlyValidCompletion()
+    {
+        var publisher = new RecordingEventPublisher();
+        var runtime = new RecordingActorRuntime();
+        var resolver = new StaticWorkflowDefinitionResolver(new Dictionary<string, string>
+        {
+            ["sub_flow"] = BuildValidWorkflowYaml("sub_role", "SubRole"),
+        });
+        var agent = CreateAgent(runtime: runtime, workflowResolver: resolver);
+        agent.EventPublisher = publisher;
+
+        await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
+        {
+            InvocationId = "invoke-mismatch-then-valid",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-child",
+            WorkflowName = "sub_flow",
+            Input = "payload",
+            Lifecycle = "singleton",
+        });
+
+        var pending = agent.State.PendingSubWorkflowInvocations.Single();
+        await agent.HandleWorkflowCompletionEnvelope(Envelope(
+            new WorkflowCompletedEvent
+            {
+                WorkflowName = "sub_flow",
+                RunId = pending.ChildRunId,
+                Success = true,
+                Output = "bad-child-done",
+            },
+            publisherId: "untrusted-child",
+            direction: EventDirection.Both));
+
+        await agent.HandleWorkflowCompletionEnvelope(Envelope(
+            new WorkflowCompletedEvent
+            {
+                WorkflowName = "sub_flow",
+                RunId = pending.ChildRunId,
+                Success = true,
+                Output = "child-done",
+            },
+            publisherId: pending.ChildActorId,
+            direction: EventDirection.Both));
+
+        agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
+        var completions = publisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToList();
+        completions.Should().ContainSingle();
+        completions[0].Output.Should().Be("child-done");
     }
 
     [Fact]
@@ -684,6 +812,10 @@ public class WorkflowGAgentCoverageTests
 
         agent.State.PendingSubWorkflowInvocations.Should().HaveCount(retainedCount);
         agent.State.PendingSubWorkflowInvocations.Should().OnlyContain(x => x.ParentRunId == "run-other");
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().HaveCount(retainedCount);
+        agent.State.PendingChildRunIdsByParentRunId.Should().NotContainKey(parentRunId);
+        agent.State.PendingChildRunIdsByParentRunId.Should().ContainKey("run-other");
+        agent.State.PendingChildRunIdsByParentRunId["run-other"].ChildRunIds.Should().HaveCount(retainedCount);
 
         var persisted = await sharedEventStore.GetEventsAsync(agent.Id);
         var cleanupEvents = persisted
@@ -747,6 +879,8 @@ public class WorkflowGAgentCoverageTests
         });
 
         agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().BeEmpty();
+        agent.State.PendingChildRunIdsByParentRunId.Should().BeEmpty();
 
         runtime.Unlinked.Should().Contain(childActorByLifecycle["transient"]);
         runtime.Unlinked.Should().Contain(childActorByLifecycle["scope"]);
