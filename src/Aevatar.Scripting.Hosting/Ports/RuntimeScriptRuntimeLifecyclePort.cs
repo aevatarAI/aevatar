@@ -9,15 +9,12 @@ namespace Aevatar.Scripting.Hosting.Ports;
 public sealed class RuntimeScriptRuntimeLifecyclePort : IScriptRuntimeLifecyclePort
 {
     private readonly IActorRuntime _runtime;
-    private readonly IScriptDefinitionSnapshotPort _snapshotPort;
     private readonly RunScriptCommandAdapter _runCommandAdapter = new();
 
     public RuntimeScriptRuntimeLifecyclePort(
-        IActorRuntime runtime,
-        IScriptDefinitionSnapshotPort snapshotPort)
+        IActorRuntime runtime)
     {
         _runtime = runtime;
-        _snapshotPort = snapshotPort;
     }
 
     public async Task<string> SpawnAsync(
@@ -26,9 +23,13 @@ public sealed class RuntimeScriptRuntimeLifecyclePort : IScriptRuntimeLifecycleP
         string? runtimeActorId,
         CancellationToken ct)
     {
-        var snapshot = await _snapshotPort.GetRequiredAsync(definitionActorId, scriptRevision, ct);
+        ArgumentException.ThrowIfNullOrWhiteSpace(definitionActorId);
+
+        var normalizedRevision = string.IsNullOrWhiteSpace(scriptRevision)
+            ? "latest"
+            : scriptRevision;
         var actorId = string.IsNullOrWhiteSpace(runtimeActorId)
-            ? $"script-runtime:{snapshot.ScriptId}:{Guid.NewGuid():N}"
+            ? $"script-runtime:{definitionActorId}:{normalizedRevision}:{Guid.NewGuid():N}"
             : runtimeActorId;
 
         if (await _runtime.ExistsAsync(actorId))

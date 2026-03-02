@@ -194,6 +194,63 @@ message RollbackScriptRevisionRequestedEvent {
   string proposal_id = 4;
 }
 
+message QueryScriptDefinitionSnapshotRequestedEvent {
+  string request_id = 1;
+  string reply_stream_id = 2;
+  string requested_revision = 3;
+}
+
+message ScriptDefinitionSnapshotRespondedEvent {
+  string request_id = 1;
+  bool found = 2;
+  string script_id = 3;
+  string revision = 4;
+  string source_text = 5;
+  string read_model_schema_version = 6;
+  string read_model_schema_hash = 7;
+  string failure_reason = 8;
+}
+
+message QueryScriptCatalogEntryRequestedEvent {
+  string request_id = 1;
+  string reply_stream_id = 2;
+  string script_id = 3;
+}
+
+message ScriptCatalogEntryRespondedEvent {
+  string request_id = 1;
+  bool found = 2;
+  string script_id = 3;
+  string active_revision = 4;
+  string active_definition_actor_id = 5;
+  string active_source_hash = 6;
+  string previous_revision = 7;
+  repeated string revision_history = 8;
+  string last_proposal_id = 9;
+  string failure_reason = 10;
+}
+
+message QueryScriptEvolutionDecisionRequestedEvent {
+  string request_id = 1;
+  string reply_stream_id = 2;
+  string proposal_id = 3;
+}
+
+message ScriptEvolutionDecisionRespondedEvent {
+  string request_id = 1;
+  bool found = 2;
+  bool accepted = 3;
+  string proposal_id = 4;
+  string script_id = 5;
+  string base_revision = 6;
+  string candidate_revision = 7;
+  string status = 8;
+  string failure_reason = 9;
+  string definition_actor_id = 10;
+  string catalog_actor_id = 11;
+  repeated string diagnostics = 12;
+}
+
 message ScriptEvolutionProposedEvent {
   string proposal_id = 1;
   string script_id = 2;

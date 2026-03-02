@@ -224,7 +224,12 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             CancellationToken ct)
         {
             definitionActorId.Should().Be("definition-1");
-            var snapshot = definition.GetSnapshot();
+            var snapshot = new ScriptDefinitionSnapshot(
+                ScriptId: definition.State.ScriptId ?? string.Empty,
+                Revision: definition.State.Revision ?? string.Empty,
+                SourceText: definition.State.SourceText ?? string.Empty,
+                ReadModelSchemaVersion: definition.State.ReadModelSchemaVersion ?? string.Empty,
+                ReadModelSchemaHash: definition.State.ReadModelSchemaHash ?? string.Empty);
             if (!string.IsNullOrWhiteSpace(requestedRevision))
                 snapshot.Revision.Should().Be(requestedRevision);
             snapshot.SourceText.Should().NotBeNullOrWhiteSpace();

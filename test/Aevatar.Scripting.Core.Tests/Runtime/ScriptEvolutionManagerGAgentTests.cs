@@ -47,11 +47,6 @@ public class ScriptEvolutionManagerGAgentTests
         proposal.Status.Should().Be("promoted");
         proposal.ValidationSucceeded.Should().BeTrue();
         proposal.ValidationDiagnostics.Should().ContainSingle(x => x == "compile-ok");
-
-        var decision = agent.GetDecision("proposal-1");
-        decision.Should().NotBeNull();
-        decision!.Accepted.Should().BeTrue();
-        decision.Status.Should().Be("promoted");
     }
 
     [Fact]

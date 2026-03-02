@@ -7,7 +7,7 @@ using Google.Protobuf;
 
 namespace Aevatar.Scripting.Core;
 
-public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionManagerState>, IScriptEvolutionDecisionSource
+public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionManagerState>
 {
     private const string StatusProposed = "proposed";
     private const string StatusBuildRequested = "build_requested";
@@ -140,6 +140,56 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         });
     }
 
+    [EventHandler]
+    public async Task HandleQueryScriptEvolutionDecisionRequested(QueryScriptEvolutionDecisionRequestedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
+            return;
+
+        if (string.IsNullOrWhiteSpace(evt.ProposalId))
+        {
+            await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptEvolutionDecisionRespondedEvent
+            {
+                RequestId = evt.RequestId,
+                Found = false,
+                FailureReason = "ProposalId is required.",
+            });
+            return;
+        }
+
+        if (!State.Proposals.TryGetValue(evt.ProposalId, out var proposal))
+        {
+            await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptEvolutionDecisionRespondedEvent
+            {
+                RequestId = evt.RequestId,
+                Found = false,
+                ProposalId = evt.ProposalId,
+                FailureReason = $"Proposal `{evt.ProposalId}` not found.",
+            });
+            return;
+        }
+
+        var response = new ScriptEvolutionDecisionRespondedEvent
+        {
+            RequestId = evt.RequestId,
+            Found = true,
+            Accepted = string.Equals(proposal.Status, StatusPromoted, StringComparison.Ordinal),
+            ProposalId = proposal.ProposalId ?? string.Empty,
+            ScriptId = proposal.ScriptId ?? string.Empty,
+            BaseRevision = proposal.BaseRevision ?? string.Empty,
+            CandidateRevision = proposal.CandidateRevision ?? string.Empty,
+            Status = proposal.Status ?? string.Empty,
+            FailureReason = proposal.FailureReason ?? string.Empty,
+            DefinitionActorId = string.IsNullOrWhiteSpace(proposal.PromotedDefinitionActorId)
+                ? proposal.DefinitionActorId ?? string.Empty
+                : proposal.PromotedDefinitionActorId,
+            CatalogActorId = proposal.CatalogActorId ?? string.Empty,
+        };
+        response.Diagnostics.Add(proposal.ValidationDiagnostics);
+        await SendQueryResponseAsync(evt.ReplyStreamId, response);
+    }
+
     protected override ScriptEvolutionManagerState TransitionState(
         ScriptEvolutionManagerState current,
         IMessage evt) =>
@@ -154,31 +204,12 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             .On<ScriptEvolutionRolledBackEvent>(ApplyRolledBack)
             .OrCurrent();
 
-    public ScriptPromotionDecision? GetDecision(string proposalId)
+    private Task SendQueryResponseAsync(
+        string replyStreamId,
+        ScriptEvolutionDecisionRespondedEvent response,
+        CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(proposalId))
-            return null;
-        if (!State.Proposals.TryGetValue(proposalId, out var proposal))
-            return null;
-
-        var validation = new ScriptEvolutionValidationReport(
-            IsSuccess: proposal.ValidationSucceeded,
-            Diagnostics: proposal.ValidationDiagnostics.ToArray());
-        var accepted = string.Equals(proposal.Status, StatusPromoted, StringComparison.Ordinal);
-
-        return new ScriptPromotionDecision(
-            Accepted: accepted,
-            ProposalId: proposal.ProposalId ?? string.Empty,
-            ScriptId: proposal.ScriptId ?? string.Empty,
-            BaseRevision: proposal.BaseRevision ?? string.Empty,
-            CandidateRevision: proposal.CandidateRevision ?? string.Empty,
-            Status: proposal.Status ?? string.Empty,
-            FailureReason: proposal.FailureReason ?? string.Empty,
-            DefinitionActorId: string.IsNullOrWhiteSpace(proposal.PromotedDefinitionActorId)
-                ? proposal.DefinitionActorId ?? string.Empty
-                : proposal.PromotedDefinitionActorId,
-            CatalogActorId: proposal.CatalogActorId ?? string.Empty,
-            ValidationReport: validation);
+        return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
     }
 
     private static ScriptEvolutionProposal NormalizeProposal(

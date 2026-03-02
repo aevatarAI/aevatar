@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Orleans\Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Scripting.Application\Aevatar.Scripting.Application.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
@@ -29,6 +30,7 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Aevatar.Scripting.Abstractions" />

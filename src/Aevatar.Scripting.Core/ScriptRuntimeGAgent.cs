@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Google.Protobuf;
@@ -11,8 +12,11 @@ namespace Aevatar.Scripting.Core;
 
 public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
 {
+    private const string OrleansEventPublisherPrefix = "Aevatar.Foundation.Runtime.Implementations.Orleans.";
+
     private readonly IScriptRuntimeExecutionOrchestrator _orchestrator;
     private readonly IScriptDefinitionSnapshotPort _snapshotPort;
+    private readonly Dictionary<string, PendingRunContext> _pendingRuns = new(StringComparer.Ordinal);
 
     public ScriptRuntimeGAgent(
         IScriptRuntimeExecutionOrchestrator orchestrator,
@@ -38,31 +42,140 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             evt.DefinitionActorId,
             evt.ScriptRevision);
 
+        if (ShouldUseEventDrivenDefinitionQuery())
+        {
+            await QueueRunByDefinitionQueryAsync(evt, CancellationToken.None);
+            return;
+        }
+
         var snapshot = await LoadDefinitionSnapshotAsync(
             evt.DefinitionActorId,
             evt.ScriptRevision,
             CancellationToken.None);
+        await ExecuteRunAsync(evt, snapshot, CancellationToken.None);
+    }
 
+    [EventHandler]
+    public async Task HandleScriptDefinitionSnapshotResponded(ScriptDefinitionSnapshotRespondedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        Logger.LogInformation(
+            "Script definition query response received. runtime_actor_id={RuntimeActorId} request_id={RequestId} found={Found} revision={Revision}",
+            Id,
+            evt.RequestId,
+            evt.Found,
+            evt.Revision);
+
+        if (string.IsNullOrWhiteSpace(evt.RequestId) || !_pendingRuns.Remove(evt.RequestId, out var pending))
+        {
+            Logger.LogDebug(
+                "Ignoring unmatched script definition snapshot response. runtime_actor_id={RuntimeActorId} request_id={RequestId}",
+                Id,
+                evt.RequestId);
+            return;
+        }
+
+        if (!evt.Found)
+        {
+            Logger.LogWarning(
+                "Script definition snapshot query returned not found. runtime_actor_id={RuntimeActorId} run_id={RunId} request_id={RequestId} reason={Reason}",
+                Id,
+                pending.RunEvent.RunId,
+                evt.RequestId,
+                evt.FailureReason);
+            return;
+        }
+
+        var snapshot = new ScriptDefinitionSnapshot(
+            evt.ScriptId ?? string.Empty,
+            evt.Revision ?? string.Empty,
+            evt.SourceText ?? string.Empty,
+            evt.ReadModelSchemaVersion ?? string.Empty,
+            evt.ReadModelSchemaHash ?? string.Empty);
+
+        if (string.IsNullOrWhiteSpace(snapshot.SourceText))
+        {
+            Logger.LogWarning(
+                "Script definition query returned empty source. runtime_actor_id={RuntimeActorId} run_id={RunId} request_id={RequestId}",
+                Id,
+                pending.RunEvent.RunId,
+                evt.RequestId);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(pending.RunEvent.ScriptRevision) &&
+            !string.Equals(pending.RunEvent.ScriptRevision, snapshot.Revision, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "Script definition revision mismatch. runtime_actor_id={RuntimeActorId} run_id={RunId} request_id={RequestId} requested_revision={RequestedRevision} actual_revision={ActualRevision}",
+                Id,
+                pending.RunEvent.RunId,
+                evt.RequestId,
+                pending.RunEvent.ScriptRevision,
+                snapshot.Revision);
+            return;
+        }
+
+        await ExecuteRunAsync(pending.RunEvent, snapshot, CancellationToken.None);
+    }
+
+    private async Task QueueRunByDefinitionQueryAsync(RunScriptRequestedEvent evt, CancellationToken ct)
+    {
+        var requestId = Guid.NewGuid().ToString("N");
+        _pendingRuns[requestId] = new PendingRunContext(evt.Clone());
+
+        await SendToAsync(
+            evt.DefinitionActorId,
+            new QueryScriptDefinitionSnapshotRequestedEvent
+            {
+                RequestId = requestId,
+                ReplyStreamId = Id,
+                RequestedRevision = evt.ScriptRevision ?? string.Empty,
+            },
+            ct);
+
+        Logger.LogInformation(
+            "Script definition query dispatched. runtime_actor_id={RuntimeActorId} run_id={RunId} request_id={RequestId} definition_actor_id={DefinitionActorId} revision={Revision}",
+            Id,
+            evt.RunId,
+            requestId,
+            evt.DefinitionActorId,
+            evt.ScriptRevision);
+    }
+
+    private async Task ExecuteRunAsync(
+        RunScriptRequestedEvent runEvent,
+        ScriptDefinitionSnapshot snapshot,
+        CancellationToken ct)
+    {
         var committedEvents = await _orchestrator.ExecuteRunAsync(
             new ScriptRuntimeExecutionRequest(
                 RuntimeActorId: Id,
                 CurrentState: ClonePayloads(State.StatePayloads),
                 CurrentReadModel: ClonePayloads(State.ReadModelPayloads),
-                RunEvent: evt,
+                RunEvent: runEvent,
                 ScriptId: snapshot.ScriptId,
                 ScriptRevision: snapshot.Revision,
                 SourceText: snapshot.SourceText,
                 ReadModelSchemaVersion: snapshot.ReadModelSchemaVersion,
                 ReadModelSchemaHash: snapshot.ReadModelSchemaHash),
-            CancellationToken.None);
-        await PersistDomainEventsAsync(committedEvents, CancellationToken.None);
+            ct);
+        await PersistDomainEventsAsync(committedEvents, ct);
 
         Logger.LogInformation(
             "Script run committed. runtime_actor_id={RuntimeActorId} run_id={RunId} committed_events={CommittedEvents} revision={Revision}",
             Id,
-            evt.RunId,
+            runEvent.RunId,
             committedEvents.Count,
             snapshot.Revision);
+    }
+
+    private bool ShouldUseEventDrivenDefinitionQuery()
+    {
+        var publisherType = EventPublisher.GetType().FullName;
+        return !string.IsNullOrWhiteSpace(publisherType) &&
+               publisherType.StartsWith(OrleansEventPublisherPrefix, StringComparison.Ordinal);
     }
 
     protected override ScriptRuntimeState TransitionState(ScriptRuntimeState current, IMessage evt) =>
@@ -129,4 +242,6 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             target[key] = value.Clone();
         }
     }
+
+    private sealed record PendingRunContext(RunScriptRequestedEvent RunEvent);
 }

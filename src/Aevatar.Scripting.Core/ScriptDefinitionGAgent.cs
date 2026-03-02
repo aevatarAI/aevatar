@@ -6,10 +6,11 @@ using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Schema;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Scripting.Core;
 
-public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>, IScriptDefinitionSnapshotSource
+public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
 {
     private const string SchemaStatusPending = "pending";
     private const string SchemaStatusDeclared = "declared";
@@ -114,6 +115,60 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>, 
         });
     }
 
+    [EventHandler]
+    public async Task HandleQueryScriptDefinitionSnapshotRequested(QueryScriptDefinitionSnapshotRequestedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
+            return;
+
+        Logger.LogInformation(
+            "Script definition query received. actor_id={ActorId} request_id={RequestId} requested_revision={RequestedRevision} active_revision={ActiveRevision} reply_stream_id={ReplyStreamId}",
+            Id,
+            evt.RequestId,
+            evt.RequestedRevision,
+            State.Revision,
+            evt.ReplyStreamId);
+
+        if (!string.IsNullOrWhiteSpace(evt.RequestedRevision) &&
+            !string.Equals(evt.RequestedRevision, State.Revision, StringComparison.Ordinal))
+        {
+            Logger.LogInformation(
+                "Script definition query rejected due to revision mismatch. actor_id={ActorId} request_id={RequestId} requested_revision={RequestedRevision} active_revision={ActiveRevision}",
+                Id,
+                evt.RequestId,
+                evt.RequestedRevision,
+                State.Revision);
+            await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptDefinitionSnapshotRespondedEvent
+            {
+                RequestId = evt.RequestId,
+                Found = false,
+                FailureReason = $"Requested revision `{evt.RequestedRevision}` does not match active revision `{State.Revision}`.",
+            });
+            return;
+        }
+
+        Logger.LogInformation(
+            "Script definition query responding. actor_id={ActorId} request_id={RequestId} found={Found} revision={Revision}",
+            Id,
+            evt.RequestId,
+            !string.IsNullOrWhiteSpace(State.SourceText),
+            State.Revision);
+        await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptDefinitionSnapshotRespondedEvent
+        {
+            RequestId = evt.RequestId,
+            Found = !string.IsNullOrWhiteSpace(State.SourceText),
+            ScriptId = State.ScriptId ?? string.Empty,
+            Revision = State.Revision ?? string.Empty,
+            SourceText = State.SourceText ?? string.Empty,
+            ReadModelSchemaVersion = State.ReadModelSchemaVersion ?? string.Empty,
+            ReadModelSchemaHash = State.ReadModelSchemaHash ?? string.Empty,
+            FailureReason = string.IsNullOrWhiteSpace(State.SourceText)
+                ? "Script source text is empty."
+                : string.Empty,
+        });
+    }
+
     protected override ScriptDefinitionState TransitionState(ScriptDefinitionState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
@@ -122,6 +177,14 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>, 
             .On<ScriptReadModelSchemaValidatedEvent>(ApplySchemaValidated)
             .On<ScriptReadModelSchemaActivationFailedEvent>(ApplySchemaActivationFailed)
             .OrCurrent();
+
+    private Task SendQueryResponseAsync(
+        string replyStreamId,
+        ScriptDefinitionSnapshotRespondedEvent response,
+        CancellationToken ct = default)
+    {
+        return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
+    }
 
     private static ScriptDefinitionState ApplyDefinitionUpserted(
         ScriptDefinitionState state,
@@ -182,13 +245,4 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>, 
         return next;
     }
 
-    public ScriptDefinitionSnapshot GetSnapshot()
-    {
-        return new ScriptDefinitionSnapshot(
-            State.ScriptId ?? string.Empty,
-            State.Revision ?? string.Empty,
-            State.SourceText ?? string.Empty,
-            State.ReadModelSchemaVersion ?? string.Empty,
-            State.ReadModelSchemaHash ?? string.Empty);
-    }
 }
