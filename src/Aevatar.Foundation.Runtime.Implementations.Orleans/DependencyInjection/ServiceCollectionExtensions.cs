@@ -1,6 +1,8 @@
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Context;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Filters;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.DependencyInjection;
 using Orleans.Hosting;
@@ -30,7 +32,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
 
         services.TryAddSingleton<IRunManager, RunManager>();
-        services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
+        services.Replace(ServiceDescriptor.Singleton<IAgentContextAccessor, OrleansAgentContextAccessor>());
+        services.TryAddSingleton<OrleansAgentContextIncomingFilter>();
+        services.TryAddSingleton<OrleansAgentContextOutgoingFilter>();
         services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
@@ -64,6 +68,9 @@ public static class ServiceCollectionExtensions
         {
             builder.AddMemoryStreams(options.StreamProviderName, _ => { });
         }
+
+        builder.AddIncomingGrainCallFilter<OrleansAgentContextIncomingFilter>();
+        builder.AddOutgoingGrainCallFilter<OrleansAgentContextOutgoingFilter>();
 
         builder.ConfigureServices(services =>
         {

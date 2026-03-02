@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Context;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Orleans.Streams;
 
@@ -17,6 +18,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private IEnvelopePropagationPolicy _propagationPolicy =
         new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
+    private IAgentContextAccessor? _agentContextAccessor;
     private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
     private IAsyncStream<EventEnvelope>? _selfStream;
     private StreamSubscriptionHandle<EventEnvelope>? _selfStreamHandle;
@@ -35,6 +37,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _deduplicator = ServiceProvider.GetService<IEventDeduplicator>();
         _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>() ?? _propagationPolicy;
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
+        _agentContextAccessor = ServiceProvider.GetService<IAgentContextAccessor>();
 
         var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
         _logger = loggerFactory?.CreateLogger<RuntimeActorGrain>() ?? NullLogger<RuntimeActorGrain>.Instance;
@@ -122,7 +125,22 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 return;
         }
 
-        await _agent.HandleEventAsync(envelope);
+        IAgentContext? previousContext = null;
+        if (_agentContextAccessor != null)
+        {
+            previousContext = _agentContextAccessor.Context;
+            _agentContextAccessor.Context = AgentContextPropagator.Extract(envelope);
+        }
+
+        try
+        {
+            await _agent.HandleEventAsync(envelope);
+        }
+        finally
+        {
+            if (_agentContextAccessor != null)
+                _agentContextAccessor.Context = previousContext;
+        }
     }
 
     public async Task AddChildAsync(string childId)
@@ -266,7 +284,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             () => _state.State.ParentId,
             envelope => HandleEnvelopeAsync(envelope.ToByteArray()),
             _propagationPolicy,
-            _streams);
+            _streams,
+            _agentContextAccessor);
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
         gAgent.ManifestStore = ServiceProvider.GetService<IAgentManifestStore>();

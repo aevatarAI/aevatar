@@ -28,7 +28,11 @@ public sealed class AsyncLocalAgentContextAccessor : IAgentContextAccessor
 /// <summary>Injects AgentContext into EventEnvelope metadata and extracts it back.</summary>
 public static class AgentContextPropagator
 {
-    private const string Prefix = "__ctx_";
+    /// <summary>
+    /// Metadata key prefix for AgentContext propagation (RequestContext / EventEnvelope.Metadata).
+    /// OrleansAgentContextAccessor and filters MUST use this constant for key-space isolation.
+    /// </summary>
+    public const string MetadataPrefix = "__ctx_";
 
     /// <summary>Writes current context into envelope metadata.</summary>
     public static void Inject(IAgentContext? context, EventEnvelope envelope)
@@ -36,7 +40,7 @@ public static class AgentContextPropagator
         if (context == null) return;
         foreach (var (key, value) in context.GetAll())
             if (value != null)
-                envelope.Metadata[$"{Prefix}{key}"] = value.ToString() ?? "";
+                envelope.Metadata[$"{MetadataPrefix}{key}"] = value.ToString() ?? "";
     }
 
     /// <summary>Restores context from envelope metadata.</summary>
@@ -44,8 +48,8 @@ public static class AgentContextPropagator
     {
         var ctx = new AsyncLocalAgentContext();
         foreach (var (key, value) in envelope.Metadata)
-            if (key.StartsWith(Prefix))
-                ctx.Set(key[Prefix.Length..], value);
+            if (key.StartsWith(MetadataPrefix))
+                ctx.Set(key[MetadataPrefix.Length..], value);
         return ctx;
     }
 }

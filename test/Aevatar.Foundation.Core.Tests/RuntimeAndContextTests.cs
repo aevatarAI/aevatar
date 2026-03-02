@@ -80,7 +80,7 @@ public class AgentContextPropagatorTests
     {
         var envelope = TestHelper.Envelope(new PingEvent { Message = "hello" });
         envelope.Metadata["plain"] = "value";
-        envelope.Metadata["__ctx_correlationId"] = "corr-1";
+        envelope.Metadata[$"{AgentContextPropagator.MetadataPrefix}correlationId"] = "corr-1";
 
         var extracted = AgentContextPropagator.Extract(envelope);
 

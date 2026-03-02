@@ -1,5 +1,7 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Context;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -30,6 +32,32 @@ public class OrleansGrainEventPublisherTests
         dispatched.Should().NotBeNull();
         dispatched!.Metadata.ContainsKey(PublisherChainMetadata.PublishersMetadataKey).Should().BeFalse();
         streams.GetProduced("actor-self").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PublishAsync_ShouldInjectAgentContextMetadata()
+    {
+        EventEnvelope? dispatched = null;
+        var streams = new RecordingStreamProvider();
+        var accessor = new AsyncLocalAgentContextAccessor();
+        var context = new AsyncLocalAgentContext();
+        context.Set("traceId", "trace-42");
+        accessor.Context = context;
+
+        var publisher = CreatePublisher(
+            actorId: "actor-self",
+            streams: streams,
+            onDispatchToSelf: envelope =>
+            {
+                dispatched = envelope;
+                return Task.CompletedTask;
+            },
+            contextAccessor: accessor);
+
+        await publisher.PublishAsync(new StringValue { Value = "hello" }, EventDirection.Self, CancellationToken.None);
+
+        dispatched.Should().NotBeNull();
+        dispatched!.Metadata[$"{AgentContextPropagator.MetadataPrefix}traceId"].Should().Be("trace-42");
     }
 
     [Fact]
@@ -232,14 +260,16 @@ public class OrleansGrainEventPublisherTests
         string actorId,
         RecordingStreamProvider streams,
         Func<EventEnvelope, Task> onDispatchToSelf,
-        Func<string?>? getParentId = null)
+        Func<string?>? getParentId = null,
+        IAgentContextAccessor? contextAccessor = null)
     {
         return new OrleansGrainEventPublisher(
             actorId,
             getParentId ?? (() => null),
             onDispatchToSelf,
             new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy()),
-            streams);
+            streams,
+            contextAccessor);
     }
 
     private sealed class RecordingStreamProvider : IStreamProvider

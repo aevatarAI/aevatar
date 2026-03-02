@@ -11,19 +11,22 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
     private readonly Func<EventEnvelope, Task> _dispatchToSelfAsync;
     private readonly IEnvelopePropagationPolicy _propagationPolicy;
     private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
+    private readonly IAgentContextAccessor? _contextAccessor;
 
     public OrleansGrainEventPublisher(
         string actorId,
         Func<string?> getParentId,
         Func<EventEnvelope, Task> dispatchToSelfAsync,
         IEnvelopePropagationPolicy propagationPolicy,
-        Aevatar.Foundation.Abstractions.IStreamProvider streams)
+        Aevatar.Foundation.Abstractions.IStreamProvider streams,
+        IAgentContextAccessor? contextAccessor = null)
     {
         _actorId = actorId;
         _getParentId = getParentId;
         _dispatchToSelfAsync = dispatchToSelfAsync;
         _propagationPolicy = propagationPolicy;
         _streams = streams;
+        _contextAccessor = contextAccessor;
     }
 
     public async Task PublishAsync<TEvent>(
@@ -44,6 +47,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         envelope.Metadata["__source_actor_id"] = _actorId;
 
         _propagationPolicy.Apply(envelope, sourceEnvelope);
+        AgentContextPropagator.Inject(_contextAccessor?.Context, envelope);
 
         switch (direction)
         {
@@ -94,6 +98,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         envelope.Metadata["__source_actor_id"] = _actorId;
 
         _propagationPolicy.Apply(envelope, sourceEnvelope);
+        AgentContextPropagator.Inject(_contextAccessor?.Context, envelope);
         return DispatchAsync(_actorId, targetActorId, envelope, ct);
     }
 

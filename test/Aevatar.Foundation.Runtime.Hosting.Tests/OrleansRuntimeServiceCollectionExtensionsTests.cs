@@ -1,7 +1,10 @@
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Context;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Filters;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Context;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -68,6 +71,19 @@ public sealed class OrleansRuntimeServiceCollectionExtensionsTests
         var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IStateStore<>));
         descriptor.Should().NotBeNull();
         descriptor!.ImplementationType.Should().Be(typeof(RuntimeActorGrainStateStore<>));
+    }
+
+    [Fact]
+    public void AddAevatarFoundationRuntimeOrleans_ServiceCollection_ShouldRegisterOrleansAgentContextComponents()
+    {
+        var services = new ServiceCollection();
+
+        services.AddAevatarFoundationRuntimeOrleans();
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IAgentContextAccessor>().Should().BeOfType<OrleansAgentContextAccessor>();
+        provider.GetRequiredService<OrleansAgentContextIncomingFilter>().Should().NotBeNull();
+        provider.GetRequiredService<OrleansAgentContextOutgoingFilter>().Should().NotBeNull();
     }
 
     [Fact]
