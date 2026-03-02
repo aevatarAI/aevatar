@@ -1,7 +1,7 @@
 using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Scripting.Application;
 
-public sealed record RunScriptCommand(
+public sealed record RunScriptActorRequest(
     string RunId,
     Any? InputPayload,
     string ScriptRevision,

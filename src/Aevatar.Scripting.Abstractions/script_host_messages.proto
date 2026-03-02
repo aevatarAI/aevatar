@@ -90,12 +90,9 @@ message ScriptEvolutionProposalState {
   bool validation_succeeded = 8;
   repeated string validation_diagnostics = 9;
   string failure_reason = 10;
-  string definition_actor_id = 11;
-  string catalog_actor_id = 12;
-  string promoted_definition_actor_id = 13;
-  string promoted_revision = 14;
-  string requested_by_actor_id = 15;
-  string reason = 16;
+  string promoted_definition_actor_id = 11;
+  string promoted_revision = 12;
+  string reason = 13;
 }
 
 message ScriptEvolutionManagerState {
@@ -174,11 +171,6 @@ message ProposeScriptEvolutionRequestedEvent {
   string candidate_source = 5;
   string candidate_source_hash = 6;
   string reason = 7;
-  string definition_actor_id = 8;
-  string catalog_actor_id = 9;
-  string requested_by_actor_id = 10;
-  string decision_request_id = 11;
-  string decision_reply_stream_id = 12;
 }
 
 message PromoteScriptRevisionRequestedEvent {
@@ -187,6 +179,7 @@ message PromoteScriptRevisionRequestedEvent {
   string definition_actor_id = 3;
   string source_hash = 4;
   string proposal_id = 5;
+  string expected_base_revision = 6;
 }
 
 message RollbackScriptRevisionRequestedEvent {
@@ -260,9 +253,6 @@ message ScriptEvolutionProposedEvent {
   string candidate_revision = 4;
   string candidate_source_hash = 5;
   string reason = 6;
-  string definition_actor_id = 7;
-  string catalog_actor_id = 8;
-  string requested_by_actor_id = 9;
 }
 
 message ScriptEvolutionBuildRequestedEvent {

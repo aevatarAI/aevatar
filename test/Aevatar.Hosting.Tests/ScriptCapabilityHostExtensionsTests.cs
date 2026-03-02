@@ -8,7 +8,7 @@ using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Scripting.Hosting.DependencyInjection;
-using Aevatar.Scripting.Hosting.Ports;
+using Aevatar.Scripting.Infrastructure.Ports;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
@@ -67,22 +67,12 @@ public class ScriptCapabilityHostExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptCatalogPort));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptPolicyGatePort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptValidationPipelinePort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptPromotionPort));
-        services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptEvolutionFlowPort) &&
             x.ImplementationType == typeof(RuntimeScriptEvolutionFlowPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptEvolutionPort));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IGAgentEventRoutingPort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IGAgentInvocationPort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IGAgentFactoryPort));
+            x.ServiceType == typeof(IGAgentRuntimePort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IAICapability));
     }

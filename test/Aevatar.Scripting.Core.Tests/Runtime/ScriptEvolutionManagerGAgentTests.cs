@@ -34,9 +34,6 @@ public class ScriptEvolutionManagerGAgentTests
             CandidateRevision = "rev-2",
             CandidateSource = "source-rev-2",
             CandidateSourceHash = "hash-rev-2",
-            DefinitionActorId = "definition-1",
-            CatalogActorId = "catalog-1",
-            RequestedByActorId = "runtime-1",
         });
 
         flowPort.ExecutedProposals.Should().ContainSingle();
@@ -69,9 +66,6 @@ public class ScriptEvolutionManagerGAgentTests
             CandidateRevision = "rev-2",
             CandidateSource = "source-rev-2",
             CandidateSourceHash = "hash-rev-2",
-            DefinitionActorId = "definition-1",
-            CatalogActorId = "catalog-1",
-            RequestedByActorId = "runtime-1",
         });
 
         agent.State.Proposals.Should().ContainKey("proposal-denied");

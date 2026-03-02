@@ -7,6 +7,7 @@
     <RootNamespace>Aevatar.Scripting.Infrastructure</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Scripting.Application\Aevatar.Scripting.Application.csproj" />
     <ProjectReference Include="..\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
   </ItemGroup>
   <ItemGroup>

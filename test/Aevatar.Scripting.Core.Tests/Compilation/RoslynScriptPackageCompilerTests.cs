@@ -521,8 +521,8 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
                     CandidateRevision: proposal.CandidateRevision,
                     Status: "promoted",
                     FailureReason: string.Empty,
-                    DefinitionActorId: proposal.DefinitionActorId,
-                    CatalogActorId: proposal.CatalogActorId,
+                    DefinitionActorId: $"script-definition:{proposal.ScriptId}",
+                    CatalogActorId: "script-catalog",
                     ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
 
         public Task<string> UpsertScriptDefinitionAsync(

@@ -14,13 +14,15 @@ public sealed class ScriptEvolutionProposedEventReducer
         ScriptEvolutionProposedEvent evt,
         DateTimeOffset now)
     {
-        readModel.Id = context.RootActorId;
+        _ = context;
+
+        readModel.Id = evt.ProposalId ?? string.Empty;
         readModel.ProposalId = evt.ProposalId ?? string.Empty;
         readModel.ScriptId = evt.ScriptId ?? string.Empty;
         readModel.BaseRevision = evt.BaseRevision ?? string.Empty;
         readModel.CandidateRevision = evt.CandidateRevision ?? string.Empty;
-        readModel.DefinitionActorId = evt.DefinitionActorId ?? string.Empty;
-        readModel.CatalogActorId = evt.CatalogActorId ?? string.Empty;
+        readModel.DefinitionActorId = string.Empty;
+        readModel.CatalogActorId = string.Empty;
         readModel.ValidationStatus = "pending";
         readModel.PromotionStatus = "pending";
         readModel.RollbackStatus = string.Empty;

@@ -4,31 +4,30 @@ using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 
-namespace Aevatar.Scripting.Hosting.Ports;
+namespace Aevatar.Scripting.Infrastructure.Ports;
 
-public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort, IScriptRuntimeDefinitionQueryModePort
+public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
 {
-    private const string OrleansRuntimePrefix = "Aevatar.Foundation.Runtime.Implementations.Orleans.";
-
     private readonly IActorRuntime _runtime;
     private readonly IStreamProvider _streams;
     private readonly TimeSpan _queryTimeout;
+    private readonly bool _useEventDrivenDefinitionQuery;
     private readonly QueryScriptDefinitionSnapshotRequestAdapter _queryAdapter = new();
 
     public RuntimeScriptDefinitionSnapshotPort(
         IActorRuntime runtime,
         IStreamProvider streams,
+        IScriptingRuntimeQueryModes queryModes,
         IScriptingPortTimeouts timeouts)
     {
         _runtime = runtime;
         _streams = streams;
+        _useEventDrivenDefinitionQuery = (queryModes ?? throw new ArgumentNullException(nameof(queryModes)))
+            .UseEventDrivenDefinitionQuery;
         _queryTimeout = NormalizeTimeout(timeouts.DefinitionSnapshotQueryTimeout);
-        var runtimeType = runtime.GetType().FullName;
-        UseEventDrivenDefinitionQuery = !string.IsNullOrWhiteSpace(runtimeType) &&
-                                        runtimeType.StartsWith(OrleansRuntimePrefix, StringComparison.Ordinal);
     }
 
-    public bool UseEventDrivenDefinitionQuery { get; }
+    public bool UseEventDrivenDefinitionQuery => _useEventDrivenDefinitionQuery;
 
     public async Task<ScriptDefinitionSnapshot> GetRequiredAsync(
         string definitionActorId,
@@ -40,26 +39,16 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
         var actor = await _runtime.GetAsync(definitionActorId)
             ?? throw new InvalidOperationException($"Script definition actor not found: {definitionActorId}");
 
-        var requestId = Guid.NewGuid().ToString("N");
-        var replyStreamId = $"scripting.query.definition.reply:{requestId}";
-        var responseTaskSource = new TaskCompletionSource<ScriptDefinitionSnapshotRespondedEvent>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var subscription = await _streams
-            .GetStream(replyStreamId)
-            .SubscribeAsync<ScriptDefinitionSnapshotRespondedEvent>(response =>
-            {
-                if (string.Equals(response.RequestId, requestId, StringComparison.Ordinal))
-                    responseTaskSource.TrySetResult(response);
-
-                return Task.CompletedTask;
-            }, ct);
-
-        await actor.HandleEventAsync(
-            _queryAdapter.Map(definitionActorId, requestId, replyStreamId, requestedRevision),
+        var response = await ScriptQueryReplyAwaiter.QueryAsync<ScriptDefinitionSnapshotRespondedEvent>(
+            _streams,
+            "scripting.query.definition.reply",
+            _queryTimeout,
+            (requestId, replyStreamId) => actor.HandleEventAsync(
+                _queryAdapter.Map(definitionActorId, requestId, replyStreamId, requestedRevision),
+                ct),
+            static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
+            static requestId => $"Timeout waiting for script definition snapshot query response. request_id={requestId}",
             ct);
-
-        var response = await WaitForResponseAsync(responseTaskSource.Task, requestId, ct);
         if (!response.Found)
             throw new InvalidOperationException(
                 string.IsNullOrWhiteSpace(response.FailureReason)
@@ -83,21 +72,6 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
 
         ct.ThrowIfCancellationRequested();
         return snapshot;
-    }
-
-    private async Task<ScriptDefinitionSnapshotRespondedEvent> WaitForResponseAsync(
-        Task<ScriptDefinitionSnapshotRespondedEvent> responseTask,
-        string requestId,
-        CancellationToken ct)
-    {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var timeoutTask = Task.Delay(_queryTimeout, timeoutCts.Token);
-        var completed = await Task.WhenAny(responseTask, timeoutTask);
-        if (!ReferenceEquals(completed, responseTask))
-            throw new TimeoutException($"Timeout waiting for script definition snapshot query response. request_id={requestId}");
-
-        timeoutCts.Cancel();
-        return await responseTask;
     }
 
     private static TimeSpan NormalizeTimeout(TimeSpan timeout) =>

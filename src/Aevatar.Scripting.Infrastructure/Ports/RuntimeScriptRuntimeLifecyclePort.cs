@@ -4,12 +4,12 @@ using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Scripting.Hosting.Ports;
+namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptRuntimeLifecyclePort : IScriptRuntimeLifecyclePort
 {
     private readonly IActorRuntime _runtime;
-    private readonly RunScriptCommandAdapter _runCommandAdapter = new();
+    private readonly RunScriptActorRequestAdapter _runRequestAdapter = new();
 
     public RuntimeScriptRuntimeLifecyclePort(
         IActorRuntime runtime)
@@ -55,8 +55,8 @@ public sealed class RuntimeScriptRuntimeLifecyclePort : IScriptRuntimeLifecycleP
             ?? throw new InvalidOperationException($"Script runtime actor not found: {runtimeActorId}");
 
         await runtimeActor.HandleEventAsync(
-            _runCommandAdapter.Map(
-                new RunScriptCommand(
+            _runRequestAdapter.Map(
+                new RunScriptActorRequest(
                     RunId: runId,
                     InputPayload: inputPayload?.Clone(),
                     ScriptRevision: scriptRevision ?? string.Empty,

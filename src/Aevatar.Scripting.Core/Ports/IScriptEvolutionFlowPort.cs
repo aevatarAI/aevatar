@@ -2,6 +2,18 @@ using Aevatar.Scripting.Abstractions.Definitions;
 
 namespace Aevatar.Scripting.Core.Ports;
 
+public sealed record ScriptPromotionResult(
+    string DefinitionActorId,
+    string CatalogActorId,
+    string PromotedRevision);
+
+public sealed record ScriptRollbackRequest(
+    string ProposalId,
+    string ScriptId,
+    string TargetRevision,
+    string CatalogActorId,
+    string Reason);
+
 public enum ScriptEvolutionFlowStatus
 {
     PolicyRejected = 0,

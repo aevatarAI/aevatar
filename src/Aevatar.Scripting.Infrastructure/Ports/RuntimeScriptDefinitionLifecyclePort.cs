@@ -3,13 +3,13 @@ using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 
-namespace Aevatar.Scripting.Hosting.Ports;
+namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptDefinitionLifecyclePort : IScriptDefinitionLifecyclePort
 {
     private readonly IActorRuntime _runtime;
     private readonly IScriptingActorAddressResolver _addressResolver;
-    private readonly UpsertScriptDefinitionCommandAdapter _adapter = new();
+    private readonly UpsertScriptDefinitionActorRequestAdapter _adapter = new();
 
     public RuntimeScriptDefinitionLifecyclePort(
         IActorRuntime runtime,
@@ -48,7 +48,7 @@ public sealed class RuntimeScriptDefinitionLifecyclePort : IScriptDefinitionLife
 
         await actor.HandleEventAsync(
             _adapter.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: scriptId,
                     ScriptRevision: scriptRevision,
                     SourceText: sourceText,

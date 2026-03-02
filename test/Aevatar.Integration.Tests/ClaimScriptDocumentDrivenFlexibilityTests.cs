@@ -134,7 +134,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
         var supportsDynamicDecisionEvents = decision.DomainEvents.Count > 0;
         var enforcesDefinitionSnapshotLookup = true;
         var hasFactoryPort = System.Type.GetType(
-                "Aevatar.Scripting.Core.Ports.IGAgentFactoryPort, Aevatar.Scripting.Core",
+                "Aevatar.Scripting.Core.Ports.IGAgentRuntimePort, Aevatar.Scripting.Core",
                 throwOnError: false,
                 ignoreCase: false) != null;
 
@@ -148,10 +148,10 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsertAdapter = new UpsertScriptDefinitionCommandAdapter();
+        var upsertAdapter = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
             upsertAdapter.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: orchestrator.ScriptId,
                     ScriptRevision: orchestrator.Revision,
                     SourceText: orchestrator.Source,
@@ -159,10 +159,10 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
                 definitionActorId),
             CancellationToken.None);
 
-        var runAdapter = new RunScriptCommandAdapter();
+        var runAdapter = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
             runAdapter.Map(
-                new RunScriptCommand(
+                new RunScriptActorRequest(
                     RunId: "run-flex",
                     InputPayload: BuildClaimPayload("Case-B", 0.91, true),
                     ScriptRevision: orchestrator.Revision,
@@ -251,6 +251,8 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
 
     private sealed class ThrowingSnapshotPort : IScriptDefinitionSnapshotPort
     {
+        public bool UseEventDrivenDefinitionQuery => false;
+
         public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
             string definitionActorId,
             string requestedRevision,

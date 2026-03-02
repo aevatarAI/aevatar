@@ -83,10 +83,10 @@ public sealed class PersistedDefinitionSourceScript : IScriptPackageRuntime
 }
 """;
 
-        var upsert = new UpsertScriptDefinitionCommandAdapter();
+        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
             upsert.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: "claim-recompile-script",
                     ScriptRevision: scriptRevision,
                     SourceText: persistedDefinitionSource,
@@ -94,10 +94,10 @@ public sealed class PersistedDefinitionSourceScript : IScriptPackageRuntime
                 definitionActorId),
             CancellationToken.None);
 
-        var run = new RunScriptCommandAdapter();
+        var run = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
             run.Map(
-                new RunScriptCommand(
+                new RunScriptActorRequest(
                     RunId: "run-recompile-1",
                     InputPayload: Any.Pack(new Struct()),
                     ScriptRevision: scriptRevision,
@@ -122,7 +122,7 @@ public sealed class PersistedDefinitionSourceScript : IScriptPackageRuntime
 
         await runtimeActor.HandleEventAsync(
             run.Map(
-                new RunScriptCommand(
+                new RunScriptActorRequest(
                     RunId: "run-recompile-2",
                     InputPayload: Any.Pack(new Struct()),
                     ScriptRevision: scriptRevision,
@@ -154,10 +154,10 @@ public sealed class PersistedDefinitionSourceScript : IScriptPackageRuntime
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsert = new UpsertScriptDefinitionCommandAdapter();
+        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
             upsert.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: "claim-script",
                     ScriptRevision: "rev-claim-replay",
                     SourceText: """
@@ -213,10 +213,10 @@ public sealed class ClaimReplayScript : IScriptPackageRuntime
                 definitionActorId),
             CancellationToken.None);
 
-        var run = new RunScriptCommandAdapter();
+        var run = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
             run.Map(
-                new RunScriptCommand(
+                new RunScriptActorRequest(
                     RunId: "run-replay-case-b",
                     InputPayload: Any.Pack(new Struct
                     {
@@ -255,10 +255,10 @@ public sealed class ClaimReplayScript : IScriptPackageRuntime
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsert = new UpsertScriptDefinitionCommandAdapter();
+        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
             upsert.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: "claim-script-rm",
                     ScriptRevision: "rev-claim-rm",
                     SourceText: """
@@ -308,10 +308,10 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
                 definitionActorId),
             CancellationToken.None);
 
-        var run = new RunScriptCommandAdapter();
+        var run = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
             run.Map(
-                new RunScriptCommand(
+                new RunScriptActorRequest(
                     RunId: "run-readmodel",
                     InputPayload: Any.Pack(new Struct
                     {

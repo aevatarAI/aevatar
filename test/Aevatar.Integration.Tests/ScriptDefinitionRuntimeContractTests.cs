@@ -27,10 +27,10 @@ public class ScriptDefinitionRuntimeContractTests
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsert = new UpsertScriptDefinitionCommandAdapter();
+        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
             upsert.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: "script-contract",
                     ScriptRevision: "rev-contract-1",
                     SourceText: """
@@ -80,10 +80,10 @@ public sealed class ContractScript : IScriptPackageRuntime
                 definitionActorId),
             CancellationToken.None);
 
-        var run = new RunScriptCommandAdapter();
+        var run = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
             run.Map(
-                new RunScriptCommand(
+                new RunScriptActorRequest(
                     RunId: "run-contract-1",
                     InputPayload: Any.Pack(new Struct
                     {
@@ -119,10 +119,10 @@ public sealed class ContractScript : IScriptPackageRuntime
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsert = new UpsertScriptDefinitionCommandAdapter();
+        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
             upsert.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: "script-self-contained",
                     ScriptRevision: "rev-self-contained",
                     SourceText: """
@@ -172,10 +172,10 @@ public sealed class ReplayScript : IScriptPackageRuntime
                 definitionActorId),
             CancellationToken.None);
 
-        var run = new RunScriptCommandAdapter();
+        var run = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
             run.Map(
-                new RunScriptCommand(
+                new RunScriptActorRequest(
                     RunId: "run-self-contained",
                     InputPayload: Any.Pack(new Struct
                     {
@@ -221,10 +221,10 @@ public sealed class ReplayScript : IScriptPackageRuntime
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsert = new UpsertScriptDefinitionCommandAdapter();
+        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
             upsert.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: "script-revision-check",
                     ScriptRevision: "rev-actual",
                     SourceText: """
@@ -274,10 +274,10 @@ public sealed class RevisionScript : IScriptPackageRuntime
                 definitionActorId),
             CancellationToken.None);
 
-        var run = new RunScriptCommandAdapter();
+        var run = new RunScriptActorRequestAdapter();
         Func<Task> act = async () => await runtimeActor.HandleEventAsync(
             run.Map(
-                new RunScriptCommand(
+                new RunScriptActorRequest(
                     RunId: "run-revision-check",
                     InputPayload: Any.Pack(new Struct()),
                     ScriptRevision: "rev-requested-mismatch",

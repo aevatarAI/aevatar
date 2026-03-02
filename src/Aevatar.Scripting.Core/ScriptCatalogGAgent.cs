@@ -17,15 +17,29 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
     public async Task HandlePromoteScriptRevisionRequested(PromoteScriptRevisionRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        if (string.IsNullOrWhiteSpace(evt.ScriptId))
+        var scriptId = evt.ScriptId ?? string.Empty;
+        var revision = evt.Revision ?? string.Empty;
+        var expectedBaseRevision = evt.ExpectedBaseRevision ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(scriptId))
             throw new InvalidOperationException("ScriptId is required.");
-        if (string.IsNullOrWhiteSpace(evt.Revision))
+        if (string.IsNullOrWhiteSpace(revision))
             throw new InvalidOperationException("Revision is required.");
+
+        if (!string.IsNullOrWhiteSpace(expectedBaseRevision))
+        {
+            if (State.Entries.TryGetValue(scriptId, out var currentEntry) &&
+                !string.Equals(currentEntry.ActiveRevision, expectedBaseRevision, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Promotion conflict for script `{scriptId}`. expected_base_revision=`{expectedBaseRevision}` actual_active_revision=`{currentEntry.ActiveRevision}`.");
+            }
+        }
 
         await PersistDomainEventAsync(new ScriptCatalogRevisionPromotedEvent
         {
-            ScriptId = evt.ScriptId ?? string.Empty,
-            Revision = evt.Revision ?? string.Empty,
+            ScriptId = scriptId,
+            Revision = revision,
             DefinitionActorId = evt.DefinitionActorId ?? string.Empty,
             SourceHash = evt.SourceHash ?? string.Empty,
             ProposalId = evt.ProposalId ?? string.Empty,

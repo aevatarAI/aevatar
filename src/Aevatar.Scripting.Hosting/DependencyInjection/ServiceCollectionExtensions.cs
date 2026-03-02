@@ -6,7 +6,7 @@ using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Schema;
-using Aevatar.Scripting.Hosting.Ports;
+using Aevatar.Scripting.Infrastructure.Ports;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -28,18 +28,14 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptRuntimeCapabilityComposer, ScriptRuntimeCapabilityComposer>();
         services.TryAddSingleton<IScriptRuntimeExecutionOrchestrator, ScriptRuntimeExecutionOrchestrator>();
         services.TryAddSingleton<IScriptingPortTimeouts, DefaultScriptingPortTimeouts>();
+        services.TryAddSingleton<IScriptingRuntimeQueryModes, DefaultScriptingRuntimeQueryModes>();
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, RuntimeScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptDefinitionLifecyclePort, RuntimeScriptDefinitionLifecyclePort>();
         services.TryAddSingleton<IScriptRuntimeLifecyclePort, RuntimeScriptRuntimeLifecyclePort>();
         services.TryAddSingleton<IScriptCatalogPort, RuntimeScriptCatalogPort>();
-        services.TryAddSingleton<IScriptPolicyGatePort, RuntimeScriptPolicyGatePort>();
-        services.TryAddSingleton<IScriptValidationPipelinePort, RuntimeScriptValidationPipelinePort>();
-        services.TryAddSingleton<IScriptPromotionPort, RuntimeScriptPromotionPort>();
         services.TryAddSingleton<IScriptEvolutionFlowPort, RuntimeScriptEvolutionFlowPort>();
         services.TryAddSingleton<IScriptEvolutionPort, RuntimeScriptEvolutionPort>();
-        services.TryAddSingleton<IGAgentEventRoutingPort, RuntimeGAgentEventRoutingPort>();
-        services.TryAddSingleton<IGAgentInvocationPort, RuntimeGAgentInvocationPort>();
-        services.TryAddSingleton<IGAgentFactoryPort, RuntimeGAgentFactoryPort>();
+        services.TryAddSingleton<IGAgentRuntimePort, RuntimeGAgentRuntimePort>();
         services.TryAddSingleton<IAICapability>(sp =>
         {
             var roleAgentPort = sp.GetService<IRoleAgentPort>();

@@ -1,4 +1,5 @@
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
@@ -33,9 +34,8 @@ public class ClaimOrchestrationIntegrationTests
             new ScriptPackageCompilationRequest(orchestratorScript.ScriptId, orchestratorScript.Revision, orchestratorScript.Source),
             CancellationToken.None);
 
-        var invocationPort = new RecordingInvocationPort();
-        var factoryPort = new RecordingFactoryPort();
-        var orchestrator = new ClaimRuntimeOrchestrator(compilation.CompiledDefinition!, invocationPort, factoryPort);
+        var agentRuntimePort = new RecordingAgentRuntimePort();
+        var orchestrator = new ClaimRuntimeOrchestrator(compilation.CompiledDefinition!, agentRuntimePort);
 
         await orchestrator.ExecuteAsync(
             runId: "run-claim-b",
@@ -43,11 +43,11 @@ public class ClaimOrchestrationIntegrationTests
             inputPayload: BuildClaimPayload("Case-B", 0.91, true),
             CancellationToken.None);
 
-        invocationPort.Calls.Should().Contain(x => x.PayloadValue == "ClaimFactsExtractionRequestedEvent");
-        invocationPort.Calls.Should().Contain(x => x.PayloadValue == "ClaimRiskScoringRequestedEvent");
-        invocationPort.Calls.Should().Contain(x => x.PayloadValue == "ClaimComplianceValidationRequestedEvent");
-        invocationPort.Calls.Should().Contain(x => x.PayloadValue == "ClaimManualReviewRequestedEvent");
-        factoryPort.Created.Should().HaveCount(1);
+        agentRuntimePort.Calls.Should().Contain(x => x.PayloadValue == "ClaimFactsExtractionRequestedEvent");
+        agentRuntimePort.Calls.Should().Contain(x => x.PayloadValue == "ClaimRiskScoringRequestedEvent");
+        agentRuntimePort.Calls.Should().Contain(x => x.PayloadValue == "ClaimComplianceValidationRequestedEvent");
+        agentRuntimePort.Calls.Should().Contain(x => x.PayloadValue == "ClaimManualReviewRequestedEvent");
+        agentRuntimePort.Created.Should().HaveCount(1);
     }
 
     [Fact]
@@ -60,9 +60,8 @@ public class ClaimOrchestrationIntegrationTests
             new ScriptPackageCompilationRequest(orchestratorScript.ScriptId, orchestratorScript.Revision, orchestratorScript.Source),
             CancellationToken.None);
 
-        var invocationPort = new RecordingInvocationPort();
-        var factoryPort = new RecordingFactoryPort();
-        var orchestrator = new ClaimRuntimeOrchestrator(compilation.CompiledDefinition!, invocationPort, factoryPort);
+        var agentRuntimePort = new RecordingAgentRuntimePort();
+        var orchestrator = new ClaimRuntimeOrchestrator(compilation.CompiledDefinition!, agentRuntimePort);
 
         await orchestrator.ExecuteAsync(
             runId: "run-claim-a",
@@ -70,14 +69,13 @@ public class ClaimOrchestrationIntegrationTests
             inputPayload: BuildClaimPayload("Case-A", 0.12, true),
             CancellationToken.None);
 
-        invocationPort.Calls.Should().Contain(x => x.PayloadValue == "ClaimApprovedEvent");
-        factoryPort.Created.Should().BeEmpty();
+        agentRuntimePort.Calls.Should().Contain(x => x.PayloadValue == "ClaimApprovedEvent");
+        agentRuntimePort.Created.Should().BeEmpty();
     }
 
     private sealed class ClaimRuntimeOrchestrator(
         Aevatar.Scripting.Abstractions.Definitions.IScriptPackageDefinition definition,
-        IGAgentInvocationPort invocationPort,
-        IGAgentFactoryPort factoryPort)
+        IGAgentRuntimePort agentRuntimePort)
     {
         public async Task ExecuteAsync(
             string runId,
@@ -106,11 +104,11 @@ public class ClaimOrchestrationIntegrationTests
                 var eventName = evt.Value ?? string.Empty;
                 if (string.Equals(eventName, "ClaimManualReviewRequestedEvent", StringComparison.Ordinal))
                 {
-                    var reviewActorId = await factoryPort.CreateAsync(
+                    var reviewActorId = await agentRuntimePort.CreateAsync(
                         typeof(ScriptRuntimeGAgent).AssemblyQualifiedName!,
                         "manual-review-" + runId,
                         ct);
-                    await invocationPort.InvokeAsync(
+                    await agentRuntimePort.InvokeAsync(
                         reviewActorId,
                         new StringValue { Value = eventName },
                         correlationId,
@@ -118,7 +116,7 @@ public class ClaimOrchestrationIntegrationTests
                     continue;
                 }
 
-                await invocationPort.InvokeAsync(
+                await agentRuntimePort.InvokeAsync(
                     targetAgentId: "agent-" + eventName,
                     eventPayload: new StringValue { Value = eventName },
                     correlationId: correlationId,
@@ -127,9 +125,34 @@ public class ClaimOrchestrationIntegrationTests
         }
     }
 
-    private sealed class RecordingInvocationPort : IGAgentInvocationPort
+    private sealed class RecordingAgentRuntimePort : IGAgentRuntimePort
     {
         public List<(string TargetActorId, string PayloadValue, string CorrelationId)> Calls { get; } = [];
+        public List<(string TypeName, string? ActorId)> Created { get; } = [];
+
+        public Task<string> CreateAsync(
+            string agentTypeAssemblyQualifiedName,
+            string? actorId,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Created.Add((agentTypeAssemblyQualifiedName, actorId));
+            return Task.FromResult(actorId ?? "created-runtime");
+        }
+
+        public Task PublishAsync(
+            string sourceActorId,
+            IMessage eventPayload,
+            EventDirection direction,
+            string correlationId,
+            CancellationToken ct) => Task.CompletedTask;
+
+        public Task SendToAsync(
+            string sourceActorId,
+            string targetActorId,
+            IMessage eventPayload,
+            string correlationId,
+            CancellationToken ct) => Task.CompletedTask;
 
         public Task InvokeAsync(
             string targetAgentId,
@@ -141,21 +164,6 @@ public class ClaimOrchestrationIntegrationTests
             var payloadValue = eventPayload is StringValue sv ? sv.Value : eventPayload.Descriptor.Name;
             Calls.Add((targetAgentId, payloadValue, correlationId));
             return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingFactoryPort : IGAgentFactoryPort
-    {
-        public List<(string TypeName, string? ActorId)> Created { get; } = [];
-
-        public Task<string> CreateAsync(
-            string agentTypeAssemblyQualifiedName,
-            string? actorId,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            Created.Add((agentTypeAssemblyQualifiedName, actorId));
-            return Task.FromResult(actorId ?? "created-runtime");
         }
 
         public Task DestroyAsync(string actorId, CancellationToken ct) => Task.CompletedTask;

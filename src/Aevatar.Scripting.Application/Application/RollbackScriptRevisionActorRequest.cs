@@ -1,6 +1,6 @@
 namespace Aevatar.Scripting.Application;
 
-public sealed record RollbackScriptRevisionCommand(
+public sealed record RollbackScriptRevisionActorRequest(
     string ScriptId,
     string TargetRevision,
     string Reason,

@@ -100,9 +100,7 @@ public class ScriptRuntimeGAgentReplayContractTests
     {
         var capabilityComposer = new ScriptRuntimeCapabilityComposer(
             new NullAICapability(),
-            new NullEventRoutingPort(),
-            new NullInvocationPort(),
-            new NullFactoryPort(),
+            new NullAgentRuntimePort(),
             new NullEvolutionPort(),
             new NullDefinitionLifecyclePort(),
             new NullRuntimeLifecyclePort(),
@@ -218,6 +216,8 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
 
     private sealed class StaticSnapshotPort(ScriptDefinitionGAgent definition) : IScriptDefinitionSnapshotPort
     {
+        public bool UseEventDrivenDefinitionQuery => false;
+
         public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
             string definitionActorId,
             string requestedRevision,
@@ -247,25 +247,30 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             CancellationToken ct) => Task.FromResult("noop");
     }
 
-    private sealed class NullEventRoutingPort : Aevatar.Scripting.Core.Ports.IGAgentEventRoutingPort
-    {
-        public Task PublishAsync(string sourceActorId, IMessage eventPayload, EventDirection direction, string correlationId, CancellationToken ct) =>
-            Task.CompletedTask;
-
-        public Task SendToAsync(string sourceActorId, string targetActorId, IMessage eventPayload, string correlationId, CancellationToken ct) =>
-            Task.CompletedTask;
-    }
-
-    private sealed class NullInvocationPort : Aevatar.Scripting.Core.Ports.IGAgentInvocationPort
-    {
-        public Task InvokeAsync(string targetAgentId, IMessage eventPayload, string correlationId, CancellationToken ct) =>
-            Task.CompletedTask;
-    }
-
-    private sealed class NullFactoryPort : Aevatar.Scripting.Core.Ports.IGAgentFactoryPort
+    private sealed class NullAgentRuntimePort : Aevatar.Scripting.Core.Ports.IGAgentRuntimePort
     {
         public Task<string> CreateAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) =>
             Task.FromResult(actorId ?? "agent-created");
+
+        public Task PublishAsync(
+            string sourceActorId,
+            IMessage eventPayload,
+            EventDirection direction,
+            string correlationId,
+            CancellationToken ct) => Task.CompletedTask;
+
+        public Task SendToAsync(
+            string sourceActorId,
+            string targetActorId,
+            IMessage eventPayload,
+            string correlationId,
+            CancellationToken ct) => Task.CompletedTask;
+
+        public Task InvokeAsync(
+            string targetAgentId,
+            IMessage eventPayload,
+            string correlationId,
+            CancellationToken ct) => Task.CompletedTask;
 
         public Task DestroyAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
 
@@ -277,11 +282,9 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
     private sealed class NullEvolutionPort : IScriptEvolutionPort
     {
         public Task<ScriptPromotionDecision> ProposeAsync(
-            string managerActorId,
             ScriptEvolutionProposal proposal,
             CancellationToken ct)
         {
-            _ = managerActorId;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(
                 new ScriptPromotionDecision(
@@ -292,8 +295,8 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
                     CandidateRevision: proposal.CandidateRevision,
                     Status: "promoted",
                     FailureReason: string.Empty,
-                    DefinitionActorId: proposal.DefinitionActorId,
-                    CatalogActorId: proposal.CatalogActorId,
+                    DefinitionActorId: "definition-1",
+                    CatalogActorId: "script-catalog",
                     ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
         }
     }
@@ -356,6 +359,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
         public Task PromoteAsync(
             string catalogActorId,
             string scriptId,
+            string expectedBaseRevision,
             string revision,
             string definitionActorId,
             string sourceHash,
@@ -364,6 +368,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
         {
             _ = catalogActorId;
             _ = scriptId;
+            _ = expectedBaseRevision;
             _ = revision;
             _ = definitionActorId;
             _ = sourceHash;

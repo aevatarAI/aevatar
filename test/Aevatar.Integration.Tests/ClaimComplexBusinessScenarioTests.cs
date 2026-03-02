@@ -25,14 +25,12 @@ public class ClaimComplexBusinessScenarioTests
     public async Task Should_execute_complex_claim_business_paths_with_ai_ports_projection_and_replay()
     {
         var aiCapability = new RecordingAICapability();
-        var invocationPort = new RecordingInvocationPort();
-        var factoryPort = new RecordingFactoryPort();
+        var agentRuntimePort = new RecordingAgentRuntimePort();
 
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddSingleton<IAICapability>(aiCapability);
-        services.AddSingleton<IGAgentInvocationPort>(invocationPort);
-        services.AddSingleton<IGAgentFactoryPort>(factoryPort);
+        services.AddSingleton<IGAgentRuntimePort>(agentRuntimePort);
         services.AddScriptCapability();
 
         using var provider = services.BuildServiceProvider();
@@ -44,10 +42,10 @@ public class ClaimComplexBusinessScenarioTests
         const string revision = "rev-claim-complex-1";
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
 
-        var upsertAdapter = new UpsertScriptDefinitionCommandAdapter();
+        var upsertAdapter = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
             upsertAdapter.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: scriptId,
                     ScriptRevision: revision,
                     SourceText: ComplexClaimScriptSource,
@@ -67,15 +65,15 @@ public class ClaimComplexBusinessScenarioTests
             var runtimeActorId = "claim-complex-runtime-" + claimCase.CaseId.ToLowerInvariant();
             var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-            var invocationCountBefore = invocationPort.Calls.Count;
-            var factoryCountBefore = factoryPort.Created.Count;
+            var invocationCountBefore = agentRuntimePort.Calls.Count;
+            var factoryCountBefore = agentRuntimePort.Created.Count;
             var aiCountBefore = aiCapability.Calls.Count;
 
             var runId = "run-" + claimCase.CaseId.ToLowerInvariant();
-            var runAdapter = new RunScriptCommandAdapter();
+            var runAdapter = new RunScriptActorRequestAdapter();
             await runtimeActor.HandleEventAsync(
                 runAdapter.Map(
-                    new RunScriptCommand(
+                    new RunScriptActorRequest(
                         RunId: runId,
                         InputPayload: BuildClaimPayload(
                             claimCase.CaseId,
@@ -101,19 +99,19 @@ public class ClaimComplexBusinessScenarioTests
             aiCalls[0].CorrelationId.Should().Be(runId);
             aiCalls[0].Prompt.Should().Contain(claimCase.CaseId);
 
-            var invocationCalls = invocationPort.Calls.Skip(invocationCountBefore).ToArray();
+            var invocationCalls = agentRuntimePort.Calls.Skip(invocationCountBefore).ToArray();
             invocationCalls.Should().Contain(x => x.PayloadValue == "AnalyzeClaimNarrativeEvent");
             invocationCalls.Should().Contain(x => x.PayloadValue == "ScoreFraudRiskEvent");
             invocationCalls.Should().Contain(x => x.PayloadValue == "ValidateClaimComplianceEvent");
 
             if (claimCase.ManualReviewRequired)
             {
-                factoryPort.Created.Skip(factoryCountBefore).Should().ContainSingle();
+                agentRuntimePort.Created.Skip(factoryCountBefore).Should().ContainSingle();
                 invocationCalls.Should().Contain(x => x.PayloadValue == "RequestManualReviewEvent");
             }
             else
             {
-                factoryPort.Created.Skip(factoryCountBefore).Should().BeEmpty();
+                agentRuntimePort.Created.Skip(factoryCountBefore).Should().BeEmpty();
                 invocationCalls.Should().NotContain(x => x.PayloadValue == "RequestManualReviewEvent");
             }
 
@@ -203,9 +201,35 @@ public class ClaimComplexBusinessScenarioTests
         }
     }
 
-    private sealed class RecordingInvocationPort : IGAgentInvocationPort
+    private sealed class RecordingAgentRuntimePort : IGAgentRuntimePort
     {
+        public List<(string TypeName, string ActorId)> Created { get; } = [];
         public List<(string TargetActorId, string PayloadValue, string CorrelationId)> Calls { get; } = [];
+
+        public Task<string> CreateAsync(
+            string agentTypeAssemblyQualifiedName,
+            string? actorId,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var createdId = actorId ?? "created-" + Guid.NewGuid().ToString("N");
+            Created.Add((agentTypeAssemblyQualifiedName, createdId));
+            return Task.FromResult(createdId);
+        }
+
+        public Task PublishAsync(
+            string sourceActorId,
+            IMessage eventPayload,
+            EventDirection direction,
+            string correlationId,
+            CancellationToken ct) => Task.CompletedTask;
+
+        public Task SendToAsync(
+            string sourceActorId,
+            string targetActorId,
+            IMessage eventPayload,
+            string correlationId,
+            CancellationToken ct) => Task.CompletedTask;
 
         public Task InvokeAsync(
             string targetAgentId,
@@ -217,22 +241,6 @@ public class ClaimComplexBusinessScenarioTests
             var payloadValue = eventPayload is StringValue sv ? sv.Value : eventPayload.Descriptor.Name;
             Calls.Add((targetAgentId, payloadValue, correlationId));
             return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingFactoryPort : IGAgentFactoryPort
-    {
-        public List<(string TypeName, string ActorId)> Created { get; } = [];
-
-        public Task<string> CreateAsync(
-            string agentTypeAssemblyQualifiedName,
-            string? actorId,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            var createdId = actorId ?? "created-" + Guid.NewGuid().ToString("N");
-            Created.Add((agentTypeAssemblyQualifiedName, createdId));
-            return Task.FromResult(createdId);
         }
 
         public Task DestroyAsync(string actorId, CancellationToken ct) => Task.CompletedTask;

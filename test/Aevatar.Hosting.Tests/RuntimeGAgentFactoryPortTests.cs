@@ -1,17 +1,17 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Scripting.Hosting.Ports;
+using Aevatar.Scripting.Infrastructure.Ports;
 using FluentAssertions;
 using Google.Protobuf;
 
 namespace Aevatar.Hosting.Tests;
 
-public class RuntimeGAgentFactoryPortTests
+public class RuntimeGAgentRuntimePortFactoryTests
 {
     [Fact]
     public async Task CreateAsync_ShouldCreateAgentThroughRuntime_AndReturnActorId()
     {
         var runtime = new RecordingRuntime();
-        var port = new RuntimeGAgentFactoryPort(runtime);
+        var port = new RuntimeGAgentRuntimePort(runtime);
 
         var actorId = await port.CreateAsync(
             typeof(FakeTestAgent).AssemblyQualifiedName!,
@@ -27,7 +27,7 @@ public class RuntimeGAgentFactoryPortTests
     public async Task CreateAsync_ShouldThrow_WhenAgentTypeNotFound()
     {
         var runtime = new RecordingRuntime();
-        var port = new RuntimeGAgentFactoryPort(runtime);
+        var port = new RuntimeGAgentRuntimePort(runtime);
 
         Func<Task> act = async () =>
             _ = await port.CreateAsync("Missing.Type, Missing.Assembly", "agent-y", CancellationToken.None);
@@ -40,7 +40,7 @@ public class RuntimeGAgentFactoryPortTests
     public async Task DestroyLinkAndUnlink_ShouldDelegateToRuntime()
     {
         var runtime = new RecordingRuntime();
-        var port = new RuntimeGAgentFactoryPort(runtime);
+        var port = new RuntimeGAgentRuntimePort(runtime);
 
         await port.LinkAsync("parent-1", "child-1", CancellationToken.None);
         await port.UnlinkAsync("child-1", CancellationToken.None);

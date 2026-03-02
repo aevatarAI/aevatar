@@ -21,7 +21,7 @@ public class ScriptGAgentFactoryLifecycleBoundaryTests
 
         await using (var scope = provider.CreateAsyncScope())
         {
-            var factory = scope.ServiceProvider.GetRequiredService<IGAgentFactoryPort>();
+            var factory = scope.ServiceProvider.GetRequiredService<IGAgentRuntimePort>();
             var actorId = await factory.CreateAsync(
                 typeof(ScriptDefinitionGAgent).AssemblyQualifiedName!,
                 "factory-lifecycle-definition",
@@ -34,7 +34,7 @@ public class ScriptGAgentFactoryLifecycleBoundaryTests
 
         await using (var scope = provider.CreateAsyncScope())
         {
-            var factory = scope.ServiceProvider.GetRequiredService<IGAgentFactoryPort>();
+            var factory = scope.ServiceProvider.GetRequiredService<IGAgentRuntimePort>();
             await factory.DestroyAsync("factory-lifecycle-definition", CancellationToken.None);
         }
 
@@ -49,7 +49,7 @@ public class ScriptGAgentFactoryLifecycleBoundaryTests
         services.AddScriptCapability();
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
-        var factory = provider.GetRequiredService<IGAgentFactoryPort>();
+        var factory = provider.GetRequiredService<IGAgentRuntimePort>();
 
         var parentId = await factory.CreateAsync(
             typeof(ScriptRuntimeGAgent).AssemblyQualifiedName!,

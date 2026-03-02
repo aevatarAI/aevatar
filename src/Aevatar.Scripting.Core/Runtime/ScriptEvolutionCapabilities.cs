@@ -51,18 +51,9 @@ public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
             CandidateSourceHash = string.IsNullOrWhiteSpace(proposal.CandidateSourceHash)
                 ? ComputeSourceHash(proposal.CandidateSource)
                 : proposal.CandidateSourceHash,
-            DefinitionActorId = string.IsNullOrWhiteSpace(proposal.DefinitionActorId)
-                ? _context.DefinitionActorId
-                : proposal.DefinitionActorId,
-            CatalogActorId = string.IsNullOrWhiteSpace(proposal.CatalogActorId)
-                ? _addressResolver.GetCatalogActorId()
-                : proposal.CatalogActorId,
-            RequestedByActorId = string.IsNullOrWhiteSpace(proposal.RequestedByActorId)
-                ? _context.RuntimeActorId
-                : proposal.RequestedByActorId,
         };
 
-        return _evolutionPort.ProposeAsync(_addressResolver.GetEvolutionManagerActorId(), normalized, ct);
+        return _evolutionPort.ProposeAsync(normalized, ct);
     }
 
     public Task<string> UpsertScriptDefinitionAsync(
@@ -115,6 +106,7 @@ public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
         _catalogPort.PromoteAsync(
             string.IsNullOrWhiteSpace(catalogActorId) ? _addressResolver.GetCatalogActorId() : catalogActorId,
             scriptId,
+            string.Empty,
             revision,
             definitionActorId,
             sourceHash,

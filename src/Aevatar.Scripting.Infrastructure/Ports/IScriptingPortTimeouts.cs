@@ -1,4 +1,4 @@
-namespace Aevatar.Scripting.Hosting.Ports;
+namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public interface IScriptingPortTimeouts
 {

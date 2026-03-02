@@ -1,6 +1,6 @@
 using Aevatar.Scripting.Core.Ports;
 
-namespace Aevatar.Scripting.Hosting.Ports;
+namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class DefaultScriptingActorAddressResolver : IScriptingActorAddressResolver
 {

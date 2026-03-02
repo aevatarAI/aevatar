@@ -40,7 +40,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             evt.DefinitionActorId,
             evt.ScriptRevision);
 
-        if (_snapshotPort is IScriptRuntimeDefinitionQueryModePort { UseEventDrivenDefinitionQuery: true })
+        if (_snapshotPort.UseEventDrivenDefinitionQuery)
         {
             await QueueRunByDefinitionQueryAsync(evt, CancellationToken.None);
             return;

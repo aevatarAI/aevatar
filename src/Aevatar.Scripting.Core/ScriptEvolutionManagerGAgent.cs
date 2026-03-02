@@ -35,7 +35,7 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
     {
         ArgumentNullException.ThrowIfNull(evt);
 
-        var proposal = NormalizeProposal(evt, _addressResolver);
+        var proposal = NormalizeProposal(evt);
         await PersistDomainEventAsync(new ScriptEvolutionProposedEvent
         {
             ProposalId = proposal.ProposalId,
@@ -44,9 +44,6 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             CandidateRevision = proposal.CandidateRevision,
             CandidateSourceHash = proposal.CandidateSourceHash,
             Reason = proposal.Reason,
-            DefinitionActorId = proposal.DefinitionActorId,
-            CatalogActorId = proposal.CatalogActorId,
-            RequestedByActorId = proposal.RequestedByActorId,
         });
 
         await PersistDomainEventAsync(new ScriptEvolutionBuildRequestedEvent
@@ -66,17 +63,6 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
                 CandidateRevision = proposal.CandidateRevision,
                 FailureReason = flowResult.FailureReason ?? string.Empty,
             });
-            await TrySendDecisionResponseAsync(
-                evt,
-                BuildDecisionResponse(
-                    requestId: evt.DecisionRequestId ?? string.Empty,
-                    proposal: proposal,
-                    accepted: false,
-                    status: StatusRejected,
-                    failureReason: flowResult.FailureReason ?? string.Empty,
-                    definitionActorId: proposal.DefinitionActorId,
-                    catalogActorId: proposal.CatalogActorId,
-                    validation: flowResult.ValidationReport ?? ScriptEvolutionValidationReport.Empty));
             return;
         }
 
@@ -99,17 +85,6 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
                 CandidateRevision = proposal.CandidateRevision,
                 FailureReason = flowResult.FailureReason ?? string.Empty,
             });
-            await TrySendDecisionResponseAsync(
-                evt,
-                BuildDecisionResponse(
-                    requestId: evt.DecisionRequestId ?? string.Empty,
-                    proposal: proposal,
-                    accepted: false,
-                    status: StatusRejected,
-                    failureReason: flowResult.FailureReason ?? string.Empty,
-                    definitionActorId: proposal.DefinitionActorId,
-                    catalogActorId: proposal.CatalogActorId,
-                    validation: validation));
             return;
         }
 
@@ -126,17 +101,6 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
                 DefinitionActorId = promotion.DefinitionActorId,
                 CatalogActorId = promotion.CatalogActorId,
             });
-            await TrySendDecisionResponseAsync(
-                evt,
-                BuildDecisionResponse(
-                    requestId: evt.DecisionRequestId ?? string.Empty,
-                    proposal: proposal,
-                    accepted: true,
-                    status: StatusPromoted,
-                    failureReason: string.Empty,
-                    definitionActorId: promotion.DefinitionActorId,
-                    catalogActorId: promotion.CatalogActorId,
-                    validation: validation));
             return;
         }
 
@@ -147,17 +111,6 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             CandidateRevision = proposal.CandidateRevision,
             FailureReason = flowResult.FailureReason ?? string.Empty,
         });
-        await TrySendDecisionResponseAsync(
-            evt,
-            BuildDecisionResponse(
-                requestId: evt.DecisionRequestId ?? string.Empty,
-                proposal: proposal,
-                accepted: false,
-                status: StatusRejected,
-                failureReason: flowResult.FailureReason ?? string.Empty,
-                definitionActorId: proposal.DefinitionActorId,
-                catalogActorId: proposal.CatalogActorId,
-                validation: validation));
     }
 
     [EventHandler]
@@ -226,9 +179,9 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             Status = proposal.Status ?? string.Empty,
             FailureReason = proposal.FailureReason ?? string.Empty,
             DefinitionActorId = string.IsNullOrWhiteSpace(proposal.PromotedDefinitionActorId)
-                ? proposal.DefinitionActorId ?? string.Empty
+                ? _addressResolver.GetDefinitionActorId(proposal.ScriptId ?? string.Empty)
                 : proposal.PromotedDefinitionActorId,
-            CatalogActorId = proposal.CatalogActorId ?? string.Empty,
+            CatalogActorId = _addressResolver.GetCatalogActorId(),
         };
         response.Diagnostics.Add(proposal.ValidationDiagnostics);
         await SendQueryResponseAsync(evt.ReplyStreamId, response);
@@ -256,56 +209,9 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
     }
 
-    private async Task TrySendDecisionResponseAsync(
-        ProposeScriptEvolutionRequestedEvent requestEvent,
-        ScriptEvolutionDecisionRespondedEvent response,
-        CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(requestEvent.DecisionRequestId) ||
-            string.IsNullOrWhiteSpace(requestEvent.DecisionReplyStreamId))
-            return;
-
-        await EventPublisher.SendToAsync(
-            requestEvent.DecisionReplyStreamId,
-            response,
-            ct,
-            sourceEnvelope: null);
-    }
-
-    private static ScriptEvolutionDecisionRespondedEvent BuildDecisionResponse(
-        string requestId,
-        ScriptEvolutionProposal proposal,
-        bool accepted,
-        string status,
-        string failureReason,
-        string definitionActorId,
-        string catalogActorId,
-        ScriptEvolutionValidationReport validation)
-    {
-        var response = new ScriptEvolutionDecisionRespondedEvent
-        {
-            RequestId = requestId ?? string.Empty,
-            Found = true,
-            Accepted = accepted,
-            ProposalId = proposal.ProposalId,
-            ScriptId = proposal.ScriptId,
-            BaseRevision = proposal.BaseRevision,
-            CandidateRevision = proposal.CandidateRevision,
-            Status = status,
-            FailureReason = failureReason ?? string.Empty,
-            DefinitionActorId = definitionActorId ?? string.Empty,
-            CatalogActorId = catalogActorId ?? string.Empty,
-        };
-        response.Diagnostics.Add(validation.Diagnostics);
-        return response;
-    }
-
     private static ScriptEvolutionProposal NormalizeProposal(
-        ProposeScriptEvolutionRequestedEvent evt,
-        IScriptingActorAddressResolver addressResolver)
+        ProposeScriptEvolutionRequestedEvent evt)
     {
-        ArgumentNullException.ThrowIfNull(addressResolver);
-
         var proposalId = string.IsNullOrWhiteSpace(evt.ProposalId)
             ? Guid.NewGuid().ToString("N")
             : evt.ProposalId;
@@ -320,13 +226,6 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         if (string.IsNullOrWhiteSpace(candidateSource))
             throw new InvalidOperationException("CandidateSource is required.");
 
-        var definitionActorId = string.IsNullOrWhiteSpace(evt.DefinitionActorId)
-            ? addressResolver.GetDefinitionActorId(scriptId)
-            : evt.DefinitionActorId;
-        var catalogActorId = string.IsNullOrWhiteSpace(evt.CatalogActorId)
-            ? addressResolver.GetCatalogActorId()
-            : evt.CatalogActorId;
-
         return new ScriptEvolutionProposal(
             ProposalId: proposalId,
             ScriptId: scriptId,
@@ -334,10 +233,7 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             CandidateRevision: candidateRevision,
             CandidateSource: candidateSource,
             CandidateSourceHash: evt.CandidateSourceHash ?? string.Empty,
-            Reason: evt.Reason ?? string.Empty,
-            DefinitionActorId: definitionActorId,
-            CatalogActorId: catalogActorId,
-            RequestedByActorId: evt.RequestedByActorId ?? string.Empty);
+            Reason: evt.Reason ?? string.Empty);
     }
 
     private static ScriptEvolutionManagerState ApplyProposed(
@@ -353,9 +249,6 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         proposal.CandidateRevision = evt.CandidateRevision ?? string.Empty;
         proposal.CandidateSourceHash = evt.CandidateSourceHash ?? string.Empty;
         proposal.Reason = evt.Reason ?? string.Empty;
-        proposal.DefinitionActorId = evt.DefinitionActorId ?? string.Empty;
-        proposal.CatalogActorId = evt.CatalogActorId ?? string.Empty;
-        proposal.RequestedByActorId = evt.RequestedByActorId ?? string.Empty;
         proposal.PolicyAllowed = false;
         proposal.ValidationSucceeded = false;
         proposal.ValidationDiagnostics.Clear();
@@ -430,8 +323,6 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         proposal.Status = StatusPromoted;
         proposal.PromotedDefinitionActorId = evt.DefinitionActorId ?? string.Empty;
         proposal.PromotedRevision = evt.CandidateRevision ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(evt.CatalogActorId))
-            proposal.CatalogActorId = evt.CatalogActorId;
 
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = string.Concat(proposal.ProposalId, ":", StatusPromoted);

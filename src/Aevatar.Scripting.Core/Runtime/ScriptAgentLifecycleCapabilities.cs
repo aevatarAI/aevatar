@@ -6,35 +6,29 @@ namespace Aevatar.Scripting.Core.Runtime;
 
 public sealed class ScriptAgentLifecycleCapabilities : IScriptAgentLifecycleCapabilities
 {
-    private readonly string _runtimeActorId;
     private readonly string _correlationId;
-    private readonly IGAgentInvocationPort _invocationPort;
-    private readonly IGAgentFactoryPort _factoryPort;
+    private readonly IGAgentRuntimePort _agentRuntimePort;
 
     public ScriptAgentLifecycleCapabilities(
-        string runtimeActorId,
         string correlationId,
-        IGAgentInvocationPort invocationPort,
-        IGAgentFactoryPort factoryPort)
+        IGAgentRuntimePort agentRuntimePort)
     {
-        _runtimeActorId = runtimeActorId ?? string.Empty;
         _correlationId = correlationId ?? string.Empty;
-        _invocationPort = invocationPort ?? throw new ArgumentNullException(nameof(invocationPort));
-        _factoryPort = factoryPort ?? throw new ArgumentNullException(nameof(factoryPort));
+        _agentRuntimePort = agentRuntimePort ?? throw new ArgumentNullException(nameof(agentRuntimePort));
     }
 
     public Task InvokeAgentAsync(string targetAgentId, IMessage eventPayload, CancellationToken ct) =>
-        _invocationPort.InvokeAsync(targetAgentId, eventPayload, _correlationId, ct);
+        _agentRuntimePort.InvokeAsync(targetAgentId, eventPayload, _correlationId, ct);
 
     public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) =>
-        _factoryPort.CreateAsync(agentTypeAssemblyQualifiedName, actorId, ct);
+        _agentRuntimePort.CreateAsync(agentTypeAssemblyQualifiedName, actorId, ct);
 
     public Task DestroyAgentAsync(string actorId, CancellationToken ct) =>
-        _factoryPort.DestroyAsync(actorId, ct);
+        _agentRuntimePort.DestroyAsync(actorId, ct);
 
     public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) =>
-        _factoryPort.LinkAsync(parentActorId, childActorId, ct);
+        _agentRuntimePort.LinkAsync(parentActorId, childActorId, ct);
 
     public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) =>
-        _factoryPort.UnlinkAsync(childActorId, ct);
+        _agentRuntimePort.UnlinkAsync(childActorId, ct);
 }

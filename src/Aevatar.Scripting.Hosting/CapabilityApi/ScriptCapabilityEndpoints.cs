@@ -44,11 +44,7 @@ public static class ScriptCapabilityEndpoints
                     CandidateSource: request.CandidateSource,
                     CandidateSourceHash: request.CandidateSourceHash ?? string.Empty,
                     Reason: request.Reason ?? string.Empty,
-                    DefinitionActorId: request.DefinitionActorId ?? string.Empty,
-                    CatalogActorId: request.CatalogActorId ?? string.Empty,
-                    RequestedByActorId: request.RequestedByActorId ?? string.Empty,
-                    ProposalId: request.ProposalId ?? string.Empty,
-                    ManagerActorId: request.ManagerActorId ?? string.Empty),
+                    ProposalId: request.ProposalId ?? string.Empty),
                 ct);
 
             return Results.Ok(decision);
@@ -74,8 +70,4 @@ public sealed record ProposeScriptEvolutionHttpRequest(
     string? CandidateSource,
     string? CandidateSourceHash,
     string? Reason,
-    string? DefinitionActorId,
-    string? CatalogActorId,
-    string? RequestedByActorId,
-    string? ProposalId,
-    string? ManagerActorId);
+    string? ProposalId);

@@ -14,6 +14,7 @@ public interface IScriptCatalogPort
     Task PromoteAsync(
         string catalogActorId,
         string scriptId,
+        string expectedBaseRevision,
         string revision,
         string definitionActorId,
         string sourceHash,

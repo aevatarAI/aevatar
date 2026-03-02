@@ -45,8 +45,6 @@ public class ScriptEvolutionReadModelProjectorTests
                     BaseRevision = "rev-1",
                     CandidateRevision = "rev-2",
                     CandidateSourceHash = "hash-rev-2",
-                    DefinitionActorId = "definition-1",
-                    CatalogActorId = "catalog-1",
                 })),
             CancellationToken.None);
 
@@ -78,7 +76,7 @@ public class ScriptEvolutionReadModelProjectorTests
                 })),
             CancellationToken.None);
 
-        var readModel = await dispatcher.GetAsync("evolution-manager-1", CancellationToken.None);
+        var readModel = await dispatcher.GetAsync("proposal-1", CancellationToken.None);
         readModel.Should().NotBeNull();
         readModel!.ProposalId.Should().Be("proposal-1");
         readModel.ScriptId.Should().Be("script-1");
@@ -122,8 +120,6 @@ public class ScriptEvolutionReadModelProjectorTests
                     BaseRevision = "rev-1",
                     CandidateRevision = "rev-2",
                     CandidateSourceHash = "hash-rev-2",
-                    DefinitionActorId = "definition-2",
-                    CatalogActorId = "catalog-2",
                 })),
             CancellationToken.None);
 
@@ -154,7 +150,7 @@ public class ScriptEvolutionReadModelProjectorTests
                 })),
             CancellationToken.None);
 
-        var readModel = await dispatcher.GetAsync("evolution-manager-2", CancellationToken.None);
+        var readModel = await dispatcher.GetAsync("proposal-2", CancellationToken.None);
         readModel.Should().NotBeNull();
         readModel!.ProposalId.Should().Be("proposal-2");
         readModel.PromotionStatus.Should().Be("rolled_back");

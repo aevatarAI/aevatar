@@ -7,7 +7,4 @@ public sealed record ScriptEvolutionProposal(
     string CandidateRevision,
     string CandidateSource,
     string CandidateSourceHash,
-    string Reason,
-    string DefinitionActorId,
-    string CatalogActorId,
-    string RequestedByActorId);
+    string Reason);

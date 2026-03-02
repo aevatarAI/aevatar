@@ -12,28 +12,28 @@ public sealed class ScriptInteractionCapabilities : IScriptInteractionCapabiliti
     private readonly string _runId;
     private readonly string _correlationId;
     private readonly IAICapability _aiCapability;
-    private readonly IGAgentEventRoutingPort _eventRoutingPort;
+    private readonly IGAgentRuntimePort _agentRuntimePort;
 
     public ScriptInteractionCapabilities(
         string runtimeActorId,
         string runId,
         string correlationId,
         IAICapability aiCapability,
-        IGAgentEventRoutingPort eventRoutingPort)
+        IGAgentRuntimePort agentRuntimePort)
     {
         _runtimeActorId = runtimeActorId ?? string.Empty;
         _runId = runId ?? string.Empty;
         _correlationId = correlationId ?? string.Empty;
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
-        _eventRoutingPort = eventRoutingPort ?? throw new ArgumentNullException(nameof(eventRoutingPort));
+        _agentRuntimePort = agentRuntimePort ?? throw new ArgumentNullException(nameof(agentRuntimePort));
     }
 
     public Task<string> AskAIAsync(string prompt, CancellationToken ct) =>
         _aiCapability.AskAsync(_runId, _correlationId, prompt ?? string.Empty, ct);
 
     public Task PublishAsync(IMessage eventPayload, EventDirection direction, CancellationToken ct) =>
-        _eventRoutingPort.PublishAsync(_runtimeActorId, eventPayload, direction, _correlationId, ct);
+        _agentRuntimePort.PublishAsync(_runtimeActorId, eventPayload, direction, _correlationId, ct);
 
     public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) =>
-        _eventRoutingPort.SendToAsync(_runtimeActorId, targetActorId, eventPayload, _correlationId, ct);
+        _agentRuntimePort.SendToAsync(_runtimeActorId, targetActorId, eventPayload, _correlationId, ct);
 }

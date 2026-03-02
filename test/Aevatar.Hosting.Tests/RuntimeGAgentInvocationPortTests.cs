@@ -1,12 +1,12 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Scripting.Hosting.Ports;
+using Aevatar.Scripting.Infrastructure.Ports;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Hosting.Tests;
 
-public class RuntimeGAgentInvocationPortTests
+public class RuntimeGAgentRuntimePortInvocationTests
 {
     [Fact]
     public async Task InvokeAsync_ShouldDispatchEventEnvelope_ToTargetActor()
@@ -14,7 +14,7 @@ public class RuntimeGAgentInvocationPortTests
         var runtime = new FakeRuntime();
         var actor = new FakeActor("actor-1");
         runtime.Actor = actor;
-        var port = new RuntimeGAgentInvocationPort(runtime);
+        var port = new RuntimeGAgentRuntimePort(runtime);
 
         await port.InvokeAsync("actor-1", new StringValue { Value = "hello" }, "run-1", CancellationToken.None);
 
@@ -30,7 +30,7 @@ public class RuntimeGAgentInvocationPortTests
     public async Task InvokeAsync_ShouldThrow_WhenTargetActorNotFound()
     {
         var runtime = new FakeRuntime();
-        var port = new RuntimeGAgentInvocationPort(runtime);
+        var port = new RuntimeGAgentRuntimePort(runtime);
 
         var act = () => port.InvokeAsync("missing", new StringValue { Value = "x" }, "run-2", CancellationToken.None);
 

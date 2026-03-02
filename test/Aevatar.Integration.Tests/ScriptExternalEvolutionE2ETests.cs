@@ -29,11 +29,7 @@ public class ScriptExternalEvolutionE2ETests
                 CandidateSource: ExternalScriptSource,
                 CandidateSourceHash: string.Empty,
                 Reason: "external pipeline rollout",
-                DefinitionActorId: string.Empty,
-                CatalogActorId: string.Empty,
-                RequestedByActorId: "ci-pipeline",
-                ProposalId: "external-proposal-1",
-                ManagerActorId: string.Empty),
+                ProposalId: "external-proposal-1"),
             CancellationToken.None);
 
         decision.Accepted.Should().BeTrue();
@@ -45,7 +41,6 @@ public class ScriptExternalEvolutionE2ETests
         var manager = (ScriptEvolutionManagerGAgent)(await runtime.GetAsync("script-evolution-manager"))!.Agent;
         manager.State.Proposals.Should().ContainKey("external-proposal-1");
         manager.State.Proposals["external-proposal-1"].Status.Should().Be("promoted");
-        manager.State.Proposals["external-proposal-1"].RequestedByActorId.Should().Be("ci-pipeline");
 
         var catalog = (ScriptCatalogGAgent)(await runtime.GetAsync("script-catalog"))!.Agent;
         catalog.State.Entries.Should().ContainKey("external-script");

@@ -27,8 +27,8 @@ public sealed record ScriptPromotionDecision(
             CandidateRevision: proposal.CandidateRevision ?? string.Empty,
             Status: "rejected",
             FailureReason: failureReason ?? string.Empty,
-            DefinitionActorId: proposal.DefinitionActorId ?? string.Empty,
-            CatalogActorId: proposal.CatalogActorId ?? string.Empty,
+            DefinitionActorId: string.Empty,
+            CatalogActorId: string.Empty,
             ValidationReport: validation ?? ScriptEvolutionValidationReport.Empty);
     }
 }

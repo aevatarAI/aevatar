@@ -4,15 +4,15 @@ using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 
-namespace Aevatar.Scripting.Hosting.Ports;
+namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptCatalogPort : IScriptCatalogPort
 {
     private readonly IActorRuntime _runtime;
     private readonly IStreamProvider _streams;
     private readonly TimeSpan _queryTimeout;
-    private readonly PromoteScriptRevisionCommandAdapter _promoteAdapter = new();
-    private readonly RollbackScriptRevisionCommandAdapter _rollbackAdapter = new();
+    private readonly PromoteScriptRevisionActorRequestAdapter _promoteAdapter = new();
+    private readonly RollbackScriptRevisionActorRequestAdapter _rollbackAdapter = new();
     private readonly QueryScriptCatalogEntryRequestAdapter _queryAdapter = new();
 
     public RuntimeScriptCatalogPort(
@@ -28,6 +28,7 @@ public sealed class RuntimeScriptCatalogPort : IScriptCatalogPort
     public async Task PromoteAsync(
         string catalogActorId,
         string scriptId,
+        string expectedBaseRevision,
         string revision,
         string definitionActorId,
         string sourceHash,
@@ -39,12 +40,13 @@ public sealed class RuntimeScriptCatalogPort : IScriptCatalogPort
         var actor = await GetOrCreateCatalogActorAsync(catalogActorId, ct);
         await actor.HandleEventAsync(
             _promoteAdapter.Map(
-                new PromoteScriptRevisionCommand(
+                new PromoteScriptRevisionActorRequest(
                     ScriptId: scriptId ?? string.Empty,
                     Revision: revision ?? string.Empty,
                     DefinitionActorId: definitionActorId ?? string.Empty,
                     SourceHash: sourceHash ?? string.Empty,
-                    ProposalId: proposalId ?? string.Empty),
+                    ProposalId: proposalId ?? string.Empty,
+                    ExpectedBaseRevision: expectedBaseRevision ?? string.Empty),
                 catalogActorId),
             ct);
     }
@@ -62,7 +64,7 @@ public sealed class RuntimeScriptCatalogPort : IScriptCatalogPort
         var actor = await GetOrCreateCatalogActorAsync(catalogActorId, ct);
         await actor.HandleEventAsync(
             _rollbackAdapter.Map(
-                new RollbackScriptRevisionCommand(
+                new RollbackScriptRevisionActorRequest(
                     ScriptId: scriptId ?? string.Empty,
                     TargetRevision: targetRevision ?? string.Empty,
                     Reason: reason ?? string.Empty,
@@ -83,26 +85,16 @@ public sealed class RuntimeScriptCatalogPort : IScriptCatalogPort
         if (actor == null)
             return null;
 
-        var requestId = Guid.NewGuid().ToString("N");
-        var replyStreamId = $"scripting.query.catalog.reply:{requestId}";
-        var responseTaskSource = new TaskCompletionSource<ScriptCatalogEntryRespondedEvent>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var subscription = await _streams
-            .GetStream(replyStreamId)
-            .SubscribeAsync<ScriptCatalogEntryRespondedEvent>(response =>
-            {
-                if (string.Equals(response.RequestId, requestId, StringComparison.Ordinal))
-                    responseTaskSource.TrySetResult(response);
-
-                return Task.CompletedTask;
-            }, ct);
-
-        await actor.HandleEventAsync(
-            _queryAdapter.Map(catalogActorId, requestId, replyStreamId, scriptId),
+        var response = await ScriptQueryReplyAwaiter.QueryAsync<ScriptCatalogEntryRespondedEvent>(
+            _streams,
+            "scripting.query.catalog.reply",
+            _queryTimeout,
+            (requestId, replyStreamId) => actor.HandleEventAsync(
+                _queryAdapter.Map(catalogActorId, requestId, replyStreamId, scriptId),
+                ct),
+            static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
+            static requestId => $"Timeout waiting for script catalog entry query response. request_id={requestId}",
             ct);
-
-        var response = await WaitForResponseAsync(responseTaskSource.Task, requestId, ct);
         if (!response.Found)
             return null;
 
@@ -125,21 +117,6 @@ public sealed class RuntimeScriptCatalogPort : IScriptCatalogPort
         }
 
         return await _runtime.CreateAsync<ScriptCatalogGAgent>(catalogActorId, ct);
-    }
-
-    private async Task<ScriptCatalogEntryRespondedEvent> WaitForResponseAsync(
-        Task<ScriptCatalogEntryRespondedEvent> responseTask,
-        string requestId,
-        CancellationToken ct)
-    {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var timeoutTask = Task.Delay(_queryTimeout, timeoutCts.Token);
-        var completed = await Task.WhenAny(responseTask, timeoutTask);
-        if (!ReferenceEquals(completed, responseTask))
-            throw new TimeoutException($"Timeout waiting for script catalog entry query response. request_id={requestId}");
-
-        timeoutCts.Cancel();
-        return await responseTask;
     }
 
     private static TimeSpan NormalizeTimeout(TimeSpan timeout) =>

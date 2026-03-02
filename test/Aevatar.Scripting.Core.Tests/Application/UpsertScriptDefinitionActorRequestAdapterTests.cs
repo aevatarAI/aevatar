@@ -4,15 +4,15 @@ using FluentAssertions;
 
 namespace Aevatar.Scripting.Core.Tests.Application;
 
-public class UpsertScriptDefinitionCommandAdapterTests
+public class UpsertScriptDefinitionActorRequestAdapterTests
 {
     [Fact]
     public void Map_ShouldProduceEventEnvelope_WithUpsertScriptDefinitionRequestedEvent()
     {
-        var adapter = new UpsertScriptDefinitionCommandAdapter();
+        var adapter = new UpsertScriptDefinitionActorRequestAdapter();
 
         var envelope = adapter.Map(
-            new UpsertScriptDefinitionCommand(
+            new UpsertScriptDefinitionActorRequest(
                 ScriptId: "script-1",
                 ScriptRevision: "rev-1",
                 SourceText: "return 1;",

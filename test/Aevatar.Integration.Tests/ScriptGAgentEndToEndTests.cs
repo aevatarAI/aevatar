@@ -34,9 +34,9 @@ public class ScriptGAgentEndToEndTests
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(
             "script-runtime-" + Guid.NewGuid().ToString("N")[..8]);
 
-        var upsertAdapter = new UpsertScriptDefinitionCommandAdapter();
+        var upsertAdapter = new UpsertScriptDefinitionActorRequestAdapter();
         var definitionEnvelope = upsertAdapter.Map(
-            new UpsertScriptDefinitionCommand(
+            new UpsertScriptDefinitionActorRequest(
                 ScriptId: "script-1",
                 ScriptRevision: "rev-1",
                 SourceText: """
@@ -99,9 +99,9 @@ public sealed class EndToEndScript : IScriptPackageRuntime
             [new ScriptRunDomainEventCommittedReducer()]);
         await projector.InitializeAsync(context, CancellationToken.None);
 
-        var runAdapter = new RunScriptCommandAdapter();
+        var runAdapter = new RunScriptActorRequestAdapter();
         var runEnvelope = runAdapter.Map(
-            new RunScriptCommand(
+            new RunScriptActorRequest(
                 RunId: "run-1",
                 InputPayload: Any.Pack(new Struct
                 {

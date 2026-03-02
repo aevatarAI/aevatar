@@ -5,15 +5,15 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Application;
 
-public class RunScriptCommandAdapterTests
+public class RunScriptActorRequestAdapterTests
 {
     [Fact]
     public void Map_ShouldProduceEventEnvelope_WithRunScriptRequestedEvent()
     {
-        var adapter = new RunScriptCommandAdapter();
+        var adapter = new RunScriptActorRequestAdapter();
 
         var envelope = adapter.Map(
-            new RunScriptCommand(
+            new RunScriptActorRequest(
                 "run-1",
                 Any.Pack(new Struct { Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-1") } }),
                 "r1",

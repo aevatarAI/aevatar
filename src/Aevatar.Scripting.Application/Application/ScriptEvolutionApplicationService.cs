@@ -8,14 +8,11 @@ namespace Aevatar.Scripting.Application;
 public sealed class ScriptEvolutionApplicationService : IScriptEvolutionApplicationService
 {
     private readonly IScriptEvolutionPort _evolutionPort;
-    private readonly IScriptingActorAddressResolver _addressResolver;
 
     public ScriptEvolutionApplicationService(
-        IScriptEvolutionPort evolutionPort,
-        IScriptingActorAddressResolver addressResolver)
+        IScriptEvolutionPort evolutionPort)
     {
         _evolutionPort = evolutionPort ?? throw new ArgumentNullException(nameof(evolutionPort));
-        _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }
 
     public Task<ScriptPromotionDecision> ProposeAsync(
@@ -38,15 +35,6 @@ public sealed class ScriptEvolutionApplicationService : IScriptEvolutionApplicat
         var normalizedSourceHash = string.IsNullOrWhiteSpace(request.CandidateSourceHash)
             ? ComputeSourceHash(request.CandidateSource)
             : request.CandidateSourceHash;
-        var definitionActorId = string.IsNullOrWhiteSpace(request.DefinitionActorId)
-            ? _addressResolver.GetDefinitionActorId(normalizedScriptId)
-            : request.DefinitionActorId;
-        var catalogActorId = string.IsNullOrWhiteSpace(request.CatalogActorId)
-            ? _addressResolver.GetCatalogActorId()
-            : request.CatalogActorId;
-        var managerActorId = string.IsNullOrWhiteSpace(request.ManagerActorId)
-            ? _addressResolver.GetEvolutionManagerActorId()
-            : request.ManagerActorId;
 
         var proposal = new ScriptEvolutionProposal(
             ProposalId: normalizedProposalId,
@@ -55,12 +43,9 @@ public sealed class ScriptEvolutionApplicationService : IScriptEvolutionApplicat
             CandidateRevision: request.CandidateRevision,
             CandidateSource: request.CandidateSource,
             CandidateSourceHash: normalizedSourceHash,
-            Reason: request.Reason ?? string.Empty,
-            DefinitionActorId: definitionActorId,
-            CatalogActorId: catalogActorId,
-            RequestedByActorId: request.RequestedByActorId ?? string.Empty);
+            Reason: request.Reason ?? string.Empty);
 
-        return _evolutionPort.ProposeAsync(managerActorId, proposal, ct);
+        return _evolutionPort.ProposeAsync(proposal, ct);
     }
 
     private static string ComputeSourceHash(string source)

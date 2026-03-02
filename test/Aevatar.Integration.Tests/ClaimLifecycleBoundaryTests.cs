@@ -18,7 +18,7 @@ public class ClaimLifecycleBoundaryTests
         services.AddScriptCapability();
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
-        var factory = provider.GetRequiredService<IGAgentFactoryPort>();
+        var factory = provider.GetRequiredService<IGAgentRuntimePort>();
 
         var orchestratorId = await factory.CreateAsync(
             typeof(ScriptRuntimeGAgent).AssemblyQualifiedName!,
@@ -55,7 +55,7 @@ public class ClaimLifecycleBoundaryTests
         string actorId;
         await using (var scope = provider.CreateAsyncScope())
         {
-            var factory = scope.ServiceProvider.GetRequiredService<IGAgentFactoryPort>();
+            var factory = scope.ServiceProvider.GetRequiredService<IGAgentRuntimePort>();
             actorId = await factory.CreateAsync(
                 typeof(ScriptRuntimeGAgent).AssemblyQualifiedName!,
                 "claim-scope-runtime",

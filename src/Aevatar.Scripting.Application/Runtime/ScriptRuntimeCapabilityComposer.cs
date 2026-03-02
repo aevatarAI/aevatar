@@ -8,9 +8,7 @@ namespace Aevatar.Scripting.Application.Runtime;
 public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityComposer
 {
     private readonly IAICapability _aiCapability;
-    private readonly IGAgentEventRoutingPort _eventRoutingPort;
-    private readonly IGAgentInvocationPort _invocationPort;
-    private readonly IGAgentFactoryPort _factoryPort;
+    private readonly IGAgentRuntimePort _agentRuntimePort;
     private readonly IScriptEvolutionPort _evolutionPort;
     private readonly IScriptDefinitionLifecyclePort _definitionLifecyclePort;
     private readonly IScriptRuntimeLifecyclePort _runtimeLifecyclePort;
@@ -19,9 +17,7 @@ public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityCo
 
     public ScriptRuntimeCapabilityComposer(
         IAICapability aiCapability,
-        IGAgentEventRoutingPort eventRoutingPort,
-        IGAgentInvocationPort invocationPort,
-        IGAgentFactoryPort factoryPort,
+        IGAgentRuntimePort agentRuntimePort,
         IScriptEvolutionPort evolutionPort,
         IScriptDefinitionLifecyclePort definitionLifecyclePort,
         IScriptRuntimeLifecyclePort runtimeLifecyclePort,
@@ -29,9 +25,7 @@ public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityCo
         IScriptingActorAddressResolver addressResolver)
     {
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
-        _eventRoutingPort = eventRoutingPort ?? throw new ArgumentNullException(nameof(eventRoutingPort));
-        _invocationPort = invocationPort ?? throw new ArgumentNullException(nameof(invocationPort));
-        _factoryPort = factoryPort ?? throw new ArgumentNullException(nameof(factoryPort));
+        _agentRuntimePort = agentRuntimePort ?? throw new ArgumentNullException(nameof(agentRuntimePort));
         _evolutionPort = evolutionPort ?? throw new ArgumentNullException(nameof(evolutionPort));
         _definitionLifecyclePort = definitionLifecyclePort ?? throw new ArgumentNullException(nameof(definitionLifecyclePort));
         _runtimeLifecyclePort = runtimeLifecyclePort ?? throw new ArgumentNullException(nameof(runtimeLifecyclePort));
@@ -48,12 +42,10 @@ public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityCo
             context.RunId,
             context.CorrelationId,
             _aiCapability,
-            _eventRoutingPort);
+            _agentRuntimePort);
         var agentLifecycle = new ScriptAgentLifecycleCapabilities(
-            context.RuntimeActorId,
             context.CorrelationId,
-            _invocationPort,
-            _factoryPort);
+            _agentRuntimePort);
         var evolution = new ScriptEvolutionCapabilities(
             context,
             _evolutionPort,

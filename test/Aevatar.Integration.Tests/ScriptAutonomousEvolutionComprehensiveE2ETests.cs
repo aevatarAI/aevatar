@@ -53,7 +53,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await RunScriptAsync(
             orchestratorRuntime,
             orchestratorRuntimeActorId,
-            new RunScriptCommand(
+            new RunScriptActorRequest(
                 RunId: "run-multi-script-1",
                 InputPayload: Any.Pack(new Struct
                 {
@@ -102,11 +102,6 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         (await runtime.ExistsAsync(evolvedARuntimeId)).Should().BeTrue();
         (await runtime.ExistsAsync(evolvedBRuntimeId)).Should().BeTrue();
 
-        var workerADefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(workerADefinitionActorId))!.Agent;
-        var workerBDefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(workerBDefinitionActorId))!.Agent;
-        workerADefinition.State.Revision.Should().Be("rev-a-3");
-        workerBDefinition.State.Revision.Should().Be("rev-b-3");
-
         var manager = (ScriptEvolutionManagerGAgent)(await runtime.GetAsync("script-evolution-manager"))!.Agent;
         manager.State.Proposals.Should().ContainKey("proposal-a-2-run-multi-script-1");
         manager.State.Proposals.Should().ContainKey("proposal-a-3-run-multi-script-1");
@@ -122,10 +117,19 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         catalog.State.Entries.Should().ContainKey("worker-b-script");
         catalog.State.Entries["worker-a-script"].ActiveRevision.Should().Be("rev-a-3");
         catalog.State.Entries["worker-b-script"].ActiveRevision.Should().Be("rev-b-3");
+        catalog.State.Entries["worker-a-script"].ActiveDefinitionActorId.Should().Be("script-definition:worker-a-script");
+        catalog.State.Entries["worker-b-script"].ActiveDefinitionActorId.Should().Be("script-definition:worker-b-script");
         catalog.State.Entries["worker-a-script"].RevisionHistory.Should().Contain("rev-a-2");
         catalog.State.Entries["worker-a-script"].RevisionHistory.Should().Contain("rev-a-3");
         catalog.State.Entries["worker-b-script"].RevisionHistory.Should().Contain("rev-b-2");
         catalog.State.Entries["worker-b-script"].RevisionHistory.Should().Contain("rev-b-3");
+
+        var workerADefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(
+            catalog.State.Entries["worker-a-script"].ActiveDefinitionActorId))!.Agent;
+        var workerBDefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(
+            catalog.State.Entries["worker-b-script"].ActiveDefinitionActorId))!.Agent;
+        workerADefinition.State.Revision.Should().Be("rev-a-3");
+        workerBDefinition.State.Revision.Should().Be("rev-b-3");
 
         var orchestratorEvents = await eventStore.GetEventsAsync(orchestratorRuntimeActorId, ct: CancellationToken.None);
         orchestratorEvents.Should().Contain(x =>
@@ -157,7 +161,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await RunScriptAsync(
             rootRuntime,
             runtimeActorId,
-            new RunScriptCommand(
+            new RunScriptActorRequest(
                 RunId: "run-self-1",
                 InputPayload: Any.Pack(new Struct
                 {
@@ -186,9 +190,6 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         var v3RuntimeId = v2Summary.Fields["v3_runtime_id"].StringValue;
         (await runtime.ExistsAsync(v3RuntimeId)).Should().BeTrue();
 
-        var definition = (ScriptDefinitionGAgent)(await runtime.GetAsync(definitionActorId))!.Agent;
-        definition.State.Revision.Should().Be("rev-self-3");
-
         var manager = (ScriptEvolutionManagerGAgent)(await runtime.GetAsync("script-evolution-manager"))!.Agent;
         manager.State.Proposals.Should().ContainKey("self-proposal-v2-run-self-1");
         manager.State.Proposals.Should().ContainKey("self-proposal-v3-self-v2-run-run-self-1");
@@ -198,8 +199,13 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         var catalog = (ScriptCatalogGAgent)(await runtime.GetAsync("script-catalog"))!.Agent;
         catalog.State.Entries.Should().ContainKey("self-evolving-script");
         catalog.State.Entries["self-evolving-script"].ActiveRevision.Should().Be("rev-self-3");
+        catalog.State.Entries["self-evolving-script"].ActiveDefinitionActorId.Should().Be("script-definition:self-evolving-script");
         catalog.State.Entries["self-evolving-script"].RevisionHistory.Should().Contain("rev-self-2");
         catalog.State.Entries["self-evolving-script"].RevisionHistory.Should().Contain("rev-self-3");
+
+        var definition = (ScriptDefinitionGAgent)(await runtime.GetAsync(
+            catalog.State.Entries["self-evolving-script"].ActiveDefinitionActorId))!.Agent;
+        definition.State.Revision.Should().Be("rev-self-3");
 
         var v3Events = await eventStore.GetEventsAsync(v3RuntimeId, ct: CancellationToken.None);
         v3Events.Should().Contain(x =>
@@ -233,7 +239,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await RunScriptAsync(
             controllerRuntime,
             controllerRuntimeActorId,
-            new RunScriptCommand(
+            new RunScriptActorRequest(
                 RunId: "run-catalog-control-1",
                 InputPayload: Any.Pack(new Struct
                 {
@@ -296,7 +302,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await RunScriptAsync(
             controllerRuntime,
             controllerRuntimeActorId,
-            new RunScriptCommand(
+            new RunScriptActorRequest(
                 RunId: "run-interaction-1",
                 InputPayload: Any.Pack(new Struct
                 {
@@ -342,10 +348,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         string source)
     {
         var actor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
-        var upsert = new UpsertScriptDefinitionCommandAdapter();
+        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await actor.HandleEventAsync(
             upsert.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: scriptId,
                     ScriptRevision: revision,
                     SourceText: source,
@@ -357,9 +363,9 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
     private static async Task RunScriptAsync(
         IActor runtimeActor,
         string runtimeActorId,
-        RunScriptCommand command)
+        RunScriptActorRequest command)
     {
-        var run = new RunScriptCommandAdapter();
+        var run = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
             run.Map(command, runtimeActorId),
             CancellationToken.None);
@@ -500,10 +506,7 @@ public sealed class MultiScriptEvolutionOrchestrator : IScriptPackageRuntime
                 CandidateRevision: "rev-a-2",
                 CandidateSource: workerAV2Source,
                 CandidateSourceHash: string.Empty,
-                Reason: "upgrade worker-a to rev-a-2",
-                DefinitionActorId: "multi-worker-a-definition",
-                CatalogActorId: "script-catalog",
-                RequestedByActorId: context.ActorId),
+                Reason: "upgrade worker-a to rev-a-2"),
             ct);
 
         var decisionB2 = await context.Capabilities.ProposeScriptEvolutionAsync(
@@ -514,10 +517,7 @@ public sealed class MultiScriptEvolutionOrchestrator : IScriptPackageRuntime
                 CandidateRevision: "rev-b-2",
                 CandidateSource: workerBV2Source,
                 CandidateSourceHash: string.Empty,
-                Reason: "upgrade worker-b to rev-b-2",
-                DefinitionActorId: "multi-worker-b-definition",
-                CatalogActorId: "script-catalog",
-                RequestedByActorId: context.ActorId),
+                Reason: "upgrade worker-b to rev-b-2"),
             ct);
 
         var decisionA3 = await context.Capabilities.ProposeScriptEvolutionAsync(
@@ -528,10 +528,7 @@ public sealed class MultiScriptEvolutionOrchestrator : IScriptPackageRuntime
                 CandidateRevision: "rev-a-3",
                 CandidateSource: workerAV3Source,
                 CandidateSourceHash: string.Empty,
-                Reason: "upgrade worker-a to rev-a-3",
-                DefinitionActorId: "multi-worker-a-definition",
-                CatalogActorId: "script-catalog",
-                RequestedByActorId: context.ActorId),
+                Reason: "upgrade worker-a to rev-a-3"),
             ct);
 
         var decisionB3 = await context.Capabilities.ProposeScriptEvolutionAsync(
@@ -542,10 +539,7 @@ public sealed class MultiScriptEvolutionOrchestrator : IScriptPackageRuntime
                 CandidateRevision: "rev-b-3",
                 CandidateSource: workerBV3Source,
                 CandidateSourceHash: string.Empty,
-                Reason: "upgrade worker-b to rev-b-3",
-                DefinitionActorId: "multi-worker-b-definition",
-                CatalogActorId: "script-catalog",
-                RequestedByActorId: context.ActorId),
+                Reason: "upgrade worker-b to rev-b-3"),
             ct);
 
         var evolvedARuntimeId = string.Empty;
@@ -703,10 +697,7 @@ public sealed class SelfEvolutionV1Runtime : IScriptPackageRuntime
                 CandidateRevision: "rev-self-2",
                 CandidateSource: nextV2Source,
                 CandidateSourceHash: string.Empty,
-                Reason: "self evolution to rev-self-2",
-                DefinitionActorId: "self-evolving-definition",
-                CatalogActorId: "script-catalog",
-                RequestedByActorId: context.ActorId),
+                Reason: "self evolution to rev-self-2"),
             ct);
 
         var v2RuntimeId = string.Empty;
@@ -798,10 +789,7 @@ public sealed class SelfEvolutionV2Runtime : IScriptPackageRuntime
                 CandidateRevision: "rev-self-3",
                 CandidateSource: nextV3Source,
                 CandidateSourceHash: string.Empty,
-                Reason: "self evolution to rev-self-3",
-                DefinitionActorId: "self-evolving-definition",
-                CatalogActorId: "script-catalog",
-                RequestedByActorId: context.ActorId),
+                Reason: "self evolution to rev-self-3"),
             ct);
 
         var v3RuntimeId = string.Empty;

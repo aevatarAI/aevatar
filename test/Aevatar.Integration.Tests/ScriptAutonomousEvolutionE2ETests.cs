@@ -27,13 +27,13 @@ public class ScriptAutonomousEvolutionE2ETests
         const string orchestratorDefinitionActorId = "orchestrator-definition";
         const string orchestratorRuntimeActorId = "orchestrator-runtime";
 
-        var upsert = new UpsertScriptDefinitionCommandAdapter();
-        var run = new RunScriptCommandAdapter();
+        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
+        var run = new RunScriptActorRequestAdapter();
 
         var workerDefinition = await runtime.CreateAsync<ScriptDefinitionGAgent>(workerDefinitionActorId);
         await workerDefinition.HandleEventAsync(
             upsert.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: "worker-script",
                     ScriptRevision: "rev-worker-1",
                     SourceText: WorkerRuntimeV1Source,
@@ -44,7 +44,7 @@ public class ScriptAutonomousEvolutionE2ETests
         var orchestratorDefinition = await runtime.CreateAsync<ScriptDefinitionGAgent>(orchestratorDefinitionActorId);
         await orchestratorDefinition.HandleEventAsync(
             upsert.Map(
-                new UpsertScriptDefinitionCommand(
+                new UpsertScriptDefinitionActorRequest(
                     ScriptId: "orchestrator-script",
                     ScriptRevision: "rev-orchestrator-1",
                     SourceText: ScriptOnlyOrchestratorSource,
@@ -55,7 +55,7 @@ public class ScriptAutonomousEvolutionE2ETests
         var orchestratorRuntime = await runtime.CreateAsync<ScriptRuntimeGAgent>(orchestratorRuntimeActorId);
         await orchestratorRuntime.HandleEventAsync(
             run.Map(
-                new RunScriptCommand(
+                new RunScriptActorRequest(
                     RunId: "run-autonomy-1",
                     InputPayload: Any.Pack(new Struct
                     {
@@ -88,9 +88,6 @@ public class ScriptAutonomousEvolutionE2ETests
         (await runtime.ExistsAsync(evolvedRuntimeId)).Should().BeTrue();
         (await runtime.ExistsAsync(newDefinitionActorId)).Should().BeTrue();
 
-        var workerDefinitionState = ((ScriptDefinitionGAgent)(await runtime.GetAsync(workerDefinitionActorId))!.Agent).State;
-        workerDefinitionState.Revision.Should().Be("rev-worker-2");
-
         var manager = ((ScriptEvolutionManagerGAgent)(await runtime.GetAsync("script-evolution-manager"))!.Agent);
         manager.State.Proposals.Should().ContainKey("proposal-run-autonomy-1");
         manager.State.Proposals["proposal-run-autonomy-1"].Status.Should().Be("promoted");
@@ -98,6 +95,11 @@ public class ScriptAutonomousEvolutionE2ETests
         var catalog = ((ScriptCatalogGAgent)(await runtime.GetAsync("script-catalog"))!.Agent);
         catalog.State.Entries.Should().ContainKey("worker-script");
         catalog.State.Entries["worker-script"].ActiveRevision.Should().Be("rev-worker-2");
+        catalog.State.Entries["worker-script"].ActiveDefinitionActorId.Should().Be("script-definition:worker-script");
+
+        var promotedWorkerDefinitionActorId = catalog.State.Entries["worker-script"].ActiveDefinitionActorId;
+        var promotedWorkerDefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(promotedWorkerDefinitionActorId))!.Agent;
+        promotedWorkerDefinition.State.Revision.Should().Be("rev-worker-2");
 
         var evolvedRuntime = (ScriptRuntimeGAgent)(await runtime.GetAsync(evolvedRuntimeId))!.Agent;
         evolvedRuntime.State.Revision.Should().Be("rev-worker-2");
@@ -169,10 +171,7 @@ public sealed class ScriptOnlyOrchestrator : IScriptPackageRuntime
                 CandidateRevision: "rev-worker-2",
                 CandidateSource: workerV2Source,
                 CandidateSourceHash: "hash-worker-2",
-                Reason: "script-only autonomous promotion",
-                DefinitionActorId: "worker-definition",
-                CatalogActorId: "script-catalog",
-                RequestedByActorId: context.ActorId),
+                Reason: "script-only autonomous promotion"),
             ct);
 
         var evolvedRuntimeId = string.Empty;

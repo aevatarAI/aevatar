@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
 
@@ -30,13 +31,9 @@ public sealed class ScriptEvolutionReadModelProjector
         ScriptEvolutionProjectionContext context,
         CancellationToken ct = default)
     {
-        var now = _clock.UtcNow;
-        var readModel = new ScriptEvolutionReadModel
-        {
-            Id = context.RootActorId,
-            UpdatedAt = now,
-        };
-        return new ValueTask(_storeDispatcher.UpsertAsync(readModel, ct));
+        _ = context;
+        ct.ThrowIfCancellationRequested();
+        return ValueTask.CompletedTask;
     }
 
     public async ValueTask ProjectAsync(
@@ -47,13 +44,16 @@ public sealed class ScriptEvolutionReadModelProjector
         var payload = envelope.Payload;
         if (payload == null)
             return;
+        var readModelId = ResolveReadModelId(payload);
+        if (string.IsNullOrWhiteSpace(readModelId))
+            return;
 
         var typeUrl = payload.TypeUrl;
         if (!_reducersByType.TryGetValue(typeUrl, out var reducers))
             return;
 
         var now = ResolveEventTimestamp(envelope, _clock.UtcNow);
-        await _storeDispatcher.MutateAsync(context.RootActorId, readModel =>
+        await _storeDispatcher.MutateAsync(readModelId, readModel =>
         {
             var mutated = false;
             foreach (var reducer in reducers)
@@ -76,6 +76,22 @@ public sealed class ScriptEvolutionReadModelProjector
         _ = topology;
         _ = ct;
         return ValueTask.CompletedTask;
+    }
+
+    private static string ResolveReadModelId(Google.Protobuf.WellKnownTypes.Any payload)
+    {
+        if (payload.Is(ScriptEvolutionProposedEvent.Descriptor))
+            return payload.Unpack<ScriptEvolutionProposedEvent>().ProposalId ?? string.Empty;
+        if (payload.Is(ScriptEvolutionValidatedEvent.Descriptor))
+            return payload.Unpack<ScriptEvolutionValidatedEvent>().ProposalId ?? string.Empty;
+        if (payload.Is(ScriptEvolutionRejectedEvent.Descriptor))
+            return payload.Unpack<ScriptEvolutionRejectedEvent>().ProposalId ?? string.Empty;
+        if (payload.Is(ScriptEvolutionPromotedEvent.Descriptor))
+            return payload.Unpack<ScriptEvolutionPromotedEvent>().ProposalId ?? string.Empty;
+        if (payload.Is(ScriptEvolutionRolledBackEvent.Descriptor))
+            return payload.Unpack<ScriptEvolutionRolledBackEvent>().ProposalId ?? string.Empty;
+
+        return string.Empty;
     }
 
     private static DateTimeOffset ResolveEventTimestamp(
