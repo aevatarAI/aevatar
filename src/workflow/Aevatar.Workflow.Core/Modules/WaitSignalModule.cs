@@ -13,7 +13,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class WaitSignalModule : IEventModule
 {
-    private readonly Dictionary<(string RunId, string SignalName), PendingSignal> _pending = [];
+    private readonly Dictionary<PendingSignalKey, PendingSignal> _pending = [];
 
     public string Name => "wait_signal";
     public int Priority => 5;
@@ -22,7 +22,9 @@ public sealed class WaitSignalModule : IEventModule
     {
         var p = envelope.Payload;
         return p != null &&
-               (p.Is(StepRequestEvent.Descriptor) || p.Is(SignalReceivedEvent.Descriptor));
+               (p.Is(StepRequestEvent.Descriptor) ||
+                p.Is(SignalReceivedEvent.Descriptor) ||
+                p.Is(WaitSignalTimeoutFiredEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
@@ -57,7 +59,7 @@ public sealed class WaitSignalModule : IEventModule
             {
                 timeoutMs = Math.Clamp(timeoutSeconds * 1000, 0, 3_600_000);
             }
-            var pendingKey = (runId, signalName);
+            var pendingKey = new PendingSignalKey(runId, signalName, request.StepId);
 
             _pending[pendingKey] = new PendingSignal(request.StepId, runId, request.Input ?? "", signalName);
 
@@ -84,26 +86,44 @@ public sealed class WaitSignalModule : IEventModule
                     try
                     {
                         await Task.Delay(Math.Clamp(timeoutMs, 100, 3_600_000), ct);
-                        if (!_pending.Remove(pendingKey, out _))
-                            return;
-
-                        ctx.Logger.LogWarning(
-                            "WaitSignal: step={StepId} run={RunId} signal={Signal} timed out",
-                            stepId,
-                            runId,
-                            signalName);
-
-                        await ctx.PublishAsync(new StepCompletedEvent
+                        await ctx.PublishAsync(new WaitSignalTimeoutFiredEvent
                         {
-                            StepId = stepId,
                             RunId = runId,
-                            Success = false,
-                            Error = $"signal '{signalName}' timed out after {timeoutMs}ms",
+                            StepId = stepId,
+                            SignalName = signalName,
+                            TimeoutMs = Math.Clamp(timeoutMs, 100, 3_600_000),
                         }, EventDirection.Self, CancellationToken.None);
                     }
                     catch (OperationCanceledException) { }
                 }, CancellationToken.None);
             }
+        }
+        else if (payload.Is(WaitSignalTimeoutFiredEvent.Descriptor))
+        {
+            var timeout = payload.Unpack<WaitSignalTimeoutFiredEvent>();
+            var runId = WorkflowRunIdNormalizer.Normalize(timeout.RunId);
+            var stepId = NormalizeStepId(timeout.StepId);
+            if (string.IsNullOrWhiteSpace(stepId))
+                return;
+
+            var signalName = NormalizeSignalName(timeout.SignalName);
+            var pendingKey = new PendingSignalKey(runId, signalName, stepId);
+            if (!_pending.Remove(pendingKey, out _))
+                return;
+
+            ctx.Logger.LogWarning(
+                "WaitSignal: step={StepId} run={RunId} signal={Signal} timed out",
+                stepId,
+                runId,
+                signalName);
+
+            await ctx.PublishAsync(new StepCompletedEvent
+            {
+                StepId = stepId,
+                RunId = runId,
+                Success = false,
+                Error = $"signal '{signalName}' timed out after {timeout.TimeoutMs}ms",
+            }, EventDirection.Self, ct);
         }
         else if (payload.Is(SignalReceivedEvent.Descriptor))
         {
@@ -111,9 +131,10 @@ public sealed class WaitSignalModule : IEventModule
             if (!TryResolvePending(signal, out var pendingKey, out var pending))
             {
                 ctx.Logger.LogWarning(
-                    "WaitSignal: signal={Signal} run={RunId} not matched to pending waiters",
+                    "WaitSignal: signal={Signal} run={RunId} step={StepId} not matched to pending waiters",
                     signal.SignalName,
-                    string.IsNullOrWhiteSpace(signal.RunId) ? "(missing)" : signal.RunId);
+                    string.IsNullOrWhiteSpace(signal.RunId) ? "(missing)" : signal.RunId,
+                    string.IsNullOrWhiteSpace(signal.StepId) ? "(missing)" : signal.StepId);
                 return;
             }
 
@@ -138,35 +159,70 @@ public sealed class WaitSignalModule : IEventModule
 
     private bool TryResolvePending(
         SignalReceivedEvent signal,
-        out (string RunId, string SignalName) pendingKey,
+        out PendingSignalKey pendingKey,
         out PendingSignal pending)
     {
         var signalName = NormalizeSignalName(signal.SignalName);
+        var signalStepId = NormalizeStepId(signal.StepId);
         if (!string.IsNullOrWhiteSpace(signal.RunId))
         {
-            pendingKey = (WorkflowRunIdNormalizer.Normalize(signal.RunId), signalName);
-            return _pending.TryGetValue(pendingKey, out pending!);
+            var runId = WorkflowRunIdNormalizer.Normalize(signal.RunId);
+            if (!string.IsNullOrWhiteSpace(signalStepId))
+            {
+                pendingKey = new PendingSignalKey(runId, signalName, signalStepId);
+                return _pending.TryGetValue(pendingKey, out pending!);
+            }
+
+            return TryResolveSinglePending(
+                static (key, state) => key.RunId.Equals(state.RunId, StringComparison.Ordinal) &&
+                                       key.SignalName.Equals(state.SignalName, StringComparison.Ordinal),
+                (RunId: runId, SignalName: signalName),
+                out pendingKey,
+                out pending);
         }
 
         // Backward compatibility: old clients may not send run_id.
-        // Only resolve automatically when exactly one run is waiting for this signal.
-        var matchCount = 0;
+        // Only resolve automatically when exactly one waiter matches.
+        if (!string.IsNullOrWhiteSpace(signalStepId))
+        {
+            return TryResolveSinglePending(
+                static (key, state) => key.SignalName.Equals(state.SignalName, StringComparison.Ordinal) &&
+                                       key.StepId.Equals(state.StepId, StringComparison.Ordinal),
+                (SignalName: signalName, StepId: signalStepId),
+                out pendingKey,
+                out pending);
+        }
+
+        return TryResolveSinglePending(
+            static (key, signal) => key.SignalName.Equals(signal, StringComparison.Ordinal),
+            signalName,
+            out pendingKey,
+            out pending);
+    }
+
+    private bool TryResolveSinglePending<TState>(
+        Func<PendingSignalKey, TState, bool> predicate,
+        TState state,
+        out PendingSignalKey pendingKey,
+        out PendingSignal pending)
+    {
+        var found = false;
         pendingKey = default;
         pending = default!;
         foreach (var entry in _pending)
         {
-            if (!entry.Key.SignalName.Equals(signalName, StringComparison.Ordinal))
+            if (!predicate(entry.Key, state))
                 continue;
 
-            matchCount++;
-            if (matchCount > 1)
+            if (found)
                 return false;
 
             pendingKey = entry.Key;
             pending = entry.Value;
+            found = true;
         }
 
-        return matchCount == 1;
+        return found;
     }
 
     private static string NormalizeSignalName(string signalName)
@@ -175,5 +231,9 @@ public sealed class WaitSignalModule : IEventModule
         return normalized.ToLowerInvariant();
     }
 
+    private static string NormalizeStepId(string? stepId) =>
+        string.IsNullOrWhiteSpace(stepId) ? string.Empty : stepId.Trim();
+
+    private readonly record struct PendingSignalKey(string RunId, string SignalName, string StepId);
     private sealed record PendingSignal(string StepId, string RunId, string Input, string SignalName);
 }

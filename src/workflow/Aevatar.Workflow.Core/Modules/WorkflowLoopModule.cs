@@ -16,6 +16,7 @@ public sealed class WorkflowLoopModule : IEventModule
     private WorkflowDefinition? _workflow;
     private readonly HashSet<string> _activeRunIds = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _currentStepByRunId = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _currentStepInputByRunId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, string>> _variablesByRunId = new(StringComparer.Ordinal);
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
     private readonly Dictionary<string, int> _retryAttempts = new(StringComparer.Ordinal);
@@ -31,7 +32,8 @@ public sealed class WorkflowLoopModule : IEventModule
         var payload = envelope.Payload;
         return payload != null &&
                (payload.Is(StartWorkflowEvent.Descriptor) ||
-                payload.Is(StepCompletedEvent.Descriptor));
+                payload.Is(StepCompletedEvent.Descriptor) ||
+                payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
@@ -43,7 +45,9 @@ public sealed class WorkflowLoopModule : IEventModule
         if (payload.Is(StartWorkflowEvent.Descriptor))
         {
             var evt = payload.Unpack<StartWorkflowEvent>();
-            var runId = string.IsNullOrWhiteSpace(evt.RunId) ? Guid.NewGuid().ToString("N") : evt.RunId;
+            var runId = string.IsNullOrWhiteSpace(evt.RunId)
+                ? Guid.NewGuid().ToString("N")
+                : WorkflowRunIdNormalizer.Normalize(evt.RunId);
 
             if (_activeRunIds.Contains(runId))
             {
@@ -79,9 +83,49 @@ public sealed class WorkflowLoopModule : IEventModule
 
             await DispatchStep(entry, evt.Input ?? string.Empty, runId, ctx, ct);
         }
+        else if (payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor))
+        {
+            var evt = payload.Unpack<WorkflowStepTimeoutFiredEvent>();
+            var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
+            if (string.IsNullOrWhiteSpace(runId) || !_activeRunIds.Contains(runId))
+                return;
+
+            var stepId = evt.StepId?.Trim();
+            if (string.IsNullOrWhiteSpace(stepId))
+                return;
+
+            if (!_currentStepByRunId.TryGetValue(runId, out var expectedStepId) ||
+                !string.Equals(expectedStepId, stepId, StringComparison.Ordinal))
+            {
+                ctx.Logger.LogDebug(
+                    "workflow_loop: ignore stale timeout run={RunId} step={StepId} expected={ExpectedStepId}",
+                    runId,
+                    stepId,
+                    expectedStepId ?? "(none)");
+                return;
+            }
+
+            CancelTimeout(runId, stepId);
+            ctx.Logger.LogWarning("workflow_loop: step={StepId} timed out after {Ms}ms", stepId, evt.TimeoutMs);
+            await ctx.PublishAsync(new StepCompletedEvent
+            {
+                StepId = stepId,
+                RunId = runId,
+                Success = false,
+                Error = $"TIMEOUT after {evt.TimeoutMs}ms",
+            }, EventDirection.Self, ct);
+        }
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
             var evt = payload.Unpack<StepCompletedEvent>();
+            if (string.IsNullOrWhiteSpace(evt.RunId))
+            {
+                ctx.Logger.LogWarning(
+                    "workflow_loop: ignore completion without run_id step={StepId}",
+                    evt.StepId);
+                return;
+            }
+
             var runId = ResolveRunId(evt);
             if (string.IsNullOrWhiteSpace(runId) || !_activeRunIds.Contains(runId))
                 return;
@@ -270,7 +314,16 @@ public sealed class WorkflowLoopModule : IEventModule
         if (delayMs > 0)
             await Task.Delay(delayMs, ct);
 
-        await DispatchStep(step, evt.Output ?? "", runId, ctx, ct);
+        if (!_currentStepInputByRunId.TryGetValue(runId, out var retryInput))
+        {
+            ctx.Logger.LogWarning(
+                "workflow_loop: missing retry input run={RunId} step={StepId}, fallback to empty input",
+                runId,
+                step.Id);
+            retryInput = string.Empty;
+        }
+
+        await DispatchStep(step, retryInput, runId, ctx, ct);
         return true;
     }
 
@@ -336,6 +389,7 @@ public sealed class WorkflowLoopModule : IEventModule
         CancellationToken ct)
     {
         _currentStepByRunId[runId] = step.Id;
+        _currentStepInputByRunId[runId] = input;
         var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
         if (_workflow?.Configuration.ClosedWorldMode == true &&
             WorkflowPrimitiveCatalog.IsClosedWorldBlocked(canonicalStepType))
@@ -422,13 +476,11 @@ public sealed class WorkflowLoopModule : IEventModule
             try
             {
                 await Task.Delay(timeoutMs, cts.Token);
-                ctx.Logger.LogWarning("workflow_loop: step={StepId} timed out after {Ms}ms", stepId, timeoutMs);
-                await ctx.PublishAsync(new StepCompletedEvent
+                await ctx.PublishAsync(new WorkflowStepTimeoutFiredEvent
                 {
-                    StepId = stepId,
                     RunId = runId,
-                    Success = false,
-                    Error = $"TIMEOUT after {timeoutMs}ms",
+                    StepId = stepId,
+                    TimeoutMs = timeoutMs,
                 }, EventDirection.Self, CancellationToken.None);
             }
             catch (OperationCanceledException) { }
@@ -454,18 +506,16 @@ public sealed class WorkflowLoopModule : IEventModule
 
     private static string GetStepRunKey(string runId, string stepId) => $"{runId}:{stepId}";
 
-    private string ResolveRunId(StepCompletedEvent evt)
+    private static string ResolveRunId(StepCompletedEvent evt)
     {
-        if (!string.IsNullOrWhiteSpace(evt.RunId))
-            return evt.RunId;
-
-        return _activeRunIds.Count == 1 ? _activeRunIds.First() : string.Empty;
+        return WorkflowRunIdNormalizer.Normalize(evt.RunId);
     }
 
     private void CleanupRun(string runId)
     {
         _activeRunIds.Remove(runId);
         _currentStepByRunId.Remove(runId);
+        _currentStepInputByRunId.Remove(runId);
         _variablesByRunId.Remove(runId);
 
         var retryPrefix = $"{runId}:";

@@ -85,6 +85,20 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     WorkflowChatRunStartError.WorkflowBindingMismatch);
             }
 
+            if (hasInlineWorkflowYamls)
+            {
+                // Never mutate an already bound actor in-place with inline yaml.
+                // Inline workflow execution must run on a fresh actor instance.
+                var isolatedActor = await _actorPort.CreateAsync(ct);
+                await ConfigureWorkflowForRunAsync(
+                    isolatedActor,
+                    workflowYamlForRun,
+                    workflowNameForRun,
+                    inlineWorkflowYamlMapForRun,
+                    ct);
+                return new WorkflowActorResolutionResult(isolatedActor, workflowNameForRun, WorkflowChatRunStartError.None);
+            }
+
             if (!hasInlineWorkflowYamls &&
                 hasRequestedWorkflowName &&
                 !string.Equals(requestedWorkflowName, boundWorkflowName, StringComparison.OrdinalIgnoreCase))
@@ -94,17 +108,6 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     boundWorkflowName,
                     WorkflowChatRunStartError.WorkflowBindingMismatch);
             }
-
-            if (hasInlineWorkflowYamls)
-            {
-                await ConfigureWorkflowForRunAsync(
-                    existing,
-                    workflowYamlForRun,
-                    boundWorkflowName,
-                    inlineWorkflowYamlMapForRun,
-                    ct);
-            }
-
             return new WorkflowActorResolutionResult(existing, boundWorkflowName, WorkflowChatRunStartError.None);
         }
 
