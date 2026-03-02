@@ -67,8 +67,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             var runtimeNode3 = node3.Services.GetRequiredService<IActorRuntime>();
             var evolutionServiceNode2 = node2.Services.GetRequiredService<IScriptEvolutionApplicationService>();
             var evolutionServiceNode3 = node3.Services.GetRequiredService<IScriptEvolutionApplicationService>();
-            var catalogPortNode1 = node1.Services.GetRequiredService<IScriptCatalogPort>();
-            var catalogPortNode3 = node3.Services.GetRequiredService<IScriptCatalogPort>();
+            var lifecyclePortNode1 = node1.Services.GetRequiredService<IScriptLifecyclePort>();
+            var lifecyclePortNode3 = node3.Services.GetRequiredService<IScriptLifecyclePort>();
             var definitionSnapshotPortNode2 = node2.Services.GetRequiredService<IScriptDefinitionSnapshotPort>();
             var definitionSnapshotPortNode3 = node3.Services.GetRequiredService<IScriptDefinitionSnapshotPort>();
 
@@ -210,22 +210,22 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             ScriptCatalogEntrySnapshot? workerBCatalogEntry = null;
             (await EventuallyAsync(async () =>
             {
-                var entry = await catalogPortNode1.GetEntryAsync("script-catalog", workerAScriptId, CancellationToken.None);
+                var entry = await lifecyclePortNode1.GetCatalogEntryAsync("script-catalog", workerAScriptId, CancellationToken.None);
                 return entry != null && string.Equals(entry.ActiveRevision, "rev-a-2", StringComparison.Ordinal);
             })).Should().BeTrue();
             (await EventuallyAsync(async () =>
             {
-                var entry = await catalogPortNode1.GetEntryAsync("script-catalog", workerBScriptId, CancellationToken.None);
+                var entry = await lifecyclePortNode1.GetCatalogEntryAsync("script-catalog", workerBScriptId, CancellationToken.None);
                 return entry != null && string.Equals(entry.ActiveRevision, "rev-b-2", StringComparison.Ordinal);
             })).Should().BeTrue();
             (await EventuallyAsync(async () =>
             {
-                workerACatalogEntry = await catalogPortNode3.GetEntryAsync("script-catalog", workerAScriptId, CancellationToken.None);
+                workerACatalogEntry = await lifecyclePortNode3.GetCatalogEntryAsync("script-catalog", workerAScriptId, CancellationToken.None);
                 return workerACatalogEntry != null && string.Equals(workerACatalogEntry.ActiveRevision, "rev-a-2", StringComparison.Ordinal);
             })).Should().BeTrue();
             (await EventuallyAsync(async () =>
             {
-                workerBCatalogEntry = await catalogPortNode3.GetEntryAsync("script-catalog", workerBScriptId, CancellationToken.None);
+                workerBCatalogEntry = await lifecyclePortNode3.GetCatalogEntryAsync("script-catalog", workerBScriptId, CancellationToken.None);
                 return workerBCatalogEntry != null && string.Equals(workerBCatalogEntry.ActiveRevision, "rev-b-2", StringComparison.Ordinal);
             })).Should().BeTrue();
 

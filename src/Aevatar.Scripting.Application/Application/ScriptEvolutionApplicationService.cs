@@ -7,12 +7,12 @@ namespace Aevatar.Scripting.Application;
 
 public sealed class ScriptEvolutionApplicationService : IScriptEvolutionApplicationService
 {
-    private readonly IScriptEvolutionPort _evolutionPort;
+    private readonly IScriptLifecyclePort _lifecyclePort;
 
     public ScriptEvolutionApplicationService(
-        IScriptEvolutionPort evolutionPort)
+        IScriptLifecyclePort lifecyclePort)
     {
-        _evolutionPort = evolutionPort ?? throw new ArgumentNullException(nameof(evolutionPort));
+        _lifecyclePort = lifecyclePort ?? throw new ArgumentNullException(nameof(lifecyclePort));
     }
 
     public Task<ScriptPromotionDecision> ProposeAsync(
@@ -45,7 +45,7 @@ public sealed class ScriptEvolutionApplicationService : IScriptEvolutionApplicat
             CandidateSourceHash: normalizedSourceHash,
             Reason: request.Reason ?? string.Empty);
 
-        return _evolutionPort.ProposeAsync(proposal, ct);
+        return _lifecyclePort.ProposeAsync(proposal, ct);
     }
 
     private static string ComputeSourceHash(string source)

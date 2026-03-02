@@ -30,11 +30,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptingPortTimeouts, DefaultScriptingPortTimeouts>();
         services.TryAddSingleton<IScriptingRuntimeQueryModes, DefaultScriptingRuntimeQueryModes>();
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, RuntimeScriptDefinitionSnapshotPort>();
-        services.TryAddSingleton<IScriptDefinitionLifecyclePort, RuntimeScriptDefinitionLifecyclePort>();
-        services.TryAddSingleton<IScriptRuntimeLifecyclePort, RuntimeScriptRuntimeLifecyclePort>();
-        services.TryAddSingleton<IScriptCatalogPort, RuntimeScriptCatalogPort>();
+        services.TryAddSingleton<IScriptLifecyclePort, RuntimeScriptLifecyclePort>();
         services.TryAddSingleton<IScriptEvolutionFlowPort, RuntimeScriptEvolutionFlowPort>();
-        services.TryAddSingleton<IScriptEvolutionPort, RuntimeScriptEvolutionPort>();
         services.TryAddSingleton<IGAgentRuntimePort, RuntimeGAgentRuntimePort>();
         services.TryAddSingleton<IAICapability>(sp =>
         {

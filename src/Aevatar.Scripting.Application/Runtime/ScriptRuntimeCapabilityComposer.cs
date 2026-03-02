@@ -9,28 +9,16 @@ public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityCo
 {
     private readonly IAICapability _aiCapability;
     private readonly IGAgentRuntimePort _agentRuntimePort;
-    private readonly IScriptEvolutionPort _evolutionPort;
-    private readonly IScriptDefinitionLifecyclePort _definitionLifecyclePort;
-    private readonly IScriptRuntimeLifecyclePort _runtimeLifecyclePort;
-    private readonly IScriptCatalogPort _catalogPort;
-    private readonly IScriptingActorAddressResolver _addressResolver;
+    private readonly IScriptLifecyclePort _lifecyclePort;
 
     public ScriptRuntimeCapabilityComposer(
         IAICapability aiCapability,
         IGAgentRuntimePort agentRuntimePort,
-        IScriptEvolutionPort evolutionPort,
-        IScriptDefinitionLifecyclePort definitionLifecyclePort,
-        IScriptRuntimeLifecyclePort runtimeLifecyclePort,
-        IScriptCatalogPort catalogPort,
-        IScriptingActorAddressResolver addressResolver)
+        IScriptLifecyclePort lifecyclePort)
     {
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
         _agentRuntimePort = agentRuntimePort ?? throw new ArgumentNullException(nameof(agentRuntimePort));
-        _evolutionPort = evolutionPort ?? throw new ArgumentNullException(nameof(evolutionPort));
-        _definitionLifecyclePort = definitionLifecyclePort ?? throw new ArgumentNullException(nameof(definitionLifecyclePort));
-        _runtimeLifecyclePort = runtimeLifecyclePort ?? throw new ArgumentNullException(nameof(runtimeLifecyclePort));
-        _catalogPort = catalogPort ?? throw new ArgumentNullException(nameof(catalogPort));
-        _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
+        _lifecyclePort = lifecyclePort ?? throw new ArgumentNullException(nameof(lifecyclePort));
     }
 
     public IScriptRuntimeCapabilities Compose(ScriptRuntimeCapabilityContext context)
@@ -48,11 +36,7 @@ public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityCo
             _agentRuntimePort);
         var evolution = new ScriptEvolutionCapabilities(
             context,
-            _evolutionPort,
-            _definitionLifecyclePort,
-            _runtimeLifecyclePort,
-            _catalogPort,
-            _addressResolver);
+            _lifecyclePort);
 
         return new ScriptRuntimeCapabilities(interaction, agentLifecycle, evolution);
     }

@@ -101,11 +101,7 @@ public class ScriptRuntimeGAgentReplayContractTests
         var capabilityComposer = new ScriptRuntimeCapabilityComposer(
             new NullAICapability(),
             new NullAgentRuntimePort(),
-            new NullEvolutionPort(),
-            new NullDefinitionLifecyclePort(),
-            new NullRuntimeLifecyclePort(),
-            new NullCatalogPort(),
-            new NullAddressResolver());
+            new NullLifecyclePort());
 
         var orchestrator = new ScriptRuntimeExecutionOrchestrator(
             new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
@@ -279,7 +275,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
         public Task UnlinkAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class NullEvolutionPort : IScriptEvolutionPort
+    private sealed class NullLifecyclePort : IScriptLifecyclePort
     {
         public Task<ScriptPromotionDecision> ProposeAsync(
             ScriptEvolutionProposal proposal,
@@ -299,11 +295,8 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
                     CatalogActorId: "script-catalog",
                     ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
         }
-    }
 
-    private sealed class NullDefinitionLifecyclePort : IScriptDefinitionLifecyclePort
-    {
-        public Task<string> UpsertAsync(
+        public Task<string> UpsertDefinitionAsync(
             string scriptId,
             string scriptRevision,
             string sourceText,
@@ -318,11 +311,8 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(definitionActorId ?? "definition-1");
         }
-    }
 
-    private sealed class NullRuntimeLifecyclePort : IScriptRuntimeLifecyclePort
-    {
-        public Task<string> SpawnAsync(
+        public Task<string> SpawnRuntimeAsync(
             string definitionActorId,
             string scriptRevision,
             string? runtimeActorId,
@@ -334,7 +324,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             return Task.FromResult(runtimeActorId ?? "runtime-1");
         }
 
-        public Task RunAsync(
+        public Task RunRuntimeAsync(
             string runtimeActorId,
             string runId,
             Any? inputPayload,
@@ -352,12 +342,9 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
-    }
 
-    private sealed class NullCatalogPort : IScriptCatalogPort
-    {
-        public Task PromoteAsync(
-            string catalogActorId,
+        public Task PromoteCatalogRevisionAsync(
+            string? catalogActorId,
             string scriptId,
             string expectedBaseRevision,
             string revision,
@@ -377,8 +364,8 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             return Task.CompletedTask;
         }
 
-        public Task RollbackAsync(
-            string catalogActorId,
+        public Task RollbackCatalogRevisionAsync(
+            string? catalogActorId,
             string scriptId,
             string targetRevision,
             string reason,
@@ -394,8 +381,8 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             return Task.CompletedTask;
         }
 
-        public Task<ScriptCatalogEntrySnapshot?> GetEntryAsync(
-            string catalogActorId,
+        public Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(
+            string? catalogActorId,
             string scriptId,
             CancellationToken ct)
         {
@@ -404,14 +391,5 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<ScriptCatalogEntrySnapshot?>(null);
         }
-    }
-
-    private sealed class NullAddressResolver : IScriptingActorAddressResolver
-    {
-        public string GetEvolutionManagerActorId() => "script-evolution-manager";
-
-        public string GetCatalogActorId() => "script-catalog";
-
-        public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
     }
 }
