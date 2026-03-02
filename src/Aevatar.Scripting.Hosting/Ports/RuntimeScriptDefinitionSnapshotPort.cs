@@ -6,21 +6,29 @@ using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Hosting.Ports;
 
-public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
+public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort, IScriptRuntimeDefinitionQueryModePort
 {
-    private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(45);
+    private const string OrleansRuntimePrefix = "Aevatar.Foundation.Runtime.Implementations.Orleans.";
 
     private readonly IActorRuntime _runtime;
     private readonly IStreamProvider _streams;
+    private readonly TimeSpan _queryTimeout;
     private readonly QueryScriptDefinitionSnapshotRequestAdapter _queryAdapter = new();
 
     public RuntimeScriptDefinitionSnapshotPort(
         IActorRuntime runtime,
-        IStreamProvider streams)
+        IStreamProvider streams,
+        IScriptingPortTimeouts timeouts)
     {
         _runtime = runtime;
         _streams = streams;
+        _queryTimeout = NormalizeTimeout(timeouts.DefinitionSnapshotQueryTimeout);
+        var runtimeType = runtime.GetType().FullName;
+        UseEventDrivenDefinitionQuery = !string.IsNullOrWhiteSpace(runtimeType) &&
+                                        runtimeType.StartsWith(OrleansRuntimePrefix, StringComparison.Ordinal);
     }
+
+    public bool UseEventDrivenDefinitionQuery { get; }
 
     public async Task<ScriptDefinitionSnapshot> GetRequiredAsync(
         string definitionActorId,
@@ -77,13 +85,13 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
         return snapshot;
     }
 
-    private static async Task<ScriptDefinitionSnapshotRespondedEvent> WaitForResponseAsync(
+    private async Task<ScriptDefinitionSnapshotRespondedEvent> WaitForResponseAsync(
         Task<ScriptDefinitionSnapshotRespondedEvent> responseTask,
         string requestId,
         CancellationToken ct)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var timeoutTask = Task.Delay(QueryTimeout, timeoutCts.Token);
+        var timeoutTask = Task.Delay(_queryTimeout, timeoutCts.Token);
         var completed = await Task.WhenAny(responseTask, timeoutTask);
         if (!ReferenceEquals(completed, responseTask))
             throw new TimeoutException($"Timeout waiting for script definition snapshot query response. request_id={requestId}");
@@ -91,4 +99,7 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
         timeoutCts.Cancel();
         return await responseTask;
     }
+
+    private static TimeSpan NormalizeTimeout(TimeSpan timeout) =>
+        timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(45);
 }

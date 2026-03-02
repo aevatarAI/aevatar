@@ -27,6 +27,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptEvolutionApplicationService, ScriptEvolutionApplicationService>();
         services.TryAddSingleton<IScriptRuntimeCapabilityComposer, ScriptRuntimeCapabilityComposer>();
         services.TryAddSingleton<IScriptRuntimeExecutionOrchestrator, ScriptRuntimeExecutionOrchestrator>();
+        services.TryAddSingleton<IScriptingPortTimeouts, DefaultScriptingPortTimeouts>();
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, RuntimeScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptDefinitionLifecyclePort, RuntimeScriptDefinitionLifecyclePort>();
         services.TryAddSingleton<IScriptRuntimeLifecyclePort, RuntimeScriptRuntimeLifecyclePort>();

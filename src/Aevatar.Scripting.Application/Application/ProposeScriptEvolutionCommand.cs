@@ -10,4 +10,6 @@ public sealed record ProposeScriptEvolutionCommand(
     string Reason,
     string DefinitionActorId,
     string CatalogActorId,
-    string RequestedByActorId);
+    string RequestedByActorId,
+    string DecisionRequestId = "",
+    string DecisionReplyStreamId = "");

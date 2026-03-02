@@ -8,20 +8,21 @@ namespace Aevatar.Scripting.Hosting.Ports;
 
 public sealed class RuntimeScriptCatalogPort : IScriptCatalogPort
 {
-    private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(45);
-
     private readonly IActorRuntime _runtime;
     private readonly IStreamProvider _streams;
+    private readonly TimeSpan _queryTimeout;
     private readonly PromoteScriptRevisionCommandAdapter _promoteAdapter = new();
     private readonly RollbackScriptRevisionCommandAdapter _rollbackAdapter = new();
     private readonly QueryScriptCatalogEntryRequestAdapter _queryAdapter = new();
 
     public RuntimeScriptCatalogPort(
         IActorRuntime runtime,
-        IStreamProvider streams)
+        IStreamProvider streams,
+        IScriptingPortTimeouts timeouts)
     {
         _runtime = runtime;
         _streams = streams;
+        _queryTimeout = NormalizeTimeout(timeouts.CatalogEntryQueryTimeout);
     }
 
     public async Task PromoteAsync(
@@ -126,13 +127,13 @@ public sealed class RuntimeScriptCatalogPort : IScriptCatalogPort
         return await _runtime.CreateAsync<ScriptCatalogGAgent>(catalogActorId, ct);
     }
 
-    private static async Task<ScriptCatalogEntryRespondedEvent> WaitForResponseAsync(
+    private async Task<ScriptCatalogEntryRespondedEvent> WaitForResponseAsync(
         Task<ScriptCatalogEntryRespondedEvent> responseTask,
         string requestId,
         CancellationToken ct)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var timeoutTask = Task.Delay(QueryTimeout, timeoutCts.Token);
+        var timeoutTask = Task.Delay(_queryTimeout, timeoutCts.Token);
         var completed = await Task.WhenAny(responseTask, timeoutTask);
         if (!ReferenceEquals(completed, responseTask))
             throw new TimeoutException($"Timeout waiting for script catalog entry query response. request_id={requestId}");
@@ -140,4 +141,7 @@ public sealed class RuntimeScriptCatalogPort : IScriptCatalogPort
         timeoutCts.Cancel();
         return await responseTask;
     }
+
+    private static TimeSpan NormalizeTimeout(TimeSpan timeout) =>
+        timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(45);
 }

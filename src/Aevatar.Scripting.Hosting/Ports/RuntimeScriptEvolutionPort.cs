@@ -9,23 +9,19 @@ namespace Aevatar.Scripting.Hosting.Ports;
 
 public sealed class RuntimeScriptEvolutionPort : IScriptEvolutionPort
 {
-    private static readonly TimeSpan DecisionTimeout = TimeSpan.FromSeconds(45);
-    private static readonly TimeSpan DecisionRoundQueryTimeout = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan DecisionProbeInterval = TimeSpan.FromMilliseconds(100);
-    private const string StatusPromoted = "promoted";
-    private const string StatusRejected = "rejected";
-
     private readonly IActorRuntime _runtime;
     private readonly IStreamProvider _streams;
+    private readonly TimeSpan _decisionTimeout;
     private readonly ProposeScriptEvolutionCommandAdapter _commandAdapter = new();
-    private readonly QueryScriptEvolutionDecisionRequestAdapter _queryAdapter = new();
 
     public RuntimeScriptEvolutionPort(
         IActorRuntime runtime,
-        IStreamProvider streams)
+        IStreamProvider streams,
+        IScriptingPortTimeouts timeouts)
     {
         _runtime = runtime;
         _streams = streams;
+        _decisionTimeout = NormalizeTimeout(timeouts.EvolutionDecisionTimeout);
     }
 
     public async Task<ScriptPromotionDecision> ProposeAsync(
@@ -42,6 +38,21 @@ public sealed class RuntimeScriptEvolutionPort : IScriptEvolutionPort
         var normalizedProposal = proposal with { ProposalId = normalizedProposalId };
 
         var actor = await GetOrCreateManagerAsync(managerActorId, ct);
+        var decisionRequestId = Guid.NewGuid().ToString("N");
+        var decisionReplyStreamId = $"scripting.evolution.decision.reply:{decisionRequestId}";
+        var responseTaskSource = new TaskCompletionSource<ScriptEvolutionDecisionRespondedEvent>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var subscription = await _streams
+            .GetStream(decisionReplyStreamId)
+            .SubscribeAsync<ScriptEvolutionDecisionRespondedEvent>(response =>
+            {
+                if (string.Equals(response.RequestId, decisionRequestId, StringComparison.Ordinal))
+                    responseTaskSource.TrySetResult(response);
+
+                return Task.CompletedTask;
+            }, ct);
+
         await actor.HandleEventAsync(
             _commandAdapter.Map(
                 new ProposeScriptEvolutionCommand(
@@ -54,14 +65,26 @@ public sealed class RuntimeScriptEvolutionPort : IScriptEvolutionPort
                     Reason: normalizedProposal.Reason ?? string.Empty,
                     DefinitionActorId: normalizedProposal.DefinitionActorId ?? string.Empty,
                     CatalogActorId: normalizedProposal.CatalogActorId ?? string.Empty,
-                    RequestedByActorId: normalizedProposal.RequestedByActorId ?? string.Empty),
+                    RequestedByActorId: normalizedProposal.RequestedByActorId ?? string.Empty,
+                    DecisionRequestId: decisionRequestId,
+                    DecisionReplyStreamId: decisionReplyStreamId),
                 managerActorId),
             ct);
 
-        var response = await WaitForDecisionByEventAsync(actor, managerActorId, normalizedProposalId, ct);
-        if (response == null)
+        var response = await WaitForDecisionResponseAsync(responseTaskSource.Task, decisionRequestId, ct);
+        if (!response.Found)
+        {
             throw new InvalidOperationException(
-                $"Script evolution decision not found for proposal `{normalizedProposalId}`.");
+                string.IsNullOrWhiteSpace(response.FailureReason)
+                    ? $"Script evolution decision not found for proposal `{normalizedProposalId}`."
+                    : response.FailureReason);
+        }
+
+        if (!string.Equals(response.ProposalId, normalizedProposalId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script evolution decision proposal mismatch. expected=`{normalizedProposalId}` actual=`{response.ProposalId}`.");
+        }
 
         return MapDecision(response);
     }
@@ -77,81 +100,10 @@ public sealed class RuntimeScriptEvolutionPort : IScriptEvolutionPort
         return await _runtime.CreateAsync<ScriptEvolutionManagerGAgent>(managerActorId, ct);
     }
 
-    private async Task<ScriptEvolutionDecisionRespondedEvent?> WaitForDecisionByEventAsync(
-        IActor managerActor,
-        string managerActorId,
-        string proposalId,
-        CancellationToken ct)
-    {
-        var deadline = DateTime.UtcNow + DecisionTimeout;
-        ScriptEvolutionDecisionRespondedEvent? latestFound = null;
-
-        while (DateTime.UtcNow <= deadline)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var response = await TryQueryDecisionAsync(
-                managerActor,
-                managerActorId,
-                proposalId,
-                ct,
-                DecisionRoundQueryTimeout);
-            if (response?.Found == true)
-            {
-                latestFound = response;
-                if (string.Equals(response.Status, StatusPromoted, StringComparison.Ordinal) ||
-                    string.Equals(response.Status, StatusRejected, StringComparison.Ordinal))
-                {
-                    return response;
-                }
-            }
-
-            await Task.Delay(DecisionProbeInterval, ct);
-        }
-
-        return latestFound;
-    }
-
-    private async Task<ScriptEvolutionDecisionRespondedEvent?> TryQueryDecisionAsync(
-        IActor managerActor,
-        string managerActorId,
-        string proposalId,
-        CancellationToken ct,
-        TimeSpan roundTimeout)
-    {
-        var requestId = Guid.NewGuid().ToString("N");
-        var replyStreamId = $"scripting.query.evolution.reply:{requestId}";
-        var responseTaskSource = new TaskCompletionSource<ScriptEvolutionDecisionRespondedEvent>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var subscription = await _streams
-            .GetStream(replyStreamId)
-            .SubscribeAsync<ScriptEvolutionDecisionRespondedEvent>(response =>
-            {
-                if (string.Equals(response.RequestId, requestId, StringComparison.Ordinal))
-                    responseTaskSource.TrySetResult(response);
-
-                return Task.CompletedTask;
-            }, ct);
-
-        await managerActor.HandleEventAsync(
-            _queryAdapter.Map(managerActorId, requestId, replyStreamId, proposalId),
-            ct);
-
-        var response = await WaitForResponseAsync(responseTaskSource.Task, requestId, ct, roundTimeout);
-        if (response == null)
-            return null;
-
-        if (!string.Equals(response.ProposalId, proposalId, StringComparison.Ordinal))
-            return null;
-
-        return response;
-    }
-
     private static ScriptPromotionDecision MapDecision(ScriptEvolutionDecisionRespondedEvent response)
     {
         var validation = new ScriptEvolutionValidationReport(
-            IsSuccess: string.Equals(response.Status, StatusPromoted, StringComparison.Ordinal),
+            IsSuccess: response.Accepted,
             Diagnostics: response.Diagnostics.ToArray());
         return new ScriptPromotionDecision(
             Accepted: response.Accepted,
@@ -166,23 +118,28 @@ public sealed class RuntimeScriptEvolutionPort : IScriptEvolutionPort
             ValidationReport: validation);
     }
 
-    private static async Task<ScriptEvolutionDecisionRespondedEvent?> WaitForResponseAsync(
+    private async Task<ScriptEvolutionDecisionRespondedEvent> WaitForDecisionResponseAsync(
         Task<ScriptEvolutionDecisionRespondedEvent> responseTask,
-        string requestId,
-        CancellationToken ct,
-        TimeSpan timeout)
+        string decisionRequestId,
+        CancellationToken ct)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var timeoutTask = Task.Delay(timeout, timeoutCts.Token);
+        var timeoutTask = Task.Delay(_decisionTimeout, timeoutCts.Token);
         var completed = await Task.WhenAny(responseTask, timeoutTask);
         if (!ReferenceEquals(completed, responseTask))
-            return null;
+            throw new TimeoutException($"Timeout waiting for script evolution decision response. request_id={decisionRequestId}");
 
         timeoutCts.Cancel();
         var response = await responseTask;
-        if (!string.Equals(response.RequestId, requestId, StringComparison.Ordinal))
-            return null;
+        if (!string.Equals(response.RequestId, decisionRequestId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script evolution decision response request mismatch. expected=`{decisionRequestId}` actual=`{response.RequestId}`.");
+        }
 
         return response;
     }
+
+    private static TimeSpan NormalizeTimeout(TimeSpan timeout) =>
+        timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(45);
 }

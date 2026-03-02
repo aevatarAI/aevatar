@@ -66,6 +66,17 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
                 CandidateRevision = proposal.CandidateRevision,
                 FailureReason = flowResult.FailureReason ?? string.Empty,
             });
+            await TrySendDecisionResponseAsync(
+                evt,
+                BuildDecisionResponse(
+                    requestId: evt.DecisionRequestId ?? string.Empty,
+                    proposal: proposal,
+                    accepted: false,
+                    status: StatusRejected,
+                    failureReason: flowResult.FailureReason ?? string.Empty,
+                    definitionActorId: proposal.DefinitionActorId,
+                    catalogActorId: proposal.CatalogActorId,
+                    validation: flowResult.ValidationReport ?? ScriptEvolutionValidationReport.Empty));
             return;
         }
 
@@ -88,6 +99,17 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
                 CandidateRevision = proposal.CandidateRevision,
                 FailureReason = flowResult.FailureReason ?? string.Empty,
             });
+            await TrySendDecisionResponseAsync(
+                evt,
+                BuildDecisionResponse(
+                    requestId: evt.DecisionRequestId ?? string.Empty,
+                    proposal: proposal,
+                    accepted: false,
+                    status: StatusRejected,
+                    failureReason: flowResult.FailureReason ?? string.Empty,
+                    definitionActorId: proposal.DefinitionActorId,
+                    catalogActorId: proposal.CatalogActorId,
+                    validation: validation));
             return;
         }
 
@@ -104,6 +126,17 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
                 DefinitionActorId = promotion.DefinitionActorId,
                 CatalogActorId = promotion.CatalogActorId,
             });
+            await TrySendDecisionResponseAsync(
+                evt,
+                BuildDecisionResponse(
+                    requestId: evt.DecisionRequestId ?? string.Empty,
+                    proposal: proposal,
+                    accepted: true,
+                    status: StatusPromoted,
+                    failureReason: string.Empty,
+                    definitionActorId: promotion.DefinitionActorId,
+                    catalogActorId: promotion.CatalogActorId,
+                    validation: validation));
             return;
         }
 
@@ -114,6 +147,17 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             CandidateRevision = proposal.CandidateRevision,
             FailureReason = flowResult.FailureReason ?? string.Empty,
         });
+        await TrySendDecisionResponseAsync(
+            evt,
+            BuildDecisionResponse(
+                requestId: evt.DecisionRequestId ?? string.Empty,
+                proposal: proposal,
+                accepted: false,
+                status: StatusRejected,
+                failureReason: flowResult.FailureReason ?? string.Empty,
+                definitionActorId: proposal.DefinitionActorId,
+                catalogActorId: proposal.CatalogActorId,
+                validation: validation));
     }
 
     [EventHandler]
@@ -210,6 +254,50 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         CancellationToken ct = default)
     {
         return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
+    }
+
+    private async Task TrySendDecisionResponseAsync(
+        ProposeScriptEvolutionRequestedEvent requestEvent,
+        ScriptEvolutionDecisionRespondedEvent response,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(requestEvent.DecisionRequestId) ||
+            string.IsNullOrWhiteSpace(requestEvent.DecisionReplyStreamId))
+            return;
+
+        await EventPublisher.SendToAsync(
+            requestEvent.DecisionReplyStreamId,
+            response,
+            ct,
+            sourceEnvelope: null);
+    }
+
+    private static ScriptEvolutionDecisionRespondedEvent BuildDecisionResponse(
+        string requestId,
+        ScriptEvolutionProposal proposal,
+        bool accepted,
+        string status,
+        string failureReason,
+        string definitionActorId,
+        string catalogActorId,
+        ScriptEvolutionValidationReport validation)
+    {
+        var response = new ScriptEvolutionDecisionRespondedEvent
+        {
+            RequestId = requestId ?? string.Empty,
+            Found = true,
+            Accepted = accepted,
+            ProposalId = proposal.ProposalId,
+            ScriptId = proposal.ScriptId,
+            BaseRevision = proposal.BaseRevision,
+            CandidateRevision = proposal.CandidateRevision,
+            Status = status,
+            FailureReason = failureReason ?? string.Empty,
+            DefinitionActorId = definitionActorId ?? string.Empty,
+            CatalogActorId = catalogActorId ?? string.Empty,
+        };
+        response.Diagnostics.Add(validation.Diagnostics);
+        return response;
     }
 
     private static ScriptEvolutionProposal NormalizeProposal(

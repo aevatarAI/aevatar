@@ -177,6 +177,8 @@ message ProposeScriptEvolutionRequestedEvent {
   string definition_actor_id = 8;
   string catalog_actor_id = 9;
   string requested_by_actor_id = 10;
+  string decision_request_id = 11;
+  string decision_reply_stream_id = 12;
 }
 
 message PromoteScriptRevisionRequestedEvent {

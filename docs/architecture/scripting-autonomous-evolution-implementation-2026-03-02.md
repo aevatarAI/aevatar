@@ -1,158 +1,167 @@
-# Aevatar.Scripting 自治进化重构实施文档（2026-03-02）
+# Aevatar.Scripting 架构实施文档（2026-03-02 R2）
 
-## 1. 变更结论
+## 1. 实施结论
 
-本次重构已从“执行型脚本框架”升级为“执行 + 演化”框架，并完成“双通道终态”的落地：
+当前实现已经满足以下目标：
 
-1. 脚本可在运行时自建临时脚本 Runtime。
-2. 脚本可在运行时创建新脚本定义并运行新脚本 Runtime。
-3. 脚本可在运行时发起升级提案并完成验证与发布。
-4. 发布事实由 `ScriptEvolutionManagerGAgent + ScriptCatalogGAgent` 持久化维护。
-5. 外部更新入口（API/CI/Ops）已通过标准化 Host/API + Application Service 接入并走同一治理主链路。
+1. 脚本内可发起自我演化，并完成提案、验证、发布与回滚。
+2. 外部入口可发起同构提案，进入同一演化治理链路。
+3. 运行态与演化态全部通过事件通信协作，事实状态由 Actor 持久态承载。
+4. Orleans 3 集群场景可稳定运行复杂多脚本、多轮演化测试。
 
-## 2. 关键架构变更
+## 2. 分层实施清单
 
 ### 2.1 Abstractions
 
-新增文件：
+文件：`src/Aevatar.Scripting.Abstractions/script_host_messages.proto`
 
-1. `src/Aevatar.Scripting.Abstractions/Definitions/ScriptEvolutionProposal.cs`
-2. `src/Aevatar.Scripting.Abstractions/Definitions/ScriptEvolutionValidationReport.cs`
-3. `src/Aevatar.Scripting.Abstractions/Definitions/ScriptPromotionDecision.cs`
+已落地内容：
 
-扩展接口：
-
-1. `src/Aevatar.Scripting.Abstractions/Definitions/IScriptRuntimeCapabilities.cs`
-
-扩展 proto：
-
-1. `src/Aevatar.Scripting.Abstractions/script_host_messages.proto`
-
-新增 `EvolutionManager/Catalog` 状态和演化事件链。
+1. 增加演化状态与事件链。
+2. 增加查询契约：Definition/Catalog/Evolution 的 request/response 事件。
+3. 保持运行事件与演化事件统一在 protobuf 契约层表达。
 
 ### 2.2 Core
 
-新增 Actor：
+关键 Actor：
 
-1. `src/Aevatar.Scripting.Core/ScriptEvolutionManagerGAgent.cs`
-2. `src/Aevatar.Scripting.Core/ScriptCatalogGAgent.cs`
+1. `ScriptDefinitionGAgent`
+2. `ScriptRuntimeGAgent`
+3. `ScriptEvolutionManagerGAgent`
+4. `ScriptCatalogGAgent`
 
-新增端口：
+关键实现点：
 
-1. `src/Aevatar.Scripting.Core/Ports/IScriptEvolutionPort.cs`
-2. `src/Aevatar.Scripting.Core/Ports/IScriptEvolutionFlowPort.cs`
-3. `src/Aevatar.Scripting.Core/Ports/IScriptPolicyGatePort.cs`
-4. `src/Aevatar.Scripting.Core/Ports/IScriptValidationPipelinePort.cs`
-5. `src/Aevatar.Scripting.Core/Ports/IScriptPromotionPort.cs`
-6. `src/Aevatar.Scripting.Core/Ports/IScriptCatalogPort.cs`
-7. `src/Aevatar.Scripting.Core/Ports/IScriptDefinitionLifecyclePort.cs`
-8. `src/Aevatar.Scripting.Core/Ports/IScriptRuntimeLifecyclePort.cs`
-9. `src/Aevatar.Scripting.Core/Ports/IScriptingActorAddressResolver.cs`
-
-新增快照源接口：
-
-1. `src/Aevatar.Scripting.Core/IScriptEvolutionDecisionSource.cs`
-2. `src/Aevatar.Scripting.Core/IScriptCatalogSnapshotSource.cs`
+1. Definition/Catalog/EvolutionManager 均实现 Query Handler，直接基于自身状态响应。
+2. `ScriptRuntimeGAgent` 在 Orleans 路径启用事件化 definition 查询，收到响应后恢复执行。
+3. `ScriptRuntimeGAgent` 对 Query Response 做 revision 与 source 对账，拒绝陈旧/不一致响应。
+4. Core 已移除对 Orleans `EventPublisher` 类型名前缀的直接依赖，运行模式判断下沉到 Hosting 端口。
 
 ### 2.3 Application
 
-新增命令适配器：
+已落地 Query Adapter：
 
-1. `ProposeScriptEvolutionCommand(+Adapter)`
-2. `PromoteScriptRevisionCommand(+Adapter)`
-3. `RollbackScriptRevisionCommand(+Adapter)`
+1. `QueryScriptDefinitionSnapshotRequestAdapter`
+2. `QueryScriptCatalogEntryRequestAdapter`
+3. `QueryScriptEvolutionDecisionRequestAdapter`
 
-运行编排器增强：
+职责：
 
-1. `src/Aevatar.Scripting.Application/Runtime/ScriptRuntimeExecutionOrchestrator.cs`
-2. `src/Aevatar.Scripting.Application/Runtime/ScriptRuntimeCapabilityComposer.cs`
-3. `src/Aevatar.Scripting.Core/Runtime/ScriptRuntimeCapabilities.cs`
-
-能力上下文已拆分为 `Interaction/Lifecycle/Evolution` 三类 capability 并通过 composer 组装。
-
-新增应用服务（外部入口统一编排）：
-
-1. `src/Aevatar.Scripting.Application/Application/IScriptEvolutionApplicationService.cs`
-2. `src/Aevatar.Scripting.Application/Application/ProposeScriptEvolutionRequest.cs`
-3. `src/Aevatar.Scripting.Application/Application/ScriptEvolutionApplicationService.cs`
+1. 统一构造 `EventEnvelope`。
+2. 统一 `request_id` 作为 `correlation_id`。
+3. 保持 query 事件发布者语义可区分（definition/catalog/evolution）。
 
 ### 2.4 Hosting
 
-新增端口实现：
+关键端口：
 
-1. `DefaultScriptingActorAddressResolver`
-2. `RuntimeScriptEvolutionPort`
-3. `RuntimeScriptEvolutionFlowPort`
-4. `RuntimeScriptPolicyGatePort`
-5. `RuntimeScriptValidationPipelinePort`
-6. `RuntimeScriptPromotionPort`
-7. `RuntimeScriptCatalogPort`
-8. `RuntimeScriptDefinitionLifecyclePort`
-9. `RuntimeScriptRuntimeLifecyclePort`
+1. `RuntimeScriptDefinitionSnapshotPort`
+2. `RuntimeScriptCatalogPort`
+3. `RuntimeScriptEvolutionPort`
+4. `RuntimeScriptRuntimeLifecyclePort`
 
-DI 装配更新：
+实施要点：
 
-1. `src/Aevatar.Scripting.Hosting/DependencyInjection/ServiceCollectionExtensions.cs`
+1. Query 端口都采用“订阅 reply stream -> 发送 query -> 等待响应/超时”的一致模式。
+2. `RuntimeScriptRuntimeLifecyclePort.SpawnAsync` 已去除 definition snapshot 依赖，只做 runtime 实例生命周期管理。
+3. Orleans 集成测试引入 `Microsoft.Orleans.Serialization.Protobuf` 支撑跨 silo 的 protobuf 事件序列化。
+4. `RuntimeScriptEvolutionPort` 已改为“提案即订阅决策回传 stream”的推送式收敛模型，不再轮询查询决策。
+5. 端口超时由 `IScriptingPortTimeouts` 统一提供，默认实现为 `DefaultScriptingPortTimeouts`。
 
-新增外部入口：
+## 3. 关键实现细节
 
-1. `src/Aevatar.Scripting.Hosting/CapabilityApi/ScriptCapabilityEndpoints.cs`
-2. `src/Aevatar.Scripting.Hosting/CapabilityApi/ScriptCapabilityHostBuilderExtensions.cs`
+### 3.1 响应链路防丢
 
-### 2.5 Projection
+在以下三个 Actor 中，Query Response 均使用 `sourceEnvelope: null`：
 
-新增演化审计投影：
+1. `ScriptDefinitionGAgent`
+2. `ScriptCatalogGAgent`
+3. `ScriptEvolutionManagerGAgent`
 
-1. `ScriptEvolutionReadModelProjector`
-2. `ScriptEvolutionReadModel`
-3. `ScriptEvolution*Reducer` 全链路
-4. `ScriptEvolutionProjectionContext`
+目的：
 
-## 3. 设计取舍
+1. 避免沿用原入站 envelope 的 publisher chain 导致响应被回路保护误丢。
 
-1. 保持 `ScriptRuntimeGAgent` 作为运行入口，不新增旁路执行主干。
-2. 让升级事实进入 Actor 状态（Manager/Catalog），不在中间层保留 `proposalId -> context` 字典事实态。
-3. 用 `IScriptingActorAddressResolver` 统一 actor 地址命名，不在多层散落字符串常量。
-4. 用 `IScriptEvolutionFlowPort` 下沉 `policy/validation/promotion` 串行流程，降低 EvolutionManager 直接依赖面。
-5. 策略门禁与验证流水线通过端口抽象，Core 不依赖具体实现。
-6. Catalog 维护 active revision/rollback 指针，避免发布状态散落在多个中间服务。
+### 3.2 Runtime 事件化恢复执行
 
-## 4. 脚本内场景落地
+`ScriptRuntimeGAgent` 采用 `_pendingRuns` 暂存待执行请求（Actor 内运行态），在收到 `ScriptDefinitionSnapshotRespondedEvent` 后恢复执行。
 
-场景覆盖测试：`test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionE2ETests.cs`
+该设计满足：
 
-在单次脚本运行中完成：
+1. 无跨线程共享写入（Actor 单线程事件处理）。
+2. 无中间层全局事实缓存。
+3. 可在 Orleans 激活队列模型下避免同步阻塞。
 
-1. 创建临时已定义脚本 Runtime 并运行。
-2. 创建新脚本定义 + 新脚本 Runtime 并运行。
-3. 提交升级提案并发布 `worker-script` 从 `rev-worker-1` 到 `rev-worker-2`。
-4. 启动升级后的 Runtime 并运行。
+### 3.3 Evolution 决策推送回传
 
-双通道状态说明：
+`ProposeScriptEvolutionRequestedEvent` 增加决策回传字段：
 
-1. 自我演化入口：已完成实现并通过 E2E。
-2. 外部更新入口：已完成 `POST /api/scripts/evolutions/proposals` 标准化入口并通过 E2E。
+1. `decision_request_id`
+2. `decision_reply_stream_id`
 
-## 5. 验证结果
+执行路径：
 
-构建与测试：
+1. `RuntimeScriptEvolutionPort` 发起提案前先订阅 `decision_reply_stream_id`。
+2. `ScriptEvolutionManagerGAgent` 在终态（promoted/rejected）直接推送 `ScriptEvolutionDecisionRespondedEvent`。
+3. Port 单次等待响应并返回 `ScriptPromotionDecision`，不再使用 `Task.Delay` 轮询查询。
 
-1. `dotnet build aevatar.slnx --nologo` 通过。
-2. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo` 通过（58/58）。
-3. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptAutonomousEvolutionE2ETests|FullyQualifiedName~ScriptExternalEvolutionE2ETests"` 通过（2/2）。
-4. `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptCapabilityHostExtensionsTests"` 通过（3/3）。
-5. `dotnet test aevatar.slnx --nologo` 通过。
+### 3.4 Spawn 解耦
 
-门禁：
+`RuntimeScriptRuntimeLifecyclePort.SpawnAsync` 当前不做 Definition 快照读取：
 
-1. `bash tools/ci/architecture_guards.sh` 通过。
-2. `bash tools/ci/projection_route_mapping_guard.sh` 通过。
-3. `bash tools/ci/test_stability_guards.sh` 通过。
-4. `bash tools/ci/solution_split_guards.sh` 通过。
-5. `bash tools/ci/solution_split_test_guards.sh` 通过。
+1. 输入参数校验后直接生成 runtime actor id。
+2. 若 actor 已存在返回复用；否则创建。
+3. Definition 版本正确性由后续 `RunScriptRequestedEvent` 路径校验。
 
-## 6. 当前边界
+## 4. 测试覆盖落地
 
-1. `RuntimeScriptPolicyGatePort` 仍为默认规则集，后续可接入更严格组织级策略。
-2. `RuntimeScriptValidationPipelinePort` 当前以编译验证为主，后续可增加测试编排与灰度验证。
-3. 若需跨集群审批链，可在不改 Core 的前提下替换 Hosting 端口实现。
+### 4.1 功能完备性
+
+`test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionComprehensiveE2ETests.cs` 覆盖：
+
+1. 多自定义脚本协作。
+2. 运行中创建临时脚本 runtime。
+3. 运行中创建新的脚本定义与新的脚本 runtime。
+4. 多轮自我演化与目录发布结果对账。
+
+### 4.2 Orleans 3 集群一致性
+
+`test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.cs` 覆盖：
+
+1. 三节点 Silo 启动与跨节点可见性。
+2. 脚本编排创建新 definition/runtime 并跨节点可读。
+3. 外部提案在不同节点发起并达成一致 catalog 结果。
+
+### 4.3 基础回放契约
+
+`test/Aevatar.Scripting.Core.Tests/Runtime/ScriptRuntimeGAgentReplayContractTests.cs` 与
+`test/Aevatar.Scripting.Core.Tests/Runtime/ScriptEvolutionManagerGAgentTests.cs` 覆盖运行/演化核心状态机与契约行为。
+
+## 5. 本次验证记录（2026-03-02）
+
+1. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo`：`58/58` 通过。
+2. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptAutonomousEvolutionE2ETests|FullyQualifiedName~ScriptAutonomousEvolutionComprehensiveE2ETests|FullyQualifiedName~ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests"`：`6/6` 通过。
+3. `bash tools/ci/test_stability_guards.sh`：通过。
+4. `bash tools/ci/architecture_guards.sh`：通过。
+
+## 6. 与“全脚本迭代”目标的对应关系
+
+目标：在框架边界稳定后，后续能力演进主要通过脚本完成。
+
+当前支撑能力：
+
+1. 脚本可上载新定义并实例化新 runtime。
+2. 脚本可触发自我演化并推进发布。
+3. 外部入口与自演化入口语义一致，可并行治理。
+
+当前未完成项（仍需框架侧增量）：
+
+1. Orleans/Local 运行模式判定目前在 Hosting 层仍采用类型名前缀策略，可继续升级为显式运行模式提供器。
+2. `IScriptingPortTimeouts` 当前为固定默认实现，建议提供环境分层实现（dev/staging/prod）。
+3. 可进一步补充高并发提案下的背压与限流策略验证。
+
+## 7. 风险与治理建议
+
+1. 若提案量激增，需对 `RuntimeScriptEvolutionPort` 的决策回传 stream 增加更严格背压与限流策略。
+2. 若未来扩展更多运行时实现，建议将 Hosting 中的运行模式类型名前缀判断替换为显式运行模式提供器。
+3. 保持 `test_polling_allowlist` 仅覆盖跨节点最终一致性探测测试，防止轮询扩散到一般测试。

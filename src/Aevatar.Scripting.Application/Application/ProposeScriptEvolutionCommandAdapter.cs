@@ -28,6 +28,8 @@ public sealed class ProposeScriptEvolutionCommandAdapter
                 DefinitionActorId = command.DefinitionActorId ?? string.Empty,
                 CatalogActorId = command.CatalogActorId ?? string.Empty,
                 RequestedByActorId = command.RequestedByActorId ?? string.Empty,
+                DecisionRequestId = command.DecisionRequestId ?? string.Empty,
+                DecisionReplyStreamId = command.DecisionReplyStreamId ?? string.Empty,
             }),
             PublisherId = CommandPublisherId,
             Direction = EventDirection.Self,

@@ -12,8 +12,6 @@ namespace Aevatar.Scripting.Core;
 
 public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
 {
-    private const string OrleansEventPublisherPrefix = "Aevatar.Foundation.Runtime.Implementations.Orleans.";
-
     private readonly IScriptRuntimeExecutionOrchestrator _orchestrator;
     private readonly IScriptDefinitionSnapshotPort _snapshotPort;
     private readonly Dictionary<string, PendingRunContext> _pendingRuns = new(StringComparer.Ordinal);
@@ -42,7 +40,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             evt.DefinitionActorId,
             evt.ScriptRevision);
 
-        if (ShouldUseEventDrivenDefinitionQuery())
+        if (_snapshotPort is IScriptRuntimeDefinitionQueryModePort { UseEventDrivenDefinitionQuery: true })
         {
             await QueueRunByDefinitionQueryAsync(evt, CancellationToken.None);
             return;
@@ -169,13 +167,6 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             runEvent.RunId,
             committedEvents.Count,
             snapshot.Revision);
-    }
-
-    private bool ShouldUseEventDrivenDefinitionQuery()
-    {
-        var publisherType = EventPublisher.GetType().FullName;
-        return !string.IsNullOrWhiteSpace(publisherType) &&
-               publisherType.StartsWith(OrleansEventPublisherPrefix, StringComparison.Ordinal);
     }
 
     protected override ScriptRuntimeState TransitionState(ScriptRuntimeState current, IMessage evt) =>
