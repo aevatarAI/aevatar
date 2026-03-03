@@ -2,15 +2,15 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:        #0b1020;
-  --bg-panel:  #111827;
-  --bg-card:   #1a2236;
-  --bg-hover:  #1e293b;
-  --border:    #1e293b;
-  --text:      #dbeafe;
-  --text-dim:  #94a3b8;
+  --bg:        #f4f7fb;
+  --bg-panel:  #ffffff;
+  --bg-card:   #ffffff;
+  --bg-hover:  #edf3ff;
+  --border:    #dbe4f0;
+  --text:      #0f172a;
+  --text-dim:  #334155;
   --text-muted:#64748b;
-  --accent:    #3b82f6;
+  --accent:    #2563eb;
   --accent-dim:#1d4ed8;
 
   /* step type colors */
@@ -42,8 +42,8 @@
   --c-workflow_loop:#64748b;
 
   /* execution states */
-  --state-pending:   #475569;
-  --state-running:   #facc15;
+  --state-pending:   #94a3b8;
+  --state-running:   #d97706;
   --state-completed: #22c55e;
   --state-failed:    #ef4444;
 
@@ -52,7 +52,7 @@
   --radius-sm: 4px;
 }
 
-html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; color-scheme: light; }
 
 #app { display: flex; height: 100vh; overflow: hidden; }
 
@@ -79,12 +79,85 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 .llm-badge {
   margin: 0 12px; padding: 6px 10px; border-radius: var(--radius-sm);
   font-size: 11px; font-weight: 600; text-align: center;
+  border: 1px solid transparent;
 }
-.llm-badge.available { background: rgba(34,197,94,0.15); color: #4ade80; }
-.llm-badge.unavailable { background: rgba(239,68,68,0.1); color: #f87171; }
+.llm-badge.available { background: #dcfce7; border-color: #86efac; color: #166534; }
+.llm-badge.unavailable { background: #fee2e2; border-color: #fca5a5; color: #991b1b; }
 
 .sidebar-section { flex: 1; overflow-y: auto; padding: 8px 0; }
 .section-label { padding: 8px 16px 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
+.sidebar-hint { padding-bottom: 2px; }
+
+#workflow-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 12px 14px;
+}
+
+.workflow-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.workflow-group-toggle {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.workflow-group-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.workflow-group-title {
+  flex: 1;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.workflow-group-count {
+  min-width: 22px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.6;
+  border-radius: 999px;
+  color: #1e3a8a;
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.workflow-group-chevron {
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 0.16s ease;
+}
+
+.workflow-group.collapsed .workflow-group-chevron {
+  transform: rotate(-90deg);
+}
+
+.workflow-group .workflow-list li {
+  padding: 8px 10px 8px 12px;
+  border-left-width: 2px;
+}
+
+.workflow-group.collapsed .workflow-list {
+  display: none;
+}
+
+.workflow-group.collapsed .workflow-group-toggle {
+  border-bottom: none;
+}
 
 .workflow-list, .primitives-list { list-style: none; }
 .workflow-list li, .primitives-list li {
@@ -167,13 +240,13 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
   line-height: 1.7; color: var(--text-dim); white-space: pre; tab-size: 2;
   counter-reset: yaml-line;
 }
-.yaml-source .y-comment { color: #546e7a; font-style: italic; }
-.yaml-source .y-key     { color: #7dd3fc; }
-.yaml-source .y-string  { color: #a5d6a7; }
-.yaml-source .y-number  { color: #f9a825; }
-.yaml-source .y-bool    { color: #ce93d8; }
-.yaml-source .y-null    { color: #ce93d8; font-style: italic; }
-.yaml-source .y-anchor  { color: #ffab91; }
+.yaml-source .y-comment { color: #64748b; font-style: italic; }
+.yaml-source .y-key     { color: #1d4ed8; }
+.yaml-source .y-string  { color: #047857; }
+.yaml-source .y-number  { color: #b45309; }
+.yaml-source .y-bool    { color: #7c3aed; }
+.yaml-source .y-null    { color: #7c3aed; font-style: italic; }
+.yaml-source .y-anchor  { color: #c2410c; }
 .yaml-source .y-punct   { color: var(--text-muted); }
 
 /* SVG step nodes */
@@ -183,7 +256,7 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 }
 .step-node text { font-family: inherit; }
 .step-node .step-label { fill: var(--text); font-size: 12px; font-weight: 600; }
-.step-node .step-type-badge { fill: rgba(255,255,255,0.7); font-size: 10px; }
+.step-node .step-type-badge { fill: rgba(15,23,42,0.72); font-size: 10px; }
 .step-node .step-role { fill: var(--text-muted); font-size: 10px; }
 
 .step-node.state-pending rect { opacity: 0.4; }
@@ -275,7 +348,7 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 .role-title {
   font-size: 13px;
   font-weight: 700;
-  color: #c7d2fe;
+  color: #1e3a8a;
 }
 .role-id {
   font-size: 11px;
@@ -317,9 +390,9 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
   display: inline-block;
   padding: 2px 7px;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(99,102,241,0.3);
-  background: rgba(99,102,241,0.15);
-  color: #c4b5fd;
+  border: 1px solid rgba(37,99,235,0.25);
+  background: rgba(37,99,235,0.1);
+  color: #1e3a8a;
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 11px;
 }
@@ -334,8 +407,8 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
   overflow: auto;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: #0f172a;
-  color: #a5b4fc;
+  background: #f8fafc;
+  color: #334155;
   padding: 8px;
   font-size: 11px;
   line-height: 1.4;
@@ -363,9 +436,9 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
   align-items: center;
   padding: 2px 8px;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(59,130,246,0.25);
-  background: rgba(59,130,246,0.12);
-  color: #93c5fd;
+  border: 1px solid rgba(37,99,235,0.25);
+  background: rgba(37,99,235,0.08);
+  color: #1d4ed8;
   font-size: 11px;
   font-family: 'SF Mono', 'Fira Code', monospace;
 }
@@ -416,7 +489,7 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
   margin-top: 4px;
   border: 1px solid rgba(100, 116, 139, 0.35);
   border-radius: var(--radius-sm);
-  background: rgba(15, 23, 42, 0.35);
+  background: rgba(148, 163, 184, 0.12);
 }
 .log-entry .log-detail-fold > summary {
   display: flex;
@@ -499,10 +572,10 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
   padding: 2px 0;
 }
 .turing-state-key {
-  color: #7dd3fc;
+  color: #1d4ed8;
 }
 .turing-state-value {
-  color: #a5d6a7;
+  color: #047857;
 }
 
 /* ── Primitive detail view ── */
@@ -515,12 +588,12 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
   display: inline-block; padding: 3px 10px; border-radius: var(--radius-sm);
   font-size: 12px; font-weight: 600; text-transform: uppercase;
 }
-.category-badge.cat-data { background: rgba(59,130,246,0.15); color: #60a5fa; }
-.category-badge.cat-control { background: rgba(245,158,11,0.15); color: #fbbf24; }
-.category-badge.cat-composition { background: rgba(34,197,94,0.15); color: #4ade80; }
-.category-badge.cat-ai { background: rgba(168,85,247,0.15); color: #c084fc; }
-.category-badge.cat-integration { background: rgba(20,184,166,0.15); color: #2dd4bf; }
-.category-badge.cat-human { background: rgba(249,115,22,0.15); color: #fb923c; }
+.category-badge.cat-data { background: rgba(59,130,246,0.15); color: #1d4ed8; }
+.category-badge.cat-control { background: rgba(245,158,11,0.15); color: #b45309; }
+.category-badge.cat-composition { background: rgba(34,197,94,0.15); color: #15803d; }
+.category-badge.cat-ai { background: rgba(168,85,247,0.15); color: #7e22ce; }
+.category-badge.cat-integration { background: rgba(20,184,166,0.15); color: #0f766e; }
+.category-badge.cat-human { background: rgba(249,115,22,0.15); color: #c2410c; }
 
 /* ── Parameters Table ── */
 .params-table {

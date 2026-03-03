@@ -2,6 +2,7 @@ using Aevatar.Configuration;
 using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.Workflows;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Presentation.AGUIAdapter.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
@@ -22,6 +23,10 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.AddWorkflowExecutionAGUIAdapter();
         services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
         services.AddWorkflowApplication();
+        services.AddHttpClient(OpenClawBridgeEndpoints.ReceiptClientName);
+        services.AddOptions<OpenClawBridgeOptions>()
+            .Bind(configuration.GetSection("OpenClawBridge"));
+        services.AddSingleton<IOpenClawIdempotencyStore, ManifestBackedOpenClawIdempotencyStore>();
         services.AddWorkflowDefinitionFileSource(options =>
         {
             options.WorkflowDirectories.Add(Path.Combine(AppContext.BaseDirectory, "workflows"));

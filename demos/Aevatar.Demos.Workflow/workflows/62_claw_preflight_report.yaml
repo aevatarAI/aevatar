@@ -1,0 +1,111 @@
+name: 62_claw_preflight_report
+description: Comprehensive OpenClaw preflight report for gateway, node, and browser relay.
+
+steps:
+  - id: derive_browser_profile
+    type: assign
+    parameters:
+      target: browser_profile
+      value: "${if(isBlank(session_id), 'openclaw', concat('openclaw-', session_id))}"
+    next: probe_gateway_status
+
+  - id: probe_gateway_status
+    type: openclaw
+    parameters:
+      args: "gateway status --json"
+      timeout_ms: "15000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: probe_gateway_health
+
+  - id: probe_gateway_health
+    type: openclaw
+    parameters:
+      args: "gateway call health --json"
+      timeout_ms: "15000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: probe_node_status
+
+  - id: probe_node_status
+    type: openclaw
+    parameters:
+      args: "node status --json"
+      timeout_ms: "20000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: start_browser_profile
+
+  - id: start_browser_profile
+    type: openclaw
+    parameters:
+      args: "browser start --browser-profile ${browser_profile}"
+      timeout_ms: "45000"
+    on_error:
+      strategy: fallback
+      fallback_step: create_browser_profile
+    next: probe_browser_status
+
+  - id: create_browser_profile
+    type: openclaw
+    parameters:
+      args: "browser create-profile --name ${browser_profile} --json"
+      timeout_ms: "20000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: start_browser_profile_retry
+
+  - id: start_browser_profile_retry
+    type: openclaw
+    parameters:
+      args: "browser start --browser-profile ${browser_profile}"
+      timeout_ms: "45000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: probe_browser_status
+
+  - id: probe_browser_status
+    type: openclaw
+    parameters:
+      args: "browser status --browser-profile ${browser_profile} --json"
+      timeout_ms: "30000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: assemble_report
+
+  - id: assemble_report
+    type: assign
+    parameters:
+      target: result
+      value: |
+        gateway_status:
+        ${probe_gateway_status}
+        ---
+        gateway_health:
+        ${probe_gateway_health}
+        ---
+        node_status:
+        ${probe_node_status}
+        ---
+        browser_status:
+        ${probe_browser_status}
+    next: finish
+
+  - id: setup_guide
+    type: assign
+    parameters:
+      target: result
+      value: "OpenClaw preflight failed. Run once: openclaw gateway install && openclaw gateway start && openclaw node install && openclaw node restart && openclaw devices approve --latest, then retry 62_claw_preflight_report."
+    next: finish
+
+  - id: finish
+    type: assign
+    parameters:
+      target: result
+      value: "$input"

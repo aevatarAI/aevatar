@@ -24,6 +24,11 @@ public sealed record ChatInput
     /// If present, this field takes precedence over <see cref="Workflow"/>.
     /// </summary>
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
+
+    /// <summary>
+    /// Optional run metadata passthrough for internal bridge integrations.
+    /// </summary>
+    public IDictionary<string, string>? Metadata { get; init; }
 }
 
 public sealed record WorkflowResumeInput

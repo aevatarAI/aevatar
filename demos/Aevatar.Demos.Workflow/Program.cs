@@ -16,12 +16,15 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Core.Agents;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.Bootstrap;
+using Aevatar.Bootstrap.Connectors;
+using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Workflow.Core;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Runtime.DependencyInjection;
@@ -109,6 +112,28 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
           apple
         carrot  
         """,
+
+    ["57_claw_setup"] = "Quick setup probe for OpenClaw gateway availability.",
+
+    ["58_claw_ota_loop"] = "Readiness smoke for OpenClaw gateway + node + browser relay.",
+
+    ["59_claw_planner"] = "Given a user goal, output one HTTPS URL per line and run screenshot sub-workflow for each line.",
+
+    ["60_claw_browser_task"] = "https://example.com",
+
+    ["61_claw_screenshot_save"] = "https://example.com",
+
+    ["62_claw_preflight_report"] = "Generate a comprehensive preflight report for gateway/node/browser readiness.",
+
+    ["63_claw_open_snapshot_url"] = "https://example.com",
+
+    ["64_claw_screenshot_from_url"] = "https://example.com",
+
+    ["65_claw_batch_screenshot_foreach"] = "https://example.com\nhttps://www.rfc-editor.org",
+
+    ["66_claw_resilient_browser_open"] = "https://example.com",
+
+    ["67_claw_human_approval_screenshot"] = "https://example.com",
 };
 
 var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -116,6 +141,15 @@ var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCas
     "01_transform", "02_guard", "03_conditional", "04_switch",
     "05_assign", "06_retrieve_facts", "07_pipeline",
     "49_workflow_call_multilevel",
+    "57_claw_setup",
+    "58_claw_ota_loop",
+    "60_claw_browser_task",
+    "61_claw_screenshot_save",
+    "62_claw_preflight_report",
+    "63_claw_open_snapshot_url",
+    "64_claw_screenshot_from_url",
+    "65_claw_batch_screenshot_foreach",
+    "66_claw_resilient_browser_open",
 };
 
 // ─── Parse CLI ───
@@ -262,8 +296,14 @@ foreach (var (workflowName, workflowYaml) in workflowDefinitions)
 
 var services = new ServiceCollection();
 services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
-services.AddAevatarRuntime();
-services.AddAevatarConfig();
+services.AddAevatarBootstrap(config);
+services.AddAevatarAIFeatures(config, options =>
+{
+    options.EnableMCPTools = false;
+    options.EnableMEAIProviders = false;
+    options.EnableMEAIToTornadoFailover = false;
+    options.EnableSkills = false;
+});
 services.AddAevatarWorkflow();
 services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 services.AddSingleton<IWorkflowDefinitionRegistry>(workflowRegistry);
@@ -289,6 +329,13 @@ if (needsLlm && !string.IsNullOrEmpty(apiKey))
 }
 
 var sp = services.BuildServiceProvider();
+var connectorRegistry = sp.GetService<IConnectorRegistry>();
+if (connectorRegistry != null)
+{
+    var connectorBuilders = sp.GetServices<IConnectorBuilder>();
+    var connectorLogger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("WorkflowDemoConnectorBootstrap");
+    ConnectorRegistration.RegisterConnectors(connectorRegistry, connectorBuilders, connectorLogger);
+}
 var runtime = sp.GetRequiredService<IActorRuntime>();
 var streams = sp.GetRequiredService<IStreamProvider>();
 

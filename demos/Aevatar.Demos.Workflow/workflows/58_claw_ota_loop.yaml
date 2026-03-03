@@ -1,0 +1,90 @@
+name: 58_claw_ota_loop
+description: Deterministic OpenClaw readiness smoke for gateway, node, and browser relay.
+
+steps:
+  - id: derive_browser_profile
+    type: assign
+    parameters:
+      target: browser_profile
+      value: "${if(isBlank(session_id), 'openclaw', concat('openclaw-', session_id))}"
+    next: probe_gateway_health
+
+  - id: probe_gateway_health
+    type: openclaw
+    parameters:
+      args: "gateway call health --json"
+      timeout_ms: "15000"
+    on_error:
+      strategy: fallback
+      fallback_step: browser_not_ready
+    next: probe_node_status
+
+  - id: probe_node_status
+    type: openclaw
+    parameters:
+      args: "node status --json"
+      timeout_ms: "20000"
+    on_error:
+      strategy: fallback
+      fallback_step: browser_not_ready
+    next: start_browser_profile
+
+  - id: start_browser_profile
+    type: openclaw
+    parameters:
+      args: "browser start --browser-profile ${browser_profile}"
+      timeout_ms: "45000"
+    on_error:
+      strategy: fallback
+      fallback_step: create_browser_profile
+    next: probe_browser_status
+
+  - id: create_browser_profile
+    type: openclaw
+    parameters:
+      args: "browser create-profile --name ${browser_profile} --json"
+      timeout_ms: "20000"
+    on_error:
+      strategy: fallback
+      fallback_step: browser_not_ready
+    next: start_browser_profile_retry
+
+  - id: start_browser_profile_retry
+    type: openclaw
+    parameters:
+      args: "browser start --browser-profile ${browser_profile}"
+      timeout_ms: "45000"
+    on_error:
+      strategy: fallback
+      fallback_step: browser_not_ready
+    next: probe_browser_status
+
+  - id: probe_browser_status
+    type: openclaw
+    parameters:
+      args: "browser status --browser-profile ${browser_profile} --json"
+      timeout_ms: "30000"
+    on_error:
+      strategy: fallback
+      fallback_step: browser_not_ready
+    next: ready
+
+  - id: ready
+    type: assign
+    parameters:
+      target: result
+      value: "OpenClaw readiness smoke passed (gateway/node/browser relay)."
+    next: finish
+
+  - id: browser_not_ready
+    type: assign
+    parameters:
+      target: result
+      value: "OpenClaw runtime is not ready. Run once: openclaw gateway install && openclaw gateway start && openclaw node install && openclaw node restart && openclaw devices approve --latest, then retry 58_claw_ota_loop."
+    next: finish
+
+  - id: finish
+    type: assign
+    parameters:
+      target: result
+      value: "$input"

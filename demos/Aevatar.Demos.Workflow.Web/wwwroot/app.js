@@ -18,6 +18,7 @@
   let pgThinkingBuffers = new Map();
   let persistStateTimer = null;
   let persistenceHooksBound = false;
+  let workflowGroupCollapsed = {};
   const UI_STATE_STORAGE_KEY = "aevatar.workflow.web.ui.v1";
   const UI_STATE_STORAGE_VERSION = 1;
 
@@ -33,32 +34,39 @@
   };
   const WORKFLOW_GROUP_ORDER = [
     "start-here",
-    "custom-step-modules",
-    "connector-integration",
-    "ergonomic-aliases",
-    "integration-utility",
-    "role-event-modules",
+    "llm-workflows",
+    "openclaw-integration",
     "human-interaction-manual",
     "human-interaction-legacy",
+    "connector-integration",
+    "integration-utility",
+    "ergonomic-aliases",
+    "custom-step-modules",
+    "role-event-modules",
     "turing-completeness",
-    "llm-workflows",
     "deterministic-other",
     "other",
   ];
   const WORKFLOW_GROUP_LABELS = {
-    "start-here": "Start Here (Deterministic Basics)",
-    "custom-step-modules": "Custom Step Modules",
-    "connector-integration": "Connector Integration",
-    "ergonomic-aliases": "Ergonomic Aliases",
-    "integration-utility": "Integration Utility",
+    "start-here": "01-07 Deterministic Basics",
+    "llm-workflows": "08-16 LLM Workflows",
+    "openclaw-integration": "57-67 OpenClaw Integration",
     "role-event-modules": "Role Event Modules",
     "human-interaction-manual": "Human Interaction (Manual)",
     "human-interaction-legacy": "Human Interaction (Legacy Auto)",
+    "connector-integration": "Connector Integration",
+    "integration-utility": "Integration Utility",
+    "ergonomic-aliases": "Ergonomic Aliases",
+    "custom-step-modules": "Custom Step Modules",
     "turing-completeness": "Turing Completeness",
-    "llm-workflows": "LLM Workflows",
     "deterministic-other": "Other Deterministic Demos",
     "other": "Other",
   };
+  const WORKFLOW_GROUP_DEFAULT_EXPANDED = new Set([
+    "start-here",
+    "llm-workflows",
+    "openclaw-integration",
+  ]);
 
   // ── DOM refs ──
   const $ = (sel) => document.querySelector(sel);
@@ -145,23 +153,59 @@
       return leftOrder - rightOrder || left.localeCompare(right);
     });
 
+    const nextCollapsedState = {};
     for (const groupKey of orderedKeys) {
       const group = grouped.get(groupKey);
       if (!group) continue;
-
-      const label = document.createElement("div");
-      label.className = "section-label";
-      label.textContent = group.label;
-      groupsContainer.appendChild(label);
-
-      const list = document.createElement("ul");
-      list.className = "workflow-list";
 
       const sortedItems = group.items.sort((a, b) => {
         const leftOrder = Number.isFinite(a.sortOrder) ? a.sortOrder : 10_000;
         const rightOrder = Number.isFinite(b.sortOrder) ? b.sortOrder : 10_000;
         return leftOrder - rightOrder || a.name.localeCompare(b.name);
       });
+
+      const hasActiveWorkflow = sortedItems.some((item) => item.name === selectedWorkflow);
+      let collapsed = workflowGroupCollapsed[groupKey];
+      if (typeof collapsed !== "boolean")
+        collapsed = !WORKFLOW_GROUP_DEFAULT_EXPANDED.has(groupKey);
+      if (hasActiveWorkflow)
+        collapsed = false;
+      nextCollapsedState[groupKey] = collapsed;
+
+      const section = document.createElement("section");
+      section.className = "workflow-group";
+      section.dataset.group = groupKey;
+      section.classList.toggle("collapsed", collapsed);
+
+      const header = document.createElement("button");
+      header.type = "button";
+      header.className = "workflow-group-toggle";
+      header.setAttribute("aria-expanded", String(!collapsed));
+
+      const title = document.createElement("span");
+      title.className = "workflow-group-title";
+      title.textContent = group.label;
+
+      const count = document.createElement("span");
+      count.className = "workflow-group-count";
+      count.textContent = String(sortedItems.length);
+
+      const chevron = document.createElement("span");
+      chevron.className = "workflow-group-chevron";
+      chevron.textContent = "▾";
+
+      header.appendChild(title);
+      header.appendChild(count);
+      header.appendChild(chevron);
+      header.addEventListener("click", () => {
+        const collapsedNow = section.classList.toggle("collapsed");
+        workflowGroupCollapsed[groupKey] = collapsedNow;
+        header.setAttribute("aria-expanded", String(!collapsedNow));
+        scheduleUiStatePersist();
+      });
+
+      const list = document.createElement("ul");
+      list.className = "workflow-list";
 
       for (const wf of sortedItems) {
         const li = document.createElement("li");
@@ -178,8 +222,11 @@
         list.appendChild(li);
       }
 
-      groupsContainer.appendChild(list);
+      section.appendChild(header);
+      section.appendChild(list);
+      groupsContainer.appendChild(section);
     }
+    workflowGroupCollapsed = nextCollapsedState;
   }
 
   function renderLlmStatus() {
@@ -215,9 +262,9 @@
     stopExecution();
     selectedWorkflow = name;
     selectedWorkflowMeta = workflows.find((w) => w.name === name) || null;
-
-    $$(".workflow-list li").forEach((li) =>
-      li.classList.toggle("active", li.dataset.name === name));
+    if (selectedWorkflowMeta?.group)
+      workflowGroupCollapsed[selectedWorkflowMeta.group] = false;
+    renderWorkflowList();
 
     showView("workflow");
     $("#btn-run").disabled = true;
@@ -1342,6 +1389,9 @@
       version: UI_STATE_STORAGE_VERSION,
       activeView: getActiveNavView(),
       selectedWorkflow,
+      sidebar: {
+        groupCollapsed: { ...workflowGroupCollapsed },
+      },
       workflow: {
         input: $("#wf-input")?.value || "",
         autoResume: $("#wf-auto-resume")?.checked === true,
@@ -1380,6 +1430,8 @@
   async function restoreUiState(snapshot) {
     if (!snapshot || typeof snapshot !== "object") return;
 
+    workflowGroupCollapsed = normalizeGroupCollapsed(snapshot.sidebar?.groupCollapsed);
+    renderWorkflowList();
     pgSetMode(snapshot.playground?.autoMode === true, { force: true, preserveMessages: true });
 
     const targetWorkflow = typeof snapshot.selectedWorkflow === "string" ? snapshot.selectedWorkflow : "";
@@ -1505,6 +1557,16 @@
         title: String(entry.title || ""),
         detail: entry.detail === null || entry.detail === undefined ? "" : String(entry.detail),
       }));
+  }
+
+  function normalizeGroupCollapsed(value) {
+    if (!value || typeof value !== "object") return {};
+    const normalized = {};
+    for (const [key, collapsed] of Object.entries(value)) {
+      if (!key) continue;
+      normalized[key] = collapsed === true;
+    }
+    return normalized;
   }
 
   function getActiveNavView() {

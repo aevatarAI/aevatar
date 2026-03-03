@@ -217,6 +217,26 @@ public class WorkflowParserConfigurationTests
     }
 
     [Fact]
+    public void Parse_WhenUsingOpenClawAlias_ShouldCanonicalizeToOpenClawCall()
+    {
+        var yaml = """
+            name: openclaw_alias
+            roles: []
+            steps:
+              - id: s_openclaw
+                type: openclaw
+                parameters:
+                  args: "browser status --json"
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+
+        workflow.Steps.Should().ContainSingle();
+        workflow.Steps[0].Type.Should().Be("openclaw_call");
+        workflow.Steps[0].Parameters["args"].Should().Be("browser status --json");
+    }
+
+    [Fact]
     public void Parse_WhenParametersContainNestedObjects_ShouldSerializeToJsonString()
     {
         var yaml = """

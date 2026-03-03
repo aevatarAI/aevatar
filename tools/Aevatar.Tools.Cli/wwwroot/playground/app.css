@@ -1,0 +1,302 @@
+:root {
+  --bg: #f4f7fb;
+  --panel: #ffffff;
+  --panel-border: #dbe4f0;
+  --text: #0f172a;
+  --muted: #64748b;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: rgba(37, 99, 235, 0.1);
+  --ok: #16a34a;
+  --warn: #d97706;
+  --error: #dc2626;
+  --topbar: #ffffff;
+  --input-bg: #ffffff;
+  --input-border: #cdd8ea;
+  --msg-user-bg: #dbeafe;
+  --msg-user-text: #1d4ed8;
+  --msg-assistant-bg: #eef2ff;
+  --msg-error-bg: #fee2e2;
+  --msg-error-text: #991b1b;
+  --edge: #64748b;
+}
+
+body[data-theme="dark"] {
+  --bg: #0b1220;
+  --panel: #111a2b;
+  --panel-border: #25324c;
+  --text: #dbe7ff;
+  --muted: #8ca1c7;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-soft: rgba(59, 130, 246, 0.18);
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --error: #ef4444;
+  --topbar: #0f172a;
+  --input-bg: #0f172a;
+  --input-border: #2b3a58;
+  --msg-user-bg: #172554;
+  --msg-user-text: #c7d2fe;
+  --msg-assistant-bg: #1e293b;
+  --msg-error-bg: #3f1d1d;
+  --msg-error-text: #fecaca;
+  --edge: #94a3b8;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.app-shell { height: 100vh; display: flex; flex-direction: column; }
+
+.topbar {
+  border-bottom: 1px solid var(--panel-border);
+  padding: 12px 16px;
+  background: var(--topbar);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.topbar h1 { margin: 0; font-size: 18px; }
+.topbar-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
+
+.main-layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  min-height: 0;
+}
+
+.chat-panel, .preview-panel { min-height: 0; }
+
+.chat-panel {
+  border-right: 1px solid var(--panel-border);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preview-panel {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.panel-card {
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.preview-top {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--panel);
+}
+
+.msg {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.msg.user { background: var(--msg-user-bg); color: var(--msg-user-text); margin-left: 24px; }
+.msg.assistant { background: var(--msg-assistant-bg); }
+.msg.error { background: var(--msg-error-bg); color: var(--msg-error-text); }
+
+.chat-input-row, .run-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+textarea, input[type="text"] {
+  width: 100%;
+  resize: vertical;
+  border-radius: 6px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--text);
+  padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+textarea:focus, input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+button {
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button:hover:not(:disabled) { background: var(--accent-hover); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+#reset-btn { background: #64748b; }
+#theme-toggle { min-width: 72px; }
+
+.checkbox {
+  color: var(--muted);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+pre {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre;
+  color: var(--text);
+}
+
+.graph-view {
+  max-height: 320px;
+  min-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px;
+}
+
+.graph-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.flow-svg {
+  display: block;
+  margin: 0 auto;
+}
+
+.edge-line {
+  stroke: var(--edge);
+  stroke-width: 1.5;
+  fill: none;
+  color: var(--edge);
+  marker-end: url(#graph-arrowhead);
+}
+
+.edge-label {
+  fill: var(--muted);
+  font-size: 10px;
+  font-family: inherit;
+}
+
+.step-node rect {
+  rx: 6;
+  ry: 6;
+  stroke-width: 2;
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+.step-node .step-label {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.step-node .step-type-badge {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.step-node .step-role {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.step-node .step-status {
+  font-size: 14px;
+  fill: var(--muted);
+}
+
+.step-node.state-pending rect { opacity: 0.42; }
+.step-node.state-running rect {
+  opacity: 1;
+  filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.45));
+}
+.step-node.state-completed .step-status { fill: var(--ok); }
+.step-node.state-failed .step-status { fill: var(--error); }
+
+.log-view {
+  max-height: 200px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.log-line {
+  margin-bottom: 4px;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+#result-view {
+  max-height: 160px;
+  overflow: auto;
+  color: var(--text);
+}
+
+.hidden { display: none; }
+
+.interaction-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.btn-danger { background: #b91c1c; }
+
+@media (max-width: 1200px) {
+  .main-layout { grid-template-columns: 1fr; }
+  .chat-panel { border-right: 0; border-bottom: 1px solid var(--panel-border); }
+  .preview-top { grid-template-columns: 1fr; }
+}

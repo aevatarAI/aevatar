@@ -5,7 +5,8 @@ public sealed record WorkflowChatRunRequest(
     string? WorkflowName,
     string? ActorId,
     // Inline workflow YAML bundle; first item is the entry workflow.
-    IReadOnlyList<string>? WorkflowYamls = null);
+    IReadOnlyList<string>? WorkflowYamls = null,
+    IReadOnlyDictionary<string, string>? Metadata = null);
 
 public enum WorkflowChatRunStartError
 {

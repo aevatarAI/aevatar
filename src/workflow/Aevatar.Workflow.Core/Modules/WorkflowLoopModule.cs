@@ -66,6 +66,7 @@ public sealed class WorkflowLoopModule : IEventModule
             {
                 ["input"] = evt.Input ?? string.Empty,
             };
+            MergeStartParametersIntoVariables(_variablesByRunId[runId], evt.Parameters);
 
             var entry = _workflow.Steps.FirstOrDefault();
             if (entry == null)
@@ -502,6 +503,23 @@ public sealed class WorkflowLoopModule : IEventModule
         vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         _variablesByRunId[runId] = vars;
         return vars;
+    }
+
+    private static void MergeStartParametersIntoVariables(
+        IDictionary<string, string> variables,
+        Google.Protobuf.Collections.MapField<string, string> parameters)
+    {
+        if (parameters == null || parameters.Count == 0)
+            return;
+
+        foreach (var (key, value) in parameters)
+        {
+            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+            var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+            variables[normalizedKey] = normalizedValue;
+        }
     }
 
     private static string GetStepRunKey(string runId, string stepId) => $"{runId}:{stepId}";

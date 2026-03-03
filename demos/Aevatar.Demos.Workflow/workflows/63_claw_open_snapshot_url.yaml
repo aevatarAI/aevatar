@@ -1,0 +1,93 @@
+name: 63_claw_open_snapshot_url
+description: Open one URL and return browser snapshot JSON for quick inspection.
+
+steps:
+  - id: derive_browser_profile
+    type: assign
+    parameters:
+      target: browser_profile
+      value: "${if(isBlank(session_id), 'openclaw', concat('openclaw-', session_id))}"
+    next: probe_gateway_health
+
+  - id: probe_gateway_health
+    type: openclaw
+    parameters:
+      args: "gateway call health --json"
+      timeout_ms: "15000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: start_browser_profile
+
+  - id: start_browser_profile
+    type: openclaw
+    parameters:
+      args: "browser start --browser-profile ${browser_profile}"
+      timeout_ms: "45000"
+    on_error:
+      strategy: fallback
+      fallback_step: create_browser_profile
+    next: open_target_url
+
+  - id: create_browser_profile
+    type: openclaw
+    parameters:
+      args: "browser create-profile --name ${browser_profile} --json"
+      timeout_ms: "20000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: start_browser_profile_retry
+
+  - id: start_browser_profile_retry
+    type: openclaw
+    parameters:
+      args: "browser start --browser-profile ${browser_profile}"
+      timeout_ms: "45000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: open_target_url
+
+  - id: open_target_url
+    type: openclaw
+    parameters:
+      args: "browser --browser-profile ${browser_profile} open ${input}"
+      timeout_ms: "30000"
+    on_error:
+      strategy: fallback
+      fallback_step: open_default_url
+    next: capture_browser_snapshot
+
+  - id: open_default_url
+    type: openclaw
+    parameters:
+      args: "browser --browser-profile ${browser_profile} open https://example.com"
+      timeout_ms: "30000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: capture_browser_snapshot
+
+  - id: capture_browser_snapshot
+    type: openclaw
+    parameters:
+      args: "browser snapshot --browser-profile ${browser_profile} --json"
+      timeout_ms: "30000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: finish
+
+  - id: setup_guide
+    type: assign
+    parameters:
+      target: result
+      value: "Snapshot capture failed. Ensure OpenClaw runtime is ready and pass one valid HTTPS URL input."
+    next: finish
+
+  - id: finish
+    type: assign
+    parameters:
+      target: result
+      value: "$input"

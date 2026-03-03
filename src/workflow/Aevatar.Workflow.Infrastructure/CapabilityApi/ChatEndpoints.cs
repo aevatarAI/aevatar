@@ -21,6 +21,13 @@ public static class WorkflowCapabilityEndpoints
         var group = app.MapGroup("/api").WithTags("Chat");
         MapInteractionEndpoints(group);
         ChatQueryEndpoints.Map(group);
+        app.MapPost("/hooks/agent", OpenClawBridgeEndpoints.HandleOpenClawAgentHook)
+            .WithTags("OpenClawBridge")
+            .Produces(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status500InternalServerError);
 
         return app;
     }
@@ -39,6 +46,13 @@ public static class WorkflowCapabilityEndpoints
             .Produces(StatusCodes.Status200OK, contentType: "text/event-stream")
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
+        group.MapPost("/openclaw/hooks/agent", OpenClawBridgeEndpoints.HandleOpenClawAgentHook)
+            .WithTags("OpenClawBridge")
+            .Produces(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status500InternalServerError);
 
         group.MapGet("/ws/chat", HandleChatWebSocket);
         group.MapPost("/workflows/resume", HandleResume)

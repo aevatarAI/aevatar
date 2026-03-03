@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>aevatar</ToolCommandName>
+    <PackageId>aevatar</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Aevatar</Authors>
+    <Description>Unified Aevatar CLI with config and app playground commands.</Description>
+    <PackageTags>aevatar;cli;workflow;playground;config</PackageTags>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Sdk\Aevatar.Workflow.Sdk.csproj" />
+    <ProjectReference Include="..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Hosting\Aevatar.Workflow.Extensions.Hosting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="wwwroot/playground/**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+
+    <Compile Include="..\Aevatar.Tools.Config\ConfigToolHost.cs" Link="SharedConfig/ConfigToolHost.cs" />
+    <Compile Include="..\Aevatar.Tools.Config\LLMContracts.cs" Link="SharedConfig/LLMContracts.cs" />
+    <Compile Include="..\Aevatar.Tools.Config\LLMProbe.cs" Link="SharedConfig/LLMProbe.cs" />
+    <Compile Include="..\Aevatar.Tools.Config\LLMProviderProfiles.cs" Link="SharedConfig/LLMProviderProfiles.cs" />
+    <Compile Include="..\Aevatar.Tools.Config\LLMProviderResolver.cs" Link="SharedConfig/LLMProviderResolver.cs" />
+    <Compile Include="..\Aevatar.Tools.Config\ProviderCatalog.cs" Link="SharedConfig/ProviderCatalog.cs" />
+    <Compile Include="..\Aevatar.Tools.Config\ConfigOperations.cs" Link="SharedConfig/ConfigOperations.cs" />
+    <Compile Include="..\Aevatar.Tools.Config\SecretsStoreAdapter.cs" Link="SharedConfig/SecretsStoreAdapter.cs" />
+
+    <Content Include="..\Aevatar.Tools.Config\wwwroot\**\*">
+      <Link>wwwroot/config/%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

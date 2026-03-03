@@ -184,6 +184,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [WorkflowRunCommandMetadataKeys.SessionId] = "session-42",
+                [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#ops",
             });
         var command = new WorkflowChatRunRequest("hello", "direct", "actor-1");
 
@@ -196,6 +197,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         envelope.PublisherId.Should().Be("api");
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
+        request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
     }
 
     [Fact]

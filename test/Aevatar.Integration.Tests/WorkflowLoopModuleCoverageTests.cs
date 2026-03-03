@@ -169,6 +169,41 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenStartParametersProvided_ShouldExposeContextVariablesToStepExpressions()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "assign",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["target"] = "result",
+                    ["value"] = "${session_id}",
+                },
+            }));
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-start-parameters",
+                Input = "seed",
+                Parameters =
+                {
+                    ["session_id"] = "session-ctx-001",
+                    ["workflow.session_id"] = "workflow-session-ctx-001",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var request = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["value"].Should().Be("session-ctx-001");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenAlreadyRunning_ShouldPublishFailure()
     {
         var module = new WorkflowLoopModule();

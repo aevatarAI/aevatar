@@ -1,0 +1,101 @@
+name: 61_claw_screenshot_save
+description: Screenshot artifact save demo using OpenClaw node runtime and openclaw_call.
+
+steps:
+  - id: derive_browser_profile
+    type: assign
+    parameters:
+      target: browser_profile
+      value: "${if(isBlank(session_id), 'openclaw', concat('openclaw-', session_id))}"
+    next: derive_screenshot_dir
+
+  - id: derive_screenshot_dir
+    type: assign
+    parameters:
+      target: screenshot_dir
+      value: "${if(isBlank(session_id), '~/.aevatar/screenshot', concat('~/.aevatar/screenshot/', session_id))}"
+    next: probe_gateway_health
+
+  - id: probe_gateway_health
+    type: openclaw
+    parameters:
+      args: "gateway call health --json"
+      timeout_ms: "15000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: start_browser_profile
+
+  - id: start_browser_profile
+    type: openclaw
+    parameters:
+      args: "browser start --browser-profile ${browser_profile}"
+      timeout_ms: "45000"
+    on_error:
+      strategy: fallback
+      fallback_step: create_browser_profile
+    next: open_demo_page
+
+  - id: create_browser_profile
+    type: openclaw
+    parameters:
+      args: "browser create-profile --name ${browser_profile} --json"
+      timeout_ms: "20000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: start_browser_profile_retry
+
+  - id: start_browser_profile_retry
+    type: openclaw
+    parameters:
+      args: "browser start --browser-profile ${browser_profile}"
+      timeout_ms: "45000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: open_demo_page
+
+  - id: open_demo_page
+    type: openclaw
+    parameters:
+      args: "browser --browser-profile ${browser_profile} open ${input}"
+      timeout_ms: "30000"
+    on_error:
+      strategy: fallback
+      fallback_step: open_default_page
+    next: capture_and_save
+
+  - id: open_default_page
+    type: openclaw
+    parameters:
+      args: "browser --browser-profile ${browser_profile} open https://example.com"
+      timeout_ms: "30000"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: capture_and_save
+
+  - id: capture_and_save
+    type: openclaw
+    parameters:
+      args: "browser screenshot --browser-profile ${browser_profile} --json"
+      timeout_ms: "30000"
+      save_media_to: "${screenshot_dir}"
+    on_error:
+      strategy: fallback
+      fallback_step: setup_guide
+    next: finish
+
+  - id: setup_guide
+    type: assign
+    parameters:
+      target: result
+      value: "Screenshot capture failed. Ensure OpenClaw runtime is ready and pass a valid URL input. Screenshots default to ~/.aevatar/screenshot, and use ~/.aevatar/screenshot/${session_id} when session_id is present."
+    next: finish
+
+  - id: finish
+    type: assign
+    parameters:
+      target: result
+      value: "$input"

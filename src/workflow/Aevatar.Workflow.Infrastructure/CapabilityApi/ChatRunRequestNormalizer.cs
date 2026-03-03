@@ -23,6 +23,7 @@ internal static class ChatRunRequestNormalizer
         ChatInput input,
         IFileBackedWorkflowNameCatalog fileBackedWorkflowNames)
     {
+        var normalizedMetadata = NormalizeMetadata(input.Metadata);
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
         if (inlineWorkflowYamls.Count > 0)
         {
@@ -32,7 +33,8 @@ internal static class ChatRunRequestNormalizer
                     input.Prompt,
                     WorkflowName: null,
                     input.AgentId,
-                    inlineWorkflowYamls));
+                    inlineWorkflowYamls,
+                    normalizedMetadata));
         }
 
         var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
@@ -46,7 +48,8 @@ internal static class ChatRunRequestNormalizer
                     input.Prompt,
                     requestedWorkflowName,
                     input.AgentId,
-                    WorkflowYamls: null));
+                    WorkflowYamls: null,
+                    normalizedMetadata));
         }
 
         // Public default mode: prompt-only requests route to auto.
@@ -55,7 +58,8 @@ internal static class ChatRunRequestNormalizer
                 input.Prompt,
                 WorkflowRunBehaviorOptions.AutoWorkflowName,
                 input.AgentId,
-                WorkflowYamls: null));
+                WorkflowYamls: null,
+                normalizedMetadata));
     }
 
     private static IReadOnlyList<string> NormalizeInlineWorkflowYamls(IReadOnlyList<string>? workflowYamls)
@@ -71,4 +75,22 @@ internal static class ChatRunRequestNormalizer
 
     private static string NormalizeWorkflowName(string? workflowName) =>
         string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
+
+    private static IReadOnlyDictionary<string, string> NormalizeMetadata(IDictionary<string, string>? metadata)
+    {
+        if (metadata == null || metadata.Count == 0)
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in metadata)
+        {
+            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+            var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+            normalized[normalizedKey] = normalizedValue;
+        }
+
+        return normalized;
+    }
 }

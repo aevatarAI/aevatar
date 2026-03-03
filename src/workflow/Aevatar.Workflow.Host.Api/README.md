@@ -11,6 +11,8 @@
 
 - 暴露端点：
   - `POST /api/chat`（SSE）
+  - `POST /api/openclaw/hooks/agent`（OpenClaw Hook Bridge）
+  - `POST /hooks/agent`（OpenClaw Hook Bridge 短路径）
   - `GET /api/ws/chat`（WebSocket）
   - `GET /api/agents`、`GET /api/workflows`、`GET /api/actors/{actorId}`、`GET /api/actors/{actorId}/timeline`
   - `chat` payload 支持 `prompt` + `agentId` 复用已绑定 Actor，也支持 `workflow`（file-backed 名称 lookup）或 `workflowYamls`（inline YAML bundle）；当 `workflow/workflowYamls` 同时为空时，外部 API 默认走 `auto`

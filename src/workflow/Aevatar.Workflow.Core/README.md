@@ -23,6 +23,7 @@ Aevatar.Workflow.Core/
 │   ├── LLMCallModule.cs           # llm_call: 向 RoleGAgent 发 ChatRequestEvent
 │   ├── ToolCallModule.cs          # tool_call: 调用已注册的 Agent 工具
 │   ├── ConnectorCallModule.cs     # connector_call: 按名称调用 HTTP/CLI/MCP connector
+│   ├── OpenClawModule.cs          # openclaw_call: 直连执行 OpenClaw CLI（可选截图落盘）
 │   ├── ParallelFanOutModule.cs    # parallel: 多路扇出 + 结果聚合
 │   ├── VoteConsensusModule.cs     # vote: 投票选出最佳候选
 │   ├── ForEachModule.cs           # foreach: 按分隔符拆分迭代
@@ -126,6 +127,7 @@ WorkflowGAgent.InstallModulesAsync
 | `llm_call` | — | 发送 ChatRequestEvent 到目标角色 |
 | `tool_call` | — | 调用 Agent 注册工具 |
 | `connector_call` | `bridge_call` | 调用命名 connector（HTTP/CLI/MCP） |
+| `openclaw_call` | `openclaw` | 直接执行 OpenClaw CLI（无需 connector 配置；browser profile 不存在时会自动 create-profile 并重试一次；`browser open --browser-profile ... --json` 旧参数会自动兼容到新 CLI 语法） |
 | `workflow_call` | `sub_workflow` | 递归调用子工作流 |
 | `wait_signal` | `wait` | 暂停等待外部信号（human-in-the-loop / webhook） |
 
