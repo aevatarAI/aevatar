@@ -16,7 +16,7 @@ namespace Sisyphus.Application.Tests;
 public class SessionRunFallbackTests
 {
     private readonly FakeWorkflowRunCommandService _runService = new();
-    private readonly FakeWorkflowQueryService _queryService = new();
+    private readonly FakeWorkflowDefinitionRegistry _registry = new();
     private readonly GraphIdProvider _graphIdProvider = new();
 
     public SessionRunFallbackTests()
@@ -27,7 +27,7 @@ public class SessionRunFallbackTests
 
     private WorkflowTriggerService CreateSut() => new(
         _runService,
-        _queryService,
+        _registry,
         _graphIdProvider,
         NullLogger<WorkflowTriggerService>.Instance);
 

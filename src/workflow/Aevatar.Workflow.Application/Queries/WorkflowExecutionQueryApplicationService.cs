@@ -36,8 +36,6 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
 
     public IReadOnlyList<string> ListWorkflows() => _workflowRegistry.GetNames();
 
-    public string? GetWorkflowYaml(string name) => _workflowRegistry.GetYaml(name);
-
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
     {
         if (!ActorQueryEnabled)
