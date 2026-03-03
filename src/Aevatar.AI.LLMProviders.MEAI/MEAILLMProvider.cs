@@ -68,39 +68,68 @@ public sealed class MEAILLMProvider : ILLMProvider
 
         _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} 条消息", messages.Count);
 
-        await foreach (var update in _client.GetStreamingResponseAsync(messages, options, ct))
+        // Manual iteration so we can catch premature stream end on MoveNextAsync
+        // without yielding inside a try-catch (which C# disallows).
+        var enumerator = _client.GetStreamingResponseAsync(messages, options, ct).GetAsyncEnumerator(ct);
+        try
         {
-            var emittedTextFromContents = false;
-            if (update.Contents is { Count: > 0 })
+            while (true)
             {
-                foreach (var part in update.Contents)
+                ChatResponseUpdate update;
+                bool hasNext;
+                try
                 {
-                    switch (part)
+                    hasNext = await enumerator.MoveNextAsync();
+                }
+                catch (System.Net.Http.HttpIOException ex) when (
+                    ex.HttpRequestError == System.Net.Http.HttpRequestError.ResponseEnded)
+                {
+                    // Upstream dropped the SSE connection mid-stream.  All chunks yielded
+                    // so far are valid — gracefully end with whatever we received.
+                    _logger.LogWarning(
+                        "LLM streaming response ended prematurely; using partial content received so far");
+                    break;
+                }
+
+                if (!hasNext) break;
+                update = enumerator.Current;
+
+                var emittedTextFromContents = false;
+                if (update.Contents is { Count: > 0 })
+                {
+                    foreach (var part in update.Contents)
                     {
-                        case TextContent textContent when !string.IsNullOrEmpty(textContent.Text):
-                            emittedTextFromContents = true;
-                            yield return new LLMStreamChunk
-                            {
-                                DeltaContent = textContent.Text,
-                            };
-                            break;
-                        case FunctionCallContent functionCall:
-                            yield return new LLMStreamChunk
-                            {
-                                DeltaToolCall = ConvertFunctionCallDelta(functionCall),
-                            };
-                            break;
+                        switch (part)
+                        {
+                            case TextContent textContent when !string.IsNullOrEmpty(textContent.Text):
+                                emittedTextFromContents = true;
+                                yield return new LLMStreamChunk
+                                {
+                                    DeltaContent = textContent.Text,
+                                };
+                                break;
+                            case FunctionCallContent functionCall:
+                                yield return new LLMStreamChunk
+                                {
+                                    DeltaToolCall = ConvertFunctionCallDelta(functionCall),
+                                };
+                                break;
+                        }
                     }
                 }
-            }
 
-            if (!emittedTextFromContents && !string.IsNullOrEmpty(update.Text))
-            {
-                yield return new LLMStreamChunk
+                if (!emittedTextFromContents && !string.IsNullOrEmpty(update.Text))
                 {
-                    DeltaContent = update.Text,
-                };
+                    yield return new LLMStreamChunk
+                    {
+                        DeltaContent = update.Text,
+                    };
+                }
             }
+        }
+        finally
+        {
+            await enumerator.DisposeAsync();
         }
 
         yield return new LLMStreamChunk { IsLast = true };

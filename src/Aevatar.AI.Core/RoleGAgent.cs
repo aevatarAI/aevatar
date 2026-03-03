@@ -138,16 +138,24 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
             if (chunk.DeltaToolCall != null)
                 toolCalls.TrackDelta(chunk.DeltaToolCall);
-        }
 
-        foreach (var toolCall in toolCalls.BuildToolCalls())
-        {
-            await PublishAsync(new ToolCallEvent
+            // Tool execution completed — publish start (with full args) + result for AG-UI display
+            if (chunk.ToolCallResult != null)
             {
-                CallId = toolCall.Id,
-                ToolName = toolCall.Name,
-                ArgumentsJson = toolCall.ArgumentsJson,
-            }, EventDirection.Up);
+                await PublishAsync(new ToolCallEvent
+                {
+                    CallId = chunk.ToolCallResult.CallId,
+                    ToolName = chunk.ToolCallResult.ToolName,
+                    ArgumentsJson = chunk.ToolCallResult.ArgumentsJson,
+                }, EventDirection.Up);
+
+                await PublishAsync(new ToolResultEvent
+                {
+                    CallId = chunk.ToolCallResult.CallId,
+                    ResultJson = chunk.ToolCallResult.Result,
+                    Success = true,
+                }, EventDirection.Up);
+            }
         }
 
         var response = fullContent.ToString();

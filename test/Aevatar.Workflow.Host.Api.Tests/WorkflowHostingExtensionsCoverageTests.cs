@@ -29,51 +29,73 @@ public class WorkflowHostingExtensionsCoverageTests
     [Fact]
     public async Task AddWorkflowCapabilityWithAIDefaults_ShouldRegisterWorkflowAndAIServices()
     {
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        var prev = SaveLLMEnvVars();
+        try
         {
-            EnvironmentName = Environments.Development,
-        });
+            Environment.SetEnvironmentVariable("LLM_PROVIDER", "openai");
+            Environment.SetEnvironmentVariable("LLM_MODEL", "gpt-4o-mini");
+            Environment.SetEnvironmentVariable("LLM_API_KEY", "demo-key");
 
-        builder.AddWorkflowCapabilityWithAIDefaults(options =>
+            var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+            {
+                EnvironmentName = Environments.Development,
+            });
+
+            builder.AddWorkflowCapabilityWithAIDefaults(options =>
+            {
+                options.EnableMCPTools = false;
+                options.EnableSkills = false;
+            });
+
+            builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunRequestExecutor)).Should().BeTrue();
+            builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
+            builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>)).Should().BeTrue();
+
+            await using var provider = builder.Services.BuildServiceProvider();
+            provider.GetService<ILLMProviderFactory>().Should().NotBeNull();
+            provider.GetService<IProjectionDocumentStore<WorkflowExecutionReport, string>>().Should().NotBeNull();
+
+            var toolSources = provider.GetServices<IAgentToolSource>().ToList();
+            toolSources.Should().NotContain(x => x is MCPAgentToolSource);
+            toolSources.Should().NotContain(x => x is SkillsAgentToolSource);
+        }
+        finally
         {
-            options.EnableMCPTools = false;
-            options.EnableSkills = false;
-            options.ApiKey = "demo-key";
-            options.DefaultProvider = "openai";
-        });
-
-        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunRequestExecutor)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>)).Should().BeTrue();
-
-        await using var provider = builder.Services.BuildServiceProvider();
-        provider.GetService<ILLMProviderFactory>().Should().NotBeNull();
-        provider.GetService<IProjectionDocumentStore<WorkflowExecutionReport, string>>().Should().NotBeNull();
-
-        var toolSources = provider.GetServices<IAgentToolSource>().ToList();
-        toolSources.Should().NotContain(x => x is MCPAgentToolSource);
-        toolSources.Should().NotContain(x => x is SkillsAgentToolSource);
+            RestoreLLMEnvVars(prev);
+        }
     }
 
     [Fact]
     public void AddWorkflowCapabilityWithAIDefaults_ShouldRegisterReadModelProvidersInHostLayer()
     {
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        var prev = SaveLLMEnvVars();
+        try
         {
-            EnvironmentName = Environments.Development,
-        });
+            Environment.SetEnvironmentVariable("LLM_PROVIDER", "openai");
+            Environment.SetEnvironmentVariable("LLM_MODEL", "gpt-4o-mini");
+            Environment.SetEnvironmentVariable("LLM_API_KEY", "demo-key");
 
-        builder.AddWorkflowCapabilityWithAIDefaults();
+            var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+            {
+                EnvironmentName = Environments.Development,
+            });
 
-        var documentStores = builder.Services
-            .Where(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>))
-            .ToList();
-        documentStores.Should().HaveCount(1);
+            builder.AddWorkflowCapabilityWithAIDefaults();
 
-        var graphStores = builder.Services
-            .Where(x => x.ServiceType == typeof(IProjectionGraphStore))
-            .ToList();
-        graphStores.Should().HaveCount(1);
+            var documentStores = builder.Services
+                .Where(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>))
+                .ToList();
+            documentStores.Should().HaveCount(1);
+
+            var graphStores = builder.Services
+                .Where(x => x.ServiceType == typeof(IProjectionGraphStore))
+                .ToList();
+            graphStores.Should().HaveCount(1);
+        }
+        finally
+        {
+            RestoreLLMEnvVars(prev);
+        }
     }
 
     [Fact]
@@ -201,5 +223,17 @@ public class WorkflowHostingExtensionsCoverageTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*InMemory document provider is not allowed*");
+    }
+
+    private static readonly string[] LLMEnvVarNames =
+        ["LLM_PROVIDER", "LLM_MODEL", "LLM_API_KEY", "LLM_BASE_URL"];
+
+    private static Dictionary<string, string?> SaveLLMEnvVars() =>
+        LLMEnvVarNames.ToDictionary(k => k, Environment.GetEnvironmentVariable);
+
+    private static void RestoreLLMEnvVars(Dictionary<string, string?> saved)
+    {
+        foreach (var (key, value) in saved)
+            Environment.SetEnvironmentVariable(key, value);
     }
 }

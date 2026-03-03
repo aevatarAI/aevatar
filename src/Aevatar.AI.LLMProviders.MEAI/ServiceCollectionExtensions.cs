@@ -36,4 +36,28 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILLMProviderFactory>(factory);
         return services;
     }
+
+    /// <summary>
+    /// Registers MEAI LLM Provider Factory with deferred configuration.
+    /// The factory is created at service resolution time, so DI services
+    /// (like token services) are available during configuration.
+    /// </summary>
+    public static IServiceCollection AddMEAIProviders(
+        this IServiceCollection services,
+        Action<IServiceProvider, IMEAILLMProviderRegistry> configure)
+    {
+        if (services.Any(x => x.ServiceType == typeof(ILLMProviderFactory)))
+        {
+            throw new InvalidOperationException(
+                "ILLMProviderFactory is already registered. Multiple factory implementations are not supported in the same IServiceCollection.");
+        }
+
+        services.AddSingleton<ILLMProviderFactory>(sp =>
+        {
+            var factory = new MEAILLMProviderFactory();
+            configure(sp, factory);
+            return factory;
+        });
+        return services;
+    }
 }

@@ -1,3 +1,4 @@
+using System.Net.Http;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -12,5 +13,8 @@ public interface IMEAILLMProviderRegistry
         string apiKey,
         string? baseUrl = null,
         ILogger? logger = null);
+    IMEAILLMProviderRegistry RegisterOpenAI(
+        string name, string model, string baseUrl,
+        HttpMessageHandler authHandler, ILogger? logger = null);
     IMEAILLMProviderRegistry SetDefault(string name);
 }

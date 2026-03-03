@@ -33,11 +33,30 @@ public sealed class LLMStreamChunk
     /// <summary>本块增量 tool_call（若存在）。</summary>
     public ToolCall? DeltaToolCall { get; init; }
 
+    /// <summary>Tool call result — set when the chunk represents a completed tool execution.</summary>
+    public ToolCallResult? ToolCallResult { get; init; }
+
     /// <summary>是否为最后一块。</summary>
     public bool IsLast { get; init; }
 
     /// <summary>Token 用量（通常最后一块才有）。</summary>
     public TokenUsage? Usage { get; init; }
+}
+
+/// <summary>Represents a completed tool execution result yielded during streaming.</summary>
+public sealed class ToolCallResult
+{
+    /// <summary>The tool_call ID this result corresponds to.</summary>
+    public required string CallId { get; init; }
+
+    /// <summary>The tool name that was executed.</summary>
+    public required string ToolName { get; init; }
+
+    /// <summary>The arguments JSON that was passed to the tool.</summary>
+    public required string ArgumentsJson { get; init; }
+
+    /// <summary>The tool execution result content.</summary>
+    public required string Result { get; init; }
 }
 
 /// <summary>Token 用量统计。</summary>

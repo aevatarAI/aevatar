@@ -20,15 +20,20 @@ namespace Aevatar.Bootstrap.Tests;
 public class AIFeatureBootstrapCoverageTests
 {
     [Fact]
-    public void AddAevatarAIFeatures_ShouldRegisterCoreServicesWithExplicitApiKey()
+    public void AddAevatarAIFeatures_ShouldRegisterCoreServicesWithLLMEnvVars()
     {
+        using var scope = new EnvironmentVariablesScope(new Dictionary<string, string?>
+        {
+            ["LLM_PROVIDER"] = "deepseek",
+            ["LLM_MODEL"] = "deepseek-chat",
+            ["LLM_API_KEY"] = "demo-key",
+        });
+
         var services = new ServiceCollection();
         var config = new ConfigurationBuilder().Build();
 
         services.AddAevatarAIFeatures(config, options =>
         {
-            options.ApiKey = "demo-key";
-            options.DefaultProvider = "deepseek";
             options.EnableMEAIProviders = true;
             options.EnableSkills = true;
             options.SkillDirectories.Add("./skills-a");

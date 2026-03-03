@@ -288,6 +288,7 @@ public sealed class ToolCallAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelope
                     Timestamp = ts,
                     ToolCallId = evt.CallId,
                     ToolName = evt.ToolName,
+                    Args = string.IsNullOrEmpty(evt.ArgumentsJson) ? null : evt.ArgumentsJson,
                 },
             ];
             return true;

@@ -22,6 +22,9 @@ public sealed class MCPServerConfig
     /// <summary>OAuth 认证配置。</summary>
     public MCPAuthConfig? Auth { get; init; }
 
+    /// <summary>Custom authentication handler (takes priority over OAuth Auth config).</summary>
+    public HttpMessageHandler? AuthHandler { get; set; }
+
     /// <summary>是否为 HTTP 传输。</summary>
     public bool IsHttp => !string.IsNullOrWhiteSpace(Url);
 

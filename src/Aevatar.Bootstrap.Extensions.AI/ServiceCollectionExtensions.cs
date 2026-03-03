@@ -19,11 +19,14 @@ public sealed class AevatarAIFeatureOptions
     public bool EnableMCPTools { get; set; }
     public bool EnableSkills { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
-    public string? ApiKey { get; set; }
-    public string DefaultProvider { get; set; } = "openai";
-    public string OpenAIModel { get; set; } = "gpt-4o-mini";
-    public string DeepSeekModel { get; set; } = "deepseek-chat";
     public List<string> SkillDirectories { get; } = [];
+
+    /// <summary>
+    /// Factory producing HttpMessageHandler instances for custom auth.
+    /// Called once per handler (LLM, each MCP server with Auth config).
+    /// All instances share the same underlying token service via DI.
+    /// </summary>
+    public Func<IServiceProvider, HttpMessageHandler>? AuthHandlerFactory { get; set; }
 }
 
 public static class ServiceCollectionExtensions
@@ -44,7 +47,7 @@ public static class ServiceCollectionExtensions
 
         if (options.EnableMCPTools)
         {
-            RegisterMCPTools(services);
+            RegisterMCPTools(services, options);
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, MCPConnectorBuilder>());
         }
 
@@ -62,53 +65,104 @@ public static class ServiceCollectionExtensions
         if (!options.EnableMEAIProviders)
             return;
 
-        var apiKey = options.ApiKey
-            ?? Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY")
-            ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
-            ?? Environment.GetEnvironmentVariable("AEVATAR_LLM_API_KEY");
-
-        var provider = options.DefaultProvider;
-
-        if (string.IsNullOrEmpty(apiKey))
+        // Step 1: LLM_* env vars (highest priority).
+        var llmProvider = Environment.GetEnvironmentVariable("LLM_PROVIDER");
+        if (!string.IsNullOrEmpty(llmProvider))
         {
-            var secrets = options.SecretsStore ?? new AevatarSecretsStore();
-            provider = secrets.GetDefaultProvider() ?? configuration["Models:DefaultProvider"] ?? options.DefaultProvider;
-            apiKey = secrets.GetApiKey(provider);
-            if (string.IsNullOrEmpty(apiKey))
+            var llmModel = Environment.GetEnvironmentVariable("LLM_MODEL")
+                ?? throw new InvalidOperationException(
+                    "LLM_PROVIDER is set but LLM_MODEL is missing. " +
+                    "LLM_MODEL is required when LLM_PROVIDER is set.");
+
+            if (options.AuthHandlerFactory is { } handlerFactory)
             {
-                foreach (var fallback in new[] { "deepseek", "openai" })
-                {
-                    apiKey = secrets.GetApiKey(fallback);
-                    if (!string.IsNullOrEmpty(apiKey))
-                    {
-                        provider = fallback;
-                        break;
-                    }
-                }
+                // Custom auth handler mode (e.g. NyxID token).
+                // API key is not needed; base URL is required.
+                var llmBaseUrl = Environment.GetEnvironmentVariable("LLM_BASE_URL")
+                    ?? throw new InvalidOperationException(
+                        "LLM_PROVIDER is set with AuthHandlerFactory but LLM_BASE_URL is missing. " +
+                        "LLM_BASE_URL is required when using custom auth.");
+
+                services.AddMEAIProviders((sp, factory) => factory
+                    .RegisterOpenAI(llmProvider, llmModel, llmBaseUrl, handlerFactory(sp))
+                    .SetDefault(llmProvider));
+                return;
+            }
+
+            var llmApiKey = Environment.GetEnvironmentVariable("LLM_API_KEY")
+                ?? throw new InvalidOperationException(
+                    "LLM_PROVIDER is set but LLM_API_KEY is missing. " +
+                    "Both LLM_MODEL and LLM_API_KEY are required when LLM_PROVIDER is set.");
+            var llmBaseUrlStd = Environment.GetEnvironmentVariable("LLM_BASE_URL");
+
+            services.AddMEAIProviders(factory => factory
+                .RegisterOpenAI(llmProvider, llmModel, llmApiKey, baseUrl: llmBaseUrlStd)
+                .SetDefault(llmProvider));
+            return;
+        }
+
+        // Step 2: AevatarSecretsStore fallback.
+        var secrets = options.SecretsStore ?? new AevatarSecretsStore();
+        var provider = secrets.GetDefaultProvider() ?? configuration["Models:DefaultProvider"];
+        if (!string.IsNullOrEmpty(provider))
+        {
+            var apiKey = secrets.GetApiKey(provider);
+            if (!string.IsNullOrEmpty(apiKey))
+            {
+                var (model, baseUrl) = ResolveModelDefaults(provider);
+                services.AddMEAIProviders(factory => factory
+                    .RegisterOpenAI(provider, model, apiKey, baseUrl: baseUrl)
+                    .SetDefault(provider));
+                return;
             }
         }
 
-        if (string.IsNullOrEmpty(apiKey))
+        foreach (var fallback in new[] { "deepseek", "openai" })
         {
-            services.AddMEAIProviders(_ => { });
-            return;
+            var apiKey = secrets.GetApiKey(fallback);
+            if (!string.IsNullOrEmpty(apiKey))
+            {
+                var (model, baseUrl) = ResolveModelDefaults(fallback);
+                services.AddMEAIProviders(factory => factory
+                    .RegisterOpenAI(fallback, model, apiKey, baseUrl: baseUrl)
+                    .SetDefault(fallback));
+                return;
+            }
         }
 
-        var useDeepSeek = provider.Contains("deepseek", StringComparison.OrdinalIgnoreCase);
-        if (useDeepSeek)
+        // Step 3: Legacy env vars.
+        (string envVar, string inferredProvider)[] legacyEnvVars =
+        [
+            ("DEEPSEEK_API_KEY", "deepseek"),
+            ("OPENAI_API_KEY", "openai"),
+            ("AEVATAR_LLM_API_KEY", "openai"),
+        ];
+
+        foreach (var (envVar, inferredProvider) in legacyEnvVars)
         {
-            services.AddMEAIProviders(factory => factory
-                .RegisterOpenAI("deepseek", options.DeepSeekModel, apiKey, baseUrl: "https://api.deepseek.com/v1")
-                .SetDefault("deepseek"));
-            return;
+            var apiKey = Environment.GetEnvironmentVariable(envVar);
+            if (!string.IsNullOrEmpty(apiKey))
+            {
+                var (model, baseUrl) = ResolveModelDefaults(inferredProvider);
+                services.AddMEAIProviders(factory => factory
+                    .RegisterOpenAI(inferredProvider, model, apiKey, baseUrl: baseUrl)
+                    .SetDefault(inferredProvider));
+                return;
+            }
         }
 
-        services.AddMEAIProviders(factory => factory
-            .RegisterOpenAI("openai", options.OpenAIModel, apiKey)
-            .SetDefault("openai"));
+        // Step 4: No provider configured.
+        throw new InvalidOperationException(
+            "No LLM provider configured. Set LLM_PROVIDER + LLM_MODEL + LLM_API_KEY env vars, " +
+            "or configure via AevatarSecretsStore (~/.aevatar/secrets.json).");
     }
 
-    private static void RegisterMCPTools(IServiceCollection services)
+    private static (string model, string? baseUrl) ResolveModelDefaults(string provider) =>
+        provider.Contains("deepseek", StringComparison.OrdinalIgnoreCase)
+            ? ("deepseek-chat", "https://api.deepseek.com/v1")
+            : ("gpt-4o-mini", null);
+
+    private static void RegisterMCPTools(IServiceCollection services, AevatarAIFeatureOptions options)
     {
         // Merged server map — connectors.json entries win on name collision.
         var serverMap = new Dictionary<string, MCPServerConfig>(StringComparer.OrdinalIgnoreCase);
@@ -136,12 +190,28 @@ public static class ServiceCollectionExtensions
                 serverMap[server.Name] = server;
         }
 
-        // Always register the MCP tool source so MCPAgentToolSource is available.
-        services.AddMCPTools(options =>
+        if (options.AuthHandlerFactory is { } handlerFactory)
         {
-            foreach (var server in serverMap.Values)
-                options.Servers.Add(server);
-        });
+            // Deferred registration — resolve handler at service-provider time.
+            services.AddMCPTools((sp, mcpOptions) =>
+            {
+                foreach (var server in serverMap.Values)
+                {
+                    if (server.Auth is not null)
+                        server.AuthHandler = handlerFactory(sp);
+                    mcpOptions.Servers.Add(server);
+                }
+            });
+        }
+        else
+        {
+            // Immediate registration (existing behavior).
+            services.AddMCPTools(mcpOptions =>
+            {
+                foreach (var server in serverMap.Values)
+                    mcpOptions.Servers.Add(server);
+            });
+        }
     }
 
     private static void RegisterSkills(IServiceCollection services, AevatarAIFeatureOptions options)

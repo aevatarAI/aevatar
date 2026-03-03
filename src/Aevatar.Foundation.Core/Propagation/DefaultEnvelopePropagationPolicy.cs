@@ -13,6 +13,13 @@ public sealed class DefaultEnvelopePropagationPolicy : IEnvelopePropagationPolic
         "command_id",
     };
 
+    /// <summary>
+    /// Metadata key prefixes that are internal routing/system metadata
+    /// and must NOT be propagated from inbound to outbound envelopes.
+    /// These are set fresh by the publisher for each new event.
+    /// </summary>
+    private static readonly string[] BlockedMetadataKeyPrefixes = ["__"];
+
     private readonly ICorrelationLinkPolicy _correlationLinkPolicy;
 
     public DefaultEnvelopePropagationPolicy(ICorrelationLinkPolicy correlationLinkPolicy)
@@ -31,6 +38,9 @@ public sealed class DefaultEnvelopePropagationPolicy : IEnvelopePropagationPolic
                 if (BlockedMetadataKeys.Contains(key))
                     continue;
 
+                if (IsBlockedByPrefix(key))
+                    continue;
+
                 outboundEnvelope.Metadata[key] = value;
             }
         }
@@ -42,5 +52,15 @@ public sealed class DefaultEnvelopePropagationPolicy : IEnvelopePropagationPolic
         var causationId = _correlationLinkPolicy.ResolveCausationId(outboundEnvelope, inboundEnvelope);
         if (!string.IsNullOrWhiteSpace(causationId))
             outboundEnvelope.Metadata[EnvelopeMetadataKeys.TraceCausationId] = causationId;
+    }
+
+    private static bool IsBlockedByPrefix(string key)
+    {
+        foreach (var prefix in BlockedMetadataKeyPrefixes)
+        {
+            if (key.StartsWith(prefix, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
     }
 }

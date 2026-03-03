@@ -72,60 +72,10 @@ public sealed class ToolCallLoop
             // 记录 assistant tool_call 消息（保留 Content，部分 LLM 会同时返回文本和 tool_call）
             messages.Add(new ChatMessage { Role = "assistant", Content = response.Content, ToolCalls = response.ToolCalls });
 
-            // 执行每个 tool call
-            foreach (var call in response.ToolCalls!)
-            {
-                // ─── Hook: Tool Execute Start ───
-                var toolCtx = new AIGAgentExecutionHookContext
-                {
-                    ToolName = call.Name, ToolArguments = call.ArgumentsJson, ToolCallId = call.Id,
-                };
-                if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct);
-
-                var tool = _tools.Get(call.Name);
-                var toolCallContext = new ToolCallContext
-                {
-                    Tool = tool ?? new NullAgentTool(call.Name),
-                    ToolName = string.IsNullOrWhiteSpace(toolCtx.ToolName) ? call.Name : toolCtx.ToolName!,
-                    ToolCallId = call.Id,
-                    ArgumentsJson = toolCtx.ToolArguments ?? call.ArgumentsJson,
-                    CancellationToken = ct,
-                };
-
-                await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
-                {
-                    if (toolCallContext.Terminate) return;
-
-                    var resolvedCall = new ToolCall
-                    {
-                        Id = toolCallContext.ToolCallId,
-                        Name = toolCallContext.ToolName,
-                        ArgumentsJson = toolCallContext.ArgumentsJson,
-                    };
-
-                    var result = await _tools.ExecuteToolCallAsync(resolvedCall, ct);
-                    toolCallContext.Result = result.Content;
-                });
-
-                var toolResult = toolCallContext.Result ?? $"Tool '{toolCallContext.ToolName}' returned no result";
-
-                // Truncate oversized tool results to prevent context-window overflow
-                if (!toolCallContext.Terminate && toolResult.Length > MaxToolResultChars)
-                {
-                    toolResult = string.Concat(
-                        toolResult.AsSpan(0, MaxToolResultChars),
-                        $"\n\n[TRUNCATED — tool result was {toolResult.Length:N0} chars, limit is {MaxToolResultChars:N0}]");
-                }
-
-                if (toolCallContext.Terminate)
-                    messages.Add(ChatMessage.Tool(call.Id, toolCallContext.Result ?? "Tool call terminated by middleware"));
-                else
-                    messages.Add(ChatMessage.Tool(call.Id, toolResult));
-
-                // ─── Hook: Tool Execute End ───
-                toolCtx.ToolResult = toolResult;
-                if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct);
-            }
+            // 执行每个 tool call（委托给可复用方法）
+            var toolResults = await ExecuteToolCallsAsync(response.ToolCalls!, ct);
+            foreach (var (callId, _, resultContent) in toolResults)
+                messages.Add(ChatMessage.Tool(callId, resultContent));
         }
 
         // maxRounds exhausted — tool results from the last round are already in messages.
@@ -141,6 +91,72 @@ public sealed class ToolCallLoop
         if (finalContent != null)
             messages.Add(ChatMessage.Assistant(finalContent));
         return finalContent;
+    }
+
+    /// <summary>
+    /// Execute a list of tool calls with hooks, middleware, and truncation.
+    /// Returns the results without invoking the LLM — reusable by both sync and streaming paths.
+    /// </summary>
+    public async Task<List<(string CallId, string ToolName, string Result)>> ExecuteToolCallsAsync(
+        IReadOnlyList<ToolCall> toolCalls, CancellationToken ct)
+    {
+        var results = new List<(string CallId, string ToolName, string Result)>(toolCalls.Count);
+
+        foreach (var call in toolCalls)
+        {
+            // ─── Hook: Tool Execute Start ───
+            var toolCtx = new AIGAgentExecutionHookContext
+            {
+                ToolName = call.Name, ToolArguments = call.ArgumentsJson, ToolCallId = call.Id,
+            };
+            if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct);
+
+            var tool = _tools.Get(call.Name);
+            var toolCallContext = new ToolCallContext
+            {
+                Tool = tool ?? new NullAgentTool(call.Name),
+                ToolName = string.IsNullOrWhiteSpace(toolCtx.ToolName) ? call.Name : toolCtx.ToolName!,
+                ToolCallId = call.Id,
+                ArgumentsJson = toolCtx.ToolArguments ?? call.ArgumentsJson,
+                CancellationToken = ct,
+            };
+
+            await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
+            {
+                if (toolCallContext.Terminate) return;
+
+                var resolvedCall = new ToolCall
+                {
+                    Id = toolCallContext.ToolCallId,
+                    Name = toolCallContext.ToolName,
+                    ArgumentsJson = toolCallContext.ArgumentsJson,
+                };
+
+                var result = await _tools.ExecuteToolCallAsync(resolvedCall, ct);
+                toolCallContext.Result = result.Content;
+            });
+
+            var toolResult = toolCallContext.Result ?? $"Tool '{toolCallContext.ToolName}' returned no result";
+
+            // Truncate oversized tool results to prevent context-window overflow
+            if (!toolCallContext.Terminate && toolResult.Length > MaxToolResultChars)
+            {
+                toolResult = string.Concat(
+                    toolResult.AsSpan(0, MaxToolResultChars),
+                    $"\n\n[TRUNCATED — tool result was {toolResult.Length:N0} chars, limit is {MaxToolResultChars:N0}]");
+            }
+
+            if (toolCallContext.Terminate)
+                toolResult = toolCallContext.Result ?? "Tool call terminated by middleware";
+
+            // ─── Hook: Tool Execute End ───
+            toolCtx.ToolResult = toolResult;
+            if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct);
+
+            results.Add((call.Id, call.Name, toolResult));
+        }
+
+        return results;
     }
 
     private async Task<(LLMResponse Response, bool Terminated)> InvokeLlmAsync(
