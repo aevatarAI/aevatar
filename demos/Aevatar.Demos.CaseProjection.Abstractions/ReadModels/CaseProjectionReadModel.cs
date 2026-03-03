@@ -1,3 +1,5 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+
 namespace Aevatar.Demos.CaseProjection.Abstractions.ReadModels;
 
 public sealed class CaseProjectionReadModel : IProjectionReadModel

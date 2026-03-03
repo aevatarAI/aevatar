@@ -17,6 +17,8 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     where TState : class, IMessage<TState>, new()
 {
     private TState _state = new();
+    private IServiceProvider? _applierServiceProvider;
+    private IReadOnlyList<IStateEventApplier<TState>> _appliers = [];
 
     /// <summary>Mutable agent state, writable only in EventHandler/OnActivateAsync scopes.</summary>
     public TState State
@@ -49,6 +51,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         var eventSourcing = EnsureEventSourcingConfigured();
         await OnDeactivateAsync(ct);
         await eventSourcing.ConfirmEventsAsync(ct);
+        await eventSourcing.PersistSnapshotAsync(_state, ct);
     }
 
     /// <summary>Hook invoked after state changes, useful for CQRS projection.</summary>
@@ -63,9 +66,19 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
 
     /// <summary>
     /// Applies one persisted domain event to state.
+    /// Default behavior delegates to registered <see cref="IStateEventApplier{TState}"/> instances.
     /// Override this method for agent-local transition logic.
     /// </summary>
-    protected virtual TState TransitionState(TState current, IMessage evt) => current;
+    protected virtual TState TransitionState(TState current, IMessage evt)
+    {
+        foreach (var applier in ResolveStateEventAppliers())
+        {
+            if (applier.TryApply(current, evt, out var next))
+                return next;
+        }
+
+        return current;
+    }
 
     /// <summary>
     /// Persist one domain event, then apply it to in-memory state.
@@ -101,7 +114,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
 
         using var guard = StateGuard.BeginWriteScope();
         foreach (var evt in domainEvents)
-            _state = TransitionState(_state, evt);
+            _state = eventSourcing.TransitionState(_state, evt);
 
         await OnStateChangedAsync(_state, ct);
     }
@@ -129,6 +142,25 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
             return;
 
         EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<TState>>();
+    }
+
+    private IReadOnlyList<IStateEventApplier<TState>> ResolveStateEventAppliers()
+    {
+        if (ReferenceEquals(_applierServiceProvider, Services))
+            return _appliers;
+
+        _applierServiceProvider = Services;
+        if (Services == null)
+        {
+            _appliers = [];
+            return _appliers;
+        }
+
+        _appliers = Services
+            .GetServices<IStateEventApplier<TState>>()
+            .OrderBy(x => x.Order)
+            .ToArray();
+        return _appliers;
     }
 
 }

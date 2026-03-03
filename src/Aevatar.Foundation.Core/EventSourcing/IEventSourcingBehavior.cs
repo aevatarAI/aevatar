@@ -22,6 +22,17 @@ public interface IEventSourcingBehavior<TState> where TState : class, IMessage
     /// <summary>Persist all pending events to IEventStore.</summary>
     Task ConfirmEventsAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// Persist a snapshot for replay optimization.
+    /// Snapshot failure must not affect committed event facts.
+    /// </summary>
+    Task PersistSnapshotAsync(
+        TState currentState,
+        CancellationToken ct = default);
+
     /// <summary>Replay events from IEventStore to rebuild state.</summary>
     Task<TState?> ReplayAsync(string agentId, CancellationToken ct = default);
+
+    /// <summary>Pure function: apply event to state and return new state.</summary>
+    TState TransitionState(TState current, IMessage evt);
 }

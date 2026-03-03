@@ -1,7 +1,9 @@
-using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
+using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,11 +27,16 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         services.AddSingleton<WorkflowProjectionProviderRegistrationsMarker>();
 
         var enableElasticsearchDocument = ResolveElasticsearchDocumentEnabled(configuration);
+        var enableNeo4jGraph = ResolveNeo4jGraphEnabled(configuration);
         var enableInMemoryDocument = ResolveOptionalBool(
             configuration["Projection:Document:Providers:InMemory:Enabled"],
             fallbackValue: !enableElasticsearchDocument);
+        var enableInMemoryGraph = ResolveOptionalBool(
+            configuration["Projection:Graph:Providers:InMemory:Enabled"],
+            fallbackValue: !enableNeo4jGraph);
 
         EnforceDocumentProviderPolicy(configuration, enableInMemoryDocument);
+        EnforceGraphProviderPolicy(configuration, enableInMemoryGraph);
 
         var documentProviderCount = (enableElasticsearchDocument ? 1 : 0) + (enableInMemoryDocument ? 1 : 0);
         if (documentProviderCount != 1)
@@ -38,14 +45,21 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                 "Exactly one document projection provider must be enabled. Configure either Projection:Document:Providers:Elasticsearch:Enabled=true or Projection:Document:Providers:InMemory:Enabled=true.");
         }
 
+        var graphProviderCount = (enableNeo4jGraph ? 1 : 0) + (enableInMemoryGraph ? 1 : 0);
+        if (graphProviderCount != 1)
+        {
+            throw new InvalidOperationException(
+                "Exactly one graph projection provider must be enabled. Configure either Projection:Graph:Providers:Neo4j:Enabled=true or Projection:Graph:Providers:InMemory:Enabled=true.");
+        }
+
         if (enableElasticsearchDocument)
         {
             services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
                 metadataFactory: sp =>
                 {
-                    var metadataProvider = sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>>();
-                    return metadataProvider.Metadata;
+                    var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
+                    return metadataResolver.Resolve<WorkflowExecutionReport>();
                 },
                 keySelector: report => report.RootActorId,
                 keyFormatter: key => key);
@@ -59,18 +73,29 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                 listTakeMax: 200);
         }
 
+        if (enableNeo4jGraph)
+        {
+            services.AddNeo4jGraphProjectionStore(
+                optionsFactory: _ => BuildNeo4jGraphOptions(configuration));
+        }
+        else
+        {
+            services.AddInMemoryGraphProjectionStore();
+        }
+
         return services;
     }
 
     private static void EnsureLegacyProviderOptionsNotUsed(IConfiguration configuration)
     {
         var legacyDocumentProvider = configuration["Projection:Document:Provider"]?.Trim();
+        var legacyGraphProvider = configuration["Projection:Graph:Provider"]?.Trim();
 
-        if (legacyDocumentProvider?.Length > 0)
+        if (legacyDocumentProvider?.Length > 0 || legacyGraphProvider?.Length > 0)
         {
             throw new InvalidOperationException(
                 "Legacy provider single-selection options are no longer supported. " +
-                "Use Projection:Document:Providers:*:Enabled with exactly one provider enabled.");
+                "Use Projection:Document:Providers:*:Enabled and Projection:Graph:Providers:*:Enabled with exactly one provider enabled per store type.");
         }
     }
 
@@ -87,6 +112,15 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         return ResolveOptionalBool(explicitEnabled, hasEndpoints);
     }
 
+    private static bool ResolveNeo4jGraphEnabled(IConfiguration configuration)
+    {
+        var section = configuration.GetSection("Projection:Graph:Providers:Neo4j");
+        var explicitEnabled = section["Enabled"];
+        var hasUri = (section["Uri"]?.Trim().Length ?? 0) > 0;
+
+        return ResolveOptionalBool(explicitEnabled, hasUri);
+    }
+
     private static ElasticsearchProjectionDocumentStoreOptions BuildElasticsearchDocumentOptions(
         IConfiguration configuration)
     {
@@ -99,6 +133,37 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         }
 
         return options;
+    }
+
+    private static Neo4jProjectionGraphStoreOptions BuildNeo4jGraphOptions(IConfiguration configuration)
+    {
+        var options = new Neo4jProjectionGraphStoreOptions();
+        configuration.GetSection("Projection:Graph:Providers:Neo4j").Bind(options);
+        if (string.IsNullOrWhiteSpace(options.Uri))
+        {
+            throw new InvalidOperationException(
+                "Projection:Graph:Providers:Neo4j is enabled but Uri is empty.");
+        }
+
+        return options;
+    }
+
+    private static void EnforceGraphProviderPolicy(
+        IConfiguration configuration,
+        bool enableInMemoryGraphProvider)
+    {
+        var denyInMemoryGraphProvider = ResolveOptionalBool(
+            configuration["Projection:Policies:DenyInMemoryGraphFactStore"],
+            fallbackValue: false);
+        var environment = ResolveRuntimeEnvironment(configuration["Projection:Policies:Environment"]);
+        var production = IsProductionEnvironment(environment);
+
+        if ((denyInMemoryGraphProvider || production) && enableInMemoryGraphProvider)
+        {
+            throw new InvalidOperationException(
+                "InMemory graph provider is not allowed by projection policy. " +
+                "Disable Projection:Graph:Providers:InMemory:Enabled and configure Neo4j.");
+        }
     }
 
     private static void EnforceDocumentProviderPolicy(

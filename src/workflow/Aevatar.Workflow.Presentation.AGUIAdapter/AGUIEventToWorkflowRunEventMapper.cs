@@ -63,7 +63,6 @@ internal static class AGUIEventToWorkflowRunEventMapper
                 Timestamp = e.Timestamp,
                 ToolCallId = e.ToolCallId,
                 ToolName = e.ToolName,
-                Args = e.Args,
             },
             AGUI.ToolCallEndEvent e => new WorkflowToolCallEndEvent
             {

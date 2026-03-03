@@ -46,6 +46,26 @@ public sealed class GarnetEventStore : IEventStore
                                       return {1, latest}
                                       """;
 
+    private const string DeleteScript = """
+                                      local toVersion = tonumber(ARGV[1])
+                                      if toVersion <= 0 then
+                                        return 0
+                                      end
+
+                                      local versions = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', toVersion)
+                                      local removed = #versions
+                                      if removed == 0 then
+                                        return 0
+                                      end
+
+                                      redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', toVersion)
+                                      for i = 1, removed do
+                                        redis.call('HDEL', KEYS[2], versions[i])
+                                      end
+
+                                      return removed
+                                      """;
+
     private readonly IDatabase _database;
     private readonly string _keyPrefix;
     private readonly ILogger<GarnetEventStore> _logger;
@@ -179,6 +199,32 @@ public sealed class GarnetEventStore : IEventStore
             throw new InvalidOperationException($"Corrupted Garnet stream version for agent '{agentId}'.");
 
         return version;
+    }
+
+    public async Task<long> DeleteEventsUpToAsync(
+        string agentId,
+        long toVersion,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+        ct.ThrowIfCancellationRequested();
+        if (toVersion <= 0)
+            return 0;
+
+        var keys = BuildKeys(agentId);
+        var rawDeleted = await _database.ScriptEvaluateAsync(
+            DeleteScript,
+            [keys.EventIndexKey, keys.EventDataKey],
+            [toVersion]);
+        ct.ThrowIfCancellationRequested();
+
+        var deleted = (long)rawDeleted;
+        _logger.LogDebug(
+            "Garnet event-store compaction completed. agentId={AgentId} compactToVersion={CompactToVersion} deletedEvents={DeletedEvents}",
+            agentId,
+            toVersion,
+            deleted);
+        return deleted;
     }
 
     private StreamKeys BuildKeys(string agentId)

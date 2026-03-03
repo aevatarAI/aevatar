@@ -7,7 +7,7 @@
     <RootNamespace>Aevatar.CQRS.Projection.Core</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Aevatar.CQRS.Projection.Abstractions\Aevatar.CQRS.Projection.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
   </ItemGroup>

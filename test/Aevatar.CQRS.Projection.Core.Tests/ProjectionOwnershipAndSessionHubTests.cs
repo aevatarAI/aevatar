@@ -168,6 +168,7 @@ public class ProjectionOwnershipCoordinatorGAgentTests
             services.AddSingleton(eventStore);
         else
             services.AddSingleton<IEventStore, TestInMemoryEventStore>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         return services.BuildServiceProvider();
     }

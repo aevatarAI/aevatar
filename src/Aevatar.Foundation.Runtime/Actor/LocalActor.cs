@@ -15,6 +15,7 @@ public sealed class LocalActor : IActor
     private readonly EventRouter _router;
     private readonly IStreamProvider _streams;
     private readonly ILogger _logger;
+    private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private IAsyncDisposable? _selfSubscription;
 
     public LocalActor(
@@ -22,13 +23,15 @@ public sealed class LocalActor : IActor
         string id,
         EventRouter router,
         IStreamProvider streams,
-        ILogger logger)
+        ILogger logger,
+        IActorDeactivationHookDispatcher? deactivationHookDispatcher = null)
     {
         Agent = agent;
         Id = id;
         _router = router;
         _streams = streams;
         _logger = logger;
+        _deactivationHookDispatcher = deactivationHookDispatcher;
     }
 
     public string Id { get; }
@@ -75,6 +78,7 @@ public sealed class LocalActor : IActor
     {
         if (_selfSubscription != null) { await _selfSubscription.DisposeAsync(); _selfSubscription = null; }
         await Agent.DeactivateAsync(ct);
+        TriggerDeactivationHook();
     }
 
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>
@@ -147,4 +151,11 @@ public sealed class LocalActor : IActor
         }
     }
 
+    private void TriggerDeactivationHook()
+    {
+        if (_deactivationHookDispatcher == null)
+            return;
+
+        _ = _deactivationHookDispatcher.DispatchAsync(Id, CancellationToken.None);
+    }
 }

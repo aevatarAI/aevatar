@@ -1,4 +1,4 @@
-
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.DependencyInjection;
@@ -36,8 +36,8 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
         {
             try
             {
-                var store = _serviceProvider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
-                _ = await store.ListAsync(take: 1, cancellationToken);
+                var documentStore = _serviceProvider.GetRequiredService<IProjectionDocumentStore<WorkflowExecutionReport, string>>();
+                _ = await documentStore.ListAsync(take: 1, cancellationToken);
                 _logger.LogInformation(
                     "Workflow read-model document startup probe passed. readModelType={ReadModelType}",
                     typeof(WorkflowExecutionReport).FullName);
@@ -45,6 +45,26 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
             catch (Exception ex)
             {
                 HandleProbeFailure("document", ex, production);
+            }
+        }
+
+        if (_options.ValidateGraphProviderOnStartup)
+        {
+            try
+            {
+                var graphStore = _serviceProvider.GetRequiredService<IProjectionGraphStore>();
+                _ = await graphStore.ListNodesByOwnerAsync(
+                    scope: WorkflowExecutionGraphConstants.Scope,
+                    ownerId: "startup-probe",
+                    take: 1,
+                    ct: cancellationToken);
+                _logger.LogInformation(
+                    "Workflow read-model graph startup probe passed. graphType={GraphType}",
+                    typeof(ProjectionGraphNode).FullName);
+            }
+            catch (Exception ex)
+            {
+                HandleProbeFailure("graph", ex, production);
             }
         }
     }

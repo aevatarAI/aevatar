@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions.Propagation;
-using Aevatar.Foundation.Abstractions.Streaming;
 
 namespace Aevatar.Foundation.Core.Propagation;
 
@@ -12,7 +11,6 @@ public sealed class DefaultEnvelopePropagationPolicy : IEnvelopePropagationPolic
     {
         "command.id",
         "command_id",
-        PublisherChainMetadata.PublishersMetadataKey,
     };
 
     private readonly ICorrelationLinkPolicy _correlationLinkPolicy;

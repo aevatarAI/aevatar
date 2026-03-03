@@ -25,10 +25,13 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
+        services.TryAddSingleton<EventSourcingRuntimeOptions>();
         services.RemoveAll(typeof(IStateStore<>));
+        services.RemoveAll(typeof(IEventSourcingSnapshotStore<>));
         services.RemoveAll(typeof(IEventSourcingBehaviorFactory<>));
         services.TryAddSingleton<IRuntimeActorStateBindingAccessor, AsyncLocalRuntimeActorStateBindingAccessor>();
         services.TryAddTransient(typeof(IStateStore<>), typeof(RuntimeActorGrainStateStore<>));
+        services.TryAddTransient(typeof(IEventSourcingSnapshotStore<>), typeof(RuntimeActorGrainEventSourcingSnapshotStore<>));
         services.TryAddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         if (IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet))
         {
@@ -42,6 +45,9 @@ public static class ServiceCollectionExtensions
             services.TryAddSingleton<IEventStore, InMemoryEventStore>();
         }
 
+        services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
+        services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
+        services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<IAgentManifestStore, InMemoryManifestStore>();
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
 

@@ -1,8 +1,9 @@
 using Aevatar.AI.Projection.Reducers;
 using Aevatar.AI.Projection.Appliers;
-
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -24,6 +25,17 @@ public class WorkflowExecutionReadModelProjectorTests
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
         listSortSelector: report => report.StartedAt);
+    private static IProjectionStoreDispatcher<WorkflowExecutionReport, string> CreateDispatcher(
+        InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> store)
+    {
+        var graphStore = new InMemoryProjectionGraphStore();
+        var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+        {
+            new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
+            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(graphStore),
+        };
+        return new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
+    }
 
     private static IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> BuildReducers() =>
     [
@@ -62,7 +74,7 @@ public class WorkflowExecutionReadModelProjectorTests
     {
         var store = CreateStore();
         var projector = new WorkflowExecutionReadModelProjector(
-            store,
+            CreateDispatcher(store),
             CreateDeduplicator(),
             new SystemProjectionClock(),
             BuildReducers());
@@ -130,7 +142,7 @@ public class WorkflowExecutionReadModelProjectorTests
     {
         var store = CreateStore();
         var projector = new WorkflowExecutionReadModelProjector(
-            store,
+            CreateDispatcher(store),
             CreateDeduplicator(),
             new SystemProjectionClock(),
             BuildReducers());
@@ -164,7 +176,7 @@ public class WorkflowExecutionReadModelProjectorTests
     {
         var store = CreateStore();
         var projector = new WorkflowExecutionReadModelProjector(
-            store,
+            CreateDispatcher(store),
             CreateDeduplicator(),
             new SystemProjectionClock(),
             BuildReducers());
@@ -204,7 +216,7 @@ public class WorkflowExecutionReadModelProjectorTests
     {
         var store = CreateStore();
         var projector = new WorkflowExecutionReadModelProjector(
-            store,
+            CreateDispatcher(store),
             CreateDeduplicator(),
             new SystemProjectionClock(),
             BuildReducers());
@@ -251,7 +263,7 @@ public class WorkflowExecutionReadModelProjectorTests
             new TextMessageStartProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>([]),
         ];
         var projector = new WorkflowExecutionReadModelProjector(
-            store,
+            CreateDispatcher(store),
             CreateDeduplicator(),
             new SystemProjectionClock(),
             reducers);
@@ -287,7 +299,7 @@ public class WorkflowExecutionReadModelProjectorTests
     {
         var store = CreateStore();
         var projector = new WorkflowExecutionReadModelProjector(
-            store,
+            CreateDispatcher(store),
             CreateDeduplicator(),
             new SystemProjectionClock(),
             BuildReducers());

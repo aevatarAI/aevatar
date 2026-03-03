@@ -2,11 +2,12 @@
 // RoleGAgent - role-based AI GAgent.
 //
 // Handles ChatRequestEvent:
-// 1. Calls LLM via ChatAsync with onContent callback (streaming + tool calling)
+// 1. Calls LLM via ChatStreamAsync (streaming)
 // 2. Publishes AG-UI events: TextMessageStart → Content* → ToolCall* → End
 // 3. Logs prompt and full LLM response for observability
 // ─────────────────────────────────────────────────────────────
 
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -17,6 +18,7 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 
@@ -66,7 +68,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     [EventHandler]
     public async Task HandleConfigureRoleAgent(ConfigureRoleAgentEvent evt)
     {
-        SetRoleName(evt.RoleName);
+        await PersistDomainEventAsync(evt);
         await ((IRoleAgent)this).ConfigureAsync(new RoleAgentConfig
         {
             ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName,
@@ -86,9 +88,22 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     public override Task<string> GetDescriptionAsync() =>
         Task.FromResult($"RoleGAgent[{RoleName}]:{Id}");
 
+    protected override RoleGAgentState TransitionState(RoleGAgentState current, IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<ConfigureRoleAgentEvent>(ApplyConfigureRoleAgent)
+            .OrCurrent();
+
+    protected override Task OnStateChangedAsync(RoleGAgentState state, CancellationToken ct)
+    {
+        _ = ct;
+        RoleName = state.RoleName ?? string.Empty;
+        return Task.CompletedTask;
+    }
+
     /// <summary>
-    /// Handles ChatRequestEvent via non-streaming LLM call with tool-calling loop.
-    /// Publishes AG-UI three-phase events with real-time intermediate text streaming.
+    /// Handles ChatRequestEvent via streaming LLM call.
+    /// Publishes text stream events and tool call events.
     /// </summary>
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
@@ -105,17 +120,37 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             AgentId = Id,
         }, EventDirection.Up);
 
-        // ChatAsync with onContent callback: streams LLM tokens in real-time.
-        // Each callback invocation delivers a small text delta (token-level granularity).
-        var response = await ChatAsync(request.Prompt, async (content, _) =>
-        {
-            await PublishAsync(new TextMessageContentEvent
-            {
-                Delta = content,
-                SessionId = request.SessionId,
-            }, EventDirection.Up);
-        }) ?? "";
+        // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
+        var fullContent = new StringBuilder();
+        var toolCalls = new StreamingToolCallAccumulator();
 
+        await foreach (var chunk in ChatStreamAsync(request.Prompt))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            {
+                fullContent.Append(chunk.DeltaContent);
+                await PublishAsync(new TextMessageContentEvent
+                {
+                    Delta = chunk.DeltaContent,
+                    SessionId = request.SessionId,
+                }, EventDirection.Up);
+            }
+
+            if (chunk.DeltaToolCall != null)
+                toolCalls.TrackDelta(chunk.DeltaToolCall);
+        }
+
+        foreach (var toolCall in toolCalls.BuildToolCalls())
+        {
+            await PublishAsync(new ToolCallEvent
+            {
+                CallId = toolCall.Id,
+                ToolName = toolCall.Name,
+                ArgumentsJson = toolCall.ArgumentsJson,
+            }, EventDirection.Up);
+        }
+
+        var response = fullContent.ToString();
         var responsePreview = response.Length > 300
             ? response[..300] + "..."
             : response;
@@ -128,5 +163,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             Content = response,
             SessionId = request.SessionId,
         }, EventDirection.Up);
+    }
+
+    private static RoleGAgentState ApplyConfigureRoleAgent(
+        RoleGAgentState current,
+        ConfigureRoleAgentEvent evt)
+    {
+        var next = current.Clone();
+        next.RoleName = evt.RoleName ?? string.Empty;
+        return next;
     }
 }

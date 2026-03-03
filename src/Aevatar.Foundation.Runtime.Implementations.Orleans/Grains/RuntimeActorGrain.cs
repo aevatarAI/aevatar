@@ -19,6 +19,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
     private IRuntimeActorStateBindingAccessor? _stateBindingAccessor;
+    private IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
     private IAsyncStream<EventEnvelope>? _selfStream;
     private StreamSubscriptionHandle<EventEnvelope>? _selfStreamHandle;
@@ -35,6 +36,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>() ?? _propagationPolicy;
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
         _stateBindingAccessor = ServiceProvider.GetService<IRuntimeActorStateBindingAccessor>();
+        _deactivationHookDispatcher = ServiceProvider.GetService<IActorDeactivationHookDispatcher>();
 
         var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
         _logger = loggerFactory?.CreateLogger<RuntimeActorGrain>() ?? NullLogger<RuntimeActorGrain>.Instance;
@@ -59,6 +61,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             await _agent.DeactivateAsync(cancellationToken);
             _agent = null;
         }
+
+        TriggerDeactivationHook();
     }
 
     public async Task<bool> InitializeAgentAsync(string agentTypeName)
@@ -310,6 +314,14 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     {
         _ = token;
         return HandleEnvelopeAsync(envelope.ToByteArray());
+    }
+
+    private void TriggerDeactivationHook()
+    {
+        if (_deactivationHookDispatcher == null)
+            return;
+
+        _ = _deactivationHookDispatcher.DispatchAsync(this.GetPrimaryKeyString(), CancellationToken.None);
     }
 
 }

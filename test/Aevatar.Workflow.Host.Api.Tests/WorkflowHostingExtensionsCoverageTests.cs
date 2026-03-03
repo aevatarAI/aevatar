@@ -44,11 +44,11 @@ public class WorkflowHostingExtensionsCoverageTests
 
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunRequestExecutor)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(IProjectionReadModelStore<WorkflowExecutionReport, string>)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>)).Should().BeTrue();
 
         await using var provider = builder.Services.BuildServiceProvider();
         provider.GetService<ILLMProviderFactory>().Should().NotBeNull();
-        provider.GetService<IProjectionReadModelStore<WorkflowExecutionReport, string>>().Should().NotBeNull();
+        provider.GetService<IProjectionDocumentStore<WorkflowExecutionReport, string>>().Should().NotBeNull();
 
         var toolSources = provider.GetServices<IAgentToolSource>().ToList();
         toolSources.Should().NotContain(x => x is MCPAgentToolSource);
@@ -66,9 +66,14 @@ public class WorkflowHostingExtensionsCoverageTests
         builder.AddWorkflowCapabilityWithAIDefaults();
 
         var documentStores = builder.Services
-            .Where(x => x.ServiceType == typeof(IProjectionReadModelStore<WorkflowExecutionReport, string>))
+            .Where(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>))
             .ToList();
         documentStores.Should().HaveCount(1);
+
+        var graphStores = builder.Services
+            .Where(x => x.ServiceType == typeof(IProjectionGraphStore))
+            .ToList();
+        graphStores.Should().HaveCount(1);
     }
 
     [Fact]
@@ -81,9 +86,14 @@ public class WorkflowHostingExtensionsCoverageTests
         services.AddWorkflowProjectionReadModelProviders(configuration);
 
         var documentStores = services
-            .Where(x => x.ServiceType == typeof(IProjectionReadModelStore<WorkflowExecutionReport, string>))
+            .Where(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>))
             .ToList();
         documentStores.Should().HaveCount(1);
+
+        var graphStores = services
+            .Where(x => x.ServiceType == typeof(IProjectionGraphStore))
+            .ToList();
+        graphStores.Should().HaveCount(1);
     }
 
     [Fact]
@@ -96,16 +106,23 @@ public class WorkflowHostingExtensionsCoverageTests
                 ["Projection:Document:Providers:InMemory:Enabled"] = "false",
                 ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
                 ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Uri"] = "bolt://localhost:7687",
             })
             .Build();
 
         services.AddWorkflowProjectionReadModelProviders(configuration);
 
         var documentStores = services
-            .Where(x => x.ServiceType == typeof(IProjectionReadModelStore<WorkflowExecutionReport, string>))
+            .Where(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>))
+            .ToList();
+        var graphStores = services
+            .Where(x => x.ServiceType == typeof(IProjectionGraphStore))
             .ToList();
 
         documentStores.Should().HaveCount(1);
+        graphStores.Should().HaveCount(1);
     }
 
     [Fact]
@@ -118,6 +135,9 @@ public class WorkflowHostingExtensionsCoverageTests
                 ["Projection:Document:Providers:InMemory:Enabled"] = "true",
                 ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
                 ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Uri"] = "bolt://localhost:7687",
             })
             .Build();
 
@@ -145,6 +165,23 @@ public class WorkflowHostingExtensionsCoverageTests
     }
 
     [Fact]
+    public void AddWorkflowProjectionReadModelProviders_WhenPolicyDeniesInMemoryRelationFactStore_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Policies:DenyInMemoryGraphFactStore"] = "true",
+            })
+            .Build();
+
+        Action act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*InMemory graph provider is not allowed*");
+    }
+
+    [Fact]
     public void AddWorkflowProjectionReadModelProviders_WhenProductionAndInMemoryDocumentEnabled_ShouldThrow()
     {
         var services = new ServiceCollection();
@@ -154,6 +191,9 @@ public class WorkflowHostingExtensionsCoverageTests
                 ["Projection:Policies:Environment"] = "Production",
                 ["Projection:Document:Providers:InMemory:Enabled"] = "true",
                 ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Uri"] = "bolt://localhost:7687",
             })
             .Build();
 

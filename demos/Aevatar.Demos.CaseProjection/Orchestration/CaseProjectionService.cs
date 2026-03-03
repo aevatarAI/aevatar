@@ -1,5 +1,5 @@
 using Aevatar.Demos.CaseProjection.Configuration;
-
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using System.Collections.Concurrent;
 
 namespace Aevatar.Demos.CaseProjection.Orchestration;
@@ -11,7 +11,7 @@ public sealed class CaseProjectionService : ICaseProjectionService
 {
     private readonly CaseProjectionOptions _options;
     private readonly IProjectionLifecycleService<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>> _lifecycle;
-    private readonly IProjectionReadModelStore<CaseProjectionReadModel, string> _store;
+    private readonly IProjectionDocumentStore<CaseProjectionReadModel, string> _store;
     private readonly IProjectionClock _clock;
     private readonly ICaseProjectionContextFactory _contextFactory;
     private readonly ConcurrentDictionary<string, CaseProjectionContext> _contexts = new(StringComparer.Ordinal);
@@ -19,7 +19,7 @@ public sealed class CaseProjectionService : ICaseProjectionService
     public CaseProjectionService(
         CaseProjectionOptions options,
         IProjectionLifecycleService<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>> lifecycle,
-        IProjectionReadModelStore<CaseProjectionReadModel, string> store,
+        IProjectionDocumentStore<CaseProjectionReadModel, string> store,
         IProjectionClock clock,
         ICaseProjectionContextFactory contextFactory)
     {

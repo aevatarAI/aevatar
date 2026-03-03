@@ -32,7 +32,8 @@ public static class ServiceCollectionExtensions
     /// <returns>Service collection for fluent chaining.</returns>
     public static IServiceCollection AddAevatarRuntime(
         this IServiceCollection services,
-        Action<InMemoryStreamOptions>? configureStreams = null)
+        Action<InMemoryStreamOptions>? configureStreams = null,
+        Action<EventSourcingRuntimeOptions>? configureEventSourcing = null)
     {
         // Streaming
         var streamOptions = new InMemoryStreamOptions();
@@ -58,9 +59,17 @@ public static class ServiceCollectionExtensions
                 sp.GetService<ILogger<LocalActorRuntime>>()));
 
         // Persistence
+        var eventSourcingOptions = new EventSourcingRuntimeOptions();
+        configureEventSourcing?.Invoke(eventSourcingOptions);
+        services.Replace(ServiceDescriptor.Singleton(eventSourcingOptions));
+
         services.TryAddSingleton(typeof(IStateStore<>), typeof(InMemoryStateStore<>));
+        services.TryAddSingleton(typeof(IEventSourcingSnapshotStore<>), typeof(InMemoryEventSourcingSnapshotStore<>));
         services.TryAddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         services.TryAddSingleton<IEventStore, InMemoryEventStore>();
+        services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
+        services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
+        services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<IAgentManifestStore, InMemoryManifestStore>();
 
         // Deduplication
@@ -80,4 +89,20 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// Replaces <see cref="IEventStore"/> with file-backed persistence.
+    /// </summary>
+    public static IServiceCollection AddFileEventStore(
+        this IServiceCollection services,
+        Action<FileEventStoreOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        var options = new FileEventStoreOptions();
+        configure?.Invoke(options);
+        services.Replace(ServiceDescriptor.Singleton(options));
+        services.Replace(ServiceDescriptor.Singleton<IEventStore, FileEventStore>());
+        services.Replace(ServiceDescriptor.Singleton(typeof(IEventSourcingSnapshotStore<>), typeof(FileEventSourcingSnapshotStore<>)));
+        return services;
+    }
 }

@@ -10,18 +10,18 @@ namespace Aevatar.Workflow.Projection.Projectors;
 public sealed class WorkflowExecutionReadModelProjector
     : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
 {
-    private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
+    private readonly IProjectionStoreDispatcher<WorkflowExecutionReport, string> _storeDispatcher;
     private readonly IEventDeduplicator _deduplicator;
     private readonly IProjectionClock _clock;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>> _reducersByType;
 
     public WorkflowExecutionReadModelProjector(
-        IProjectionReadModelStore<WorkflowExecutionReport, string> store,
+        IProjectionStoreDispatcher<WorkflowExecutionReport, string> storeDispatcher,
         IEventDeduplicator deduplicator,
         IProjectionClock clock,
         IEnumerable<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> reducers)
     {
-        _store = store;
+        _storeDispatcher = storeDispatcher;
         _deduplicator = deduplicator;
         _clock = clock;
         _reducersByType = reducers
@@ -51,7 +51,7 @@ public sealed class WorkflowExecutionReadModelProjector
             Input = context.Input,
         };
         report.Summary = new WorkflowExecutionSummary();
-        return new ValueTask(_store.UpsertAsync(report, ct));
+        return new ValueTask(_storeDispatcher.UpsertAsync(report, ct));
     }
 
     public async ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
@@ -69,7 +69,7 @@ public sealed class WorkflowExecutionReadModelProjector
         }
 
         var now = ResolveEventTimestamp(envelope, _clock.UtcNow);
-        await _store.MutateAsync(context.RootActorId, report =>
+        await _storeDispatcher.MutateAsync(context.RootActorId, report =>
         {
             report.Id = context.RootActorId;
             if (string.IsNullOrWhiteSpace(report.RootActorId))
@@ -92,7 +92,7 @@ public sealed class WorkflowExecutionReadModelProjector
         CancellationToken ct = default)
     {
         var completedAt = _clock.UtcNow;
-        return new ValueTask(_store.MutateAsync(context.RootActorId, report =>
+        return new ValueTask(_storeDispatcher.MutateAsync(context.RootActorId, report =>
         {
             report.Id = context.RootActorId;
             if (string.IsNullOrWhiteSpace(report.RootActorId))
