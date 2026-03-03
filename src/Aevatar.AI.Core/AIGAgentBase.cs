@@ -10,7 +10,6 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.Foundation.Abstractions;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 
@@ -189,13 +188,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     {
         EnsureRuntime();
         return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
-    }
-
-    /// <summary>单轮 Chat（含 Tool Calling 循环），带中间内容回调。</summary>
-    protected Task<string?> ChatAsync(string userMessage, Func<string, CancellationToken, Task> onContent, CancellationToken ct = default)
-    {
-        EnsureRuntime();
-        return _chat!.ChatAsync(userMessage, Config.MaxToolRounds, onContent, ct);
     }
 
     /// <summary>流式 Chat。</summary>
