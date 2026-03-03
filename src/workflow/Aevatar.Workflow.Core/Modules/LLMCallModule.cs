@@ -69,7 +69,7 @@ public sealed class LLMCallModule : IEventModule
             }
 
             // Use run/step/attempt-scoped session id to avoid collisions across concurrent runs and retries.
-            var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
+            var chatSessionId = WorkflowSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
             _pending[chatSessionId] = request;
 
             var targetRole = request.TargetRole;

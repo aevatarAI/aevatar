@@ -19,7 +19,7 @@ public static class ElasticsearchProjectionServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(metadataFactory);
         ArgumentNullException.ThrowIfNull(keySelector);
 
-        services.AddSingleton<IProjectionDocumentStore<TReadModel, TKey>>(provider =>
+        services.AddSingleton<IProjectionReadModelStore<TReadModel, TKey>>(provider =>
             new ElasticsearchProjectionDocumentStore<TReadModel, TKey>(
                 optionsFactory(provider),
                 metadataFactory(provider),

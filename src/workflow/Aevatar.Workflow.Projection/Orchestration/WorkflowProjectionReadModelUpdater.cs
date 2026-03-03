@@ -5,14 +5,14 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionReadModelUpdater
 {
-    private readonly IProjectionStoreDispatcher<WorkflowExecutionReport, string> _storeDispatcher;
+    private readonly IProjectionReadModelStore<WorkflowExecutionReport, string> _store;
     private readonly IProjectionClock _clock;
 
     public WorkflowProjectionReadModelUpdater(
-        IProjectionStoreDispatcher<WorkflowExecutionReport, string> storeDispatcher,
+        IProjectionReadModelStore<WorkflowExecutionReport, string> store,
         IProjectionClock clock)
     {
-        _storeDispatcher = storeDispatcher;
+        _store = store;
         _clock = clock;
     }
 
@@ -22,7 +22,7 @@ public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionRead
         CancellationToken ct = default)
     {
         var updatedAt = _clock.UtcNow;
-        return _storeDispatcher.MutateAsync(actorId, report =>
+        return _store.MutateAsync(actorId, report =>
         {
             report.Id = actorId;
             if (string.IsNullOrWhiteSpace(report.RootActorId))
@@ -45,7 +45,7 @@ public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionRead
         CancellationToken ct = default)
     {
         var updatedAt = _clock.UtcNow;
-        return _storeDispatcher.MutateAsync(actorId, report =>
+        return _store.MutateAsync(actorId, report =>
         {
             report.Id = actorId;
             if (string.IsNullOrWhiteSpace(report.RootActorId))

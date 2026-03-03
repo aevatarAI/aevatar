@@ -1,8 +1,8 @@
-using Aevatar.CQRS.Projection.Core.Abstractions;
+
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
+
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -38,7 +38,7 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public async Task AddWorkflowExecutionProjectionCQRS_ShouldResolveDispatcherAndStores()
+    public async Task AddWorkflowExecutionProjectionCQRS_ShouldResolveReadModelStore()
     {
         var services = new ServiceCollection();
         RegisterEventStore(services);
@@ -46,31 +46,12 @@ public class WorkflowExecutionProjectionRegistrationTests
         services.AddWorkflowExecutionProjectionCQRS();
 
         await using var provider = services.BuildServiceProvider();
-        var documentStore = provider.GetRequiredService<IProjectionDocumentStore<WorkflowExecutionReport, string>>();
-        var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
-        var dispatcher = provider.GetRequiredService<IProjectionStoreDispatcher<WorkflowExecutionReport, string>>();
+        var store = provider.GetRequiredService<IProjectionReadModelStore<WorkflowExecutionReport, string>>();
 
-        documentStore.Should().NotBeNull();
-        relationStore.Should().NotBeNull();
-        dispatcher.Should().NotBeNull();
+        store.Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();
-    }
-
-    [Fact]
-    public void AddWorkflowExecutionProjectionCQRS_WhenGraphProviderMissing_ShouldThrowOnGraphStoreResolution()
-    {
-        var services = new ServiceCollection();
-        RegisterEventStore(services);
-        RegisterElasticsearchDocumentProvider(services);
-        services.AddWorkflowExecutionProjectionCQRS();
-
-        using var provider = services.BuildServiceProvider();
-        Action act = () => provider.GetRequiredService<IProjectionGraphStore>();
-
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*IProjectionGraphStore*");
     }
 
     [Fact]
@@ -147,23 +128,6 @@ public class WorkflowExecutionProjectionRegistrationTests
             keyFormatter: key => key,
             listSortSelector: report => report.CreatedAt,
             listTakeMax: 200);
-        services.AddInMemoryGraphProjectionStore();
-    }
-
-    private static void RegisterElasticsearchDocumentProvider(IServiceCollection services)
-    {
-        services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
-            optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
-            {
-                Endpoints = ["http://localhost:9200"],
-            },
-            metadataFactory: sp =>
-            {
-                var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
-                return metadataResolver.Resolve<WorkflowExecutionReport>();
-            },
-            keySelector: report => report.RootActorId,
-            keyFormatter: key => key);
     }
 
     private static async Task StartHostedServicesAsync(IServiceProvider provider)

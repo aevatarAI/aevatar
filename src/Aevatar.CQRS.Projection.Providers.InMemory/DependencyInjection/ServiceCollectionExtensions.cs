@@ -16,21 +16,13 @@ public static class InMemoryProjectionServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(keySelector);
 
-        services.AddSingleton<IProjectionDocumentStore<TReadModel, TKey>>(provider =>
+        services.AddSingleton<IProjectionReadModelStore<TReadModel, TKey>>(provider =>
             new InMemoryProjectionDocumentStore<TReadModel, TKey>(
                 keySelector,
                 keyFormatter,
                 listSortSelector,
                 listTakeMax,
                 provider.GetService<ILogger<InMemoryProjectionDocumentStore<TReadModel, TKey>>>()));
-
-        return services;
-    }
-
-    public static IServiceCollection AddInMemoryGraphProjectionStore(
-        this IServiceCollection services)
-    {
-        services.AddSingleton<IProjectionGraphStore, InMemoryProjectionGraphStore>();
 
         return services;
     }

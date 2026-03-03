@@ -5,11 +5,11 @@ namespace Aevatar.Demos.CaseProjection.Projectors;
 public sealed class CaseReadModelProjector
     : IProjectionProjector<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>
 {
-    private readonly IProjectionDocumentStore<CaseProjectionReadModel, string> _store;
+    private readonly IProjectionReadModelStore<CaseProjectionReadModel, string> _store;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<CaseProjectionReadModel, CaseProjectionContext>>> _reducersByType;
 
     public CaseReadModelProjector(
-        IProjectionDocumentStore<CaseProjectionReadModel, string> store,
+        IProjectionReadModelStore<CaseProjectionReadModel, string> store,
         IEnumerable<IProjectionEventReducer<CaseProjectionReadModel, CaseProjectionContext>> reducers)
     {
         _store = store;

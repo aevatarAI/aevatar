@@ -35,7 +35,7 @@ public sealed class AIAgentConfig
     public int? MaxTokens { get; set; }
 
     /// <summary>单轮 Chat 最大 Tool Calling 轮数。</summary>
-    public int MaxToolRounds { get; set; } = 30;
+    public int MaxToolRounds { get; set; } = 10;
 
     /// <summary>历史消息上限。</summary>
     public int MaxHistoryMessages { get; set; } = 100;
@@ -142,7 +142,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             new ExecutionTraceHook(Logger),
             new ToolTruncationHook(),
             new BudgetMonitorHook(Logger),
-            new ToolCallEventPublishingHook(evt => PublishAsync(evt, EventDirection.Up)),
         };
         hooks.AddRange(_additionalHooks);
         _hooks = new AgentHookPipeline(hooks, Logger);

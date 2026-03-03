@@ -57,7 +57,7 @@ public sealed class EvaluateModule : IEventModule
             var attempt = _attemptsByRunStep.GetValueOrDefault(stepRunKey, 0) + 1;
             _attemptsByRunStep[stepRunKey] = attempt;
 
-            var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
+            var sessionId = WorkflowSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
             _pending[sessionId] = new EvalContext(request.StepId, runId, request.Input ?? "", threshold, onBelow);
 
             var targetRole = request.TargetRole;

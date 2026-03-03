@@ -47,13 +47,6 @@ public sealed class ToolCallLoop
         ExecuteAsync(provider, messages, baseRequest, maxRounds, onContent: null, ct);
 
     /// <summary>
-    /// Maximum total character count across all messages before older tool-call
-    /// rounds are trimmed. Prevents LLM context-window overflow.
-    /// ~400K chars ≈ ~100K tokens — leaves headroom for a 128K context model.
-    /// </summary>
-    public int MaxContextChars { get; set; } = 400_000;
-
-    /// <summary>
     /// Maximum character count for a single tool result. Results exceeding this
     /// limit are truncated with a notice. Prevents a single large tool response
     /// (e.g. a full graph snapshot) from blowing the context window.
@@ -69,9 +62,6 @@ public sealed class ToolCallLoop
     {
         for (var round = 0; round < maxRounds; round++)
         {
-            // Trim older tool-call rounds if approaching context limit
-            TrimMessagesIfOverLimit(messages, MaxContextChars);
-
             var request = new LLMRequest
             {
                 Messages = [..messages], Tools = baseRequest.Tools,
@@ -167,7 +157,6 @@ public sealed class ToolCallLoop
         // maxRounds exhausted — tool results from the last round are already in messages.
         // Make one final LLM call WITHOUT tools so the model must produce a text response.
         // P2-2: Route through the same hook/middleware pipeline as loop iterations.
-        TrimMessagesIfOverLimit(messages, MaxContextChars);
         var finalRequest = new LLMRequest
         {
             Messages = [..messages], Tools = null,
@@ -247,49 +236,6 @@ public sealed class ToolCallLoop
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);
 
         return (response, llmCallContext.Terminate, contentStreamedLive);
-    }
-
-    /// <summary>
-    /// Trims the oldest tool-call rounds from the message list when total content
-    /// exceeds <paramref name="maxChars"/>. Preserves the system prompt and the
-    /// first user message. Removes complete assistant+tool rounds from the front.
-    /// </summary>
-    private static void TrimMessagesIfOverLimit(List<ChatMessage> messages, int maxChars)
-    {
-        if (maxChars <= 0) return;
-
-        var totalChars = EstimateTotalChars(messages);
-        if (totalChars <= maxChars) return;
-
-        // Find the first message after system + first user (the boundary we preserve)
-        var preserveUpTo = 0;
-        for (var i = 0; i < messages.Count; i++)
-        {
-            preserveUpTo = i + 1;
-            if (messages[i].Role is "user") break;
-        }
-
-        // Remove oldest assistant+tool messages until under limit
-        while (totalChars > maxChars && preserveUpTo < messages.Count - 2)
-        {
-            // Remove one message from the start of the tool-call section
-            var removed = messages[preserveUpTo];
-            totalChars -= (removed.Content?.Length ?? 0) + (removed.ToolCalls?.Sum(tc => tc.ArgumentsJson?.Length ?? 0) ?? 0);
-            messages.RemoveAt(preserveUpTo);
-        }
-    }
-
-    private static int EstimateTotalChars(List<ChatMessage> messages)
-    {
-        var total = 0;
-        foreach (var m in messages)
-        {
-            total += m.Content?.Length ?? 0;
-            if (m.ToolCalls != null)
-                foreach (var tc in m.ToolCalls)
-                    total += (tc.ArgumentsJson?.Length ?? 0) + (tc.Name?.Length ?? 0);
-        }
-        return total;
     }
 
     private sealed class NullAgentTool(string name) : IAgentTool

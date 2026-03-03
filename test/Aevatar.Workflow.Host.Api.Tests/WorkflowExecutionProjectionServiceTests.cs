@@ -1,10 +1,9 @@
 using Aevatar.AI.Projection.Reducers;
 using Aevatar.AI.Projection.Appliers;
-using Aevatar.CQRS.Projection.Core.Abstractions;
+
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
-using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -540,15 +539,8 @@ public class WorkflowExecutionProjectionServiceTests
         var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         store = new ObservableWorkflowExecutionDocumentStore();
         var resolvedClock = clock ?? new SystemProjectionClock();
-        var relationStore = new InMemoryProjectionGraphStore();
-        var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
-        {
-            new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
-        };
-        var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
         var projector = new WorkflowExecutionReadModelProjector(
-            storeDispatcher,
+            store,
             new TestEventDeduplicator(),
             resolvedClock,
             BuildReducers());
@@ -566,7 +558,6 @@ public class WorkflowExecutionProjectionServiceTests
         var runtimeServices = new ServiceCollection();
         runtimeServices.AddSingleton<IAgentManifestStore, InMemoryManifestStore>();
         runtimeServices.AddSingleton<IEventStore, InMemoryEventStore>();
-        runtimeServices.AddSingleton<EventSourcingRuntimeOptions>();
         runtimeServices.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         var runtimeProvider = runtimeServices.BuildServiceProvider();
         var runtime = new LocalActorRuntime(
@@ -586,11 +577,10 @@ public class WorkflowExecutionProjectionServiceTests
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventStreamHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventStreamHub, resolvedClock);
-        var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, resolvedClock);
+        var readModelUpdater = new WorkflowProjectionReadModelUpdater(store, resolvedClock);
         var queryReader = new WorkflowProjectionQueryReader(
             store,
-            mapper,
-            relationStore);
+            mapper);
         var activationService = new WorkflowProjectionActivationService(
             lifecycle,
             resolvedClock,
@@ -621,22 +611,14 @@ public class WorkflowExecutionProjectionServiceTests
     {
         var store = CreateStore();
         var clock = new SystemProjectionClock();
-        var relationStore = new InMemoryProjectionGraphStore();
-        var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
-        {
-            new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
-        };
-        var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
         var runEventHub = new NoOpWorkflowRunEventHub();
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new WorkflowProjectionSinkSubscriptionManager(runEventHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventHub, clock);
-        var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, clock);
+        var readModelUpdater = new WorkflowProjectionReadModelUpdater(store, clock);
         var queryReader = new WorkflowProjectionQueryReader(
             store,
-            mapper,
-            relationStore);
+            mapper);
         var activationService = new WorkflowProjectionActivationService(
             lifecycle,
             clock,
@@ -826,7 +808,7 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     private sealed class ObservableWorkflowExecutionDocumentStore
-        : IProjectionDocumentStore<WorkflowExecutionReport, string>
+        : IProjectionReadModelStore<WorkflowExecutionReport, string>
     {
         private readonly InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> _inner = CreateStore();
         private readonly object _gate = new();

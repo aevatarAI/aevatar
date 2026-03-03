@@ -305,7 +305,6 @@ public class WorkflowGAgentCoverageTests
         {
             Services = new ServiceCollection()
                 .AddSingleton(eventStore)
-                .AddSingleton<EventSourcingRuntimeOptions>()
                 .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
                 .BuildServiceProvider(),
         };

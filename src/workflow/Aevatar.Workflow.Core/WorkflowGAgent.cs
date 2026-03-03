@@ -246,12 +246,14 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
 
     // ─── 编译 + 验证 ───
 
-    protected override WorkflowState TransitionState(WorkflowState current, IMessage evt) =>
-        StateTransitionMatcher
-            .Match(current, evt)
-            .On<ConfigureWorkflowEvent>(ApplyConfigureWorkflow)
-            .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
-            .OrCurrent();
+    protected override WorkflowState TransitionState(WorkflowState current, IMessage evt)
+    {
+        if (StateTransitionMatcher.TryExtract<ConfigureWorkflowEvent>(evt, out var configure))
+            return ApplyConfigureWorkflow(current, configure);
+        if (StateTransitionMatcher.TryExtract<WorkflowCompletedEvent>(evt, out var completed))
+            return ApplyWorkflowCompleted(current, completed);
+        return current;
+    }
 
     private WorkflowState ApplyConfigureWorkflow(WorkflowState current, ConfigureWorkflowEvent evt)
     {

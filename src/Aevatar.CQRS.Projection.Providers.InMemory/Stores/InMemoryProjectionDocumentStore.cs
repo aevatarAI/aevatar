@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 
 public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
-    : IProjectionDocumentStore<TReadModel, TKey>
+    : IProjectionReadModelStore<TReadModel, TKey>
     where TReadModel : class, IProjectionReadModel
 {
     private const string ProviderName = "InMemory";

@@ -24,7 +24,6 @@ public sealed class LocalActorRuntime : IActorRuntime
     private readonly IStreamProvider _streams;
     private readonly IStreamLifecycleManager _streamLifecycleManager;
     private readonly IServiceProvider _services;
-    private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private readonly ILogger<LocalActorRuntime> _logger;
 
     /// <summary>Creates local actor runtime.</summary>
@@ -37,7 +36,6 @@ public sealed class LocalActorRuntime : IActorRuntime
         _streams = streams;
         _services = services;
         _streamLifecycleManager = streamLifecycleManager;
-        _deactivationHookDispatcher = services.GetService<IActorDeactivationHookDispatcher>();
         _logger = logger ?? NullLogger<LocalActorRuntime>.Instance;
     }
 
@@ -59,8 +57,7 @@ public sealed class LocalActorRuntime : IActorRuntime
             actorId,
             router,
             _streams,
-            logger,
-            _deactivationHookDispatcher);
+            logger);
 
         InjectDependencies(agent, publisher, actorId, logger);
 

@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -515,7 +516,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
         chat.Prompt.Should().Be("system\n\nquestion");
-        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-1"));
+        chat.SessionId.Should().Be(WorkflowSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "default", "llm-1", 1));
         ctx.Published.Last().direction.Should().Be(EventDirection.Self);
     }
 
@@ -536,7 +537,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-text");
+        var textSessionId = WorkflowSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "default", "llm-text", 1);
         await module.HandleAsync(
             Envelope(new TextMessageEndEvent
             {
@@ -564,7 +565,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-chat");
+        var chatSessionId = WorkflowSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "default", "llm-chat", 1);
         await module.HandleAsync(
             Envelope(new ChatResponseEvent
             {

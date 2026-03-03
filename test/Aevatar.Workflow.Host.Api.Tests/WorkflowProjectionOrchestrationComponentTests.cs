@@ -1,7 +1,6 @@
-using Aevatar.CQRS.Projection.Core.Abstractions;
+
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
-using Aevatar.CQRS.Projection.Runtime.Runtime;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
+
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
@@ -80,15 +79,8 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             EndedAt = startedAt.AddMinutes(-6),
             CompletionStatus = WorkflowExecutionCompletionStatus.Running,
         });
-        var relationStore = new InMemoryProjectionGraphStore();
-        var dispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(
-            new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
-            {
-                new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-                new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
-            });
         var updater = new WorkflowProjectionReadModelUpdater(
-            dispatcher,
+            store,
             new FixedClock(stoppedAt));
         var context = new WorkflowExecutionProjectionContext
         {
@@ -160,8 +152,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         });
         var reader = new WorkflowProjectionQueryReader(
             store,
-            new WorkflowExecutionReadModelMapper(),
-            new InMemoryProjectionGraphStore());
+            new WorkflowExecutionReadModelMapper());
 
         var snapshot = await reader.GetActorSnapshotAsync("actor-3");
         var timeline = await reader.ListActorTimelineAsync("actor-3", take: 2);
@@ -177,7 +168,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     [Fact]
-    public async Task QueryReader_GraphQueries_ShouldRespectDirectionFiltersAndBounds()
+    public async Task QueryReader_GraphEdges_ShouldDeriveFromTopology()
     {
         var store = CreateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
@@ -187,116 +178,42 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             CommandId = "cmd-graph",
             StartedAt = DateTimeOffset.UtcNow,
             Summary = new WorkflowExecutionSummary(),
-        });
-
-        var graphStore = new InMemoryProjectionGraphStore();
-        var now = DateTimeOffset.UtcNow;
-        await graphStore.UpsertNodeAsync(new ProjectionGraphNode
-        {
-            Scope = WorkflowExecutionGraphConstants.Scope,
-            NodeId = "actor-graph",
-            NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
-            UpdatedAt = now,
-        });
-        await graphStore.UpsertNodeAsync(new ProjectionGraphNode
-        {
-            Scope = WorkflowExecutionGraphConstants.Scope,
-            NodeId = "actor-child",
-            NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
-            UpdatedAt = now,
-        });
-        await graphStore.UpsertNodeAsync(new ProjectionGraphNode
-        {
-            Scope = WorkflowExecutionGraphConstants.Scope,
-            NodeId = "actor-parent",
-            NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
-            UpdatedAt = now,
-        });
-
-        await graphStore.UpsertEdgeAsync(new ProjectionGraphEdge
-        {
-            Scope = WorkflowExecutionGraphConstants.Scope,
-            EdgeId = "edge-out-own",
-            FromNodeId = "actor-graph",
-            ToNodeId = "actor-child",
-            EdgeType = WorkflowExecutionGraphConstants.EdgeTypeOwns,
-            UpdatedAt = now.AddMinutes(3),
-        });
-        await graphStore.UpsertEdgeAsync(new ProjectionGraphEdge
-        {
-            Scope = WorkflowExecutionGraphConstants.Scope,
-            EdgeId = "edge-in-child",
-            FromNodeId = "actor-parent",
-            ToNodeId = "actor-graph",
-            EdgeType = WorkflowExecutionGraphConstants.EdgeTypeChildOf,
-            UpdatedAt = now.AddMinutes(2),
-        });
-        await graphStore.UpsertEdgeAsync(new ProjectionGraphEdge
-        {
-            Scope = WorkflowExecutionGraphConstants.Scope,
-            EdgeId = "edge-out-child",
-            FromNodeId = "actor-graph",
-            ToNodeId = "actor-parent",
-            EdgeType = WorkflowExecutionGraphConstants.EdgeTypeChildOf,
-            UpdatedAt = now.AddMinutes(1),
+            Topology =
+            [
+                new WorkflowExecutionTopologyEdge("actor-graph", "actor-child"),
+                new WorkflowExecutionTopologyEdge("actor-parent", "actor-graph"),
+            ],
         });
 
         var reader = new WorkflowProjectionQueryReader(
             store,
-            new WorkflowExecutionReadModelMapper(),
-            graphStore);
+            new WorkflowExecutionReadModelMapper());
 
-        var outboundOwn = await reader.GetActorGraphEdgesAsync(
-            " actor-graph ",
-            take: 0,
-            options: new WorkflowActorGraphQueryOptions
-            {
-                Direction = WorkflowActorGraphDirection.Outbound,
-                EdgeTypes = [" OWNS ", "OWNS", ""],
-            });
-        outboundOwn.Should().ContainSingle();
-        outboundOwn[0].EdgeId.Should().Be("edge-out-own");
-
-        var inbound = await reader.GetActorGraphEdgesAsync(
-            "actor-graph",
-            take: 50,
-            options: new WorkflowActorGraphQueryOptions
-            {
-                Direction = WorkflowActorGraphDirection.Inbound,
-            });
-        inbound.Should().ContainSingle();
-        inbound[0].EdgeId.Should().Be("edge-in-child");
-
-        var both = await reader.GetActorGraphEdgesAsync("actor-graph", take: 50);
-        both.Should().HaveCount(3);
+        var edges = await reader.GetActorGraphEdgesAsync("actor-graph", take: 50);
+        edges.Should().HaveCount(2);
+        edges[0].FromNodeId.Should().Be("actor-graph");
+        edges[0].ToNodeId.Should().Be("actor-child");
+        edges[1].FromNodeId.Should().Be("actor-parent");
+        edges[1].ToNodeId.Should().Be("actor-graph");
 
         var emptyActor = await reader.GetActorGraphEdgesAsync("   ", take: 50);
         emptyActor.Should().BeEmpty();
 
-        var subgraph = await reader.GetActorGraphSubgraphAsync(
-            "actor-graph",
-            depth: 0,
-            take: 0,
-            options: new WorkflowActorGraphQueryOptions
-            {
-                Direction = WorkflowActorGraphDirection.Both,
-                EdgeTypes = [WorkflowExecutionGraphConstants.EdgeTypeChildOf],
-            });
+        var subgraph = await reader.GetActorGraphSubgraphAsync("actor-graph", depth: 2, take: 50);
         subgraph.RootNodeId.Should().Be("actor-graph");
-        subgraph.Edges.Should().HaveCount(1);
-        subgraph.Edges.Should().OnlyContain(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf);
+        subgraph.Edges.Should().HaveCount(2);
         subgraph.Nodes.Should().Contain(x => x.NodeId == "actor-graph");
+        subgraph.Nodes.Should().Contain(x => x.NodeId == "actor-child");
+        subgraph.Nodes.Should().Contain(x => x.NodeId == "actor-parent");
     }
 
     [Fact]
     public async Task QueryReader_GetActorGraphEnrichedSnapshotAsync_ShouldReturnNullForMissingSnapshot_AndComposeWhenExists()
     {
         var store = CreateStore();
-        var graphStore = new InMemoryProjectionGraphStore();
         var reader = new WorkflowProjectionQueryReader(
             store,
-            new WorkflowExecutionReadModelMapper(),
-            graphStore);
+            new WorkflowExecutionReadModelMapper());
 
         var missing = await reader.GetActorGraphEnrichedSnapshotAsync("missing");
         missing.Should().BeNull();
@@ -315,20 +232,17 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
                 CompletedSteps = 1,
                 RoleReplyCount = 0,
             },
-        });
-        await graphStore.UpsertNodeAsync(new ProjectionGraphNode
-        {
-            Scope = WorkflowExecutionGraphConstants.Scope,
-            NodeId = "actor-enriched",
-            NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
-            UpdatedAt = now,
+            Topology =
+            [
+                new WorkflowExecutionTopologyEdge("actor-enriched", "child-1"),
+            ],
         });
 
         var enriched = await reader.GetActorGraphEnrichedSnapshotAsync("actor-enriched");
         enriched.Should().NotBeNull();
         enriched!.Snapshot.ActorId.Should().Be("actor-enriched");
         enriched.Subgraph.RootNodeId.Should().Be("actor-enriched");
-        enriched.Subgraph.Nodes.Should().ContainSingle(x => x.NodeId == "actor-enriched");
+        enriched.Subgraph.Nodes.Should().Contain(x => x.NodeId == "actor-enriched");
     }
 
     [Fact]
@@ -364,8 +278,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
         var reader = new WorkflowProjectionQueryReader(
             store,
-            new WorkflowExecutionReadModelMapper(),
-            new InMemoryProjectionGraphStore());
+            new WorkflowExecutionReadModelMapper());
 
         var minTake = await reader.ListActorSnapshotsAsync(take: 0);
         minTake.Should().HaveCount(1);
@@ -382,7 +295,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     [Fact]
-    public void ReadModelMapper_ShouldMapSnapshotTimelineAndGraphModels_WithCopiedDictionaries()
+    public void ReadModelMapper_ShouldMapSnapshotAndTimeline_WithCopiedDictionaries()
     {
         var mapper = new WorkflowExecutionReadModelMapper();
         var now = DateTimeOffset.UtcNow;
@@ -429,44 +342,6 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         timeline.Stage.Should().Be("stage-map");
         timeline.Data.Should().ContainKey("x").WhoseValue.Should().Be("1");
         timeline.Data.Should().NotBeSameAs(timelineSource.Data);
-
-        var graphNodeSource = new ProjectionGraphNode
-        {
-            Scope = WorkflowExecutionGraphConstants.Scope,
-            NodeId = "n-1",
-            NodeType = "Actor",
-            UpdatedAt = now,
-            Properties = new Dictionary<string, string>(StringComparer.Ordinal) { ["p"] = "v" },
-        };
-        var graphEdgeSource = new ProjectionGraphEdge
-        {
-            Scope = WorkflowExecutionGraphConstants.Scope,
-            EdgeId = "e-1",
-            FromNodeId = "n-1",
-            ToNodeId = "n-2",
-            EdgeType = WorkflowExecutionGraphConstants.EdgeTypeOwns,
-            UpdatedAt = now,
-            Properties = new Dictionary<string, string>(StringComparer.Ordinal) { ["q"] = "w" },
-        };
-
-        var graphNode = mapper.ToActorGraphNode(graphNodeSource);
-        graphNode.NodeId.Should().Be("n-1");
-        graphNode.Properties.Should().ContainKey("p").WhoseValue.Should().Be("v");
-        graphNode.Properties.Should().NotBeSameAs(graphNodeSource.Properties);
-
-        var graphEdge = mapper.ToActorGraphEdge(graphEdgeSource);
-        graphEdge.EdgeId.Should().Be("e-1");
-        graphEdge.Properties.Should().ContainKey("q").WhoseValue.Should().Be("w");
-        graphEdge.Properties.Should().NotBeSameAs(graphEdgeSource.Properties);
-
-        var subgraph = mapper.ToActorGraphSubgraph("root-map", new ProjectionGraphSubgraph
-        {
-            Nodes = [graphNodeSource],
-            Edges = [graphEdgeSource],
-        });
-        subgraph.RootNodeId.Should().Be("root-map");
-        subgraph.Nodes.Should().ContainSingle(x => x.NodeId == "n-1");
-        subgraph.Edges.Should().ContainSingle(x => x.EdgeId == "e-1");
     }
 
     [Fact]

@@ -107,9 +107,9 @@ public sealed record ToolCallEndEvent : AGUIEvent
 public sealed record HumanInputRequestEvent : AGUIEvent
 {
     public override string Type => "HUMAN_INPUT_REQUEST";
-    public required string StepId { get; init; }
-    public required string RunId { get; init; }
-    public required string SuspensionType { get; init; }
+    public string? StepId { get; init; }
+    public string? RunId { get; init; }
+    public string? SuspensionType { get; init; }
     public required string Prompt { get; init; }
     public int TimeoutSeconds { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
@@ -118,8 +118,8 @@ public sealed record HumanInputRequestEvent : AGUIEvent
 public sealed record HumanInputResponseEvent : AGUIEvent
 {
     public override string Type => "HUMAN_INPUT_RESPONSE";
-    public required string StepId { get; init; }
-    public required string RunId { get; init; }
+    public string? StepId { get; init; }
+    public string? RunId { get; init; }
     public bool Approved { get; init; }
     public string? UserInput { get; init; }
 }

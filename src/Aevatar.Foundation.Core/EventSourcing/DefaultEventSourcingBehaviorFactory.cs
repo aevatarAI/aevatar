@@ -1,34 +1,20 @@
 using Aevatar.Foundation.Abstractions.Persistence;
 using Google.Protobuf;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.Core.EventSourcing;
 
 /// <summary>
-/// Default event sourcing behavior factory bound to runtime persistence options.
+/// Default event sourcing behavior factory.
 /// </summary>
 public sealed class DefaultEventSourcingBehaviorFactory<TState>
     : IEventSourcingBehaviorFactory<TState>
     where TState : class, IMessage<TState>, new()
 {
     private readonly IEventStore _eventStore;
-    private readonly EventSourcingRuntimeOptions _options;
-    private readonly IEventSourcingSnapshotStore<TState>? _snapshotStore;
-    private readonly IEventStoreCompactionScheduler? _compactionScheduler;
-    private readonly ILogger<EventSourcingBehavior<TState>>? _logger;
 
-    public DefaultEventSourcingBehaviorFactory(
-        IEventStore eventStore,
-        EventSourcingRuntimeOptions? options = null,
-        IEventSourcingSnapshotStore<TState>? snapshotStore = null,
-        IEventStoreCompactionScheduler? compactionScheduler = null,
-        ILogger<EventSourcingBehavior<TState>>? logger = null)
+    public DefaultEventSourcingBehaviorFactory(IEventStore eventStore)
     {
         _eventStore = eventStore;
-        _options = options ?? new EventSourcingRuntimeOptions();
-        _snapshotStore = snapshotStore;
-        _compactionScheduler = compactionScheduler;
-        _logger = logger;
     }
 
     public IEventSourcingBehavior<TState> Create(
@@ -38,22 +24,10 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
         ArgumentNullException.ThrowIfNull(agentId);
         ArgumentNullException.ThrowIfNull(transitionState);
 
-        var snapshotsEnabled = _options.EnableSnapshots && _snapshotStore != null;
-        var snapshotStore = snapshotsEnabled ? _snapshotStore : null;
-        ISnapshotStrategy snapshotStrategy = snapshotsEnabled
-            ? new IntervalSnapshotStrategy(_options.SnapshotInterval)
-            : NeverSnapshotStrategy.Instance;
-
         return new DelegatingEventSourcingBehavior(
             _eventStore,
             agentId,
-            transitionState,
-            snapshotStore,
-            snapshotStrategy,
-            _logger,
-            _options.EnableEventCompaction,
-            _options.RetainedEventsAfterSnapshot,
-            _compactionScheduler);
+            transitionState);
     }
 
     private sealed class DelegatingEventSourcingBehavior : EventSourcingBehavior<TState>
@@ -63,22 +37,8 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
         public DelegatingEventSourcingBehavior(
             IEventStore eventStore,
             string agentId,
-            Func<TState, IMessage, TState> transitionState,
-            IEventSourcingSnapshotStore<TState>? snapshotStore,
-            ISnapshotStrategy snapshotStrategy,
-            ILogger<EventSourcingBehavior<TState>>? logger,
-            bool enableEventCompaction,
-            int retainedEventsAfterSnapshot,
-            IEventStoreCompactionScheduler? compactionScheduler)
-            : base(
-                eventStore,
-                agentId,
-                snapshotStore,
-                snapshotStrategy,
-                logger,
-                enableEventCompaction,
-                retainedEventsAfterSnapshot,
-                compactionScheduler)
+            Func<TState, IMessage, TState> transitionState)
+            : base(eventStore, agentId)
         {
             _transitionState = transitionState;
         }

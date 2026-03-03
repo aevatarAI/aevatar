@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Abstractions;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Metadata;
 using Aevatar.Workflow.Projection.Orchestration;
@@ -6,7 +6,6 @@ using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Foundation.Abstractions.Deduplication;
-using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
@@ -37,9 +36,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
         services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
-        services.AddProjectionReadModelRuntime();
-        services.TryAddSingleton<IProjectionDispatchCompensationOutbox, ActorProjectionDispatchCompensationOutbox>();
-        services.TryAddSingleton<IProjectionStoreDispatchCompensator<WorkflowExecutionReport, string>, WorkflowProjectionDurableOutboxCompensator>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>, WorkflowExecutionReportDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
@@ -71,7 +67,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<WorkflowExecutionProjectionQueryService>();
         services.TryAddSingleton<IWorkflowExecutionProjectionQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionQueryService>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowProjectionDispatchCompensationReplayHostedService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
         return services;
     }

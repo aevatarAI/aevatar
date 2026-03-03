@@ -118,13 +118,10 @@ public class AgentLifecycleBddTests
             : base(eventStore, agentId) { }
 
         public override CounterState TransitionState(CounterState current, IMessage evt)
-            => StateTransitionMatcher
-                .Match(current, evt)
-                .On<IncrementEvent>((state, inc) => new CounterState
-                {
-                    Count = state.Count + inc.Amount,
-                    Name = state.Name,
-                })
-                .OrCurrent();
+        {
+            if (StateTransitionMatcher.TryExtract<IncrementEvent>(evt, out var inc))
+                return new CounterState { Count = current.Count + inc.Amount, Name = current.Name };
+            return current;
+        }
     }
 }

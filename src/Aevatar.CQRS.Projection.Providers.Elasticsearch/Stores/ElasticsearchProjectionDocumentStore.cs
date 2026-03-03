@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
 public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
-    : IProjectionDocumentStore<TReadModel, TKey>,
+    : IProjectionReadModelStore<TReadModel, TKey>,
       IDisposable
     where TReadModel : class, IProjectionReadModel
 {

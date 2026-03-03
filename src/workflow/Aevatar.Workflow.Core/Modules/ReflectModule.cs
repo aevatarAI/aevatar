@@ -105,7 +105,7 @@ public sealed class ReflectModule : IEventModule
             {draft}
             """;
 
-        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, state.RunId, $"{state.StepId}_r{state.Round}_critique");
+        var sessionId = WorkflowSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, state.RunId, $"{state.StepId}_r{state.Round}_critique");
         _pendingLLM[sessionId] = state;
 
         if (!string.IsNullOrEmpty(state.TargetRole))
@@ -129,7 +129,7 @@ public sealed class ReflectModule : IEventModule
             {state.CurrentDraft}
             """;
 
-        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, state.RunId, $"{state.StepId}_r{state.Round}_improve");
+        var sessionId = WorkflowSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, state.RunId, $"{state.StepId}_r{state.Round}_improve");
         _pendingLLM[sessionId] = state;
 
         if (!string.IsNullOrEmpty(state.TargetRole))

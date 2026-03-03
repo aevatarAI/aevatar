@@ -115,13 +115,7 @@ public static class ServiceCollectionExtensions
         IServiceCollection services,
         AevatarActorRuntimeOptions options)
     {
-        services.AddAevatarRuntime(configureEventSourcing: eventSourcingOptions =>
-        {
-            eventSourcingOptions.EnableSnapshots = options.EventSourcingEnableSnapshots;
-            eventSourcingOptions.SnapshotInterval = options.EventSourcingSnapshotInterval;
-            eventSourcingOptions.EnableEventCompaction = options.EventSourcingEnableEventCompaction;
-            eventSourcingOptions.RetainedEventsAfterSnapshot = options.EventSourcingRetainedEventsAfterSnapshot;
-        });
+        services.AddAevatarRuntime();
     }
 
     private static void ConfigureMassTransitTransport(

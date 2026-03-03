@@ -517,6 +517,8 @@ public class ChatEndpointsInternalTests
 
         public IReadOnlyList<string> ListWorkflows() => Workflows;
 
+        public string? GetWorkflowYaml(string name) => null;
+
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
         {
             SnapshotByActorId.TryGetValue(actorId, out var snapshot);

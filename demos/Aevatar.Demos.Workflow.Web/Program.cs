@@ -1936,4 +1936,3 @@ sealed class DemoRunContext
     public string? LastSignalName { get; set; }
     public string? LastEventType { get; set; }
 }
-
