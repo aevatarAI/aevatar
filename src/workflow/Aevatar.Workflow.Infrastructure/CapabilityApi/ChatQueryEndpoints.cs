@@ -1,5 +1,4 @@
 using Aevatar.Workflow.Application.Abstractions.Queries;
-using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -15,10 +14,6 @@ public static class ChatQueryEndpoints
 
         group.MapGet("/workflows", ListWorkflows)
             .Produces(StatusCodes.Status200OK);
-
-        group.MapGet("/workflows/{name}", GetWorkflowYaml)
-            .Produces(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/actors/{actorId}", GetActorSnapshot)
             .Produces(StatusCodes.Status200OK)
@@ -48,12 +43,6 @@ public static class ChatQueryEndpoints
 
     internal static IResult ListWorkflows(IWorkflowExecutionQueryApplicationService queryService) =>
         Results.Ok(queryService.ListWorkflows());
-
-    internal static IResult GetWorkflowYaml(string name, IWorkflowDefinitionRegistry registry)
-    {
-        var yaml = registry.GetYaml(name);
-        return yaml == null ? Results.NotFound() : Results.Text(yaml, "text/yaml");
-    }
 
     internal static async Task<IResult> GetActorSnapshot(
         string actorId,
