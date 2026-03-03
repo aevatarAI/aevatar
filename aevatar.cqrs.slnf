@@ -4,8 +4,7 @@
     "projects": [
       "src\\Aevatar.CQRS.Core.Abstractions\\Aevatar.CQRS.Core.Abstractions.csproj",
       "src\\Aevatar.CQRS.Core\\Aevatar.CQRS.Core.csproj",
-      "src\\Aevatar.CQRS.Projection.Core.Abstractions\\Aevatar.CQRS.Projection.Core.Abstractions.csproj",
-      "src\\Aevatar.CQRS.Projection.Stores.Abstractions\\Aevatar.CQRS.Projection.Stores.Abstractions.csproj",
+      "src\\Aevatar.CQRS.Projection.Abstractions\\Aevatar.CQRS.Projection.Abstractions.csproj",
       "src\\Aevatar.CQRS.Projection.Core\\Aevatar.CQRS.Projection.Core.csproj",
       "src\\Aevatar.Foundation.Projection\\Aevatar.Foundation.Projection.csproj",
       "test\\Aevatar.CQRS.Core.Tests\\Aevatar.CQRS.Core.Tests.csproj",

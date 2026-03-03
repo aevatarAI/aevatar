@@ -1,4 +1,4 @@
-using Aevatar.CQRS.Projection.Core.Abstractions;
+
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Google.Protobuf;

@@ -28,20 +28,13 @@ public sealed class GarnetEventStoreIntegrationTests
         var all = await store.GetEventsAsync(agentId);
         all.Select(x => x.Version).Should().Equal(1, 2, 3);
 
-        var removed = await store.DeleteEventsUpToAsync(agentId, toVersion: 2);
-        removed.Should().Be(2);
-        (await store.GetVersionAsync(agentId)).Should().Be(3);
-
-        var retained = await store.GetEventsAsync(agentId);
-        retained.Select(x => x.Version).Should().Equal(3);
-
         var secondBatch = CreateEvents(agentId, startVersion: 4, count: 2);
         var secondCommit = await store.AppendAsync(agentId, secondBatch, expectedVersion: 3);
         secondCommit.LatestVersion.Should().Be(5);
         secondCommit.CommittedEvents.Select(x => x.Version).Should().Equal(4, 5);
 
         var afterAppend = await store.GetEventsAsync(agentId);
-        afterAppend.Select(x => x.Version).Should().Equal(3, 4, 5);
+        afterAppend.Select(x => x.Version).Should().Equal(1, 2, 3, 4, 5);
     }
 
     [GarnetIntegrationFact]

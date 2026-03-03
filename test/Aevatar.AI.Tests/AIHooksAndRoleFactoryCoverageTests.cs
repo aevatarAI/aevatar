@@ -152,7 +152,7 @@ public class AIHooksAndRoleFactoryCoverageTests
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
         services.AddSingleton<IEventModuleFactory<IEventHandlerContext>, StubEventModuleFactory>();
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
-        services.AddSingleton<EventSourcingRuntimeOptions>();
+
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         await using var provider = services.BuildServiceProvider();
 
@@ -184,7 +184,7 @@ public class AIHooksAndRoleFactoryCoverageTests
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
-        services.AddSingleton<EventSourcingRuntimeOptions>();
+
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         await using var provider = services.BuildServiceProvider();
 
@@ -235,7 +235,7 @@ public class AIHooksAndRoleFactoryCoverageTests
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
         services.AddSingleton<IEventModuleFactory<IEventHandlerContext>, StubEventModuleFactory>();
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
-        services.AddSingleton<EventSourcingRuntimeOptions>();
+
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         await using var provider = services.BuildServiceProvider();
 

@@ -20,7 +20,6 @@ public class AIGAgentBaseToolRefreshTests
         var services = new ServiceCollection();
         services.AddSingleton<IAgentToolSource>(source);
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
-        services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         using var provider = services.BuildServiceProvider();
         var agent = new TestAIGAgent(provider.GetServices<IAgentToolSource>())
@@ -45,7 +44,6 @@ public class AIGAgentBaseToolRefreshTests
         var services = new ServiceCollection();
         services.AddSingleton<IAgentToolSource>(source);
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
-        services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         using var provider = services.BuildServiceProvider();
         var agent = new TestAIGAgent(provider.GetServices<IAgentToolSource>())

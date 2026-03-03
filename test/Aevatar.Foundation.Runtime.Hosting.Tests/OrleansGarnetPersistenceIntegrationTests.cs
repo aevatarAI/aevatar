@@ -236,12 +236,11 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
             PersistDomainEventAsync(evt.Clone(), CancellationToken.None);
 
         protected override Int32Value TransitionState(Int32Value current, IMessage evt)
-            => StateTransitionMatcher
-                .Match(current, evt)
-                .On<StringValue>((state, payload) => payload.Value == "activated"
-                    ? new Int32Value { Value = state.Value + 1 }
-                    : state)
-                .OrCurrent();
+        {
+            if (StateTransitionMatcher.TryExtract<StringValue>(evt, out var payload) && payload.Value == "activated")
+                return new Int32Value { Value = current.Value + 1 };
+            return current;
+        }
 
         public override Task<string> GetDescriptionAsync() =>
             Task.FromResult($"activation-count:{State.Value}");

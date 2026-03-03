@@ -12,8 +12,6 @@
 
 - 追加写入走 Lua 脚本，带 `expectedVersion` 乐观并发检查。
 - 读取按版本有序回放，支持 `fromVersion` 增量读取。
-- `DeleteEventsUpToAsync` 支持快照后的历史事件裁剪。
-
 ## 运行时装配
 
 在 Orleans runtime 中，当 `PersistenceBackend=Garnet` 时会自动装配 `GarnetEventStore`（无需业务层额外绑定）。

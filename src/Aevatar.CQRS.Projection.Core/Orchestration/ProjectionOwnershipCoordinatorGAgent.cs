@@ -100,12 +100,14 @@ public sealed class ProjectionOwnershipCoordinatorGAgent
 
     protected override ProjectionOwnershipCoordinatorState TransitionState(
         ProjectionOwnershipCoordinatorState current,
-        IMessage evt) =>
-        StateTransitionMatcher
-            .Match(current, evt)
-            .On<ProjectionOwnershipAcquireEvent>(ApplyAcquire)
-            .On<ProjectionOwnershipReleaseEvent>(ApplyRelease)
-            .OrCurrent();
+        IMessage evt)
+    {
+        if (StateTransitionMatcher.TryExtract<ProjectionOwnershipAcquireEvent>(evt, out var acquire))
+            return ApplyAcquire(current, acquire);
+        if (StateTransitionMatcher.TryExtract<ProjectionOwnershipReleaseEvent>(evt, out var release))
+            return ApplyRelease(current, release);
+        return current;
+    }
 
     private static ProjectionOwnershipCoordinatorState ApplyAcquire(
         ProjectionOwnershipCoordinatorState current,
