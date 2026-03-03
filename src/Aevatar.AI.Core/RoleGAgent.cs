@@ -3,7 +3,7 @@
 //
 // Handles ChatRequestEvent:
 // 1. Calls LLM via ChatStreamAsync (streaming)
-// 2. Publishes AG-UI events: TextMessageStart → Content* → End
+// 2. Publishes AG-UI events: TextMessageStart → Content* → ToolCall* → End
 // 3. Logs prompt and full LLM response for observability
 // ─────────────────────────────────────────────────────────────
 
@@ -13,10 +13,13 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Core;
@@ -65,27 +68,42 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     [EventHandler]
     public async Task HandleConfigureRoleAgent(ConfigureRoleAgentEvent evt)
     {
-        SetRoleName(evt.RoleName);
+        await PersistDomainEventAsync(evt);
         await ((IRoleAgent)this).ConfigureAsync(new RoleAgentConfig
         {
-            ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? "deepseek" : evt.ProviderName,
+            ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName,
             Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,
             SystemPrompt = evt.SystemPrompt ?? string.Empty,
-            Temperature = evt.Temperature == 0 ? null : evt.Temperature,
+            Temperature = evt.HasTemperature ? evt.Temperature : null,
             MaxTokens = evt.MaxTokens == 0 ? null : evt.MaxTokens,
             MaxToolRounds = evt.MaxToolRounds <= 0 ? 10 : evt.MaxToolRounds,
             MaxHistoryMessages = evt.MaxHistoryMessages <= 0 ? 100 : evt.MaxHistoryMessages,
             StreamBufferCapacity = evt.StreamBufferCapacity <= 0 ? 256 : evt.StreamBufferCapacity,
         });
+
+        RoleGAgentFactory.ApplyModuleExtensions(this, evt.EventModules, evt.EventRoutes, Services);
     }
 
     /// <summary>Returns agent description.</summary>
     public override Task<string> GetDescriptionAsync() =>
         Task.FromResult($"RoleGAgent[{RoleName}]:{Id}");
 
+    protected override RoleGAgentState TransitionState(RoleGAgentState current, IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<ConfigureRoleAgentEvent>(ApplyConfigureRoleAgent)
+            .OrCurrent();
+
+    protected override Task OnStateChangedAsync(RoleGAgentState state, CancellationToken ct)
+    {
+        _ = ct;
+        RoleName = state.RoleName ?? string.Empty;
+        return Task.CompletedTask;
+    }
+
     /// <summary>
     /// Handles ChatRequestEvent via streaming LLM call.
-    /// Publishes AG-UI three-phase events and logs the interaction.
+    /// Publishes text stream events and tool call events.
     /// </summary>
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
@@ -104,13 +122,31 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
         // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
         var fullContent = new StringBuilder();
+        var toolCalls = new StreamingToolCallAccumulator();
+
         await foreach (var chunk in ChatStreamAsync(request.Prompt))
         {
-            fullContent.Append(chunk);
-            await PublishAsync(new TextMessageContentEvent
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
-                Delta = chunk,
-                SessionId = request.SessionId,
+                fullContent.Append(chunk.DeltaContent);
+                await PublishAsync(new TextMessageContentEvent
+                {
+                    Delta = chunk.DeltaContent,
+                    SessionId = request.SessionId,
+                }, EventDirection.Up);
+            }
+
+            if (chunk.DeltaToolCall != null)
+                toolCalls.TrackDelta(chunk.DeltaToolCall);
+        }
+
+        foreach (var toolCall in toolCalls.BuildToolCalls())
+        {
+            await PublishAsync(new ToolCallEvent
+            {
+                CallId = toolCall.Id,
+                ToolName = toolCall.Name,
+                ArgumentsJson = toolCall.ArgumentsJson,
             }, EventDirection.Up);
         }
 
@@ -127,5 +163,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             Content = response,
             SessionId = request.SessionId,
         }, EventDirection.Up);
+    }
+
+    private static RoleGAgentState ApplyConfigureRoleAgent(
+        RoleGAgentState current,
+        ConfigureRoleAgentEvent evt)
+    {
+        var next = current.Clone();
+        next.RoleName = evt.RoleName ?? string.Empty;
+        return next;
     }
 }

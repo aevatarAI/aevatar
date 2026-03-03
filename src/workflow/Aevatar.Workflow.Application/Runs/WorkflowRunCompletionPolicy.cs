@@ -9,13 +9,13 @@ public sealed class WorkflowRunCompletionPolicy : IWorkflowRunCompletionPolicy
         out WorkflowProjectionCompletionStatus status)
     {
         status = WorkflowProjectionCompletionStatus.Unknown;
-        if (string.Equals(frame.Type, "RUN_FINISHED", StringComparison.Ordinal))
+        if (string.Equals(frame.Type, WorkflowRunEventTypes.RunFinished, StringComparison.Ordinal))
         {
             status = WorkflowProjectionCompletionStatus.Completed;
             return true;
         }
 
-        if (string.Equals(frame.Type, "RUN_ERROR", StringComparison.Ordinal))
+        if (string.Equals(frame.Type, WorkflowRunEventTypes.RunError, StringComparison.Ordinal))
         {
             status = WorkflowProjectionCompletionStatus.Failed;
             return true;

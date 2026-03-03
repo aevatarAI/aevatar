@@ -1,0 +1,21 @@
+name: 31_role_event_module_extensions_multiplex_json
+description: |
+  Single-role multiplex demo using extensions.* only.
+  All three modules are loaded from extensions.event_modules and route selects
+  demo_json_pick for ChatRequestEvent.
+
+roles:
+  - id: extensions_multiplex_role
+    name: Extensions Multiplex Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by routed role event module.
+    extensions:
+      event_modules: "demo_template,demo_csv_markdown,demo_json_pick"
+      event_routes: |
+        - when: event.type == "ChatRequestEvent"
+          to: demo_json_pick
+
+steps:
+  - id: role_reply
+    type: llm_call
+    role: extensions_multiplex_role

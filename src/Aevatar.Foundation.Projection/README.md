@@ -4,7 +4,7 @@
 
 ## 职责
 
-- 定义读模型基础字段：`AevatarReadModelBase`
+- 定义读模型基础字段：`AevatarReadModelBase`（`RootActorId/CommandId/StateVersion/LastEventId/CreatedAt/UpdatedAt`）
 - 定义通用读侧能力接口：
   - `IHasProjectionTimeline`
   - `IHasProjectionRoleReplies`

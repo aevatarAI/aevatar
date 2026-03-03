@@ -1,9 +1,12 @@
-using Aevatar.CQRS.Projection.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Runtime.Runtime;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Workflow.Projection.Stores;
 using FluentAssertions;
 using System.Runtime.CompilerServices;
 
@@ -11,19 +14,6 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowProjectionOrchestrationComponentTests
 {
-    [Fact]
-    public async Task LeaseManager_ShouldForwardAcquireAndRelease()
-    {
-        var ownership = new TrackingOwnershipCoordinator();
-        var manager = new WorkflowProjectionLeaseManager(ownership);
-
-        await manager.AcquireAsync("actor-1", "cmd-1");
-        await manager.ReleaseAsync("actor-1", "cmd-1");
-
-        ownership.Acquired.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
-        ownership.Released.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
-    }
-
     [Fact]
     public async Task ActivationService_ShouldStartProjectionAndReturnRuntimeLease()
     {
@@ -34,7 +24,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             lifecycle,
             new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
             new DefaultWorkflowExecutionProjectionContextFactory(),
-            new WorkflowProjectionLeaseManager(ownership),
+            ownership,
             readModelUpdater);
 
         var lease = await activationService.EnsureAsync(
@@ -59,7 +49,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             new ThrowingLifecycleService(new InvalidOperationException("start failed")),
             new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
             new DefaultWorkflowExecutionProjectionContextFactory(),
-            new WorkflowProjectionLeaseManager(ownership),
+            ownership,
             new RecordingReadModelUpdater());
 
         var act = async () => await activationService.EnsureAsync(
@@ -79,7 +69,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     {
         var startedAt = new DateTimeOffset(2026, 2, 21, 12, 0, 0, TimeSpan.Zero);
         var stoppedAt = startedAt.AddMinutes(3);
-        var store = new InMemoryWorkflowExecutionReadModelStore();
+        var store = CreateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
             RootActorId = "actor-2",
@@ -90,7 +80,16 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             EndedAt = startedAt.AddMinutes(-6),
             CompletionStatus = WorkflowExecutionCompletionStatus.Running,
         });
-        var updater = new WorkflowProjectionReadModelUpdater(store, new FixedClock(stoppedAt));
+        var relationStore = new InMemoryProjectionGraphStore();
+        var dispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(
+            new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+            {
+                new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
+                new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
+            });
+        var updater = new WorkflowProjectionReadModelUpdater(
+            dispatcher,
+            new FixedClock(stoppedAt));
         var context = new WorkflowExecutionProjectionContext
         {
             ProjectionId = "projection-1",
@@ -123,7 +122,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     [Fact]
     public async Task QueryReader_ShouldMapSnapshotsAndSortTimeline()
     {
-        var store = new InMemoryWorkflowExecutionReadModelStore();
+        var store = CreateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
             RootActorId = "actor-3",
@@ -159,7 +158,10 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
                 RoleReplyCount = 1,
             },
         });
-        var reader = new WorkflowProjectionQueryReader(store, new WorkflowExecutionReadModelMapper());
+        var reader = new WorkflowProjectionQueryReader(
+            store,
+            new WorkflowExecutionReadModelMapper(),
+            new InMemoryProjectionGraphStore());
 
         var snapshot = await reader.GetActorSnapshotAsync("actor-3");
         var timeline = await reader.ListActorTimelineAsync("actor-3", take: 2);
@@ -175,6 +177,299 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     [Fact]
+    public async Task QueryReader_GraphQueries_ShouldRespectDirectionFiltersAndBounds()
+    {
+        var store = CreateStore();
+        await store.UpsertAsync(new WorkflowExecutionReport
+        {
+            RootActorId = "actor-graph",
+            WorkflowName = "direct",
+            CommandId = "cmd-graph",
+            StartedAt = DateTimeOffset.UtcNow,
+            Summary = new WorkflowExecutionSummary(),
+        });
+
+        var graphStore = new InMemoryProjectionGraphStore();
+        var now = DateTimeOffset.UtcNow;
+        await graphStore.UpsertNodeAsync(new ProjectionGraphNode
+        {
+            Scope = WorkflowExecutionGraphConstants.Scope,
+            NodeId = "actor-graph",
+            NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
+            UpdatedAt = now,
+        });
+        await graphStore.UpsertNodeAsync(new ProjectionGraphNode
+        {
+            Scope = WorkflowExecutionGraphConstants.Scope,
+            NodeId = "actor-child",
+            NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
+            UpdatedAt = now,
+        });
+        await graphStore.UpsertNodeAsync(new ProjectionGraphNode
+        {
+            Scope = WorkflowExecutionGraphConstants.Scope,
+            NodeId = "actor-parent",
+            NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
+            UpdatedAt = now,
+        });
+
+        await graphStore.UpsertEdgeAsync(new ProjectionGraphEdge
+        {
+            Scope = WorkflowExecutionGraphConstants.Scope,
+            EdgeId = "edge-out-own",
+            FromNodeId = "actor-graph",
+            ToNodeId = "actor-child",
+            EdgeType = WorkflowExecutionGraphConstants.EdgeTypeOwns,
+            UpdatedAt = now.AddMinutes(3),
+        });
+        await graphStore.UpsertEdgeAsync(new ProjectionGraphEdge
+        {
+            Scope = WorkflowExecutionGraphConstants.Scope,
+            EdgeId = "edge-in-child",
+            FromNodeId = "actor-parent",
+            ToNodeId = "actor-graph",
+            EdgeType = WorkflowExecutionGraphConstants.EdgeTypeChildOf,
+            UpdatedAt = now.AddMinutes(2),
+        });
+        await graphStore.UpsertEdgeAsync(new ProjectionGraphEdge
+        {
+            Scope = WorkflowExecutionGraphConstants.Scope,
+            EdgeId = "edge-out-child",
+            FromNodeId = "actor-graph",
+            ToNodeId = "actor-parent",
+            EdgeType = WorkflowExecutionGraphConstants.EdgeTypeChildOf,
+            UpdatedAt = now.AddMinutes(1),
+        });
+
+        var reader = new WorkflowProjectionQueryReader(
+            store,
+            new WorkflowExecutionReadModelMapper(),
+            graphStore);
+
+        var outboundOwn = await reader.GetActorGraphEdgesAsync(
+            " actor-graph ",
+            take: 0,
+            options: new WorkflowActorGraphQueryOptions
+            {
+                Direction = WorkflowActorGraphDirection.Outbound,
+                EdgeTypes = [" OWNS ", "OWNS", ""],
+            });
+        outboundOwn.Should().ContainSingle();
+        outboundOwn[0].EdgeId.Should().Be("edge-out-own");
+
+        var inbound = await reader.GetActorGraphEdgesAsync(
+            "actor-graph",
+            take: 50,
+            options: new WorkflowActorGraphQueryOptions
+            {
+                Direction = WorkflowActorGraphDirection.Inbound,
+            });
+        inbound.Should().ContainSingle();
+        inbound[0].EdgeId.Should().Be("edge-in-child");
+
+        var both = await reader.GetActorGraphEdgesAsync("actor-graph", take: 50);
+        both.Should().HaveCount(3);
+
+        var emptyActor = await reader.GetActorGraphEdgesAsync("   ", take: 50);
+        emptyActor.Should().BeEmpty();
+
+        var subgraph = await reader.GetActorGraphSubgraphAsync(
+            "actor-graph",
+            depth: 0,
+            take: 0,
+            options: new WorkflowActorGraphQueryOptions
+            {
+                Direction = WorkflowActorGraphDirection.Both,
+                EdgeTypes = [WorkflowExecutionGraphConstants.EdgeTypeChildOf],
+            });
+        subgraph.RootNodeId.Should().Be("actor-graph");
+        subgraph.Edges.Should().HaveCount(1);
+        subgraph.Edges.Should().OnlyContain(x => x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf);
+        subgraph.Nodes.Should().Contain(x => x.NodeId == "actor-graph");
+    }
+
+    [Fact]
+    public async Task QueryReader_GetActorGraphEnrichedSnapshotAsync_ShouldReturnNullForMissingSnapshot_AndComposeWhenExists()
+    {
+        var store = CreateStore();
+        var graphStore = new InMemoryProjectionGraphStore();
+        var reader = new WorkflowProjectionQueryReader(
+            store,
+            new WorkflowExecutionReadModelMapper(),
+            graphStore);
+
+        var missing = await reader.GetActorGraphEnrichedSnapshotAsync("missing");
+        missing.Should().BeNull();
+
+        var now = DateTimeOffset.UtcNow;
+        await store.UpsertAsync(new WorkflowExecutionReport
+        {
+            RootActorId = "actor-enriched",
+            WorkflowName = "wf-enriched",
+            CommandId = "cmd-enriched",
+            StartedAt = now,
+            Summary = new WorkflowExecutionSummary
+            {
+                TotalSteps = 1,
+                RequestedSteps = 1,
+                CompletedSteps = 1,
+                RoleReplyCount = 0,
+            },
+        });
+        await graphStore.UpsertNodeAsync(new ProjectionGraphNode
+        {
+            Scope = WorkflowExecutionGraphConstants.Scope,
+            NodeId = "actor-enriched",
+            NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
+            UpdatedAt = now,
+        });
+
+        var enriched = await reader.GetActorGraphEnrichedSnapshotAsync("actor-enriched");
+        enriched.Should().NotBeNull();
+        enriched!.Snapshot.ActorId.Should().Be("actor-enriched");
+        enriched.Subgraph.RootNodeId.Should().Be("actor-enriched");
+        enriched.Subgraph.Nodes.Should().ContainSingle(x => x.NodeId == "actor-enriched");
+    }
+
+    [Fact]
+    public async Task QueryReader_ListSnapshotsAndTimeline_ShouldClampTakeAndHandleMissingActor()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var store = CreateStore();
+        await store.UpsertAsync(new WorkflowExecutionReport
+        {
+            RootActorId = "actor-a",
+            WorkflowName = "wf",
+            CommandId = "cmd-a",
+            StartedAt = now.AddMinutes(-2),
+            Timeline =
+            [
+                new WorkflowExecutionTimelineEvent
+                {
+                    Timestamp = now.AddMinutes(-1),
+                    Stage = "s-1",
+                    Data = new Dictionary<string, string>(StringComparer.Ordinal) { ["k"] = "v" },
+                },
+            ],
+            Summary = new WorkflowExecutionSummary(),
+        });
+        await store.UpsertAsync(new WorkflowExecutionReport
+        {
+            RootActorId = "actor-b",
+            WorkflowName = "wf",
+            CommandId = "cmd-b",
+            StartedAt = now.AddMinutes(-1),
+            Summary = new WorkflowExecutionSummary(),
+        });
+
+        var reader = new WorkflowProjectionQueryReader(
+            store,
+            new WorkflowExecutionReadModelMapper(),
+            new InMemoryProjectionGraphStore());
+
+        var minTake = await reader.ListActorSnapshotsAsync(take: 0);
+        minTake.Should().HaveCount(1);
+
+        var maxTake = await reader.ListActorSnapshotsAsync(take: 9999);
+        maxTake.Should().HaveCount(2);
+
+        var missingTimeline = await reader.ListActorTimelineAsync("missing", take: 10);
+        missingTimeline.Should().BeEmpty();
+
+        var timeline = await reader.ListActorTimelineAsync("actor-a", take: 10);
+        timeline.Should().ContainSingle();
+        timeline[0].Data.Should().ContainKey("k").WhoseValue.Should().Be("v");
+    }
+
+    [Fact]
+    public void ReadModelMapper_ShouldMapSnapshotTimelineAndGraphModels_WithCopiedDictionaries()
+    {
+        var mapper = new WorkflowExecutionReadModelMapper();
+        var now = DateTimeOffset.UtcNow;
+        var report = new WorkflowExecutionReport
+        {
+            RootActorId = "actor-map",
+            WorkflowName = "wf-map",
+            CommandId = "cmd-map",
+            LastEventId = "evt-map",
+            UpdatedAt = now,
+            Success = true,
+            FinalOutput = "ok",
+            FinalError = "",
+            Summary = new WorkflowExecutionSummary
+            {
+                TotalSteps = 3,
+                RequestedSteps = 3,
+                CompletedSteps = 3,
+                RoleReplyCount = 2,
+            },
+        };
+        var snapshot = mapper.ToActorSnapshot(report);
+        snapshot.ActorId.Should().Be("actor-map");
+        snapshot.WorkflowName.Should().Be("wf-map");
+        snapshot.LastCommandId.Should().Be("cmd-map");
+        snapshot.LastEventId.Should().Be("evt-map");
+        snapshot.LastSuccess.Should().BeTrue();
+        snapshot.LastOutput.Should().Be("ok");
+        snapshot.TotalSteps.Should().Be(3);
+        snapshot.RoleReplyCount.Should().Be(2);
+
+        var timelineSource = new WorkflowExecutionTimelineEvent
+        {
+            Timestamp = now,
+            Stage = "stage-map",
+            Message = "msg-map",
+            AgentId = "agent-map",
+            StepId = "step-map",
+            StepType = "type-map",
+            EventType = "evt-map",
+            Data = new Dictionary<string, string>(StringComparer.Ordinal) { ["x"] = "1" },
+        };
+        var timeline = mapper.ToActorTimelineItem(timelineSource);
+        timeline.Stage.Should().Be("stage-map");
+        timeline.Data.Should().ContainKey("x").WhoseValue.Should().Be("1");
+        timeline.Data.Should().NotBeSameAs(timelineSource.Data);
+
+        var graphNodeSource = new ProjectionGraphNode
+        {
+            Scope = WorkflowExecutionGraphConstants.Scope,
+            NodeId = "n-1",
+            NodeType = "Actor",
+            UpdatedAt = now,
+            Properties = new Dictionary<string, string>(StringComparer.Ordinal) { ["p"] = "v" },
+        };
+        var graphEdgeSource = new ProjectionGraphEdge
+        {
+            Scope = WorkflowExecutionGraphConstants.Scope,
+            EdgeId = "e-1",
+            FromNodeId = "n-1",
+            ToNodeId = "n-2",
+            EdgeType = WorkflowExecutionGraphConstants.EdgeTypeOwns,
+            UpdatedAt = now,
+            Properties = new Dictionary<string, string>(StringComparer.Ordinal) { ["q"] = "w" },
+        };
+
+        var graphNode = mapper.ToActorGraphNode(graphNodeSource);
+        graphNode.NodeId.Should().Be("n-1");
+        graphNode.Properties.Should().ContainKey("p").WhoseValue.Should().Be("v");
+        graphNode.Properties.Should().NotBeSameAs(graphNodeSource.Properties);
+
+        var graphEdge = mapper.ToActorGraphEdge(graphEdgeSource);
+        graphEdge.EdgeId.Should().Be("e-1");
+        graphEdge.Properties.Should().ContainKey("q").WhoseValue.Should().Be("w");
+        graphEdge.Properties.Should().NotBeSameAs(graphEdgeSource.Properties);
+
+        var subgraph = mapper.ToActorGraphSubgraph("root-map", new ProjectionGraphSubgraph
+        {
+            Nodes = [graphNodeSource],
+            Edges = [graphEdgeSource],
+        });
+        subgraph.RootNodeId.Should().Be("root-map");
+        subgraph.Nodes.Should().ContainSingle(x => x.NodeId == "n-1");
+        subgraph.Edges.Should().ContainSingle(x => x.EdgeId == "e-1");
+    }
+
+    [Fact]
     public async Task SinkSubscriptionManager_ShouldReplaceSameSinkSubscription()
     {
         var hub = new RecordingRunEventHub();
@@ -184,17 +479,17 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
         await manager.AttachOrReplaceAsync(lease, sink, _ => ValueTask.CompletedTask);
         var first = hub.Subscriptions.Should().ContainSingle().Subject;
-        manager.GetSubscriptionCount(lease).Should().Be(1);
+        lease.GetLiveSinkSubscriptionCount().Should().Be(1);
 
         await manager.AttachOrReplaceAsync(lease, sink, _ => ValueTask.CompletedTask);
         hub.Subscriptions.Should().HaveCount(2);
         first.Disposed.Should().BeTrue();
-        manager.GetSubscriptionCount(lease).Should().Be(1);
+        lease.GetLiveSinkSubscriptionCount().Should().Be(1);
 
         var second = hub.Subscriptions[1];
         await manager.DetachAsync(lease, sink);
         second.Disposed.Should().BeTrue();
-        manager.GetSubscriptionCount(lease).Should().Be(0);
+        lease.GetLiveSinkSubscriptionCount().Should().Be(0);
     }
 
     [Fact]
@@ -248,14 +543,12 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     public async Task ReleaseService_WhenNoLiveSink_ShouldStopMarkAndRelease()
     {
         var lifecycle = new RecordingLifecycleService();
-        var sinkManager = new RecordingSinkSubscriptionManager();
         var readModelUpdater = new RecordingReadModelUpdater();
         var ownership = new TrackingOwnershipCoordinator();
         var releaseService = new WorkflowProjectionReleaseService(
             lifecycle,
-            sinkManager,
             readModelUpdater,
-            new WorkflowProjectionLeaseManager(ownership));
+            ownership);
         var lease = CreateLease("actor-release", "cmd-release");
 
         await releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None);
@@ -269,15 +562,16 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     public async Task ReleaseService_WhenLiveSinkExists_ShouldSkipStopAndRelease()
     {
         var lifecycle = new RecordingLifecycleService();
-        var sinkManager = new RecordingSinkSubscriptionManager { SubscriptionCount = 1 };
         var readModelUpdater = new RecordingReadModelUpdater();
         var ownership = new TrackingOwnershipCoordinator();
         var releaseService = new WorkflowProjectionReleaseService(
             lifecycle,
-            sinkManager,
             readModelUpdater,
-            new WorkflowProjectionLeaseManager(ownership));
+            ownership);
         var lease = CreateLease("actor-busy", "cmd-busy");
+        lease.AttachOrReplaceLiveSinkSubscription(
+            new NoopRunEventSink(),
+            new TrackingSubscription());
 
         await releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None);
 
@@ -328,6 +622,11 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         policy.Calls.Should().ContainSingle();
     }
 
+    private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
+        keySelector: report => report.RootActorId,
+        keyFormatter: key => key,
+        listSortSelector: report => report.StartedAt);
+
     private static WorkflowExecutionRuntimeLease CreateLease(string actorId, string commandId) => new(
         new WorkflowExecutionProjectionContext
         {
@@ -369,9 +668,9 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         public DateTimeOffset UtcNow { get; }
     }
 
-    private sealed class RecordingSinkSubscriptionManager : IWorkflowProjectionSinkSubscriptionManager
+    private sealed class RecordingSinkSubscriptionManager
+        : IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent>
     {
-        public int SubscriptionCount { get; set; }
         public int DetachCalls { get; private set; }
 
         public Task AttachOrReplaceAsync(
@@ -399,11 +698,6 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             return Task.CompletedTask;
         }
 
-        public int GetSubscriptionCount(WorkflowExecutionRuntimeLease lease)
-        {
-            _ = lease;
-            return SubscriptionCount;
-        }
     }
 
     private sealed class RecordingReadModelUpdater : IWorkflowProjectionReadModelUpdater

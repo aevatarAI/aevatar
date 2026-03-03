@@ -1,23 +1,24 @@
 # Aevatar.Workflow.Infrastructure
 
-`Aevatar.Workflow.Infrastructure` 提供 Workflow 应用层端口的基础设施实现（文件系统、工件落盘、启动装配）。
+工作流基础设施层。提供文件系统加载、报告工件落盘、宿主启动装配等 IO 相关实现。
 
-## 当前实现
+## 目录结构
 
-- `Reporting/FileSystemWorkflowExecutionReportArtifactSink`
-  - 实现 `IWorkflowExecutionReportArtifactSink`。
-  - 将 `WorkflowRunReport` 输出为 JSON/HTML 工件。
-- `Reporting/WorkflowExecutionReportWriter`
-  - 报告序列化与 HTML 渲染。
-- `Workflows/WorkflowDefinitionFileLoader`
-  - 从目录加载 `*.yaml/*.yml` 并注册到 `IWorkflowDefinitionRegistry`。
-  - 对重复 workflow 名称执行 fail-fast（抛异常，阻止静默覆盖）。
-- `Workflows/WorkflowDefinitionBootstrapHostedService`
-  - 宿主启动时自动加载 workflow 文件源。
-- `CapabilityApi/*`
-  - Workflow 能力 API 定义（`/api/chat`、`/api/ws/chat`、`/api/actors/*` 等）与协议适配实现。
+```
+Aevatar.Workflow.Infrastructure/
+├── DependencyInjection/
+│   └── ServiceCollectionExtensions.cs            # AddWorkflowInfrastructure() / AddWorkflowDefinitionFileSource()
+├── Workflows/
+│   ├── WorkflowDefinitionFileLoader.cs           # 扫描目录、加载 YAML、注册 workflow
+│   ├── WorkflowDefinitionBootstrapHostedService.cs # IHostedService：启动时自动加载
+│   └── WorkflowDefinitionFileSourceOptions.cs    # 配置：扫描目录列表
+└── Reporting/
+    ├── FileSystemWorkflowExecutionReportArtifactSink.cs # IWorkflowExecutionReportArtifactSink 文件系统实现
+    ├── WorkflowExecutionReportWriter.cs                 # JSON/HTML 报告生成
+    └── WorkflowExecutionReportArtifactOptions.cs        # 配置：输出目录
+```
 
-## DI 扩展
+## 核心组件
 
 - `AddWorkflowInfrastructure(...)`
   - 注册报告工件 sink。
@@ -25,27 +26,65 @@
   - 注册 workflow 文件源与启动加载 HostedService。
 - `AddWorkflowCapability(IServiceCollection, IConfiguration)`
   - 能力一键组合（Application + Projection + AGUIAdapter + Infrastructure + workflow 文件源）。
+  - 不负责具体 ReadModel Provider 注册（Provider 组合下沉到 Host/Extensions 层）。
 - `AddWorkflowCapability(WebApplicationBuilder)`
   - Host 侧一行接入 Workflow 能力（服务注册 + 能力端点声明）。
 - `Aevatar.Workflow.Extensions.Hosting.AddWorkflowCapabilityWithAIDefaults(WebApplicationBuilder)`
   - 在 Host 入口统一装配 Workflow capability + AI features + AI projection extension（推荐用于生产组合入口）。
+  - 默认同时注册 Workflow 读模型 Provider（InMemory/Elasticsearch/Neo4j）。
 - `MapWorkflowCapabilityEndpoints(...)`
   - 将 Workflow 能力 API 端点挂载到 Host（默认由 `UseAevatarDefaultHost()` 自动调用能力映射链路）。
 
 ## 配置
 
-- `WorkflowExecutionReportArtifacts:OutputDirectory`
-  - 报告输出目录，默认 `artifacts/workflow-executions`。
-- `WorkflowDefinitionFileSource:WorkflowDirectories`
-  - workflow 定义扫描目录列表。
-  - 未知 YAML 字段与重复 workflow 名称会在启动期触发失败，避免运行时暴露配置问题。
+### 报告工件
 
-## API 语义约束
+`WorkflowExecutionReportArtifacts` section：
 
-- 一个 workflow 对应一个 actor，actor 绑定 workflow 后不可切换。
-- 当请求携带 `actorId` 时，表示在该 actor 上继续运行；`workflow` 必须为空或与已绑定 workflow 一致。
-- 若要运行另一个 workflow，必须创建新 actor（不复用旧 `actorId`）。
+| 选项 | 默认 | 说明 |
+|------|------|------|
+| `OutputDirectory` | `artifacts/workflow-executions` | 报告输出目录 |
 
-## 分层说明
+### Workflow 文件源
 
-本项目是 workflow 能力的组合层，按宿主场景装配 `Application/Projection/Adapter/Infrastructure`。
+`WorkflowDefinitionFileSource` section：
+
+| 选项 | 默认 | 说明 |
+|------|------|------|
+| `WorkflowDirectories` | `[]` | workflow YAML 扫描目录列表 |
+
+## DI 入口
+
+```csharp
+// 注册报告落盘（Replace Application 层的 Noop 默认）
+services.AddWorkflowInfrastructure(opt =>
+{
+    opt.OutputDirectory = "artifacts/workflow-executions";
+});
+
+// 注册 workflow 文件源 + 启动自动加载
+services.AddWorkflowDefinitionFileSource(opt =>
+{
+    opt.WorkflowDirectories.Add("workflows/");
+    opt.WorkflowDirectories.Add(Path.Combine(homeDir, ".aevatar/workflows"));
+});
+```
+
+`AddWorkflowInfrastructure` 使用 `Replace` 将 Application 层注册的 `NoopWorkflowExecutionReportArtifactSink` 替换为 `FileSystemWorkflowExecutionReportArtifactSink`。
+
+## 分层边界
+
+- 依赖 `Aevatar.Workflow.Application.Abstractions`（端口接口）
+- 依赖 `Aevatar.Configuration`（配置模型）
+- 不依赖 `Aevatar.Workflow.Application` 实现
+- 不依赖 `Aevatar.Workflow.Core`
+- 只做 IO 与启动装配，不承载业务逻辑
+
+## 依赖
+
+- `Aevatar.Workflow.Application.Abstractions`
+- `Aevatar.Configuration`
+- `Microsoft.Extensions.DependencyInjection.Abstractions`
+- `Microsoft.Extensions.Hosting.Abstractions`
+- `Microsoft.Extensions.Logging.Abstractions`
+- `Microsoft.Extensions.Options`

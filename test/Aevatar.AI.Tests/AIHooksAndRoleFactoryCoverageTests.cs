@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Hooks.BuiltIn;
@@ -8,6 +10,8 @@ using Aevatar.AI.Core.Routing;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Hooks;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -95,6 +99,9 @@ public class AIHooksAndRoleFactoryCoverageTests
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
         services.AddSingleton<IEventModuleFactory, StubEventModuleFactory>();
+        services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         await using var provider = services.BuildServiceProvider();
 
         var agent = CreateRoleAgent(provider);
@@ -124,6 +131,9 @@ public class AIHooksAndRoleFactoryCoverageTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
+        services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         await using var provider = services.BuildServiceProvider();
 
         var cfg = new RoleYamlConfig
@@ -145,6 +155,76 @@ public class AIHooksAndRoleFactoryCoverageTests
 
         agent.RoleName.Should().Be("worker");
         agent.GetModules().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void RoleConfigurationNormalizer_ShouldPreferTopLevelEventFieldsOverExtensions()
+    {
+        var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
+        {
+            Id = "planner",
+            Name = "Planner",
+            EventModules = "top_module",
+            EventRoutes = "event.type == DemoEvent -> top_module",
+            Extensions = new RoleExtensionsInput
+            {
+                EventModules = "ext_module",
+                EventRoutes = "event.type == DemoEvent -> ext_module",
+            },
+            Connectors = ["a", "A", "  ", "b"],
+        });
+
+        normalized.Id.Should().Be("planner");
+        normalized.Name.Should().Be("Planner");
+        normalized.EventModules.Should().Be("top_module");
+        normalized.EventRoutes.Should().Be("event.type == DemoEvent -> top_module");
+        normalized.Connectors.Should().BeEquivalentTo(["a", "A", "  ", "b"]);
+    }
+
+    [Fact]
+    public async Task RoleGAgentFactory_ShouldReuseNormalizerAndApplyTopLevelRoleFields()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
+        services.AddSingleton<IEventModuleFactory, StubEventModuleFactory>();
+        services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+        await using var provider = services.BuildServiceProvider();
+
+        var cfg = new RoleYamlConfig
+        {
+            Name = "worker",
+            SystemPrompt = "prompt",
+            Provider = "stub",
+            Model = "model-x",
+            Temperature = 0.4,
+            MaxTokens = 128,
+            MaxToolRounds = 2,
+            MaxHistoryMessages = 8,
+            StreamBufferCapacity = 32,
+            EventModules = "routable",
+            EventRoutes = "event.type == DemoEvent -> routable",
+            Extensions = new RoleYamlExtensions
+            {
+                EventModules = "bypass",
+                EventRoutes = "event.type == DemoEvent -> bypass",
+            },
+        };
+
+        var agent = CreateRoleAgent(provider);
+        await RoleGAgentFactory.ApplyConfig(agent, cfg, provider);
+
+        agent.RoleName.Should().Be("worker");
+        agent.Config.Temperature.Should().Be(0.4);
+        agent.Config.MaxTokens.Should().Be(128);
+        agent.Config.MaxToolRounds.Should().Be(2);
+        agent.Config.MaxHistoryMessages.Should().Be(8);
+        agent.Config.StreamBufferCapacity.Should().Be(32);
+
+        var modules = agent.GetModules();
+        modules.Should().HaveCount(1);
+        modules.Should().ContainSingle(m => m.Name == "routable" && m is RoutedEventModule);
     }
 
     private sealed class MinimalHook : IAIGAgentExecutionHook
@@ -217,5 +297,9 @@ public class AIHooksAndRoleFactoryCoverageTests
             provider.GetServices<IAgentRunMiddleware>(),
             provider.GetServices<IToolCallMiddleware>(),
             provider.GetServices<ILLMCallMiddleware>(),
-            provider.GetServices<IAgentToolSource>());
+            provider.GetServices<IAgentToolSource>())
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+        };
 }

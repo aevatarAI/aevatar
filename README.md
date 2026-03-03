@@ -92,7 +92,7 @@ curl -X POST http://localhost:5000/api/chat \
 | Orleans Transport | `ActorRuntime:Provider=Orleans` 默认仍走内置链路；可选 `ActorRuntime:Transport=Kafka` 启用 MassTransit/Kafka 传输插件。 | 生产按部署拓扑启用可插拔 transport，并统一由 stream/queue 层承载跨节点转发。 |
 | Projection 启动并发（Ensure/Release） | 已由 `projection:{rootActorId}` 投影协调 Actor 串行裁决，不再依赖进程内 `SemaphoreSlim`。 | 分布式 Runtime 下继续依赖“同一 actorId 单激活 + 邮箱串行”保证并发互斥。 |
 | LiveSink 绑定（Attach/Detach） | 已通过 `workflow-run:{actorId}:{commandId}` 事件流订阅/退订；不再依赖 `ProjectionContext` 内存 sink 列表。 | 在分布式 stream provider 下天然支持跨节点推送；生产需保障 provider 可用性与顺序语义。 |
-| ReadModel 存储 | Workflow 默认 `InMemoryWorkflowExecutionReadModelStore`，可替换。 | 生产默认切换到持久化读模型存储，实现跨节点一致读。 |
+| ReadModel 存储 | 默认通过 `Aevatar.CQRS.Projection.Providers.InMemory` 注册通用 InMemory Store，可按 Provider 机制替换。 | 生产默认切换到持久化读模型 Provider，实现跨节点一致读。 |
 | 审计评分口径 | 以“当前已落地代码”为准评分。 | 目标态能力上线后，评分按实现结果重新审计。 |
 
 下面这张图概括了「宿主（API + 运行时 + LLM + Connector）」与「Agent 树 + 工作流步骤」的关系。
@@ -273,40 +273,63 @@ sequenceDiagram
 
 ---
 
-## 仓库结构（按需查阅）
+## 代码组织与职责边界（重点）
 
-```
-aevatar/
-├── docs/
-│   ├── FOUNDATION.md       # 底层事件与 Pipeline 设计
-│   ├── PROJECT_ARCHITECTURE.md # 系统分层、能力装配、目标架构
-│   ├── CQRS_ARCHITECTURE.md # CQRS 与统一投影链路
-│   ├── ROLE.md             # Role、Workflow YAML、Connector 与外部服务
-│   ├── DISTRIBUTED_RUNTIME_PERSISTENCE_PLAN.md # 分布式 Runtime 与持久化演进
-│   └── EVENT_SOURCING.md   # Event Sourcing 使用说明
-├── workflows/              # 示例工作流（simple_qa、summarize、brainstorm）
-├── src/
-│   ├── Aevatar.Mainnet.Host.Api # 默认统一入口（内置 Workflow 能力）
-│   ├── workflow/Aevatar.Workflow.Host.Api # Workflow 独立宿主
-│   ├── workflow/extensions/Aevatar.Workflow.Extensions.Maker # Maker 插件（workflow 扩展）
-│   ├── Aevatar.Bootstrap   # 统一宿主装配与能力接入
-│   ├── workflow/Aevatar.Workflow.Abstractions # 工作流执行事件抽象契约
-│   ├── workflow/Aevatar.Workflow.Core   # 工作流引擎与内置步骤模块
-│   ├── Aevatar.AI.Core     # 角色 Agent 与 LLM 集成
-│   ├── Aevatar.Foundation.Runtime  # 运行时（事件路由、存储、流）
-│   ├── Aevatar.Foundation.Core     # Agent 基类与事件管道
-│   ├── Aevatar.Foundation.Abstractions # 接口与契约
-│   ├── Aevatar.Configuration  # 配置与 Connector 模型
-│   └── Aevatar.AI.LLMProviders.MEAI / Aevatar.AI.ToolProviders.MCP / Aevatar.AI.ToolProviders.Skills  # LLM 与工具扩展
-├── tools/
-│   └── Aevatar.Tools.Config  # aevatar-config（Web 界面配置 API Key）
-├── demos/
-│   ├── Aevatar.Demos.Cli    # Runtime CLI 演示
-│   └── Aevatar.Demos.Maker  # MAKER 模式示例（自定义步骤 + Connector）
-└── test/                   # 测试
-```
+### 分层口径（对应代码组织）
 
-你主要会接触：**workflows/**（改或加 YAML）、**src/Aevatar.Mainnet.Host.Api** 或 **src/workflow/Aevatar.Workflow.Host.Api**（启动服务）、**~/.aevatar/**（配置与 Connector）。其余目录在二次开发或排查问题时再看不迟。
+| 层 | 主要项目 | 职责 | 边界约束 |
+|---|---|---|---|
+| **Domain / Core** | `Aevatar.Foundation.Abstractions` / `Aevatar.Foundation.Core` / `Aevatar.AI.Abstractions` / `Aevatar.AI.Core` / `workflow/Aevatar.Workflow.Core` / `workflow/Aevatar.Workflow.Abstractions` | 领域语义、执行原语、事件与状态模型、工作流步骤模块 | 不放协议适配与宿主编排；`Workflow.Core` 不反向依赖 `AI.Core` |
+| **Application** | `workflow/Aevatar.Workflow.Application.Abstractions` / `workflow/Aevatar.Workflow.Application` / `Aevatar.CQRS.Core*` | 命令执行编排、查询服务、应用层端口 | 通过抽象依赖 Domain/Projection，不直接耦合 Host 细节 |
+| **Projection / Read Side** | `Aevatar.CQRS.Projection.*` / `Aevatar.Foundation.Projection` / `Aevatar.AI.Projection` / `workflow/Aevatar.Workflow.Projection` | 统一事件投影、ReadModel 更新、查询输入 | CQRS 与 AGUI 共享同一投影输入链路，避免双轨 |
+| **Infrastructure** | `workflow/Aevatar.Workflow.Infrastructure` / `workflow/Aevatar.Workflow.Presentation.AGUIAdapter` / `Aevatar.Configuration` / `Aevatar.Foundation.Runtime.*` | 持久化、外部 I/O 适配、运行时实现、AGUI 映射 | 不承载业务编排事实态（run/session/actor 映射） |
+| **Host / Composition** | `Aevatar.Mainnet.Host.Api` / `workflow/Aevatar.Workflow.Host.Api` / `Aevatar.Hosting` / `Aevatar.Bootstrap*` | 协议适配（HTTP/SSE/WS）、DI 组合、能力装配 | Host 只做宿主与组合，不承载核心业务流程 |
+
+### 模块地图（按能力）
+
+- **Foundation 内核与运行时**
+  - `src/Aevatar.Foundation.Abstractions`：基础契约（Agent/Actor/Event/Store）
+  - `src/Aevatar.Foundation.Core`：`GAgentBase`、事件管线、上下文与状态守卫
+  - `src/Aevatar.Foundation.Runtime`：本地运行时、路由、流、存储
+  - `src/Aevatar.Foundation.Runtime.*`：Orleans/Streaming/Transport/Hosting 实现与装配
+- **AI 能力层**
+  - `src/Aevatar.AI.Abstractions`：LLM/Tool/Middleware 抽象
+  - `src/Aevatar.AI.Core`：ChatRuntime、ToolLoop、可观测性中间件
+  - `src/Aevatar.AI.LLMProviders.*`：LLM Provider 实现
+  - `src/Aevatar.AI.ToolProviders.*`：MCP/Skills 工具提供者
+- **CQRS 与投影内核**
+  - `src/Aevatar.CQRS.Core*`：命令执行基础设施
+  - `src/Aevatar.CQRS.Projection.*`：通用投影协调、订阅、生命周期
+  - `src/Aevatar.Foundation.Projection` / `src/Aevatar.AI.Projection`：通用读侧模型与 AI 投影能力
+- **Workflow 主能力**
+  - `src/workflow/Aevatar.Workflow.Core`：工作流引擎与步骤模块（`workflow_loop`、`llm_call`、`parallel`、`vote`、`connector_call` 等）
+  - `src/workflow/Aevatar.Workflow.Application*`：Run 请求编排、输出流聚合、查询服务
+  - `src/workflow/Aevatar.Workflow.Projection`：Workflow read model 与实时输出事件
+  - `src/workflow/Aevatar.Workflow.Infrastructure`：Workflow 的基础设施实现
+  - `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter`：EventEnvelope -> AGUI 事件映射
+- **Workflow 扩展（插件）**
+  - `src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`：Maker 扩展模块
+  - `src/workflow/extensions/Aevatar.Workflow.Extensions.AIProjection`：AI 投影扩展
+  - `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting`：Workflow Hosting 扩展装配
+- **宿主与统一入口**
+  - `src/Aevatar.Mainnet.Host.Api`：默认统一入口（组合 Workflow 能力和扩展）
+  - `src/workflow/Aevatar.Workflow.Host.Api`：Workflow 独立宿主（能力隔离入口）
+  - `src/Aevatar.Bootstrap` / `src/Aevatar.Bootstrap.Extensions.AI`：能力装配入口
+- **配套目录**
+  - `workflows/`：YAML 工作流定义
+  - `tools/Aevatar.Tools.Config`：本地配置工具
+  - `demos/`：演示工程
+  - `test/`：单元、集成、宿主测试
+
+### 依赖边界速记
+
+- 主链路统一为 `Command -> Event -> Projection -> ReadModel`。
+- 编排能力统一落在 workflow 模块，不在 Foundation 维护第二套独立编排实现。
+- Host/API 只做协议适配与能力组合，不直接写业务编排逻辑。
+- Projection 相关运行态由 Actor/分布式状态承载，避免中间层进程内事实态字典。
+- 扩展（如 Maker）通过插件挂载，不允许 Workflow 主能力反向依赖扩展。
+
+你主要会接触：**`workflows/`**（改或加 YAML）、**`src/Aevatar.Mainnet.Host.Api`** 或 **`src/workflow/Aevatar.Workflow.Host.Api`**（启动服务）、**`~/.aevatar/`**（配置与 Connector）。其余目录在二次开发或排查问题时按上面模块地图定位即可。
 
 ---
 

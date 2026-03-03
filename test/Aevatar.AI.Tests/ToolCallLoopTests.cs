@@ -131,7 +131,18 @@ public class ToolCallLoopTests
         ]);
         var tools = new ToolManager();
         tools.Register(new DelegateTool("echo", _ => "{}"));
-        var loop = new ToolCallLoop(tools);
+        var hook = new RecordingHook();
+        var llmMiddlewareCalls = 0;
+        var llmMiddleware = new DelegateLlmCallMiddleware(async (_, next) =>
+        {
+            llmMiddlewareCalls++;
+            await next();
+        });
+        var loop = new ToolCallLoop(
+            tools,
+            hooks: new AgentHookPipeline([hook]),
+            toolMiddlewares: [],
+            llmMiddlewares: [llmMiddleware]);
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
         var request = new LLMRequest { Messages = [], Tools = null };
 
@@ -140,6 +151,12 @@ public class ToolCallLoopTests
         result.Should().BeNull();
         messages.Count(m => m.Role == "assistant" && m.ToolCalls?.Count == 1).Should().Be(1);
         messages.Should().ContainSingle(m => m.Role == "tool");
+        // Final call should have been made without tools
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].Tools.Should().BeNull();
+        llmMiddlewareCalls.Should().Be(2);
+        hook.LlmStartCount.Should().Be(2);
+        hook.LlmEndCount.Should().Be(2);
     }
 
     [Fact]
@@ -262,6 +279,12 @@ public class ToolCallLoopTests
         Func<ToolCallContext, Func<Task>, Task> handler) : IToolCallMiddleware
     {
         public Task InvokeAsync(ToolCallContext context, Func<Task> next) => handler(context, next);
+    }
+
+    private sealed class DelegateLlmCallMiddleware(
+        Func<LLMCallContext, Func<Task>, Task> handler) : ILLMCallMiddleware
+    {
+        public Task InvokeAsync(LLMCallContext context, Func<Task> next) => handler(context, next);
     }
 
     private sealed class RecordingHook : IAIGAgentExecutionHook

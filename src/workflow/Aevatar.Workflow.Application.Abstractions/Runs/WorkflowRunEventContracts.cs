@@ -12,14 +12,14 @@ public abstract record WorkflowRunEvent
 
 public sealed record WorkflowRunStartedEvent : WorkflowRunEvent
 {
-    public override string Type => "RUN_STARTED";
+    public override string Type => WorkflowRunEventTypes.RunStarted;
 
     public required string ThreadId { get; init; }
 }
 
 public sealed record WorkflowRunFinishedEvent : WorkflowRunEvent
 {
-    public override string Type => "RUN_FINISHED";
+    public override string Type => WorkflowRunEventTypes.RunFinished;
 
     public required string ThreadId { get; init; }
 
@@ -28,7 +28,7 @@ public sealed record WorkflowRunFinishedEvent : WorkflowRunEvent
 
 public sealed record WorkflowRunErrorEvent : WorkflowRunEvent
 {
-    public override string Type => "RUN_ERROR";
+    public override string Type => WorkflowRunEventTypes.RunError;
 
     public required string Message { get; init; }
 
@@ -37,21 +37,21 @@ public sealed record WorkflowRunErrorEvent : WorkflowRunEvent
 
 public sealed record WorkflowStepStartedEvent : WorkflowRunEvent
 {
-    public override string Type => "STEP_STARTED";
+    public override string Type => WorkflowRunEventTypes.StepStarted;
 
     public required string StepName { get; init; }
 }
 
 public sealed record WorkflowStepFinishedEvent : WorkflowRunEvent
 {
-    public override string Type => "STEP_FINISHED";
+    public override string Type => WorkflowRunEventTypes.StepFinished;
 
     public required string StepName { get; init; }
 }
 
 public sealed record WorkflowTextMessageStartEvent : WorkflowRunEvent
 {
-    public override string Type => "TEXT_MESSAGE_START";
+    public override string Type => WorkflowRunEventTypes.TextMessageStart;
 
     public required string MessageId { get; init; }
 
@@ -60,7 +60,7 @@ public sealed record WorkflowTextMessageStartEvent : WorkflowRunEvent
 
 public sealed record WorkflowTextMessageContentEvent : WorkflowRunEvent
 {
-    public override string Type => "TEXT_MESSAGE_CONTENT";
+    public override string Type => WorkflowRunEventTypes.TextMessageContent;
 
     public required string MessageId { get; init; }
 
@@ -69,21 +69,21 @@ public sealed record WorkflowTextMessageContentEvent : WorkflowRunEvent
 
 public sealed record WorkflowTextMessageEndEvent : WorkflowRunEvent
 {
-    public override string Type => "TEXT_MESSAGE_END";
+    public override string Type => WorkflowRunEventTypes.TextMessageEnd;
 
     public required string MessageId { get; init; }
 }
 
 public sealed record WorkflowStateSnapshotEvent : WorkflowRunEvent
 {
-    public override string Type => "STATE_SNAPSHOT";
+    public override string Type => WorkflowRunEventTypes.StateSnapshot;
 
     public required object Snapshot { get; init; }
 }
 
 public sealed record WorkflowToolCallStartEvent : WorkflowRunEvent
 {
-    public override string Type => "TOOL_CALL_START";
+    public override string Type => WorkflowRunEventTypes.ToolCallStart;
 
     public required string ToolCallId { get; init; }
 
@@ -92,7 +92,7 @@ public sealed record WorkflowToolCallStartEvent : WorkflowRunEvent
 
 public sealed record WorkflowToolCallEndEvent : WorkflowRunEvent
 {
-    public override string Type => "TOOL_CALL_END";
+    public override string Type => WorkflowRunEventTypes.ToolCallEnd;
 
     public required string ToolCallId { get; init; }
 
@@ -101,7 +101,7 @@ public sealed record WorkflowToolCallEndEvent : WorkflowRunEvent
 
 public sealed record WorkflowCustomEvent : WorkflowRunEvent
 {
-    public override string Type => "CUSTOM";
+    public override string Type => WorkflowRunEventTypes.Custom;
 
     public required string Name { get; init; }
 

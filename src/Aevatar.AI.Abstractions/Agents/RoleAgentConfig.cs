@@ -2,7 +2,7 @@ namespace Aevatar.AI.Abstractions.Agents;
 
 public class RoleAgentConfig
 {
-    public string ProviderName { get; set; } = "deepseek";
+    public string ProviderName { get; set; } = string.Empty;
     public string? Model { get; set; }
     public string SystemPrompt { get; set; } = "";
     public double? Temperature { get; set; }

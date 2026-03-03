@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.Foundation.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.ReadModels;
@@ -21,6 +23,7 @@ public enum WorkflowExecutionCompletionStatus
     Stopped = 4,
     NotFound = 5,
     Disabled = 6,
+    WaitingForSignal = 7,
     Unknown = 99,
 }
 
@@ -30,13 +33,26 @@ public enum WorkflowExecutionCompletionStatus
 public sealed class WorkflowExecutionReport
     : AevatarReadModelBase,
       IHasProjectionTimeline,
-      IHasProjectionRoleReplies
+      IHasProjectionRoleReplies,
+      IGraphReadModel
 {
+    private const string UnknownToken = "unknown";
+
+    public string GraphScope => WorkflowExecutionGraphConstants.Scope;
+
+    public IReadOnlyList<ProjectionGraphNode> GraphNodes => BuildGraphNodes();
+
+    public IReadOnlyList<ProjectionGraphEdge> GraphEdges => BuildGraphEdges();
+
+    public string RootActorId { get; set; } = "";
+    public string CommandId { get; set; } = "";
     public string ReportVersion { get; set; } = "1.0";
     public WorkflowExecutionProjectionScope ProjectionScope { get; set; } = WorkflowExecutionProjectionScope.ActorShared;
     public WorkflowExecutionTopologySource TopologySource { get; set; } = WorkflowExecutionTopologySource.RuntimeSnapshot;
     public WorkflowExecutionCompletionStatus CompletionStatus { get; set; } = WorkflowExecutionCompletionStatus.Unknown;
     public string WorkflowName { get; set; } = "";
+    public DateTimeOffset StartedAt { get; set; }
+    public DateTimeOffset EndedAt { get; set; }
     public double DurationMs { get; set; }
     public bool? Success { get; set; }
     public string Input { get; set; } = "";
@@ -77,6 +93,201 @@ public sealed class WorkflowExecutionReport
             Content = roleReply.Content,
             ContentLength = roleReply.ContentLength,
         });
+    }
+
+    private IReadOnlyList<ProjectionGraphNode> BuildGraphNodes()
+    {
+        var updatedAt = UpdatedAt == default ? DateTimeOffset.UtcNow : UpdatedAt;
+        var rootActorId = NormalizeToken(RootActorId);
+        var runNodeId = BuildRunNodeId(rootActorId, CommandId);
+        var nodes = new Dictionary<string, ProjectionGraphNode>(StringComparer.Ordinal);
+
+        nodes[rootActorId] = new ProjectionGraphNode
+        {
+            Scope = GraphScope,
+            NodeId = rootActorId,
+            NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
+            Properties = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["workflowName"] = WorkflowName ?? "",
+            },
+            UpdatedAt = updatedAt,
+        };
+
+        nodes[runNodeId] = new ProjectionGraphNode
+        {
+            Scope = GraphScope,
+            NodeId = runNodeId,
+            NodeType = WorkflowExecutionGraphConstants.RunNodeType,
+            Properties = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["rootActorId"] = rootActorId,
+                ["workflowName"] = WorkflowName ?? "",
+                ["commandId"] = NormalizeToken(CommandId),
+                ["input"] = Input ?? "",
+            },
+            UpdatedAt = updatedAt,
+        };
+
+        foreach (var step in Steps)
+        {
+            var stepNodeId = BuildStepNodeId(rootActorId, CommandId, step.StepId);
+            nodes[stepNodeId] = new ProjectionGraphNode
+            {
+                Scope = GraphScope,
+                NodeId = stepNodeId,
+                NodeType = WorkflowExecutionGraphConstants.StepNodeType,
+                Properties = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["rootActorId"] = rootActorId,
+                    ["commandId"] = NormalizeToken(CommandId),
+                    ["stepId"] = NormalizeToken(step.StepId),
+                    ["stepType"] = step.StepType ?? "",
+                    ["targetRole"] = step.TargetRole ?? "",
+                    ["workerId"] = step.WorkerId ?? "",
+                    ["success"] = step.Success?.ToString() ?? "",
+                },
+                UpdatedAt = updatedAt,
+            };
+        }
+
+        foreach (var topologyEdge in Topology)
+        {
+            var parentId = NormalizeToken(topologyEdge.Parent);
+            var childId = NormalizeToken(topologyEdge.Child);
+            if (parentId.Length > 0 && !nodes.ContainsKey(parentId))
+            {
+                nodes[parentId] = new ProjectionGraphNode
+                {
+                    Scope = GraphScope,
+                    NodeId = parentId,
+                    NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
+                    Properties = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["workflowName"] = WorkflowName ?? "",
+                    },
+                    UpdatedAt = updatedAt,
+                };
+            }
+
+            if (childId.Length > 0 && !nodes.ContainsKey(childId))
+            {
+                nodes[childId] = new ProjectionGraphNode
+                {
+                    Scope = GraphScope,
+                    NodeId = childId,
+                    NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
+                    Properties = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["workflowName"] = WorkflowName ?? "",
+                    },
+                    UpdatedAt = updatedAt,
+                };
+            }
+        }
+
+        return nodes.Values.ToList();
+    }
+
+    private IReadOnlyList<ProjectionGraphEdge> BuildGraphEdges()
+    {
+        var updatedAt = UpdatedAt == default ? DateTimeOffset.UtcNow : UpdatedAt;
+        var rootActorId = NormalizeToken(RootActorId);
+        var runNodeId = BuildRunNodeId(rootActorId, CommandId);
+        var edges = new Dictionary<string, ProjectionGraphEdge>(StringComparer.Ordinal);
+
+        var ownsEdge = CreateEdge(
+            WorkflowExecutionGraphConstants.EdgeTypeOwns,
+            rootActorId,
+            runNodeId,
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            updatedAt);
+        edges[ownsEdge.EdgeId] = ownsEdge;
+
+        foreach (var step in Steps)
+        {
+            var stepNodeId = BuildStepNodeId(rootActorId, CommandId, step.StepId);
+            var containsEdge = CreateEdge(
+                WorkflowExecutionGraphConstants.EdgeTypeContainsStep,
+                runNodeId,
+                stepNodeId,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["stepId"] = NormalizeToken(step.StepId),
+                    ["stepType"] = step.StepType ?? "",
+                },
+                updatedAt);
+            edges[containsEdge.EdgeId] = containsEdge;
+        }
+
+        foreach (var topologyEdge in Topology)
+        {
+            var parentId = NormalizeToken(topologyEdge.Parent);
+            var childId = NormalizeToken(topologyEdge.Child);
+            if (parentId.Length == 0 || childId.Length == 0)
+                continue;
+
+            var childOfEdge = CreateEdge(
+                WorkflowExecutionGraphConstants.EdgeTypeChildOf,
+                parentId,
+                childId,
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                updatedAt);
+            edges[childOfEdge.EdgeId] = childOfEdge;
+        }
+
+        return edges.Values.ToList();
+    }
+
+    private ProjectionGraphEdge CreateEdge(
+        string relationType,
+        string fromNodeId,
+        string toNodeId,
+        IReadOnlyDictionary<string, string> properties,
+        DateTimeOffset updatedAt)
+    {
+        var normalizedFromNodeId = NormalizeToken(fromNodeId);
+        var normalizedToNodeId = NormalizeToken(toNodeId);
+        var normalizedEdgeType = NormalizeToken(relationType);
+        var edgeId = BuildEdgeId(normalizedEdgeType, normalizedFromNodeId, normalizedToNodeId);
+        return new ProjectionGraphEdge
+        {
+            Scope = GraphScope,
+            EdgeId = edgeId,
+            EdgeType = normalizedEdgeType,
+            FromNodeId = normalizedFromNodeId,
+            ToNodeId = normalizedToNodeId,
+            Properties = new Dictionary<string, string>(properties, StringComparer.Ordinal),
+            UpdatedAt = updatedAt,
+        };
+    }
+
+    private static string BuildRunNodeId(string rootActorId, string commandId)
+    {
+        var normalizedRootActorId = NormalizeToken(rootActorId);
+        var normalizedCommandId = NormalizeToken(commandId);
+        return $"run:{normalizedRootActorId}:{normalizedCommandId}";
+    }
+
+    private static string BuildStepNodeId(string rootActorId, string commandId, string stepId)
+    {
+        var normalizedRootActorId = NormalizeToken(rootActorId);
+        var normalizedCommandId = NormalizeToken(commandId);
+        var normalizedStepId = NormalizeToken(stepId);
+        return $"step:{normalizedRootActorId}:{normalizedCommandId}:{normalizedStepId}";
+    }
+
+    private static string BuildEdgeId(string relationType, string fromNodeId, string toNodeId)
+    {
+        var payload = $"{relationType}|{fromNodeId}|{toNodeId}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
+        return $"{relationType}:{Convert.ToHexString(hash.AsSpan(0, 8))}";
+    }
+
+    private static string NormalizeToken(string? token)
+    {
+        var normalized = token?.Trim() ?? "";
+        return normalized.Length == 0 ? UnknownToken : normalized;
     }
 }
 

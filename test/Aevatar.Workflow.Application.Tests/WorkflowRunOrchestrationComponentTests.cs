@@ -90,16 +90,20 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var requestExecutor = new CapturingRequestExecutor();
         var outputStreamer = new SequenceOutputStreamer(
         [
-            new WorkflowOutputFrame { Type = "RUN_STARTED", ThreadId = "actor-1" },
-            new WorkflowOutputFrame { Type = "STEP_STARTED", StepName = "s1" },
+            new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" },
+            new WorkflowOutputFrame { Type = WorkflowRunEventTypes.StepStarted, StepName = "s1" },
         ]);
         var finalizer = new SpyResourceFinalizer();
+        var snapshotEmitter = new WorkflowRunStateSnapshotEmitter(
+            new NoopProjectionQueryPort(),
+            outputStreamer);
         var engine = new WorkflowRunExecutionEngine(
             new ComponentEnvelopeFactory(),
             requestExecutor,
             outputStreamer,
             new WorkflowRunCompletionPolicy(),
-            finalizer);
+            finalizer,
+            snapshotEmitter);
         var runContext = BuildRunContext("actor-1", "cmd-11");
         var emitted = new List<WorkflowOutputFrame>();
 
@@ -117,7 +121,9 @@ public sealed class WorkflowRunOrchestrationComponentTests
         result.FinalizeResult.Should().NotBeNull();
         result.FinalizeResult!.ProjectionCompleted.Should().BeFalse();
         result.FinalizeResult.ProjectionCompletionStatus.Should().Be(WorkflowProjectionCompletionStatus.Failed);
-        emitted.Should().HaveCount(2);
+        emitted.Should().HaveCount(3);
+        emitted[^1].Type.Should().Be(WorkflowRunEventTypes.StateSnapshot);
+        emitted[^1].Snapshot.Should().NotBeNull();
         requestExecutor.Calls.Should().ContainSingle();
         finalizer.Calls.Should().ContainSingle();
     }
@@ -126,12 +132,17 @@ public sealed class WorkflowRunOrchestrationComponentTests
     public async Task ExecutionEngine_WhenStreamerThrows_ShouldStillFinalizeResources()
     {
         var finalizer = new SpyResourceFinalizer();
+        var outputStreamer = new ThrowingOutputStreamer(new InvalidOperationException("stream failed"));
+        var snapshotEmitter = new WorkflowRunStateSnapshotEmitter(
+            new NoopProjectionQueryPort(),
+            outputStreamer);
         var engine = new WorkflowRunExecutionEngine(
             new ComponentEnvelopeFactory(),
             new CapturingRequestExecutor(),
-            new ThrowingOutputStreamer(new InvalidOperationException("stream failed")),
+            outputStreamer,
             new WorkflowRunCompletionPolicy(),
-            finalizer);
+            finalizer,
+            snapshotEmitter);
         var runContext = BuildRunContext("actor-4", "cmd-4");
 
         var act = async () => await engine.ExecuteAsync(
@@ -143,6 +154,57 @@ public sealed class WorkflowRunOrchestrationComponentTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("stream failed");
         finalizer.Calls.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecutionEngine_WhenSnapshotAvailable_ShouldEmitStateSnapshotFrame()
+    {
+        var queryPort = new NoopProjectionQueryPort
+        {
+            SnapshotByActorId = new Dictionary<string, WorkflowActorSnapshot>(StringComparer.Ordinal)
+            {
+                ["actor-7"] = new WorkflowActorSnapshot
+                {
+                    ActorId = "actor-7",
+                    WorkflowName = "direct",
+                    LastCommandId = "cmd-7",
+                },
+            },
+        };
+        var outputStreamer = new SequenceOutputStreamer(
+        [
+            new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-7" },
+            new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunFinished, ThreadId = "actor-7" },
+        ]);
+        var snapshotEmitter = new WorkflowRunStateSnapshotEmitter(queryPort, outputStreamer);
+        var engine = new WorkflowRunExecutionEngine(
+            new ComponentEnvelopeFactory(),
+            new CapturingRequestExecutor(),
+            outputStreamer,
+            new WorkflowRunCompletionPolicy(),
+            new SpyResourceFinalizer(),
+            snapshotEmitter);
+        var emitted = new List<WorkflowOutputFrame>();
+
+        _ = await engine.ExecuteAsync(
+            BuildRunContext("actor-7", "cmd-7"),
+            new WorkflowChatRunRequest("hello", "direct", "actor-7"),
+            (frame, _) =>
+            {
+                emitted.Add(frame);
+                return ValueTask.CompletedTask;
+            },
+            ct: CancellationToken.None);
+
+        emitted.Should().Contain(f => f.Type == WorkflowRunEventTypes.StateSnapshot);
+        var snapshotFrame = emitted.First(f => f.Type == WorkflowRunEventTypes.StateSnapshot);
+        var payload = snapshotFrame.Snapshot.Should().BeOfType<WorkflowStateSnapshotPayload>().Subject;
+        payload.ActorId.Should().Be("actor-7");
+        payload.CommandId.Should().Be("cmd-7");
+        payload.ProjectionCompletionStatus.Should().Be(WorkflowProjectionCompletionStatus.Completed.ToString());
+        payload.ProjectionCompleted.Should().BeTrue();
+        payload.SnapshotAvailable.Should().BeTrue();
+        payload.Snapshot.Should().BeOfType<WorkflowActorSnapshot>();
     }
 
     [Fact]
@@ -184,9 +246,9 @@ public sealed class WorkflowRunOrchestrationComponentTests
     }
 
     [Theory]
-    [InlineData("RUN_FINISHED", true, WorkflowProjectionCompletionStatus.Completed)]
-    [InlineData("RUN_ERROR", true, WorkflowProjectionCompletionStatus.Failed)]
-    [InlineData("STEP_STARTED", false, WorkflowProjectionCompletionStatus.Unknown)]
+    [InlineData(WorkflowRunEventTypes.RunFinished, true, WorkflowProjectionCompletionStatus.Completed)]
+    [InlineData(WorkflowRunEventTypes.RunError, true, WorkflowProjectionCompletionStatus.Failed)]
+    [InlineData(WorkflowRunEventTypes.StepStarted, false, WorkflowProjectionCompletionStatus.Unknown)]
     public void CompletionPolicy_ShouldResolveExpectedTerminalTypes(
         string frameType,
         bool expectedResolved,
@@ -277,7 +339,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         }
     }
 
-    private sealed class CapturingProjectionPort : IWorkflowExecutionProjectionPort
+    private sealed class CapturingProjectionPort : IWorkflowExecutionProjectionLifecyclePort
     {
         public bool ProjectionEnabled { get; set; } = true;
         public bool EnableActorQueryEndpoints => false;
@@ -357,6 +419,32 @@ public sealed class WorkflowRunOrchestrationComponentTests
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
         }
+
+        public Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(
+            string actorId,
+            int take = 200,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = take;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
+        }
+
+        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            CancellationToken ct = default)
+        {
+            _ = depth;
+            _ = take;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new WorkflowActorGraphSubgraph
+            {
+                RootNodeId = actorId,
+            });
+        }
     }
 
     private sealed class ComponentEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>
@@ -414,6 +502,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
             foreach (var frame in _frames)
                 await emitAsync(frame, ct);
         }
+
+        public WorkflowOutputFrame Map(WorkflowRunEvent evt) => new WorkflowRunOutputStreamer().Map(evt);
     }
 
     private sealed class ThrowingOutputStreamer : IWorkflowRunOutputStreamer
@@ -434,6 +524,81 @@ public sealed class WorkflowRunOrchestrationComponentTests
             _ = emitAsync;
             ct.ThrowIfCancellationRequested();
             return Task.FromException(_exception);
+        }
+
+        public WorkflowOutputFrame Map(WorkflowRunEvent evt) => new WorkflowRunOutputStreamer().Map(evt);
+    }
+
+    private sealed class NoopProjectionQueryPort : IWorkflowExecutionProjectionQueryPort
+    {
+        public Dictionary<string, WorkflowActorSnapshot> SnapshotByActorId { get; init; } = new(StringComparer.Ordinal);
+
+        public bool EnableActorQueryEndpoints => true;
+
+        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            SnapshotByActorId.TryGetValue(actorId, out var snapshot);
+            return Task.FromResult<WorkflowActorSnapshot?>(snapshot);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(int take = 200, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = take;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(
+            string actorId,
+            int take = 200,
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = take;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
+        }
+
+        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default)
+        {
+            _ = depth;
+            _ = take;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new WorkflowActorGraphSubgraph
+            {
+                RootNodeId = actorId,
+            });
+        }
+
+        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = depth;
+            _ = take;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(null);
         }
     }
 

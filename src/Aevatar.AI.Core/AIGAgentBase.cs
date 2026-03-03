@@ -19,7 +19,7 @@ namespace Aevatar.AI.Core;
 public sealed class AIAgentConfig
 {
     /// <summary>LLM Provider 名称。</summary>
-    public string ProviderName { get; set; } = "deepseek";
+    public string ProviderName { get; set; } = string.Empty;
 
     /// <summary>模型名称，可选，覆盖 Provider 默认。</summary>
     public string? Model { get; set; }
@@ -112,7 +112,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     }
 
     /// <summary>流式 Chat。</summary>
-    protected IAsyncEnumerable<string> ChatStreamAsync(string userMessage, CancellationToken ct = default)
+    protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
         return _chat!.ChatStreamAsync(userMessage, ct);

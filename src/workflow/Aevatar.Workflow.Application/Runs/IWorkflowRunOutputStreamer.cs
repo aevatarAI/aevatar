@@ -8,4 +8,6 @@ public interface IWorkflowRunOutputStreamer
         IWorkflowRunEventSink sink,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default);
+
+    WorkflowOutputFrame Map(WorkflowRunEvent evt);
 }

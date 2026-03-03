@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.Logging;
 
@@ -13,9 +14,9 @@ namespace Aevatar.Workflow.Extensions.Maker.Modules;
 /// </summary>
 public sealed class MakerRecursiveModule : IEventModule
 {
-    private readonly Dictionary<string, NodeState> _nodes = [];
-    private readonly Dictionary<string, InternalStageRef> _internalStages = [];
-    private readonly Dictionary<string, string> _childToParent = [];
+    private readonly Dictionary<StepRunKey, NodeState> _nodes = [];
+    private readonly Dictionary<StepRunKey, InternalStageRef> _internalStages = [];
+    private readonly Dictionary<StepRunKey, StepRunKey> _childToParent = [];
 
     public string Name => "maker_recursive";
     public int Priority => 3;
@@ -43,28 +44,38 @@ public sealed class MakerRecursiveModule : IEventModule
 
     private async Task HandleRecursiveRequestAsync(StepRequestEvent request, IEventHandlerContext ctx, CancellationToken ct)
     {
-        if (_nodes.ContainsKey(request.StepId))
+        var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
+        var nodeKey = new StepRunKey(runId, request.StepId);
+        if (_nodes.ContainsKey(nodeKey))
         {
-            ctx.Logger.LogDebug("maker_recursive: ignore duplicate request step={StepId}", request.StepId);
+            ctx.Logger.LogDebug(
+                "maker_recursive: ignore duplicate request run={RunId} step={StepId}",
+                runId,
+                request.StepId);
             return;
         }
 
-        var state = NodeState.Create(request);
-        _nodes[state.StepId] = state;
+        var state = NodeState.Create(request, runId);
+        _nodes[nodeKey] = state;
 
         ctx.Logger.LogInformation(
-            "maker_recursive: start step={StepId} depth={Depth}/{MaxDepth}",
-            state.StepId, state.Depth, state.MaxDepth);
+            "maker_recursive: start run={RunId} step={StepId} depth={Depth}/{MaxDepth}",
+            state.RunId,
+            state.StepId,
+            state.Depth,
+            state.MaxDepth);
 
         await DispatchAtomicVoteAsync(state, ctx, ct);
     }
 
     private async Task HandleStepCompletedAsync(StepCompletedEvent completed, IEventHandlerContext ctx, CancellationToken ct)
     {
-        if (_internalStages.TryGetValue(completed.StepId, out var stageRef))
+        var runId = WorkflowRunIdNormalizer.Normalize(completed.RunId);
+        var completionKey = new StepRunKey(runId, completed.StepId);
+        if (_internalStages.TryGetValue(completionKey, out var stageRef))
         {
-            _internalStages.Remove(completed.StepId);
-            if (!_nodes.TryGetValue(stageRef.NodeStepId, out var node))
+            _internalStages.Remove(completionKey);
+            if (!_nodes.TryGetValue(stageRef.NodeKey, out var node))
                 return;
 
             switch (stageRef.Stage)
@@ -84,10 +95,10 @@ public sealed class MakerRecursiveModule : IEventModule
             }
         }
 
-        if (_childToParent.TryGetValue(completed.StepId, out var parentStepId))
+        if (_childToParent.TryGetValue(completionKey, out var parentNodeKey))
         {
-            _childToParent.Remove(completed.StepId);
-            if (!_nodes.TryGetValue(parentStepId, out var parent))
+            _childToParent.Remove(completionKey);
+            if (!_nodes.TryGetValue(parentNodeKey, out var parent))
                 return;
 
             parent.ChildResults[completed.StepId] = completed;
@@ -162,13 +173,14 @@ public sealed class MakerRecursiveModule : IEventModule
         {
             var childStepId = $"{node.StepId}_child_{i}";
             node.ChildStepIds.Add(childStepId);
-            _childToParent[childStepId] = node.StepId;
+            _childToParent[new StepRunKey(node.RunId, childStepId)] = node.Key;
 
             var childRequest = new StepRequestEvent
             {
                 StepId = childStepId,
                 StepType = "maker_recursive",
                 Input = subtasks[i],
+                RunId = node.RunId,
             };
             foreach (var (key, value) in node.OriginalParameters)
                 childRequest.Parameters[key] = value;
@@ -220,6 +232,7 @@ public sealed class MakerRecursiveModule : IEventModule
         var completed = new StepCompletedEvent
         {
             StepId = node.StepId,
+            RunId = node.RunId,
             Success = stageResult.Success,
             Output = stageResult.Output,
             Error = stageResult.Error,
@@ -236,7 +249,7 @@ public sealed class MakerRecursiveModule : IEventModule
         completed.Metadata["maker.child_count"] = node.ChildStepIds.Count.ToString();
 
         await ctx.PublishAsync(completed, EventDirection.Self, ct);
-        CleanupNode(node.StepId);
+        CleanupNode(node.Key);
     }
 
     private async Task FailNodeAsync(NodeState node, string error, IEventHandlerContext ctx, CancellationToken ct)
@@ -244,16 +257,33 @@ public sealed class MakerRecursiveModule : IEventModule
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = node.StepId,
+            RunId = node.RunId,
             Success = false,
             Error = error,
         }, EventDirection.Self, ct);
 
-        CleanupNode(node.StepId);
+        CleanupNode(node.Key);
     }
 
-    private void CleanupNode(string stepId)
+    private void CleanupNode(StepRunKey nodeKey)
     {
-        _nodes.Remove(stepId);
+        _nodes.Remove(nodeKey);
+
+        foreach (var internalKey in _internalStages
+                     .Where(x => x.Value.NodeKey.Equals(nodeKey))
+                     .Select(x => x.Key)
+                     .ToList())
+        {
+            _internalStages.Remove(internalKey);
+        }
+
+        foreach (var childKey in _childToParent
+                     .Where(x => x.Value.Equals(nodeKey))
+                     .Select(x => x.Key)
+                     .ToList())
+        {
+            _childToParent.Remove(childKey);
+        }
     }
 
     private async Task DispatchAtomicVoteAsync(NodeState node, IEventHandlerContext ctx, CancellationToken ct)
@@ -292,6 +322,7 @@ public sealed class MakerRecursiveModule : IEventModule
             StepId = internalStepId,
             StepType = node.ParallelStepType,
             Input = input,
+            RunId = node.RunId,
         };
         req.Parameters["workers"] = string.Join(",", workerList);
         req.Parameters["parallel_count"] = workerList.Count.ToString();
@@ -299,7 +330,7 @@ public sealed class MakerRecursiveModule : IEventModule
         req.Parameters["vote_param_k"] = node.K.ToString();
         req.Parameters["vote_param_max_response_length"] = node.MaxResponseLength.ToString();
 
-        _internalStages[internalStepId] = new InternalStageRef(node.StepId, stage);
+        _internalStages[new StepRunKey(node.RunId, internalStepId)] = new InternalStageRef(node.Key, stage);
         await ctx.PublishAsync(req, EventDirection.Self, ct);
     }
 
@@ -373,16 +404,19 @@ public sealed class MakerRecursiveModule : IEventModule
     }
 
     private static string BuildAtomicPrompt(NodeState node) =>
-        $"{node.AtomicPrompt}\n\nTASK:\n{node.OriginalTask}";
+        $"{node.AtomicPrompt}\n\n{BuildContextBlock(node, "atomic_decision")}\n\nTASK:\n{node.OriginalTask}";
 
     private static string BuildDecomposePrompt(NodeState node) =>
-        $"{node.DecomposePrompt}\n\nDELIMITER:\n{node.Delimiter}\n\nTASK:\n{node.OriginalTask}";
+        $"{node.DecomposePrompt}\n\n{BuildContextBlock(node, "decompose")}\n\nDELIMITER:\n{node.Delimiter}\n\nTASK:\n{node.OriginalTask}";
 
     private static string BuildSolvePrompt(NodeState node) =>
-        $"{node.SolvePrompt}\n\nTASK:\n{node.OriginalTask}";
+        $"{node.SolvePrompt}\n\n{BuildContextBlock(node, "solve")}\n\nTASK:\n{node.OriginalTask}";
 
     private static string BuildComposePrompt(NodeState node, string childOutputs) =>
-        $"{node.ComposePrompt}\n\nPARENT TASK:\n{node.OriginalTask}\n\nCHILD SOLUTIONS (use delimiter {node.Delimiter}):\n{childOutputs}";
+        $"{node.ComposePrompt}\n\n{BuildContextBlock(node, "compose")}\n\nPARENT TASK:\n{node.OriginalTask}\n\nCHILD SOLUTIONS (use delimiter {node.Delimiter}):\n{childOutputs}";
+
+    private static string BuildContextBlock(NodeState node, string phase) =>
+        $"MAKER_CONTEXT:\nPHASE: {phase}\nDEPTH: {node.Depth}\nMAX_DEPTH: {node.MaxDepth}\nREMAINING_DEPTH: {Math.Max(0, node.MaxDepth - node.Depth)}\nMAX_SUBTASKS: {node.MaxSubtasks}\nVOTE_K: {node.K}\nMAX_RESPONSE_LENGTH: {node.MaxResponseLength}";
 
     private enum InternalStage
     {
@@ -392,10 +426,12 @@ public sealed class MakerRecursiveModule : IEventModule
         ComposeVote,
     }
 
-    private sealed record InternalStageRef(string NodeStepId, InternalStage Stage);
+    private readonly record struct StepRunKey(string RunId, string StepId);
+    private sealed record InternalStageRef(StepRunKey NodeKey, InternalStage Stage);
 
     private sealed class NodeState
     {
+        public required string RunId { get; init; }
         public required string StepId { get; init; }
         public required string OriginalTask { get; init; }
         public required Dictionary<string, string> OriginalParameters { get; init; }
@@ -419,12 +455,14 @@ public sealed class MakerRecursiveModule : IEventModule
         public bool AtomicDecision { get; set; }
         public List<string> ChildStepIds { get; } = [];
         public Dictionary<string, StepCompletedEvent> ChildResults { get; } = new(StringComparer.Ordinal);
+        public StepRunKey Key => new(RunId, StepId);
 
-        public static NodeState Create(StepRequestEvent request)
+        public static NodeState Create(StepRequestEvent request, string runId)
         {
             var parameters = request.Parameters.ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
             return new NodeState
             {
+                RunId = runId,
                 StepId = request.StepId,
                 OriginalTask = request.Input,
                 OriginalParameters = parameters,

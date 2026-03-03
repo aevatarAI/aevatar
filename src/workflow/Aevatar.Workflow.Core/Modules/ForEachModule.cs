@@ -10,6 +10,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -45,6 +46,8 @@ public sealed class ForEachModule : IEventModule
         {
             var evt = payload.Unpack<StepRequestEvent>();
             if (evt.StepType != "foreach") return;
+            var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
+            var parentKey = BuildRunStepKey(runId, evt.StepId);
 
             // ─── Parameters ───
             var delimiter = evt.Parameters.TryGetValue("delimiter", out var d) ? d : "\n---\n";
@@ -58,13 +61,14 @@ public sealed class ForEachModule : IEventModule
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = evt.StepId,
+                    RunId = runId,
                     Success = true, Output = "",
                 }, EventDirection.Self, ct);
                 return;
             }
 
-            _expected[evt.StepId] = items.Length;
-            _collected[evt.StepId] = [];
+            _expected[parentKey] = items.Length;
+            _collected[parentKey] = [];
 
             ctx.Logger.LogInformation(
                 "ForEach {StepId}: {Count} items, sub_step_type={SubType}",
@@ -77,6 +81,7 @@ public sealed class ForEachModule : IEventModule
                 {
                     StepId = $"{evt.StepId}_item_{i}",
                     StepType = subStepType,
+                    RunId = runId,
                     Input = items[i].Trim(),
                     TargetRole = subTargetRole ?? "",
                 };
@@ -98,14 +103,16 @@ public sealed class ForEachModule : IEventModule
             // Only collect direct foreach item completions: "<parent>_item_<index>".
             // Ignore nested children like "_item_0_sub_1" or "_item_0_vote".
             var parent = TryGetParentFromDirectItemStepId(evt.StepId);
+            var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
+            var parentKey = parent == null ? null : BuildRunStepKey(runId, parent);
 
-            if (parent == null || !_collected.ContainsKey(parent)) return;
+            if (parent == null || parentKey == null || !_collected.ContainsKey(parentKey)) return;
 
-            _collected[parent].Add(evt);
+            _collected[parentKey].Add(evt);
 
-            if (_collected[parent].Count >= _expected[parent])
+            if (_collected[parentKey].Count >= _expected[parentKey])
             {
-                var results = _collected[parent];
+                var results = _collected[parentKey];
                 var allSuccess = results.All(r => r.Success);
                 var merged = string.Join("\n---\n", results.Select(r => r.Output));
 
@@ -116,14 +123,17 @@ public sealed class ForEachModule : IEventModule
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = parent,
+                    RunId = runId,
                     Success = allSuccess, Output = merged,
                 }, EventDirection.Self, ct);
 
-                _collected.Remove(parent);
-                _expected.Remove(parent);
+                _collected.Remove(parentKey);
+                _expected.Remove(parentKey);
             }
         }
     }
+
+    private static string BuildRunStepKey(string runId, string stepId) => $"{runId}:{stepId}";
 
     private static string? TryGetParentFromDirectItemStepId(string stepId)
     {

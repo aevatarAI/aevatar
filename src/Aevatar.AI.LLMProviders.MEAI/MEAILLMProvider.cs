@@ -70,10 +70,37 @@ public sealed class MEAILLMProvider : ILLMProvider
 
         await foreach (var update in _client.GetStreamingResponseAsync(messages, options, ct))
         {
-            yield return new LLMStreamChunk
+            var emittedTextFromContents = false;
+            if (update.Contents is { Count: > 0 })
             {
-                DeltaContent = update.Text,
-            };
+                foreach (var part in update.Contents)
+                {
+                    switch (part)
+                    {
+                        case TextContent textContent when !string.IsNullOrEmpty(textContent.Text):
+                            emittedTextFromContents = true;
+                            yield return new LLMStreamChunk
+                            {
+                                DeltaContent = textContent.Text,
+                            };
+                            break;
+                        case FunctionCallContent functionCall:
+                            yield return new LLMStreamChunk
+                            {
+                                DeltaToolCall = ConvertFunctionCallDelta(functionCall),
+                            };
+                            break;
+                    }
+                }
+            }
+
+            if (!emittedTextFromContents && !string.IsNullOrEmpty(update.Text))
+            {
+                yield return new LLMStreamChunk
+                {
+                    DeltaContent = update.Text,
+                };
+            }
         }
 
         // 最后一个 chunk 标记结束
@@ -180,15 +207,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                 if (part is FunctionCallContent fcc)
                 {
                     toolCalls ??= [];
-                    var argsJson = fcc.Arguments != null
-                        ? System.Text.Json.JsonSerializer.Serialize(fcc.Arguments)
-                        : "{}";
-                    toolCalls.Add(new ToolCall
-                    {
-                        Id = fcc.CallId ?? Guid.NewGuid().ToString("N"),
-                        Name = fcc.Name,
-                        ArgumentsJson = argsJson,
-                    });
+                    toolCalls.Add(ConvertFunctionCall(fcc));
                 }
             }
         }
@@ -208,6 +227,33 @@ public sealed class MEAILLMProvider : ILLMProvider
             ToolCalls = toolCalls,
             Usage = usage,
             FinishReason = response.FinishReason?.ToString(),
+        };
+    }
+
+    private static ToolCall ConvertFunctionCall(FunctionCallContent functionCall)
+    {
+        var argsJson = functionCall.Arguments != null
+            ? System.Text.Json.JsonSerializer.Serialize(functionCall.Arguments)
+            : "{}";
+        return new ToolCall
+        {
+            Id = functionCall.CallId ?? Guid.NewGuid().ToString("N"),
+            Name = functionCall.Name ?? string.Empty,
+            ArgumentsJson = argsJson,
+        };
+    }
+
+    // Keep delta semantics: missing callId should stay empty and be resolved by downstream accumulator.
+    private static ToolCall ConvertFunctionCallDelta(FunctionCallContent functionCall)
+    {
+        var argsJson = functionCall.Arguments != null
+            ? System.Text.Json.JsonSerializer.Serialize(functionCall.Arguments)
+            : string.Empty;
+        return new ToolCall
+        {
+            Id = functionCall.CallId ?? string.Empty,
+            Name = functionCall.Name ?? string.Empty,
+            ArgumentsJson = argsJson,
         };
     }
 }

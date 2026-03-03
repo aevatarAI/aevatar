@@ -1,0 +1,41 @@
+name: counter_addition
+description: |
+  Closed-world 2-counter addition: transfer counter b into counter a.
+configuration:
+  closed_world_mode: true
+roles: []
+steps:
+  - id: init_a
+    type: assign
+    parameters:
+      target: a
+      value: "2"
+  - id: init_b
+    type: assign
+    parameters:
+      target: b
+      value: "3"
+  - id: jz_b
+    type: conditional
+    parameters:
+      condition: "${eq(variables.b, '0')}"
+    branches:
+      true: halt
+      false: inc_a
+  - id: inc_a
+    type: assign
+    next: dec_b
+    parameters:
+      target: a
+      value: "${add(variables.a, 1)}"
+  - id: dec_b
+    type: assign
+    next: jz_b
+    parameters:
+      target: b
+      value: "${sub(variables.b, 1)}"
+  - id: halt
+    type: assign
+    parameters:
+      target: result
+      value: "${variables.a}"

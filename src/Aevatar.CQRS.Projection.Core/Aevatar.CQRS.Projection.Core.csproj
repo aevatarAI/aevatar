@@ -7,7 +7,7 @@
     <RootNamespace>Aevatar.CQRS.Projection.Core</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Aevatar.CQRS.Projection.Abstractions\Aevatar.CQRS.Projection.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
   </ItemGroup>
@@ -21,6 +21,7 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
   <ItemGroup>
+    <Protobuf Include="projection_dispatch_compensation_messages.proto" GrpcServices="None" />
     <Protobuf Include="projection_ownership_messages.proto" GrpcServices="None" />
     <Protobuf Include="projection_session_event_transport.proto" GrpcServices="None" />
   </ItemGroup>

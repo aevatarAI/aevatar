@@ -16,6 +16,7 @@
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Workflow.Abstractions;
@@ -24,6 +25,7 @@ using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -44,6 +46,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     private readonly IEventModuleFactory _eventModuleFactory;
     private readonly IReadOnlyList<IWorkflowModuleDependencyExpander> _moduleDependencyExpanders;
     private readonly IReadOnlyList<IWorkflowModuleConfigurator> _moduleConfigurators;
+    private readonly ISet<string> _knownModuleStepTypes;
 
     public WorkflowGAgent(
         IActorRuntime runtime,
@@ -71,6 +74,11 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             .Select(x => x.First())
             .OrderBy(x => x.Order)
             .ToList();
+
+        _knownModuleStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
+            packs
+                .SelectMany(x => x.Modules)
+                .SelectMany(x => x.Names));
     }
 
     // ─── 生命周期 ───
@@ -78,8 +86,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     /// <inheritdoc />
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
-        if (!string.IsNullOrEmpty(State.WorkflowYaml))
-            TryCompile(State.WorkflowYaml);
+        RebuildCompiledWorkflowCache();
 
         InstallCognitiveModules();
         await base.OnActivateAsync(ct);
@@ -88,37 +95,22 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     /// <summary>
     /// 配置工作流 YAML 并立即编译、重装模块。
     /// </summary>
-    public void ConfigureWorkflow(string workflowYaml, string workflowName)
+    public async Task ConfigureWorkflowAsync(
+        string workflowYaml,
+        string? workflowName,
+        CancellationToken ct = default)
     {
-        var incomingWorkflowName = string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
-        var currentWorkflowName = string.IsNullOrWhiteSpace(State.WorkflowName) ? string.Empty : State.WorkflowName.Trim();
-        if (!string.IsNullOrWhiteSpace(currentWorkflowName) &&
-            !string.IsNullOrWhiteSpace(incomingWorkflowName) &&
-            !string.Equals(currentWorkflowName, incomingWorkflowName, StringComparison.OrdinalIgnoreCase))
+        EnsureWorkflowNameCanBind(workflowName);
+        await PersistDomainEventAsync(new ConfigureWorkflowEvent
         {
-            throw new InvalidOperationException(
-                $"WorkflowGAgent '{Id}' is already bound to workflow '{State.WorkflowName}' and cannot switch to '{workflowName}'.");
-        }
-
-        State.WorkflowYaml = workflowYaml ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(incomingWorkflowName))
-            State.WorkflowName = incomingWorkflowName;
-
+            WorkflowName = workflowName ?? string.Empty,
+            WorkflowYaml = workflowYaml ?? string.Empty,
+        }, ct);
+        RebuildCompiledWorkflowCache();
         _childAgentIds.Clear();
 
-        if (string.IsNullOrWhiteSpace(State.WorkflowYaml))
-        {
-            State.Compiled = false;
-            State.CompilationError = "workflow yaml is empty";
-            _compiledWorkflow = null;
-        }
-        else
-        {
-            TryCompile(State.WorkflowYaml);
-        }
-
         InstallCognitiveModules();
-        SchedulePersistWorkflowBinding(workflowName);
+        await PersistWorkflowBindingAsync(workflowName ?? string.Empty, ct);
     }
 
     /// <inheritdoc />
@@ -155,8 +147,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     [EventHandler]
     public async Task HandleConfigureWorkflow(ConfigureWorkflowEvent request)
     {
-        ConfigureWorkflow(request.WorkflowYaml, request.WorkflowName);
-        await PersistWorkflowBindingAsync(request.WorkflowName);
+        await ConfigureWorkflowAsync(request.WorkflowYaml, request.WorkflowName);
     }
 
     // ─── 工作流完成 ───
@@ -165,10 +156,8 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     [EventHandler]
     public async Task HandleWorkflowCompleted(WorkflowCompletedEvent evt)
     {
+        await PersistDomainEventAsync(evt);
         Logger.LogInformation("工作流 {Name} 完成: {Success}", evt.WorkflowName, evt.Success);
-        State.TotalExecutions++;
-        if (evt.Success) State.SuccessfulExecutions++;
-        else State.FailedExecutions++;
 
         // 使用 AG-UI 事件发布最终结果
         await PublishAsync(new TextMessageEndEvent
@@ -235,7 +224,12 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             {
                 ConfigureModule(m);
                 modules.Add(m);
+                continue;
             }
+
+            var workflowName = _compiledWorkflow?.Name ?? State.WorkflowName;
+            throw new InvalidOperationException(
+                $"Workflow '{workflowName}' requires module '{name}', but no module registration was found.");
         }
 
         if (modules.Count > 0) SetModules(modules);
@@ -252,45 +246,152 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
 
     // ─── 编译 + 验证 ───
 
-    private void TryCompile(string yaml)
+    protected override WorkflowState TransitionState(WorkflowState current, IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<ConfigureWorkflowEvent>(ApplyConfigureWorkflow)
+            .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
+            .OrCurrent();
+
+    private WorkflowState ApplyConfigureWorkflow(WorkflowState current, ConfigureWorkflowEvent evt)
     {
+        var next = current.Clone();
+        next.WorkflowYaml = evt.WorkflowYaml ?? string.Empty;
+
+        var incomingWorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName)
+            ? string.Empty
+            : evt.WorkflowName.Trim();
+        if (!string.IsNullOrWhiteSpace(incomingWorkflowName))
+            next.WorkflowName = incomingWorkflowName;
+
+        var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
+        next.Compiled = compileResult.Compiled;
+        next.CompilationError = compileResult.CompilationError;
+        next.Version = current.Version + 1;
+        return next;
+    }
+
+    private static WorkflowState ApplyWorkflowCompleted(WorkflowState current, WorkflowCompletedEvent evt)
+    {
+        var next = current.Clone();
+        next.TotalExecutions++;
+        if (evt.Success)
+            next.SuccessfulExecutions++;
+        else
+            next.FailedExecutions++;
+        return next;
+    }
+
+    private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)
+    {
+        if (string.IsNullOrWhiteSpace(yaml))
+            return WorkflowCompilationResult.Invalid("workflow yaml is empty");
+
         try
         {
             var workflow = _parser.Parse(yaml);
-            var errors = WorkflowValidator.Validate(workflow);
+            var errors = ValidateWorkflowDefinition(workflow);
             if (errors.Count > 0)
-            {
-                State.Compiled = false;
-                State.CompilationError = string.Join("; ", errors);
-                _compiledWorkflow = null;
-                return;
-            }
-            _compiledWorkflow = workflow;
-            State.Compiled = true;
-            State.CompilationError = "";
+                return WorkflowCompilationResult.Invalid(string.Join("; ", errors));
+
+            return WorkflowCompilationResult.Success;
         }
         catch (Exception ex)
         {
-            State.Compiled = false;
-            State.CompilationError = ex.Message;
+            return WorkflowCompilationResult.Invalid(ex.Message);
+        }
+    }
+
+    private void RebuildCompiledWorkflowCache()
+    {
+        if (string.IsNullOrWhiteSpace(State.WorkflowYaml))
+        {
+            _compiledWorkflow = null;
+            return;
+        }
+
+        try
+        {
+            var workflow = _parser.Parse(State.WorkflowYaml);
+            var errors = ValidateWorkflowDefinition(workflow);
+            _compiledWorkflow = errors.Count == 0 ? workflow : null;
+        }
+        catch
+        {
             _compiledWorkflow = null;
         }
     }
 
-    private void SchedulePersistWorkflowBinding(string workflowName)
+    private void EnsureWorkflowNameCanBind(string? workflowName)
     {
-        _ = PersistWorkflowBindingSafeAsync(workflowName);
+        var incomingWorkflowName = string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
+        var currentWorkflowName = string.IsNullOrWhiteSpace(State.WorkflowName) ? string.Empty : State.WorkflowName.Trim();
+        if (!string.IsNullOrWhiteSpace(currentWorkflowName) &&
+            !string.IsNullOrWhiteSpace(incomingWorkflowName) &&
+            !string.Equals(currentWorkflowName, incomingWorkflowName, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"WorkflowGAgent '{Id}' is already bound to workflow '{State.WorkflowName}' and cannot switch to '{workflowName}'.");
+        }
     }
 
-    private async Task PersistWorkflowBindingSafeAsync(string workflowName)
+    private readonly record struct WorkflowCompilationResult(bool Compiled, string CompilationError)
     {
-        try
+        public static WorkflowCompilationResult Success => new(true, string.Empty);
+
+        public static WorkflowCompilationResult Invalid(string error) =>
+            new(false, error ?? string.Empty);
+    }
+
+    private List<string> ValidateWorkflowDefinition(WorkflowDefinition workflow)
+    {
+        var knownStepTypes = new HashSet<string>(_knownModuleStepTypes, StringComparer.OrdinalIgnoreCase);
+        knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
+        ExpandKnownStepTypesFromFactory(workflow, knownStepTypes);
+
+        return WorkflowValidator.Validate(
+            workflow,
+            new WorkflowValidator.WorkflowValidationOptions
+            {
+                RequireKnownStepTypes = true,
+                KnownStepTypes = knownStepTypes,
+            },
+            availableWorkflowNames: null);
+    }
+
+    private void ExpandKnownStepTypesFromFactory(WorkflowDefinition workflow, ISet<string> knownStepTypes)
+    {
+        foreach (var stepType in EnumerateReferencedStepTypes(workflow.Steps))
         {
-            await PersistWorkflowBindingAsync(workflowName);
+            var canonical = WorkflowPrimitiveCatalog.ToCanonicalType(stepType);
+            if (string.IsNullOrWhiteSpace(canonical) || knownStepTypes.Contains(canonical))
+                continue;
+
+            if (_eventModuleFactory.TryCreate(canonical, out _))
+                knownStepTypes.Add(canonical);
         }
-        catch (Exception ex)
+    }
+
+    private static IEnumerable<string> EnumerateReferencedStepTypes(IEnumerable<StepDefinition> steps)
+    {
+        foreach (var step in steps)
         {
-            Logger.LogWarning(ex, "Failed to persist workflow binding metadata for actor {ActorId}", Id);
+            yield return step.Type;
+
+            foreach (var (key, value) in step.Parameters)
+            {
+                if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
+                    !string.IsNullOrWhiteSpace(value))
+                {
+                    yield return value;
+                }
+            }
+
+            if (step.Children is { Count: > 0 })
+            {
+                foreach (var childType in EnumerateReferencedStepTypes(step.Children))
+                    yield return childType;
+            }
         }
     }
 
@@ -309,20 +410,35 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         await ManifestStore.SaveAsync(Id, manifest, ct);
     }
 
-    private EventEnvelope CreateRoleAgentConfigureEnvelope(RoleDefinition role) =>
-        new()
+    private EventEnvelope CreateRoleAgentConfigureEnvelope(RoleDefinition role)
+    {
+        var configure = new ConfigureRoleAgentEvent
+        {
+            RoleName = role.Name ?? string.Empty,
+            // Keep provider/model empty when workflow does not specify them,
+            // so RoleGAgent resolves from globally configured default provider.
+            ProviderName = string.IsNullOrWhiteSpace(role.Provider) ? string.Empty : role.Provider,
+            Model = string.IsNullOrWhiteSpace(role.Model) ? string.Empty : role.Model,
+            SystemPrompt = role.SystemPrompt ?? string.Empty,
+            MaxTokens = role.MaxTokens ?? 0,
+            MaxToolRounds = role.MaxToolRounds ?? 0,
+            MaxHistoryMessages = role.MaxHistoryMessages ?? 0,
+            StreamBufferCapacity = role.StreamBufferCapacity ?? 0,
+            EventModules = role.EventModules ?? string.Empty,
+            EventRoutes = role.EventRoutes ?? string.Empty,
+        };
+
+        if (role.Temperature.HasValue)
+            configure.Temperature = role.Temperature.Value;
+
+        return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ConfigureRoleAgentEvent
-            {
-                RoleName = role.Name ?? string.Empty,
-                ProviderName = role.Provider ?? "deepseek",
-                Model = role.Model ?? string.Empty,
-                SystemPrompt = role.SystemPrompt ?? string.Empty,
-            }),
+            Payload = Any.Pack(configure),
             PublisherId = Id,
             Direction = EventDirection.Self,
             CorrelationId = Guid.NewGuid().ToString("N"),
         };
+    }
 }

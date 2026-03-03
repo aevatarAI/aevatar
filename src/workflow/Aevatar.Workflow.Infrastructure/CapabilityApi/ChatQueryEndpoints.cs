@@ -21,6 +21,16 @@ public static class ChatQueryEndpoints
 
         group.MapGet("/actors/{actorId}/timeline", ListActorTimeline)
             .Produces(StatusCodes.Status200OK);
+
+        group.MapGet("/actors/{actorId}/graph-edges", ListActorGraphEdges)
+            .Produces(StatusCodes.Status200OK);
+
+        group.MapGet("/actors/{actorId}/graph-subgraph", GetActorGraphSubgraph)
+            .Produces(StatusCodes.Status200OK);
+
+        group.MapGet("/actors/{actorId}/graph-enriched", GetActorGraphEnrichedSnapshot)
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
     }
 
     internal static async Task<IResult> ListAgents(
@@ -51,6 +61,80 @@ public static class ChatQueryEndpoints
     {
         var timeline = await queryService.ListActorTimelineAsync(actorId, take, ct);
         return Results.Ok(timeline);
+    }
+
+    internal static async Task<IResult> ListActorGraphEdges(
+        string actorId,
+        IWorkflowExecutionQueryApplicationService queryService,
+        int take = 200,
+        string? direction = null,
+        string[]? edgeTypes = null,
+        CancellationToken ct = default)
+    {
+        var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
+        var edges = await queryService.ListActorGraphEdgesAsync(actorId, take, graphOptions, ct);
+        return Results.Ok(edges);
+    }
+
+    internal static async Task<IResult> GetActorGraphSubgraph(
+        string actorId,
+        IWorkflowExecutionQueryApplicationService queryService,
+        int depth = 2,
+        int take = 200,
+        string? direction = null,
+        string[]? edgeTypes = null,
+        CancellationToken ct = default)
+    {
+        var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
+        var subgraph = await queryService.GetActorGraphSubgraphAsync(actorId, depth, take, graphOptions, ct);
+        return Results.Ok(subgraph);
+    }
+
+    internal static async Task<IResult> GetActorGraphEnrichedSnapshot(
+        string actorId,
+        IWorkflowExecutionQueryApplicationService queryService,
+        int depth = 2,
+        int take = 200,
+        string? direction = null,
+        string[]? edgeTypes = null,
+        CancellationToken ct = default)
+    {
+        var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
+        var graphEnriched = await queryService.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, graphOptions, ct);
+        return graphEnriched == null ? Results.NotFound() : Results.Ok(graphEnriched);
+    }
+
+    private static WorkflowActorGraphQueryOptions BuildGraphQueryOptions(
+        string? direction,
+        string[]? edgeTypes)
+    {
+        return new WorkflowActorGraphQueryOptions
+        {
+            Direction = ParseDirection(direction),
+            EdgeTypes = NormalizeEdgeTypes(edgeTypes),
+        };
+    }
+
+    private static WorkflowActorGraphDirection ParseDirection(string? direction)
+    {
+        if (string.IsNullOrWhiteSpace(direction))
+            return WorkflowActorGraphDirection.Both;
+
+        return Enum.TryParse<WorkflowActorGraphDirection>(direction.Trim(), ignoreCase: true, out var parsed)
+            ? parsed
+            : WorkflowActorGraphDirection.Both;
+    }
+
+    private static IReadOnlyList<string> NormalizeEdgeTypes(IReadOnlyList<string>? edgeTypes)
+    {
+        if (edgeTypes == null || edgeTypes.Count == 0)
+            return [];
+
+        return edgeTypes
+            .Select(x => x?.Trim() ?? "")
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 
 }

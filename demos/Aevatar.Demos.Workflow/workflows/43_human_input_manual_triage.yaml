@@ -1,0 +1,21 @@
+name: 43_human_input_manual_triage
+description: |
+  Manual human_input demo for real app interaction.
+  Workflow pauses for operator input in Web UI, then continues with normalized output.
+
+roles: []
+
+steps:
+  - id: collect_context
+    type: human_input
+    parameters:
+      prompt: "Please provide triage details: impacted service, suspected root cause, and mitigation."
+      variable: "triage_context"
+      timeout: "300"
+      on_timeout: "fail"
+    next: normalize_context
+
+  - id: normalize_context
+    type: transform
+    parameters:
+      op: "trim"

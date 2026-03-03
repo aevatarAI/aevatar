@@ -2,7 +2,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 
 namespace Aevatar.Workflow.Core;
 
-public sealed class WorkflowModuleFactory : IEventModuleFactory
+public class WorkflowModuleFactory : IEventModuleFactory
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly IReadOnlyDictionary<string, ModuleEntry> _modulesByName;
@@ -15,7 +15,7 @@ public sealed class WorkflowModuleFactory : IEventModuleFactory
         _modulesByName = BuildModuleMap(modulePacks ?? throw new ArgumentNullException(nameof(modulePacks)));
     }
 
-    public bool TryCreate(string name, out IEventModule? module)
+    public virtual bool TryCreate(string name, out IEventModule? module)
     {
         module = null;
         if (string.IsNullOrWhiteSpace(name))

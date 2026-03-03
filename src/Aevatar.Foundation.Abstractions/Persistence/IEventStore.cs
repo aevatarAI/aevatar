@@ -28,4 +28,14 @@ public interface IEventStore
 
     /// <summary>Get current latest version number.</summary>
     Task<long> GetVersionAsync(string agentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes historical events whose version is less than or equal to <paramref name="toVersion"/>.
+    /// Used by snapshot-based compaction to control stream size growth.
+    /// Returns the number of deleted events.
+    /// </summary>
+    Task<long> DeleteEventsUpToAsync(
+        string agentId,
+        long toVersion,
+        CancellationToken ct = default);
 }

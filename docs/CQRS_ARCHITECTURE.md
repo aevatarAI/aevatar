@@ -45,6 +45,8 @@ flowchart LR
 3. 未命中 reducer 的事件必须为 no-op。
 4. Workflow 投影生命周期通过 lease/session 句柄管理，不允许 `actorId -> context` 反查。
 5. 同一 `EventEnvelope` 分发到多个 projector 时采用“一对多全分支尝试”语义：单个 projector 失败不阻断其他 projector 执行，最终以聚合异常统一回传。
+6. 禁止 `Projection:ReadModel:Bindings` 与任何 BindingResolver 路由；投影存储路由统一由 `IProjectionStoreDispatcher` + Store Binding (`IProjectionDocumentStore` / `IProjectionGraphStore`) 决策。
+7. Host 组合层按配置仅注册所需 provider 组合，不允许无条件并列注册 InMemory/Elasticsearch/Neo4j。
 
 ## 5.1 编排减重落地（2026-02-22）
 
@@ -55,10 +57,13 @@ flowchart LR
    `WorkflowRunCompletionPolicy`（终态） +  
    `WorkflowRunResourceFinalizer`（清理）。
 2. Projection 端口实现已拆分为：
-   `WorkflowExecutionProjectionService`（facade） +  
+   `WorkflowExecutionProjectionLifecycleService`（生命周期端口） +  
+   `WorkflowExecutionProjectionQueryService`（查询端口） +  
+   `ProjectionLifecyclePortServiceBase<>`（通用基类） +  
+   `ProjectionQueryPortServiceBase<>`（通用基类） +  
    `WorkflowProjectionActivationService`（激活） +  
    `WorkflowProjectionReleaseService`（释放） +  
-   `WorkflowProjectionLeaseManager`（ownership） +  
+   `IProjectionOwnershipCoordinator`（ownership） +  
    `WorkflowProjectionSinkSubscriptionManager`（订阅生命周期） +  
    `WorkflowProjectionLiveSinkForwarder`（sink 转发） +  
    `WorkflowProjectionSinkFailurePolicy`（异常策略） +  

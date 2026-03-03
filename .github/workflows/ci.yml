@@ -11,34 +11,81 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  fast-build-test:
+  changes:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    outputs:
+      core_code: ${{ steps.filter.outputs.core_code }}
+      projection_provider: ${{ steps.filter.outputs.projection_provider }}
+      kafka_runtime: ${{ steps.filter.outputs.kafka_runtime }}
+      event_sourcing: ${{ steps.filter.outputs.event_sourcing }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Changed Paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            core_code:
+              - 'src/**'
+              - 'test/**'
+              - 'aevatar.slnx'
+              - 'aevatar.*.slnf'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - 'global.json'
+              - 'tools/ci/**'
+              - '.github/workflows/ci.yml'
+            projection_provider:
+              - 'docker-compose.projection-providers.yml'
+              - 'src/Aevatar.CQRS.Projection.*/**'
+              - 'src/Aevatar.CQRS.Projection.Core/**'
+              - 'src/workflow/Aevatar.Workflow.Projection/**'
+              - 'src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/**'
+              - 'src/workflow/Aevatar.Workflow.Infrastructure/DependencyInjection/WorkflowCapabilityServiceCollectionExtensions.cs'
+              - 'test/Aevatar.CQRS.Projection.Core.Tests/**'
+              - 'test/Aevatar.Workflow.Host.Api.Tests/**'
+              - 'tools/ci/projection_provider_e2e_smoke.sh'
+              - '.github/workflows/ci.yml'
+            kafka_runtime:
+              - 'docker-compose.yml'
+              - 'src/Aevatar.Foundation.Runtime*/**'
+              - 'test/Aevatar.Foundation.Runtime.Hosting.Tests/**'
+              - '.github/workflows/ci.yml'
+            event_sourcing:
+              - 'src/Aevatar.Foundation.Core/**'
+              - 'src/Aevatar.Foundation.Runtime/**'
+              - 'src/Aevatar.Foundation.Runtime.Implementations.Orleans/**'
+              - 'src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/**'
+              - 'test/Aevatar.Foundation.Core.Tests/**'
+              - 'test/Aevatar.Foundation.Runtime.Hosting.Tests/**'
+              - 'tools/ci/event_sourcing_regression.sh'
+              - 'tools/ci/orleans_garnet_persistence_smoke.sh'
+              - 'tools/ci/architecture_guards.sh'
+              - '.github/workflows/ci.yml'
+
+  fast-gates:
+    if: github.event_name != 'schedule' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.core_code == 'true')
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
         with:
-          global-json-file: global.json
-
-      - name: Install ripgrep
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ripgrep
-
-      - name: Restore
-        run: dotnet restore aevatar.slnx --nologo
-
-      - name: Build
-        run: dotnet build aevatar.slnx --nologo --no-restore --tl:off -m:1 -p:UseSharedCompilation=false -p:NuGetAudit=false
-
-      - name: Coverage Quality Guard
-        env:
-          COVERAGE_LINE_THRESHOLD: "85"
-          COVERAGE_BRANCH_THRESHOLD: "72"
-        run: bash tools/ci/coverage_quality_guard.sh
+          setup-dotnet: "false"
+          cache-nuget: "false"
+          install-ripgrep: "true"
 
       - name: Architecture Guards (full-scan + projection route mapping)
         env:
@@ -51,11 +98,79 @@ jobs:
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
 
-      - name: Solution Split Test Guards
-        env:
-          SPLIT_TEST_NO_RESTORE: "1"
-          SPLIT_TEST_NO_BUILD: "1"
-        run: bash tools/ci/solution_split_test_guards.sh
+  split-test-guards:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        solution_filter:
+          - aevatar.foundation.slnf
+          - aevatar.ai.slnf
+          - aevatar.cqrs.slnf
+          - aevatar.workflow.slnf
+          - aevatar.hosting.slnf
+          - aevatar.distributed.slnf
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Run split test guard (${{ matrix.solution_filter }})
+        run: |
+          dotnet test "${{ matrix.solution_filter }}" \
+            --nologo \
+            --tl:off \
+            -m:1 \
+            -p:UseSharedCompilation=false \
+            -p:NuGetAudit=false
+
+  projection-provider-e2e:
+    if: |
+      github.event_name != 'schedule' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+        needs.changes.outputs.projection_provider == 'true'
+      )
+    needs:
+      - changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+        with:
+          install-ripgrep: "true"
+
+      - name: Projection Provider E2E Smoke Test
+        run: bash tools/ci/projection_provider_e2e_smoke.sh
+
+  kafka-transport-integration:
+    if: |
+      github.event_name != 'schedule' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+        needs.changes.outputs.kafka_runtime == 'true'
+      )
+    needs:
+      - changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Restore and Build
+        run: bash tools/ci/restore_and_build.sh
 
       - name: Start Kafka for Distributed Integration Test
         run: docker compose up -d kafka
@@ -94,6 +209,51 @@ jobs:
         if: always()
         run: docker compose down --volumes --remove-orphans
 
+  event-sourcing-regression:
+    if: |
+      github.event_name != 'schedule' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+        needs.changes.outputs.event_sourcing == 'true'
+      )
+    needs:
+      - changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+        with:
+          install-ripgrep: "true"
+
+      - name: EventSourcing Regression
+        run: bash tools/ci/event_sourcing_regression.sh
+
+  coverage-quality:
+    if: |
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Restore and Build
+        run: bash tools/ci/restore_and_build.sh
+
+      - name: Coverage Quality Guard
+        env:
+          COVERAGE_LINE_THRESHOLD: "85"
+          COVERAGE_BRANCH_THRESHOLD: "72"
+        run: bash tools/ci/coverage_quality_guard.sh
+
   distributed-3node-smoke:
     if: |
       github.event_name == 'schedule' ||
@@ -104,10 +264,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
 
       - name: 3-Node Distributed Smoke Test
         run: bash tools/ci/distributed_3node_smoke.sh

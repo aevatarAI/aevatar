@@ -39,6 +39,8 @@ public class ChatEndpointsInternalTests
         routePatterns.Should().Contain("/api/ws/chat");
         routePatterns.Should().Contain("/api/actors/{actorId}");
         routePatterns.Should().Contain("/api/actors/{actorId}/timeline");
+        routePatterns.Should().Contain("/api/actors/{actorId}/graph-edges");
+        routePatterns.Should().Contain("/api/actors/{actorId}/graph-subgraph");
     }
 
     [Fact]
@@ -77,13 +79,13 @@ public class ChatEndpointsInternalTests
 
                 await emitAsync(new WorkflowOutputFrame
                 {
-                    Type = "RUN_STARTED",
+                    Type = WorkflowRunEventTypes.RunStarted,
                     ThreadId = "actor-1",
                 }, ct);
 
                 await emitAsync(new WorkflowOutputFrame
                 {
-                    Type = "RUN_FINISHED",
+                    Type = WorkflowRunEventTypes.RunFinished,
                     ThreadId = "actor-1",
                 }, ct);
 
@@ -106,8 +108,49 @@ public class ChatEndpointsInternalTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         var body = await ReadBodyAsync(http);
         body.Should().Contain("data:");
-        body.Should().Contain("RUN_STARTED");
-        body.Should().Contain("RUN_FINISHED");
+        body.Should().Contain(WorkflowRunEventTypes.RunStarted);
+        body.Should().Contain(WorkflowRunEventTypes.RunFinished);
+    }
+
+    [Fact]
+    public async Task HandleChat_WhenWorkflowYamlProvided_ShouldForwardWorkflowYamlToRequest()
+    {
+        var http = CreateHttpContext();
+        WorkflowChatRunRequest? captured = null;
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (request, _, _, _) =>
+            {
+                captured = request;
+                return Task.FromResult(ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.WorkflowNotFound,
+                        null,
+                        null)));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput
+            {
+                Prompt = "hello",
+                WorkflowYaml = """
+                               name: inline_direct
+                               roles:
+                                 - id: assistant
+                                   name: Assistant
+                               steps:
+                                 - id: reply
+                                   type: llm_call
+                                   role: assistant
+                               """,
+            },
+            service,
+            CancellationToken.None);
+
+        captured.Should().NotBeNull();
+        captured!.WorkflowYaml.Should().Contain("name: inline_direct");
     }
 
     [Fact]
@@ -202,6 +245,36 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleCommand_WhenWorkflowYamlInvalid_ShouldReturn400WithStructuredCode()
+    {
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) => Task.FromResult(ToCoreResult(
+                new WorkflowChatRunExecutionResult(
+                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    null,
+                    null))),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput
+            {
+                Prompt = "hello",
+                WorkflowYaml = "invalid",
+            },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("INVALID_WORKFLOW_YAML");
+    }
+
+    [Fact]
     public async Task GetActorSnapshot_ShouldReturnSnapshot()
     {
         var queryService = new FakeQueryService
@@ -268,6 +341,107 @@ public class ChatEndpointsInternalTests
         doc.RootElement[0].GetProperty("stage").GetString().Should().Be("workflow.start");
     }
 
+    [Fact]
+    public async Task ListActorGraphEdges_ShouldReturnRelationItems()
+    {
+        var queryService = new FakeQueryService
+        {
+            ActorQueryEnabledValue = true,
+            RelationsByActorId = new Dictionary<string, IReadOnlyList<WorkflowActorGraphEdge>>(StringComparer.Ordinal)
+            {
+                ["actor-1"] =
+                [
+                    new WorkflowActorGraphEdge
+                    {
+                        EdgeId = "edge-1",
+                        FromNodeId = "actor-1",
+                        ToNodeId = "actor-2",
+                        EdgeType = "CHILD_OF",
+                    },
+                ],
+            },
+        };
+
+        var result = await ChatQueryEndpoints.ListActorGraphEdges("actor-1", queryService, 50, ct: CancellationToken.None);
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        doc.RootElement.GetArrayLength().Should().Be(1);
+        doc.RootElement[0].GetProperty("edgeId").GetString().Should().Be("edge-1");
+    }
+
+    [Fact]
+    public async Task ListActorGraphEdges_WhenDirectionAndEdgeTypesProvided_ShouldForwardQueryOptions()
+    {
+        var queryService = new FakeQueryService
+        {
+            ActorQueryEnabledValue = true,
+        };
+
+        var result = await ChatQueryEndpoints.ListActorGraphEdges(
+            "actor-1",
+            queryService,
+            50,
+            direction: "Outbound",
+            edgeTypes: ["CHILD_OF", "OWNS"],
+            ct: CancellationToken.None);
+        var (statusCode, _) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        queryService.LastGraphQueryOptions.Should().NotBeNull();
+        queryService.LastGraphQueryOptions!.Direction.Should().Be(WorkflowActorGraphDirection.Outbound);
+        queryService.LastGraphQueryOptions.EdgeTypes.Should().BeEquivalentTo(["CHILD_OF", "OWNS"]);
+    }
+
+    [Fact]
+    public async Task GetActorGraphSubgraph_ShouldReturnSubgraph()
+    {
+        var queryService = new FakeQueryService
+        {
+            ActorQueryEnabledValue = true,
+            SubgraphByActorId = new Dictionary<string, WorkflowActorGraphSubgraph>(StringComparer.Ordinal)
+            {
+                ["actor-1"] = new WorkflowActorGraphSubgraph
+                {
+                    RootNodeId = "actor-1",
+                    Nodes =
+                    [
+                        new WorkflowActorGraphNode
+                        {
+                            NodeId = "actor-1",
+                            NodeType = "Actor",
+                        },
+                        new WorkflowActorGraphNode
+                        {
+                            NodeId = "actor-2",
+                            NodeType = "Actor",
+                        },
+                    ],
+                    Edges =
+                    [
+                        new WorkflowActorGraphEdge
+                        {
+                            EdgeId = "edge-1",
+                            FromNodeId = "actor-1",
+                            ToNodeId = "actor-2",
+                            EdgeType = "CHILD_OF",
+                        },
+                    ],
+                },
+            },
+        };
+
+        var result = await ChatQueryEndpoints.GetActorGraphSubgraph("actor-1", queryService, 2, 50, ct: CancellationToken.None);
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        doc.RootElement.GetProperty("rootNodeId").GetString().Should().Be("actor-1");
+        doc.RootElement.GetProperty("nodes").GetArrayLength().Should().Be(2);
+        doc.RootElement.GetProperty("edges").GetArrayLength().Should().Be(1);
+    }
+
     private static DefaultHttpContext CreateHttpContext()
     {
         return new DefaultHttpContext
@@ -332,6 +506,9 @@ public class ChatEndpointsInternalTests
         public IReadOnlyList<string> Workflows { get; set; } = [];
         public Dictionary<string, WorkflowActorSnapshot> SnapshotByActorId { get; set; } = new(StringComparer.Ordinal);
         public Dictionary<string, IReadOnlyList<WorkflowActorTimelineItem>> TimelineByActorId { get; set; } = new(StringComparer.Ordinal);
+        public Dictionary<string, IReadOnlyList<WorkflowActorGraphEdge>> RelationsByActorId { get; set; } = new(StringComparer.Ordinal);
+        public Dictionary<string, WorkflowActorGraphSubgraph> SubgraphByActorId { get; set; } = new(StringComparer.Ordinal);
+        public WorkflowActorGraphQueryOptions? LastGraphQueryOptions { get; private set; }
 
         public bool ActorQueryEnabled => ActorQueryEnabledValue;
 
@@ -352,6 +529,61 @@ public class ChatEndpointsInternalTests
                 items = [];
 
             return Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>(items.Take(Math.Max(1, take)).ToList());
+        }
+
+        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
+            string actorId,
+            int take = 200,
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default)
+        {
+            LastGraphQueryOptions = options;
+            _ = options;
+            if (!RelationsByActorId.TryGetValue(actorId, out var items))
+                items = [];
+
+            return Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>(items.Take(Math.Max(1, take)).ToList());
+        }
+
+        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default)
+        {
+            LastGraphQueryOptions = options;
+            _ = depth;
+            _ = take;
+            _ = options;
+            if (!SubgraphByActorId.TryGetValue(actorId, out var item))
+            {
+                item = new WorkflowActorGraphSubgraph
+                {
+                    RootNodeId = actorId,
+                };
+            }
+
+            return Task.FromResult(item);
+        }
+
+        public async Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default)
+        {
+            var snapshot = await GetActorSnapshotAsync(actorId, ct);
+            if (snapshot == null)
+                return null;
+
+            var subgraph = await GetActorGraphSubgraphAsync(actorId, depth, take, options, ct);
+            return new WorkflowActorGraphEnrichedSnapshot
+            {
+                Snapshot = snapshot,
+                Subgraph = subgraph,
+            };
         }
     }
 

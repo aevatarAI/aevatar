@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+option csharp_namespace = "Aevatar.CQRS.Projection.Core.Orchestration";
+
+import "google/protobuf/timestamp.proto";
+
+message ProjectionDispatchCompensationOutboxState {
+  map<string, ProjectionDispatchCompensationOutboxEntry> entries = 1;
+}
+
+message ProjectionDispatchCompensationOutboxEntry {
+  string record_id = 1;
+  string operation = 2;
+  string failed_store = 3;
+  repeated string succeeded_stores = 4;
+  string read_model_type = 5;
+  string read_model_json = 6;
+  string key = 7;
+  google.protobuf.Timestamp enqueued_at_utc = 8;
+  google.protobuf.Timestamp next_visible_at_utc = 9;
+  int32 attempt_count = 10;
+  string last_error = 11;
+  google.protobuf.Timestamp completed_at_utc = 12;
+}
+
+message ProjectionCompensationEnqueuedEvent {
+  string record_id = 1;
+  string operation = 2;
+  string failed_store = 3;
+  repeated string succeeded_stores = 4;
+  string read_model_type = 5;
+  string read_model_json = 6;
+  string key = 7;
+  google.protobuf.Timestamp enqueued_at_utc = 8;
+  string last_error = 9;
+}
+
+message ProjectionCompensationRetryScheduledEvent {
+  string record_id = 1;
+  int32 attempt_count = 2;
+  google.protobuf.Timestamp next_visible_at_utc = 3;
+  string error = 4;
+}
+
+message ProjectionCompensationSucceededEvent {
+  string record_id = 1;
+  google.protobuf.Timestamp completed_at_utc = 2;
+}
+
+message ProjectionCompensationTriggerReplayEvent {
+  int32 batch_size = 1;
+}

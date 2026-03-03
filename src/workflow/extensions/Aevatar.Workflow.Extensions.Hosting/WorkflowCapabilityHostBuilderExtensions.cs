@@ -20,6 +20,7 @@ public static class WorkflowCapabilityHostBuilderExtensions
             options.EnableSkills = true;
             configureAIFeatures?.Invoke(options);
         });
+        builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
         builder.AddWorkflowCapability();
         builder.Services.AddWorkflowAIProjectionExtensions();
 

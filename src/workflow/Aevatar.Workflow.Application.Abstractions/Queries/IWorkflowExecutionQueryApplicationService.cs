@@ -11,4 +11,24 @@ public interface IWorkflowExecutionQueryApplicationService
     Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default);
 
     Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default);
+
+    Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
+        string actorId,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default);
+
+    Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default);
+
+    Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
+        string actorId,
+        int depth = 2,
+        int take = 200,
+        WorkflowActorGraphQueryOptions? options = null,
+        CancellationToken ct = default);
 }
