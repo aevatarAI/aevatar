@@ -63,7 +63,7 @@ bash tools/openclaw/setup_openclaw_connectors.sh
 | `llm_call` | — | LLMCallModule | 向目标 Role Agent 发送 ChatRequest，返回 LLM 响应 |
 | `tool_call` | — | ToolCallModule | 调用注册的 Agent 工具 |
 | `connector_call` | `bridge_call` | ConnectorCallModule | 调用框架 Connector（MCP/HTTP/CLI），支持 retry + timeout |
-| `openclaw_call` | `openclaw` | OpenClawModule | 直接执行 OpenClaw CLI（无需 connectors），支持超时、继续策略、截图落盘 |
+| `openclaw_call` | `openclaw` | OpenClawModule | 直接执行 OpenClaw CLI（仅允许 OpenClaw CLI；如需自定义路径使用 `AEVATAR_OPENCLAW_CLI_PATH`；无需 connectors），支持超时、继续策略、截图落盘 |
 | `evaluate` | `judge` | EvaluateModule | LLM-as-Judge 评估：打分 + 阈值分支 |
 | `reflect` | — | ReflectModule | 自我反思循环：critique → improve → critique，直到 PASS 或达到上限 |
 

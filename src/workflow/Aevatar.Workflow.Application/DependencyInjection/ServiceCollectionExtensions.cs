@@ -3,8 +3,10 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.OpenClaw;
 using Aevatar.Workflow.Application.Adapters;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Application.OpenClaw;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Runs;
@@ -62,6 +64,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowExecutionReportArtifactSink, NoopWorkflowExecutionReportArtifactSink>();
         services.TryAddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
         services.AddSingleton<IWorkflowRunCommandService, WorkflowChatRunApplicationService>();
+        services.TryAddSingleton<IOpenClawBridgeOrchestrationService, OpenClawBridgeOrchestrationService>();
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
         services.TryAddSingleton<WorkflowCommandExecutionServiceAdapter>();
         services.TryAddSingleton<ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>(sp =>

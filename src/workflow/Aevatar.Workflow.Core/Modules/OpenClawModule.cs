@@ -16,6 +16,8 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class OpenClawModule : IEventModule
 {
+    internal const string OpenClawCliPathEnv = "AEVATAR_OPENCLAW_CLI_PATH";
+    private const string DefaultOpenClawCli = "openclaw";
     private static readonly Regex MediaTokenRegex =
         new(@"MEDIA:(?<path>\S+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex BrowserProfileNotFoundRegex =
@@ -34,58 +36,55 @@ public sealed class OpenClawModule : IEventModule
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (!string.Equals(request.StepType, "openclaw_call", StringComparison.OrdinalIgnoreCase))
             return;
-
-        var cli = WorkflowParameterValueParser.GetString(
-            request.Parameters,
-            "openclaw",
-            "cli",
-            "command").Trim();
-        if (string.IsNullOrWhiteSpace(cli))
-            cli = "openclaw";
-
-        var argsRaw = WorkflowParameterValueParser.GetString(
-            request.Parameters,
-            string.Empty,
-            "args",
-            "arguments");
-        var args = NormalizeLegacyBrowserOpenArgs(ParseArguments(argsRaw));
-
-        var timeoutMs = WorkflowParameterValueParser.GetBoundedInt(
-            request.Parameters,
-            30_000,
-            100,
-            300_000,
-            "timeout_ms");
-
-        var onError = WorkflowParameterValueParser.GetString(
-            request.Parameters,
-            "fail",
-            "on_error");
-        var continueOnError = string.Equals(onError, "continue", StringComparison.OrdinalIgnoreCase);
-
-        var saveMediaTo = WorkflowParameterValueParser.GetString(
-            request.Parameters,
-            string.Empty,
-            "save_media_to",
-            "save_to",
-            "save_dir").Trim();
-
-        var workingDirectory = WorkflowParameterValueParser.GetString(
-            request.Parameters,
-            string.Empty,
-            "working_directory",
-            "cwd").Trim();
-
-        var stdinMode = WorkflowParameterValueParser.GetString(
-            request.Parameters,
-            "none",
-            "stdin_mode",
-            "stdin").Trim();
-        var stdIn = ResolveStdIn(stdinMode, request.Input);
-
+        var cli = DefaultOpenClawCli;
+        IReadOnlyList<string> args = [];
+        var timeoutMs = 30_000;
+        var continueOnError = false;
         var sw = Stopwatch.StartNew();
         try
         {
+            cli = ResolveOpenClawCli(request.Parameters);
+
+            var argsRaw = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                string.Empty,
+                "args",
+                "arguments");
+            args = NormalizeLegacyBrowserOpenArgs(ParseArguments(argsRaw));
+
+            timeoutMs = WorkflowParameterValueParser.GetBoundedInt(
+                request.Parameters,
+                30_000,
+                100,
+                300_000,
+                "timeout_ms");
+
+            var onError = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                "fail",
+                "on_error");
+            continueOnError = string.Equals(onError, "continue", StringComparison.OrdinalIgnoreCase);
+
+            var saveMediaTo = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                string.Empty,
+                "save_media_to",
+                "save_to",
+                "save_dir").Trim();
+
+            var workingDirectory = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                string.Empty,
+                "working_directory",
+                "cwd").Trim();
+
+            var stdinMode = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                "none",
+                "stdin_mode",
+                "stdin").Trim();
+            var stdIn = ResolveStdIn(stdinMode, request.Input);
+
             var commandOutcome = await ExecuteCommandWithProfileRecoveryAsync(
                 cli,
                 args,
@@ -320,6 +319,65 @@ public sealed class OpenClawModule : IEventModule
         {
             // Best effort only.
         }
+    }
+
+    private static string ResolveOpenClawCli(IReadOnlyDictionary<string, string> parameters)
+    {
+        var requestedCli = WorkflowParameterValueParser.GetString(
+            parameters,
+            string.Empty,
+            "openclaw",
+            "cli",
+            "command").Trim();
+        ValidateOpenClawExecutableIdentity(
+            requestedCli,
+            "Step parameters 'openclaw/cli/command'",
+            allowEmpty: true);
+
+        var overriddenCli = Environment.GetEnvironmentVariable(OpenClawCliPathEnv);
+        if (!string.IsNullOrWhiteSpace(overriddenCli))
+        {
+            return ValidateOpenClawExecutableIdentity(
+                overriddenCli,
+                $"Environment variable '{OpenClawCliPathEnv}'");
+        }
+
+        return DefaultOpenClawCli;
+    }
+
+    private static string ValidateOpenClawExecutableIdentity(
+        string? rawValue,
+        string source,
+        bool allowEmpty = false)
+    {
+        var normalized = rawValue?.Trim() ?? string.Empty;
+        if (normalized.Length == 0)
+        {
+            if (allowEmpty)
+                return string.Empty;
+
+            throw new InvalidOperationException(
+                $"{source} must reference the OpenClaw CLI executable.");
+        }
+
+        if (IsOpenClawExecutable(normalized))
+            return normalized;
+
+        throw new InvalidOperationException(
+            $"{source} must reference the OpenClaw CLI executable. Use '{DefaultOpenClawCli}' or a path whose executable name is '{DefaultOpenClawCli}'.");
+    }
+
+    private static bool IsOpenClawExecutable(string value)
+    {
+        var normalized = value.Trim();
+        if (normalized.Length == 0)
+            return false;
+
+        if (string.Equals(normalized, DefaultOpenClawCli, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var fileName = Path.GetFileNameWithoutExtension(normalized);
+        return string.Equals(fileName, DefaultOpenClawCli, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryGetBrowserProfileFromArgs(IReadOnlyList<string> args, out string browserProfile)

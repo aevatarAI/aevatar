@@ -35,62 +35,146 @@ public sealed class OpenClawModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenCommandSucceeds_ShouldPublishSuccess()
     {
-        var module = new OpenClawModule();
-        var ctx = CreateContext();
-        var request = new StepRequestEvent
+        await RunWithMockOpenClawCliAsync(
+            """
+            #!/bin/sh
+            set -eu
+            if [ "${1:-}" = "--version" ]; then
+              echo "openclaw mock 1.0"
+              exit 0
+            fi
+
+            echo "unsupported args: $*" >&2
+            exit 9
+            """,
+            async cliPath =>
         {
-            StepId = "s-ok",
-            StepType = "openclaw_call",
-            Parameters =
+            var module = new OpenClawModule();
+            var ctx = CreateContext();
+            var request = new StepRequestEvent
             {
-                ["cli"] = "dotnet",
-                ["args"] = "--version",
-                ["timeout_ms"] = "20000",
-            },
-        };
+                StepId = "s-ok",
+                StepType = "openclaw_call",
+                Parameters =
+                {
+                    ["args"] = "--version",
+                    ["timeout_ms"] = "20000",
+                },
+            };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
-        completed.Success.Should().BeTrue();
-        completed.Output.Should().NotBeNullOrWhiteSpace();
-        completed.Metadata["openclaw.cli"].Should().Be("dotnet");
-        completed.Metadata["openclaw.args"].Should().Contain("--version");
+            var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+            completed.Success.Should().BeTrue();
+            completed.Output.Should().NotBeNullOrWhiteSpace();
+            completed.Metadata["openclaw.cli"].Should().Be(cliPath);
+            completed.Metadata["openclaw.args"].Should().Contain("--version");
+        },
+            """
+            @echo off
+            if "%~1"=="--version" (
+              echo openclaw mock 1.0
+              exit /b 0
+            )
+
+            echo unsupported args: %* 1>&2
+            exit /b 9
+            """);
     }
 
     [Fact]
     public async Task HandleAsync_WhenCommandFailsAndContinue_ShouldKeepInput()
     {
+        await RunWithMockOpenClawCliAsync(
+            """
+            #!/bin/sh
+            set -eu
+            echo "unknown command: $*" >&2
+            exit 2
+            """,
+            async _ =>
+        {
+            var module = new OpenClawModule();
+            var ctx = CreateContext();
+            var request = new StepRequestEvent
+            {
+                StepId = "s-continue",
+                StepType = "openclaw_call",
+                Input = "fallback-input",
+                Parameters =
+                {
+                    ["args"] = "__this_command_does_not_exist__",
+                    ["on_error"] = "continue",
+                    ["timeout_ms"] = "20000",
+                },
+            };
+
+            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+            var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+            completed.Success.Should().BeTrue();
+            completed.Output.Should().Be("fallback-input");
+            completed.Metadata["openclaw.continued_on_error"].Should().Be("true");
+            completed.Metadata.Should().ContainKey("openclaw.error");
+        },
+            """
+            @echo off
+            echo unknown command: %* 1>&2
+            exit /b 2
+            """);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenCliParameterOverridesNonOpenClawBinary_ShouldFailFast()
+    {
         var module = new OpenClawModule();
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
-            StepId = "s-continue",
+            StepId = "s-cli-reject",
             StepType = "openclaw_call",
-            Input = "fallback-input",
             Parameters =
             {
                 ["cli"] = "dotnet",
-                ["args"] = "__this_command_does_not_exist__",
-                ["on_error"] = "continue",
-                ["timeout_ms"] = "20000",
+                ["args"] = "--version",
             },
         };
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
-        completed.Success.Should().BeTrue();
-        completed.Output.Should().Be("fallback-input");
-        completed.Metadata["openclaw.continued_on_error"].Should().Be("true");
-        completed.Metadata.Should().ContainKey("openclaw.error");
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("must reference the OpenClaw CLI executable");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenEnvOverrideUsesNonOpenClawBinary_ShouldFailFast()
+    {
+        var module = new OpenClawModule();
+        var ctx = CreateContext();
+        var request = new StepRequestEvent
+        {
+            StepId = "s-env-cli-reject",
+            StepType = "openclaw_call",
+            Parameters =
+            {
+                ["args"] = "--version",
+            },
+        };
+
+        await RunWithOpenClawCliPathAsync("dotnet", async () =>
+        {
+            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        });
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("AEVATAR_OPENCLAW_CLI_PATH");
     }
 
     [Fact]
     public async Task HandleAsync_WhenSaveMediaToConfigured_ShouldCopyArtifactAndReturnSavedPath()
     {
-        if (!CommandExists("python3"))
-            return;
 
         var sourceDir = Path.Combine(Path.GetTempPath(), "aevatar-openclaw-source-" + Guid.NewGuid().ToString("N"));
         var saveDir = Path.Combine(Path.GetTempPath(), "aevatar-openclaw-save-" + Guid.NewGuid().ToString("N"));
@@ -107,29 +191,54 @@ public sealed class OpenClawModuleCoverageTests
                 sourcePath,
             });
 
-            var module = new OpenClawModule();
-            var ctx = CreateContext();
-            var request = new StepRequestEvent
+            await RunWithMockOpenClawCliAsync(
+                """
+                #!/bin/sh
+                set -eu
+                last=""
+                for arg in "$@"; do
+                  last="$arg"
+                done
+
+                printf '%s\n' "$last"
+                """,
+                async _ =>
             {
-                StepId = "s-save",
-                StepType = "openclaw_call",
-                Parameters =
+                var module = new OpenClawModule();
+                var ctx = CreateContext();
+                var request = new StepRequestEvent
                 {
-                    ["cli"] = "python3",
-                    ["args"] = args,
-                    ["save_media_to"] = saveDir,
-                    ["timeout_ms"] = "20000",
-                },
-            };
+                    StepId = "s-save",
+                    StepType = "openclaw_call",
+                    Parameters =
+                    {
+                        ["args"] = args,
+                        ["save_media_to"] = saveDir,
+                        ["timeout_ms"] = "20000",
+                    },
+                };
 
-            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+                await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
-            var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
-            completed.Success.Should().BeTrue();
-            completed.Output.Should().NotBeNullOrWhiteSpace();
-            File.Exists(completed.Output).Should().BeTrue();
-            completed.Metadata["openclaw.media_source_path"].Should().Be(sourcePath);
-            completed.Metadata["openclaw.saved_path"].Should().Be(completed.Output);
+                var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+                completed.Success.Should().BeTrue();
+                completed.Output.Should().NotBeNullOrWhiteSpace();
+                File.Exists(completed.Output).Should().BeTrue();
+                completed.Metadata["openclaw.media_source_path"].Should().Be(sourcePath);
+                completed.Metadata["openclaw.saved_path"].Should().Be(completed.Output);
+            },
+                """
+                @echo off
+                setlocal EnableDelayedExpansion
+                set "last="
+                :loop
+                if "%~1"=="" goto done
+                set "last=%~1"
+                shift
+                goto loop
+                :done
+                echo !last!
+                """);
         }
         finally
         {
@@ -148,7 +257,9 @@ public sealed class OpenClawModuleCoverageTests
 
         var tempDir = Path.Combine(Path.GetTempPath(), "aevatar-openclaw-mock-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
-        var scriptPath = Path.Combine(tempDir, "mock-openclaw.sh");
+        var scriptPath = OperatingSystem.IsWindows()
+            ? Path.Combine(tempDir, "openclaw.cmd")
+            : Path.Combine(tempDir, "openclaw");
         var markerPath = Path.Combine(tempDir, "profile-created.txt");
         var previousMarkerPath = Environment.GetEnvironmentVariable("MOCK_PROFILE_MARKER");
         Environment.SetEnvironmentVariable("MOCK_PROFILE_MARKER", markerPath);
@@ -228,28 +339,30 @@ public sealed class OpenClawModuleCoverageTests
                 scriptPath,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-            var module = new OpenClawModule();
-            var ctx = CreateContext();
-            var request = new StepRequestEvent
+            await RunWithOpenClawCliPathAsync(scriptPath, async () =>
             {
-                StepId = "s-profile-recovery",
-                StepType = "openclaw_call",
-                Parameters =
+                var module = new OpenClawModule();
+                var ctx = CreateContext();
+                var request = new StepRequestEvent
                 {
-                    ["cli"] = scriptPath,
-                    ["args"] = "browser start --browser-profile session-missing",
-                    ["timeout_ms"] = "20000",
-                },
-            };
+                    StepId = "s-profile-recovery",
+                    StepType = "openclaw_call",
+                    Parameters =
+                    {
+                        ["args"] = "browser start --browser-profile session-missing",
+                        ["timeout_ms"] = "20000",
+                    },
+                };
 
-            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+                await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
-            var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
-            completed.Success.Should().BeTrue();
-            completed.Output.Should().Contain("started:session-missing");
-            completed.Metadata["openclaw.profile_recovery_attempted"].Should().Be("true");
-            completed.Metadata["openclaw.profile_recovery_succeeded"].Should().Be("true");
-            completed.Metadata["openclaw.browser_profile"].Should().Be("session-missing");
+                var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+                completed.Success.Should().BeTrue();
+                completed.Output.Should().Contain("started:session-missing");
+                completed.Metadata["openclaw.profile_recovery_attempted"].Should().Be("true");
+                completed.Metadata["openclaw.profile_recovery_succeeded"].Should().Be("true");
+                completed.Metadata["openclaw.browser_profile"].Should().Be("session-missing");
+            });
         }
         finally
         {
@@ -267,7 +380,9 @@ public sealed class OpenClawModuleCoverageTests
 
         var tempDir = Path.Combine(Path.GetTempPath(), "aevatar-openclaw-open-compat-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
-        var scriptPath = Path.Combine(tempDir, "mock-openclaw-open.sh");
+        var scriptPath = OperatingSystem.IsWindows()
+            ? Path.Combine(tempDir, "openclaw.cmd")
+            : Path.Combine(tempDir, "openclaw");
 
         try
         {
@@ -333,27 +448,29 @@ public sealed class OpenClawModuleCoverageTests
                 scriptPath,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-            var module = new OpenClawModule();
-            var ctx = CreateContext();
-            var request = new StepRequestEvent
+            await RunWithOpenClawCliPathAsync(scriptPath, async () =>
             {
-                StepId = "s-open-compat",
-                StepType = "openclaw_call",
-                Parameters =
+                var module = new OpenClawModule();
+                var ctx = CreateContext();
+                var request = new StepRequestEvent
                 {
-                    ["cli"] = scriptPath,
-                    ["args"] = "browser open --browser-profile legacy-profile https://example.com --json",
-                    ["timeout_ms"] = "20000",
-                },
-            };
+                    StepId = "s-open-compat",
+                    StepType = "openclaw_call",
+                    Parameters =
+                    {
+                        ["args"] = "browser open --browser-profile legacy-profile https://example.com --json",
+                        ["timeout_ms"] = "20000",
+                    },
+                };
 
-            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+                await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
-            var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
-            completed.Success.Should().BeTrue();
-            completed.Output.Should().Contain("opened:https://example.com");
-            completed.Output.Should().Contain("profile=legacy-profile");
-            completed.Metadata["openclaw.args"].Should().Be("browser --browser-profile legacy-profile --json open https://example.com");
+                var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+                completed.Success.Should().BeTrue();
+                completed.Output.Should().Contain("opened:https://example.com");
+                completed.Output.Should().Contain("profile=legacy-profile");
+                completed.Metadata["openclaw.args"].Should().Be("browser --browser-profile legacy-profile --json open https://example.com");
+            });
         }
         finally
         {
@@ -362,36 +479,67 @@ public sealed class OpenClawModuleCoverageTests
         }
     }
 
-    private static bool CommandExists(string command)
-    {
-        var path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrWhiteSpace(path))
-            return false;
-
-        var pathExt = OperatingSystem.IsWindows()
-            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT")
-                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            : [""];
-
-        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            foreach (var ext in pathExt)
-            {
-                var candidate = Path.Combine(dir, command + ext);
-                if (File.Exists(candidate))
-                    return true;
-            }
-        }
-
-        return false;
-    }
-
     private static RecordingEventHandlerContext CreateContext()
     {
         return new RecordingEventHandlerContext(
             new ServiceCollection().BuildServiceProvider(),
             new StubAgent("openclaw-module-test-agent"),
             NullLogger.Instance);
+    }
+
+    private static async Task RunWithMockOpenClawCliAsync(
+        string unixScript,
+        Func<string, Task> action,
+        string? windowsScript = null)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "aevatar-openclaw-cli-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var cliPath = await CreateMockOpenClawCliAsync(tempDir, unixScript, windowsScript);
+            await RunWithOpenClawCliPathAsync(cliPath, () => action(cliPath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    private static async Task RunWithOpenClawCliPathAsync(string cliPath, Func<Task> action)
+    {
+        const string envName = "AEVATAR_OPENCLAW_CLI_PATH";
+        var previous = Environment.GetEnvironmentVariable(envName);
+        Environment.SetEnvironmentVariable(envName, cliPath);
+        try
+        {
+            await action();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envName, previous);
+        }
+    }
+
+    private static async Task<string> CreateMockOpenClawCliAsync(
+        string tempDir,
+        string unixScript,
+        string? windowsScript = null)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var scriptPath = Path.Combine(tempDir, "openclaw.cmd");
+            var content = windowsScript ?? throw new InvalidOperationException("Windows mock OpenClaw script is required.");
+            await File.WriteAllTextAsync(scriptPath, content);
+            return scriptPath;
+        }
+
+        var unixPath = Path.Combine(tempDir, "openclaw");
+        await File.WriteAllTextAsync(unixPath, unixScript);
+        File.SetUnixFileMode(
+            unixPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return unixPath;
     }
 
     private static EventEnvelope Envelope(IMessage evt)

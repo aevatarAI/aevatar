@@ -41,6 +41,12 @@
 }
 ```
 
+安全约束：
+
+- `RequireAuthToken` 默认应保持开启；未配置 token 时，bridge 会拒绝请求而不是回落到匿名访问。
+- `callbackUrl` 只有在 host 命中 `CallbackAllowedHosts` 时才会被接受；空 allowlist 表示默认禁用 callback。
+- 若请求提供了 `callbackUrl`，但部署方未配置 allowlist 或 host 不在白名单内，bridge 会直接返回 `400 CALLBACK_HOST_NOT_ALLOWED`。
+
 ## 3. OpenClaw Hook 入站请求（到 Aevatar）
 
 请求示例：
@@ -130,6 +136,7 @@ Bridge 会向 `callbackUrl` 回传事件。默认事件类型：
 - `eventId`：`${idempotencyKey}:${sequence}`，可直接用于去重。
 - `actorId` / `commandId`：`started` 事件后持续透传到后续 `frame/completed/failed` 事件，保证链路连续性。
 - `CallbackAllowedHosts` 非空时，仅允许向白名单 host 发送 callback。
+- `CallbackAllowedHosts` 为空时，callback 默认为关闭状态，不会接受任意 host。
 - callback 发送支持 `CallbackMaxAttempts` + `CallbackRetryDelayMs` 重试，不阻断主流程。
 
 ## 4.1 幂等与重复请求策略

@@ -20,6 +20,7 @@
   - `ICommandExecutionService<WorkflowChatRunRequest,...>`
   - `IWorkflowExecutionQueryApplicationService`
 - 不承载 workflow/cqrs 业务编排。
+- OpenClaw bridge 默认要求显式 auth token；若使用 `callbackUrl`，其 host 必须命中 `OpenClawBridge:CallbackAllowedHosts`。
 
 ## `/api/chat` 入参速查
 

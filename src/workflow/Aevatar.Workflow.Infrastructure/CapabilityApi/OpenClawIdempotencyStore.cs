@@ -1,99 +1,28 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Workflow.Application.Abstractions.OpenClaw;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
-internal static class OpenClawIdempotencyStatuses
-{
-    public const string Pending = "pending";
-    public const string Started = "started";
-    public const string Completed = "completed";
-    public const string Failed = "failed";
-}
-
-internal enum OpenClawIdempotencyAcquireStatus
-{
-    Acquired = 0,
-    ExistingPending = 1,
-    ExistingStarted = 2,
-    ExistingCompleted = 3,
-    ExistingFailed = 4,
-}
-
-internal sealed record OpenClawIdempotencyAcquireRequest(
-    string IdempotencyKey,
-    string SessionKey,
-    string CorrelationId,
-    string ActorId,
-    string WorkflowName,
-    string ChannelId,
-    string UserId,
-    string MessageId,
-    int TtlHours);
-
-internal sealed record OpenClawIdempotencyAcquireResult(
-    OpenClawIdempotencyAcquireStatus Status,
-    OpenClawIdempotencyRecord? Record);
-
-internal sealed record OpenClawIdempotencyRecord
-{
-    public required string IdempotencyKey { get; init; }
-    public required string SessionKey { get; init; }
-    public required string CorrelationId { get; init; }
-    public required string ActorId { get; init; }
-    public required string WorkflowName { get; init; }
-    public required string ChannelId { get; init; }
-    public required string UserId { get; init; }
-    public required string MessageId { get; init; }
-    public required string Status { get; init; }
-    public required long CreatedAtUnixMs { get; init; }
-    public required long UpdatedAtUnixMs { get; init; }
-    public required long ExpiresAtUnixMs { get; init; }
-    public string CommandId { get; init; } = "";
-    public string LastErrorCode { get; init; } = "";
-    public string LastErrorMessage { get; init; } = "";
-
-    public bool IsExpired(long nowUnixMs) =>
-        ExpiresAtUnixMs > 0 && ExpiresAtUnixMs <= nowUnixMs;
-}
-
-internal interface IOpenClawIdempotencyStore
-{
-    Task<OpenClawIdempotencyAcquireResult> AcquireAsync(
-        OpenClawIdempotencyAcquireRequest request,
-        CancellationToken ct = default);
-
-    Task MarkStartedAsync(
-        string idempotencyKey,
-        string actorId,
-        string commandId,
-        string workflowName,
-        CancellationToken ct = default);
-
-    Task MarkCompletedAsync(
-        string idempotencyKey,
-        bool success,
-        string errorCode,
-        string errorMessage,
-        CancellationToken ct = default);
-}
-
 internal sealed class ManifestBackedOpenClawIdempotencyStore : IOpenClawIdempotencyStore
 {
     private const string ManifestTypeName = "Aevatar.Workflow.OpenClaw.Idempotency";
-    private static readonly SemaphoreSlim Gate = new(1, 1);
 
     private readonly IAgentManifestStore _manifestStore;
+    private readonly IProjectionOwnershipCoordinator _ownershipCoordinator;
     private readonly ILogger<ManifestBackedOpenClawIdempotencyStore> _logger;
 
     public ManifestBackedOpenClawIdempotencyStore(
         IAgentManifestStore manifestStore,
+        IProjectionOwnershipCoordinator ownershipCoordinator,
         ILogger<ManifestBackedOpenClawIdempotencyStore> logger)
     {
         _manifestStore = manifestStore;
+        _ownershipCoordinator = ownershipCoordinator;
         _logger = logger;
     }
 
@@ -110,15 +39,37 @@ internal sealed class ManifestBackedOpenClawIdempotencyStore : IOpenClawIdempote
             .AddHours(Math.Clamp(request.TtlHours, 1, 24 * 30))
             .ToUnixTimeMilliseconds();
         var manifestId = BuildManifestId(idempotencyKey);
+        var ownershipScopeId = BuildOwnershipScopeId(idempotencyKey);
+        var acquisitionSessionId = Guid.NewGuid().ToString("N");
 
-        await Gate.WaitAsync(ct);
+        try
+        {
+            await _ownershipCoordinator.AcquireAsync(ownershipScopeId, acquisitionSessionId, ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (!IsOwnershipBusy(ex))
+                throw;
+
+            _logger.LogDebug(
+                ex,
+                "OpenClaw idempotency ownership is already active. key={IdempotencyKey}",
+                idempotencyKey);
+
+            var existingBusyRecord = await LoadRecordAsync(manifestId, ct);
+            if (existingBusyRecord != null && !existingBusyRecord.IsExpired(nowUnixMs))
+                return new OpenClawIdempotencyAcquireResult(MapAcquireStatus(existingBusyRecord.Status), existingBusyRecord);
+
+            return new OpenClawIdempotencyAcquireResult(
+                OpenClawIdempotencyAcquireStatus.ExistingPending,
+                BuildProvisionalPendingRecord(request, idempotencyKey, nowUnixMs, expiresAtUnixMs));
+        }
+
         try
         {
             var existing = await LoadRecordAsync(manifestId, ct);
             if (existing != null && !existing.IsExpired(nowUnixMs))
-            {
                 return new OpenClawIdempotencyAcquireResult(MapAcquireStatus(existing.Status), existing);
-            }
 
             var pending = new OpenClawIdempotencyRecord
             {
@@ -141,7 +92,7 @@ internal sealed class ManifestBackedOpenClawIdempotencyStore : IOpenClawIdempote
         }
         finally
         {
-            Gate.Release();
+            await TryReleaseOwnershipAsync(ownershipScopeId, acquisitionSessionId);
         }
     }
 
@@ -157,27 +108,19 @@ internal sealed class ManifestBackedOpenClawIdempotencyStore : IOpenClawIdempote
             return;
 
         var manifestId = BuildManifestId(normalizedIdempotencyKey);
-        await Gate.WaitAsync(ct);
-        try
-        {
-            var current = await LoadRecordAsync(manifestId, ct);
-            if (current == null)
-                return;
+        var current = await LoadRecordAsync(manifestId, ct);
+        if (current == null)
+            return;
 
-            var updated = current with
-            {
-                ActorId = NormalizeToken(actorId),
-                CommandId = NormalizeToken(commandId),
-                WorkflowName = NormalizeToken(workflowName),
-                Status = OpenClawIdempotencyStatuses.Started,
-                UpdatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            };
-            await SaveRecordAsync(manifestId, updated, ct);
-        }
-        finally
+        var updated = current with
         {
-            Gate.Release();
-        }
+            ActorId = NormalizeToken(actorId),
+            CommandId = NormalizeToken(commandId),
+            WorkflowName = NormalizeToken(workflowName),
+            Status = OpenClawIdempotencyStatuses.Started,
+            UpdatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+        await SaveRecordAsync(manifestId, updated, ct);
     }
 
     public async Task MarkCompletedAsync(
@@ -192,28 +135,37 @@ internal sealed class ManifestBackedOpenClawIdempotencyStore : IOpenClawIdempote
             return;
 
         var manifestId = BuildManifestId(normalizedIdempotencyKey);
-        await Gate.WaitAsync(ct);
+        var current = await LoadRecordAsync(manifestId, ct);
+        if (current == null)
+            return;
+
+        var status = success
+            ? OpenClawIdempotencyStatuses.Completed
+            : OpenClawIdempotencyStatuses.Failed;
+        var updated = current with
+        {
+            Status = status,
+            LastErrorCode = NormalizeToken(errorCode),
+            LastErrorMessage = NormalizeToken(errorMessage),
+            UpdatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+        await SaveRecordAsync(manifestId, updated, ct);
+    }
+
+    private async Task TryReleaseOwnershipAsync(
+        string scopeId,
+        string sessionId)
+    {
         try
         {
-            var current = await LoadRecordAsync(manifestId, ct);
-            if (current == null)
-                return;
-
-            var status = success
-                ? OpenClawIdempotencyStatuses.Completed
-                : OpenClawIdempotencyStatuses.Failed;
-            var updated = current with
-            {
-                Status = status,
-                LastErrorCode = NormalizeToken(errorCode),
-                LastErrorMessage = NormalizeToken(errorMessage),
-                UpdatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            };
-            await SaveRecordAsync(manifestId, updated, ct);
+            await _ownershipCoordinator.ReleaseAsync(scopeId, sessionId, CancellationToken.None);
         }
-        finally
+        catch (Exception ex)
         {
-            Gate.Release();
+            _logger.LogDebug(
+                ex,
+                "OpenClaw idempotency ownership release skipped. scope={ScopeId}",
+                scopeId);
         }
     }
 
@@ -259,6 +211,27 @@ internal sealed class ManifestBackedOpenClawIdempotencyStore : IOpenClawIdempote
         return _manifestStore.SaveAsync(manifestId, manifest, ct);
     }
 
+    private static OpenClawIdempotencyRecord BuildProvisionalPendingRecord(
+        OpenClawIdempotencyAcquireRequest request,
+        string idempotencyKey,
+        long nowUnixMs,
+        long expiresAtUnixMs) =>
+        new()
+        {
+            IdempotencyKey = idempotencyKey,
+            SessionKey = NormalizeToken(request.SessionKey),
+            CorrelationId = NormalizeToken(request.CorrelationId),
+            ActorId = NormalizeToken(request.ActorId),
+            WorkflowName = NormalizeToken(request.WorkflowName),
+            ChannelId = NormalizeToken(request.ChannelId),
+            UserId = NormalizeToken(request.UserId),
+            MessageId = NormalizeToken(request.MessageId),
+            Status = OpenClawIdempotencyStatuses.Pending,
+            CreatedAtUnixMs = nowUnixMs,
+            UpdatedAtUnixMs = nowUnixMs,
+            ExpiresAtUnixMs = expiresAtUnixMs,
+        };
+
     private static OpenClawIdempotencyAcquireStatus MapAcquireStatus(string status) =>
         status switch
         {
@@ -275,6 +248,16 @@ internal sealed class ManifestBackedOpenClawIdempotencyStore : IOpenClawIdempote
         var hash = Convert.ToHexString(bytes).ToLowerInvariant();
         return $"openclaw.idempotency.{hash[..32]}";
     }
+
+    private static string BuildOwnershipScopeId(string idempotencyKey)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey));
+        var hash = Convert.ToHexString(bytes).ToLowerInvariant();
+        return $"openclaw:idempotency:{hash[..32]}";
+    }
+
+    private static bool IsOwnershipBusy(InvalidOperationException ex) =>
+        ex.Message.Contains("already active", StringComparison.OrdinalIgnoreCase);
 
     private static string NormalizeToken(string? value) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();

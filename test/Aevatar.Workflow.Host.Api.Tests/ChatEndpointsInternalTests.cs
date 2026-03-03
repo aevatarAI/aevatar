@@ -3,12 +3,15 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.Workflows;
+using Aevatar.Workflow.Application.Abstractions.OpenClaw;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.OpenClaw;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
@@ -565,7 +568,7 @@ public class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         var service = new FakeChatRunApplicationService();
 
-        var result = await OpenClawBridgeEndpoints.HandleOpenClawAgentHook(
+        var result = await InvokeOpenClawAgentHookAsync(
             http,
             new OpenClawAgentHookInput
             {
@@ -573,18 +576,41 @@ public class ChatEndpointsInternalTests
                 SessionId = "session-a",
             },
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
-            Options.Create(new OpenClawBridgeOptions
+            new OpenClawBridgeOptions
             {
                 RequireAuthToken = true,
                 AuthToken = "bridge-secret",
-            }),
-            httpClientFactory: null,
+            },
             ct: CancellationToken.None);
 
         var (statusCode, body) = await ExecuteResultAsync(result);
         using var doc = JsonDocument.Parse(body);
+        statusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("UNAUTHORIZED");
+    }
+
+    [Fact]
+    public async Task HandleOpenClawAgentHook_WithDefaultOptions_ShouldRequireAuthToken()
+    {
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService();
+
+        var result = await InvokeOpenClawAgentHookAsync(
+            CreateHttpContext(),
+            new OpenClawAgentHookInput
+            {
+                Prompt = "default auth hardening",
+                SessionId = "session-default-auth",
+            },
+            service,
+            loggerFactory,
+            new OpenClawBridgeOptions(),
+            ct: CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
         statusCode.Should().Be(StatusCodes.Status401Unauthorized);
         doc.RootElement.GetProperty("code").GetString().Should().Be("UNAUTHORIZED");
     }
@@ -620,32 +646,28 @@ public class ChatEndpointsInternalTests
             Workflow = "direct",
         };
 
-        var result1 = await OpenClawBridgeEndpoints.HandleOpenClawAgentHook(
+        var result1 = await InvokeOpenClawAgentHookAsync(
             CreateHttpContext(),
             input,
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
-            Options.Create(new OpenClawBridgeOptions
+            new OpenClawBridgeOptions
             {
                 RequireAuthToken = false,
-            }),
-            httpClientFactory: null,
+            },
             ct: CancellationToken.None);
         var (statusCode1, body1) = await ExecuteResultAsync(result1);
         statusCode1.Should().Be(StatusCodes.Status202Accepted);
 
-        var result2 = await OpenClawBridgeEndpoints.HandleOpenClawAgentHook(
+        var result2 = await InvokeOpenClawAgentHookAsync(
             CreateHttpContext(),
             input,
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
-            Options.Create(new OpenClawBridgeOptions
+            new OpenClawBridgeOptions
             {
                 RequireAuthToken = false,
-            }),
-            httpClientFactory: null,
+            },
             ct: CancellationToken.None);
         var (statusCode2, body2) = await ExecuteResultAsync(result2);
         statusCode2.Should().Be(StatusCodes.Status202Accepted);
@@ -665,7 +687,9 @@ public class ChatEndpointsInternalTests
         using var loggerFactory = LoggerFactory.Create(_ => { });
         var receiptHandler = new RecordingReceiptHttpHandler();
         using var receiptClient = new HttpClient(receiptHandler);
-        var httpClientFactory = new StaticHttpClientFactory(receiptClient);
+        var dispatcher = new HttpOpenClawBridgeReceiptDispatcher(
+            loggerFactory.CreateLogger<HttpOpenClawBridgeReceiptDispatcher>(),
+            new StaticHttpClientFactory(receiptClient));
         var service = new FakeChatRunApplicationService
         {
             ExecuteHandler = async (request, emitAsync, onStartedAsync, ct) =>
@@ -691,7 +715,7 @@ public class ChatEndpointsInternalTests
             },
         };
 
-        var result = await OpenClawBridgeEndpoints.HandleOpenClawAgentHook(
+        var result = await InvokeOpenClawAgentHookAsync(
             CreateHttpContext(),
             new OpenClawAgentHookInput
             {
@@ -704,14 +728,13 @@ public class ChatEndpointsInternalTests
                 CallbackToken = "cb-secret",
             },
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
-            Options.Create(new OpenClawBridgeOptions
+            new OpenClawBridgeOptions
             {
                 RequireAuthToken = false,
-            }),
-            httpClientFactory,
-            idempotencyStore: null,
+                CallbackAllowedHosts = ["callback.example"],
+            },
+            receiptDispatcher: dispatcher,
             ct: CancellationToken.None);
 
         var (statusCode, _) = await ExecuteResultAsync(result);
@@ -737,7 +760,9 @@ public class ChatEndpointsInternalTests
         using var loggerFactory = LoggerFactory.Create(_ => { });
         var receiptHandler = new RecordingReceiptHttpHandler();
         using var receiptClient = new HttpClient(receiptHandler);
-        var httpClientFactory = new StaticHttpClientFactory(receiptClient);
+        var dispatcher = new HttpOpenClawBridgeReceiptDispatcher(
+            loggerFactory.CreateLogger<HttpOpenClawBridgeReceiptDispatcher>(),
+            new StaticHttpClientFactory(receiptClient));
         var service = new FakeChatRunApplicationService
         {
             ExecuteHandler = async (request, emitAsync, onStartedAsync, ct) =>
@@ -769,7 +794,7 @@ public class ChatEndpointsInternalTests
             },
         };
 
-        var result = await OpenClawBridgeEndpoints.HandleOpenClawAgentHook(
+        var result = await InvokeOpenClawAgentHookAsync(
             CreateHttpContext(),
             new OpenClawAgentHookInput
             {
@@ -779,24 +804,19 @@ public class ChatEndpointsInternalTests
                 CallbackUrl = "https://callback.example/openclaw",
             },
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
-            Options.Create(new OpenClawBridgeOptions
+            new OpenClawBridgeOptions
             {
                 RequireAuthToken = false,
-            }),
-            httpClientFactory,
-            idempotencyStore: null,
+                CallbackAllowedHosts = ["callback.example"],
+            },
+            receiptDispatcher: dispatcher,
             ct: CancellationToken.None);
 
         var (statusCode, _) = await ExecuteResultAsync(result);
         statusCode.Should().Be(StatusCodes.Status202Accepted);
 
-        var startAt = DateTime.UtcNow;
-        while (receiptHandler.Payloads.Count < 3 && DateTime.UtcNow - startAt < TimeSpan.FromSeconds(2))
-            await Task.Delay(20);
-
-        var payloads = receiptHandler.Payloads.ToArray();
+        var payloads = await receiptHandler.WaitForPayloadCountAsync(3, TimeSpan.FromSeconds(2));
         payloads.Length.Should().BeGreaterThanOrEqualTo(3);
 
         string? actorId = null;
@@ -833,7 +853,7 @@ public class ChatEndpointsInternalTests
         using var loggerFactory = LoggerFactory.Create(_ => { });
         var service = new FakeChatRunApplicationService();
 
-        var result = await OpenClawBridgeEndpoints.HandleOpenClawAgentHook(
+        var result = await InvokeOpenClawAgentHookAsync(
             CreateHttpContext(),
             new OpenClawAgentHookInput
             {
@@ -841,11 +861,8 @@ public class ChatEndpointsInternalTests
                 ChannelId = "slack ops",
             },
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
-            Options.Create(new OpenClawBridgeOptions { RequireAuthToken = false }),
-            httpClientFactory: null,
-            idempotencyStore: null,
+            new OpenClawBridgeOptions { RequireAuthToken = false },
             ct: CancellationToken.None);
 
         var (statusCode, body) = await ExecuteResultAsync(result);
@@ -880,6 +897,7 @@ public class ChatEndpointsInternalTests
         };
         var idempotencyStore = new ManifestBackedOpenClawIdempotencyStore(
             new InMemoryAgentManifestStore(),
+            new PassThroughProjectionOwnershipCoordinator(),
             loggerFactory.CreateLogger<ManifestBackedOpenClawIdempotencyStore>());
         var input = new OpenClawAgentHookInput
         {
@@ -889,27 +907,23 @@ public class ChatEndpointsInternalTests
             Workflow = "direct",
         };
 
-        var result1 = await OpenClawBridgeEndpoints.HandleOpenClawAgentHook(
+        var result1 = await InvokeOpenClawAgentHookAsync(
             CreateHttpContext(),
             input,
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
-            Options.Create(new OpenClawBridgeOptions { RequireAuthToken = false, EnableIdempotency = true }),
-            httpClientFactory: null,
-            idempotencyStore,
+            new OpenClawBridgeOptions { RequireAuthToken = false, EnableIdempotency = true },
+            idempotencyStore: idempotencyStore,
             ct: CancellationToken.None);
         var (statusCode1, _) = await ExecuteResultAsync(result1);
 
-        var result2 = await OpenClawBridgeEndpoints.HandleOpenClawAgentHook(
+        var result2 = await InvokeOpenClawAgentHookAsync(
             CreateHttpContext(),
             input,
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
-            Options.Create(new OpenClawBridgeOptions { RequireAuthToken = false, EnableIdempotency = true }),
-            httpClientFactory: null,
-            idempotencyStore,
+            new OpenClawBridgeOptions { RequireAuthToken = false, EnableIdempotency = true },
+            idempotencyStore: idempotencyStore,
             ct: CancellationToken.None);
         var (statusCode2, body2) = await ExecuteResultAsync(result2);
         using var doc2 = JsonDocument.Parse(body2);
@@ -927,7 +941,9 @@ public class ChatEndpointsInternalTests
         using var loggerFactory = LoggerFactory.Create(_ => { });
         var receiptHandler = new RecordingReceiptHttpHandler();
         using var receiptClient = new HttpClient(receiptHandler);
-        var httpClientFactory = new StaticHttpClientFactory(receiptClient);
+        var dispatcher = new HttpOpenClawBridgeReceiptDispatcher(
+            loggerFactory.CreateLogger<HttpOpenClawBridgeReceiptDispatcher>(),
+            new StaticHttpClientFactory(receiptClient));
         var service = new FakeChatRunApplicationService
         {
             ExecuteHandler = async (request, emitAsync, onStartedAsync, ct) =>
@@ -951,7 +967,7 @@ public class ChatEndpointsInternalTests
             },
         };
 
-        var result = await OpenClawBridgeEndpoints.HandleOpenClawAgentHook(
+        var result = await InvokeOpenClawAgentHookAsync(
             CreateHttpContext(),
             new OpenClawAgentHookInput
             {
@@ -960,22 +976,50 @@ public class ChatEndpointsInternalTests
                 CallbackUrl = "https://blocked.example/openclaw",
             },
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
-            Options.Create(new OpenClawBridgeOptions
+            new OpenClawBridgeOptions
             {
                 RequireAuthToken = false,
                 CallbackAllowedHosts = ["allowed.example"],
-            }),
-            httpClientFactory,
-            idempotencyStore: null,
+            },
+            receiptDispatcher: dispatcher,
             ct: CancellationToken.None);
 
-        var (statusCode, _) = await ExecuteResultAsync(result);
-        await Task.Delay(100);
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
 
-        statusCode.Should().Be(StatusCodes.Status202Accepted);
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("CALLBACK_HOST_NOT_ALLOWED");
         receiptHandler.Payloads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleOpenClawAgentHook_WithCallbackUrlAndEmptyAllowList_ShouldRejectByDefault()
+    {
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService();
+
+        var result = await InvokeOpenClawAgentHookAsync(
+            CreateHttpContext(),
+            new OpenClawAgentHookInput
+            {
+                Prompt = "default callback hardening",
+                SessionId = "session-callback-default",
+                CallbackUrl = "https://callback.example/openclaw",
+            },
+            service,
+            loggerFactory,
+            new OpenClawBridgeOptions
+            {
+                RequireAuthToken = false,
+            },
+            ct: CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+        using var doc = JsonDocument.Parse(body);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("CALLBACK_HOST_NOT_ALLOWED");
     }
 
     [Fact]
@@ -1226,7 +1270,32 @@ public class ChatEndpointsInternalTests
             role: assistant
         """;
 
-    private sealed class FakeChatRunApplicationService : ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>
+    private static Task<IResult> InvokeOpenClawAgentHookAsync(
+        HttpContext http,
+        OpenClawAgentHookInput input,
+        FakeChatRunApplicationService service,
+        ILoggerFactory loggerFactory,
+        OpenClawBridgeOptions options,
+        IOpenClawIdempotencyStore? idempotencyStore = null,
+        IOpenClawBridgeReceiptDispatcher? receiptDispatcher = null,
+        CancellationToken ct = default)
+    {
+        var bridgeService = new OpenClawBridgeOrchestrationService(
+            service,
+            receiptDispatcher,
+            idempotencyStore,
+            loggerFactory.CreateLogger<OpenClawBridgeOrchestrationService>());
+        return OpenClawBridgeEndpoints.HandleOpenClawAgentHook(
+            http,
+            input,
+            bridgeService,
+            Options.Create(options),
+            ct);
+    }
+
+    private sealed class FakeChatRunApplicationService :
+        ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>,
+        IWorkflowRunCommandService
     {
         public Func<WorkflowChatRunRequest, Func<WorkflowOutputFrame, CancellationToken, ValueTask>, Func<WorkflowChatRunStarted, CancellationToken, ValueTask>?, CancellationToken, Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>>
             ExecuteHandler { get; set; } = (_, _, _, _) => Task.FromResult(ToCoreResult(
@@ -1243,6 +1312,23 @@ public class ChatEndpointsInternalTests
         {
             return ExecuteHandler(command, emitAsync, onStartedAsync, ct);
         }
+
+        async Task<WorkflowChatRunExecutionResult> IWorkflowRunCommandService.ExecuteAsync(
+            WorkflowChatRunRequest request,
+            Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+            Func<WorkflowChatRunStarted, CancellationToken, ValueTask>? onStartedAsync = null,
+            CancellationToken ct = default)
+        {
+            var result = await ExecuteHandler(request, emitAsync, onStartedAsync, ct);
+            return new WorkflowChatRunExecutionResult(result.Error, result.Started, result.FinalizeResult);
+        }
+    }
+
+    private sealed class PassThroughProjectionOwnershipCoordinator : IProjectionOwnershipCoordinator
+    {
+        public Task AcquireAsync(string scopeId, string sessionId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task ReleaseAsync(string scopeId, string sessionId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class FakeQueryService :
@@ -1498,6 +1584,8 @@ public class ChatEndpointsInternalTests
         public TaskCompletionSource<string> FirstPayload { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ConcurrentQueue<string> Payloads { get; } = new();
+        private readonly object _payloadGate = new();
+        private readonly List<(int Count, TaskCompletionSource<string[]>)> _waiters = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -1506,10 +1594,48 @@ public class ChatEndpointsInternalTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             Payloads.Enqueue(payload);
             FirstPayload.TrySetResult(payload);
+            CompleteWaitersIfNeeded();
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("{}"),
             };
+        }
+
+        public async Task<string[]> WaitForPayloadCountAsync(int count, TimeSpan timeout)
+        {
+            if (Payloads.Count >= count)
+                return Payloads.ToArray();
+
+            var waiter = new TaskCompletionSource<string[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_payloadGate)
+            {
+                if (Payloads.Count >= count)
+                    return Payloads.ToArray();
+
+                _waiters.Add((count, waiter));
+            }
+
+            return await waiter.Task.WaitAsync(timeout);
+        }
+
+        private void CompleteWaitersIfNeeded()
+        {
+            lock (_payloadGate)
+            {
+                if (_waiters.Count == 0)
+                    return;
+
+                var payloads = Payloads.ToArray();
+                for (var i = _waiters.Count - 1; i >= 0; i--)
+                {
+                    var (count, waiter) = _waiters[i];
+                    if (payloads.Length < count)
+                        continue;
+
+                    _waiters.RemoveAt(i);
+                    waiter.TrySetResult(payloads);
+                }
+            }
         }
     }
 }
