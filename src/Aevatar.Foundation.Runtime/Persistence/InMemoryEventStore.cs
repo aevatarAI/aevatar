@@ -75,4 +75,22 @@ public sealed class InMemoryEventStore : IEventStore
             return Task.FromResult(!_store.TryGetValue(agentId, out var stream) ? 0L : stream.CurrentVersion);
         }
     }
+
+    public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (toVersion <= 0)
+            return Task.FromResult(0L);
+
+        lock (_lock)
+        {
+            if (!_store.TryGetValue(agentId, out var stream))
+                return Task.FromResult(0L);
+
+            var before = stream.Events.Count;
+            stream.Events.RemoveAll(x => x.Version <= toVersion);
+            var removed = before - stream.Events.Count;
+            return Task.FromResult((long)removed);
+        }
+    }
 }

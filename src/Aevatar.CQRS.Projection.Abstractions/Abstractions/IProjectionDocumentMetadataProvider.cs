@@ -1,7 +1,0 @@
-namespace Aevatar.CQRS.Projection.Abstractions;
-
-public interface IProjectionDocumentMetadataProvider<out TReadModel>
-    where TReadModel : class, IProjectionReadModel
-{
-    DocumentIndexMetadata Metadata { get; }
-}
