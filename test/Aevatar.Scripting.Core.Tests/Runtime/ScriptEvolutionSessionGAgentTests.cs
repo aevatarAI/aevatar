@@ -45,7 +45,7 @@ public class ScriptEvolutionSessionGAgentTests
     }
 
     [Fact]
-    public async Task Decision_ShouldPublishSessionCompletionEvent()
+    public async Task Decision_ShouldPersistSessionCompletionWithoutDirectStreamPush()
     {
         var publisher = new RecordingEventPublisher();
         var agent = new ScriptEvolutionSessionGAgent(new StaticAddressResolver())
@@ -84,12 +84,7 @@ public class ScriptEvolutionSessionGAgentTests
             Diagnostics = { "compile-ok" },
         });
 
-        publisher.Sent.Should().ContainSingle();
-        publisher.Sent[0].TargetActorId.Should().Be("scripting.evolution.session.reply:proposal-2");
-        var completed = publisher.Sent[0].Payload.Should().BeOfType<ScriptEvolutionSessionCompletedEvent>().Subject;
-        completed.ProposalId.Should().Be("proposal-2");
-        completed.Accepted.Should().BeTrue();
-        completed.Status.Should().Be("promoted");
+        publisher.Sent.Should().BeEmpty();
 
         agent.State.Completed.Should().BeTrue();
         agent.State.Accepted.Should().BeTrue();

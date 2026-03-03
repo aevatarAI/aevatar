@@ -83,13 +83,6 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
         };
 
         await PersistDomainEventAsync(completed);
-
-        // Push terminal decision to a deterministic session stream for HTTP/SSE/WS consumers.
-        await EventPublisher.SendToAsync(
-            ResolveDecisionStreamId(completed.ProposalId),
-            completed,
-            CancellationToken.None,
-            sourceEnvelope: null);
     }
 
     protected override ScriptEvolutionSessionState TransitionState(
@@ -166,6 +159,4 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
         return next;
     }
 
-    private static string ResolveDecisionStreamId(string proposalId) =>
-        $"scripting.evolution.session.reply:{proposalId}";
 }

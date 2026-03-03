@@ -4,7 +4,7 @@
 
 - 文档状态：`Active`
 - 文档版本：`v6`
-- 更新时间：`2026-03-02`
+- 更新时间：`2026-03-04`
 - 适用范围：`src/Aevatar.Scripting.*` 与 `test/Aevatar.Scripting.*` / `test/Aevatar.Integration.Tests` 的 Scripting 相关测试
 - 非范围：`Aevatar.Foundation.*`（本轮无架构改动）
 
@@ -107,6 +107,7 @@ Core 响应处理要点：
 
 1. Definition/Catalog/EvolutionManager 的 Query Handler 都在 Actor 内直接读取自身状态并返回响应事件。
 2. Query Response 统一用 `EventPublisher.SendToAsync(..., sourceEnvelope: null)`，避免响应被 publisher chain 回路过滤。
+3. Evolution 终态回推统一走 `Projection -> ProjectionSessionEventHub`，`ScriptEvolutionSessionGAgent` 不再直接向固定 stream 推送终态事件。
 
 ## 6. 运行与演化两条主链
 
@@ -127,6 +128,7 @@ Core 响应处理要点：
 
 1. 外部入口：Host API -> `IScriptEvolutionApplicationService`
 2. 脚本入口：`IScriptRuntimeCapabilities.ProposeScriptEvolutionAsync`
+3. 外部入口等待终态时走 `RuntimeScriptLifecyclePort` 的 `ensure projection -> attach sink -> dispatch -> wait -> detach/release` 链路。
 
 两条入口在 Manager 状态机与 Catalog 事实层合流，保证策略、验证、发布、回滚语义一致。
 
@@ -182,7 +184,7 @@ sequenceDiagram
 ## 9. 已知架构债务
 
 1. `Scripting:Runtime:UseEventDrivenDefinitionQuery` 目前仍是单一布尔开关 + 运行时类型回退策略；后续可继续细化为按环境与运行时能力的多策略提供器。
-2. Evolution Query 协议仍保留在契约层用于按需查询；当前主链路已改为提案请求内携带决策回传 stream 的推送式返回。
+2. Evolution Query 协议仍保留在契约层用于超时兜底查询；主链路终态回推统一走 `ScriptEvolutionSessionCompletedEventProjector -> ProjectionSessionEventHub(script-evolution:{sessionActorId}:{proposalId})`。
 3. 超时常量已抽象为 `IScriptingPortTimeouts`，后续可按环境提供分层实现（如 dev/staging/prod 配置差异）。
 
 ## 10. 结论
