@@ -3,11 +3,11 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Application;
 
-public sealed class ProposeScriptEvolutionActorRequestAdapter
+public sealed class StartScriptEvolutionSessionActorRequestAdapter
 {
     private const string RequestPublisherId = "scripting.application";
 
-    public EventEnvelope Map(ProposeScriptEvolutionActorRequest request, string actorId)
+    public EventEnvelope Map(StartScriptEvolutionSessionActorRequest request, string actorId)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
@@ -16,7 +16,7 @@ public sealed class ProposeScriptEvolutionActorRequestAdapter
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ProposeScriptEvolutionRequestedEvent
+            Payload = Any.Pack(new StartScriptEvolutionSessionRequestedEvent
             {
                 ProposalId = request.ProposalId ?? string.Empty,
                 ScriptId = request.ScriptId ?? string.Empty,
@@ -25,8 +25,6 @@ public sealed class ProposeScriptEvolutionActorRequestAdapter
                 CandidateSource = request.CandidateSource ?? string.Empty,
                 CandidateSourceHash = request.CandidateSourceHash ?? string.Empty,
                 Reason = request.Reason ?? string.Empty,
-                DecisionRequestId = request.DecisionRequestId ?? string.Empty,
-                DecisionReplyStreamId = request.DecisionReplyStreamId ?? string.Empty,
             }),
             PublisherId = RequestPublisherId,
             Direction = EventDirection.Self,

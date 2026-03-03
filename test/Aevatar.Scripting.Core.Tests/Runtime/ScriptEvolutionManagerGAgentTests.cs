@@ -1,9 +1,11 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using FluentAssertions;
+using Google.Protobuf;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
@@ -75,6 +77,45 @@ public class ScriptEvolutionManagerGAgentTests
         proposal.ValidationSucceeded.Should().BeFalse();
     }
 
+    [Fact]
+    public async Task Propose_ShouldSendDecisionToCallbackActor_WhenCallbackProvided()
+    {
+        var flowPort = new FakeEvolutionFlowPort(
+            ScriptEvolutionFlowResult.Promoted(
+                new ScriptEvolutionValidationReport(true, ["compile-ok"]),
+                new ScriptPromotionResult(
+                    DefinitionActorId: "definition-1",
+                    CatalogActorId: "catalog-1",
+                    PromotedRevision: "rev-2")));
+
+        var publisher = new RecordingEventPublisher();
+        var agent = new ScriptEvolutionManagerGAgent(flowPort, new StaticAddressResolver())
+        {
+            EventPublisher = publisher,
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptEvolutionManagerState>(
+                new InMemoryEventStore()),
+        };
+
+        await agent.HandleProposeScriptEvolutionRequested(new ProposeScriptEvolutionRequestedEvent
+        {
+            ProposalId = "proposal-1",
+            ScriptId = "script-1",
+            BaseRevision = "rev-1",
+            CandidateRevision = "rev-2",
+            CandidateSource = "source-rev-2",
+            CandidateSourceHash = "hash-rev-2",
+            CallbackActorId = "script-evolution-session:proposal-1",
+            CallbackRequestId = "session-request-1",
+        });
+
+        publisher.Sent.Should().ContainSingle();
+        publisher.Sent[0].TargetActorId.Should().Be("script-evolution-session:proposal-1");
+        var response = publisher.Sent[0].Payload.Should().BeOfType<ScriptEvolutionDecisionRespondedEvent>().Subject;
+        response.RequestId.Should().Be("session-request-1");
+        response.Accepted.Should().BeTrue();
+        response.ProposalId.Should().Be("proposal-1");
+    }
+
     private sealed class FakeEvolutionFlowPort(ScriptEvolutionFlowResult result) : IScriptEvolutionFlowPort
     {
         public List<ScriptEvolutionProposal> ExecutedProposals { get; } = [];
@@ -100,8 +141,44 @@ public class ScriptEvolutionManagerGAgentTests
     {
         public string GetEvolutionManagerActorId() => "script-evolution-manager";
 
+        public string GetEvolutionSessionActorId(string proposalId) => $"script-evolution-session:{proposalId}";
+
         public string GetCatalogActorId() => "script-catalog";
 
         public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
     }
+
+    private sealed class RecordingEventPublisher : IEventPublisher
+    {
+        public List<PublishedMessage> Sent { get; } = [];
+
+        public Task PublishAsync<T>(
+            T evt,
+            EventDirection direction = EventDirection.Down,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null)
+            where T : IMessage
+        {
+            _ = evt;
+            _ = direction;
+            _ = sourceEnvelope;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<T>(
+            string targetActorId,
+            T evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null)
+            where T : IMessage
+        {
+            _ = sourceEnvelope;
+            ct.ThrowIfCancellationRequested();
+            Sent.Add(new PublishedMessage(targetActorId, evt));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record PublishedMessage(string TargetActorId, IMessage Payload);
 }

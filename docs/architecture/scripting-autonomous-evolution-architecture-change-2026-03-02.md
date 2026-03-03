@@ -42,9 +42,10 @@
 
 ### 决策 E：演化决策改为推送式回传
 
-1. `ProposeScriptEvolutionRequestedEvent` 新增 `decision_request_id/decision_reply_stream_id`。
-2. `RuntimeScriptLifecyclePort` 在发起提案前订阅回传 stream，等待单次决策响应。
-3. `ScriptEvolutionManagerGAgent` 在提案终态（promoted/rejected）直接推送 `ScriptEvolutionDecisionRespondedEvent`，移除轮询式决策探测。
+1. 引入 `ScriptEvolutionSessionGAgent` 承载“提案会话”运行态与终态回流。
+2. `ProposeScriptEvolutionRequestedEvent` 改为携带 `callback_actor_id/callback_request_id`，由 manager 终态回调会话 actor。
+3. `RuntimeScriptLifecyclePort` 发起提案时改为：先确保 session actor，再订阅 `scripting.evolution.session.reply:{proposalId}` 等待 `ScriptEvolutionSessionCompletedEvent`。
+4. 会话流超时时保留一次 manager query fallback，作为跨节点偶发订阅抖动的可靠性补偿路径。
 
 ### 决策 F：查询超时抽象化
 
@@ -103,16 +104,19 @@ sequenceDiagram
     ORC-->>RT: "ScriptRunDomainEventCommitted*"
 ```
 
-### 6.2 演化决策查询
+### 6.2 演化决策会话回流
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
     participant PORT as "RuntimeScriptLifecyclePort"
+    participant SES as "ScriptEvolutionSessionGAgent"
     participant EVO as "ScriptEvolutionManagerGAgent"
 
-    PORT->>EVO: "ProposeScriptEvolutionRequestedEvent"
-    EVO-->>PORT: "ScriptEvolutionDecisionRespondedEvent (terminal)"
+    PORT->>SES: "StartScriptEvolutionSessionRequestedEvent"
+    SES->>EVO: "ProposeScriptEvolutionRequestedEvent(callback_actor_id=SES)"
+    EVO-->>SES: "ScriptEvolutionDecisionRespondedEvent (terminal)"
+    SES-->>PORT: "ScriptEvolutionSessionCompletedEvent @ session.reply:{proposalId}"
 ```
 
 ## 7. 测试与验证

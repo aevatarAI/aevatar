@@ -25,21 +25,19 @@
 | 分层与依赖反转 | 20 | 19 | Host 仅组装能力，核心编排留在 Core/Application；运行模式改为“配置优先 + 类型回退”。 |
 | CQRS 与统一投影链路 | 20 | 19 | Scripting Projection 已接入 Hosting DI 组装，单链路闭环成立。 |
 | Projection 编排与状态约束 | 20 | 20 | 未发现中间层 ID 映射事实态；守卫已覆盖 Scripting 扫描根。 |
-| 读写分离与会话语义 | 15 | 14 | 演化决策改为提案事件携带回传流并由 Actor 发送终态事件；仍保留同步等待终态响应的 API 体验。 |
+| 读写分离与会话语义 | 15 | 14 | 演化决策改为 session actor 回调与会话流收口；仍保留同步等待终态响应的 API 体验。 |
 | 命名语义与冗余清理 | 10 | 9 | 命名与目录语义一致；废弃适配器已删除，文档锚点同步。 |
 | 可验证性（门禁/构建/测试） | 15 | 15 | 架构守卫、全量构建、全量测试全部通过。 |
 
 ## 5. 关键修复项闭环证据
 
-### R1（已修复）演化链路“命令后查询”改为“提案携带决策回传流 + 终态推送”
+### R1（已修复）演化链路“命令后查询”改为“Session Actor 回调 + 会话流终态收口”
 
-1. 提案事件新增 `decision_request_id` 与 `decision_reply_stream_id`：`src/Aevatar.Scripting.Abstractions/script_host_messages.proto:166-176`。
-2. 应用层请求模型与适配器贯通上述字段：
-   - `src/Aevatar.Scripting.Application/Application/ProposeScriptEvolutionActorRequest.cs:3-12`
-   - `src/Aevatar.Scripting.Application/Application/ProposeScriptEvolutionActorRequestAdapter.cs:19-30`
-3. 生命周期端口改为订阅 `scripting.evolution.decision.reply` 等待终态响应，不再走旧查询适配器：`src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptLifecyclePort.cs:39-90`。
-4. 演化管理 Actor 在 `rejected/promoted` 终态统一发送 `ScriptEvolutionDecisionRespondedEvent`：`src/Aevatar.Scripting.Core/ScriptEvolutionManagerGAgent.cs:57-159`、`257-293`。
-5. `QueryScriptEvolutionDecisionRequestAdapter` 已删除（冗余层清理）。
+1. 协议新增 `StartScriptEvolutionSessionRequestedEvent`，并将提案回调字段改为 `callback_actor_id/callback_request_id`：`src/Aevatar.Scripting.Abstractions/script_host_messages.proto:182-202`。
+2. 应用层请求模型由 `Propose*` 适配器重构为 `StartScriptEvolutionSessionActorRequest`：`src/Aevatar.Scripting.Application/Application/StartScriptEvolutionSessionActorRequest.cs:3-10`、`src/Aevatar.Scripting.Application/Application/StartScriptEvolutionSessionActorRequestAdapter.cs:6-33`。
+3. 生命周期端口改为“启动 session actor + 订阅 `scripting.evolution.session.reply:{proposalId}` + 超时 query fallback”：`src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptLifecyclePort.cs:39-81`、`293-356`。
+4. Session actor 负责转发提案、接收 manager 终态并推送会话完成事件：`src/Aevatar.Scripting.Core/ScriptEvolutionSessionGAgent.cs:23-93`。
+5. 演化管理 Actor 在终态通过 `callback_actor_id` 回调 session actor，而非直接写 reply stream：`src/Aevatar.Scripting.Core/ScriptEvolutionManagerGAgent.cs:257-293`。
 
 ### R2（已修复）Scripting Projection 接入宿主组装链
 

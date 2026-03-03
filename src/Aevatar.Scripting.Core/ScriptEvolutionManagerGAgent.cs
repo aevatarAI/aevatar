@@ -266,15 +266,15 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         IReadOnlyList<string> diagnostics,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(request.DecisionRequestId) ||
-            string.IsNullOrWhiteSpace(request.DecisionReplyStreamId))
+        if (string.IsNullOrWhiteSpace(request.CallbackActorId) ||
+            string.IsNullOrWhiteSpace(request.CallbackRequestId))
         {
             return Task.CompletedTask;
         }
 
         var response = new ScriptEvolutionDecisionRespondedEvent
         {
-            RequestId = request.DecisionRequestId,
+            RequestId = request.CallbackRequestId,
             Found = true,
             Accepted = accepted,
             ProposalId = proposal.ProposalId ?? string.Empty,
@@ -289,7 +289,7 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         if (diagnostics is { Count: > 0 })
             response.Diagnostics.Add(diagnostics);
 
-        return SendQueryResponseAsync(request.DecisionReplyStreamId, response, ct);
+        return SendToAsync(request.CallbackActorId, response, ct);
     }
 
     private static ScriptEvolutionProposal NormalizeProposal(

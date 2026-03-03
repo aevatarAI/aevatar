@@ -9,6 +9,12 @@ public sealed class DefaultScriptingActorAddressResolver : IScriptingActorAddres
 
     public string GetEvolutionManagerActorId() => EvolutionManagerActorId;
 
+    public string GetEvolutionSessionActorId(string proposalId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(proposalId);
+        return $"script-evolution-session:{proposalId}";
+    }
+
     public string GetCatalogActorId() => CatalogActorId;
 
     public string GetDefinitionActorId(string scriptId)

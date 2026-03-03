@@ -62,7 +62,7 @@
 1. Query 端口都采用“订阅 reply stream -> 发送 query -> 等待响应/超时”的一致模式。
 2. `RuntimeScriptLifecyclePort.SpawnRuntimeAsync` 已去除 definition snapshot 依赖，只做 runtime 实例生命周期管理。
 3. Orleans 集成测试引入 `Microsoft.Orleans.Serialization.Protobuf` 支撑跨 silo 的 protobuf 事件序列化。
-4. `RuntimeScriptLifecyclePort` 已改为“提案即订阅决策回传 stream”的推送式收敛模型，不再轮询查询决策。
+4. `RuntimeScriptLifecyclePort` 已改为“Session Actor 会话化收敛”模型：先启动会话 actor，再等待 `scripting.evolution.session.reply:{proposalId}` 终态事件。
 5. 端口超时由 `IScriptingPortTimeouts` 统一提供，默认实现为 `DefaultScriptingPortTimeouts`。
 
 ## 3. 关键实现细节
@@ -89,18 +89,20 @@
 2. 无中间层全局事实缓存。
 3. 可在 Orleans 激活队列模型下避免同步阻塞。
 
-### 3.3 Evolution 决策推送回传
+### 3.3 Evolution 决策会话化回传
 
 `ProposeScriptEvolutionRequestedEvent` 增加决策回传字段：
 
-1. `decision_request_id`
-2. `decision_reply_stream_id`
+1. `callback_actor_id`
+2. `callback_request_id`
 
 执行路径：
 
-1. `RuntimeScriptLifecyclePort` 发起提案前先订阅 `decision_reply_stream_id`。
-2. `ScriptEvolutionManagerGAgent` 在终态（promoted/rejected）直接推送 `ScriptEvolutionDecisionRespondedEvent`。
-3. Port 单次等待响应并返回 `ScriptPromotionDecision`，不再使用 `Task.Delay` 轮询查询。
+1. `RuntimeScriptLifecyclePort` 创建/获取 `ScriptEvolutionSessionGAgent`，发送 `StartScriptEvolutionSessionRequestedEvent`。
+2. Session actor 转发 `ProposeScriptEvolutionRequestedEvent` 到 `ScriptEvolutionManagerGAgent`，并把自身 `actor_id` 作为 `callback_actor_id`。
+3. manager 在终态（promoted/rejected）回调 `ScriptEvolutionDecisionRespondedEvent` 到 session actor。
+4. session actor 持久化 `ScriptEvolutionSessionCompletedEvent`，并推送到 `scripting.evolution.session.reply:{proposalId}`。
+5. Port 单次等待会话终态并返回 `ScriptPromotionDecision`；若会话流等待超时，执行一次 manager query fallback 作为可靠性补偿。
 
 ### 3.4 Spawn 解耦
 

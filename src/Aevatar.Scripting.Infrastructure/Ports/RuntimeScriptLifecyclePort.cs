@@ -16,7 +16,7 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
     private readonly TimeSpan _decisionTimeout;
     private readonly TimeSpan _catalogQueryTimeout;
 
-    private readonly ProposeScriptEvolutionActorRequestAdapter _proposeAdapter = new();
+    private readonly StartScriptEvolutionSessionActorRequestAdapter _startSessionAdapter = new();
     private readonly UpsertScriptDefinitionActorRequestAdapter _upsertDefinitionAdapter = new();
     private readonly RunScriptActorRequestAdapter _runScriptAdapter = new();
     private readonly PromoteScriptRevisionActorRequestAdapter _promoteRevisionAdapter = new();
@@ -48,45 +48,37 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
             : proposal.ProposalId;
         var normalizedProposal = proposal with { ProposalId = normalizedProposalId };
 
-        var actor = await GetOrCreateManagerAsync(managerActorId, ct);
-        var response = await ScriptQueryReplyAwaiter.QueryAsync<ScriptEvolutionDecisionRespondedEvent>(
-            _streams,
-            "scripting.evolution.decision.reply",
-            _decisionTimeout,
-            (requestId, replyStreamId) => actor.HandleEventAsync(
-                _proposeAdapter.Map(
-                    new ProposeScriptEvolutionActorRequest(
-                        ProposalId: normalizedProposal.ProposalId ?? string.Empty,
-                        ScriptId: normalizedProposal.ScriptId ?? string.Empty,
-                        BaseRevision: normalizedProposal.BaseRevision ?? string.Empty,
-                        CandidateRevision: normalizedProposal.CandidateRevision ?? string.Empty,
-                        CandidateSource: normalizedProposal.CandidateSource ?? string.Empty,
-                        CandidateSourceHash: normalizedProposal.CandidateSourceHash ?? string.Empty,
-                        Reason: normalizedProposal.Reason ?? string.Empty,
-                        DecisionRequestId: requestId,
-                        DecisionReplyStreamId: replyStreamId),
-                    managerActorId),
-                ct),
-            (reply, requestId) =>
-                string.Equals(reply.RequestId, requestId, StringComparison.Ordinal) &&
-                string.Equals(reply.ProposalId, normalizedProposalId, StringComparison.Ordinal),
-            static requestId => $"Timeout waiting for script evolution decision response. request_id={requestId}",
-            ct);
-        if (!response.Found)
+        _ = await GetOrCreateManagerAsync(managerActorId, ct);
+        var sessionActorId = _addressResolver.GetEvolutionSessionActorId(normalizedProposalId);
+        var sessionActor = await GetOrCreateSessionActorAsync(sessionActorId, ct);
+        try
         {
-            throw new InvalidOperationException(
-                string.IsNullOrWhiteSpace(response.FailureReason)
-                    ? $"Script evolution decision not found for proposal `{normalizedProposalId}`."
-                    : response.FailureReason);
-        }
+            var completed = await WaitForSessionCompletionAsync(
+                normalizedProposalId,
+                () => sessionActor.HandleEventAsync(
+                    _startSessionAdapter.Map(
+                        new StartScriptEvolutionSessionActorRequest(
+                            ProposalId: normalizedProposal.ProposalId ?? string.Empty,
+                            ScriptId: normalizedProposal.ScriptId ?? string.Empty,
+                            BaseRevision: normalizedProposal.BaseRevision ?? string.Empty,
+                            CandidateRevision: normalizedProposal.CandidateRevision ?? string.Empty,
+                            CandidateSource: normalizedProposal.CandidateSource ?? string.Empty,
+                            CandidateSourceHash: normalizedProposal.CandidateSourceHash ?? string.Empty,
+                            Reason: normalizedProposal.Reason ?? string.Empty),
+                        sessionActorId),
+                    ct),
+                ct);
 
-        if (!string.Equals(response.ProposalId, normalizedProposalId, StringComparison.Ordinal))
+            return MapDecision(normalizedProposal, completed);
+        }
+        catch (TimeoutException)
         {
-            throw new InvalidOperationException(
-                $"Script evolution decision proposal mismatch. expected=`{normalizedProposalId}` actual=`{response.ProposalId}`.");
-        }
+            var fallback = await QueryManagerDecisionAsync(managerActorId, normalizedProposalId, ct);
+            if (fallback is { Found: true })
+                return MapDecision(fallback);
 
-        return MapDecision(response);
+            throw;
+        }
     }
 
     public async Task<string> UpsertDefinitionAsync(
@@ -271,6 +263,17 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
         return await _runtime.CreateAsync<ScriptEvolutionManagerGAgent>(managerActorId, ct);
     }
 
+    private async Task<IActor> GetOrCreateSessionActorAsync(string sessionActorId, CancellationToken ct)
+    {
+        if (await _runtime.ExistsAsync(sessionActorId))
+        {
+            return await _runtime.GetAsync(sessionActorId)
+                ?? throw new InvalidOperationException($"Script evolution session actor not found: {sessionActorId}");
+        }
+
+        return await _runtime.CreateAsync<ScriptEvolutionSessionGAgent>(sessionActorId, ct);
+    }
+
     private async Task<IActor> GetOrCreateCatalogActorAsync(string catalogActorId, CancellationToken ct)
     {
         if (await _runtime.ExistsAsync(catalogActorId))
@@ -286,6 +289,117 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
         string.IsNullOrWhiteSpace(catalogActorId)
             ? _addressResolver.GetCatalogActorId()
             : catalogActorId;
+
+    private async Task<ScriptEvolutionSessionCompletedEvent> WaitForSessionCompletionAsync(
+        string proposalId,
+        Func<Task> dispatchAsync,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(proposalId);
+        ArgumentNullException.ThrowIfNull(dispatchAsync);
+
+        var completionSource = new TaskCompletionSource<ScriptEvolutionSessionCompletedEvent>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var streamId = ResolveSessionDecisionStreamId(proposalId);
+
+        await using var subscription = await _streams
+            .GetStream(streamId)
+            .SubscribeAsync<ScriptEvolutionSessionCompletedEvent>(evt =>
+            {
+                if (string.Equals(evt.ProposalId, proposalId, StringComparison.Ordinal))
+                    completionSource.TrySetResult(evt);
+
+                return Task.CompletedTask;
+            }, ct);
+
+        await dispatchAsync();
+        return await WaitForSessionCompletionAsync(completionSource.Task, proposalId, ct);
+    }
+
+    private async Task<ScriptEvolutionSessionCompletedEvent> WaitForSessionCompletionAsync(
+        Task<ScriptEvolutionSessionCompletedEvent> completionTask,
+        string proposalId,
+        CancellationToken ct)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var timeoutTask = Task.Delay(_decisionTimeout, timeoutCts.Token);
+        var completed = await Task.WhenAny(completionTask, timeoutTask);
+        if (!ReferenceEquals(completed, completionTask))
+        {
+            throw new TimeoutException(
+                $"Timeout waiting for script evolution session completion. proposal_id={proposalId}");
+        }
+
+        timeoutCts.Cancel();
+        return await completionTask;
+    }
+
+    private async Task<ScriptEvolutionDecisionRespondedEvent?> QueryManagerDecisionAsync(
+        string managerActorId,
+        string proposalId,
+        CancellationToken ct)
+    {
+        var managerActor = await _runtime.GetAsync(managerActorId);
+        if (managerActor == null)
+            return null;
+
+        return await ScriptQueryReplyAwaiter.QueryAsync<ScriptEvolutionDecisionRespondedEvent>(
+            _streams,
+            "scripting.query.evolution.reply",
+            _decisionTimeout,
+            (requestId, replyStreamId) => managerActor.HandleEventAsync(
+                BuildManagerDecisionQueryEnvelope(managerActorId, proposalId, requestId, replyStreamId),
+                ct),
+            static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
+            static requestId => $"Timeout waiting for script evolution decision query response. request_id={requestId}",
+            ct);
+    }
+
+    private static EventEnvelope BuildManagerDecisionQueryEnvelope(
+        string targetActorId,
+        string proposalId,
+        string requestId,
+        string replyStreamId)
+    {
+        return new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new QueryScriptEvolutionDecisionRequestedEvent
+            {
+                RequestId = requestId,
+                ReplyStreamId = replyStreamId,
+                ProposalId = proposalId,
+            }),
+            PublisherId = "scripting.query.evolution",
+            Direction = EventDirection.Self,
+            TargetActorId = targetActorId,
+            CorrelationId = proposalId,
+        };
+    }
+
+    private static string ResolveSessionDecisionStreamId(string proposalId) =>
+        $"scripting.evolution.session.reply:{proposalId}";
+
+    private static ScriptPromotionDecision MapDecision(
+        ScriptEvolutionProposal proposal,
+        ScriptEvolutionSessionCompletedEvent completed)
+    {
+        var validation = new ScriptEvolutionValidationReport(
+            IsSuccess: completed.Accepted,
+            Diagnostics: completed.Diagnostics.ToArray());
+        return new ScriptPromotionDecision(
+            Accepted: completed.Accepted,
+            ProposalId: proposal.ProposalId ?? string.Empty,
+            ScriptId: proposal.ScriptId ?? string.Empty,
+            BaseRevision: proposal.BaseRevision ?? string.Empty,
+            CandidateRevision: proposal.CandidateRevision ?? string.Empty,
+            Status: completed.Status ?? string.Empty,
+            FailureReason: completed.FailureReason ?? string.Empty,
+            DefinitionActorId: completed.DefinitionActorId ?? string.Empty,
+            CatalogActorId: completed.CatalogActorId ?? string.Empty,
+            ValidationReport: validation);
+    }
 
     private static ScriptPromotionDecision MapDecision(ScriptEvolutionDecisionRespondedEvent response)
     {
