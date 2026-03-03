@@ -96,4 +96,5 @@ public static class RoleConfigurationNormalizer
             return null;
         return value.Trim();
     }
+
 }

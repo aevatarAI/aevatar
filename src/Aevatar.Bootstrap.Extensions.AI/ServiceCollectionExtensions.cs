@@ -20,7 +20,7 @@ public sealed class AevatarAIFeatureOptions
     public bool EnableSkills { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
-    public string DefaultProvider { get; set; } = "deepseek";
+    public string DefaultProvider { get; set; } = "openai";
     public string OpenAIModel { get; set; } = "gpt-4o-mini";
     public string DeepSeekModel { get; set; } = "deepseek-chat";
     public List<string> SkillDirectories { get; } = [];

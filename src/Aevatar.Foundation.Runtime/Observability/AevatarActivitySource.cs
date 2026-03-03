@@ -14,7 +14,7 @@ public static class AevatarActivitySource
     /// <summary>ActivitySource instance.</summary>
     public static readonly ActivitySource Source = new("Aevatar.Agents", "1.0.0");
 
-    /// <summary>Global sensitive data flag.</summary>
+    /// <summary>Global sensitive data flag. Set via AevatarObservabilityOptions.</summary>
     public static bool EnableSensitiveData { get; set; }
 
     /// <summary>Starts a HandleEvent activity (legacy, used by LocalActor).</summary>
