@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Microsoft.Extensions.Logging;
 using Sisyphus.Application.Models;
 
@@ -8,7 +8,7 @@ namespace Sisyphus.Application.Services;
 
 public sealed class WorkflowTriggerService(
     IWorkflowRunCommandService workflowRunService,
-    IWorkflowExecutionQueryApplicationService workflowQueryService,
+    IWorkflowDefinitionRegistry workflowRegistry,
     GraphIdProvider graphIdProvider,
     ILogger<WorkflowTriggerService> logger)
 {
@@ -34,7 +34,7 @@ public sealed class WorkflowTriggerService(
         // Patch workflow YAML to inject session's MaxRounds into while.max_iterations.
         // If the YAML registry returns null, fall back to name-only resolution (hardcoded default).
         var workflowYaml = PatchMaxIterations(
-            workflowQueryService.GetWorkflowYaml(WorkflowName),
+            workflowRegistry.GetYaml(WorkflowName),
             session.MaxRounds);
 
         if (workflowYaml is null)

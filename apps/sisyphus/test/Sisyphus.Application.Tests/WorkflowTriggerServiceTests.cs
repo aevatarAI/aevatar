@@ -10,7 +10,7 @@ namespace Sisyphus.Application.Tests;
 public class WorkflowTriggerServiceTests
 {
     private readonly FakeWorkflowRunCommandService _runService = new();
-    private readonly FakeWorkflowQueryService _queryService = new();
+    private readonly FakeWorkflowDefinitionRegistry _registry = new();
     private readonly GraphIdProvider _graphIdProvider = new();
 
     public WorkflowTriggerServiceTests()
@@ -21,7 +21,7 @@ public class WorkflowTriggerServiceTests
 
     private WorkflowTriggerService CreateSut() => new(
         _runService,
-        _queryService,
+        _registry,
         _graphIdProvider,
         NullLogger<WorkflowTriggerService>.Instance);
 
@@ -114,7 +114,7 @@ public class WorkflowTriggerServiceTests
     [Fact]
     public async Task TriggerAsync_PatchesMaxIterationsInYaml()
     {
-        _queryService.WorkflowYaml = """
+        _registry.WorkflowYaml = """
             steps:
               - id: research_loop
                 type: while
@@ -136,7 +136,7 @@ public class WorkflowTriggerServiceTests
     [Fact]
     public async Task TriggerAsync_NullYaml_FallsBackToNameOnly()
     {
-        _queryService.WorkflowYaml = null;
+        _registry.WorkflowYaml = null;
         _runService.NextResult = MakeResult(
             WorkflowChatRunStartError.None,
             WorkflowProjectionCompletionStatus.Completed);
