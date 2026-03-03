@@ -127,7 +127,7 @@ WorkflowGAgent.InstallModulesAsync
 | `llm_call` | — | 发送 ChatRequestEvent 到目标角色 |
 | `tool_call` | — | 调用 Agent 注册工具 |
 | `connector_call` | `bridge_call` | 调用命名 connector（HTTP/CLI/MCP） |
-| `openclaw_call` | `openclaw` | 直接执行 OpenClaw CLI（仅允许 OpenClaw CLI；如需自定义安装路径使用环境变量 `AEVATAR_OPENCLAW_CLI_PATH`；无需 connector 配置；browser profile 不存在时会自动 create-profile 并重试一次；`browser open --browser-profile ... --json` 旧参数会自动兼容到新 CLI 语法） |
+| `openclaw_call` | `openclaw` | 直接执行 OpenClaw CLI（仅允许 OpenClaw CLI；如需自定义安装路径使用环境变量 `AEVATAR_OPENCLAW_CLI_PATH`，但该路径必须仍指向名为 `openclaw` 的可执行文件；无需 connector 配置；browser profile 不存在时会自动 create-profile 并重试一次；`browser open --browser-profile ... --json` 旧参数会自动兼容到新 CLI 语法） |
 | `workflow_call` | `sub_workflow` | 递归调用子工作流 |
 | `wait_signal` | `wait` | 暂停等待外部信号（human-in-the-loop / webhook） |
 

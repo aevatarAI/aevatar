@@ -10,7 +10,7 @@ Aevatar 保持 workflow 编排主脑，OpenClaw 作为 computer-use 执行层与
 - Aevatar 聚焦编排：多 Agent 协作、流程控制、重试/降级/审计。
 - OpenClaw 聚焦执行：桌面与浏览器真实动作。
 - 统一通过 `openclaw_call` 执行 OpenClaw CLI，避免为每条命令维护 connector。
-- `openclaw_call` 仅允许执行 OpenClaw CLI；若二进制不在默认 PATH，可通过环境变量 `AEVATAR_OPENCLAW_CLI_PATH` 显式指定安装路径。
+- `openclaw_call` 仅允许执行 OpenClaw CLI；若二进制不在默认 PATH，可通过环境变量 `AEVATAR_OPENCLAW_CLI_PATH` 显式指定安装路径，但该路径必须仍然指向名为 `openclaw` 的可执行文件。
 - 仅在确有必要时使用 `connector_call`（如跨系统 HTTP 接入）。
 
 ## 目标链路
