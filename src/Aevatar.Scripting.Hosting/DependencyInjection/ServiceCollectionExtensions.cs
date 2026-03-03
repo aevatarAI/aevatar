@@ -10,14 +10,24 @@ using Aevatar.Scripting.Infrastructure.Ports;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Configuration;
+using Aevatar.Scripting.Projection.DependencyInjection;
 
 namespace Aevatar.Scripting.Hosting.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddScriptCapability(this IServiceCollection services)
+    public static IServiceCollection AddScriptCapability(
+        this IServiceCollection services,
+        IConfiguration? configuration = null)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        var useEventDrivenDefinitionQuery = ResolveUseEventDrivenDefinitionQuery(configuration);
+        services.TryAddSingleton(new ScriptingRuntimeQueryModeOptions
+        {
+            UseEventDrivenDefinitionQuery = useEventDrivenDefinitionQuery,
+        });
 
         services.TryAddSingleton<ScriptSandboxPolicy>();
         services.TryAddSingleton<IScriptingActorAddressResolver, DefaultScriptingActorAddressResolver>();
@@ -33,6 +43,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptLifecyclePort, RuntimeScriptLifecyclePort>();
         services.TryAddSingleton<IScriptEvolutionFlowPort, RuntimeScriptEvolutionFlowPort>();
         services.TryAddSingleton<IGAgentRuntimePort, RuntimeGAgentRuntimePort>();
+        services.AddScriptingProjectionComponents();
         services.TryAddSingleton<IAICapability>(sp =>
         {
             var roleAgentPort = sp.GetService<IRoleAgentPort>();
@@ -42,5 +53,18 @@ public static class ServiceCollectionExtensions
         });
 
         return services;
+    }
+
+    private static bool? ResolveUseEventDrivenDefinitionQuery(IConfiguration? configuration)
+    {
+        var raw = configuration?["Scripting:Runtime:UseEventDrivenDefinitionQuery"];
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        if (!bool.TryParse(raw, out var parsed))
+            throw new InvalidOperationException(
+                $"Invalid boolean value '{raw}' for Scripting:Runtime:UseEventDrivenDefinitionQuery.");
+
+        return parsed;
     }
 }

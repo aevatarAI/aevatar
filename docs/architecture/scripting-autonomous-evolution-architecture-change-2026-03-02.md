@@ -36,20 +36,20 @@
 
 ### 决策 D：Spawn 与 Definition 查询解耦
 
-1. `RuntimeScriptRuntimeLifecyclePort.SpawnAsync` 删除定义快照依赖。
+1. `RuntimeScriptLifecyclePort.SpawnRuntimeAsync` 删除定义快照依赖。
 2. Spawn 只负责 runtime actor id 生成与创建/复用。
 3. Definition 正确性校验留在实际 run 阶段（Runtime Query + revision 对账）。
 
 ### 决策 E：演化决策改为推送式回传
 
 1. `ProposeScriptEvolutionRequestedEvent` 新增 `decision_request_id/decision_reply_stream_id`。
-2. `RuntimeScriptEvolutionPort` 在发起提案前订阅回传 stream，等待单次决策响应。
+2. `RuntimeScriptLifecyclePort` 在发起提案前订阅回传 stream，等待单次决策响应。
 3. `ScriptEvolutionManagerGAgent` 在提案终态（promoted/rejected）直接推送 `ScriptEvolutionDecisionRespondedEvent`，移除轮询式决策探测。
 
 ### 决策 F：查询超时抽象化
 
 1. 引入 `IScriptingPortTimeouts` 与 `DefaultScriptingPortTimeouts`。
-2. `RuntimeScriptDefinitionSnapshotPort`、`RuntimeScriptCatalogPort`、`RuntimeScriptEvolutionPort` 全部改用注入式超时策略，不再写死端口超时常量。
+2. `RuntimeScriptDefinitionSnapshotPort`、`RuntimeScriptLifecyclePort` 全部改用注入式超时策略，不再写死端口超时常量。
 
 ## 4. 变更前后对比
 
@@ -74,7 +74,6 @@
 2. 查询适配器：
    - `src/Aevatar.Scripting.Application/Application/QueryScriptDefinitionSnapshotRequestAdapter.cs`
    - `src/Aevatar.Scripting.Application/Application/QueryScriptCatalogEntryRequestAdapter.cs`
-   - `src/Aevatar.Scripting.Application/Application/QueryScriptEvolutionDecisionRequestAdapter.cs`
 3. Query Handler：
    - `src/Aevatar.Scripting.Core/ScriptDefinitionGAgent.cs`
    - `src/Aevatar.Scripting.Core/ScriptCatalogGAgent.cs`
@@ -82,11 +81,10 @@
 4. Runtime Orleans 事件化执行：
    - `src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs`
 5. Spawn 解耦：
-   - `src/Aevatar.Scripting.Hosting/Ports/RuntimeScriptRuntimeLifecyclePort.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptLifecyclePort.cs`
 6. Query 端口：
-   - `src/Aevatar.Scripting.Hosting/Ports/RuntimeScriptDefinitionSnapshotPort.cs`
-   - `src/Aevatar.Scripting.Hosting/Ports/RuntimeScriptCatalogPort.cs`
-   - `src/Aevatar.Scripting.Hosting/Ports/RuntimeScriptEvolutionPort.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptDefinitionSnapshotPort.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptLifecyclePort.cs`
 
 ## 6. 时序变化
 
@@ -110,7 +108,7 @@ sequenceDiagram
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
-    participant PORT as "RuntimeScriptEvolutionPort"
+    participant PORT as "RuntimeScriptLifecyclePort"
     participant EVO as "ScriptEvolutionManagerGAgent"
 
     PORT->>EVO: "ProposeScriptEvolutionRequestedEvent"
@@ -135,5 +133,5 @@ sequenceDiagram
 
 ## 9. 剩余改进项
 
-1. Orleans/Local 运行模式判定已下沉到 Hosting，但目前仍基于运行时类型名前缀；建议升级为显式运行模式提供器。
+1. 运行模式判定已改为“显式配置优先 + Runtime 类型回退”策略：`Scripting:Runtime:UseEventDrivenDefinitionQuery` 未配置时，Orleans 运行时自动启用事件化定义查询；后续可继续升级为更细粒度策略提供器。
 2. Query 超时策略已可注入，建议后续按环境（dev/staging/prod）提供不同实现并纳入配置治理。

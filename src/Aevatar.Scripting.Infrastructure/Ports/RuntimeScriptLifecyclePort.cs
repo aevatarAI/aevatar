@@ -17,7 +17,6 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
     private readonly TimeSpan _catalogQueryTimeout;
 
     private readonly ProposeScriptEvolutionActorRequestAdapter _proposeAdapter = new();
-    private readonly QueryScriptEvolutionDecisionRequestAdapter _queryDecisionAdapter = new();
     private readonly UpsertScriptDefinitionActorRequestAdapter _upsertDefinitionAdapter = new();
     private readonly RunScriptActorRequestAdapter _runScriptAdapter = new();
     private readonly PromoteScriptRevisionActorRequestAdapter _promoteRevisionAdapter = new();
@@ -50,21 +49,29 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
         var normalizedProposal = proposal with { ProposalId = normalizedProposalId };
 
         var actor = await GetOrCreateManagerAsync(managerActorId, ct);
-
-        await actor.HandleEventAsync(
-            _proposeAdapter.Map(
-                new ProposeScriptEvolutionActorRequest(
-                    ProposalId: normalizedProposal.ProposalId ?? string.Empty,
-                    ScriptId: normalizedProposal.ScriptId ?? string.Empty,
-                    BaseRevision: normalizedProposal.BaseRevision ?? string.Empty,
-                    CandidateRevision: normalizedProposal.CandidateRevision ?? string.Empty,
-                    CandidateSource: normalizedProposal.CandidateSource ?? string.Empty,
-                    CandidateSourceHash: normalizedProposal.CandidateSourceHash ?? string.Empty,
-                    Reason: normalizedProposal.Reason ?? string.Empty),
-                managerActorId),
+        var response = await ScriptQueryReplyAwaiter.QueryAsync<ScriptEvolutionDecisionRespondedEvent>(
+            _streams,
+            "scripting.evolution.decision.reply",
+            _decisionTimeout,
+            (requestId, replyStreamId) => actor.HandleEventAsync(
+                _proposeAdapter.Map(
+                    new ProposeScriptEvolutionActorRequest(
+                        ProposalId: normalizedProposal.ProposalId ?? string.Empty,
+                        ScriptId: normalizedProposal.ScriptId ?? string.Empty,
+                        BaseRevision: normalizedProposal.BaseRevision ?? string.Empty,
+                        CandidateRevision: normalizedProposal.CandidateRevision ?? string.Empty,
+                        CandidateSource: normalizedProposal.CandidateSource ?? string.Empty,
+                        CandidateSourceHash: normalizedProposal.CandidateSourceHash ?? string.Empty,
+                        Reason: normalizedProposal.Reason ?? string.Empty,
+                        DecisionRequestId: requestId,
+                        DecisionReplyStreamId: replyStreamId),
+                    managerActorId),
+                ct),
+            (reply, requestId) =>
+                string.Equals(reply.RequestId, requestId, StringComparison.Ordinal) &&
+                string.Equals(reply.ProposalId, normalizedProposalId, StringComparison.Ordinal),
+            static requestId => $"Timeout waiting for script evolution decision response. request_id={requestId}",
             ct);
-
-        var response = await QueryDecisionAsync(managerActorId, normalizedProposalId, ct);
         if (!response.Found)
         {
             throw new InvalidOperationException(
@@ -251,26 +258,6 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
             PreviousRevision: response.PreviousRevision ?? string.Empty,
             RevisionHistory: response.RevisionHistory.ToArray(),
             LastProposalId: response.LastProposalId ?? string.Empty);
-    }
-
-    private async Task<ScriptEvolutionDecisionRespondedEvent> QueryDecisionAsync(
-        string managerActorId,
-        string proposalId,
-        CancellationToken ct)
-    {
-        var actor = await _runtime.GetAsync(managerActorId)
-            ?? throw new InvalidOperationException($"Script evolution manager actor not found: {managerActorId}");
-
-        return await ScriptQueryReplyAwaiter.QueryAsync<ScriptEvolutionDecisionRespondedEvent>(
-            _streams,
-            "scripting.query.evolution.reply",
-            _decisionTimeout,
-            (requestId, replyStreamId) => actor.HandleEventAsync(
-                _queryDecisionAdapter.Map(managerActorId, requestId, replyStreamId, proposalId),
-                ct),
-            static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
-            static requestId => $"Timeout waiting for script evolution decision response. request_id={requestId}",
-            ct);
     }
 
     private async Task<IActor> GetOrCreateManagerAsync(string managerActorId, CancellationToken ct)

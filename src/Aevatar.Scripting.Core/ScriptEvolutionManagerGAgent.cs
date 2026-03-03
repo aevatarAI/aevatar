@@ -56,13 +56,24 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         var flowResult = await _evolutionFlowPort.ExecuteAsync(proposal, CancellationToken.None);
         if (flowResult.Status == ScriptEvolutionFlowStatus.PolicyRejected)
         {
+            var failureReason = flowResult.FailureReason ?? string.Empty;
             await PersistDomainEventAsync(new ScriptEvolutionRejectedEvent
             {
                 ProposalId = proposal.ProposalId,
                 ScriptId = proposal.ScriptId,
                 CandidateRevision = proposal.CandidateRevision,
-                FailureReason = flowResult.FailureReason ?? string.Empty,
+                FailureReason = failureReason,
             });
+            await SendTerminalDecisionResponseAsync(
+                evt,
+                accepted: false,
+                proposal,
+                proposal.CandidateRevision,
+                StatusRejected,
+                failureReason,
+                _addressResolver.GetDefinitionActorId(proposal.ScriptId),
+                _addressResolver.GetCatalogActorId(),
+                Array.Empty<string>());
             return;
         }
 
@@ -78,13 +89,24 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
 
         if (flowResult.Status == ScriptEvolutionFlowStatus.ValidationFailed)
         {
+            var failureReason = flowResult.FailureReason ?? string.Empty;
             await PersistDomainEventAsync(new ScriptEvolutionRejectedEvent
             {
                 ProposalId = proposal.ProposalId,
                 ScriptId = proposal.ScriptId,
                 CandidateRevision = proposal.CandidateRevision,
-                FailureReason = flowResult.FailureReason ?? string.Empty,
+                FailureReason = failureReason,
             });
+            await SendTerminalDecisionResponseAsync(
+                evt,
+                accepted: false,
+                proposal,
+                proposal.CandidateRevision,
+                StatusRejected,
+                failureReason,
+                _addressResolver.GetDefinitionActorId(proposal.ScriptId),
+                _addressResolver.GetCatalogActorId(),
+                validation.Diagnostics);
             return;
         }
 
@@ -101,16 +123,39 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
                 DefinitionActorId = promotion.DefinitionActorId,
                 CatalogActorId = promotion.CatalogActorId,
             });
+            await SendTerminalDecisionResponseAsync(
+                evt,
+                accepted: true,
+                proposal,
+                promotion.PromotedRevision,
+                StatusPromoted,
+                string.Empty,
+                promotion.DefinitionActorId,
+                string.IsNullOrWhiteSpace(promotion.CatalogActorId)
+                    ? _addressResolver.GetCatalogActorId()
+                    : promotion.CatalogActorId,
+                validation.Diagnostics);
             return;
         }
 
+        var defaultFailureReason = flowResult.FailureReason ?? string.Empty;
         await PersistDomainEventAsync(new ScriptEvolutionRejectedEvent
         {
             ProposalId = proposal.ProposalId,
             ScriptId = proposal.ScriptId,
             CandidateRevision = proposal.CandidateRevision,
-            FailureReason = flowResult.FailureReason ?? string.Empty,
+            FailureReason = defaultFailureReason,
         });
+        await SendTerminalDecisionResponseAsync(
+            evt,
+            accepted: false,
+            proposal,
+            proposal.CandidateRevision,
+            StatusRejected,
+            defaultFailureReason,
+            _addressResolver.GetDefinitionActorId(proposal.ScriptId),
+            _addressResolver.GetCatalogActorId(),
+            validation.Diagnostics);
     }
 
     [EventHandler]
@@ -207,6 +252,44 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         CancellationToken ct = default)
     {
         return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
+    }
+
+    private Task SendTerminalDecisionResponseAsync(
+        ProposeScriptEvolutionRequestedEvent request,
+        bool accepted,
+        ScriptEvolutionProposal proposal,
+        string candidateRevision,
+        string status,
+        string failureReason,
+        string definitionActorId,
+        string catalogActorId,
+        IReadOnlyList<string> diagnostics,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.DecisionRequestId) ||
+            string.IsNullOrWhiteSpace(request.DecisionReplyStreamId))
+        {
+            return Task.CompletedTask;
+        }
+
+        var response = new ScriptEvolutionDecisionRespondedEvent
+        {
+            RequestId = request.DecisionRequestId,
+            Found = true,
+            Accepted = accepted,
+            ProposalId = proposal.ProposalId ?? string.Empty,
+            ScriptId = proposal.ScriptId ?? string.Empty,
+            BaseRevision = proposal.BaseRevision ?? string.Empty,
+            CandidateRevision = candidateRevision ?? string.Empty,
+            Status = status ?? string.Empty,
+            FailureReason = failureReason ?? string.Empty,
+            DefinitionActorId = definitionActorId ?? string.Empty,
+            CatalogActorId = catalogActorId ?? string.Empty,
+        };
+        if (diagnostics is { Count: > 0 })
+            response.Diagnostics.Add(diagnostics);
+
+        return SendQueryResponseAsync(request.DecisionReplyStreamId, response, ct);
     }
 
     private static ScriptEvolutionProposal NormalizeProposal(

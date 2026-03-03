@@ -171,6 +171,8 @@ message ProposeScriptEvolutionRequestedEvent {
   string candidate_source = 5;
   string candidate_source_hash = 6;
   string reason = 7;
+  string decision_request_id = 8;
+  string decision_reply_stream_id = 9;
 }
 
 message PromoteScriptRevisionRequestedEvent {

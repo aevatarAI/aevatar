@@ -573,6 +573,9 @@ id_mapping_scan_roots=(
   "src/Aevatar.AI.Projection"
   "src/workflow/Aevatar.Workflow.Projection"
   "src/workflow/Aevatar.Workflow.Application"
+  "src/Aevatar.Scripting.Application"
+  "src/Aevatar.Scripting.Infrastructure"
+  "src/Aevatar.Scripting.Projection"
 )
 
 scan_args=()

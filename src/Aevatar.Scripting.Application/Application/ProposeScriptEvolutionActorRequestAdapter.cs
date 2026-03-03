@@ -25,6 +25,8 @@ public sealed class ProposeScriptEvolutionActorRequestAdapter
                 CandidateSource = request.CandidateSource ?? string.Empty,
                 CandidateSourceHash = request.CandidateSourceHash ?? string.Empty,
                 Reason = request.Reason ?? string.Empty,
+                DecisionRequestId = request.DecisionRequestId ?? string.Empty,
+                DecisionReplyStreamId = request.DecisionReplyStreamId ?? string.Empty,
             }),
             PublisherId = RequestPublisherId,
             Direction = EventDirection.Self,

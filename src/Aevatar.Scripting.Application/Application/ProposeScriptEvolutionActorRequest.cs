@@ -7,4 +7,6 @@ public sealed record ProposeScriptEvolutionActorRequest(
     string CandidateRevision,
     string CandidateSource,
     string CandidateSourceHash,
-    string Reason);
+    string Reason,
+    string DecisionRequestId,
+    string DecisionReplyStreamId);

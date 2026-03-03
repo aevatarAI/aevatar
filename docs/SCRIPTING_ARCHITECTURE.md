@@ -3,7 +3,7 @@
 ## 1. 文档元信息
 
 - 文档状态：`Active`
-- 文档版本：`v5`
+- 文档版本：`v6`
 - 更新时间：`2026-03-02`
 - 适用范围：`src/Aevatar.Scripting.*` 与 `test/Aevatar.Scripting.*` / `test/Aevatar.Integration.Tests` 的 Scripting 相关测试
 - 非范围：`Aevatar.Foundation.*`（本轮无架构改动）
@@ -30,8 +30,8 @@
 | Abstractions | `Aevatar.Scripting.Abstractions` | Proto 状态/事件契约、脚本运行抽象 |
 | Core | `Aevatar.Scripting.Core` | 4 个主 Actor（Definition/Runtime/EvolutionManager/Catalog）与状态机 |
 | Application | `Aevatar.Scripting.Application` | 命令/查询适配器，运行编排器 |
-| Infrastructure | `Aevatar.Scripting.Infrastructure` | Roslyn 编译执行与沙箱策略 |
-| Hosting | `Aevatar.Scripting.Hosting` | 端口实现、DI 组装、Host API 接入 |
+| Infrastructure | `Aevatar.Scripting.Infrastructure` | Roslyn 编译执行、运行时端口实现、查询超时与运行模式策略 |
+| Hosting | `Aevatar.Scripting.Hosting` | DI 组装、Host API 接入 |
 | Projection | `Aevatar.Scripting.Projection` | 执行与演化读模型投影 |
 
 依赖方向：
@@ -97,13 +97,11 @@ Application 查询适配器：
 
 1. `QueryScriptDefinitionSnapshotRequestAdapter`
 2. `QueryScriptCatalogEntryRequestAdapter`
-3. `QueryScriptEvolutionDecisionRequestAdapter`
 
-Hosting 查询端口：
+Infrastructure 查询/生命周期端口：
 
 1. `RuntimeScriptDefinitionSnapshotPort`
-2. `RuntimeScriptCatalogPort`
-3. `RuntimeScriptEvolutionPort`
+2. `RuntimeScriptLifecyclePort`
 
 Core 响应处理要点：
 
@@ -119,7 +117,7 @@ Core 响应处理要点：
 关键实现：
 
 1. Orleans Runtime 下，`ScriptRuntimeGAgent` 先发 `QueryScriptDefinitionSnapshotRequestedEvent`，收到响应后再执行脚本。
-2. 非 Orleans 路径保留快照端口直取（单机/本地开发模式）。
+2. 是否启用“Actor 内异步恢复执行”由 `Scripting:Runtime:UseEventDrivenDefinitionQuery` 显式配置；未配置时按 Runtime 类型判定（Orleans=`true`，Local=`false`）。
 
 ### 6.2 演化链（Evolution）
 
@@ -183,7 +181,7 @@ sequenceDiagram
 
 ## 9. 已知架构债务
 
-1. Orleans/Local 运行模式判定已从 Core 下沉到 Hosting（`RuntimeScriptDefinitionSnapshotPort`），但目前仍基于运行时类型名前缀判断；后续可继续演进为显式运行模式提供器。
+1. `Scripting:Runtime:UseEventDrivenDefinitionQuery` 目前仍是单一布尔开关 + 运行时类型回退策略；后续可继续细化为按环境与运行时能力的多策略提供器。
 2. Evolution Query 协议仍保留在契约层用于按需查询；当前主链路已改为提案请求内携带决策回传 stream 的推送式返回。
 3. 超时常量已抽象为 `IScriptingPortTimeouts`，后续可按环境提供分层实现（如 dev/staging/prod 配置差异）。
 
