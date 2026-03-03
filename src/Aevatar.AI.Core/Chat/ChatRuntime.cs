@@ -53,11 +53,7 @@ public sealed class ChatRuntime
     }
 
     /// <summary>单轮 Chat（含 Tool Calling 循环），包裹 Agent Run Middleware。</summary>
-    public Task<string?> ChatAsync(string userMessage, int maxToolRounds = 10, CancellationToken ct = default) =>
-        ChatAsync(userMessage, maxToolRounds, onContent: null, ct);
-
-    public async Task<string?> ChatAsync(string userMessage, int maxToolRounds,
-        Func<string, CancellationToken, Task>? onContent, CancellationToken ct = default)
+    public async Task<string?> ChatAsync(string userMessage, int maxToolRounds = 10, CancellationToken ct = default)
     {
         var runContext = new AgentRunContext
         {
@@ -77,7 +73,7 @@ public sealed class ChatRuntime
             runContext.Metadata["gen_ai.provider.name"] = provider.Name;
             var messages = _history.BuildMessages(baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content);
 
-            var result = await _toolLoop.ExecuteAsync(provider, messages, baseRequest, maxToolRounds, onContent, ct);
+            var result = await _toolLoop.ExecuteAsync(provider, messages, baseRequest, maxToolRounds, ct);
 
             _history.Clear();
             foreach (var m in messages.Where(m => m.Role != "system"))
