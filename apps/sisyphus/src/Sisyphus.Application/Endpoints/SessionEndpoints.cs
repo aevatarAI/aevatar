@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -27,6 +28,13 @@ public static class SessionEndpoints
                 ? Results.Ok(new { readGraphId = provider.ReadGraphId, writeGraphId = provider.WriteGraphId })
                 : Results.StatusCode(StatusCodes.Status503ServiceUnavailable))
             .WithTags("Graph");
+
+        // Workflow YAML retrieval — app-layer endpoint for frontend introspection
+        app.MapGet("/api/workflows/{name}", (string name, IWorkflowDefinitionRegistry registry) =>
+        {
+            var yaml = registry.GetYaml(name);
+            return yaml == null ? Results.NotFound() : Results.Text(yaml, "text/yaml");
+        }).WithTags("Workflows");
 
         // SSE research endpoint — injects graph IDs from config into the prompt
         app.MapPost("/api/research", HandleResearchChat)
