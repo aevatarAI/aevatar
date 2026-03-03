@@ -45,27 +45,18 @@ public sealed class WorkflowRunContextFactory : IWorkflowRunContextFactory
             baseContext.CommandId,
             baseContext.CorrelationId,
             metadata);
-        var sink = new WorkflowRunEventChannel();
-        IWorkflowExecutionProjectionLease? projectionLease = null;
-
-        try
-        {
-            projectionLease = await _projectionPort.EnsureActorProjectionAsync(
+        var sink = new EventChannel<WorkflowRunEvent>();
+        var projectionLease = await _projectionPort.EnsureAndAttachAsync(
+            token => _projectionPort.EnsureActorProjectionAsync(
                 actor.Id,
                 workflowNameForRun,
                 request.Prompt,
                 commandContext.CommandId,
-                ct);
-            if (projectionLease == null)
-                return new WorkflowRunContextCreateResult(WorkflowChatRunStartError.ProjectionDisabled, null);
-
-            await _projectionPort.AttachLiveSinkAsync(projectionLease, sink, ct);
-        }
-        catch
-        {
-            await sink.DisposeAsync();
-            throw;
-        }
+                token),
+            sink,
+            ct);
+        if (projectionLease == null)
+            return new WorkflowRunContextCreateResult(WorkflowChatRunStartError.ProjectionDisabled, null);
 
         return new WorkflowRunContextCreateResult(
             WorkflowChatRunStartError.None,

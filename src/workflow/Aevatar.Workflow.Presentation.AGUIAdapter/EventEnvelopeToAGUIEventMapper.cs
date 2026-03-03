@@ -1,8 +1,6 @@
 using Aevatar.Presentation.AGUI;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Core;
-using AIEvents = Aevatar.AI.Abstractions;
-using AGUI = Aevatar.Presentation.AGUI;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Presentation.AGUIAdapter;
@@ -140,13 +138,13 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
         var payload = envelope.Payload;
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
 
-        if (payload.Is(AIEvents.TextMessageStartEvent.Descriptor))
+        if (payload.Is(Aevatar.AI.Abstractions.TextMessageStartEvent.Descriptor))
         {
-            var evt = payload.Unpack<AIEvents.TextMessageStartEvent>();
+            var evt = payload.Unpack<Aevatar.AI.Abstractions.TextMessageStartEvent>();
             var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
             events =
             [
-                new AGUI.TextMessageStartEvent
+                new Aevatar.Presentation.AGUI.TextMessageStartEvent
                 {
                     Timestamp = ts,
                     MessageId = msgId,
@@ -156,13 +154,13 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
             return true;
         }
 
-        if (payload.Is(AIEvents.TextMessageContentEvent.Descriptor))
+        if (payload.Is(Aevatar.AI.Abstractions.TextMessageContentEvent.Descriptor))
         {
-            var evt = payload.Unpack<AIEvents.TextMessageContentEvent>();
+            var evt = payload.Unpack<Aevatar.AI.Abstractions.TextMessageContentEvent>();
             var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
             events =
             [
-                new AGUI.TextMessageContentEvent
+                new Aevatar.Presentation.AGUI.TextMessageContentEvent
                 {
                     Timestamp = ts,
                     MessageId = msgId,
@@ -172,13 +170,13 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
             return true;
         }
 
-        if (payload.Is(AIEvents.TextMessageEndEvent.Descriptor))
+        if (payload.Is(Aevatar.AI.Abstractions.TextMessageEndEvent.Descriptor))
         {
-            var evt = payload.Unpack<AIEvents.TextMessageEndEvent>();
+            var evt = payload.Unpack<Aevatar.AI.Abstractions.TextMessageEndEvent>();
             var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
             events =
             [
-                new AGUI.TextMessageEndEvent
+                new Aevatar.Presentation.AGUI.TextMessageEndEvent
                 {
                     Timestamp = ts,
                     MessageId = msgId,
@@ -187,25 +185,25 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
             return true;
         }
 
-        if (payload.Is(AIEvents.ChatResponseEvent.Descriptor))
+        if (payload.Is(Aevatar.AI.Abstractions.ChatResponseEvent.Descriptor))
         {
-            var evt = payload.Unpack<AIEvents.ChatResponseEvent>();
+            var evt = payload.Unpack<Aevatar.AI.Abstractions.ChatResponseEvent>();
             var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
             events =
             [
-                new AGUI.TextMessageStartEvent
+                new Aevatar.Presentation.AGUI.TextMessageStartEvent
                 {
                     Timestamp = ts,
                     MessageId = msgId,
                     Role = "assistant",
                 },
-                new AGUI.TextMessageContentEvent
+                new Aevatar.Presentation.AGUI.TextMessageContentEvent
                 {
                     Timestamp = ts,
                     MessageId = msgId,
                     Delta = evt.Content,
                 },
-                new AGUI.TextMessageEndEvent
+                new Aevatar.Presentation.AGUI.TextMessageEndEvent
                 {
                     Timestamp = ts,
                     MessageId = msgId,
@@ -278,9 +276,9 @@ public sealed class ToolCallAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelope
         var payload = envelope.Payload;
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
 
-        if (payload.Is(AIEvents.ToolCallEvent.Descriptor))
+        if (payload.Is(Aevatar.AI.Abstractions.ToolCallEvent.Descriptor))
         {
-            var evt = payload.Unpack<AIEvents.ToolCallEvent>();
+            var evt = payload.Unpack<Aevatar.AI.Abstractions.ToolCallEvent>();
             events =
             [
                 new ToolCallStartEvent
@@ -293,9 +291,9 @@ public sealed class ToolCallAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelope
             return true;
         }
 
-        if (payload.Is(AIEvents.ToolResultEvent.Descriptor))
+        if (payload.Is(Aevatar.AI.Abstractions.ToolResultEvent.Descriptor))
         {
-            var evt = payload.Unpack<AIEvents.ToolResultEvent>();
+            var evt = payload.Unpack<Aevatar.AI.Abstractions.ToolResultEvent>();
             events =
             [
                 new ToolCallEndEvent

@@ -34,14 +34,9 @@ public static class ServiceCollectionExtensions
             ProjectionLifecycleService<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>>();
         services.TryAddSingleton<IProjectionPortActivationService<ScriptEvolutionRuntimeLease>, ScriptEvolutionProjectionActivationService>();
         services.TryAddSingleton<IProjectionPortReleaseService<ScriptEvolutionRuntimeLease>, ScriptEvolutionProjectionReleaseService>();
-        services.TryAddSingleton<IProjectionPortSinkSubscriptionManager<
-            ScriptEvolutionRuntimeLease,
-            IScriptEvolutionEventSink,
-            ScriptEvolutionSessionCompletedEvent>, ScriptEvolutionProjectionSinkSubscriptionManager>();
-        services.TryAddSingleton<IProjectionPortLiveSinkForwarder<
-            ScriptEvolutionRuntimeLease,
-            IScriptEvolutionEventSink,
-            ScriptEvolutionSessionCompletedEvent>, ScriptEvolutionProjectionLiveSinkForwarder>();
+        services.TryAddSingleton<IScriptEvolutionProjectionSinkSubscriptionManager, ScriptEvolutionProjectionSinkSubscriptionManager>();
+        services.TryAddSingleton<IScriptEvolutionProjectionSinkFailurePolicy, ScriptEvolutionProjectionSinkFailurePolicy>();
+        services.TryAddSingleton<IScriptEvolutionProjectionLiveSinkForwarder, ScriptEvolutionProjectionLiveSinkForwarder>();
         services.TryAddSingleton<ScriptEvolutionProjectionLifecycleService>();
         services.TryAddSingleton<IScriptEvolutionProjectionLifecyclePort>(sp =>
             sp.GetRequiredService<ScriptEvolutionProjectionLifecycleService>());

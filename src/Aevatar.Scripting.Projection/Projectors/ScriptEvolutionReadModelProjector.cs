@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -52,7 +53,7 @@ public sealed class ScriptEvolutionReadModelProjector
         if (!_reducersByType.TryGetValue(typeUrl, out var reducers))
             return;
 
-        var now = ResolveEventTimestamp(envelope, _clock.UtcNow);
+        var now = ProjectionEnvelopeTimestampResolver.Resolve(envelope, _clock.UtcNow);
         await _storeDispatcher.MutateAsync(readModelId, readModel =>
         {
             var mutated = false;
@@ -94,17 +95,4 @@ public sealed class ScriptEvolutionReadModelProjector
         return string.Empty;
     }
 
-    private static DateTimeOffset ResolveEventTimestamp(
-        EventEnvelope envelope,
-        DateTimeOffset fallbackUtcNow)
-    {
-        var ts = envelope.Timestamp;
-        if (ts == null)
-            return fallbackUtcNow;
-
-        var dt = ts.ToDateTime();
-        if (dt.Kind != DateTimeKind.Utc)
-            dt = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
-        return new DateTimeOffset(dt);
-    }
 }

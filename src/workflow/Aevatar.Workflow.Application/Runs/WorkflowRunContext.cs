@@ -11,7 +11,7 @@ public sealed class WorkflowRunContext
 
     public required string WorkflowName { get; init; }
 
-    public required IWorkflowRunEventSink Sink { get; init; }
+    public required IEventSink<WorkflowRunEvent> Sink { get; init; }
 
     public required string CommandId { get; init; }
 

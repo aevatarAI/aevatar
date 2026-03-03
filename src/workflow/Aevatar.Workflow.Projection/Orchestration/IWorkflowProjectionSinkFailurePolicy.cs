@@ -1,13 +1,9 @@
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public interface IWorkflowProjectionSinkFailurePolicy
+    : IProjectionPortSinkFailurePolicy<WorkflowExecutionRuntimeLease, IEventSink<WorkflowRunEvent>, WorkflowRunEvent>
 {
-    ValueTask<bool> TryHandleAsync(
-        WorkflowExecutionRuntimeLease runtimeLease,
-        IWorkflowRunEventSink sink,
-        WorkflowRunEvent sourceEvent,
-        Exception exception,
-        CancellationToken ct = default);
 }

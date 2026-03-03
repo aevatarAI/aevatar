@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 
 namespace Aevatar.Workflow.Application.Runs;
 
@@ -20,17 +21,11 @@ public sealed class WorkflowRunResourceFinalizer : IWorkflowRunResourceFinalizer
         ArgumentNullException.ThrowIfNull(processingTask);
         ct.ThrowIfCancellationRequested();
 
-        try
-        {
-            await _projectionPort.DetachLiveSinkAsync(runContext.ProjectionLease, runContext.Sink, CancellationToken.None);
-            await AwaitProcessingTaskSafeAsync(processingTask);
-            await _projectionPort.ReleaseActorProjectionAsync(runContext.ProjectionLease, CancellationToken.None);
-        }
-        finally
-        {
-            runContext.Sink.Complete();
-            await runContext.Sink.DisposeAsync();
-        }
+        await _projectionPort.DetachReleaseAndDisposeAsync(
+            runContext.ProjectionLease,
+            runContext.Sink,
+            () => AwaitProcessingTaskSafeAsync(processingTask),
+            CancellationToken.None);
     }
 
     private static async Task AwaitProcessingTaskSafeAsync(Task processingTask)

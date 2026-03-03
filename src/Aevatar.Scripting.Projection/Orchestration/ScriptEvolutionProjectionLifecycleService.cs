@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Evolution;
@@ -7,11 +8,7 @@ using Aevatar.Scripting.Projection.Configuration;
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptEvolutionProjectionLifecycleService
-    : ProjectionLifecyclePortServiceBase<
-        IScriptEvolutionProjectionLease,
-        ScriptEvolutionRuntimeLease,
-        IScriptEvolutionEventSink,
-        ScriptEvolutionSessionCompletedEvent>,
+    : ScriptEvolutionProjectionLifecyclePortServiceBase,
       IScriptEvolutionProjectionLifecyclePort
 {
     private const string ProjectionName = "script-evolution-session";
@@ -20,14 +17,8 @@ public sealed class ScriptEvolutionProjectionLifecycleService
         ScriptEvolutionProjectionOptions options,
         IProjectionPortActivationService<ScriptEvolutionRuntimeLease> activationService,
         IProjectionPortReleaseService<ScriptEvolutionRuntimeLease> releaseService,
-        IProjectionPortSinkSubscriptionManager<
-            ScriptEvolutionRuntimeLease,
-            IScriptEvolutionEventSink,
-            ScriptEvolutionSessionCompletedEvent> sinkSubscriptionManager,
-        IProjectionPortLiveSinkForwarder<
-            ScriptEvolutionRuntimeLease,
-            IScriptEvolutionEventSink,
-            ScriptEvolutionSessionCompletedEvent> liveSinkForwarder)
+        IScriptEvolutionProjectionSinkSubscriptionManager sinkSubscriptionManager,
+        IScriptEvolutionProjectionLiveSinkForwarder liveSinkForwarder)
         : base(
             () => options?.Enabled ?? false,
             activationService,
@@ -52,13 +43,13 @@ public sealed class ScriptEvolutionProjectionLifecycleService
 
     public Task AttachLiveSinkAsync(
         IScriptEvolutionProjectionLease lease,
-        IScriptEvolutionEventSink sink,
+        IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
         CancellationToken ct = default) =>
         AttachSinkAsync(lease, sink, ct);
 
     public Task DetachLiveSinkAsync(
         IScriptEvolutionProjectionLease lease,
-        IScriptEvolutionEventSink sink,
+        IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
         CancellationToken ct = default) =>
         DetachSinkAsync(lease, sink, ct);
 
@@ -66,8 +57,4 @@ public sealed class ScriptEvolutionProjectionLifecycleService
         IScriptEvolutionProjectionLease lease,
         CancellationToken ct = default) =>
         ReleaseProjectionAsync(lease, ct);
-
-    protected override ScriptEvolutionRuntimeLease ResolveRuntimeLease(IScriptEvolutionProjectionLease lease) =>
-        lease as ScriptEvolutionRuntimeLease
-        ?? throw new InvalidOperationException("Unsupported scripting evolution projection lease implementation.");
 }

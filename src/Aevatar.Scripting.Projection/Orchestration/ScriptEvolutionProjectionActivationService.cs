@@ -1,38 +1,37 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptEvolutionProjectionActivationService
-    : IProjectionPortActivationService<ScriptEvolutionRuntimeLease>
+    : ProjectionActivationServiceBase<ScriptEvolutionRuntimeLease, ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionLifecycleService<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>> _lifecycle;
-
     public ScriptEvolutionProjectionActivationService(
         IProjectionLifecycleService<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>> lifecycle)
+        : base(lifecycle)
     {
-        _lifecycle = lifecycle ?? throw new ArgumentNullException(nameof(lifecycle));
     }
 
-    public async Task<ScriptEvolutionRuntimeLease> EnsureAsync(
+    protected override ScriptEvolutionSessionProjectionContext CreateContext(
         string rootEntityId,
         string projectionName,
         string input,
         string commandId,
-        CancellationToken ct = default)
+        CancellationToken ct)
     {
         _ = projectionName;
         _ = input;
-        ArgumentException.ThrowIfNullOrWhiteSpace(rootEntityId);
+        _ = ct;
         ArgumentException.ThrowIfNullOrWhiteSpace(commandId);
 
-        var context = new ScriptEvolutionSessionProjectionContext
+        return new ScriptEvolutionSessionProjectionContext
         {
             ProjectionId = rootEntityId,
             RootActorId = rootEntityId,
             ProposalId = commandId,
         };
-
-        await _lifecycle.StartAsync(context, ct);
-        return new ScriptEvolutionRuntimeLease(context);
     }
+
+    protected override ScriptEvolutionRuntimeLease CreateRuntimeLease(ScriptEvolutionSessionProjectionContext context) =>
+        new(context);
 }

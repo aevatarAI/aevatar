@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Evolution;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -14,6 +15,7 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
     private readonly IActorRuntime _runtime;
     private readonly IStreamProvider _streams;
     private readonly IScriptEvolutionProjectionLifecyclePort _projectionLifecyclePort;
+    private readonly IScriptEvolutionDecisionFallbackPort _decisionFallbackPort;
     private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly TimeSpan _decisionTimeout;
     private readonly TimeSpan _catalogQueryTimeout;
@@ -29,12 +31,14 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
         IActorRuntime runtime,
         IStreamProvider streams,
         IScriptEvolutionProjectionLifecyclePort projectionLifecyclePort,
+        IScriptEvolutionDecisionFallbackPort decisionFallbackPort,
         IScriptingActorAddressResolver addressResolver,
         IScriptingPortTimeouts timeouts)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
         _projectionLifecyclePort = projectionLifecyclePort ?? throw new ArgumentNullException(nameof(projectionLifecyclePort));
+        _decisionFallbackPort = decisionFallbackPort ?? throw new ArgumentNullException(nameof(decisionFallbackPort));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
         _decisionTimeout = NormalizeTimeout(timeouts.EvolutionDecisionTimeout);
         _catalogQueryTimeout = NormalizeTimeout(timeouts.CatalogEntryQueryTimeout);
@@ -55,20 +59,19 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
         _ = await GetOrCreateManagerAsync(managerActorId, ct);
         var sessionActorId = _addressResolver.GetEvolutionSessionActorId(normalizedProposalId);
         var sessionActor = await GetOrCreateSessionActorAsync(sessionActorId, ct);
-        var sink = new ScriptEvolutionEventChannel();
-        IScriptEvolutionProjectionLease? projectionLease = null;
+        var sink = new EventChannel<ScriptEvolutionSessionCompletedEvent>(capacity: 256);
+        var projectionLease = await _projectionLifecyclePort.EnsureAndAttachAsync(
+            token => _projectionLifecyclePort.EnsureActorProjectionAsync(
+                sessionActorId,
+                normalizedProposalId,
+                token),
+            sink,
+            ct);
+        if (projectionLease == null)
+            throw new InvalidOperationException("Script evolution projection is disabled.");
 
         try
         {
-            projectionLease = await _projectionLifecyclePort.EnsureActorProjectionAsync(
-                sessionActorId,
-                normalizedProposalId,
-                ct);
-            if (projectionLease == null)
-                throw new InvalidOperationException("Script evolution projection is disabled.");
-
-            await _projectionLifecyclePort.AttachLiveSinkAsync(projectionLease, sink, ct);
-
             var completed = await WaitForSessionCompletionAsync(
                 normalizedProposalId,
                 sink,
@@ -90,15 +93,19 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
         }
         catch (TimeoutException)
         {
-            var fallback = await QueryManagerDecisionAsync(managerActorId, normalizedProposalId, ct);
-            if (fallback is { Found: true })
-                return MapDecision(fallback);
+            var fallback = await _decisionFallbackPort.TryResolveAsync(managerActorId, normalizedProposalId, ct);
+            if (fallback != null)
+                return fallback;
 
             throw;
         }
         finally
         {
-            await ReleaseProjectionResourcesAsync(projectionLease, sink);
+            await _projectionLifecyclePort.DetachReleaseAndDisposeAsync(
+                projectionLease,
+                sink,
+                onDetachedAsync: null,
+                CancellationToken.None);
         }
     }
 
@@ -118,16 +125,10 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
             ? _addressResolver.GetDefinitionActorId(scriptId)
             : definitionActorId;
 
-        IActor actor;
-        if (await _runtime.ExistsAsync(actorId))
-        {
-            actor = await _runtime.GetAsync(actorId)
-                ?? throw new InvalidOperationException($"Script definition actor not found: {actorId}");
-        }
-        else
-        {
-            actor = await _runtime.CreateAsync<ScriptDefinitionGAgent>(actorId, ct);
-        }
+        var actor = await GetOrCreateActorAsync<ScriptDefinitionGAgent>(
+            actorId,
+            "Script definition actor not found",
+            ct);
 
         await actor.HandleEventAsync(
             _upsertDefinitionAdapter.Map(
@@ -273,37 +274,38 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
             LastProposalId: response.LastProposalId ?? string.Empty);
     }
 
-    private async Task<IActor> GetOrCreateManagerAsync(string managerActorId, CancellationToken ct)
+    private Task<IActor> GetOrCreateManagerAsync(string managerActorId, CancellationToken ct) =>
+        GetOrCreateActorAsync<ScriptEvolutionManagerGAgent>(
+            managerActorId,
+            "Script evolution manager actor not found",
+            ct);
+
+    private Task<IActor> GetOrCreateSessionActorAsync(string sessionActorId, CancellationToken ct) =>
+        GetOrCreateActorAsync<ScriptEvolutionSessionGAgent>(
+            sessionActorId,
+            "Script evolution session actor not found",
+            ct);
+
+    private Task<IActor> GetOrCreateCatalogActorAsync(string catalogActorId, CancellationToken ct) =>
+        GetOrCreateActorAsync<ScriptCatalogGAgent>(
+            catalogActorId,
+            "Script catalog actor not found",
+            ct);
+
+    private async Task<IActor> GetOrCreateActorAsync<TAgent>(
+        string actorId,
+        string notFoundMessage,
+        CancellationToken ct)
+        where TAgent : IAgent
     {
-        if (await _runtime.ExistsAsync(managerActorId))
-        {
-            return await _runtime.GetAsync(managerActorId)
-                ?? throw new InvalidOperationException($"Script evolution manager actor not found: {managerActorId}");
-        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(notFoundMessage);
 
-        return await _runtime.CreateAsync<ScriptEvolutionManagerGAgent>(managerActorId, ct);
-    }
+        if (!await _runtime.ExistsAsync(actorId))
+            return await _runtime.CreateAsync<TAgent>(actorId, ct);
 
-    private async Task<IActor> GetOrCreateSessionActorAsync(string sessionActorId, CancellationToken ct)
-    {
-        if (await _runtime.ExistsAsync(sessionActorId))
-        {
-            return await _runtime.GetAsync(sessionActorId)
-                ?? throw new InvalidOperationException($"Script evolution session actor not found: {sessionActorId}");
-        }
-
-        return await _runtime.CreateAsync<ScriptEvolutionSessionGAgent>(sessionActorId, ct);
-    }
-
-    private async Task<IActor> GetOrCreateCatalogActorAsync(string catalogActorId, CancellationToken ct)
-    {
-        if (await _runtime.ExistsAsync(catalogActorId))
-        {
-            return await _runtime.GetAsync(catalogActorId)
-                ?? throw new InvalidOperationException($"Script catalog actor not found: {catalogActorId}");
-        }
-
-        return await _runtime.CreateAsync<ScriptCatalogGAgent>(catalogActorId, ct);
+        return await _runtime.GetAsync(actorId)
+            ?? throw new InvalidOperationException($"{notFoundMessage}: {actorId}");
     }
 
     private string ResolveCatalogActorId(string? catalogActorId) =>
@@ -313,7 +315,7 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
 
     private async Task<ScriptEvolutionSessionCompletedEvent> WaitForSessionCompletionAsync(
         string proposalId,
-        IScriptEvolutionEventSink sink,
+        IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
         Func<Task> dispatchAsync,
         CancellationToken ct)
     {
@@ -341,50 +343,6 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
         throw new TimeoutException($"Timeout waiting for script evolution session completion. proposal_id={proposalId}");
     }
 
-    private async Task<ScriptEvolutionDecisionRespondedEvent?> QueryManagerDecisionAsync(
-        string managerActorId,
-        string proposalId,
-        CancellationToken ct)
-    {
-        var managerActor = await _runtime.GetAsync(managerActorId);
-        if (managerActor == null)
-            return null;
-
-        return await ScriptQueryReplyAwaiter.QueryAsync<ScriptEvolutionDecisionRespondedEvent>(
-            _streams,
-            "scripting.query.evolution.reply",
-            _decisionTimeout,
-            (requestId, replyStreamId) => managerActor.HandleEventAsync(
-                BuildManagerDecisionQueryEnvelope(managerActorId, proposalId, requestId, replyStreamId),
-                ct),
-            static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
-            static requestId => $"Timeout waiting for script evolution decision query response. request_id={requestId}",
-            ct);
-    }
-
-    private static EventEnvelope BuildManagerDecisionQueryEnvelope(
-        string targetActorId,
-        string proposalId,
-        string requestId,
-        string replyStreamId)
-    {
-        return new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new QueryScriptEvolutionDecisionRequestedEvent
-            {
-                RequestId = requestId,
-                ReplyStreamId = replyStreamId,
-                ProposalId = proposalId,
-            }),
-            PublisherId = "scripting.query.evolution",
-            Direction = EventDirection.Self,
-            TargetActorId = targetActorId,
-            CorrelationId = proposalId,
-        };
-    }
-
     private static ScriptPromotionDecision MapDecision(
         ScriptEvolutionProposal proposal,
         ScriptEvolutionSessionCompletedEvent completed)
@@ -405,47 +363,6 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
             ValidationReport: validation);
     }
 
-    private static ScriptPromotionDecision MapDecision(ScriptEvolutionDecisionRespondedEvent response)
-    {
-        var validation = new ScriptEvolutionValidationReport(
-            IsSuccess: response.Accepted,
-            Diagnostics: response.Diagnostics.ToArray());
-        return new ScriptPromotionDecision(
-            Accepted: response.Accepted,
-            ProposalId: response.ProposalId ?? string.Empty,
-            ScriptId: response.ScriptId ?? string.Empty,
-            BaseRevision: response.BaseRevision ?? string.Empty,
-            CandidateRevision: response.CandidateRevision ?? string.Empty,
-            Status: response.Status ?? string.Empty,
-            FailureReason: response.FailureReason ?? string.Empty,
-            DefinitionActorId: response.DefinitionActorId ?? string.Empty,
-            CatalogActorId: response.CatalogActorId ?? string.Empty,
-            ValidationReport: validation);
-    }
-
     private static TimeSpan NormalizeTimeout(TimeSpan timeout) =>
         timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(45);
-
-    private async Task ReleaseProjectionResourcesAsync(
-        IScriptEvolutionProjectionLease? projectionLease,
-        IScriptEvolutionEventSink sink)
-    {
-        try
-        {
-            if (projectionLease != null)
-                await _projectionLifecyclePort.DetachLiveSinkAsync(projectionLease, sink, CancellationToken.None);
-        }
-        finally
-        {
-            try
-            {
-                if (projectionLease != null)
-                    await _projectionLifecyclePort.ReleaseActorProjectionAsync(projectionLease, CancellationToken.None);
-            }
-            finally
-            {
-                await sink.DisposeAsync();
-            }
-        }
-    }
 }

@@ -233,7 +233,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
         }
     }
 
-    private sealed class RecordingSink : IWorkflowRunEventSink
+    private sealed class RecordingSink : IEventSink<WorkflowRunEvent>
     {
         private readonly object _gate = new();
         private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _countWaiters = [];

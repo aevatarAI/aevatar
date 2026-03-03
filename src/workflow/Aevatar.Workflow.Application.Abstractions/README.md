@@ -48,8 +48,8 @@ Aevatar.Workflow.Application.Abstractions/
 | `WorkflowRunTextMessageEndEvent` | LLM 文本流结束 |
 | `WorkflowRunToolCallStartEvent` | 工具调用开始 |
 | `WorkflowRunToolCallEndEvent` | 工具调用结束 |
-| `IWorkflowRunEventSink` | 事件推送端口（push/complete/dispose） |
-| `WorkflowRunEventChannel` | Channel-based 实现，支持背压 |
+| `IEventSink<WorkflowRunEvent>` | 事件推送端口（push/complete/dispose） |
+| `EventChannel<WorkflowRunEvent>` | Channel-based 实现，支持背压 |
 
 ### 查询模型
 
