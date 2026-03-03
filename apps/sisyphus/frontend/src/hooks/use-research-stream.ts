@@ -1,6 +1,19 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { startResearchStream } from '../api'
 import type { AgentMessage, ToolCall, TimelineItem, RunStatus, SSEEvent } from '../types'
+
+/**
+ * Typewriter delta queue — buffers incoming text deltas and drains them
+ * at a controlled pace via requestAnimationFrame so React renders each
+ * small batch visibly instead of batching them all into one frame.
+ *
+ * CHARS_PER_FRAME controls the visible typing speed:
+ *   4 chars/frame × 60 fps = 240 chars/sec — visible typing effect.
+ * When a message ends, drain speeds up (FLUSH_CHARS_PER_FRAME) to avoid
+ * stale text sitting in the queue.
+ */
+const CHARS_PER_FRAME = 4
+const FLUSH_CHARS_PER_FRAME = 80
 
 function deriveRole(stepName: string): string {
   const s = stepName.toLowerCase()
@@ -38,6 +51,94 @@ export function useResearchStream() {
   const abortRef = useRef<AbortController | null>(null)
   const currentRoleRef = useRef<string>('researcher')
   const seenStepsRef = useRef<Set<string>>(new Set())
+
+  // ─── Typewriter delta queue ───
+  // Keyed by messageId → pending text to reveal
+  const deltaQueueRef = useRef<Map<string, string>>(new Map())
+  const rafRef = useRef<number | null>(null)
+  // Track which messages have finished streaming (TEXT_MESSAGE_END received)
+  // so we can drain them faster and mark isStreaming=false when their queue empties.
+  const endedMessagesRef = useRef<Set<string>>(new Set())
+
+  const drainDeltas = useCallback(() => {
+    rafRef.current = null
+    const queue = deltaQueueRef.current
+    const ended = endedMessagesRef.current
+    if (queue.size === 0) return
+
+    // Build a batch: use faster drain rate for ended messages
+    const batch = new Map<string, string>()
+    const fullyDrained: string[] = []
+    let hasMore = false
+    for (const [id, pending] of queue) {
+      const limit = ended.has(id) ? FLUSH_CHARS_PER_FRAME : CHARS_PER_FRAME
+      if (pending.length <= limit) {
+        batch.set(id, pending)
+        queue.delete(id)
+        if (ended.has(id)) fullyDrained.push(id)
+      } else {
+        batch.set(id, pending.slice(0, limit))
+        queue.set(id, pending.slice(limit))
+        hasMore = true
+      }
+    }
+
+    if (batch.size > 0) {
+      setMessages((prev) =>
+        prev.map((m) => {
+          const delta = batch.get(m.id)
+          if (!delta) return m
+          const updated = { ...m, content: m.content + delta }
+          // Mark streaming complete once queue fully drained for ended messages
+          if (fullyDrained.includes(m.id)) {
+            updated.isStreaming = false
+            ended.delete(m.id)
+          }
+          return updated
+        }),
+      )
+    }
+
+    if (hasMore || queue.size > 0) {
+      rafRef.current = requestAnimationFrame(drainDeltas)
+    }
+  }, [])
+
+  const enqueueDelta = useCallback(
+    (messageId: string, delta: string) => {
+      const queue = deltaQueueRef.current
+      queue.set(messageId, (queue.get(messageId) ?? '') + delta)
+      if (rafRef.current == null) {
+        rafRef.current = requestAnimationFrame(drainDeltas)
+      }
+    },
+    [drainDeltas],
+  )
+
+  // When a message stream ends, mark it for faster drain instead of instant flush.
+  // If the queue is already empty for this message, mark isStreaming=false immediately.
+  const markMessageEnded = useCallback((messageId: string) => {
+    const queue = deltaQueueRef.current
+    if (!queue.has(messageId)) {
+      // Queue already empty — mark done immediately
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, isStreaming: false } : m)),
+      )
+    } else {
+      // Queue still has pending text — let drainDeltas handle it at faster rate
+      endedMessagesRef.current.add(messageId)
+      if (rafRef.current == null) {
+        rafRef.current = requestAnimationFrame(drainDeltas)
+      }
+    }
+  }, [drainDeltas])
+
+  // Cleanup raf on unmount
+  useEffect(() => {
+    return () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
+    }
+  }, [])
 
   const handleEvent = useCallback((event: SSEEvent) => {
     switch (event.type) {
@@ -116,23 +217,15 @@ export function useResearchStream() {
 
       case 'TEXT_MESSAGE_CONTENT':
         if (event.messageId && event.delta) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === event.messageId
-                ? { ...m, content: m.content + event.delta }
-                : m,
-            ),
-          )
+          enqueueDelta(event.messageId, event.delta)
         }
         break
 
       case 'TEXT_MESSAGE_END':
         if (event.messageId) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === event.messageId ? { ...m, isStreaming: false } : m,
-            ),
-          )
+          // Let the typewriter drain remaining text at a faster rate,
+          // then mark isStreaming=false when the queue empties.
+          markMessageEnded(event.messageId)
         }
         break
 
@@ -174,10 +267,14 @@ export function useResearchStream() {
         }
         break
     }
-  }, [])
+  }, [enqueueDelta, markMessageEnded])
 
   const startRun = useCallback(
     (prompt: string, workflow?: string, agentId?: string) => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+      deltaQueueRef.current.clear()
+      endedMessagesRef.current.clear()
       setMessages([])
       setToolCalls([])
       setTimeline([])
@@ -216,6 +313,10 @@ export function useResearchStream() {
   }, [])
 
   const clear = useCallback(() => {
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
+    rafRef.current = null
+    deltaQueueRef.current.clear()
+    endedMessagesRef.current.clear()
     setMessages([])
     setToolCalls([])
     setTimeline([])

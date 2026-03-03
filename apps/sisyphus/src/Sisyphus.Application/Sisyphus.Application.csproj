@@ -15,5 +15,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Sisyphus.Application.Tests" />
+    <InternalsVisibleTo Include="Sisyphus.Host" />
   </ItemGroup>
 </Project>

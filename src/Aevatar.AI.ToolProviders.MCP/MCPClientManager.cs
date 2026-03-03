@@ -37,7 +37,11 @@ public sealed class MCPClientManager : IAsyncDisposable
         {
             HttpClient httpClient;
 
-            if (config.Auth is { } auth)
+            if (config.AuthHandler is { } authHandler)
+            {
+                httpClient = new HttpClient(authHandler);
+            }
+            else if (config.Auth is { } auth)
             {
                 // Use a delegating handler that auto-refreshes the OAuth token
                 var handler = new OAuthTokenHandler(auth, _logger);

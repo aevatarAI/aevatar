@@ -85,4 +85,58 @@ public sealed class MEAILLMProviderFactory : ILLMProviderFactory, IMEAILLMProvid
         var meaiClient = chatClient.AsIChatClient();
         return Register(name, meaiClient, logger);
     }
+
+    /// <summary>
+    /// Creates and registers a provider using the OpenAI Responses API
+    /// with a custom HttpMessageHandler for authentication.
+    /// The handler overrides the Authorization header on each request.
+    /// Uses Responses API (/v1/responses) as required by the upstream.
+    /// </summary>
+    public IMEAILLMProviderRegistry RegisterOpenAI(
+        string name, string model, string baseUrl,
+        HttpMessageHandler authHandler, ILogger? logger = null)
+    {
+        var httpClient = new HttpClient(authHandler);
+        var transport = new System.ClientModel.Primitives.HttpClientPipelineTransport(httpClient);
+        var options = new OpenAI.OpenAIClientOptions { Endpoint = new Uri(baseUrl), Transport = transport };
+        var openAiClient = new OpenAI.OpenAIClient(new System.ClientModel.ApiKeyCredential("handler-managed"), options);
+#pragma warning disable OPENAI001 // Responses API is experimental
+        var responsesClient = openAiClient.GetResponsesClient(model);
+        // Wrap with SystemToDeveloperChatClient: Responses API uses "developer"
+        // role instead of "system". Without this, upstream rejects with
+        // "System messages are not allowed".
+        IChatClient meaiClient = new SystemToDeveloperChatClient(responsesClient.AsIChatClient());
+#pragma warning restore OPENAI001
+        return Register(name, meaiClient, logger);
+    }
+}
+
+/// <summary>
+/// Rewrites "system" role messages to "developer" role for the Responses API.
+/// The OpenAI Responses API does not accept "system" messages.
+/// </summary>
+internal sealed class SystemToDeveloperChatClient : DelegatingChatClient
+{
+    private static readonly ChatRole DeveloperRole = new("developer");
+
+    public SystemToDeveloperChatClient(IChatClient inner) : base(inner) { }
+
+    private static IEnumerable<Microsoft.Extensions.AI.ChatMessage> RewriteRoles(
+        IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages)
+    {
+        foreach (var msg in messages)
+        {
+            if (msg.Role == ChatRole.System)
+                msg.Role = DeveloperRole;
+        }
+        return messages;
+    }
+
+    public override Task<ChatResponse> GetResponseAsync(
+        IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
+        => base.GetResponseAsync(RewriteRoles(messages), options, ct);
+
+    public override IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
+        => base.GetStreamingResponseAsync(RewriteRoles(messages), options, ct);
 }

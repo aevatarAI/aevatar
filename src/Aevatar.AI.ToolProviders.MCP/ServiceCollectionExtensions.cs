@@ -31,4 +31,25 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IAgentToolSource, MCPAgentToolSource>());
         return services;
     }
+
+    /// <summary>
+    /// Registers MCP Tools with deferred configuration.
+    /// The options are created at service resolution time, so DI services
+    /// (like token services) are available for creating auth handlers.
+    /// </summary>
+    public static IServiceCollection AddMCPTools(
+        this IServiceCollection services,
+        Action<IServiceProvider, MCPToolsOptions> configure)
+    {
+        services.TryAddSingleton(sp =>
+        {
+            var options = new MCPToolsOptions();
+            configure(sp, options);
+            return options;
+        });
+        services.TryAddSingleton<MCPClientManager>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IAgentToolSource, MCPAgentToolSource>());
+        return services;
+    }
 }

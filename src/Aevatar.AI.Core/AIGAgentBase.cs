@@ -190,11 +190,11 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
     }
 
-    /// <summary>流式 Chat。</summary>
+    /// <summary>流式 Chat（含 Tool Calling 循环）。</summary>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync(userMessage, ct);
+        return _chat!.ChatStreamAsync(userMessage, Config.MaxToolRounds, ct);
     }
 
     /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>

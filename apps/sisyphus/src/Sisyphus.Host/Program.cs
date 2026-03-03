@@ -1,7 +1,9 @@
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Extensions.Maker;
+using Microsoft.Extensions.DependencyInjection;
 using Sisyphus.Application.DependencyInjection;
+using Sisyphus.Application.Services;
 using Sisyphus.Host.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -13,7 +15,18 @@ builder.AddAevatarDefaultHost(
         options.EnableWebSockets = true;
     });
 builder.AddSisyphusOrleansHost();
-builder.AddWorkflowCapabilityWithAIDefaults();
+builder.AddWorkflowCapabilityWithAIDefaults(options =>
+{
+    var llmProvider = Environment.GetEnvironmentVariable("LLM_PROVIDER");
+    if (string.Equals(llmProvider, "nyx", StringComparison.OrdinalIgnoreCase))
+    {
+        options.AuthHandlerFactory = sp =>
+        {
+            var tokenService = sp.GetRequiredService<NyxIdTokenService>();
+            return new NyxTokenHandler(tokenService);
+        };
+    }
+});
 builder.Services.AddWorkflowMakerExtensions();
 builder.AddSisyphusCapability();
 
