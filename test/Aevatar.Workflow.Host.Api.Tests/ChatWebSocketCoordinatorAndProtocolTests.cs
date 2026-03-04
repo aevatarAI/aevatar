@@ -61,11 +61,11 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
         using var ackDoc = JsonDocument.Parse(socket.SentTexts[0]);
         ackDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
-        ackDoc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
+        ackDoc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
 
         using var eventDoc = JsonDocument.Parse(socket.SentTexts[1]);
         eventDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
-        eventDoc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
+        eventDoc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
 
     }
 
@@ -94,7 +94,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("WORKFLOW_NOT_FOUND");
         doc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-2");
-        doc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
     }
 
@@ -129,7 +129,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         using var eventDoc = JsonDocument.Parse(socket.SentTexts[0]);
         eventDoc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.AguiEvent);
         eventDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-fallback");
-        eventDoc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
+        eventDoc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
 
         using var ackDoc = JsonDocument.Parse(socket.SentTexts[1]);
         ackDoc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandAck);

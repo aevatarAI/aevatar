@@ -148,12 +148,13 @@ Keep metadata keys centralized in `Aevatar.Foundation.Abstractions/Propagation/E
 
 Developers must see tracing keys at API boundary without opening internal runtime logs.
 
+> Note: `trace_id` is used internally for logging and Jaeger correlation, but is not exposed in API responses. It is only available in structured logs for debugging purposes.
+
 ### 6.1 HTTP Headers
 
 Recommended default response headers:
 
 - `X-Correlation-Id` (required when available)
-- `X-Trace-Id` (optional, empty when no active `Activity`)
 
 > Note: `traceparent` header may already be set by ASP.NET Core OTel middleware. This design does not add custom `traceparent` management — it is a hosting-level concern, consistent with Section 3 Scope Boundary.
 
@@ -163,14 +164,12 @@ For async accepted responses (`202`), include:
 
 - `commandId`
 - `correlationId`
-- `traceId`
 
 ### 6.3 WebSocket Messages
 
 `ack / event / error` messages should include:
 
 - `correlationId`
-- `traceId`
 
 ## 7. Logging Contract
 
@@ -221,8 +220,8 @@ Rules:
 ### 10.2 API Host Tests
 
 - `/api/chat` response header includes `X-Correlation-Id`.
-- `202 Accepted` body includes `correlationId` and `traceId`.
-- WebSocket ack/event/error include `correlationId` and `traceId`.
+- `202 Accepted` body includes `correlationId`.
+- WebSocket ack/event/error include `correlationId`.
 
 ### 10.3 Integration
 
@@ -232,7 +231,7 @@ Rules:
 ### 10.4 Jaeger Validation
 
 - Use `docs/architecture/workflow-jaeger-observability-guide.md` for local OTLP + Jaeger verification.
-- Validate API `X-Trace-Id` matches Jaeger trace id and runtime log `trace_id`.
+- Validate runtime log `trace_id` matches Jaeger trace id (trace_id is not exposed in API responses, only in logs).
 
 ## 11. Implementation Steps (Minimal Path)
 
@@ -247,10 +246,10 @@ Rules:
    - write `route_target_count` only when publish-time count is known
 5. Wire `TracingContextHelpers.CreateLogScopeState` into `LocalActor.EnqueueAsync` and `RuntimeActorGrain.HandleEnvelopeAsync` as `BeginScope`.
 6. Add API trace helper (`Aevatar.Workflow.Infrastructure/CapabilityApi/CapabilityTraceContext.cs`):
-   - Trace header injection (`X-Trace-Id`, `X-Correlation-Id`)
-   - Accepted payload with `traceId`/`correlationId`
-   - WebSocket envelope fields
-   - API log scope state
+   - Correlation header injection (`X-Correlation-Id`)
+   - Accepted payload with `correlationId`
+   - WebSocket envelope fields with `correlationId`
+   - API log scope state (includes `trace_id` for internal logging only)
 7. Wire API helper into `ChatEndpoints` HTTP/WS handlers.
 8. Add tests from Section 10.
 9. Run build and targeted test suites.

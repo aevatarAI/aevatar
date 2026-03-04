@@ -38,7 +38,6 @@ public static class WorkflowCapabilityEndpoints
         }
 
         var writer = new ChatSseResponseWriter(http.Response);
-        CapabilityTraceContext.ApplyTraceHeaders(http.Response);
 
         try
         {
@@ -189,8 +188,7 @@ public static class WorkflowCapabilityEndpoints
                         parseError.RequestId,
                         parseError.Code,
                         parseError.Message,
-                        parseContext.CorrelationId,
-                        parseContext.TraceId),
+                        parseContext.CorrelationId),
                     ct,
                     parseError.ResponseMessageType);
                 return;
@@ -214,7 +212,7 @@ public static class WorkflowCapabilityEndpoints
                         requestId: null,
                         code: "RUN_EXECUTION_FAILED",
                         message: "Failed to execute run.",
-                        traceId: failureContext.TraceId),
+                        correlationId: failureContext.CorrelationId),
                     ct,
                     responseMessageType);
             }

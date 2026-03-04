@@ -109,7 +109,7 @@ public class ChatEndpointsInternalTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         http.Response.Headers["X-Correlation-Id"].ToString().Should().Be("cmd-1");
-        http.Response.Headers["X-Trace-Id"].ToString().Should().Be(activity.TraceId.ToString());
+        http.Response.Headers.ContainsKey("X-Trace-Id").Should().BeFalse();
         var body = await ReadBodyAsync(http);
         body.Should().Contain("data:");
         body.Should().Contain(WorkflowRunEventTypes.RunStarted);
@@ -191,7 +191,7 @@ public class ChatEndpointsInternalTests
         statusCode.Should().Be(StatusCodes.Status202Accepted);
         doc.RootElement.GetProperty("commandId").GetString().Should().Be("cmd-1");
         doc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
-        doc.RootElement.GetProperty("traceId").ValueKind.Should().Be(JsonValueKind.String);
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
     }
 
     [Fact]

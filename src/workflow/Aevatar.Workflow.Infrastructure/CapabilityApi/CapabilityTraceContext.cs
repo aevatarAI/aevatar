@@ -26,13 +26,6 @@ internal static class CapabilityTraceContext
             ? correlationId
             : (fallbackCorrelationId ?? string.Empty);
 
-    public static void ApplyTraceHeaders(HttpResponse response)
-    {
-        var context = CreateMessageContext();
-        if (!string.IsNullOrWhiteSpace(context.TraceId))
-            response.Headers["X-Trace-Id"] = context.TraceId;
-    }
-
     public static void ApplyCorrelationHeader(HttpResponse response, string correlationId)
     {
         var context = CreateMessageContext(correlationId);
@@ -50,7 +43,6 @@ internal static class CapabilityTraceContext
         {
             CommandId = commandId,
             CorrelationId = context.CorrelationId,
-            TraceId = context.TraceId,
             ActorId = actorId,
         };
     }
@@ -82,6 +74,5 @@ internal sealed record WorkflowRunAcceptedPayload
 {
     public required string CommandId { get; init; }
     public required string CorrelationId { get; init; }
-    public required string TraceId { get; init; }
     public required string ActorId { get; init; }
 }

@@ -33,18 +33,16 @@ internal static class ChatWebSocketRunCoordinator
                     ChatWebSocketEnvelopeFactory.CreateAguiEvent(
                         command.RequestId,
                         frame,
-                        context.CorrelationId,
-                        context.TraceId),
+                        context.CorrelationId),
                     token,
                     responseMessageType));
             },
             onStartedAsync: (started, token) =>
             {
                 correlationId = started.CommandId;
-                var context = ResolveContext();
                 return new ValueTask(ChatWebSocketProtocol.SendAsync(
                     socket,
-                    ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, started, context.TraceId),
+                    ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, started),
                     token,
                     responseMessageType));
             },
@@ -60,8 +58,7 @@ internal static class ChatWebSocketRunCoordinator
                     command.RequestId,
                     code,
                     message,
-                    context.CorrelationId,
-                    context.TraceId),
+                    context.CorrelationId),
                 ct,
                 responseMessageType);
             return;
