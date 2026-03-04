@@ -1,11 +1,12 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Application;
 
 public sealed class QueryScriptDefinitionSnapshotRequestAdapter
 {
-    private const string QueryPublisherId = "scripting.query.definition";
+    private const string QueryPublisherId = ScriptingQueryChannels.DefinitionPublisherId;
 
     public EventEnvelope Map(
         string targetActorId,

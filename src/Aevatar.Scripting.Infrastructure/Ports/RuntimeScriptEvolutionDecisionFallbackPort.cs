@@ -20,7 +20,8 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
     {
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
-        _decisionTimeout = ScriptingPortTimeouts.NormalizeOrDefault(timeouts.EvolutionDecisionTimeout);
+        _decisionTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
+            .GetEvolutionDecisionTimeout();
     }
 
     public async Task<ScriptPromotionDecision?> TryResolveAsync(
@@ -41,11 +42,11 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
             response = await EventStreamQueryReplyAwaiter.QueryActorAsync<ScriptEvolutionDecisionRespondedEvent>(
                 _streams,
                 managerActor,
-                "scripting.query.evolution.reply",
+                ScriptingQueryRouteConventions.EvolutionReplyStreamPrefix,
                 _decisionTimeout,
                 (requestId, replyStreamId) => BuildQueryEnvelope(managerActorId, proposalId, requestId, replyStreamId),
                 static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
-                static requestId => $"Timeout waiting for script evolution decision query response. request_id={requestId}",
+                ScriptingQueryRouteConventions.BuildEvolutionDecisionTimeoutMessage,
                 ct);
         }
         catch (TimeoutException)
@@ -75,7 +76,7 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
                 ReplyStreamId = replyStreamId,
                 ProposalId = proposalId,
             }),
-            PublisherId = "scripting.query.evolution",
+            PublisherId = ScriptingQueryChannels.EvolutionPublisherId,
             Direction = EventDirection.Self,
             TargetActorId = targetActorId,
             CorrelationId = proposalId,

@@ -25,7 +25,8 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
         _useEventDrivenDefinitionQuery = (queryModes ?? throw new ArgumentNullException(nameof(queryModes)))
             .UseEventDrivenDefinitionQuery;
-        _queryTimeout = ScriptingPortTimeouts.NormalizeOrDefault(timeouts.DefinitionSnapshotQueryTimeout);
+        _queryTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
+            .GetDefinitionSnapshotQueryTimeout();
     }
 
     public bool UseEventDrivenDefinitionQuery => _useEventDrivenDefinitionQuery;
@@ -43,11 +44,11 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
         var response = await EventStreamQueryReplyAwaiter.QueryActorAsync<ScriptDefinitionSnapshotRespondedEvent>(
             _streams,
             actor,
-            "scripting.query.definition.reply",
+            ScriptingQueryRouteConventions.DefinitionReplyStreamPrefix,
             _queryTimeout,
             (requestId, replyStreamId) => _queryAdapter.Map(definitionActorId, requestId, replyStreamId, requestedRevision),
             static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
-            static requestId => $"Timeout waiting for script definition snapshot query response. request_id={requestId}",
+            ScriptingQueryRouteConventions.BuildDefinitionSnapshotTimeoutMessage,
             ct);
         if (!response.Found)
             throw new InvalidOperationException(

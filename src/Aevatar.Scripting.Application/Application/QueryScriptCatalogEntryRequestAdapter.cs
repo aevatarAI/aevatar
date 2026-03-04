@@ -1,11 +1,12 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Application;
 
 public sealed class QueryScriptCatalogEntryRequestAdapter
 {
-    private const string QueryPublisherId = "scripting.query.catalog";
+    private const string QueryPublisherId = ScriptingQueryChannels.CatalogPublisherId;
 
     public EventEnvelope Map(
         string targetActorId,

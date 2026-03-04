@@ -28,7 +28,8 @@ public sealed class RuntimeScriptEvolutionLifecycleService
         _projectionLifecyclePort = projectionLifecyclePort ?? throw new ArgumentNullException(nameof(projectionLifecyclePort));
         _decisionFallbackPort = decisionFallbackPort ?? throw new ArgumentNullException(nameof(decisionFallbackPort));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
-        _decisionTimeout = ScriptingPortTimeouts.NormalizeOrDefault(timeouts.EvolutionDecisionTimeout);
+        _decisionTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
+            .GetEvolutionDecisionTimeout();
     }
 
     public async Task<ScriptPromotionDecision> ProposeAsync(

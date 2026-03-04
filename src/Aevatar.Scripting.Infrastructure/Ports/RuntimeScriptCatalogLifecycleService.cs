@@ -27,7 +27,8 @@ public sealed class RuntimeScriptCatalogLifecycleService
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
-        _catalogQueryTimeout = ScriptingPortTimeouts.NormalizeOrDefault(timeouts.CatalogEntryQueryTimeout);
+        _catalogQueryTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
+            .GetCatalogEntryQueryTimeout();
     }
 
     public async Task PromoteCatalogRevisionAsync(
@@ -40,11 +41,7 @@ public sealed class RuntimeScriptCatalogLifecycleService
         string proposalId,
         CancellationToken ct)
     {
-        var resolvedCatalogActorId = ResolveCatalogActorId(catalogActorId);
-        var actor = await _actorAccessor.GetOrCreateAsync<ScriptCatalogGAgent>(
-            resolvedCatalogActorId,
-            "Script catalog actor not found",
-            ct);
+        var (resolvedCatalogActorId, actor) = await ResolveAndGetOrCreateCatalogActorAsync(catalogActorId, ct);
 
         await actor.HandleEventAsync(
             _promoteRevisionAdapter.Map(
@@ -67,11 +64,7 @@ public sealed class RuntimeScriptCatalogLifecycleService
         string proposalId,
         CancellationToken ct)
     {
-        var resolvedCatalogActorId = ResolveCatalogActorId(catalogActorId);
-        var actor = await _actorAccessor.GetOrCreateAsync<ScriptCatalogGAgent>(
-            resolvedCatalogActorId,
-            "Script catalog actor not found",
-            ct);
+        var (resolvedCatalogActorId, actor) = await ResolveAndGetOrCreateCatalogActorAsync(catalogActorId, ct);
 
         await actor.HandleEventAsync(
             _rollbackRevisionAdapter.Map(
@@ -100,11 +93,11 @@ public sealed class RuntimeScriptCatalogLifecycleService
         var response = await EventStreamQueryReplyAwaiter.QueryActorAsync<ScriptCatalogEntryRespondedEvent>(
             _streams,
             actor,
-            "scripting.query.catalog.reply",
+            ScriptingQueryRouteConventions.CatalogReplyStreamPrefix,
             _catalogQueryTimeout,
             (requestId, replyStreamId) => _queryCatalogEntryAdapter.Map(resolvedCatalogActorId, requestId, replyStreamId, scriptId),
             static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
-            static requestId => $"Timeout waiting for script catalog entry query response. request_id={requestId}",
+            ScriptingQueryRouteConventions.BuildCatalogEntryTimeoutMessage,
             ct);
         if (!response.Found)
             return null;
@@ -123,5 +116,17 @@ public sealed class RuntimeScriptCatalogLifecycleService
         string.IsNullOrWhiteSpace(catalogActorId)
             ? _addressResolver.GetCatalogActorId()
             : catalogActorId;
+
+    private async Task<(string ActorId, IActor Actor)> ResolveAndGetOrCreateCatalogActorAsync(
+        string? catalogActorId,
+        CancellationToken ct)
+    {
+        var resolvedCatalogActorId = ResolveCatalogActorId(catalogActorId);
+        var actor = await _actorAccessor.GetOrCreateAsync<ScriptCatalogGAgent>(
+            resolvedCatalogActorId,
+            "Script catalog actor not found",
+            ct);
+        return (resolvedCatalogActorId, actor);
+    }
 
 }
