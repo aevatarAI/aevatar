@@ -55,7 +55,7 @@ src/
 
 - `GAgentBase`：无状态 Agent 基类，统一事件分发与 Hook 管线
 - `GAgentBase<TState>`：状态型基类，集成 `IStateStore<TState>`
-- `GAgentBase<TState, TConfig>`：配置型基类（配置由宿主默认值 + 事件/状态覆盖构成）
+- `GAgentBase<TState, TConfig>`：有效配置型基类（`EffectiveConfig` 由类默认值 + 状态覆盖合并得到）
 - `EventPipelineBuilder`：把静态 `[EventHandler]` 与动态 `IEventModule` 合并为一个按 `Priority` 排序的流水线
 - `StateGuard`：通过 `AsyncLocal` 限制 State 只在允许的生命周期写入
 - `RunManager`/`RunContextScope`：latest-wins 运行管理与作用域传播

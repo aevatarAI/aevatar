@@ -90,13 +90,13 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     /// <summary>激活时初始化历史上限并重建 Runtime。</summary>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
-        History.MaxMessages = Config.MaxHistoryMessages;
+        History.MaxMessages = EffectiveConfig.MaxHistoryMessages;
         await RegisterToolsFromSourcesAsync(ct);
         RebuildRuntime();
     }
 
     /// <summary>配置变更时更新历史上限并重建 Runtime。</summary>
-    protected override async Task OnConfigChangedAsync(AIAgentConfig config, CancellationToken ct)
+    protected override async Task OnEffectiveConfigChangedAsync(AIAgentConfig config, CancellationToken ct)
     {
         History.MaxMessages = config.MaxHistoryMessages;
         await RegisterToolsFromSourcesAsync(ct);
@@ -133,7 +133,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     /// <summary>Extracts config overrides from protobuf state.</summary>
     protected abstract AIAgentConfigStateOverrides ExtractStateConfigOverrides(TState state);
 
-    protected sealed override AIAgentConfig MergeConfig(AIAgentConfig classDefaults, TState state)
+    protected sealed override AIAgentConfig MergeEffectiveConfig(AIAgentConfig classDefaults, TState state)
     {
         ArgumentNullException.ThrowIfNull(classDefaults);
         ArgumentNullException.ThrowIfNull(state);
@@ -176,7 +176,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     protected Task<string?> ChatAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatAsync(userMessage, Config.MaxToolRounds, ct);
+        return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, ct);
     }
 
     /// <summary>流式 Chat。</summary>
@@ -226,15 +226,15 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             llmMiddlewares: _llmMiddlewares,
             agentId: Id,
             agentName: GetType().Name,
-            streamBufferCapacity: Config.StreamBufferCapacity);
+            streamBufferCapacity: EffectiveConfig.StreamBufferCapacity);
     }
 
     private ILLMProvider GetLLMProvider()
     {
-        if (string.IsNullOrWhiteSpace(Config.ProviderName))
+        if (string.IsNullOrWhiteSpace(EffectiveConfig.ProviderName))
             return _llmProviderFactory.GetDefault();
 
-        var configuredProvider = Config.ProviderName.Trim();
+        var configuredProvider = EffectiveConfig.ProviderName.Trim();
         var availableProviders = _llmProviderFactory.GetAvailableProviders();
         if (availableProviders.Any(name => string.Equals(name, configuredProvider, StringComparison.OrdinalIgnoreCase)))
             return _llmProviderFactory.GetProvider(configuredProvider);
@@ -251,11 +251,11 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
     private LLMRequest BuildRequest() => new()
     {
-        Messages = History.BuildMessages(Config.SystemPrompt),
+        Messages = History.BuildMessages(EffectiveConfig.SystemPrompt),
         Tools = Tools.HasTools ? Tools.GetAll() : null,
-        Model = Config.Model,
-        Temperature = Config.Temperature,
-        MaxTokens = Config.MaxTokens,
+        Model = EffectiveConfig.Model,
+        Temperature = EffectiveConfig.Temperature,
+        MaxTokens = EffectiveConfig.MaxTokens,
     };
 
     private void EnsureRuntime()

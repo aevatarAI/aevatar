@@ -13,7 +13,7 @@
 
 - `GAgentBase`：无状态基类，统一事件分发、模块管理、Hook 生命周期
 - `GAgentBase<TState>`：状态型基类，内建 EventSourcing 生命周期（Replay 恢复 + 事件提交）
-- `GAgentBase<TState, TConfig>`：配置型基类（宿主默认值 + 事件/状态覆盖）
+- `GAgentBase<TState, TConfig>`：有效配置型基类（类默认值 + 事件/状态覆盖）
 - `StateGuard`：限制状态写入时机
 - `EventPipelineBuilder`：合并并排序静态/动态处理器
 - `RunManager`：latest-wins 的运行上下文管理

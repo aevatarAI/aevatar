@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────
-// RoleGAgentFactory — 角色 Agent 工厂
+// RoleGAgentFactory — 角色 Agent 初始化工厂
 //
-// 从 YAML 配置 RoleGAgent：
-// 1. 基础配置：名称、SystemPrompt、Provider、Model
+// 从 YAML 初始化 RoleGAgent：
+// 1. 初始化字段：名称、SystemPrompt、Provider、Model
 // 2. EventModules：按名字从 IEventModuleFactory 创建
 // 3. EventRoutes：解析路由规则，用 RoutedEventModule 包装非 bypass 模块
 //
@@ -27,8 +27,8 @@ using YamlDotNet.Serialization.NamingConventions;
 namespace Aevatar.AI.Core;
 
 /// <summary>
-/// RoleGAgent 配置工厂。从 YAML 或配置对象装配 Agent：
-/// 基础配置 → 创建 EventModules → 解析 EventRoutes → 路由包装 → 注册到 Agent。
+/// RoleGAgent 初始化工厂。从 YAML 或初始化对象装配 Agent：
+/// 初始化字段 → 创建 EventModules → 解析 EventRoutes → 路由包装 → 注册到 Agent。
 /// </summary>
 public static class RoleGAgentFactory
 {
@@ -37,15 +37,15 @@ public static class RoleGAgentFactory
         .IgnoreUnmatchedProperties()
         .Build();
 
-    /// <summary>从 YAML 字符串配置 RoleGAgent。</summary>
-    public static Task ConfigureFromYaml(RoleGAgent agent, string yaml, IServiceProvider services)
+    /// <summary>从 YAML 字符串初始化 RoleGAgent。</summary>
+    public static Task InitializeFromYaml(RoleGAgent agent, string yaml, IServiceProvider services)
     {
         var config = Yaml.Deserialize<RoleYamlConfig>(yaml);
-        return ApplyConfig(agent, config, services);
+        return ApplyInitialization(agent, config, services);
     }
 
-    /// <summary>应用 RoleYamlConfig 到 RoleGAgent。</summary>
-    public static async Task ApplyConfig(RoleGAgent agent, RoleYamlConfig config, IServiceProvider services)
+    /// <summary>应用 RoleYamlConfig 初始化 RoleGAgent。</summary>
+    public static async Task ApplyInitialization(RoleGAgent agent, RoleYamlConfig config, IServiceProvider services)
     {
         var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
         {

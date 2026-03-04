@@ -39,12 +39,12 @@ public class RoleGAgentReplayContractTests
 
         agent2.RoleName.Should().Be("researcher");
         agent2.State.RoleName.Should().Be("researcher");
-        agent2.Config.ProviderName.Should().Be("mock");
-        agent2.Config.Model.Should().Be("m1");
-        agent2.Config.SystemPrompt.Should().Be("be helpful");
-        agent2.Config.MaxToolRounds.Should().Be(4);
-        agent2.Config.MaxHistoryMessages.Should().Be(32);
-        agent2.Config.StreamBufferCapacity.Should().Be(128);
+        agent2.EffectiveConfig.ProviderName.Should().Be("mock");
+        agent2.EffectiveConfig.Model.Should().Be("m1");
+        agent2.EffectiveConfig.SystemPrompt.Should().Be("be helpful");
+        agent2.EffectiveConfig.MaxToolRounds.Should().Be(4);
+        agent2.EffectiveConfig.MaxHistoryMessages.Should().Be(32);
+        agent2.EffectiveConfig.StreamBufferCapacity.Should().Be(128);
     }
 
     [Fact]
@@ -63,7 +63,7 @@ public class RoleGAgentReplayContractTests
             Temperature = 0,
         });
 
-        agent.Config.Temperature.Should().Be(0);
+        agent.EffectiveConfig.Temperature.Should().Be(0);
 
         var persisted = await store.GetEventsAsync("role-temperature-zero");
         persisted.Should().ContainSingle();
@@ -80,7 +80,7 @@ public class RoleGAgentReplayContractTests
 
         var agent1 = CreateAgent(services, "role-factory-replay");
         await agent1.ActivateAsync();
-        await RoleGAgentFactory.ApplyConfig(agent1, new RoleYamlConfig
+        await RoleGAgentFactory.ApplyInitialization(agent1, new RoleYamlConfig
         {
             Name = "assistant",
             Provider = "mock",

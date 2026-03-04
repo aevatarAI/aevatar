@@ -40,14 +40,14 @@ public class RoleGAgentAppStateAndConfigContractTests
         agent.State.ConfigOverrides.MaxHistoryMessages.Should().Be(9);
         agent.State.ConfigOverrides.StreamBufferCapacity.Should().Be(33);
 
-        agent.Config.ProviderName.Should().Be("mock");
-        agent.Config.Model.Should().Be("model-a");
-        agent.Config.SystemPrompt.Should().Be("be helpful");
-        agent.Config.Temperature.Should().Be(0.7);
-        agent.Config.MaxTokens.Should().Be(256);
-        agent.Config.MaxToolRounds.Should().Be(3);
-        agent.Config.MaxHistoryMessages.Should().Be(9);
-        agent.Config.StreamBufferCapacity.Should().Be(33);
+        agent.EffectiveConfig.ProviderName.Should().Be("mock");
+        agent.EffectiveConfig.Model.Should().Be("model-a");
+        agent.EffectiveConfig.SystemPrompt.Should().Be("be helpful");
+        agent.EffectiveConfig.Temperature.Should().Be(0.7);
+        agent.EffectiveConfig.MaxTokens.Should().Be(256);
+        agent.EffectiveConfig.MaxToolRounds.Should().Be(3);
+        agent.EffectiveConfig.MaxHistoryMessages.Should().Be(9);
+        agent.EffectiveConfig.StreamBufferCapacity.Should().Be(33);
     }
 
     [Fact]
@@ -74,9 +74,9 @@ public class RoleGAgentAppStateAndConfigContractTests
             MaxTokens = 0,
         });
 
-        agent.Config.Temperature.Should().BeNull();
-        agent.Config.MaxTokens.Should().BeNull();
-        agent.Config.SystemPrompt.Should().Be("prompt-2");
+        agent.EffectiveConfig.Temperature.Should().BeNull();
+        agent.EffectiveConfig.MaxTokens.Should().BeNull();
+        agent.EffectiveConfig.SystemPrompt.Should().Be("prompt-2");
     }
 
     private static ServiceProvider BuildServiceProvider()

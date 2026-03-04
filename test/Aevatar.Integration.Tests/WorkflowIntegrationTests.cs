@@ -275,13 +275,13 @@ public class WorkflowIntegrationTests
             """;
 
         // When
-        await RoleGAgentFactory.ConfigureFromYaml(agent, yaml, sp);
+        await RoleGAgentFactory.InitializeFromYaml(agent, yaml, sp);
 
         // Then
         agent.RoleName.Should().Be("Expert Analyst");
-        agent.Config.SystemPrompt.Should().Contain("金融分析专家");
-        agent.Config.ProviderName.Should().Be("mock");
-        agent.Config.Model.Should().Be("gpt-4");
+        agent.EffectiveConfig.SystemPrompt.Should().Contain("金融分析专家");
+        agent.EffectiveConfig.ProviderName.Should().Be("mock");
+        agent.EffectiveConfig.Model.Should().Be("gpt-4");
     }
 
     // ═══════════════════════════════════════════════════════════

@@ -14,7 +14,7 @@ namespace Aevatar.AI.Tests;
 public class AIGAgentBaseToolRefreshTests
 {
     [Fact]
-    public async Task ConfigureAsync_WhenSourceToolsShrink_ShouldRemoveStaleTools()
+    public async Task RefreshRuntime_WhenSourceToolsShrink_ShouldRemoveStaleTools()
     {
         var source = new MutableToolSource("tool-a", "tool-b");
         var services = new ServiceCollection();
@@ -39,7 +39,7 @@ public class AIGAgentBaseToolRefreshTests
     }
 
     [Fact]
-    public async Task ConfigureAsync_WhenSourceToolsChanged_ShouldKeepManualTools()
+    public async Task RefreshRuntime_WhenSourceToolsChanged_ShouldKeepManualTools()
     {
         var source = new MutableToolSource("source-old");
         var services = new ServiceCollection();
@@ -84,7 +84,7 @@ public class AIGAgentBaseToolRefreshTests
 
         public void RegisterManualTool(string name) => RegisterTool(new NamedTool(name));
 
-        public Task TriggerRuntimeRefreshAsync() => OnConfigChangedAsync(Config, CancellationToken.None);
+        public Task TriggerRuntimeRefreshAsync() => OnEffectiveConfigChangedAsync(EffectiveConfig, CancellationToken.None);
 
         protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(RoleGAgentState state)
         {

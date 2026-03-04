@@ -94,7 +94,7 @@ public class AIHooksAndRoleFactoryCoverageTests
     }
 
     [Fact]
-    public async Task RoleAgentInitializeEvent_ShouldApplyConfig()
+    public async Task RoleAgentInitializeEvent_ShouldApplyEffectiveConfig()
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
@@ -114,15 +114,15 @@ public class AIHooksAndRoleFactoryCoverageTests
             MaxTokens = 100,
         });
 
-        agent.Config.ProviderName.Should().Be("stub");
-        agent.Config.Model.Should().Be("model-z");
-        agent.Config.SystemPrompt.Should().Be("system");
-        agent.Config.Temperature.Should().Be(0.1);
-        agent.Config.MaxTokens.Should().Be(100);
+        agent.EffectiveConfig.ProviderName.Should().Be("stub");
+        agent.EffectiveConfig.Model.Should().Be("model-z");
+        agent.EffectiveConfig.SystemPrompt.Should().Be("system");
+        agent.EffectiveConfig.Temperature.Should().Be(0.1);
+        agent.EffectiveConfig.MaxTokens.Should().Be(100);
     }
 
     [Fact]
-    public async Task RoleGAgentFactory_ShouldConfigureFromYamlAndWrapRoutableModules()
+    public async Task RoleGAgentFactory_ShouldInitializeFromYamlAndWrapRoutableModules()
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
@@ -145,7 +145,7 @@ public class AIHooksAndRoleFactoryCoverageTests
                        event.type == DemoEvent -> routable
                    """;
 
-        await RoleGAgentFactory.ConfigureFromYaml(agent, yaml, provider);
+        await RoleGAgentFactory.InitializeFromYaml(agent, yaml, provider);
 
         agent.RoleName.Should().Be("planner");
         var modules = agent.GetModules();
@@ -155,7 +155,7 @@ public class AIHooksAndRoleFactoryCoverageTests
     }
 
     [Fact]
-    public async Task RoleGAgentFactory_ShouldSupportDirectConfigWithoutExtensions()
+    public async Task RoleGAgentFactory_ShouldSupportDirectInitializationWithoutExtensions()
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
@@ -179,7 +179,7 @@ public class AIHooksAndRoleFactoryCoverageTests
         };
 
         var agent = CreateRoleAgent(provider);
-        await RoleGAgentFactory.ApplyConfig(agent, cfg, provider);
+        await RoleGAgentFactory.ApplyInitialization(agent, cfg, provider);
 
         agent.RoleName.Should().Be("worker");
         agent.GetModules().Should().BeEmpty();
@@ -241,14 +241,14 @@ public class AIHooksAndRoleFactoryCoverageTests
         };
 
         var agent = CreateRoleAgent(provider);
-        await RoleGAgentFactory.ApplyConfig(agent, cfg, provider);
+        await RoleGAgentFactory.ApplyInitialization(agent, cfg, provider);
 
         agent.RoleName.Should().Be("worker");
-        agent.Config.Temperature.Should().Be(0.4);
-        agent.Config.MaxTokens.Should().Be(128);
-        agent.Config.MaxToolRounds.Should().Be(2);
-        agent.Config.MaxHistoryMessages.Should().Be(8);
-        agent.Config.StreamBufferCapacity.Should().Be(32);
+        agent.EffectiveConfig.Temperature.Should().Be(0.4);
+        agent.EffectiveConfig.MaxTokens.Should().Be(128);
+        agent.EffectiveConfig.MaxToolRounds.Should().Be(2);
+        agent.EffectiveConfig.MaxHistoryMessages.Should().Be(8);
+        agent.EffectiveConfig.StreamBufferCapacity.Should().Be(32);
 
         var modules = agent.GetModules();
         modules.Should().HaveCount(1);

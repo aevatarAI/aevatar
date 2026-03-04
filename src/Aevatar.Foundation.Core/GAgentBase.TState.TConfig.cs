@@ -22,13 +22,13 @@ public abstract class GAgentBase<TState, TConfig> : GAgentBase<TState>
     private long _appliedClassDefaultsVersion = long.MinValue;
 
     /// <summary>Current effective config (class defaults merged with state overrides).</summary>
-    public TConfig Config { get; private set; } = new();
+    public TConfig EffectiveConfig { get; private set; } = new();
 
-    /// <summary>Current class defaults version that produced <see cref="Config"/>.</summary>
+    /// <summary>Current class defaults version that produced <see cref="EffectiveConfig"/>.</summary>
     protected long AppliedClassDefaultsVersion => _appliedClassDefaultsVersion;
 
     /// <summary>Hook triggered after config changes. Subclasses may override.</summary>
-    protected virtual Task OnConfigChangedAsync(TConfig config, CancellationToken ct) =>
+    protected virtual Task OnEffectiveConfigChangedAsync(TConfig config, CancellationToken ct) =>
         Task.CompletedTask;
 
     /// <summary>
@@ -40,7 +40,7 @@ public abstract class GAgentBase<TState, TConfig> : GAgentBase<TState>
     /// <summary>
     /// Merges class defaults and state into effective config.
     /// </summary>
-    protected abstract TConfig MergeConfig(TConfig classDefaults, TState state);
+    protected abstract TConfig MergeEffectiveConfig(TConfig classDefaults, TState state);
 
     /// <summary>
     /// Recomputes effective config from current state and latest class defaults.
@@ -81,12 +81,12 @@ public abstract class GAgentBase<TState, TConfig> : GAgentBase<TState>
         ArgumentNullException.ThrowIfNull(state);
 
         var classDefaults = classDefaultsSnapshot ?? await ResolveClassDefaultsAsync(ct);
-        var merged = MergeConfig(classDefaults.Defaults, state);
+        var merged = MergeEffectiveConfig(classDefaults.Defaults, state);
         if (merged == null)
         {
             throw new InvalidOperationException(
                 $"{GetType().FullName} merge returned null config. " +
-                $"MergeConfig must return a non-null effective config.");
+                $"MergeEffectiveConfig must return a non-null effective config.");
         }
 
         await ApplyEffectiveConfigAsync(merged, classDefaults.Version, ct);
@@ -97,9 +97,9 @@ public abstract class GAgentBase<TState, TConfig> : GAgentBase<TState>
         long classDefaultsVersion,
         CancellationToken ct)
     {
-        Config = config;
+        EffectiveConfig = config;
         _appliedClassDefaultsVersion = classDefaultsVersion;
-        await OnConfigChangedAsync(config, ct);
+        await OnEffectiveConfigChangedAsync(config, ct);
     }
 
     private ValueTask<AgentClassDefaultsSnapshot<TConfig>> ResolveClassDefaultsAsync(CancellationToken ct)

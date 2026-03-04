@@ -36,7 +36,7 @@
 5. 业务配置必须强类型建模，不再使用通用 `app_config_*` 字符串槽位。
 6. 删除 `AppConfigPayload` 及其相关事件通道。
 7. 删除 `RoleGAgentExtensionContract` 这类通用 app-config/app-state 补丁入口。
-8. `GAgentBase<TState,TConfig>.Config` 定义为运行态快照，不是事实源。
+8. `GAgentBase<TState,TConfig>.EffectiveConfig` 定义为运行态快照，不是事实源。
 9. 实例覆盖只允许通过 `Command -> Event -> Apply(State)` 生效。
 10. `GAgentBase<TState,TConfig>.ConfigureAsync` 作为公共旁路入口删除。
 11. 基类继续负责 `class defaults + state overrides => effective config` 统一合并。
@@ -58,7 +58,7 @@
    1. 仅在 create/first-activate/reinit 执行
    2. 是否入 state 由业务 init 逻辑显式决定
 3. Runtime View 层：
-   1. `Config` 为已合并快照
+   1. `EffectiveConfig` 为已合并快照
    2. 可被重算覆盖
    3. 不独立持久化
 
@@ -66,7 +66,7 @@
 1. 合并公式：`effective_config = Merge(class_defaults, state_overrides)`。
 2. class defaults 来源：`.NET Configuration + Options + Distributed Config Source`。
 3. instance overrides 来源：`TState`（由 EventSourcing 回放恢复）。
-4. `Config` 为运行态缓存，只在主线程更新。
+4. `EffectiveConfig` 为运行态缓存，只在主线程更新。
 5. 热更新语义：
    1. provider reload 推进 class defaults 版本
    2. 实例在消息入口比较版本并重算
@@ -112,8 +112,8 @@
 ### 5.1 Foundation/Core
 1. 删除公共入口：`GAgentBase<TState,TConfig>.ConfigureAsync(TConfig)`。
 2. 保留并强化：
-   1. `MergeConfig(TConfig classDefaults, TState state)`
-   2. `OnConfigChangedAsync(TConfig config, CancellationToken ct)`
+   1. `MergeEffectiveConfig(TConfig classDefaults, TState state)`
+   2. `OnEffectiveConfigChangedAsync(TConfig config, CancellationToken ct)`
 3. 禁止基类做配置独立持久化。
 4. 保留 `IAgentClassDefaultsProvider<TConfig>`，但实现归属 Host/Infrastructure。
 
@@ -156,7 +156,7 @@
 ### 6.2 Activate
 1. EventSourcing 回放恢复 `TState`。
 2. 基类执行 `class defaults + state overrides` 合并。
-3. 生成运行态 `Config` 快照。
+3. 生成运行态 `EffectiveConfig` 快照。
 
 ### 6.3 Initialize
 1. 由业务显式触发初始化命令。
@@ -187,7 +187,7 @@
 
 ### WP1：契约与基类瘦身
 1. 删除 Foundation/Core 配置旁路接口。
-2. 收敛 `Config` 语义为 runtime view。
+2. 收敛 `EffectiveConfig` 语义为 runtime view。
 3. 补齐 fail-fast 校验与注释。
 
 ### WP2：AI 协议重建
@@ -243,7 +243,7 @@
 
 ## 11. 验收标准（DoD）
 1. 框架层不存在 `app_config_*` 通用语义。
-2. `Config` 与 `Init Args` 边界可由代码结构直接看出。
+2. `EffectiveConfig` 与 `Init Args` 边界可由代码结构直接看出。
 3. 所有配置变更路径均可追溯到 state/event 或 class defaults。
 4. workflow role 初始化采用显式 init 协议。
 5. 业务扩展通过强类型 GAgent/State/Event 完成，不依赖 JSON 配置槽位。
