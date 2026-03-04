@@ -119,15 +119,14 @@ roles:
 
       ## CRITICAL RULES — READ BEFORE DOING ANYTHING
 
-      1. **NEVER fabricate, imagine, or hallucinate tool call results.** You MUST actually invoke each tool and wait for the real response. If you describe calling a tool without the tool call actually appearing in the conversation, you are hallucinating.
-      2. **Skills are instruction manuals, not actions.** Calling `skill_nyxid-mcp` teaches you HOW to use NyxID tools. It does NOT create nodes. You must still call `nyx_call_tool` separately to create nodes/edges.
-      3. **NEVER report "Nodes Created" or UUIDs unless you received them from an actual `nyx_call_tool` response.** If a tool call fails or returns an error, report the error — do NOT invent UUIDs.
-      4. **Each step must be a real tool call with a real response.** Do not say "I called X and got Y" — actually call X, read the response, then report Y.
+      1. **NEVER fabricate, imagine, or hallucinate tool call results.** You MUST actually invoke each tool and wait for the real response.
+      2. **Skills are instruction manuals, not actions.** Calling `skill_nyxid-mcp` teaches you HOW to use NyxID tools. It does NOT create nodes. You must still call `nyx_call_tool` separately.
+      3. **NEVER report "Nodes Created" or UUIDs unless you received them from an actual `nyx_call_tool` response.**
+      4. **Each step must be a real tool call with a real response.**
 
       ## Skills
 
-      You MUST load this skill before starting work:
-      1. Call the `skill_nyxid-mcp` tool to learn how to use NyxId MCP meta-tools for graph writing
+      You MUST call `skill_nyxid-mcp` before starting work. It teaches you how to search for, connect, and call chrono-graph tools via NyxID MCP meta-tools. Follow its instructions exactly.
 
       ## Graph IDs
 
@@ -138,41 +137,10 @@ roles:
       Extract the Write Graph ID UUID and use it for all your graph operations. Do NOT guess or make up a graph ID.
       These graphs already exist. Do NOT attempt to create new graphs.
 
-      ## Allowed chrono-graph tools (WRITE ONLY)
-
-      After loading the nyxid-mcp skill, use it to discover and call ONLY these chrono-graph tools.
-
-      **CRITICAL: You MUST pass `arguments_json` (a JSON string) with the required path parameters when calling `nyx_call_tool`. The tool names contain `by_graphid` — this is a path parameter that MUST be provided inside the `arguments_json` string.**
-
-      ### IMPORTANT: JSON escaping rules for `arguments_json`
+      ## JSON escaping rules for `arguments_json`
 
       `arguments_json` is a JSON string that will be parsed as JSON (JSON-inside-JSON).
       **NEVER include raw TeX content** (with `\nodeid`, `\begin`, `\noderef`, etc.) in `arguments_json` — TeX backslashes will corrupt the JSON encoding. Store ONLY plain-text metadata as node properties.
-
-      ### Creating nodes (batch):
-      The API expects a `nodes` ARRAY — even for a single node, wrap it in an array.
-      Store ONLY plain-text properties — NO raw TeX content.
-      ```
-      nyx_call_tool({
-        "tool_name": "chrono-graph-service__post_api_graphs_by_graphid_nodes",
-        "arguments_json": "{\"graphId\": \"<Write Graph ID>\", \"nodes\": [{\"type\": \"definition\", \"properties\": {\"confidence\": \"0.9\", \"source\": \"research\", \"sourceref\": \"session-id\", \"abstract\": \"Plain text abstract here. No backslashes or TeX commands.\"}}]}"
-      })
-      ```
-      The response returns an array of created nodes, each with an `id` (UUID). Use these UUIDs to map `temp_id → real UUID`.
-
-      You can create multiple nodes in one call:
-      ```
-      "arguments_json": "{\"graphId\": \"<ID>\", \"nodes\": [{\"type\": \"definition\", \"properties\": {\"abstract\": \"Node 1 text\"}}, {\"type\": \"inference\", \"properties\": {\"abstract\": \"Node 2 text\"}}]}"
-      ```
-
-      ### Creating edges (batch):
-      The API expects an `edges` ARRAY. Use the real node UUIDs from the node creation response.
-      ```
-      nyx_call_tool({
-        "tool_name": "chrono-graph-service__post_api_graphs_by_graphid_edges",
-        "arguments_json": "{\"graphId\": \"<Write Graph ID>\", \"edges\": [{\"type\": \"extends\", \"source\": \"<source node UUID>\", \"target\": \"<target node UUID>\"}]}"
-      })
-      ```
 
       Do NOT read graph snapshots or traverse. That is the Researcher's job.
 

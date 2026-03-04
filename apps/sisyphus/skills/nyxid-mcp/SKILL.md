@@ -12,61 +12,115 @@ You have access to a NyxID MCP server with 4 meta-tools. These are the ONLY way 
 | Tool | Purpose |
 |------|---------|
 | `nyx__search_tools` | Search connected tools by keyword. Returns tool names, descriptions, and `inputSchema`. |
-| `nyx__discover_services` | List available services (including ones not yet connected). |
+| `nyx__discover_services` | List services NOT yet connected. |
 | `nyx__connect_service` | Connect/activate a service so its tools become searchable. |
 | `nyx__call_tool` | Execute a connected tool by its full name. |
 
-## Required Setup Sequence (First Time Only)
-
-You MUST follow these steps IN ORDER the first time you need to use a service's tools. Do NOT skip any step.
+## How to Find and Use Tools
 
 ### Step 1: Search for tools
+
+Use a **short keyword** as the query — just the service name, NOT full tool names.
+
 ```json
 nyx__search_tools({ "query": "chrono-graph" })
 ```
 
-### Step 2: If search returns 0 results → Discover and Connect
+**IMPORTANT search query rules:**
+- Use SHORT keywords: `"chrono-graph"`, `"storage"`, `"sandbox"` — just 1-2 words
+- NEVER put full tool names in the query (e.g., do NOT search for `"post_api_graphs_by_graphid_nodes"`)
+- NEVER concatenate multiple terms (e.g., do NOT search for `"chrono-graph nodes edges"`)
 
-**This is expected on first use.** Services must be activated before their tools appear in search.
+`nyx__search_tools` auto-activates matching services. If the response contains a non-empty `matches` array, skip directly to **Step 3**.
 
+### Step 2: If Step 1 returned 0 matches — Discover and Connect
+
+**Only do this if Step 1 returned `"matches": [], "count": 0`.**
+
+First, check `services_activated` and `note` in the Step 1 response:
+- If `"note": "Tools were already activated."` and `"services_activated": 0` → the service is connected but your query didn't match. **Try a shorter/different query** before going to discover:
+  ```json
+  nyx__search_tools({ "query": "graph" })
+  ```
+- If still 0 matches, try a broader search:
+  ```json
+  nyx__search_tools({ "query": "chrono" })
+  ```
+
+If all search attempts return 0 matches, discover available services:
 ```json
 nyx__discover_services({})
 ```
-This returns a list of available services with their `service_id`. Find the service you need (e.g. `chrono-graph-service`).
+**IMPORTANT:** Do NOT pass `query` or `category` to `nyx__discover_services` — call it with empty args `{}` to see ALL available services. The `query` filter is very strict and will hide results.
 
-Then connect it:
+Find the service you need, then connect it:
 ```json
 nyx__connect_service({ "service_id": "<service_id_from_discovery>" })
 ```
-For services with `requires_credential: false`, connect directly without asking. For services requiring credentials, ask the user first.
 
-### Step 3: Search again
-After connecting, search again to get the tool names and schemas:
+After connecting, search again with a short keyword:
 ```json
 nyx__search_tools({ "query": "chrono-graph" })
 ```
-Now the tools will appear. Note the exact tool names — you need them for `nyx__call_tool`.
 
-### Step 4: Call tools
+### Step 3: Call tools
 
-**CRITICAL: Always pass `arguments_json` to `nyx__call_tool`.** This is a **JSON string** containing all required parameters for the tool (path parameters like `graphId`, `nodeId`, plus any body parameters). Check the tool's `inputSchema` from `nyx__search_tools` results to see what parameters are required.
+Use `nyx__call_tool` with the exact tool name from search results and an `arguments_json` string.
+
+**CRITICAL: Always pass `arguments_json`.** This is a **JSON string** containing all required parameters. Check the tool's `inputSchema` from search results to see what parameters are required.
 
 ```json
 nyx__call_tool({
-  "tool_name": "chrono-graph-service__get_api_graphs_by_graphid_snapshot",
-  "arguments_json": "{\"graphId\": \"dbeef00f-f2c7-4447-9686-3a6deba65a72\"}"
+  "tool_name": "chrono-graph-service__post_api_graphs_by_graphid_nodes",
+  "arguments_json": "{\"graphId\": \"<your-graph-id>\", \"nodes\": [{\"type\": \"definition\", \"properties\": {\"abstract\": \"Plain text here\"}}]}"
 })
 ```
 
-**If you omit `arguments_json`, the tool call WILL FAIL** because path parameters like `{graphId}` won't be substituted in the URL. Always pass `arguments_json` even if the tool takes no parameters — use `"{}"` in that case.
+**If you omit `arguments_json`, the call WILL FAIL.** Path parameters like `graphId` won't be substituted. Always pass `arguments_json` even if the tool takes no parameters — use `"{}"`.
 
-## CRITICAL: Do NOT give up if search returns empty
+## Chrono-Graph Service Reference
 
-If `nyx__search_tools` returns 0 results, this does NOT mean the tools don't exist. It means the service is not yet activated. You MUST proceed to `nyx__discover_services` → `nyx__connect_service` → search again. **Never stop or ask the user to activate services manually.**
+The `chrono-graph-service` provides knowledge graph read/write tools. Key tools:
+
+| Tool Name | Purpose |
+|-----------|---------|
+| `chrono-graph-service__get_api_graphs_by_graphid_snapshot` | Get full graph snapshot (nodes + edges) |
+| `chrono-graph-service__post_api_graphs_by_graphid_nodes` | Create nodes (batch) |
+| `chrono-graph-service__post_api_graphs_by_graphid_edges` | Create edges (batch) |
+
+### Creating nodes (batch)
+The API expects a `nodes` ARRAY — even for a single node, wrap it in `[]`.
+Store ONLY plain-text properties — NO raw TeX content.
+```json
+nyx__call_tool({
+  "tool_name": "chrono-graph-service__post_api_graphs_by_graphid_nodes",
+  "arguments_json": "{\"graphId\": \"<Graph ID>\", \"nodes\": [{\"type\": \"definition\", \"properties\": {\"confidence\": \"0.9\", \"source\": \"research\", \"sourceref\": \"session-id\", \"abstract\": \"Plain text abstract.\"}}]}"
+})
+```
+The response returns created nodes with `id` (UUID). Map each `temp_id → real UUID` by array order.
+
+### Creating edges (batch)
+Use real node UUIDs from the node creation response.
+```json
+nyx__call_tool({
+  "tool_name": "chrono-graph-service__post_api_graphs_by_graphid_edges",
+  "arguments_json": "{\"graphId\": \"<Graph ID>\", \"edges\": [{\"type\": \"extends\", \"source\": \"<source UUID>\", \"target\": \"<target UUID>\"}]}"
+})
+```
+
+## Do NOT Give Up If Search Returns Empty
+
+If `nyx__search_tools` returns 0 results, this does NOT mean the tools don't exist. Try these steps in order:
+1. **Retry with a shorter query** — e.g., `"graph"` or `"chrono"`
+2. **Call `nyx__discover_services({})` with empty args** — see all available services
+3. **Connect the service** — `nyx__connect_service({ "service_id": "..." })`
+4. **Search again** — `nyx__search_tools({ "query": "chrono-graph" })`
+
+**Never stop or ask the user to activate services manually.**
 
 ## After Setup
 
-Once a service is connected in a session, its tools stay available. On subsequent turns:
+Once a service is connected, its tools stay available for the session:
 - Skip discover/connect — go directly to `nyx__call_tool`
 - Only re-search if you need to find a new tool name
 
@@ -75,5 +129,5 @@ Once a service is connected in a session, its tools stay available. On subsequen
 - **Never guess tool names.** Always get them from `nyx__search_tools` results.
 - **Tool name format:** `{service_slug}__{endpoint_name}` (double underscore).
 - **Always use `nyx__call_tool`** to execute tools. Do not call service tools directly.
-- **Always pass `arguments_json`** (a JSON string) to `nyx__call_tool`. Check the tool's `inputSchema` for required parameters. Path parameters (e.g., `graphId`, `nodeId`) are ALWAYS required. Example: `"arguments_json": "{\"graphId\": \"uuid-here\"}"`.
+- **Always pass `arguments_json`** (a JSON string) to `nyx__call_tool`. Path parameters (e.g., `graphId`, `nodeId`) are ALWAYS required.
 - **Maximum 20 activated services per session.** Only connect services you actually need.
