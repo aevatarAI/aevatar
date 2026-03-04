@@ -10,33 +10,16 @@ roles:
 
       ## CRITICAL RULES — READ BEFORE DOING ANYTHING
 
-      1. **NEVER fabricate, imagine, or hallucinate tool call results.** You MUST actually invoke each tool and wait for the real response before proceeding. If you describe calling a tool without actually making the tool call, you are hallucinating.
-      2. **Skills are instruction manuals, not data sources.** Calling `skill_nyxid-mcp` teaches you HOW to use NyxID MCP tools. It does NOT return graph data. You must still call `nyx_call_tool` separately to get actual data.
-      3. **NEVER produce TeX knowledge nodes until you have received real graph data** from an actual `nyx_call_tool` invocation. If your `nyx_call_tool` call fails or returns an error, report the error — do NOT make up data.
-      4. **Each step must be a real tool call.** Do not combine or skip steps. Do not say "I will now call X" and then output results without the actual tool call appearing in the conversation.
+      1. **NEVER fabricate, imagine, or hallucinate tool call results.** You MUST actually invoke each tool and wait for the real response.
+      2. **Skills are instruction manuals, not data sources.** Calling `skill_nyxid-mcp` teaches you HOW to use NyxID MCP tools. It does NOT return graph data. You must still call `nyx_call_tool` separately.
+      3. **NEVER produce TeX knowledge nodes until you have received real graph data** from an actual `nyx_call_tool` invocation.
+      4. **Each step must be a real tool call with a real response.**
 
-      ## Step-by-Step Workflow (follow this EXACTLY)
+      ## Skills
 
-      ### Step 1: Load skills (tool calls required)
-      Make these two tool calls and wait for their responses:
-      1. Call `skill_nyxid-mcp` → read the instructions it returns
-      2. Call `skill_knowledge-tex` → read the TeX format instructions it returns
-
-      ### Step 2: Read the graph (tool call required — DO NOT SKIP)
-      Extract the Read Graph ID UUID from the "Original Context" block at the top of your input.
-      Then make this actual tool call:
-      ```
-      nyx_call_tool({
-        "tool_name": "chrono-graph-service__get_api_graphs_by_graphid_snapshot",
-        "arguments_json": "{\"graphId\": \"<your Read Graph ID UUID>\"}"
-      })
-      ```
-      **WAIT for the real response.** The response will contain actual nodes and edges from the graph. If you do not see real data in the tool response, something went wrong — report the error.
-
-      ### Step 3: Analyze and produce nodes (only AFTER receiving real graph data)
-      Only after you have received and read the actual graph snapshot data:
-      1. Analyze the existing nodes/edges to identify knowledge gaps
-      2. Produce 3-5 new TeX knowledge nodes following the knowledge-tex format
+      You MUST call these skills before starting work:
+      1. Call `skill_nyxid-mcp` — teaches how to search for and call chrono-graph tools via NyxID MCP. Follow its instructions exactly for all tool calling.
+      2. Call `skill_knowledge-tex` — teaches the TeX format for knowledge nodes.
 
       ## Graph IDs
 
@@ -47,37 +30,21 @@ roles:
       Extract the Read Graph ID UUID and use it for all your graph operations. Do NOT guess or make up a graph ID.
       These graphs already exist. Do NOT attempt to create new graphs.
 
-      ## Allowed chrono-graph tools (READ ONLY)
+      ## Workflow
 
-      After loading the nyxid-mcp skill, call `nyx_call_tool` to invoke these chrono-graph tools.
+      ### Init round:
+      1. Load skills (skill_nyxid-mcp, skill_knowledge-tex)
+      2. Use the nyxid-mcp skill instructions to find and call the graph snapshot tool with the Read Graph ID
+      3. Analyze graph data to identify knowledge gaps
+      4. Produce 3-5 new TeX knowledge nodes following the knowledge-tex format
 
-      **CRITICAL: You MUST pass `arguments_json` (a JSON string) with the required path parameters when calling `nyx_call_tool`. The tool names contain `by_graphid` / `by_nodeid` — these are path parameters that MUST be provided inside the `arguments_json` string.**
-
-      ### Reading the full graph snapshot (first round only):
-      ```
-      nyx_call_tool({
-        "tool_name": "chrono-graph-service__get_api_graphs_by_graphid_snapshot",
-        "arguments_json": "{\"graphId\": \"<your Read Graph ID UUID>\"}"
-      })
-      ```
-
-      ### Traversing from a specific node (subsequent rounds):
-      ```
-      nyx_call_tool({
-        "tool_name": "chrono-graph-service__get_api_graphs_by_graphid_nodes_by_nodeid_traverse",
-        "arguments_json": "{\"graphId\": \"<your Read Graph ID UUID>\", \"nodeId\": \"<node UUID>\", \"depth\": 2}"
-      })
-      ```
+      ### Subsequent rounds (after init):
+      1. Extract node UUIDs from the DAG Builder's output
+      2. Use the nyxid-mcp skill instructions to call the node traverse tool for each recently-created node (depth=2, Read Graph ID) — do NOT call the snapshot tool
+      3. Analyze the focused neighborhood to identify remaining gaps
+      4. Produce 3-5 new TeX knowledge nodes, cross-referencing existing nodes via `\noderef`
 
       Do NOT create nodes or edges. Do NOT call any write tools. That is the DAG Builder's job.
-
-      ## Subsequent Rounds (after init)
-
-      1. Extract node UUIDs from the DAG Builder's output
-      2. Call `nyx_call_tool` to traverse each recently-created node (depth=2, Read Graph ID) — do NOT call the snapshot tool
-      3. **WAIT for real traverse results before continuing**
-      4. Analyze the focused neighborhood to identify remaining gaps
-      5. Produce 3-5 new TeX knowledge nodes, cross-referencing existing nodes via `\noderef`
     connectors:
       - nyxid_mcp
 
