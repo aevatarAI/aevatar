@@ -1,6 +1,8 @@
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
@@ -11,19 +13,22 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
     private readonly Func<EventEnvelope, Task> _dispatchToSelfAsync;
     private readonly IEnvelopePropagationPolicy _propagationPolicy;
     private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
+    private readonly ILogger _logger;
 
     public OrleansGrainEventPublisher(
         string actorId,
         Func<string?> getParentId,
         Func<EventEnvelope, Task> dispatchToSelfAsync,
         IEnvelopePropagationPolicy propagationPolicy,
-        Aevatar.Foundation.Abstractions.IStreamProvider streams)
+        Aevatar.Foundation.Abstractions.IStreamProvider streams,
+        ILogger? logger = null)
     {
         _actorId = actorId;
         _getParentId = getParentId;
         _dispatchToSelfAsync = dispatchToSelfAsync;
         _propagationPolicy = propagationPolicy;
         _streams = streams;
+        _logger = logger ?? NullLogger.Instance;
     }
 
     public async Task PublishAsync<TEvent>(
@@ -57,7 +62,18 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             {
                 var parentId = _getParentId();
                 if (!string.IsNullOrWhiteSpace(parentId))
+                {
+                    _logger.LogDebug(
+                        "PublishAsync(Up): actor={ActorId} → parent={ParentId} type={Type} envelope={EnvelopeId}",
+                        _actorId, parentId, envelope.Payload?.TypeUrl, envelope.Id);
                     await DispatchAsync(_actorId, parentId, envelope, ct);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "PublishAsync(Up): actor={ActorId} has NO parent, dropping type={Type} envelope={EnvelopeId}",
+                        _actorId, envelope.Payload?.TypeUrl, envelope.Id);
+                }
                 break;
             }
             case EventDirection.Both:

@@ -73,6 +73,7 @@ public sealed class WhileModule : IEventModule
                 Input = request.Input ?? string.Empty,
                 FallbackRole = request.TargetRole ?? string.Empty,
                 Context = request.Parameters.GetValueOrDefault("context", ""),
+                RunId = request.RunId ?? string.Empty,
             };
             _activeLoops[request.StepId] = state;
 
@@ -126,6 +127,7 @@ public sealed class WhileModule : IEventModule
                     await ctx.PublishAsync(new StepCompletedEvent
                     {
                         StepId = whileStepId,
+                        RunId = state.RunId,
                         Success = true,
                         Output = completed.Output,
                     }, EventDirection.Self, ct);
@@ -157,6 +159,7 @@ public sealed class WhileModule : IEventModule
             StepType = child.Type,
             Input = state.Input,
             TargetRole = child.TargetRole ?? state.FallbackRole,
+            RunId = state.RunId,
         };
         foreach (var (k, v) in child.Parameters)
             req.Parameters[k] = v;
@@ -191,5 +194,6 @@ public sealed class WhileModule : IEventModule
         public required string Input { get; set; }
         public required string FallbackRole { get; init; }
         public required string Context { get; init; }
+        public required string RunId { get; init; }
     }
 }

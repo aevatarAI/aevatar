@@ -46,6 +46,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     {
     }
 
+    private string? _lastSessionId;
+
     /// <summary>Role name.</summary>
     public string RoleName { get; private set; } = "";
 
@@ -108,10 +110,26 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
     {
+        // Clear history when session changes — each workflow step gets a fresh context
+        // while regular chat within the same session preserves continuity.
+        if (!string.IsNullOrEmpty(request.SessionId) &&
+            !string.Equals(_lastSessionId, request.SessionId, StringComparison.Ordinal))
+        {
+            if (_lastSessionId != null)
+            {
+                Logger.LogInformation(
+                    "[{Role}] Session changed ({OldSession} → {NewSession}), clearing chat history ({Count} messages)",
+                    RoleName, _lastSessionId, request.SessionId, History.Count);
+                ClearHistory();
+            }
+            _lastSessionId = request.SessionId;
+        }
+
         var promptPreview = request.Prompt.Length > 200
             ? request.Prompt[..200] + "..."
             : request.Prompt;
-        Logger.LogInformation("[{Role}] LLM request: {Preview}", RoleName, promptPreview);
+        Logger.LogInformation("[{Role}] LLM request (history={HistoryCount}): {Preview}",
+            RoleName, History.Count, promptPreview);
 
         // ─── AG-UI: TEXT_MESSAGE_START ───
         await PublishAsync(new TextMessageStartEvent

@@ -63,7 +63,7 @@ public sealed class WorkflowExecutionReadModelProjector
             return;
         if (!string.IsNullOrWhiteSpace(envelope.Id))
         {
-            var dedupKey = $"{context.RootActorId}:{envelope.Id}";
+            var dedupKey = $"proj:{context.RootActorId}:{envelope.Id}";
             if (!await _deduplicator.TryRecordAsync(dedupKey))
                 return;
         }

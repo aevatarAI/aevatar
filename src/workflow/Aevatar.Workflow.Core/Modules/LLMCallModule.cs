@@ -107,8 +107,20 @@ public sealed class LLMCallModule : IEventModule
         {
             var evt = payload.Unpack<TextMessageEndEvent>();
             var sessionId = evt.SessionId;
-            if (string.IsNullOrEmpty(sessionId)) return;
-            if (!_pending.TryGetValue(sessionId, out var pending)) return;
+            if (string.IsNullOrEmpty(sessionId))
+            {
+                ctx.Logger.LogWarning(
+                    "LLMCallModule: received TextMessageEndEvent with empty SessionId, pending={PendingCount}",
+                    _pending.Count);
+                return;
+            }
+            if (!_pending.TryGetValue(sessionId, out var pending))
+            {
+                ctx.Logger.LogWarning(
+                    "LLMCallModule: no pending entry for SessionId={SessionId}, pending keys=[{Keys}]",
+                    sessionId, string.Join(", ", _pending.Keys));
+                return;
+            }
             _pending.Remove(sessionId);
             var pendingRunId = WorkflowRunIdNormalizer.Normalize(pending.RunId);
             _attemptsByRunStep.Remove($"{pendingRunId}:{pending.StepId}");
@@ -133,8 +145,20 @@ public sealed class LLMCallModule : IEventModule
         {
             var evt = payload.Unpack<ChatResponseEvent>();
             var sessionId = evt.SessionId;
-            if (string.IsNullOrEmpty(sessionId)) return;
-            if (!_pending.TryGetValue(sessionId, out var pending)) return;
+            if (string.IsNullOrEmpty(sessionId))
+            {
+                ctx.Logger.LogWarning(
+                    "LLMCallModule: received ChatResponseEvent with empty SessionId, pending={PendingCount}",
+                    _pending.Count);
+                return;
+            }
+            if (!_pending.TryGetValue(sessionId, out var pending))
+            {
+                ctx.Logger.LogWarning(
+                    "LLMCallModule: no pending entry for ChatResponseEvent SessionId={SessionId}, pending keys=[{Keys}]",
+                    sessionId, string.Join(", ", _pending.Keys));
+                return;
+            }
             _pending.Remove(sessionId);
             var pendingRunId = WorkflowRunIdNormalizer.Normalize(pending.RunId);
             _attemptsByRunStep.Remove($"{pendingRunId}:{pending.StepId}");

@@ -87,6 +87,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     public async Task HandleEnvelopeAsync(byte[] envelopeBytes)
     {
+        _logger.LogTrace(
+            "HandleEnvelopeAsync ENTER: actor={ActorId} agentReady={AgentReady} bytes={Len}",
+            this.GetPrimaryKeyString(), _agent != null, envelopeBytes?.Length ?? -1);
+
         if (_agent == null)
         {
             if (!string.IsNullOrWhiteSpace(_state.State.AgentTypeName))
@@ -107,17 +111,34 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
 
+        var actorId = this.GetPrimaryKeyString();
+
+        _logger.LogDebug(
+            "HandleEnvelope: actor={ActorId} type={Type} dir={Dir} publisher={Publisher} envelope={EnvelopeId}",
+            actorId, envelope.Payload?.TypeUrl, envelope.Direction, envelope.PublisherId, envelope.Id);
+
         if (!string.IsNullOrWhiteSpace(envelope.Id) && _deduplicator != null)
         {
-            var dedupKey = $"{this.GetPrimaryKeyString()}:{envelope.Id}";
+            var dedupKey = $"{actorId}:{envelope.Id}";
             if (!await _deduplicator.TryRecordAsync(dedupKey))
+            {
+                _logger.LogWarning(
+                    "Dropping DUPLICATE envelope for actor={ActorId} type={Type} dir={Dir} publisher={Publisher} envelope={EnvelopeId}",
+                    actorId, envelope.Payload?.TypeUrl, envelope.Direction, envelope.PublisherId, envelope.Id);
                 return;
+            }
         }
 
-        if (PublisherChainMetadata.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
+        if (PublisherChainMetadata.ShouldDropForReceiver(envelope, actorId))
+        {
+            _logger.LogWarning(
+                "Dropping envelope via __publishers loop for actor={ActorId} type={Type} dir={Dir} publisher={Publisher} chain=[{Chain}] envelope={EnvelopeId}",
+                actorId, envelope.Payload?.TypeUrl, envelope.Direction, envelope.PublisherId,
+                envelope.Metadata.GetValueOrDefault(PublisherChainMetadata.PublishersMetadataKey, ""),
+                envelope.Id);
             return;
+        }
 
-        var selfActorId = this.GetPrimaryKeyString();
         switch (envelope.Direction)
         {
             case EventDirection.Self:
@@ -125,16 +146,24 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 break;
             case EventDirection.Down:
             case EventDirection.Both:
-                if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
+                if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, actorId))
                 {
                     if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
+                    {
+                        _logger.LogDebug(
+                            "Dropping transit-only forwarded envelope for actor={ActorId} type={Type} envelope={EnvelopeId}",
+                            actorId, envelope.Payload?.TypeUrl, envelope.Id);
                         return;
+                    }
                     break;
                 }
 
                 if (envelope.Metadata.TryGetValue("__source_actor_id", out var sourceActorId) &&
-                    string.Equals(sourceActorId, selfActorId, StringComparison.Ordinal))
+                    string.Equals(sourceActorId, actorId, StringComparison.Ordinal))
                 {
+                    _logger.LogDebug(
+                        "Dropping self-sourced Down/Both envelope for actor={ActorId} type={Type} envelope={EnvelopeId}",
+                        actorId, envelope.Payload?.TypeUrl, envelope.Id);
                     return;
                 }
                 break;
@@ -289,7 +318,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             () => _state.State.ParentId,
             envelope => HandleEnvelopeAsync(envelope.ToByteArray()),
             _propagationPolicy,
-            _streams);
+            _streams,
+            _logger);
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
         gAgent.ManifestStore = ServiceProvider.GetService<IAgentManifestStore>();
@@ -306,6 +336,28 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         var streamProvider = this.GetStreamProvider(options.StreamProviderName);
         var streamId = StreamId.Create(options.ActorEventNamespace, this.GetPrimaryKeyString());
         _selfStream = streamProvider.GetStream<EventEnvelope>(streamId);
+
+        // Resume existing subscription handles to prevent duplicate deliveries.
+        // [ImplicitStreamSubscription] or prior activations may have left
+        // persistent handles; creating a second one causes double delivery.
+        var handles = await _selfStream.GetAllSubscriptionHandles();
+        if (handles is { Count: > 0 })
+        {
+            _logger.LogDebug(
+                "SubscribeSelfStream: resuming {Count} existing subscription(s) for actor={ActorId}",
+                handles.Count, this.GetPrimaryKeyString());
+            _selfStreamHandle = await handles[0].ResumeAsync(OnSelfStreamEventAsync);
+            for (var i = 1; i < handles.Count; i++)
+            {
+                try { await handles[i].UnsubscribeAsync(); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to unsubscribe extra handle {Index} for actor={ActorId}",
+                        i, this.GetPrimaryKeyString());
+                }
+            }
+            return;
+        }
 
         _selfStreamHandle = await _selfStream.SubscribeAsync(OnSelfStreamEventAsync);
     }
