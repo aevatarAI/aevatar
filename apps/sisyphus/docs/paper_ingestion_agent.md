@@ -392,20 +392,22 @@ Paper Ingestion 是第 3 个 WorkflowGAgent：
 
 关键设计点：**两条管线产出的节点格式完全相同**。Research 节点和 Ingestion 节点可以互相 `\noderef` 引用，不存在格式兼容问题。
 
-### 4.3 角色精简
+### 4.3 角色设计
 
-相比 v1 的 4 个角色（Chunker, Extractor, Mapper, DAG Writer），v2 精简为 **2 个角色**：
+相比 v1 的 4 个角色（Chunker, Extractor, Mapper, DAG Writer），v2 精简为 **2+1 个角色**：
 
-| 角色 | 职责 | 工具 |
-|------|------|------|
-| **Extractor** | 读取 chunk → 调用 Knowledge Node Skill → 产出标准 `.tex` 节点 | Chrono Storage (读 chunk), Knowledge Node Skill |
-| **DAG Writer** | 接收 `.tex` 节点 → 写入 Chrono Graph | Chrono Graph (写节点/边) |
+| 角色 | 职责 | 工具 | 适用场景 |
+|------|------|------|---------|
+| **Analyzer** | 分析大型 TeX 项目结构 → 生成 Processing Manifest | Chrono Storage (读项目文件), tex-bulk-load Skill | 仅大型项目（多文件 TeX 工程） |
+| **Extractor** | 读取 chunk/PU → 调用 Knowledge Node Skill → 产出标准 `.tex` 节点 | Chrono Storage (读 chunk), knowledge-tex Skill |  所有场景 |
+| **DAG Writer** | 接收 `.tex` 节点 → 写入 Chrono Graph | Chrono Graph (写节点/边) | 所有场景 |
 
 **为什么可以精简：**
 
 - **Chunker 移到 Application 层** — 分块是确定性的 AST 操作，不需要 LLM
 - **Mapper 角色被 Skill 取代** — v1 中 Mapper 负责"将提取内容映射到 DAG schema"，现在 Knowledge Node Skill 直接约束 Extractor 的输出格式，不再需要额外的映射步骤
 - **边的生成移到 Application 层** — `\noderef` 的解析是确定性的正则匹配，不需要 LLM
+- **Analyzer 仅在大型项目时激活** — 单文件论文直接进入 Extractor 流程，无需项目分析。大型项目（多文件 TeX 工程）需要 Analyzer 先理解项目拓扑并生成 Processing Manifest（详见 §14）
 
 ---
 
@@ -1136,6 +1138,28 @@ public record ValidationResult(
       "L2MaxNodesPerRound": 5,
       "SummaryNodeTrigger": 500,
       "EpochRounds": 5
+    },
+    "BulkLoad": {
+      "PUTokenLimit": 35000,
+      "PUMergeMinTokens": 2000,
+      "MaxPUsPerProject": 200,
+      "ContextLayers": {
+        "PaperOverviewMaxTokens": 200,
+        "DependencySummaryMaxTokens": 500,
+        "SiblingSummaryMaxTokens": 300,
+        "CompactRegistryMaxTokens": 500
+      },
+      "Checkpoint": {
+        "Enabled": true,
+        "StoragePrefix": "papers/{project_id}/checkpoints/",
+        "AutoSaveAfterEveryPU": true
+      },
+      "FileClassification": {
+        "MainBodyPatterns": ["sections/*.tex"],
+        "AppendixPatterns": ["sections/appendices/*.tex"],
+        "GeneratedPatterns": ["sections/generated/**/*.tex"],
+        "SkipPatterns": ["*.sty", "*.cls", "*.bst", "*.def", "scripts/**", "data/**", "figures/**"]
+      }
     }
   }
 }
@@ -1174,3 +1198,819 @@ public record ValidationResult(
 | 13 | 实现 Summary Node 自动生成 | 5 |
 | 14 | Chrono Graph 新端点（轻量查询、标题查重） | 4 |
 | 15 | 批量论文上传支持 | 12 |
+
+### Phase 4: Large Project Bulk Loading
+
+| # | 任务 | 依赖 |
+|---|------|------|
+| 16 | 定义 tex-bulk-load Skill（SKILL.md） | 1 |
+| 17 | 实现 `TexInclusionTreeBuilder`（递归 `\input`/`\include` 追踪，构建完整包含树） | 7 |
+| 18 | 实现 `FileClassificationService`（按规则分类 main_body/appendix/generated/auxiliary/data/script/figure） | 17 |
+| 19 | 实现 `ProcessingUnitBuilder`（按层级和 topic prefix 分组文件为 PU，含 token 估算和依赖拓扑排序） | 17, 18 |
+| 20 | 增强 `paper_ingestion` Workflow：添加 Analyzer 角色 + PU 循环替代 chunk 循环 | 9, 16, 19 |
+| 21 | 实现 `PUContextAssembler`（构建分层 context：paper overview / context chain / dependency summaries / sibling summaries / compact registry） | 20 |
+| 22 | 实现 `CheckpointService`（PU 级别检查点保存与恢复） | 20 |
+| 23 | 实现 `PUSummaryGenerator`（PU 完成后生成摘要，供下游 PU context 注入） | 20, 21 |
+| 24 | 增强 API：支持目录/tar.gz 项目上传 + 批量进度查询 | 12, 20 |
+
+---
+
+## 14. 大型项目批量摄取 (tex-bulk-load)
+
+### 14.1 背景与挑战
+
+§5 定义的标准 Paper Ingestion 管线假设输入是**单篇论文**（1-3 个 `.tex` 文件）。对于大型 TeX 工程项目（如专著、博士论文、多百页理论物理论文），管线面临以下挑战：
+
+| 维度 | 标准论文 | 大型 TeX 工程 |
+|------|---------|-------------|
+| 文件数 | 1-3 个 `.tex` | **数百个 `.tex` 文件** |
+| 结构 | 扁平 sections | **多层 `\input` 嵌套（3-4 级）** |
+| 内容类型 | 纯论文 | **正文 + 附录 + 自动生成片段 + 数据 + 脚本 + 图表** |
+| 大小 | 10-40 页 | **100+ MB 项目，300+ 页等价内容** |
+| 参考文献 | 20-50 条 | **数千行 `.bib` 文件** |
+| 预估节点数 | 5-15 个 | **100-400 个** |
+| 处理时间 | 1-10 min | **1-3 小时** |
+
+**核心问题**：
+
+1. **项目拓扑理解** — 哪些文件是主体内容 vs 附录 vs 生成片段 vs 辅助文件？
+2. **语义分组** — 不能按 token 上限机械分块，需要尊重论文层级结构（Part → Chapter → Section）
+3. **处理顺序** — 后续章节引用前面定义的概念，需要按依赖关系排序
+4. **大规模 Context 管理** — 处理第 50 个块时，不可能把前 49 个块产出的 200+ 节点全部塞进 Extractor prompt
+5. **容错与恢复** — 2 小时的处理过程中间断电/失败，不能从头重来
+
+`tex-bulk-load` Skill 解决这些问题。
+
+### 14.2 架构定位
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  paper_ingestion Workflow (增强版)                                     │
+│                                                                       │
+│  ┌───────────────────────────────┐                                   │
+│  │  Phase 0: Project Analysis     │  ← NEW (仅大型项目)               │
+│  │  Analyzer 角色                 │                                   │
+│  │  tex-bulk-load Skill           │                                   │
+│  │                                │                                   │
+│  │  • 扫描项目 → 包含树           │                                   │
+│  │  • 分类文件                    │                                   │
+│  │  • 构建 Processing Units       │                                   │
+│  │  • 输出 Processing Manifest    │                                   │
+│  └────────────┬──────────────────┘                                   │
+│               │ manifest                                              │
+│               ▼                                                       │
+│  ┌───────────────────────────────┐                                   │
+│  │  Phase 1: PU Extraction Loop   │  ← 替代原 chunk 循环              │
+│  │  Extractor 角色                │                                   │
+│  │  knowledge-tex Skill           │                                   │
+│  │                                │                                   │
+│  │  for each PU in manifest:      │                                   │
+│  │    • 注入分层 context           │                                   │
+│  │    • 提取知识节点               │                                   │
+│  │    • DAG Writer 写入            │                                   │
+│  │    • 保存 checkpoint            │                                   │
+│  │    • 生成 PU summary            │                                   │
+│  └────────────┬──────────────────┘                                   │
+│               │                                                       │
+│               ▼                                                       │
+│  ┌───────────────────────────────┐                                   │
+│  │  Phase 2: Edge Resolution      │  ← 与标准管线相同                  │
+│  │  Application 层                │                                   │
+│  └───────────────────────────────┘                                   │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**关键设计点**：`tex-bulk-load` 不替代标准管线，而是在管线**上游**增加一个分析阶段。单文件论文跳过 Phase 0 直接进入 Phase 1，大型项目由 Analyzer 先生成 Processing Manifest 再进入 Phase 1。
+
+### 14.3 Processing Unit (PU)
+
+#### 14.3.1 概念
+
+Processing Unit（处理单元）是 tex-bulk-load 的核心抽象。PU 取代了标准管线中的 "chunk"，区别如下：
+
+| 维度 | Chunk（标准管线） | PU（批量摄取） |
+|------|-----------------|---------------|
+| 划分依据 | Token 上限（35K tokens） | **论文语义层级**（Part/Section/Topic） |
+| 内容 | 单文件的一段连续文本 | **1-N 个相关 `.tex` 文件的集合** |
+| 上下文 | `created_node_registry`（全量 flat） | **分层 context injection**（§14.5） |
+| 元数据 | `section_path`, `token_estimate` | **priority, depends_on, context_chain, context_hint, expected_node_types** |
+
+#### 14.3.2 PU 分组规则
+
+```
+Rule 1 — 层级优先分组：
+  每个 Part 文件 + 其直接 \input 子文件 = 1 个 PU
+  如果 Part 包含的子文件总 tokens > 35K，按 \section 边界拆分为子 PU
+
+Rule 2 — 附录按 topic prefix 分组：
+  共享数字前缀的文件组成一个 PU：
+    08_*.tex (K4 audits, 11 files) → PU "K4 Protocol Audits"
+    30_*.tex (quantum measurement, 8 files) → PU "Quantum Measurement & Born Rule"
+    36_*.tex (Yang-Mills, 6 files) → PU "Continuum Yang-Mills from Holonomy"
+
+Rule 3 — 生成内容按子目录/命名模式分组：
+    generated/sigma_summary_*.tex → PU "Sigma Summary Tables"
+    generated/mass_spectrum_*.tex → PU "Mass Spectrum Closure Tables"
+    generated/neutrino_*.tex → PU "Neutrino Audit Tables"
+
+Rule 4 — Token 预算：
+  PU > 35K tokens → 在 \section 边界拆分为子 PU
+  PU < 2K tokens → 与同优先级相邻 PU 合并
+
+Rule 5 — 原子单元不可分割：
+  \begin{theorem}...\end{theorem}
+  \begin{proof}...\end{proof}
+  \begin{equation}...\end{equation}
+  \begin{lemma}...\end{lemma}
+```
+
+#### 14.3.3 PU 优先级
+
+| 优先级 | 分类 | 说明 | 处理顺序 |
+|--------|------|------|---------|
+| `critical` | 主体内容（Part I-VIII 正文） | 论文核心论点、定理、方法、结果 | 第一批 |
+| `standard` | 附录（含原创定理/证明/推导） | 深度证明、扩展分析、独立模块 | 第二批 |
+| `supplementary` | 生成内容（审计表、诊断表、闭合证据表） | 由脚本自动生成的结构化数据 | 第三批 |
+| `skip` | 辅助文件（`.sty`, `.cls`, `.bst`, `.def`、脚本、原始数据、图表文件） | 不含知识主张 | 不处理 |
+
+**注意**：`skip` 仅跳过不含知识主张的文件类型（格式定义、Python 脚本、原始 CSV 数据、图片文件）。所有 `.tex` 内容文件（包括生成的 `.tex` 片段）都会被摄取。
+
+#### 14.3.4 PU Schema
+
+```json
+{
+  "pu_id": "PU-07",
+  "name": "Part V: Matter — Standard Model Interface",
+  "priority": "critical",
+  "depends_on": ["PU-00", "PU-03", "PU-05"],
+  "context_chain": "Part V: Matter > §20: Standard Model Interface",
+  "context_hint": "SM field labeling, gauge coupling derivation, Weinberg angle from protocol geometry, CKM/PMNS matrix closure",
+  "file_list": [
+    "sections/PE_matter.tex",
+    "sections/I_20_standard_model_interface.tex",
+    "sections/V_30_sm_field_labeling_closure.tex"
+  ],
+  "estimated_tokens": 32000,
+  "expected_node_types": ["theorem", "definition", "result", "method"],
+  "expected_node_count": "8-12",
+  "labels_defined": ["sec:sm-interface", "thm:weinberg-angle", "eq:ckm-matrix"],
+  "labels_referenced": ["sec:tick-calculus", "thm:resolution-folding", "eq:holonomy-connection"]
+}
+```
+
+### 14.4 Processing Manifest
+
+Analyzer 角色的输出是一个完整的 Processing Manifest，指导后续所有处理阶段：
+
+```json
+{
+  "project_id": "<uuid>",
+  "paper_title": "The Linear Universe: Geometric Enforcement of ...",
+  "authors": "Haobo Ma (Auric)",
+  "main_entry": "main.tex",
+  "total_tex_files": 632,
+  "bibliography_entries": 150,
+
+  "processing_units": [
+    {
+      "pu_id": "PU-00",
+      "name": "Front Matter & Paper Metadata",
+      "priority": "critical",
+      "depends_on": [],
+      "context_chain": "Front Matter",
+      "context_hint": "Paper title, authors, abstract, keywords, notation conventions",
+      "file_list": ["sections/00_frontmatter.tex"],
+      "estimated_tokens": 3500,
+      "expected_node_types": ["source_paper"],
+      "expected_node_count": 1
+    },
+    {
+      "pu_id": "PU-04",
+      "name": "Part II: Tick-first Ontology",
+      "priority": "critical",
+      "depends_on": ["PU-00", "PU-03"],
+      "context_chain": "Part II: Tick-first",
+      "context_hint": "HPA readout dynamics, cut-and-project bridge, golden angle phyllotaxis, tick calculus",
+      "file_list": [
+        "sections/PB_tick_first.tex",
+        "sections/C_10_hpa_readout.tex",
+        "sections/C_13_embedding_projection.tex",
+        "sections/C_14_cut_and_project_bridge.tex",
+        "sections/I_04_golden_angle_phyllotaxis.tex",
+        "sections/I_05_tick_calculus.tex"
+      ],
+      "estimated_tokens": 28000,
+      "expected_node_types": ["definition", "theorem", "method"],
+      "expected_node_count": "5-8"
+    }
+  ],
+
+  "skip_list": {
+    "auxiliary": ["*.sty", "*.cls", "*.bst", "*.def"],
+    "scripts": ["scripts/**"],
+    "data": ["data/**"],
+    "figures": ["figures/**"]
+  },
+
+  "bibliography_summary": {
+    "storage_key": "papers/{project_id}/bibliography.json",
+    "entry_count": 150,
+    "top_cited_keys": ["vaswani2017...", "..."]
+  },
+
+  "estimates": {
+    "total_pus": 86,
+    "critical_pus": 11,
+    "standard_pus": 30,
+    "supplementary_pus": 45,
+    "skipped_files": 507,
+    "estimated_nodes": "250-350",
+    "estimated_llm_calls": "170-260",
+    "estimated_duration": "90-180 min"
+  },
+
+  "checkpoints": {
+    "enabled": true,
+    "storage_prefix": "papers/{project_id}/checkpoints/"
+  }
+}
+```
+
+### 14.5 大规模 Context 管理
+
+标准管线通过 `created_node_registry`（全量 temp_id → UUID 映射）为 Extractor 提供上下文。在 86 个 PU 的场景下（产出 ~295 个节点），全量 registry 会占用 ~8,000 tokens，挤压 PU 内容空间。
+
+tex-bulk-load 引入**分层 Context 注入**：
+
+#### 14.5.1 Context 层级
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Layer 1: Paper Overview                   (~200 tokens)  │
+│   source_paper 节点的 abstract + 论文结构大纲              │
+├──────────────────────────────────────────────────────────┤
+│ Layer 2: Context Chain                     (~30 tokens)  │
+│   "Part V: Matter > §20: SM Interface > §20.3: Gauge"   │
+├──────────────────────────────────────────────────────────┤
+│ Layer 3: Dependency PU Summaries         (~500 tokens)   │
+│   当前 PU depends_on 的所有 PU 的 summary                 │
+│   （非全量 registry，仅依赖链上的摘要）                     │
+├──────────────────────────────────────────────────────────┤
+│ Layer 4: Sibling PU Summaries            (~300 tokens)   │
+│   同一 Part 下最近完成的 PU 的 summary                     │
+├──────────────────────────────────────────────────────────┤
+│ Layer 5: Compact Node Registry           (~500 tokens)   │
+│   仅依赖链上的节点: [{id, type, title}]                    │
+│   不含 abstract，不含非依赖节点                             │
+├──────────────────────────────────────────────────────────┤
+│ Layer 6: Current PU Content           (~25,000 tokens)   │
+│   当前 PU 所有 .tex 文件的完整内容                          │
+├──────────────────────────────────────────────────────────┤
+│ Layer 7: knowledge-tex Skill           (~3,000 tokens)   │
+│   节点模板和格式规范                                       │
+├──────────────────────────────────────────────────────────┤
+│ TOTAL                                 ~29,530 tokens     │
+│ LLM 输出空间                            ~5,470 tokens    │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### 14.5.2 PU Summary
+
+每个 PU 完成后，dag_writer 产出一段 **PU Summary** — 该 PU 所有创建节点的一段话摘要。此摘要被注入到下游 PU 的 Layer 3/4 中，替代全量 registry。
+
+```json
+{
+  "pu_id": "PU-05",
+  "summary": "Established resolution folding 64→21 (theorem, confidence 0.97), kernel-view computation guide (method), and adelic prime orbit module (theorem). Key result: the 21-dimensional folded representation preserves all physical observables via explicit projection operators.",
+  "node_ids": ["node-a1b2", "node-c3d4", "node-e5f6"],
+  "node_index": [
+    {"id": "node-a1b2", "type": "theorem", "title": "Resolution folding 64→21"},
+    {"id": "node-c3d4", "type": "method", "title": "Kernel-view computation guide"},
+    {"id": "node-e5f6", "type": "theorem", "title": "Adelic prime orbit module"}
+  ]
+}
+```
+
+#### 14.5.3 与 §8 Context 管理策略的关系
+
+§8 定义的 L0/L1/L2 投影层级用于 **Research Session 的 Researcher Agent** 读取已有图谱。本节定义的分层 Context 注入用于 **Ingestion 的 Extractor Agent** 处理大型项目。两套机制互补：
+
+| 机制 | 用途 | 核心策略 |
+|------|------|---------|
+| §8 L0/L1/L2 投影 | Researcher 读取已有图谱 | abstract 作为精简投影 |
+| §14.5 分层 Context | Extractor 处理大型项目 | 依赖链摘要 + compact registry |
+
+### 14.6 增强后的 Workflow YAML
+
+```yaml
+name: paper_ingestion
+description: >
+  Parse TeX academic papers into standardized .tex knowledge nodes
+  and write them to the knowledge graph.
+  Supports both single-file papers and large multi-file TeX projects.
+
+roles:
+  # --- NEW: Analyzer（仅大型项目激活）---
+  - id: analyzer
+    name: Project Analyzer
+    system_prompt: |
+      You are a LaTeX project structure analyst. Your task is to analyze
+      a TeX project and produce a Processing Manifest that guides the
+      knowledge extraction pipeline.
+
+      ## Tools
+
+      - Chrono Storage tools to read uploaded project files
+      - tex-bulk-load skill for analysis methodology
+
+      ## Workflow
+
+      1. Invoke tex-bulk-load skill to load analysis methodology
+      2. Read the main .tex entry point
+      3. Recursively trace \input{}/\include{} → build full inclusion tree
+      4. Classify all files:
+         - main_body: files included from Part/Chapter files
+         - appendix: files under appendix structure
+         - generated: files in generated/ directories
+         - auxiliary: .sty, .cls, .bst, .def
+         - data: .json, .csv, .dat files
+         - script: .py, .sh files
+         - figure: .pdf, .png, .eps, .jpg files
+      5. Group files into Processing Units following the paper's hierarchy
+         - Respect Part/Chapter/Section boundaries
+         - Bundle related appendices by topic prefix
+         - Bundle generated fragments by naming pattern
+      6. Assign priorities (critical/standard/supplementary/skip)
+      7. Compute dependency ordering via topological sort
+      8. Generate context_chain and context_hint for each PU
+      9. Parse bibliography → extract entry count
+      10. Output the Processing Manifest JSON
+
+      ## Output Format
+      {
+        "manifest": <ProcessingManifest JSON per §14.4>
+      }
+    connectors:
+      - nyxid_mcp
+    skills:
+      - tex_bulk_load
+
+  # --- Extractor（增强：支持 PU context）---
+  - id: extractor
+    name: Knowledge Extractor
+    system_prompt: |
+      You are a knowledge extraction specialist. Your task is to read
+      chunks of academic TeX documents and extract structured knowledge
+      claims as standardized .tex knowledge nodes.
+
+      ## Graph IDs
+
+      Two Graph IDs are provided in the "Original Context" block:
+      - `Read Graph ID: <uuid>` — for reading existing graph state
+      - `Write Graph ID: <uuid>` — passed to DAG Writer (not your concern)
+      - `Paper Node ID: <uuid>` — the source_paper node for this paper
+
+      ## Context (Bulk Mode)
+
+      In bulk mode, your prompt includes layered context:
+      - Paper Overview: high-level summary of the entire paper
+      - Context Chain: where this PU sits in the paper hierarchy
+      - Dependency Summaries: summaries of PUs this content builds upon
+      - Sibling Summaries: summaries of recently processed PUs in the same Part
+      - Compact Node Registry: [{id, type, title}] of relevant prior nodes
+      Use these to correctly assign \noderef references to existing nodes.
+
+      ## Tools
+
+      You have the Knowledge Node Skill tool which defines the exact
+      .tex template format. ALWAYS invoke it before generating nodes.
+
+      You also have access to Chrono Storage tools via NyxId MCP to
+      read chunks:
+      - `chrono-storage-service__get_object` — read a chunk by storage key
+
+      ## Workflow
+
+      For each chunk/PU you receive:
+      1. Read the content from Chrono Storage using the provided storage_key(s)
+      2. Invoke the Knowledge Node Skill to load the .tex template specification
+      3. Identify all knowledge claims (theorems, hypotheses,
+         definitions, methods, results, observations)
+      4. For each claim, generate a standardized .tex node following the template
+      5. Use \noderef[relation]{id} to reference:
+         - Other nodes created in this batch (use temp IDs: t0, t1, ...)
+         - Previously created nodes from the Compact Node Registry
+         - The source paper node: \sourceref{<paper-node-id>}
+      6. Ensure every node has a ≤150 word abstract
+      7. Output all generated .tex nodes as a JSON array
+
+      ## Output Format
+      {
+        "nodes": [
+          {
+            "temp_id": "t0",
+            "tex_content": "\\nodeid{...}\n\\nodetype{...}\n..."
+          }
+        ],
+        "pu_summary": "<one paragraph summarizing all nodes created in this PU>",
+        "saturation": false
+      }
+
+      ## Constraints
+      - Each node ≤1200 words (excluding metadata lines)
+      - Abstract ≤150 words, mandatory
+      - 1-8 nodes per chunk (quality over quantity)
+      - Do NOT create nodes for trivial content (acknowledgements, formatting)
+      - Always include pu_summary in output (used for downstream context)
+    connectors:
+      - nyxid_mcp
+    skills:
+      - knowledge_tex
+
+  # --- DAG Writer（不变）---
+  - id: dag_writer
+    name: DAG Writer
+    system_prompt: |
+      You are a knowledge graph writer. You receive .tex knowledge nodes
+      from the Extractor and write them to Chrono Graph.
+
+      ## Graph IDs
+
+      Two Graph IDs are provided in the "Original Context" block:
+      - `Read Graph ID: <uuid>` — not used by you
+      - `Write Graph ID: <uuid>` — use this for ALL write operations
+
+      ## Tools
+
+      Via NyxId MCP:
+      - `chrono-graph-service__post_api_graphs_by_graphid_nodes` — create nodes
+      - `chrono-graph-service__get_api_graphs_by_graphid_nodes` — check existing
+
+      ## Workflow
+
+      For each batch of .tex nodes from the Extractor:
+      1. For each node, create a graph node with properties:
+         - type: extracted from \nodetype{}
+         - title: extracted from first line of \section{Claim}
+         - abstract: extracted from \begin{abstract}...\end{abstract}
+         - tex_content: the full .tex source
+         - confidence: extracted from \confidence{}
+         - source: "ingestion"
+         - source_paper_id: extracted from \sourceref{}
+      2. Map temp IDs (t0, t1, ...) to created node UUIDs
+      3. Report all created node IDs
+
+      ## Output Format
+      {
+        "created_nodes": [
+          {"temp_id": "t0", "node_id": "<uuid>", "title": "..."}
+        ],
+        "total_created": N
+      }
+    connectors:
+      - nyxid_mcp
+
+steps:
+  # --- Phase 0: Project Analysis（仅大型项目）---
+  - id: analyze
+    type: llm_call
+    role: analyzer
+    condition: is_bulk_project == true
+    parameters:
+      prompt_prefix: |
+        Analyze the TeX project uploaded at storage prefix:
+        {{storage_prefix}}
+        Main entry file: {{main_entry}}
+        Total files: {{total_files}}
+        Produce a Processing Manifest following the tex-bulk-load methodology.
+
+  # --- Phase 0b: Manifest Fallback（单文件论文）---
+  - id: simple_manifest
+    type: assign
+    condition: is_bulk_project == false
+    parameters:
+      manifest: build_simple_manifest(chunks)
+
+  # --- Phase 0c: Source Paper Node ---
+  - id: create_source_paper
+    type: llm_call
+    role: dag_writer
+    parameters:
+      prompt_prefix: |
+        Create the source_paper node from the following metadata:
+        Title: {{manifest.paper_title}}
+        Authors: {{manifest.authors}}
+        ...
+
+  # --- Phase 1: PU Extraction Loop ---
+  - id: init_loop
+    type: assign
+    parameters:
+      pu_index: 0
+      total_pus: len(manifest.processing_units)
+      node_registry: "{}"
+      pu_summaries: "{}"
+
+  - id: pu_loop
+    type: while
+    condition: pu_index < total_pus
+    steps:
+
+      # 跳过 skip 优先级的 PU
+      - id: check_skip
+        type: assign
+        condition: manifest.processing_units[pu_index].priority == "skip"
+        parameters:
+          pu_index: pu_index + 1
+          __continue: true
+
+      # 构建分层 context
+      - id: build_context
+        type: assign
+        parameters:
+          current_pu: manifest.processing_units[pu_index]
+          pu_context: build_pu_context(
+            manifest,
+            pu_index,
+            node_registry,
+            pu_summaries,
+            source_paper_abstract
+          )
+
+      # Extractor: 读取 PU → 提取知识节点
+      - id: extract
+        type: llm_call
+        role: extractor
+        parameters:
+          prompt_prefix: |
+            {{pu_context}}
+
+            ---
+
+            Process PU {{pu_index}}/{{total_pus}}: "{{current_pu.name}}"
+            Priority: {{current_pu.priority}}
+            Context Chain: {{current_pu.context_chain}}
+            Context Hint: {{current_pu.context_hint}}
+            Files: {{current_pu.file_list}}
+
+            Extract knowledge claims as standardized .tex nodes.
+            Include a pu_summary in your output.
+
+      # DAG Writer: 写入节点
+      - id: write_nodes
+        type: llm_call
+        role: dag_writer
+        parameters:
+          prompt_prefix: |
+            Write the following .tex knowledge nodes to the graph using
+            the Write Graph ID from the Original Context block:
+
+      # 更新 registry + PU summary + checkpoint
+      - id: update_state
+        type: assign
+        parameters:
+          node_registry: merge(node_registry, write_nodes.output.created_nodes)
+          pu_summaries: merge(pu_summaries, {
+            current_pu.pu_id: {
+              "summary": extract.output.pu_summary,
+              "node_index": write_nodes.output.created_nodes
+            }
+          })
+          pu_index: pu_index + 1
+
+      # 保存 checkpoint
+      - id: save_checkpoint
+        type: connector_call
+        connector: nyxid_mcp
+        tool: chrono-storage-service__put_object
+        parameters:
+          key: "{{manifest.checkpoints.storage_prefix}}state.json"
+          body: checkpoint_state(pu_index, node_registry, pu_summaries)
+
+  # --- Phase 2: Edge Resolution ---
+  - id: finalize
+    type: assign
+    parameters:
+      status: "completed"
+      total_nodes_created: len(node_registry)
+```
+
+### 14.7 `build_pu_context` 函数
+
+Application 层的确定性函数，为每个 PU 构建分层 context：
+
+```csharp
+public sealed class PUContextAssembler
+{
+    /// 构建分层 context 注入内容
+    public string BuildContext(
+        ProcessingManifest manifest,
+        int puIndex,
+        Dictionary<string, string> nodeRegistry,
+        Dictionary<string, PUSummary> puSummaries,
+        string sourcePaperAbstract)
+    {
+        var pu = manifest.ProcessingUnits[puIndex];
+        var sb = new StringBuilder();
+
+        // Layer 1: Paper Overview (~200 tokens)
+        sb.AppendLine("## Paper Overview");
+        sb.AppendLine(sourcePaperAbstract);
+        sb.AppendLine();
+
+        // Layer 2: Context Chain (~30 tokens)
+        sb.AppendLine($"## Current Position: {pu.ContextChain}");
+        sb.AppendLine();
+
+        // Layer 3: Dependency PU Summaries (~500 tokens)
+        sb.AppendLine("## Dependency Context");
+        foreach (var depId in pu.DependsOn)
+        {
+            if (puSummaries.TryGetValue(depId, out var depSummary))
+                sb.AppendLine($"- [{depId}] {depSummary.Summary}");
+        }
+        sb.AppendLine();
+
+        // Layer 4: Sibling PU Summaries (~300 tokens)
+        sb.AppendLine("## Recent Sibling Context");
+        var siblings = GetRecentSiblings(manifest, puIndex, puSummaries, maxCount: 3);
+        foreach (var sib in siblings)
+            sb.AppendLine($"- [{sib.PuId}] {sib.Summary}");
+        sb.AppendLine();
+
+        // Layer 5: Compact Node Registry (~500 tokens)
+        sb.AppendLine("## Available Nodes for Reference");
+        var relevantNodes = GetDependencyChainNodes(pu.DependsOn, puSummaries);
+        foreach (var node in relevantNodes)
+            sb.AppendLine($"- {node.Id} ({node.Type}): {node.Title}");
+
+        return sb.ToString();
+    }
+}
+```
+
+### 14.8 检查点与恢复
+
+#### 14.8.1 Checkpoint 数据结构
+
+每个 PU 完成后保存 checkpoint 到 Chrono Storage：
+
+```json
+{
+  "project_id": "proj-xxx",
+  "manifest_version": "1.0",
+  "last_completed_pu": "PU-12",
+  "pu_status": {
+    "PU-00": {"status": "completed", "nodes_created": 1, "summary": "..."},
+    "PU-01": {"status": "completed", "nodes_created": 3, "summary": "..."},
+    "PU-12": {"status": "completed", "nodes_created": 6, "summary": "..."},
+    "PU-13": {"status": "pending"}
+  },
+  "node_registry": {
+    "t0@PU-00": "node-real-uuid-1",
+    "t0@PU-01": "node-real-uuid-2"
+  },
+  "pu_summaries": {
+    "PU-00": {"summary": "...", "node_index": [...]},
+    "PU-01": {"summary": "...", "node_index": [...]}
+  },
+  "total_nodes_created": 52,
+  "last_checkpoint_at": "2026-03-04T10:30:00Z"
+}
+```
+
+#### 14.8.2 恢复流程
+
+```
+恢复摄取任务:
+  1. 加载 checkpoint → 跳过所有 status=completed 的 PU
+  2. 从 checkpoint 恢复 node_registry 和 pu_summaries
+  3. 定位 last_completed_pu + 1 → 设为 pu_index
+  4. 继续 PU 循环
+```
+
+#### 14.8.3 API 支持
+
+```
+POST /api/v2/papers/ingest/{ingestion_id}/resume
+
+Response: 200 OK
+{
+  "ingestion_id": "<uuid>",
+  "resumed_from_pu": "PU-13",
+  "already_completed": 12,
+  "remaining": 74,
+  "status": "processing"
+}
+```
+
+### 14.9 Application Layer 新增服务
+
+| 服务 | 职责 | 层 |
+|------|------|---|
+| `TexInclusionTreeBuilder` | 递归追踪 `\input`/`\include`，构建完整包含树 | Application |
+| `FileClassificationService` | 按规则分类文件为 main_body/appendix/generated/auxiliary/data/script/figure | Application |
+| `ProcessingUnitBuilder` | 按层级和 topic prefix 分组文件为 PU，含 token 估算和依赖拓扑排序 | Application |
+| `PUContextAssembler` | 构建分层 context injection（§14.7） | Application |
+| `CheckpointService` | PU 级别检查点保存与恢复 | Application |
+| `PUSummaryGenerator` | PU 完成后生成摘要，存入 pu_summaries | Application |
+
+### 14.10 tex-bulk-load Skill 文件
+
+```
+apps/sisyphus/skills/tex-bulk-load/SKILL.md
+```
+
+Skill 内容包含：
+
+1. §14.3 的完整 PU 分组规则
+2. §14.4 的 Processing Manifest schema
+3. 文件分类规则和 pattern 匹配示例
+4. 依赖拓扑排序算法说明
+5. context_chain 和 context_hint 生成指引
+6. 针对不同项目结构（专著、博士论文、多百页论文）的具体示例
+
+### 14.11 示例：the-omega 论文项目
+
+以 `2025_z128_standard_model_stable_sector_hpa_omega` 为例展示完整处理流程。
+
+#### 14.11.1 项目规模
+
+| 指标 | 值 |
+|------|-----|
+| 总文件数 | 1,169 |
+| `.tex` 文件 | 632 |
+| 生成 `.tex` 片段 | 421 |
+| 附录 `.tex` 文件 | 160 |
+| 数据文件 | 94 |
+| 图表文件 | 146 |
+| Python 脚本 | 286 |
+| 参考文献 (`references.bib`) | 2,256 行 |
+| 项目总大小 | 137 MB |
+| 论文结构 | 8 Parts + 附录，通过 `\input{}` 嵌套 3-4 级 |
+
+#### 14.11.2 Analyzer 输出（Processing Manifest 摘要）
+
+```
+Phase 0 产出:
+  总 PU 数: ~86
+    critical (主体 8 Parts):     11 PUs
+    standard (附录各 topic):     30 PUs
+    supplementary (生成内容):     45 PUs
+    skip (脚本/数据/图表/辅助):  507 files skipped
+
+  PU 示例:
+    PU-00: Front Matter (00_frontmatter.tex)
+           → source_paper node
+    PU-01: Unified Spine (U_00_unified_spine.tex)
+           → 2-3 nodes (paper overview, reading paths)
+    PU-03: Part I Contract (PA_contract.tex + A.0-A.4)
+           → 3-5 nodes (protocol contract, wish, motive, channels)
+    PU-04: Part II Tick-first (PB + C_10-C_14, I_04-I_05)
+           → 5-8 nodes (HPA readout, tick calculus, phyllotaxis)
+    PU-07: Part V Matter (PE + I_20, V_30-V_33)
+           depends_on: [PU-00, PU-03, PU-05]
+           → 8-12 nodes (SM interface, mass spectrum, CKM/PMNS)
+    PU-15: Appendix: K4 Protocol Audits (08_*.tex, 11 files)
+           → 5-8 nodes (K4 delay, PDG leakage, falsification)
+    PU-25: Appendix: Quantum Measurement (30_*.tex, 8 files)
+           → 4-6 nodes (Born rule, decoherence, measurement)
+    PU-60: Generated: Mass Spectrum Tables (generated/mass_spectrum_*.tex)
+           → 2-4 nodes (closure evidence, PDG comparison)
+```
+
+#### 14.11.3 处理时间估算
+
+| 阶段 | PU 数量 | 预估节点数 | 预估时间 |
+|------|---------|-----------|---------|
+| Phase 0: Analyzer | 1 次调用 | — | ~2 min |
+| Phase 1a: Critical PUs | 11 | ~45 | ~30 min |
+| Phase 1b: Standard PUs | 30 | ~100 | ~60 min |
+| Phase 1c: Supplementary PUs | 45 | ~150 | ~45 min |
+| Phase 2: Edge Resolution | — | ~600 edges | ~5 min |
+| **Total** | **86 PUs** | **~295 nodes, ~600 edges** | **~142 min** |
+
+#### 14.11.4 最终知识图谱
+
+```
+Source Paper Node: 1
+  └── Knowledge Nodes: ~295
+        ├── theorem: ~60 (resolution folding, holonomy, gauge connections, ...)
+        ├── definition: ~45 (tick, CAP, HPA, protocol primitives, ...)
+        ├── method: ~35 (kernel view, audit procedures, phyllotaxis, ...)
+        ├── result: ~50 (mass spectrum, coupling unification, BLEU scores, ...)
+        ├── fact: ~40 (SM field labeling, PDG values, ...)
+        ├── observation: ~30 (limitations, audit findings, ...)
+        ├── hypothesis: ~20 (open conjectures, candidates, ...)
+        └── inference: ~15 (cross-module connections, ...)
+
+  Edges: ~600
+        ├── depends_on: ~180
+        ├── derived_from: ~120
+        ├── supports: ~100
+        ├── proves: ~60
+        ├── extends: ~50
+        ├── evaluates: ~40
+        ├── formalizes: ~30
+        └── cites: ~20
+```
