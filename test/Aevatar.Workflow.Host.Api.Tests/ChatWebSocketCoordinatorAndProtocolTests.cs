@@ -4,7 +4,6 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -14,11 +13,10 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class ChatWebSocketCoordinatorAndProtocolTests
 {
     [Fact]
-    public async Task ExecuteAsync_WhenSuccess_ShouldSendAckRunEventsAndQueryResult()
+    public async Task ExecuteAsync_WhenSuccess_ShouldSendAckAndRunEvents()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
         using var activity = new Activity("ws-success-trace").Start();
-        var queryService = new FakeQueryService();
         var service = new FakeCommandExecutionService
         {
             Handler = async (_, emitAsync, onStartedAsync, ct) =>
@@ -47,7 +45,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 AgentId = "actor-1",
             }, WebSocketMessageType.Text),
             service,
-            queryService,
             CancellationToken.None);
 
         var types = socket.SentTexts
@@ -56,8 +53,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         types.Should().Equal(
             ChatWebSocketMessageTypes.CommandAck,
             ChatWebSocketMessageTypes.AguiEvent,
-            ChatWebSocketMessageTypes.AguiEvent,
-            "query.result");
+            ChatWebSocketMessageTypes.AguiEvent);
 
         service.LastCommand.Should().NotBeNull();
         service.LastCommand!.Prompt.Should().Be("hello");
@@ -71,11 +67,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         eventDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
         eventDoc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
 
-        using var queryDoc = JsonDocument.Parse(socket.SentTexts[3]);
-        queryDoc.RootElement.GetProperty("type").GetString().Should().Be("query.result");
-        queryDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
-        queryDoc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
-        queryDoc.RootElement.GetProperty("payload").GetProperty("actorId").GetString().Should().Be("actor-1");
     }
 
     [Fact]
@@ -83,7 +74,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
         using var activity = new Activity("ws-error-trace").Start();
-        var queryService = new FakeQueryService();
         var service = new FakeCommandExecutionService
         {
             Handler = (_, _, _, _) => Task.FromResult(
@@ -97,7 +87,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             socket,
             new ChatWebSocketCommandEnvelope("req-2", new ChatInput { Prompt = "hello" }, WebSocketMessageType.Text),
             service,
-            queryService,
             CancellationToken.None);
 
         socket.SentTexts.Should().ContainSingle();
@@ -114,7 +103,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
         using var activity = new Activity("ws-out-of-order-trace").Start();
-        var queryService = new FakeQueryService();
         var service = new FakeCommandExecutionService
         {
             Handler = async (_, emitAsync, onStartedAsync, ct) =>
@@ -135,10 +123,9 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             socket,
             new ChatWebSocketCommandEnvelope("req-fallback", new ChatInput { Prompt = "hello" }, WebSocketMessageType.Text),
             service,
-            queryService,
             CancellationToken.None);
 
-        socket.SentTexts.Should().HaveCount(3);
+        socket.SentTexts.Should().HaveCount(2);
         using var eventDoc = JsonDocument.Parse(socket.SentTexts[0]);
         eventDoc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.AguiEvent);
         eventDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-fallback");
@@ -148,9 +135,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         ackDoc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandAck);
         ackDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-late");
 
-        using var queryDoc = JsonDocument.Parse(socket.SentTexts[2]);
-        queryDoc.RootElement.GetProperty("type").GetString().Should().Be("query.result");
-        queryDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-late");
     }
 
     [Fact]
@@ -256,54 +240,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             LastCommand = command;
             return Handler(command, emitAsync, onStartedAsync, ct);
         }
-    }
-
-    private sealed class FakeQueryService : IWorkflowExecutionQueryApplicationService
-    {
-        public bool ActorQueryEnabled => true;
-
-        public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowAgentSummary>>([]);
-
-        public IReadOnlyList<string> ListWorkflows() => [];
-
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
-        {
-            return Task.FromResult<WorkflowActorSnapshot?>(new WorkflowActorSnapshot
-            {
-                ActorId = actorId,
-                WorkflowName = "direct",
-            });
-        }
-
-        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
-
-        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
-            string actorId,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
-
-        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
-            string actorId,
-            int depth = 2,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowActorGraphSubgraph
-            {
-                RootNodeId = actorId,
-            });
-
-        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
-            string actorId,
-            int depth = 2,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(null);
     }
 
     private sealed class FakeWebSocket : WebSocket

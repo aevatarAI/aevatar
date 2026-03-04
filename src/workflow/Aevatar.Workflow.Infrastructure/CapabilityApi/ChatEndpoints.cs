@@ -1,6 +1,5 @@
 using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -161,7 +160,6 @@ public static class WorkflowCapabilityEndpoints
     internal static async Task HandleChatWebSocket(
         HttpContext http,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
-        IWorkflowExecutionQueryApplicationService queryService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
@@ -201,7 +199,7 @@ public static class WorkflowCapabilityEndpoints
             }
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, queryService, ct);
+            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, ct);
         }
         catch (OperationCanceledException)
         {
