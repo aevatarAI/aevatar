@@ -74,6 +74,38 @@ public sealed class TracingContextHelpersTests
         envelope.Metadata[EnvelopeMetadataKeys.TraceFlags].Should().Be(((byte)activity.ActivityTraceFlags).ToString("x2"));
     }
 
+    [Fact]
+    public void BeginHandleEnvelopeInstrumentation_ShouldCreateActivityAndAttachScope()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Aevatar.Agents",
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var provider = new ScopeCaptureLoggerProvider();
+        using var factory = LoggerFactory.Create(builder => builder.AddProvider(provider));
+        var logger = factory.CreateLogger("runtime-tracing-test");
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-3",
+            CorrelationId = "corr-3",
+            Direction = EventDirection.Self,
+            PublisherId = "publisher-3",
+        };
+
+        using var instrumentation = TracingContextHelpers.BeginHandleEnvelopeInstrumentation(logger, "agent-3", envelope);
+        instrumentation.Activity.Should().NotBeNull();
+        instrumentation.Activity!.GetTagItem("aevatar.agent.id").Should().Be("agent-3");
+        logger.LogInformation("runtime log line");
+
+        provider.Entries.Should().ContainSingle();
+        var fields = provider.Entries[0];
+        fields["correlation_id"].Should().Be("corr-3");
+    }
+
     private sealed class ScopeCaptureLoggerProvider : ILoggerProvider, ISupportExternalScope
     {
         private IExternalScopeProvider _scopeProvider = new LoggerExternalScopeProvider();

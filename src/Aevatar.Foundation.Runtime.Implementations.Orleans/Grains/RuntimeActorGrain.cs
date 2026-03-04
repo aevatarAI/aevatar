@@ -108,10 +108,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
-        using var activity = AevatarActivitySource.StartHandleEvent(this.GetPrimaryKeyString(), envelope);
-        activity?.SetTag("aevatar.event.direction", envelope.Direction.ToString());
-        activity?.SetTag("aevatar.event.publisher", envelope.PublisherId);
-        using var logScope = TracingContextHelpers.BeginEnvelopeScope(_logger, envelope);
+        using var instrumentation = TracingContextHelpers.BeginHandleEnvelopeInstrumentation(
+            _logger,
+            this.GetPrimaryKeyString(),
+            envelope);
 
         if (!string.IsNullOrWhiteSpace(envelope.Id) && _deduplicator != null)
         {

@@ -4,7 +4,6 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka;
-using Aevatar.Foundation.Runtime.Observability;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -70,13 +69,13 @@ public static class ServiceCollectionExtensions
 
         if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderInMemory, StringComparison.OrdinalIgnoreCase))
         {
-            AddAevatarRuntimeWithEventSourcingOptions(services, options, configuration);
+            AddAevatarRuntimeWithEventSourcingOptions(services, options);
             return services;
         }
 
         if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderMassTransit, StringComparison.OrdinalIgnoreCase))
         {
-            AddAevatarRuntimeWithEventSourcingOptions(services, options, configuration);
+            AddAevatarRuntimeWithEventSourcingOptions(services, options);
             ConfigureMassTransitTransport(services, options);
             services.AddAevatarMassTransitStreamProvider();
             return services;
@@ -84,7 +83,7 @@ public static class ServiceCollectionExtensions
 
         if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderOrleans, StringComparison.OrdinalIgnoreCase))
         {
-            AddAevatarRuntimeWithEventSourcingOptions(services, options, configuration);
+            AddAevatarRuntimeWithEventSourcingOptions(services, options);
             services.AddAevatarFoundationRuntimeOrleans(orleansOptions =>
             {
                 orleansOptions.StreamBackend = options.OrleansStreamBackend;
@@ -114,22 +113,14 @@ public static class ServiceCollectionExtensions
 
     private static void AddAevatarRuntimeWithEventSourcingOptions(
         IServiceCollection services,
-        AevatarActorRuntimeOptions options,
-        IConfiguration configuration)
+        AevatarActorRuntimeOptions options)
     {
-        var observabilityOptions = new AevatarObservabilityOptions();
-        configuration.GetSection(AevatarObservabilityOptions.SectionName).Bind(observabilityOptions);
-        AevatarActivitySource.EnableSensitiveData = observabilityOptions.EnableSensitiveData;
-
         services.AddAevatarRuntime(configureEventSourcing: eventSourcingOptions =>
         {
             eventSourcingOptions.EnableSnapshots = options.EventSourcingEnableSnapshots;
             eventSourcingOptions.SnapshotInterval = options.EventSourcingSnapshotInterval;
             eventSourcingOptions.EnableEventCompaction = options.EventSourcingEnableEventCompaction;
             eventSourcingOptions.RetainedEventsAfterSnapshot = options.EventSourcingRetainedEventsAfterSnapshot;
-        }, configureObservability: configured =>
-        {
-            configured.EnableSensitiveData = observabilityOptions.EnableSensitiveData;
         });
     }
 

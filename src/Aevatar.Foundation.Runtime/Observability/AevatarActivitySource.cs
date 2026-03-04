@@ -14,11 +14,14 @@ namespace Aevatar.Foundation.Runtime.Observability;
 /// <summary>ActivitySource for Aevatar agent distributed tracing (GenAI conventions).</summary>
 public static class AevatarActivitySource
 {
+    private const string AgentIdTag = "aevatar.agent.id";
+    private const string EventIdTag = "aevatar.event.id";
+    private const string EventTypeTag = "aevatar.event.type";
+    private const string EventDirectionTag = "aevatar.event.direction";
+    private const string EventPublisherTag = "aevatar.event.publisher";
+
     /// <summary>ActivitySource instance.</summary>
     public static readonly ActivitySource Source = new("Aevatar.Agents", "1.0.0");
-
-    /// <summary>Global sensitive data flag. Set via AevatarObservabilityOptions.</summary>
-    public static bool EnableSensitiveData { get; set; }
 
     /// <summary>Starts a HandleEvent activity (legacy, used by LocalActor).</summary>
     public static Activity? StartHandleEvent(string agentId, string eventId, string? eventTypeUrl = null)
@@ -30,12 +33,12 @@ public static class AevatarActivitySource
         if (activity == null)
             return null;
 
-        activity.SetTag("aevatar.agent.id", agentId);
-        activity.SetTag("aevatar.event.id", eventId);
+        activity.SetTag(AgentIdTag, agentId);
+        activity.SetTag(EventIdTag, eventId);
         if (!string.IsNullOrWhiteSpace(eventTypeUrl))
-            activity.SetTag("aevatar.event.type", eventTypeUrl);
+            activity.SetTag(EventTypeTag, eventTypeUrl);
         else if (!string.IsNullOrWhiteSpace(eventTypeName))
-            activity.SetTag("aevatar.event.type", eventTypeName);
+            activity.SetTag(EventTypeTag, eventTypeName);
 
         return activity;
     }
@@ -51,12 +54,15 @@ public static class AevatarActivitySource
         if (activity == null)
             return null;
 
-        activity.SetTag("aevatar.agent.id", agentId);
-        activity.SetTag("aevatar.event.id", envelope.Id);
+        activity.SetTag(AgentIdTag, agentId);
+        activity.SetTag(EventIdTag, envelope.Id);
         if (!string.IsNullOrWhiteSpace(eventTypeUrl))
-            activity.SetTag("aevatar.event.type", eventTypeUrl);
+            activity.SetTag(EventTypeTag, eventTypeUrl);
         else if (!string.IsNullOrWhiteSpace(eventTypeName))
-            activity.SetTag("aevatar.event.type", eventTypeName);
+            activity.SetTag(EventTypeTag, eventTypeName);
+        activity.SetTag(EventDirectionTag, envelope.Direction.ToString());
+        if (!string.IsNullOrWhiteSpace(envelope.PublisherId))
+            activity.SetTag(EventPublisherTag, envelope.PublisherId);
 
         return activity;
     }
@@ -173,10 +179,4 @@ public static class AevatarActivitySource
         return activity;
     }
 
-    /// <summary>Records sensitive data (prompt/response) on a span if enabled.</summary>
-    public static void RecordSensitiveData(Activity? activity, string key, string? value)
-    {
-        if (activity == null || !EnableSensitiveData || value == null) return;
-        activity.SetTag(key, value);
-    }
 }

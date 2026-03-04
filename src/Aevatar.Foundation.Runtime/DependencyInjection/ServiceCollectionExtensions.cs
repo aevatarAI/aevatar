@@ -34,14 +34,8 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddAevatarRuntime(
         this IServiceCollection services,
         Action<InMemoryStreamOptions>? configureStreams = null,
-        Action<EventSourcingRuntimeOptions>? configureEventSourcing = null,
-        Action<AevatarObservabilityOptions>? configureObservability = null)
+        Action<EventSourcingRuntimeOptions>? configureEventSourcing = null)
     {
-        // Observability
-        var observabilityOptions = new AevatarObservabilityOptions();
-        configureObservability?.Invoke(observabilityOptions);
-        services.Replace(ServiceDescriptor.Singleton(observabilityOptions));
-
         // Streaming
         var streamOptions = new InMemoryStreamOptions();
         configureStreams?.Invoke(streamOptions);
