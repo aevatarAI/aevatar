@@ -27,16 +27,6 @@ public abstract class GAgentBase<TState, TConfig> : GAgentBase<TState>
     /// <summary>Current class defaults version that produced <see cref="Config"/>.</summary>
     protected long AppliedClassDefaultsVersion => _appliedClassDefaultsVersion;
 
-    /// <summary>
-    /// Runtime-only config update entry.
-    /// Persistence must still be driven by domain events/state transitions.
-    /// </summary>
-    public async Task ConfigureAsync(TConfig config, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(config);
-        await ApplyEffectiveConfigAsync(config, _appliedClassDefaultsVersion, ct);
-    }
-
     /// <summary>Hook triggered after config changes. Subclasses may override.</summary>
     protected virtual Task OnConfigChangedAsync(TConfig config, CancellationToken ct) =>
         Task.CompletedTask;

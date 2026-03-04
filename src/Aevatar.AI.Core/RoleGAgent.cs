@@ -20,7 +20,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
 
@@ -57,50 +56,32 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     /// <summary>Sets role name.</summary>
     public void SetRoleName(string name) => RoleName = name;
 
-    Task IRoleAgent.ConfigureAsync(RoleAgentConfig config, CancellationToken ct)
+    Task IRoleAgent.InitializeAsync(RoleAgentInitialization initialization, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(initialization);
         ct.ThrowIfCancellationRequested();
 
-        var evt = new ConfigureRoleAgentEvent
+        var evt = new InitializeRoleAgentEvent
         {
             RoleName = RoleName,
-            ProviderName = config.ProviderName,
-            Model = config.Model ?? string.Empty,
-            SystemPrompt = config.SystemPrompt,
-            MaxTokens = config.MaxTokens ?? 0,
-            MaxToolRounds = config.MaxToolRounds,
-            MaxHistoryMessages = config.MaxHistoryMessages,
-            StreamBufferCapacity = config.StreamBufferCapacity,
-            AppConfigJson = CurrentAppConfigJson(),
-            AppConfigCodec = CurrentAppConfigCodec(),
-            AppConfigSchemaVersion = CurrentAppConfigSchemaVersion(),
+            ProviderName = initialization.ProviderName,
+            Model = initialization.Model ?? string.Empty,
+            SystemPrompt = initialization.SystemPrompt,
+            MaxTokens = initialization.MaxTokens ?? 0,
+            MaxToolRounds = initialization.MaxToolRounds,
+            MaxHistoryMessages = initialization.MaxHistoryMessages,
+            StreamBufferCapacity = initialization.StreamBufferCapacity,
         };
-        if (config.Temperature.HasValue)
-            evt.Temperature = config.Temperature.Value;
-        return HandleConfigureRoleAgent(evt);
+        if (initialization.Temperature.HasValue)
+            evt.Temperature = initialization.Temperature.Value;
+        return HandleInitializeRoleAgent(evt);
     }
 
     [EventHandler]
-    public async Task HandleConfigureRoleAgent(ConfigureRoleAgentEvent evt)
+    public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
     {
-        _ = NormalizeAppConfigCodecOrThrow(evt.AppConfigCodec);
         await PersistDomainEventAsync(evt);
         RoleGAgentFactory.ApplyModuleExtensions(this, evt.EventModules, evt.EventRoutes, Services);
-    }
-
-    [EventHandler]
-    public async Task HandleSetRoleAppConfig(SetRoleAppConfigEvent evt)
-    {
-        _ = NormalizeAppConfigCodecOrThrow(evt.AppConfigCodec);
-        await PersistDomainEventAsync(evt);
-    }
-
-    [EventHandler]
-    public Task HandleSetRoleAppState(SetRoleAppStateEvent evt)
-    {
-        _ = NormalizeAppStateCodecOrThrow(evt.AppStateCodec);
-        return PersistDomainEventAsync(evt);
     }
 
     /// <summary>Returns agent description.</summary>
@@ -110,9 +91,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     protected override RoleGAgentState TransitionState(RoleGAgentState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
-            .On<ConfigureRoleAgentEvent>(ApplyConfigureRoleAgent)
-            .On<SetRoleAppConfigEvent>(ApplySetRoleAppConfig)
-            .On<SetRoleAppStateEvent>(ApplySetRoleAppState)
+            .On<InitializeRoleAgentEvent>(ApplyInitializeRoleAgent)
             .OrCurrent();
 
     protected override Task OnStateChangedAfterConfigAppliedAsync(RoleGAgentState state, CancellationToken ct)
@@ -128,7 +107,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         if (overrides == null)
             return new AIAgentConfigStateOverrides();
 
-        var hasAppConfig = HasAppConfigSnapshot(overrides);
         return new AIAgentConfigStateOverrides
         {
             HasProviderName = overrides.HasProviderName,
@@ -147,12 +125,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             MaxHistoryMessages = overrides.HasMaxHistoryMessages ? overrides.MaxHistoryMessages : null,
             HasStreamBufferCapacity = overrides.HasStreamBufferCapacity,
             StreamBufferCapacity = overrides.HasStreamBufferCapacity ? overrides.StreamBufferCapacity : null,
-            HasAppConfigJson = hasAppConfig,
-            AppConfigJson = hasAppConfig ? overrides.AppConfigJson : null,
-            HasAppConfigCodec = hasAppConfig,
-            AppConfigCodec = hasAppConfig ? NormalizeAppConfigCodecOrThrow(overrides.AppConfigCodec) : null,
-            HasAppConfigSchemaVersion = hasAppConfig,
-            AppConfigSchemaVersion = hasAppConfig ? overrides.AppConfigSchemaVersion : null,
         };
     }
 
@@ -296,9 +268,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     private static string SanitizeFailureMessage(string? message) =>
         string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
 
-    private static RoleGAgentState ApplyConfigureRoleAgent(
+    private static RoleGAgentState ApplyInitializeRoleAgent(
         RoleGAgentState current,
-        ConfigureRoleAgentEvent evt)
+        InitializeRoleAgentEvent evt)
     {
         var next = current.Clone();
         var overrides = EnsureConfigOverrides(next);
@@ -326,86 +298,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             overrides.StreamBufferCapacity = evt.StreamBufferCapacity;
         else
             overrides.ClearStreamBufferCapacity();
-        overrides.AppConfigJson = evt.AppConfigJson ?? string.Empty;
-        overrides.AppConfigCodec = NormalizeAppConfigCodecOrThrow(evt.AppConfigCodec);
-        overrides.AppConfigSchemaVersion = evt.AppConfigSchemaVersion;
         return next;
-    }
-
-    private static RoleGAgentState ApplySetRoleAppState(
-        RoleGAgentState current,
-        SetRoleAppStateEvent evt)
-    {
-        var next = current.Clone();
-        next.AppState = evt.AppState?.Clone() ?? new Any();
-        next.AppStateCodec = NormalizeAppStateCodecOrThrow(evt.AppStateCodec);
-        next.AppStateSchemaVersion = evt.AppStateSchemaVersion;
-        return next;
-    }
-
-    private static RoleGAgentState ApplySetRoleAppConfig(
-        RoleGAgentState current,
-        SetRoleAppConfigEvent evt)
-    {
-        var next = current.Clone();
-        var overrides = EnsureConfigOverrides(next);
-        overrides.AppConfigJson = evt.AppConfigJson ?? string.Empty;
-        overrides.AppConfigCodec = NormalizeAppConfigCodecOrThrow(evt.AppConfigCodec);
-        overrides.AppConfigSchemaVersion = evt.AppConfigSchemaVersion;
-        return next;
-    }
-
-    private static bool HasAppConfigSnapshot(AIAgentConfigOverrides overrides) =>
-        overrides.HasAppConfigCodec ||
-        overrides.HasAppConfigJson ||
-        overrides.HasAppConfigSchemaVersion;
-
-    private static string NormalizeAppStateCodecOrThrow(string? codec)
-    {
-        if (string.IsNullOrWhiteSpace(codec))
-            return RoleGAgentExtensionContract.AppStateCodecProtobufAny;
-
-        if (string.Equals(codec, RoleGAgentExtensionContract.AppStateCodecProtobufAny, StringComparison.OrdinalIgnoreCase))
-            return RoleGAgentExtensionContract.AppStateCodecProtobufAny;
-
-        throw new InvalidOperationException(
-            $"Unsupported app state codec '{codec}'. Supported codec: '{RoleGAgentExtensionContract.AppStateCodecProtobufAny}'.");
-    }
-
-    private static string NormalizeAppConfigCodecOrThrow(string? codec)
-    {
-        if (string.IsNullOrWhiteSpace(codec))
-            return RoleGAgentExtensionContract.AppConfigCodecJsonPlain;
-
-        if (string.Equals(codec, RoleGAgentExtensionContract.AppConfigCodecJsonPlain, StringComparison.OrdinalIgnoreCase))
-            return RoleGAgentExtensionContract.AppConfigCodecJsonPlain;
-
-        throw new InvalidOperationException(
-            $"Unsupported app config codec '{codec}'. Supported codec: '{RoleGAgentExtensionContract.AppConfigCodecJsonPlain}'.");
-    }
-
-    private string CurrentAppConfigJson()
-    {
-        var overrides = State.ConfigOverrides;
-        if (overrides == null || !overrides.HasAppConfigJson)
-            return string.Empty;
-        return overrides.AppConfigJson ?? string.Empty;
-    }
-
-    private string CurrentAppConfigCodec()
-    {
-        var overrides = State.ConfigOverrides;
-        if (overrides == null || !overrides.HasAppConfigCodec)
-            return string.Empty;
-        return overrides.AppConfigCodec ?? string.Empty;
-    }
-
-    private int CurrentAppConfigSchemaVersion()
-    {
-        var overrides = State.ConfigOverrides;
-        if (overrides == null || !overrides.HasAppConfigSchemaVersion)
-            return 0;
-        return overrides.AppConfigSchemaVersion;
     }
 
     private static AIAgentConfigOverrides EnsureConfigOverrides(RoleGAgentState state)

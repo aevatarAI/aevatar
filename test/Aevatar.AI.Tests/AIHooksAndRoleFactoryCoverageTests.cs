@@ -13,7 +13,6 @@ using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -95,26 +94,31 @@ public class AIHooksAndRoleFactoryCoverageTests
     }
 
     [Fact]
-    public void RoleGAgentExtensionContract_ShouldBuildStandardPatchEvents()
+    public async Task RoleAgentInitialization_ShouldUseInitializeEventPath()
     {
-        var configPatch = RoleGAgentExtensionContract.CreateAppConfigPatch(
-            "{\"tenant\":\"a\"}",
-            appConfigSchemaVersion: 4,
-            appConfigCodec: "");
+        var services = new ServiceCollection();
+        services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
+        services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+        await using var provider = services.BuildServiceProvider();
 
-        configPatch.Should().BeOfType<SetRoleAppConfigEvent>();
-        configPatch.AppConfigJson.Should().Be("{\"tenant\":\"a\"}");
-        configPatch.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
-        configPatch.AppConfigSchemaVersion.Should().Be(4);
+        var agent = CreateRoleAgent(provider);
+        var roleAgent = (IRoleAgent)agent;
+        await roleAgent.InitializeAsync(new RoleAgentInitialization
+        {
+            ProviderName = "stub",
+            Model = "model-z",
+            SystemPrompt = "system",
+            Temperature = 0.1,
+            MaxTokens = 100,
+        });
 
-        var statePatch = RoleGAgentExtensionContract.CreateAppStateUpdate(
-            new ChatResponseEvent { Content = "state" },
-            appStateSchemaVersion: 2,
-            appStateCodec: "");
-
-        statePatch.AppStateCodec.Should().Be(RoleGAgentExtensionContract.AppStateCodecProtobufAny);
-        statePatch.AppStateSchemaVersion.Should().Be(2);
-        statePatch.AppState.Unpack<ChatResponseEvent>().Content.Should().Be("state");
+        agent.Config.ProviderName.Should().Be("stub");
+        agent.Config.Model.Should().Be("model-z");
+        agent.Config.SystemPrompt.Should().Be("system");
+        agent.Config.Temperature.Should().Be(0.1);
+        agent.Config.MaxTokens.Should().Be(100);
     }
 
     [Fact]

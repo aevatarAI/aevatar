@@ -33,7 +33,7 @@ public class AIGAgentBaseToolRefreshTests
         agent.GetRegisteredToolNames().Should().Equal("tool-a", "tool-b");
 
         source.SetTools("tool-b");
-        await agent.ConfigureAsync(new AIAgentConfig());
+        await agent.TriggerRuntimeRefreshAsync();
 
         agent.GetRegisteredToolNames().Should().Equal("tool-b");
     }
@@ -59,7 +59,7 @@ public class AIGAgentBaseToolRefreshTests
         agent.GetRegisteredToolNames().Should().Equal("manual-tool", "source-old");
 
         source.SetTools("source-new");
-        await agent.ConfigureAsync(new AIAgentConfig());
+        await agent.TriggerRuntimeRefreshAsync();
 
         agent.GetRegisteredToolNames().Should().Equal("manual-tool", "source-new");
     }
@@ -83,6 +83,8 @@ public class AIGAgentBaseToolRefreshTests
             .ToList();
 
         public void RegisterManualTool(string name) => RegisterTool(new NamedTool(name));
+
+        public Task TriggerRuntimeRefreshAsync() => OnConfigChangedAsync(Config, CancellationToken.None);
 
         protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(RoleGAgentState state)
         {

@@ -71,7 +71,7 @@ public static class RoleGAgentFactory
         });
 
         // ─── 基础配置（事件优先） ───
-        var configureEvent = new ConfigureRoleAgentEvent
+        var initializeEvent = new InitializeRoleAgentEvent
         {
             RoleName = normalized.Name,
             SystemPrompt = normalized.SystemPrompt,
@@ -85,9 +85,9 @@ public static class RoleGAgentFactory
             EventRoutes = normalized.EventRoutes ?? string.Empty,
         };
         if (normalized.Temperature.HasValue)
-            configureEvent.Temperature = normalized.Temperature.Value;
+            initializeEvent.Temperature = normalized.Temperature.Value;
 
-        await agent.HandleConfigureRoleAgent(configureEvent);
+        await agent.HandleInitializeRoleAgent(initializeEvent);
     }
 
     public static void ApplyModuleExtensions(

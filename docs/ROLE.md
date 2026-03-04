@@ -260,30 +260,26 @@ Connector 是**按名称调用的外部能力**：在 `~/.aevatar/connectors.jso
 
 ---
 
-## 7. RoleGAgent 零派生扩展（App 自定义 state/config）
+## 7. Role 初始化参数与业务强类型扩展
 
-如果你希望**应用层永远不再定义派生 GAgent 类**，而只用 `RoleGAgent + event modules` 扩展行为，推荐使用下面这套约定：
+在重构后的口径中，`workflow.roles` 里的字段默认是**Role 初始化参数**，不是“通用 app 配置槽位”。
 
-1. **模块只发标准事件，不直接改状态**
-   - 全量配置：发布 `ConfigureRoleAgentEvent`（provider/model/system_prompt/limits/role_name 等完整快照）
-   - 配置补丁：发布 `SetRoleAppConfigEvent`（带 `app_config_json/app_config_codec/app_config_schema_version`）
-   - 状态更新：发布 `SetRoleAppStateEvent`（带 `app_state/app_state_codec/app_state_schema_version`）
-2. **统一辅助入口**
-   - 使用 `Aevatar.AI.Abstractions.RoleGAgentExtensionContract`
-   - 推荐方法：`CreateAppConfigPatch(...)`（返回 `SetRoleAppConfigEvent`）、`CreateAppStateUpdate(...)`
-3. **codec 与版本规则**
-   - `app_state_codec`：`protobuf-any`
-   - `app_config_codec`：`json/plain`
-   - codec 为空会归一化为默认值；未知 codec 会 fail-fast（抛异常）
-   - `*_schema_version` 由业务控制递增，用于后续迁移
+1. **初始化参数与配置分离**
+   - `name/system_prompt/provider/model/temperature/max_*` 属于初始化输入。
+   - 初始化是否写入持久状态，由 RoleGAgent 内部 init 逻辑决定。
+2. **业务扩展走强类型**
+   - 业务侧如果需要自定义配置/状态，定义自己的 `GAgentBase<TState, TConfig>` 子类。
+   - 使用业务强类型事件与状态字段，不使用框架级 JSON 字符串扩展槽位。
+3. **不再推荐通用 app_config/app_state 补丁**
+   - 不再把 `app_config_*` 或等价通用字段作为扩展主路径。
+   - 需要重初始化时，使用显式 reinit 命令或销毁重建 role actor。
 
-这种方式能保持：
+这样可以保持：
 
-- 事件处理扩展由 module 完成；
+- 初始化语义清晰（一次性输入）；
+- 配置语义清晰（长期策略）；
 - 状态事实仍由 EventSourcing 回放恢复；
-- app config 事实可由 EventSourcing 回放恢复（写入 `RoleGAgentState`）；
-- 不依赖 Manifest 作为配置恢复路径；
-- 业务扩展与运行时基础设施解耦。
+- 业务模型保持强类型，可验证、可演进。
 
 ---
 

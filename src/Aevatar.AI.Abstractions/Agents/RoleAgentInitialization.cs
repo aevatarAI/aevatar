@@ -1,6 +1,6 @@
 namespace Aevatar.AI.Abstractions.Agents;
 
-public class RoleAgentConfig
+public class RoleAgentInitialization
 {
     public string ProviderName { get; set; } = string.Empty;
     public string? Model { get; set; }

@@ -42,14 +42,6 @@ public sealed class AIAgentConfig
     /// <summary>流式输出缓冲区容量（用于背压控制）。</summary>
     public int StreamBufferCapacity { get; set; } = 256;
 
-    /// <summary>业务应用配置 JSON（由业务层自行解释）。</summary>
-    public string AppConfigJson { get; set; } = string.Empty;
-
-    /// <summary>业务应用配置编解码标识（例如 json/plain）。</summary>
-    public string AppConfigCodec { get; set; } = string.Empty;
-
-    /// <summary>业务应用配置 schema 版本。</summary>
-    public int AppConfigSchemaVersion { get; set; }
 }
 
 /// <summary>AI GAgent 基类。组合 ChatRuntime、ToolManager、ChatHistory、HookPipeline、Middleware。</summary>
@@ -111,9 +103,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         RebuildRuntime();
     }
 
-    /// <summary>
-    /// State-derived config overrides with explicit presence bits.
-    /// </summary>
     protected sealed class AIAgentConfigStateOverrides
     {
         public bool HasProviderName { get; init; }
@@ -139,15 +128,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
         public bool HasStreamBufferCapacity { get; init; }
         public int? StreamBufferCapacity { get; init; }
-
-        public bool HasAppConfigJson { get; init; }
-        public string? AppConfigJson { get; init; }
-
-        public bool HasAppConfigCodec { get; init; }
-        public string? AppConfigCodec { get; init; }
-
-        public bool HasAppConfigSchemaVersion { get; init; }
-        public int? AppConfigSchemaVersion { get; init; }
     }
 
     /// <summary>Extracts config overrides from protobuf state.</summary>
@@ -185,15 +165,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
         if (overrides.HasStreamBufferCapacity && (overrides.StreamBufferCapacity ?? 0) > 0)
             merged.StreamBufferCapacity = overrides.StreamBufferCapacity!.Value;
-
-        if (overrides.HasAppConfigJson)
-            merged.AppConfigJson = overrides.AppConfigJson ?? string.Empty;
-
-        if (overrides.HasAppConfigCodec)
-            merged.AppConfigCodec = overrides.AppConfigCodec ?? string.Empty;
-
-        if (overrides.HasAppConfigSchemaVersion)
-            merged.AppConfigSchemaVersion = overrides.AppConfigSchemaVersion ?? 0;
 
         NormalizeEffectiveConfig(merged);
         return merged;
@@ -343,9 +314,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         MaxToolRounds = source.MaxToolRounds,
         MaxHistoryMessages = source.MaxHistoryMessages,
         StreamBufferCapacity = source.StreamBufferCapacity,
-        AppConfigJson = source.AppConfigJson ?? string.Empty,
-        AppConfigCodec = source.AppConfigCodec ?? string.Empty,
-        AppConfigSchemaVersion = source.AppConfigSchemaVersion,
     };
 
     private static void NormalizeEffectiveConfig(AIAgentConfig config)
@@ -359,8 +327,6 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             config.MaxHistoryMessages = 100;
         if (config.StreamBufferCapacity <= 0)
             config.StreamBufferCapacity = 256;
-        config.AppConfigJson ??= string.Empty;
-        config.AppConfigCodec ??= string.Empty;
     }
 
     private sealed class NullLLMProviderFactory : ILLMProviderFactory

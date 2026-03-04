@@ -329,7 +329,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
                         ?? await _runtime.CreateAsync(roleAgentType, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
 
-            await actor.HandleEventAsync(CreateRoleAgentConfigureEnvelope(role));
+            await actor.HandleEventAsync(CreateRoleAgentInitializeEnvelope(role));
 
             _childAgentIds.Add(actor.Id);
         }
@@ -564,9 +564,9 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         }
     }
 
-    private EventEnvelope CreateRoleAgentConfigureEnvelope(RoleDefinition role)
+    private EventEnvelope CreateRoleAgentInitializeEnvelope(RoleDefinition role)
     {
-        var configure = new ConfigureRoleAgentEvent
+        var initialize = new InitializeRoleAgentEvent
         {
             RoleName = role.Name ?? string.Empty,
             // Keep provider/model empty when workflow does not specify them,
@@ -583,13 +583,13 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         };
 
         if (role.Temperature.HasValue)
-            configure.Temperature = role.Temperature.Value;
+            initialize.Temperature = role.Temperature.Value;
 
         return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(configure),
+            Payload = Any.Pack(initialize),
             PublisherId = Id,
             Direction = EventDirection.Self,
             CorrelationId = Guid.NewGuid().ToString("N"),

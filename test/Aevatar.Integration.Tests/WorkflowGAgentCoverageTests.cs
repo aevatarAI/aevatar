@@ -85,10 +85,10 @@ public class WorkflowGAgentCoverageTests
 
         var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
         roleAgent.RoleName.Should().Be("RoleA");
-        roleAgent.LastConfig.Should().NotBeNull();
-        roleAgent.LastConfig!.ProviderName.Should().BeEmpty();
-        roleAgent.LastConfig.Model.Should().BeNull();
-        roleAgent.LastConfig.SystemPrompt.Should().Be("helpful role");
+        roleAgent.LastInitialization.Should().NotBeNull();
+        roleAgent.LastInitialization!.ProviderName.Should().BeEmpty();
+        roleAgent.LastInitialization.Model.Should().BeNull();
+        roleAgent.LastInitialization.SystemPrompt.Should().Be("helpful role");
 
         var starts = publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().ToList();
         starts.Should().HaveCount(2);
@@ -96,7 +96,7 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_ShouldPassThroughFullRoleConfigurationToConfigureEvent()
+    public async Task HandleChatRequest_ShouldPassThroughFullRoleConfigurationToInitializeEvent()
     {
         var runtime = new RecordingActorRuntime();
         var resolver = new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
@@ -106,20 +106,20 @@ public class WorkflowGAgentCoverageTests
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
 
         var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
-        roleAgent.LastConfigureEvent.Should().NotBeNull();
-        var configureEvent = roleAgent.LastConfigureEvent!;
-        configureEvent.RoleName.Should().Be("RoleA");
-        configureEvent.ProviderName.Should().Be("openai");
-        configureEvent.Model.Should().Be("gpt-4o-mini");
-        configureEvent.SystemPrompt.Should().Be("helpful role");
-        configureEvent.HasTemperature.Should().BeTrue();
-        configureEvent.Temperature.Should().Be(0.2);
-        configureEvent.MaxTokens.Should().Be(256);
-        configureEvent.MaxToolRounds.Should().Be(4);
-        configureEvent.MaxHistoryMessages.Should().Be(30);
-        configureEvent.StreamBufferCapacity.Should().Be(64);
-        configureEvent.EventModules.Should().Be("llm_handler,tool_handler");
-        configureEvent.EventRoutes.Should().Contain("event.type");
+        roleAgent.LastInitializeEvent.Should().NotBeNull();
+        var initializeEvent = roleAgent.LastInitializeEvent!;
+        initializeEvent.RoleName.Should().Be("RoleA");
+        initializeEvent.ProviderName.Should().Be("openai");
+        initializeEvent.Model.Should().Be("gpt-4o-mini");
+        initializeEvent.SystemPrompt.Should().Be("helpful role");
+        initializeEvent.HasTemperature.Should().BeTrue();
+        initializeEvent.Temperature.Should().Be(0.2);
+        initializeEvent.MaxTokens.Should().Be(256);
+        initializeEvent.MaxToolRounds.Should().Be(4);
+        initializeEvent.MaxHistoryMessages.Should().Be(30);
+        initializeEvent.StreamBufferCapacity.Should().Be(64);
+        initializeEvent.EventModules.Should().Be("llm_handler,tool_handler");
+        initializeEvent.EventRoutes.Should().Contain("event.type");
     }
 
     [Fact]
@@ -153,9 +153,9 @@ public class WorkflowGAgentCoverageTests
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
 
         var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
-        roleAgent.LastConfig.Should().NotBeNull();
-        roleAgent.LastConfig!.ProviderName.Should().Be("openai-godgpt-doubao");
-        roleAgent.LastConfig.Model.Should().Be("godgpt-testnet");
+        roleAgent.LastInitialization.Should().NotBeNull();
+        roleAgent.LastInitialization!.ProviderName.Should().Be("openai-godgpt-doubao");
+        roleAgent.LastInitialization.Model.Should().Be("godgpt-testnet");
     }
 
     [Fact]
@@ -1216,24 +1216,24 @@ public class WorkflowGAgentCoverageTests
     {
         public string Id { get; } = id;
         public string RoleName { get; private set; } = "";
-        public ConfigureRoleAgentEvent? LastConfigureEvent { get; private set; }
-        public RoleAgentConfig? LastConfig { get; private set; }
+        public InitializeRoleAgentEvent? LastInitializeEvent { get; private set; }
+        public RoleAgentInitialization? LastInitialization { get; private set; }
 
         public void SetRoleName(string name) => RoleName = name;
-        public Task ConfigureAsync(RoleAgentConfig config, CancellationToken ct = default)
+        public Task InitializeAsync(RoleAgentInitialization initialization, CancellationToken ct = default)
         {
-            LastConfig = config;
+            LastInitialization = initialization;
             return Task.CompletedTask;
         }
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
         {
-            if (envelope.Payload?.Is(ConfigureRoleAgentEvent.Descriptor) == true)
+            if (envelope.Payload?.Is(InitializeRoleAgentEvent.Descriptor) == true)
             {
-                var evt = envelope.Payload.Unpack<ConfigureRoleAgentEvent>();
-                LastConfigureEvent = evt;
+                var evt = envelope.Payload.Unpack<InitializeRoleAgentEvent>();
+                LastInitializeEvent = evt;
                 SetRoleName(evt.RoleName);
-                LastConfig = new RoleAgentConfig
+                LastInitialization = new RoleAgentInitialization
                 {
                     ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName,
                     Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,

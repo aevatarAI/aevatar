@@ -54,7 +54,7 @@ roles:
       event_routes: "event.type == X -> fallback_module"
 ```
 
-- `roles` 配置会透传到 `ConfigureRoleAgentEvent`，并在 `RoleGAgent` 运行时生效。
+- `roles` 配置会透传到 `InitializeRoleAgentEvent`，并在 `RoleGAgent` 运行时生效。
 - `event_modules/event_routes` 合并优先级：平铺字段 > `extensions.*`。
 - `workflow yaml roles` 与独立 `role yaml` 共享同一归一化语义，避免双套解析规则。
 
@@ -567,4 +567,3 @@ POST /api/workflows/signal
 
 - `workflows/turing-completeness/counter-addition.yaml`
 - `workflows/turing-completeness/minsky-inc-dec-jz.yaml`
-

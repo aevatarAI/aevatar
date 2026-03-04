@@ -5,5 +5,5 @@ namespace Aevatar.AI.Abstractions.Agents;
 public interface IRoleAgent : IAgent
 {
     void SetRoleName(string name);
-    Task ConfigureAsync(RoleAgentConfig config, CancellationToken ct = default);
+    Task InitializeAsync(RoleAgentInitialization initialization, CancellationToken ct = default);
 }
