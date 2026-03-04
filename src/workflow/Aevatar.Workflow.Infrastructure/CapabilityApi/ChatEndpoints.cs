@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Diagnostics;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
@@ -31,9 +32,15 @@ public static class WorkflowCapabilityEndpoints
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
         CancellationToken ct = default)
     {
+        var requestStopwatch = Stopwatch.StartNew();
+        var requestResult = ApiMetrics.ResultOk;
+        var firstResponseRecorded = false;
         if (string.IsNullOrWhiteSpace(input.Prompt))
         {
+            requestResult = ApiMetrics.ResultError;
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            requestStopwatch.Stop();
+            ApiMetrics.RecordRequest(ApiMetrics.TransportHttp, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
             return;
         }
 
@@ -44,7 +51,15 @@ public static class WorkflowCapabilityEndpoints
         {
             var result = await chatRunService.ExecuteAsync(
                 new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId, input.WorkflowYaml),
-                (frame, token) => writer.WriteAsync(frame, token),
+                (frame, token) =>
+                {
+                    if (!firstResponseRecorded)
+                    {
+                        firstResponseRecorded = true;
+                        ApiMetrics.RecordFirstResponse(ApiMetrics.TransportHttp, ApiMetrics.ResultOk, requestStopwatch.Elapsed.TotalMilliseconds);
+                    }
+                    return writer.WriteAsync(frame, token);
+                },
                 onStartedAsync: (started, token) =>
                 {
                     CapabilityTraceContext.ApplyCorrelationHeader(http.Response, started.CommandId);
@@ -53,10 +68,19 @@ public static class WorkflowCapabilityEndpoints
                 ct);
 
             if (result.Error != WorkflowChatRunStartError.None && !writer.Started)
+            {
+                requestResult = ApiMetrics.ResultError;
                 http.Response.StatusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
+            }
         }
         catch (OperationCanceledException)
         {
+            requestResult = ApiMetrics.ResultError;
+        }
+        finally
+        {
+            requestStopwatch.Stop();
+            ApiMetrics.RecordRequest(ApiMetrics.TransportHttp, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
         }
     }
 
@@ -162,10 +186,15 @@ public static class WorkflowCapabilityEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
+        var requestStopwatch = Stopwatch.StartNew();
+        var requestResult = ApiMetrics.ResultOk;
         if (!http.WebSockets.IsWebSocketRequest)
         {
+            requestResult = ApiMetrics.ResultError;
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             await http.Response.WriteAsync("Expected websocket request.", ct);
+            requestStopwatch.Stop();
+            ApiMetrics.RecordRequest(ApiMetrics.TransportWebSocket, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
             return;
         }
 
@@ -182,6 +211,7 @@ public static class WorkflowCapabilityEndpoints
 
             if (!ChatWebSocketCommandParser.TryParse(incomingFrame, out var command, out var parseError))
             {
+                requestResult = ApiMetrics.ResultError;
                 var parseContext = CapabilityTraceContext.CreateMessageContext(fallbackCorrelationId: parseError.RequestId ?? string.Empty);
                 await ChatWebSocketProtocol.SendAsync(
                     socket,
@@ -197,13 +227,17 @@ public static class WorkflowCapabilityEndpoints
             }
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, ct);
+            var firstResponseDurationMs = await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, ct);
+            if (firstResponseDurationMs.HasValue)
+                ApiMetrics.RecordFirstResponse(ApiMetrics.TransportWebSocket, ApiMetrics.ResultOk, firstResponseDurationMs.Value);
         }
         catch (OperationCanceledException)
         {
+            requestResult = ApiMetrics.ResultError;
         }
         catch (Exception ex)
         {
+            requestResult = ApiMetrics.ResultError;
             logger?.LogWarning(ex, "Failed to execute websocket chat command");
             if (socket.State == System.Net.WebSockets.WebSocketState.Open)
             {
@@ -222,6 +256,8 @@ public static class WorkflowCapabilityEndpoints
         finally
         {
             await ChatWebSocketProtocol.CloseAsync(socket, ct);
+            requestStopwatch.Stop();
+            ApiMetrics.RecordRequest(ApiMetrics.TransportWebSocket, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
         }
     }
 

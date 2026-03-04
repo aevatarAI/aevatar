@@ -114,7 +114,7 @@ public sealed class LocalActor : IActor
         var activity = instrumentation.Activity;
 
         var sw = Stopwatch.StartNew();
-        var status = "ok";
+        var status = AgentMetrics.ResultOk;
         await _mailbox.WaitAsync();
         try
         {
@@ -122,7 +122,7 @@ public sealed class LocalActor : IActor
         }
         catch (Exception ex)
         {
-            status = "error";
+            status = AgentMetrics.ResultError;
             activity?.SetTag("aevatar.error", true);
             activity?.SetTag("aevatar.error.message", ex.Message);
             _logger.LogError(ex, "LocalActor {Id} failed to handle event", Id);
@@ -133,18 +133,14 @@ public sealed class LocalActor : IActor
         {
             _mailbox.Release();
             sw.Stop();
-            AgentMetrics.EventsHandled.Add(1,
+            AgentMetrics.RuntimeEventsHandled.Add(1,
             [
-                new("agent.id", Id),
-                new("event.direction", envelope.Direction.ToString()),
-                new("event.type", envelope.Payload?.TypeUrl ?? "unknown"),
-                new("status", status),
+                new(AgentMetrics.DirectionTag, envelope.Direction.ToString()),
+                new(AgentMetrics.ResultTag, status),
             ]);
-            AgentMetrics.EventHandleDuration.Record(sw.Elapsed.TotalMilliseconds,
+            AgentMetrics.RuntimeEventHandleDurationMs.Record(sw.Elapsed.TotalMilliseconds,
             [
-                new("agent.id", Id),
-                new("event.direction", envelope.Direction.ToString()),
-                new("status", status),
+                new(AgentMetrics.ResultTag, status),
             ]);
         }
     }

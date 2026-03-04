@@ -11,25 +11,23 @@ namespace Aevatar.Foundation.Runtime.Observability;
 public static class AgentMetrics
 {
     private static readonly Meter Meter = new("Aevatar.Agents", "1.0.0");
+    public const string DirectionTag = "direction";
+    public const string ResultTag = "result";
+    public const string ResultOk = "ok";
+    public const string ResultError = "error";
 
-    /// <summary>Processed event counter.</summary>
-    public static readonly Counter<long> EventsHandled = Meter.CreateCounter<long>("aevatar.agent.events_handled");
+    /// <summary>Total events handled by runtime actor pipelines.</summary>
+    public static readonly Counter<long> RuntimeEventsHandled = Meter.CreateCounter<long>(
+        "aevatar.runtime.events_handled",
+        description: "Total number of runtime events handled.");
 
-    /// <summary>Handler duration histogram in milliseconds.</summary>
-    public static readonly Histogram<double> HandlerDuration = Meter.CreateHistogram<double>("aevatar.agent.handler_duration_ms");
-
-    /// <summary>End-to-end event handle duration in milliseconds.</summary>
-    public static readonly Histogram<double> EventHandleDuration = Meter.CreateHistogram<double>("aevatar.agent.event_handle_duration_ms");
-
-    /// <summary>Published route target count by direction.</summary>
-    public static readonly Counter<long> RouteTargets = Meter.CreateCounter<long>("aevatar.runtime.route_targets");
-
-    /// <summary>State store load counter.</summary>
-    public static readonly Counter<long> StateLoads = Meter.CreateCounter<long>("aevatar.state.loads");
-
-    /// <summary>State store save counter.</summary>
-    public static readonly Counter<long> StateSaves = Meter.CreateCounter<long>("aevatar.state.saves");
+    /// <summary>Runtime event handle duration in milliseconds.</summary>
+    public static readonly Histogram<double> RuntimeEventHandleDurationMs = Meter.CreateHistogram<double>(
+        "aevatar.runtime.event_handle_duration_ms",
+        description: "Runtime event handling duration in milliseconds.");
 
     /// <summary>Active actor count (up/down counter).</summary>
-    public static readonly UpDownCounter<long> ActiveActors = Meter.CreateUpDownCounter<long>("aevatar.runtime.active_actors");
+    public static readonly UpDownCounter<long> ActiveActors = Meter.CreateUpDownCounter<long>(
+        "aevatar.runtime.active_actors",
+        description: "Current number of active actors.");
 }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
@@ -148,8 +149,31 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 return;
         }
 
-        using var stateBinding = _stateBindingAccessor?.Bind(_state);
-        await _agent.HandleEventAsync(envelope);
+        var handleResult = AgentMetrics.ResultOk;
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            using var stateBinding = _stateBindingAccessor?.Bind(_state);
+            await _agent.HandleEventAsync(envelope);
+        }
+        catch
+        {
+            handleResult = AgentMetrics.ResultError;
+            throw;
+        }
+        finally
+        {
+            stopwatch.Stop();
+            AgentMetrics.RuntimeEventsHandled.Add(1,
+            [
+                new(AgentMetrics.DirectionTag, envelope.Direction.ToString()),
+                new(AgentMetrics.ResultTag, handleResult),
+            ]);
+            AgentMetrics.RuntimeEventHandleDurationMs.Record(stopwatch.Elapsed.TotalMilliseconds,
+            [
+                new(AgentMetrics.ResultTag, handleResult),
+            ]);
+        }
     }
 
     public async Task AddChildAsync(string childId)

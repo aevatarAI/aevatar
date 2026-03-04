@@ -3,7 +3,6 @@
 
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Core.Propagation;
-using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Propagation;
 using Aevatar.Foundation.Runtime.Routing;
 using Google.Protobuf;
@@ -56,12 +55,6 @@ public sealed class LocalActorPublisher : IEventPublisher
             _envelopePropagationPolicy,
             _actorId,
             routeTargetCount);
-        AgentMetrics.RouteTargets.Add(routeTargetCount,
-        [
-            new("publisher.id", _actorId),
-            new("direction", direction.ToString()),
-            new("event.type", evt.Descriptor.Name),
-        ]);
 
         switch (direction)
         {
@@ -106,12 +99,6 @@ public sealed class LocalActorPublisher : IEventPublisher
             _actorId,
             routeTargetCount: 1);
         await _streams.GetStream(targetActorId).ProduceAsync(envelope, ct);
-        AgentMetrics.RouteTargets.Add(1,
-        [
-            new("publisher.id", _actorId),
-            new("direction", "Direct"),
-            new("event.type", evt.Descriptor.Name),
-        ]);
     }
 
     private long GetRouteTargetCount(EventDirection direction) =>

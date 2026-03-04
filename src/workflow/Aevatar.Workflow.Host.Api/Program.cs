@@ -12,6 +12,7 @@
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Host.Api;
+using OpenTelemetry.Metrics;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,5 +29,6 @@ var app = builder.Build();
 
 app.UseAevatarApiTracingScope();
 app.UseAevatarDefaultHost();
+app.MapPrometheusScrapingEndpoint();
 
 app.Run();

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -228,6 +229,7 @@ public class ChatEndpointsInternalTests
     [Fact]
     public async Task HandleChat_WithEmptyPrompt_ShouldReturn400()
     {
+        using var metricCapture = new ApiMetricCapture();
         var http = CreateHttpContext();
         var service = new FakeChatRunApplicationService();
 
@@ -238,6 +240,48 @@ public class ChatEndpointsInternalTests
             CancellationToken.None);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        metricCapture.FirstResponseMeasurements.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleChat_WhenStreaming_ShouldRecordFirstResponseMetric()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        var http = CreateHttpContext();
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = async (_, emitAsync, onStartedAsync, ct) =>
+            {
+                var started = new WorkflowChatRunStarted("actor-1", "direct", "cmd-1");
+                if (onStartedAsync != null)
+                    await onStartedAsync(started, ct);
+
+                await emitAsync(new WorkflowOutputFrame
+                {
+                    Type = WorkflowRunEventTypes.RunStarted,
+                    ThreadId = "actor-1",
+                }, ct);
+
+                return ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.None,
+                        started,
+                        new WorkflowChatRunFinalizeResult(
+                            WorkflowProjectionCompletionStatus.Completed,
+                            true)));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        metricCapture.FirstResponseMeasurements.Should().ContainSingle();
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }
 
     [Fact]
@@ -627,4 +671,41 @@ public class ChatEndpointsInternalTests
     private static CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> ToCoreResult(
         WorkflowChatRunExecutionResult source) =>
         new(source.Error, source.Started, source.FinalizeResult);
+
+    private sealed class ApiMetricCapture : IDisposable
+    {
+        private const string ApiMeterName = "Aevatar.Api";
+        private const string FirstResponseMetricName = "aevatar.api.first_response_duration_ms";
+        private readonly MeterListener _listener = new();
+
+        public ApiMetricCapture()
+        {
+            _listener.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == ApiMeterName && instrument.Name == FirstResponseMetricName)
+                {
+                    listener.EnableMeasurementEvents(instrument);
+                }
+            };
+
+            _listener.SetMeasurementEventCallback<double>((instrument, measurement, tags, _) =>
+            {
+                if (instrument.Name != FirstResponseMetricName)
+                    return;
+
+                FirstResponseMeasurements.Add(new MetricPoint(measurement, tags.ToArray()));
+            });
+
+            _listener.Start();
+        }
+
+        public List<MetricPoint> FirstResponseMeasurements { get; } = [];
+
+        public void Dispose()
+        {
+            _listener.Dispose();
+        }
+    }
+
+    private sealed record MetricPoint(double Value, KeyValuePair<string, object?>[] Tags);
 }

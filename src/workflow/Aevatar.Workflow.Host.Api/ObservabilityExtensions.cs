@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using OpenTelemetry;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using System.Globalization;
@@ -38,6 +39,15 @@ internal static class ObservabilityExtensions
                 {
                     tracing.AddOtlpExporter(options => options.Endpoint = uri);
                 }
+            })
+            .WithMetrics(metrics =>
+            {
+                metrics
+                    .AddAspNetCoreInstrumentation()
+                    .AddRuntimeInstrumentation()
+                    .AddMeter("Aevatar.Agents")
+                    .AddMeter("Aevatar.Api")
+                    .AddPrometheusExporter();
             });
 
         return builder;
