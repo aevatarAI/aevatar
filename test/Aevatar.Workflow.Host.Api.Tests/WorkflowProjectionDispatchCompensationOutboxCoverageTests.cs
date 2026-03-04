@@ -180,7 +180,6 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task RestoreAllAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class RecordingAgentTypeVerifier : IAgentTypeVerifier

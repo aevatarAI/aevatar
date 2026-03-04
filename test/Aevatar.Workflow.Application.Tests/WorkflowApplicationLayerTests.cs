@@ -1303,7 +1303,6 @@ internal sealed class FakeActorRuntime : IActorRuntime
         return Task.CompletedTask;
     }
 
-    public Task RestoreAllAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
 
 internal sealed class StubWorkflowRunActorResolver : IWorkflowRunActorResolver

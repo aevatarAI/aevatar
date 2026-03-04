@@ -1189,7 +1189,6 @@ public class WorkflowGAgentCoverageTests
             Unlinked.Add(childId);
             return Task.CompletedTask;
         }
-        public Task RestoreAllAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class StaticWorkflowDefinitionResolver(IReadOnlyDictionary<string, string> definitions)

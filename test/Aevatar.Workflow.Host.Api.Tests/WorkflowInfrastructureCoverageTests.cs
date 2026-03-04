@@ -453,11 +453,6 @@ public sealed class WorkflowInfrastructureCoverageTests
             return Task.CompletedTask;
         }
 
-        public Task RestoreAllAsync(CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
     }
 
     private sealed class StubActor : IActor

@@ -100,8 +100,6 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task RestoreAllAsync(CancellationToken ct = default) =>
-            throw new NotSupportedException();
     }
 
     private sealed class RecordingActor(string id, IAgent agent) : IActor

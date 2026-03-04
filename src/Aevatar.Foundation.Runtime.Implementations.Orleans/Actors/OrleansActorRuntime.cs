@@ -127,9 +127,6 @@ public sealed class OrleansActorRuntime : IActorRuntime
         await child.ClearParentAsync();
     }
 
-    public Task RestoreAllAsync(CancellationToken ct = default) =>
-        Task.CompletedTask;
-
     private sealed class NullStreamLifecycleManager : IStreamLifecycleManager
     {
         public static NullStreamLifecycleManager Instance { get; } = new();

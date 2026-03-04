@@ -88,7 +88,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 `Aevatar.Foundation.Runtime` 提供本地运行时实现，包含：
 
-- `LocalActorRuntime`：创建/销毁/查找/链接/恢复 Actor
+- `LocalActorRuntime`：创建/销毁/查找/链接 Actor（按需激活）
 - `LocalActor`：邮箱串行处理、父流订阅、子节点传播
 - `LocalActorPublisher`：按 `EventDirection` 路由事件
 - `InMemoryStream` / `InMemoryStreamProvider`：内存流与订阅分发

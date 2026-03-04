@@ -208,7 +208,7 @@ public class LocalActorRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RestoreAll_CreatesActorFromManifest()
+    public async Task GetAsync_WhenActorExistsOnlyInManifest_ShouldMaterializeActor()
     {
         var agentId = "restored-1";
         await _manifestStore.SaveAsync(agentId, new AgentManifest
@@ -216,8 +216,6 @@ public class LocalActorRuntimeTests : IAsyncLifetime
             AgentId = agentId,
             AgentTypeName = typeof(CollectorAgent).AssemblyQualifiedName!,
         });
-
-        await _runtime.RestoreAllAsync();
 
         var restored = await _runtime.GetAsync(agentId);
         restored.Should().NotBeNull();
