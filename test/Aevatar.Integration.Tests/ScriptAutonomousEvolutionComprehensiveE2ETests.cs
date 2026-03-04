@@ -20,7 +20,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
@@ -142,7 +142,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
@@ -220,7 +220,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
@@ -284,7 +284,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
 

@@ -19,7 +19,7 @@ namespace Aevatar.Integration.Tests;
 
 public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
 {
-    [Fact]
+    [Orleans3ClusterIntegrationFact]
     public async Task ComplexScriptFlow_ShouldRemainConsistentAcrossThreeOrleansSilos()
     {
         var clusterId = $"aevatar-script-cluster-{Guid.NewGuid():N}";
