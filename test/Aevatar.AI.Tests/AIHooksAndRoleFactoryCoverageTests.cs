@@ -186,7 +186,7 @@ public class AIHooksAndRoleFactoryCoverageTests
     }
 
     [Fact]
-    public void RoleConfigurationNormalizer_ShouldPreferTopLevelEventFieldsOverExtensions()
+    public void RoleConfigurationNormalizer_ShouldBindTopLevelEventFields()
     {
         var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
         {
@@ -194,11 +194,6 @@ public class AIHooksAndRoleFactoryCoverageTests
             Name = "Planner",
             EventModules = "top_module",
             EventRoutes = "event.type == DemoEvent -> top_module",
-            Extensions = new RoleExtensionsInput
-            {
-                EventModules = "ext_module",
-                EventRoutes = "event.type == DemoEvent -> ext_module",
-            },
             Connectors = ["a", "A", "  ", "b"],
         });
 

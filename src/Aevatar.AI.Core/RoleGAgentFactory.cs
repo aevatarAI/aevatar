@@ -47,6 +47,9 @@ public static class RoleGAgentFactory
     /// <summary>应用 RoleYamlConfig 初始化 RoleGAgent。</summary>
     public static async Task ApplyInitialization(RoleGAgent agent, RoleYamlConfig config, IServiceProvider services)
     {
+        var eventModules = PreferTopLevelText(config.EventModules, config.Extensions?.EventModules);
+        var eventRoutes = PreferTopLevelText(config.EventRoutes, config.Extensions?.EventRoutes);
+
         var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
         {
             Id = config.Name,
@@ -59,15 +62,8 @@ public static class RoleGAgentFactory
             MaxToolRounds = config.MaxToolRounds,
             MaxHistoryMessages = config.MaxHistoryMessages,
             StreamBufferCapacity = config.StreamBufferCapacity,
-            EventModules = config.EventModules,
-            EventRoutes = config.EventRoutes,
-            Extensions = config.Extensions == null
-                ? null
-                : new RoleExtensionsInput
-                {
-                    EventModules = config.Extensions.EventModules,
-                    EventRoutes = config.Extensions.EventRoutes,
-                },
+            EventModules = eventModules,
+            EventRoutes = eventRoutes,
         });
 
         // ─── 基础配置（事件优先） ───
@@ -145,6 +141,19 @@ public static class RoleGAgentFactory
 
         if (finalModules.Count > 0)
             agent.SetModules(finalModules);
+    }
+
+    private static string? PreferTopLevelText(string? topLevel, string? fallback)
+    {
+        var primary = NormalizeText(topLevel);
+        return primary ?? NormalizeText(fallback);
+    }
+
+    private static string? NormalizeText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        return value.Trim();
     }
 }
 
