@@ -103,15 +103,19 @@ public sealed class AIAbstractionsProtoCoverageTests
             AppState = Any.Pack(new ChatRequestEvent { Prompt = "state", SessionId = "session-2" }),
             AppStateCodec = RoleGAgentExtensionContract.AppStateCodecProtobufAny,
             AppStateSchemaVersion = 5,
-            AppConfigJson = "{\"tenant\":\"z\"}",
-            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
-            AppConfigSchemaVersion = 6,
+            ConfigOverrides = new AIAgentConfigOverrides
+            {
+                AppConfigJson = "{\"tenant\":\"z\"}",
+                AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
+                AppConfigSchemaVersion = 6,
+            },
         }, RoleGAgentState.Parser);
         state.RoleName.Should().Be("assistant");
         state.MessageCount.Should().Be(7);
         state.AppStateSchemaVersion.Should().Be(5);
-        state.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
-        state.AppConfigSchemaVersion.Should().Be(6);
+        state.ConfigOverrides.Should().NotBeNull();
+        state.ConfigOverrides.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
+        state.ConfigOverrides.AppConfigSchemaVersion.Should().Be(6);
     }
 
     [Fact]
@@ -143,6 +147,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolResultEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SetRoleAppConfigEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SetRoleAppStateEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(AIAgentConfigOverrides));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleGAgentState));
     }
 
@@ -248,9 +253,12 @@ public sealed class AIAbstractionsProtoCoverageTests
         {
             RoleName = "assistant",
             MessageCount = 1,
-            AppConfigJson = "{}",
-            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
-            AppConfigSchemaVersion = 1,
+            ConfigOverrides = new AIAgentConfigOverrides
+            {
+                AppConfigJson = "{}",
+                AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
+                AppConfigSchemaVersion = 1,
+            },
         };
         state.MergeFrom((RoleGAgentState)null!);
         state.Equals((object?)null).Should().BeFalse();

@@ -7,6 +7,7 @@ using Aevatar.Foundation.Abstractions.Context;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Core.Configurations;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Actors;
@@ -86,6 +87,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
         services.TryAddSingleton<IActorTypeProbe, LocalActorTypeProbe>();
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
+        services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
 
         return services;
     }

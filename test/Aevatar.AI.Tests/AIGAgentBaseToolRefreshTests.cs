@@ -83,6 +83,12 @@ public class AIGAgentBaseToolRefreshTests
             .ToList();
 
         public void RegisterManualTool(string name) => RegisterTool(new NamedTool(name));
+
+        protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(RoleGAgentState state)
+        {
+            _ = state;
+            return new AIAgentConfigStateOverrides();
+        }
     }
 
     private sealed class MutableToolSource : IAgentToolSource

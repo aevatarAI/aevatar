@@ -62,9 +62,10 @@ public sealed class RoleGAgentAppStateAndConfigContractTests
 
         agent.Config.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
         agent.Config.AppConfigSchemaVersion.Should().Be(2);
-        agent.State.AppConfigJson.Should().Be("{\"enabled\":true}");
-        agent.State.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
-        agent.State.AppConfigSchemaVersion.Should().Be(2);
+        agent.State.ConfigOverrides.Should().NotBeNull();
+        agent.State.ConfigOverrides.AppConfigJson.Should().Be("{\"enabled\":true}");
+        agent.State.ConfigOverrides.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
+        agent.State.ConfigOverrides.AppConfigSchemaVersion.Should().Be(2);
     }
 
     [Fact]
@@ -88,9 +89,10 @@ public sealed class RoleGAgentAppStateAndConfigContractTests
 
         agent.Config.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
         agent.Config.AppConfigSchemaVersion.Should().Be(2);
-        agent.State.AppConfigJson.Should().Be("{\"enabled\":true}");
-        agent.State.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
-        agent.State.AppConfigSchemaVersion.Should().Be(2);
+        agent.State.ConfigOverrides.Should().NotBeNull();
+        agent.State.ConfigOverrides.AppConfigJson.Should().Be("{\"enabled\":true}");
+        agent.State.ConfigOverrides.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
+        agent.State.ConfigOverrides.AppConfigSchemaVersion.Should().Be(2);
     }
 
     [Fact]
@@ -139,9 +141,10 @@ public sealed class RoleGAgentAppStateAndConfigContractTests
         agent.Config.AppConfigJson.Should().Be("{\"tenant\":\"a\"}");
         agent.Config.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
         agent.Config.AppConfigSchemaVersion.Should().Be(4);
-        agent.State.AppConfigJson.Should().Be("{\"tenant\":\"a\"}");
-        agent.State.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
-        agent.State.AppConfigSchemaVersion.Should().Be(4);
+        agent.State.ConfigOverrides.Should().NotBeNull();
+        agent.State.ConfigOverrides.AppConfigJson.Should().Be("{\"tenant\":\"a\"}");
+        agent.State.ConfigOverrides.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
+        agent.State.ConfigOverrides.AppConfigSchemaVersion.Should().Be(4);
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.Configurations;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.DependencyInjection;
@@ -55,6 +56,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
+        services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
         services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
         services.AddAevatarFoundationRuntimeOrleansStreaming();
 

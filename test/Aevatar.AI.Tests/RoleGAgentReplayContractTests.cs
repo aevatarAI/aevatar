@@ -234,10 +234,10 @@ public class RoleGAgentReplayContractTests
         await agent2.ActivateAsync();
 
         agent2.RoleName.Should().Be("config-role");
-        // Without framework-level config manifest, non-app config fields stay on class defaults after replay.
-        agent2.Config.ProviderName.Should().BeEmpty();
-        agent2.Config.Model.Should().BeNull();
-        agent2.Config.SystemPrompt.Should().BeEmpty();
+        // Full AI config overrides are now replayed from state/event sourcing.
+        agent2.Config.ProviderName.Should().Be("mock");
+        agent2.Config.Model.Should().Be("model-a");
+        agent2.Config.SystemPrompt.Should().Be("be helpful");
         agent2.Config.AppConfigJson.Should().Be("{\"tenant\":\"new\"}");
         agent2.Config.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
         agent2.Config.AppConfigSchemaVersion.Should().Be(2);
@@ -277,14 +277,14 @@ public class RoleGAgentReplayContractTests
         var agent2 = CreateAgent(services, "role-app-config-event-only");
         await agent2.ActivateAsync();
 
-        // Base provider/model settings come from class defaults.
-        agent2.Config.ProviderName.Should().BeEmpty();
+        agent2.Config.ProviderName.Should().Be("mock");
         agent2.Config.AppConfigJson.Should().Be("{\"tenant\":\"event\"}");
         agent2.Config.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
         agent2.Config.AppConfigSchemaVersion.Should().Be(2);
-        agent2.State.AppConfigJson.Should().Be("{\"tenant\":\"event\"}");
-        agent2.State.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
-        agent2.State.AppConfigSchemaVersion.Should().Be(2);
+        agent2.State.ConfigOverrides.Should().NotBeNull();
+        agent2.State.ConfigOverrides.AppConfigJson.Should().Be("{\"tenant\":\"event\"}");
+        agent2.State.ConfigOverrides.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
+        agent2.State.ConfigOverrides.AppConfigSchemaVersion.Should().Be(2);
     }
 
     [Fact]

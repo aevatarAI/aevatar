@@ -111,6 +111,94 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         RebuildRuntime();
     }
 
+    /// <summary>
+    /// State-derived config overrides with explicit presence bits.
+    /// </summary>
+    protected sealed class AIAgentConfigStateOverrides
+    {
+        public bool HasProviderName { get; init; }
+        public string? ProviderName { get; init; }
+
+        public bool HasModel { get; init; }
+        public string? Model { get; init; }
+
+        public bool HasSystemPrompt { get; init; }
+        public string? SystemPrompt { get; init; }
+
+        public bool HasTemperature { get; init; }
+        public double? Temperature { get; init; }
+
+        public bool HasMaxTokens { get; init; }
+        public int? MaxTokens { get; init; }
+
+        public bool HasMaxToolRounds { get; init; }
+        public int? MaxToolRounds { get; init; }
+
+        public bool HasMaxHistoryMessages { get; init; }
+        public int? MaxHistoryMessages { get; init; }
+
+        public bool HasStreamBufferCapacity { get; init; }
+        public int? StreamBufferCapacity { get; init; }
+
+        public bool HasAppConfigJson { get; init; }
+        public string? AppConfigJson { get; init; }
+
+        public bool HasAppConfigCodec { get; init; }
+        public string? AppConfigCodec { get; init; }
+
+        public bool HasAppConfigSchemaVersion { get; init; }
+        public int? AppConfigSchemaVersion { get; init; }
+    }
+
+    /// <summary>Extracts config overrides from protobuf state.</summary>
+    protected abstract AIAgentConfigStateOverrides ExtractStateConfigOverrides(TState state);
+
+    protected sealed override AIAgentConfig MergeConfig(AIAgentConfig classDefaults, TState state)
+    {
+        ArgumentNullException.ThrowIfNull(classDefaults);
+        ArgumentNullException.ThrowIfNull(state);
+
+        var merged = CloneConfig(classDefaults);
+        var overrides = ExtractStateConfigOverrides(state);
+        ArgumentNullException.ThrowIfNull(overrides);
+
+        if (overrides.HasProviderName)
+            merged.ProviderName = (overrides.ProviderName ?? string.Empty).Trim();
+
+        if (overrides.HasModel)
+            merged.Model = string.IsNullOrWhiteSpace(overrides.Model) ? null : overrides.Model.Trim();
+
+        if (overrides.HasSystemPrompt)
+            merged.SystemPrompt = overrides.SystemPrompt ?? string.Empty;
+
+        if (overrides.HasTemperature)
+            merged.Temperature = overrides.Temperature;
+
+        if (overrides.HasMaxTokens)
+            merged.MaxTokens = (overrides.MaxTokens ?? 0) > 0 ? overrides.MaxTokens : null;
+
+        if (overrides.HasMaxToolRounds && (overrides.MaxToolRounds ?? 0) > 0)
+            merged.MaxToolRounds = overrides.MaxToolRounds!.Value;
+
+        if (overrides.HasMaxHistoryMessages && (overrides.MaxHistoryMessages ?? 0) > 0)
+            merged.MaxHistoryMessages = overrides.MaxHistoryMessages!.Value;
+
+        if (overrides.HasStreamBufferCapacity && (overrides.StreamBufferCapacity ?? 0) > 0)
+            merged.StreamBufferCapacity = overrides.StreamBufferCapacity!.Value;
+
+        if (overrides.HasAppConfigJson)
+            merged.AppConfigJson = overrides.AppConfigJson ?? string.Empty;
+
+        if (overrides.HasAppConfigCodec)
+            merged.AppConfigCodec = overrides.AppConfigCodec ?? string.Empty;
+
+        if (overrides.HasAppConfigSchemaVersion)
+            merged.AppConfigSchemaVersion = overrides.AppConfigSchemaVersion ?? 0;
+
+        NormalizeEffectiveConfig(merged);
+        return merged;
+    }
+
     // ─── Chat 快捷方法 ───
 
     /// <summary>单轮 Chat（含 Tool Calling 循环）。</summary>
@@ -243,6 +331,36 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             Tools.Register(tool);
             _sourceToolNames.Add(tool.Name);
         }
+    }
+
+    private static AIAgentConfig CloneConfig(AIAgentConfig source) => new()
+    {
+        ProviderName = source.ProviderName ?? string.Empty,
+        Model = source.Model,
+        SystemPrompt = source.SystemPrompt ?? string.Empty,
+        Temperature = source.Temperature,
+        MaxTokens = source.MaxTokens,
+        MaxToolRounds = source.MaxToolRounds,
+        MaxHistoryMessages = source.MaxHistoryMessages,
+        StreamBufferCapacity = source.StreamBufferCapacity,
+        AppConfigJson = source.AppConfigJson ?? string.Empty,
+        AppConfigCodec = source.AppConfigCodec ?? string.Empty,
+        AppConfigSchemaVersion = source.AppConfigSchemaVersion,
+    };
+
+    private static void NormalizeEffectiveConfig(AIAgentConfig config)
+    {
+        config.ProviderName = config.ProviderName?.Trim() ?? string.Empty;
+        config.Model = string.IsNullOrWhiteSpace(config.Model) ? null : config.Model.Trim();
+        config.SystemPrompt ??= string.Empty;
+        if (config.MaxToolRounds <= 0)
+            config.MaxToolRounds = 10;
+        if (config.MaxHistoryMessages <= 0)
+            config.MaxHistoryMessages = 100;
+        if (config.StreamBufferCapacity <= 0)
+            config.StreamBufferCapacity = 256;
+        config.AppConfigJson ??= string.Empty;
+        config.AppConfigCodec ??= string.Empty;
     }
 
     private sealed class NullLLMProviderFactory : ILLMProviderFactory
