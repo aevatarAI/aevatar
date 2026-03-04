@@ -6,19 +6,17 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// Event-sink specialized lifecycle port base with runtime lease resolution hook.
 /// </summary>
 public abstract class EventSinkProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, TEvent>
-    : ProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, IEventSink<TEvent>, TEvent>
+    : ProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, IEventSink<TEvent>, TEvent>,
+      IEventSinkProjectionLifecyclePort<TLeaseContract, TEvent>
     where TLeaseContract : class
     where TRuntimeLease : class, TLeaseContract
 {
-    private readonly Func<TLeaseContract, TRuntimeLease> _runtimeLeaseResolver;
-
     protected EventSinkProjectionLifecyclePortServiceBase(
         Func<bool> projectionEnabledAccessor,
         IProjectionPortActivationService<TRuntimeLease> activationService,
         IProjectionPortReleaseService<TRuntimeLease> releaseService,
-        IProjectionPortSinkSubscriptionManager<TRuntimeLease, IEventSink<TEvent>, TEvent> sinkSubscriptionManager,
-        IProjectionPortLiveSinkForwarder<TRuntimeLease, IEventSink<TEvent>, TEvent> liveSinkForwarder,
-        Func<TLeaseContract, TRuntimeLease> runtimeLeaseResolver)
+        IEventSinkProjectionSubscriptionManager<TRuntimeLease, TEvent> sinkSubscriptionManager,
+        IEventSinkProjectionLiveForwarder<TRuntimeLease, TEvent> liveSinkForwarder)
         : base(
             projectionEnabledAccessor,
             activationService,
@@ -26,12 +24,24 @@ public abstract class EventSinkProjectionLifecyclePortServiceBase<TLeaseContract
             sinkSubscriptionManager,
             liveSinkForwarder)
     {
-        _runtimeLeaseResolver = runtimeLeaseResolver ?? throw new ArgumentNullException(nameof(runtimeLeaseResolver));
     }
 
-    protected sealed override TRuntimeLease ResolveRuntimeLease(TLeaseContract lease)
-    {
-        ArgumentNullException.ThrowIfNull(lease);
-        return _runtimeLeaseResolver(lease);
-    }
+    public bool ProjectionEnabled => ProjectionEnabledCore;
+
+    public Task AttachLiveSinkAsync(
+        TLeaseContract lease,
+        IEventSink<TEvent> sink,
+        CancellationToken ct = default) =>
+        AttachSinkAsync(lease, sink, ct);
+
+    public Task DetachLiveSinkAsync(
+        TLeaseContract lease,
+        IEventSink<TEvent> sink,
+        CancellationToken ct = default) =>
+        DetachSinkAsync(lease, sink, ct);
+
+    public Task ReleaseActorProjectionAsync(
+        TLeaseContract lease,
+        CancellationToken ct = default) =>
+        ReleaseProjectionAsync(lease, ct);
 }

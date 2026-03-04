@@ -98,5 +98,8 @@ public abstract class ProjectionLifecyclePortServiceBase<TLeaseContract, TRuntim
         await _releaseService.ReleaseIfIdleAsync(runtimeLease, ct);
     }
 
-    protected abstract TRuntimeLease ResolveRuntimeLease(TLeaseContract lease);
+    protected virtual TRuntimeLease ResolveRuntimeLease(TLeaseContract lease) =>
+        lease as TRuntimeLease
+        ?? throw new InvalidOperationException(
+            $"Unsupported projection lease type `{lease.GetType().FullName}`; expected `{typeof(TRuntimeLease).FullName}`.");
 }

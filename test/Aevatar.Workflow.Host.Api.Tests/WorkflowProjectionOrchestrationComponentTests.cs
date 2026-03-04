@@ -474,7 +474,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     public async Task SinkSubscriptionManager_ShouldReplaceSameSinkSubscription()
     {
         var hub = new RecordingRunEventHub();
-        var manager = new WorkflowProjectionSinkSubscriptionManager(hub);
+        var manager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>(hub);
         var lease = CreateLease("actor-4", "cmd-4");
         var sink = new NoopRunEventSink();
 
@@ -670,7 +670,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     private sealed class RecordingSinkSubscriptionManager
-        : IWorkflowProjectionSinkSubscriptionManager
+        : IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
     {
         public int DetachCalls { get; private set; }
 
@@ -814,7 +814,8 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         }
     }
 
-    private sealed class RecordingSinkFailurePolicy : IWorkflowProjectionSinkFailurePolicy
+    private sealed class RecordingSinkFailurePolicy
+        : IEventSinkProjectionFailurePolicy<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
     {
         public bool NextHandledResult { get; set; }
         public List<(WorkflowExecutionRuntimeLease Lease, IEventSink<WorkflowRunEvent> Sink, WorkflowRunEvent Event, Exception Exception)> Calls { get; } = [];

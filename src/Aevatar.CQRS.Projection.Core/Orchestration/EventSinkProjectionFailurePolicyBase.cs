@@ -6,14 +6,14 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// Common sink failure handling template for event-sink based projection live delivery.
 /// </summary>
 public abstract class EventSinkProjectionFailurePolicyBase<TLease, TEvent>
-    : IProjectionPortSinkFailurePolicy<TLease, IEventSink<TEvent>, TEvent>
+    : IEventSinkProjectionFailurePolicy<TLease, TEvent>
     where TLease : class
     where TEvent : class
 {
-    private readonly IProjectionPortSinkSubscriptionManager<TLease, IEventSink<TEvent>, TEvent> _sinkSubscriptionManager;
+    private readonly IEventSinkProjectionSubscriptionManager<TLease, TEvent> _sinkSubscriptionManager;
 
     protected EventSinkProjectionFailurePolicyBase(
-        IProjectionPortSinkSubscriptionManager<TLease, IEventSink<TEvent>, TEvent> sinkSubscriptionManager)
+        IEventSinkProjectionSubscriptionManager<TLease, TEvent> sinkSubscriptionManager)
     {
         _sinkSubscriptionManager = sinkSubscriptionManager
             ?? throw new ArgumentNullException(nameof(sinkSubscriptionManager));

@@ -197,7 +197,7 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
     }
 
     private sealed class RecordingSinkSubscriptionManager
-        : IWorkflowProjectionSinkSubscriptionManager
+        : IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
     {
         public int DetachCalls { get; private set; }
 

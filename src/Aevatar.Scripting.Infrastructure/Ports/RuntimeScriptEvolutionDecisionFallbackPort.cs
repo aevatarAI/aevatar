@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
 
@@ -8,18 +9,19 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutionDecisionFallbackPort
 {
-    private readonly IActorRuntime _runtime;
+    private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly IStreamProvider _streams;
     private readonly TimeSpan _decisionTimeout;
 
     public RuntimeScriptEvolutionDecisionFallbackPort(
-        IActorRuntime runtime,
+        RuntimeScriptActorAccessor actorAccessor,
         IStreamProvider streams,
         IScriptingPortTimeouts timeouts)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
-        _decisionTimeout = NormalizeTimeout(timeouts.EvolutionDecisionTimeout);
+        _decisionTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
+            .GetEvolutionDecisionTimeout();
     }
 
     public async Task<ScriptPromotionDecision?> TryResolveAsync(
@@ -30,22 +32,21 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
         ArgumentException.ThrowIfNullOrWhiteSpace(managerActorId);
         ArgumentException.ThrowIfNullOrWhiteSpace(proposalId);
 
-        var managerActor = await _runtime.GetAsync(managerActorId);
+        var managerActor = await _actorAccessor.GetAsync(managerActorId);
         if (managerActor == null)
             return null;
 
         ScriptEvolutionDecisionRespondedEvent? response;
         try
         {
-            response = await ScriptQueryReplyAwaiter.QueryAsync<ScriptEvolutionDecisionRespondedEvent>(
+            response = await EventStreamQueryReplyAwaiter.QueryActorAsync<ScriptEvolutionDecisionRespondedEvent>(
                 _streams,
-                "scripting.query.evolution.reply",
+                managerActor,
+                ScriptingQueryRouteConventions.EvolutionReplyStreamPrefix,
                 _decisionTimeout,
-                (requestId, replyStreamId) => managerActor.HandleEventAsync(
-                    BuildQueryEnvelope(managerActorId, proposalId, requestId, replyStreamId),
-                    ct),
+                (requestId, replyStreamId) => BuildQueryEnvelope(managerActorId, proposalId, requestId, replyStreamId),
                 static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
-                static requestId => $"Timeout waiting for script evolution decision query response. request_id={requestId}",
+                ScriptingQueryRouteConventions.BuildEvolutionDecisionTimeoutMessage,
                 ct);
         }
         catch (TimeoutException)
@@ -75,7 +76,7 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
                 ReplyStreamId = replyStreamId,
                 ProposalId = proposalId,
             }),
-            PublisherId = "scripting.query.evolution",
+            PublisherId = ScriptingQueryChannels.EvolutionPublisherId,
             Direction = EventDirection.Self,
             TargetActorId = targetActorId,
             CorrelationId = proposalId,
@@ -99,7 +100,4 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
             CatalogActorId: response.CatalogActorId ?? string.Empty,
             ValidationReport: validation);
     }
-
-    private static TimeSpan NormalizeTimeout(TimeSpan timeout) =>
-        timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(45);
 }

@@ -1,12 +1,12 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowProjectionSinkFailurePolicy
-    : EventSinkProjectionFailurePolicyBase<WorkflowExecutionRuntimeLease, WorkflowRunEvent>,
-      IWorkflowProjectionSinkFailurePolicy
+    : EventSinkProjectionFailurePolicyBase<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
 {
     public const string SinkBackpressureErrorCode = "RUN_SINK_BACKPRESSURE";
     public const string SinkWriteErrorCode = "RUN_SINK_WRITE_FAILED";
@@ -15,7 +15,7 @@ public sealed class WorkflowProjectionSinkFailurePolicy
     private readonly IProjectionClock _clock;
 
     public WorkflowProjectionSinkFailurePolicy(
-        IWorkflowProjectionSinkSubscriptionManager sinkSubscriptionManager,
+        IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent> sinkSubscriptionManager,
         IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
         IProjectionClock clock)
         : base(sinkSubscriptionManager)

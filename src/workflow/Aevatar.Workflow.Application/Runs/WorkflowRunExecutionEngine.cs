@@ -65,7 +65,7 @@ public sealed class WorkflowRunExecutionEngine : IWorkflowRunExecutionEngine
                 },
                 ct);
 
-            await JoinProcessingTaskAsync(processingTask);
+            await WorkflowRunTaskAwaiter.AwaitIgnoringCancellationAsync(processingTask);
             if (!projectionCompleted)
                 projectionCompletionStatus = WorkflowProjectionCompletionStatus.Failed;
 
@@ -98,15 +98,4 @@ public sealed class WorkflowRunExecutionEngine : IWorkflowRunExecutionEngine
             requestEnvelope,
             runContext.Sink,
             ct);
-
-    private static async Task JoinProcessingTaskAsync(Task processingTask)
-    {
-        try
-        {
-            await processingTask;
-        }
-        catch (OperationCanceledException)
-        {
-        }
-    }
 }

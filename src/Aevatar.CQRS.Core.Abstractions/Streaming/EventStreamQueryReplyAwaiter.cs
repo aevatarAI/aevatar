@@ -1,9 +1,12 @@
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf;
 
-namespace Aevatar.Scripting.Infrastructure.Ports;
+namespace Aevatar.CQRS.Core.Abstractions.Streaming;
 
-internal static class ScriptQueryReplyAwaiter
+/// <summary>
+/// Generic request/reply helper for actor query events over stream subscriptions.
+/// </summary>
+public static class EventStreamQueryReplyAwaiter
 {
     public static async Task<TResponse> QueryAsync<TResponse>(
         IStreamProvider streams,
@@ -37,7 +40,38 @@ internal static class ScriptQueryReplyAwaiter
             }, ct);
 
         await dispatchAsync(requestId, replyStreamId);
-        return await WaitForResponseAsync(responseTaskSource.Task, timeout, requestId, timeoutMessageFactory, ct);
+        return await WaitForResponseAsync(
+            responseTaskSource.Task,
+            timeout,
+            requestId,
+            timeoutMessageFactory,
+            ct);
+    }
+
+    public static Task<TResponse> QueryActorAsync<TResponse>(
+        IStreamProvider streams,
+        IActor actor,
+        string replyStreamPrefix,
+        TimeSpan timeout,
+        Func<string, string, EventEnvelope> envelopeFactory,
+        Func<TResponse, string, bool> isMatch,
+        Func<string, string> timeoutMessageFactory,
+        CancellationToken ct)
+        where TResponse : IMessage, new()
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(envelopeFactory);
+
+        return QueryAsync<TResponse>(
+            streams,
+            replyStreamPrefix,
+            timeout,
+            (requestId, replyStreamId) => actor.HandleEventAsync(
+                envelopeFactory(requestId, replyStreamId),
+                ct),
+            isMatch,
+            timeoutMessageFactory,
+            ct);
     }
 
     private static async Task<TResponse> WaitForResponseAsync<TResponse>(

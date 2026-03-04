@@ -1,4 +1,4 @@
-# Aevatar.Scripting 回推链路对齐 Workflow 架构变更文档（2026-03-04 R8）
+# Aevatar.Scripting 回推链路对齐 Workflow 架构变更文档（2026-03-04 R11）
 
 ## 1. 变更范围
 
@@ -114,6 +114,90 @@
 2. `ProjectionReleaseServiceBase` 从 `<TRuntimeLease, TContext, TTopology, TEvent>` 降维到 `<TRuntimeLease, TContext, TTopology>`。
 3. 新增 `EventSinkProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, TEvent>`，统一 runtime lease 解析模板，删除 workflow/scripting service 内重复 cast override。
 
+### 决策 Q：EventSink Lifecycle 基类直接实现 Port 接口
+
+1. `EventSinkProjectionLifecyclePortServiceBase<...>` 直接实现 `IEventSinkProjectionLifecyclePort<TLease, TEvent>`。
+2. workflow/scripting lifecycle service 删除 `ProjectionEnabled + attach/detach/release` pass-through 方法。
+3. 生命周期服务收敛为仅保留 `EnsureActorProjectionAsync` 语义差异。
+
+### 决策 R：删除 workflow/scripting 薄包装 sink 组件
+
+1. 删除 `IWorkflowProjectionSinkSubscriptionManager/IWorkflowProjectionLiveSinkForwarder` 及对应实现类。
+2. 删除 `IScriptEvolutionProjectionSinkSubscriptionManager/IScriptEvolutionProjectionLiveSinkForwarder` 及对应实现类。
+3. DI 直接注册 CQRS 通用实现：`EventSinkProjectionSessionSubscriptionManager`、`EventSinkProjectionLiveForwarder`。
+
+### 决策 S：RuntimeScriptLifecyclePort 按能力拆分为 Facade + 子服务
+
+1. `RuntimeScriptLifecyclePort` 变为 facade，仅负责组合四个子服务。
+2. 新增 `RuntimeScriptEvolutionLifecycleService`、`RuntimeScriptDefinitionLifecycleService`、`RuntimeScriptExecutionLifecycleService`、`RuntimeScriptCatalogLifecycleService`。
+3. 新增 `RuntimeScriptActorAccessor` 统一 actor `get/create/exists` 访问模板，删除端口内聚合式大类逻辑。
+
+### 决策 T：Default Sink Failure Policy 下沉并替换 scripting 空实现
+
+1. 在 CQRS 投影核心新增 `DefaultEventSinkProjectionFailurePolicy<TLease, TEvent>`。
+2. scripting 删除空扩展 `ScriptEvolutionProjectionSinkFailurePolicy`，直接使用默认策略。
+3. workflow 保留自定义 failure policy（run-error 遥测）差异化逻辑。
+
+### 决策 U：删除单行派生 ProjectorBase 空壳
+
+1. 删除 `WorkflowRunSessionEventProjectorBase` 与 `ScriptEvolutionSessionEventProjectorBase`。
+2. `WorkflowExecutionAGUIEventProjector`、`ScriptEvolutionSessionCompletedEventProjector` 直接继承 `ProjectionSessionEventProjectorBase<...>`。
+3. 减少中间层无业务价值继承层级。
+
+### 决策 V：EventSink 端口签名引入专用接口，替代业务层长泛型
+
+1. 在 CQRS 投影抽象层新增 `IEventSinkProjectionSubscriptionManager<TLease, TEvent>`、`IEventSinkProjectionLiveForwarder<TLease, TEvent>`、`IEventSinkProjectionFailurePolicy<TLease, TEvent>`。
+2. workflow/scripting 生命周期与 failure policy 构造签名统一切到上述专用接口，业务侧不再直接暴露 `IProjectionPort*<..., IEventSink<TEvent>, TEvent>`。
+3. `EventSinkProjectionRuntimeRegistration` 保留桥接注册，保证专用接口与通用泛型接口在容器中可互通解析。
+
+### 决策 W：Lifecycle runtime lease 解析模板默认化
+
+1. `ProjectionLifecyclePortServiceBase` 提供默认 `lease as TRuntimeLease` 解析逻辑及统一异常消息。
+2. `EventSinkProjectionLifecyclePortServiceBase` 删除 `runtimeLeaseResolver` 构造参数与 override 样板。
+3. workflow/scripting lifecycle service 删除各自 `ResolveRuntimeLeaseOrThrow` 重复代码。
+
+### 决策 X：Actor Query Reply Awaiter 下沉到 CQRS Core.Abstractions
+
+1. 新增 `EventStreamQueryReplyAwaiter` 作为通用 request/reply stream-await 工具。
+2. scripting 删除本地 `ScriptQueryReplyAwaiter` 实现。
+3. definition snapshot / catalog query / evolution fallback 三条 query 路径统一复用 CQRS 通用 awaiter。
+
+### 决策 Y：EventSink Runtime DI 注册模板进一步收敛
+
+1. `AddEventSinkProjectionRuntimeCore` 改为“默认策略重载 -> 自定义策略泛型重载”单路径注册。
+2. 删除先注册默认策略再 `Replace` 的两阶段流程。
+3. 统一在注册模板里完成 coordinator/dispatcher/lifecycle 与 event-sink 专用端口注入。
+
+### 决策 Z：Workflow 目标 Role Actor 解析策略统一
+
+1. 在 `Aevatar.Workflow.Core.Primitives` 新增 `WorkflowRoleActorIdResolver`。
+2. `LLMCall/Evaluate/Reflect` 三个 module 统一调用同一 `workflowActorId + role` 解析逻辑。
+3. 删除 module 内重复的 `ResolveTargetActorId` 私有实现，避免策略漂移。
+
+### 决策 AA：Scripting Query 路由常量集中
+
+1. 在 abstractions 新增 `ScriptingQueryChannels`，统一定义 `publisherId` 与 `reply stream prefix`。
+2. application query adapter 与 infrastructure fallback/query port 全部改为复用该常量定义。
+3. 降低 query 通道路由硬编码散落风险。
+
+### 决策 AB：Scripting 超时读取规范下沉为扩展
+
+1. 删除 `ScriptingPortTimeouts.NormalizeOrDefault` 辅助类。
+2. 新增 `ScriptingPortTimeoutExtensions`，按语义提供 `GetDefinitionSnapshotQueryTimeout/GetCatalogEntryQueryTimeout/GetEvolutionDecisionTimeout`。
+3. 各端口构造统一通过扩展读取已归一化 timeout，消除调用点重复 normalize。
+
+### 决策 AC：Scripting 业务分支模板继续收敛
+
+1. `RuntimeScriptCatalogLifecycleService` 抽取 `ResolveAndGetOrCreateCatalogActorAsync`，消除 promote/rollback 的重复 actor 获取模板。
+2. `ScriptEvolutionManagerGAgent` 抽取 `RejectAndRespondAsync`，统一 rejected 事件持久化 + terminal decision 回推逻辑。
+3. manager 提前解析默认 `definition/catalog` actor id，减少分支内重复解析调用。
+
+### 决策 AD：Workflow 运行任务收尾 await 模板统一
+
+1. 新增 `WorkflowRunTaskAwaiter.AwaitIgnoringCancellationAsync`。
+2. `WorkflowRunExecutionEngine` 与 `WorkflowRunResourceFinalizer` 删除重复的 `try/catch OperationCanceledException` 样板。
+3. 统一“收尾阶段忽略取消异常”的语义实现，减少维护面。
+
 ## 4. 变更前后对比
 
 ### 4.1 旧链路（R3）
@@ -131,7 +215,7 @@ sequenceDiagram
     SES-->>PORT: "SendToAsync(scripting.evolution.session.reply:{proposalId})"
 ```
 
-### 4.2 新链路（R8）
+### 4.2 新链路（R11）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -150,7 +234,7 @@ sequenceDiagram
     PORT->>LIFE: "Detach + Release"
 ```
 
-## 5. 关键实现锚点（R8）
+## 5. 关键实现锚点（R11）
 
 1. 通用 sink/channel 抽象：
    - `src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSink.cs`
@@ -158,6 +242,9 @@ sequenceDiagram
    - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionRuntimeLeaseBase.cs`
 3. 通用 sink failure policy 抽象与 forwarder 骨架：
    - `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionPortSinkFailurePolicy.cs`
+   - `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IEventSinkProjectionFailurePolicy.cs`
+   - `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IEventSinkProjectionSubscriptionManager.cs`
+   - `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IEventSinkProjectionLiveForwarder.cs`
    - `src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionFailurePolicyBase.cs`
    - `src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLiveForwarder.cs`
 4. 通用 session event projector 骨架：
@@ -183,7 +270,7 @@ sequenceDiagram
    - `src/Aevatar.Scripting.Projection/Orchestration/ScriptEvolutionProjectionActivationService.cs`
    - `src/Aevatar.Scripting.Projection/Orchestration/ScriptEvolutionProjectionReleaseService.cs`
    - `src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionSessionSubscriptionManager.cs`
-   - `src/Aevatar.Scripting.Projection/Orchestration/ScriptEvolutionProjectionSinkFailurePolicy.cs`
+   - `src/Aevatar.CQRS.Projection.Core/Orchestration/DefaultEventSinkProjectionFailurePolicy.cs`
    - `src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLiveForwarder.cs`
    - `src/Aevatar.Scripting.Projection/Orchestration/ScriptEvolutionSessionEventCodec.cs`
 13. Session Actor 行为收敛：`src/Aevatar.Scripting.Core/ScriptEvolutionSessionGAgent.cs`
@@ -202,10 +289,40 @@ sequenceDiagram
    - `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionRuntimeLease.cs`
    - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionReleaseServiceBase.cs`
    - `src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLifecyclePortServiceBase.cs`
-18. scripting actor 获取/创建模板化：
-   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptLifecyclePort.cs`
+18. EventSink runtime DI 注册模板收敛：
+   - `src/Aevatar.CQRS.Projection.Core/DependencyInjection/EventSinkProjectionRuntimeRegistration.cs`
+19. scripting lifecycle facade + 子服务拆分：
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptActorAccessor.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionLifecycleService.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptDefinitionLifecycleService.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptExecutionLifecycleService.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptCatalogLifecycleService.cs`
+20. scripting query await 下沉到 CQRS Core.Abstractions：
+   - `src/Aevatar.CQRS.Core.Abstractions/Streaming/EventStreamQueryReplyAwaiter.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionDecisionFallbackPort.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptDefinitionSnapshotPort.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptCatalogLifecycleService.cs`
+21. 删除薄包装后的直接继承 projector：
+   - `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionAGUIEventProjector.cs`
+   - `src/Aevatar.Scripting.Projection/Projectors/ScriptEvolutionSessionCompletedEventProjector.cs`
+22. workflow role actor id 解析统一：
+   - `src/workflow/Aevatar.Workflow.Core/Primitives/WorkflowRoleActorIdResolver.cs`
+   - `src/workflow/Aevatar.Workflow.Core/Modules/LLMCallModule.cs`
+   - `src/workflow/Aevatar.Workflow.Core/Modules/EvaluateModule.cs`
+   - `src/workflow/Aevatar.Workflow.Core/Modules/ReflectModule.cs`
+23. scripting query 通道与超时规范集中：
+   - `src/Aevatar.Scripting.Abstractions/Definitions/ScriptingQueryChannels.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/ScriptingQueryRouteConventions.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/ScriptingPortTimeoutExtensions.cs`
+24. scripting manager/catalog 分支模板收敛：
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptCatalogLifecycleService.cs`
+   - `src/Aevatar.Scripting.Core/ScriptEvolutionManagerGAgent.cs`
+25. workflow 运行任务收尾 await 模板统一：
+   - `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunTaskAwaiter.cs`
+   - `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunExecutionEngine.cs`
+   - `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunResourceFinalizer.cs`
 
-## 6. CQRS 抽象下沉结果（R8）
+## 6. CQRS 抽象下沉结果（R11）
 
 1. 已完成：`IEventSink<TEvent>` + `EventChannel<TEvent>` + 通用异常下沉到 `Aevatar.CQRS.Core.Abstractions`。
 2. 已完成：`ProjectionRuntimeLeaseBase<TSink>` 下沉到 `Aevatar.CQRS.Projection.Core`，workflow/scripting 复用同一 live-sink 运行态模型。
@@ -220,6 +337,17 @@ sequenceDiagram
 11. 已完成：`EventSinkProjectionLifecyclePortExtensions`，应用层 `Ensure+Attach`/`Detach+Release+Dispose` 调用不再重复委托样板。
 12. 已完成：`IProjectionRuntimeLease`，`ProjectionReleaseServiceBase` 从四泛型降为三泛型，释放 `TEvent` 噪声。
 13. 已完成：`EventSinkProjectionLifecyclePortServiceBase`，runtime lease 解析回收到 CQRS 模板基类。
+14. 已完成：`EventSinkProjectionLifecyclePortServiceBase` 直接实现 `IEventSinkProjectionLifecyclePort`，业务 lifecycle service 仅保留 ensure 语义。
+15. 已完成：`DefaultEventSinkProjectionFailurePolicy<TLease, TEvent>`，空策略能力统一下沉到 CQRS。
+16. 已完成：workflow/scripting sink subscription/live-forwarder 直接复用 CQRS 通用实现，移除重复薄包装类型。
+17. 已完成：`IEventSinkProjectionSubscriptionManager/IEventSinkProjectionLiveForwarder/IEventSinkProjectionFailurePolicy`，业务层 event-sink 依赖签名从“长泛型”收敛到“语义专用接口”。
+18. 已完成：`ProjectionLifecyclePortServiceBase` 默认 runtime lease 解析模板，workflow/scripting 删除各自 resolver/cast 样板。
+19. 已完成：`EventSinkProjectionRuntimeRegistration` 改为默认策略重载委托到自定义策略泛型重载，移除 `Replace` 两阶段注册。
+20. 已完成：`EventStreamQueryReplyAwaiter` 下沉到 `Aevatar.CQRS.Core.Abstractions`，scripting 三条 query 路径复用同一 request/reply await 模板。
+21. 已完成：workflow 三个 module 的 target role actor id 解析统一收敛为 `WorkflowRoleActorIdResolver`。
+22. 已完成：scripting query `publisherId/reply-prefix` 路由常量集中到 `ScriptingQueryChannels`。
+23. 已完成：scripting timeout 归一化访问集中到 `ScriptingPortTimeoutExtensions`，调用点不再重复 normalize。
+24. 已完成：workflow 运行任务收尾 await 样板统一为 `WorkflowRunTaskAwaiter`。
 
 ## 7. 兼容性与风险
 
@@ -228,17 +356,18 @@ sequenceDiagram
 3. 风险控制：保留 manager query fallback，避免单次 sink 等待超时导致误失败。
 4. 生命周期安全：统一在 `finally` 执行 `detach/release/sink dispose`，降低泄漏风险。
 
-## 8. 验证记录（2026-03-04 R8）
+## 8. 验证记录（2026-03-04 R11）
 
 1. `dotnet build aevatar.slnx --nologo`：通过。
-2. `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --nologo`：`222/222` 通过。
-3. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo`：`66/66` 通过。
-4. `dotnet test test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj --nologo`：`123` 通过（`1` skipped）。
-5. `dotnet test test/Aevatar.Workflow.Application.Tests/Aevatar.Workflow.Application.Tests.csproj --nologo`：`53/53` 通过。
-6. `bash tools/ci/test_stability_guards.sh`：通过。
-7. `dotnet test test/Aevatar.CQRS.Core.Tests/Aevatar.CQRS.Core.Tests.csproj --nologo`：`14/14` 通过。
-8. `bash tools/ci/architecture_guards.sh`：通过。
+2. `dotnet test test/Aevatar.Workflow.Core.Tests/Aevatar.Workflow.Core.Tests.csproj --nologo`：`59/59` 通过。
+3. `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --nologo`：`222/222` 通过。
+4. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo`：`66/66` 通过。
+5. `dotnet test test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj --nologo`：`123` 通过（`1` skipped）。
+6. `dotnet test test/Aevatar.Workflow.Application.Tests/Aevatar.Workflow.Application.Tests.csproj --nologo`：`53/53` 通过。
+7. `bash tools/ci/test_stability_guards.sh`：通过。
+8. `dotnet test test/Aevatar.CQRS.Core.Tests/Aevatar.CQRS.Core.Tests.csproj --nologo`：`14/14` 通过。
+9. `bash tools/ci/architecture_guards.sh`：通过。
 
 ## 9. 结论
 
-本次 R8 变更继续在 R7 基础上完成 `lifecycle port` 接口统一、`release` 泛型降维、`event-sink lifecycle` 模板基类与应用侧委托样板消除。当前 workflow/scripting 在回推链路的编排、生命周期与失败处理已经在接口、模板实现、调用姿势三层同构。
+本次 R11 变更在 R10 基础上继续完成“策略收敛 + 路由常量集中 + 分支模板降重”：workflow 侧 role actor 解析与 run 收尾 await 均已模板化，scripting 侧 query 路由/timeout 规范与 manager/catalog 分支样板进一步收敛。当前 workflow/scripting 两条回推链路在业务编排细节与基础模板层面对齐度继续提升。
