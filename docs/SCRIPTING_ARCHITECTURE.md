@@ -3,7 +3,7 @@
 ## 1. 文档元信息
 
 - 文档状态：`Active`
-- 文档版本：`v6`
+- 文档版本：`v7`
 - 更新时间：`2026-03-04`
 - 适用范围：`src/Aevatar.Scripting.*` 与 `test/Aevatar.Scripting.*` / `test/Aevatar.Integration.Tests` 的 Scripting 相关测试
 - 非范围：`Aevatar.Foundation.*`（本轮无架构改动）
@@ -16,6 +16,7 @@
 2. 脚本运行时可自我演化（提案/发布/回滚）。
 3. 两条入口共享同一演化治理主链路（`Propose -> Validate -> Promote/Rollback`）。
 4. 运行期通信坚持纯事件模型：`EventEnvelope + Proto Event`，不依赖脚本侧转型读取目标 Grain 内部状态。
+5. `Workflow YAML` 与 `Script` 当前是并行能力：两条链路可以共存、对照验证，但不宣称已完全替代。
 
 强约束：
 
@@ -132,6 +133,12 @@ Core 响应处理要点：
 
 两条入口在 Manager 状态机与 Catalog 事实层合流，保证策略、验证、发布、回滚语义一致。
 
+### 6.3 与 Workflow YAML 的关系（当前结论）
+
+1. Host 侧 `AddWorkflowCapabilityWithAIDefaults` 默认仅装配 workflow capability；script capability 需要显式开启。
+2. Script 演化与 Workflow YAML 执行互不覆盖，属于并行能力，不改变 Workflow YAML 既有语义入口。
+3. 迁移建议采用“同输入同输出”对照回归（见第 8 节新增 parity 测试）。
+
 ## 7. Orleans 3 节点一致性设计
 
 ### 7.1 跨 Silo 一致性策略
@@ -173,6 +180,8 @@ sequenceDiagram
 3. Runtime 回放契约与演化管理器单元测试：
    `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptRuntimeGAgentReplayContractTests.cs`
    `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptEvolutionManagerGAgentTests.cs`
+4. YAML/Script 等价与迁移回归：
+   `test/Aevatar.Integration.Tests/WorkflowYamlScriptParityTests.cs`
 
 本次已执行验证（2026-03-02）：
 
@@ -189,4 +198,4 @@ sequenceDiagram
 
 ## 10. 结论
 
-当前 `Aevatar.Scripting` 已满足“外部更新 + 自我演化 + 纯事件通信 + Orleans 3 节点一致性运行”目标，且重构落点集中在 `Scripting` 子系统内部；后续优化重点是将 Hosting 侧运行模式判定与超时策略进一步环境化与显式化。
+当前 `Aevatar.Scripting` 已满足“外部更新 + 自我演化 + 纯事件通信 + Orleans 3 节点一致性运行”目标，且重构落点集中在 `Scripting` 子系统内部。对外结论统一为：`Script` 是 `Workflow YAML` 的并行能力（已具备等价对照与迁移回归验证），而非已完成替代。

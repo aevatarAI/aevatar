@@ -22,6 +22,19 @@ public class ScriptInheritanceGuardTests
             $@"class\s+{Regex.Escape(agentName)}\s*:\s*(RoleGAgent|AIGAgentBase<)");
     }
 
+    [Fact]
+    public void GuardScript_ShouldTargetCurrentScriptAgents()
+    {
+        var repoRoot = FindRepoRoot();
+        var guardPath = Path.Combine(repoRoot, "tools", "ci", "script_inheritance_guard.sh");
+        File.Exists(guardPath).Should().BeTrue("guard script must exist at {0}", guardPath);
+
+        var source = File.ReadAllText(guardPath);
+        source.Should().Contain("ScriptDefinitionGAgent");
+        source.Should().Contain("ScriptRuntimeGAgent");
+        source.Should().NotContain("ScriptHostGAgent");
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

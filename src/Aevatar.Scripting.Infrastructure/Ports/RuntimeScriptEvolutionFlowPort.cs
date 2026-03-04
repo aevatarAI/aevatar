@@ -36,42 +36,105 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
                 proposal.CandidateRevision ?? string.Empty,
                 proposal.CandidateSource ?? string.Empty),
             ct);
-        var validation = new ScriptEvolutionValidationReport(
-            IsSuccess: compilation.IsSuccess,
-            Diagnostics: compilation.Diagnostics ?? Array.Empty<string>());
-        if (!validation.IsSuccess)
-            return ScriptEvolutionFlowResult.ValidationFailed(validation);
-
         try
         {
-            var definitionActorId = await _lifecyclePort.UpsertDefinitionAsync(
-                proposal.ScriptId ?? string.Empty,
-                proposal.CandidateRevision ?? string.Empty,
-                proposal.CandidateSource ?? string.Empty,
-                proposal.CandidateSourceHash ?? string.Empty,
-                null,
-                ct);
+            var validation = new ScriptEvolutionValidationReport(
+                IsSuccess: compilation.IsSuccess,
+                Diagnostics: compilation.Diagnostics ?? Array.Empty<string>());
+            if (!validation.IsSuccess)
+                return ScriptEvolutionFlowResult.ValidationFailed(validation);
+
+            var scriptId = proposal.ScriptId ?? string.Empty;
+            var candidateRevision = proposal.CandidateRevision ?? string.Empty;
             var catalogActorId = _addressResolver.GetCatalogActorId();
-            await _lifecyclePort.PromoteCatalogRevisionAsync(
-                catalogActorId,
-                proposal.ScriptId ?? string.Empty,
-                proposal.BaseRevision ?? string.Empty,
-                proposal.CandidateRevision ?? string.Empty,
-                definitionActorId,
-                proposal.CandidateSourceHash ?? string.Empty,
-                proposal.ProposalId ?? string.Empty,
-                ct);
+            ScriptCatalogEntrySnapshot? catalogBefore;
+            var catalogBaselineSource = "query";
+            try
+            {
+                catalogBefore = await _lifecyclePort.GetCatalogEntryAsync(catalogActorId, scriptId, ct);
+            }
+            catch (Exception ex)
+            {
+                if (string.IsNullOrWhiteSpace(proposal.BaseRevision))
+                {
+                    return ScriptEvolutionFlowResult.PromotionFailed(
+                        validation,
+                        "Failed to load catalog baseline before promotion and no base revision fallback is available. reason=" +
+                        ex.Message);
+                }
 
-            var promotion = new ScriptPromotionResult(
-                DefinitionActorId: definitionActorId,
-                CatalogActorId: catalogActorId,
-                PromotedRevision: proposal.CandidateRevision ?? string.Empty);
+                catalogBefore = BuildFallbackCatalogBaseline(proposal);
+                catalogBaselineSource = "fallback_base_revision_after_query_failure";
+            }
 
-            return ScriptEvolutionFlowResult.Promoted(validation, promotion);
+            if (catalogBefore == null && !string.IsNullOrWhiteSpace(proposal.BaseRevision))
+            {
+                catalogBefore = BuildFallbackCatalogBaseline(proposal);
+                catalogBaselineSource = "fallback_base_revision_after_null_query";
+            }
+
+            string definitionActorId;
+            try
+            {
+                definitionActorId = await _lifecyclePort.UpsertDefinitionAsync(
+                    scriptId,
+                    candidateRevision,
+                    proposal.CandidateSource ?? string.Empty,
+                    proposal.CandidateSourceHash ?? string.Empty,
+                    null,
+                    ct);
+            }
+            catch (Exception ex)
+            {
+                return ScriptEvolutionFlowResult.PromotionFailed(
+                    validation,
+                    "Failed to upsert candidate definition before promotion. reason=" + ex.Message);
+            }
+
+            try
+            {
+                await _lifecyclePort.PromoteCatalogRevisionAsync(
+                    catalogActorId,
+                    scriptId,
+                    proposal.BaseRevision ?? string.Empty,
+                    candidateRevision,
+                    definitionActorId,
+                    proposal.CandidateSourceHash ?? string.Empty,
+                    proposal.ProposalId ?? string.Empty,
+                    ct);
+
+                var promotion = new ScriptPromotionResult(
+                    DefinitionActorId: definitionActorId,
+                    CatalogActorId: catalogActorId,
+                    PromotedRevision: candidateRevision);
+
+                return ScriptEvolutionFlowResult.Promoted(validation, promotion);
+            }
+            catch (Exception ex)
+            {
+                var compensation = await TryCompensateCatalogRevisionAsync(
+                    catalogActorId,
+                    proposal,
+                    catalogBefore,
+                    ct);
+                var partial = new ScriptPromotionResult(
+                    DefinitionActorId: definitionActorId,
+                    CatalogActorId: catalogActorId,
+                    PromotedRevision: candidateRevision);
+                return ScriptEvolutionFlowResult.PromotionFailed(
+                    validation,
+                    "Promotion failed after definition upsert. definition_actor_id=" +
+                    definitionActorId +
+                    " candidate_revision=" + candidateRevision +
+                    " catalog_baseline_source=" + catalogBaselineSource +
+                    " reason=" + ex.Message +
+                    " compensation=" + compensation,
+                    partial);
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            return ScriptEvolutionFlowResult.PromotionFailed(validation, ex.Message);
+            await DisposeCompiledDefinitionAsync(compilation.CompiledDefinition);
         }
     }
 
@@ -90,6 +153,7 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
             request.TargetRevision,
             request.Reason,
             request.ProposalId,
+            request.ExpectedCurrentRevision,
             ct);
     }
 
@@ -110,5 +174,59 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
         }
 
         return string.Empty;
+    }
+
+    private static ScriptCatalogEntrySnapshot BuildFallbackCatalogBaseline(ScriptEvolutionProposal proposal)
+    {
+        var scriptId = proposal.ScriptId ?? string.Empty;
+        var baseRevision = proposal.BaseRevision ?? string.Empty;
+        return new ScriptCatalogEntrySnapshot(
+            ScriptId: scriptId,
+            ActiveRevision: baseRevision,
+            ActiveDefinitionActorId: string.Empty,
+            ActiveSourceHash: string.Empty,
+            PreviousRevision: string.Empty,
+            RevisionHistory: [baseRevision],
+            LastProposalId: proposal.ProposalId ?? string.Empty);
+    }
+
+    private async Task<string> TryCompensateCatalogRevisionAsync(
+        string catalogActorId,
+        ScriptEvolutionProposal proposal,
+        ScriptCatalogEntrySnapshot? catalogBefore,
+        CancellationToken ct)
+    {
+        var scriptId = proposal.ScriptId ?? string.Empty;
+        if (catalogBefore == null || string.IsNullOrWhiteSpace(catalogBefore.ActiveRevision))
+            return "not_required";
+
+        try
+        {
+            await _lifecyclePort.RollbackCatalogRevisionAsync(
+                catalogActorId,
+                scriptId,
+                catalogBefore.ActiveRevision,
+                "compensate promotion failure",
+                proposal.ProposalId ?? string.Empty,
+                proposal.CandidateRevision ?? string.Empty,
+                ct);
+            return "rollback_to_previous_active_revision_success";
+        }
+        catch (Exception ex)
+        {
+            return "rollback_failed:" + ex.Message;
+        }
+    }
+
+    private static async Task DisposeCompiledDefinitionAsync(IScriptPackageDefinition? definition)
+    {
+        if (definition is IAsyncDisposable asyncDisposable)
+        {
+            await asyncDisposable.DisposeAsync();
+            return;
+        }
+
+        if (definition is IDisposable disposable)
+            disposable.Dispose();
     }
 }

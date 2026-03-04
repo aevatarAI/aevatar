@@ -370,6 +370,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             string targetRevision,
             string reason,
             string proposalId,
+            string expectedCurrentRevision,
             CancellationToken ct)
         {
             _ = catalogActorId;
@@ -377,6 +378,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             _ = targetRevision;
             _ = reason;
             _ = proposalId;
+            _ = expectedCurrentRevision;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }

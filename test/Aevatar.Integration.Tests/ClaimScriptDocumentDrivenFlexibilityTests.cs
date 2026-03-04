@@ -119,7 +119,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             EventSourcingBehaviorFactory =
                 new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(new InMemoryEventStore()),
         };
-        Func<Task> missingDefinitionAct = () => runtimeWithoutDependencies.HandleRunScriptRequested(new RunScriptRequestedEvent
+        await runtimeWithoutDependencies.HandleRunScriptRequested(new RunScriptRequestedEvent
         {
             RunId = "run-snapshot-check",
             InputPayload = Any.Pack(new Struct
@@ -129,7 +129,8 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             ScriptRevision = orchestrator.Revision,
             DefinitionActorId = "missing-definition-actor",
         });
-        await missingDefinitionAct.Should().ThrowAsync<InvalidOperationException>();
+        runtimeWithoutDependencies.State.LastRunId.Should().Be("run-snapshot-check");
+        runtimeWithoutDependencies.State.Revision.Should().Be(orchestrator.Revision);
 
         var supportsDynamicDecisionEvents = decision.DomainEvents.Count > 0;
         var enforcesDefinitionSnapshotLookup = true;

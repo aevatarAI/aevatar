@@ -214,6 +214,7 @@ public sealed class ReplayScript : IScriptPackageRuntime
         services.AddScriptCapability();
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
+        var eventStore = provider.GetRequiredService<IEventStore>();
 
         const string definitionActorId = "revision-check-definition";
         const string runtimeActorId = "revision-check-runtime";
@@ -275,7 +276,7 @@ public sealed class RevisionScript : IScriptPackageRuntime
             CancellationToken.None);
 
         var run = new RunScriptActorRequestAdapter();
-        Func<Task> act = async () => await runtimeActor.HandleEventAsync(
+        await runtimeActor.HandleEventAsync(
             run.Map(
                 new RunScriptActorRequest(
                     RunId: "run-revision-check",
@@ -285,7 +286,25 @@ public sealed class RevisionScript : IScriptPackageRuntime
                 runtimeActorId),
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*revision*");
+        var runtimeState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
+        runtimeState.LastRunId.Should().Be("run-revision-check");
+        runtimeState.Revision.Should().Be("rev-requested-mismatch");
+
+        var persisted = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
+        var committed = persisted
+            .Where(x => x.EventData?.Is(ScriptRunDomainEventCommitted.Descriptor) == true)
+            .Select(x => x.EventData!.Unpack<ScriptRunDomainEventCommitted>())
+            .ToList();
+
+        committed.Should().ContainSingle(x =>
+            string.Equals(x.RunId, "run-revision-check", StringComparison.Ordinal) &&
+            string.Equals(x.EventType, "script.run.failed", StringComparison.Ordinal));
+        var failed = committed.Single(x =>
+            string.Equals(x.RunId, "run-revision-check", StringComparison.Ordinal) &&
+            string.Equals(x.EventType, "script.run.failed", StringComparison.Ordinal));
+        failed.Payload.Is(StringValue.Descriptor).Should().BeTrue();
+        var failureMessage = failed.Payload.Unpack<StringValue>().Value;
+        failureMessage.Should().Contain("Requested revision");
+        failureMessage.Should().Contain("does not match active revision");
     }
 }

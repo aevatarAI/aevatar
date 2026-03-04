@@ -116,6 +116,50 @@ public class ScriptEvolutionManagerGAgentTests
         response.ProposalId.Should().Be("proposal-1");
     }
 
+    [Fact]
+    public async Task Propose_ShouldReturnPromotionFailedStatus_WhenFlowPromotionFailsAfterUpsert()
+    {
+        var flowPort = new FakeEvolutionFlowPort(
+            ScriptEvolutionFlowResult.PromotionFailed(
+                new ScriptEvolutionValidationReport(true, ["compile-ok"]),
+                "Promotion failed after definition upsert.",
+                new ScriptPromotionResult(
+                    DefinitionActorId: "definition-candidate",
+                    CatalogActorId: "catalog-1",
+                    PromotedRevision: "rev-2")));
+
+        var publisher = new RecordingEventPublisher();
+        var agent = new ScriptEvolutionManagerGAgent(flowPort, new StaticAddressResolver())
+        {
+            EventPublisher = publisher,
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptEvolutionManagerState>(
+                new InMemoryEventStore()),
+        };
+
+        await agent.HandleProposeScriptEvolutionRequested(new ProposeScriptEvolutionRequestedEvent
+        {
+            ProposalId = "proposal-failed",
+            ScriptId = "script-1",
+            BaseRevision = "rev-1",
+            CandidateRevision = "rev-2",
+            CandidateSource = "source-rev-2",
+            CandidateSourceHash = "hash-rev-2",
+            CallbackActorId = "script-evolution-session:proposal-failed",
+            CallbackRequestId = "session-request-failed",
+        });
+
+        agent.State.Proposals.Should().ContainKey("proposal-failed");
+        agent.State.Proposals["proposal-failed"].Status.Should().Be("promotion_failed");
+        agent.State.Proposals["proposal-failed"].FailureReason.Should().Contain("Promotion failed");
+
+        publisher.Sent.Should().ContainSingle();
+        var response = publisher.Sent[0].Payload.Should().BeOfType<ScriptEvolutionDecisionRespondedEvent>().Subject;
+        response.Status.Should().Be("promotion_failed");
+        response.DefinitionActorId.Should().Be("definition-candidate");
+        response.CatalogActorId.Should().Be("catalog-1");
+        response.Accepted.Should().BeFalse();
+    }
+
     private sealed class FakeEvolutionFlowPort(ScriptEvolutionFlowResult result) : IScriptEvolutionFlowPort
     {
         public List<ScriptEvolutionProposal> ExecutedProposals { get; } = [];

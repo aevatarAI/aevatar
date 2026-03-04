@@ -116,6 +116,7 @@ public class ScriptEvolutionApplicationServiceTests
             string targetRevision,
             string reason,
             string proposalId,
+            string expectedCurrentRevision,
             CancellationToken ct) => throw new NotSupportedException();
 
         public Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(

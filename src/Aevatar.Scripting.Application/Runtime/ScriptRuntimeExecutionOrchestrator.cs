@@ -38,6 +38,8 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
         if (!compilation.IsSuccess || compilation.CompiledDefinition == null)
             throw new InvalidOperationException(
                 "Script compilation failed in runtime: " + string.Join("; ", compilation.Diagnostics));
+        var definition = compilation.CompiledDefinition;
+        await using var _ = definition as IAsyncDisposable;
 
         var runId = request.RunEvent.RunId ?? string.Empty;
         var correlationId = runId;
@@ -70,10 +72,10 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
             CorrelationId: correlationId,
             CausationId: runId);
 
-        var decision = await compilation.CompiledDefinition.HandleRequestedEventAsync(requestedEvent, context, ct);
+        var decision = await definition.HandleRequestedEventAsync(requestedEvent, context, ct);
 
         return await BuildCommittedEventsAsync(
-            compilation.CompiledDefinition,
+            definition,
             request.RunEvent,
             request.ScriptRevision,
             request.ReadModelSchemaVersion,

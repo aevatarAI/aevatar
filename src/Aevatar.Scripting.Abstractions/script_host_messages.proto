@@ -61,6 +61,12 @@ message ScriptRuntimeState {
   string last_event_id = 7;
   string last_applied_schema_version = 8;
   string last_schema_hash = 9;
+  map<string, PendingScriptDefinitionQueryState> pending_definition_queries = 10;
+}
+
+message PendingScriptDefinitionQueryState {
+  RunScriptRequestedEvent run_event = 1;
+  int64 queued_at_unix_time_ms = 2;
 }
 
 message ScriptCatalogEntryState {
@@ -215,6 +221,7 @@ message RollbackScriptRevisionRequestedEvent {
   string target_revision = 2;
   string reason = 3;
   string proposal_id = 4;
+  string expected_current_revision = 5;
 }
 
 message QueryScriptDefinitionSnapshotRequestedEvent {
@@ -232,6 +239,23 @@ message ScriptDefinitionSnapshotRespondedEvent {
   string read_model_schema_version = 6;
   string read_model_schema_hash = 7;
   string failure_reason = 8;
+}
+
+message ScriptDefinitionQueryTimeoutFiredEvent {
+  string request_id = 1;
+  string run_id = 2;
+}
+
+message ScriptDefinitionQueryQueuedEvent {
+  string request_id = 1;
+  RunScriptRequestedEvent run_event = 2;
+  int64 queued_at_unix_time_ms = 3;
+}
+
+message ScriptDefinitionQueryClearedEvent {
+  string request_id = 1;
+  string run_id = 2;
+  string reason = 3;
 }
 
 message QueryScriptCatalogEntryRequestedEvent {

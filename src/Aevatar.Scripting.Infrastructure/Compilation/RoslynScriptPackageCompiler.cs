@@ -4,8 +4,6 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using System.Reflection;
-using System.Runtime.Loader;
 using System.Text.RegularExpressions;
 
 namespace Aevatar.Scripting.Infrastructure.Compilation;
@@ -13,22 +11,21 @@ namespace Aevatar.Scripting.Infrastructure.Compilation;
 public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
 {
     private readonly ScriptSandboxPolicy _sandboxPolicy;
-    private readonly IScriptExecutionEngine _executionEngine;
 
     public RoslynScriptPackageCompiler(ScriptSandboxPolicy sandboxPolicy)
-        : this(sandboxPolicy, new RoslynScriptExecutionEngine())
     {
+        _sandboxPolicy = sandboxPolicy ?? throw new ArgumentNullException(nameof(sandboxPolicy));
     }
 
     public RoslynScriptPackageCompiler(
         ScriptSandboxPolicy sandboxPolicy,
         IScriptExecutionEngine executionEngine)
+        : this(sandboxPolicy)
     {
-        _sandboxPolicy = sandboxPolicy ?? throw new ArgumentNullException(nameof(sandboxPolicy));
-        _executionEngine = executionEngine ?? throw new ArgumentNullException(nameof(executionEngine));
+        _ = executionEngine ?? throw new ArgumentNullException(nameof(executionEngine));
     }
 
-    public Task<ScriptPackageCompilationResult> CompileAsync(
+    public async Task<ScriptPackageCompilationResult> CompileAsync(
         ScriptPackageCompilationRequest request,
         CancellationToken ct)
     {
@@ -43,11 +40,11 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
         if (string.IsNullOrWhiteSpace(request.Source))
             diagnostics.Add("Source is required.");
         if (diagnostics.Count > 0)
-            return Task.FromResult(new ScriptPackageCompilationResult(false, null, null, diagnostics));
+            return new ScriptPackageCompilationResult(false, null, null, diagnostics);
 
         var sandbox = _sandboxPolicy.Validate(request.Source);
         if (!sandbox.IsValid)
-            return Task.FromResult(new ScriptPackageCompilationResult(false, null, null, sandbox.Violations));
+            return new ScriptPackageCompilationResult(false, null, null, sandbox.Violations);
 
         var syntaxTree = CSharpSyntaxTree.ParseText(request.Source);
         var syntaxErrors = syntaxTree
@@ -56,7 +53,7 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
             .Select(x => x.ToString())
             .ToArray();
         if (syntaxErrors.Length > 0)
-            return Task.FromResult(new ScriptPackageCompilationResult(false, null, null, syntaxErrors));
+            return new ScriptPackageCompilationResult(false, null, null, syntaxErrors);
 
         var semanticCompilation = CSharpCompilation.Create(
             assemblyName: "Aevatar.DynamicScript.Validation." + Guid.NewGuid().ToString("N"),
@@ -69,38 +66,73 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
             .Select(x => x.ToString())
             .ToArray();
         if (semanticErrors.Length > 0)
-            return Task.FromResult(new ScriptPackageCompilationResult(false, null, null, semanticErrors));
+            return new ScriptPackageCompilationResult(false, null, null, semanticErrors);
 
         if (!TryEnsureRuntimeImplementation(semanticCompilation, out var runtimeDiagnostic))
         {
-            return Task.FromResult(new ScriptPackageCompilationResult(
+            return new ScriptPackageCompilationResult(
                 false,
                 null,
                 null,
-                [runtimeDiagnostic]));
+                [runtimeDiagnostic]);
         }
 
-        var contractManifest = ExtractContractManifest(request.Source, semanticCompilation);
-        IScriptPackageDefinition compiledDefinition = new CompiledScriptPackageDefinition(
-            request.ScriptId,
-            request.Revision,
-            request.Source,
-            contractManifest,
-            _executionEngine);
-        return Task.FromResult(new ScriptPackageCompilationResult(
-            true,
-            compiledDefinition,
-            contractManifest,
-            Array.Empty<string>()));
+        ScriptRuntimeLoader.LoadedScriptRuntime loadedRuntime;
+        try
+        {
+            loadedRuntime = await ScriptRuntimeLoader.LoadFromCompilationAsync(semanticCompilation, ct);
+        }
+        catch (Exception ex)
+        {
+            return new ScriptPackageCompilationResult(
+                false,
+                null,
+                null,
+                [ex.Message]);
+        }
+
+        try
+        {
+            var contractManifest = ExtractContractManifest(request.Source, loadedRuntime.Runtime);
+            IScriptPackageDefinition compiledDefinition = new CompiledScriptPackageDefinition(
+                request.ScriptId,
+                request.Revision,
+                contractManifest,
+                loadedRuntime);
+            return new ScriptPackageCompilationResult(
+                true,
+                compiledDefinition,
+                contractManifest,
+                Array.Empty<string>());
+        }
+        catch (Exception ex)
+        {
+            await loadedRuntime.DisposeAsync();
+            return new ScriptPackageCompilationResult(
+                false,
+                null,
+                null,
+                [ex.Message]);
+        }
     }
 
     private static ScriptContractManifest ExtractContractManifest(
         string source,
-        CSharpCompilation compilation)
+        IScriptPackageRuntime runtime)
     {
         var fallback = ExtractAnnotatedContractManifest(source);
-        if (!TryLoadProviderManifest(compilation, out var providerManifest))
+        if (runtime is not IScriptContractProvider provider)
             return fallback;
+
+        ScriptContractManifest? providerManifest;
+        try
+        {
+            providerManifest = provider.ContractManifest;
+        }
+        catch
+        {
+            return fallback;
+        }
 
         if (providerManifest == null)
             return fallback;
@@ -124,59 +156,6 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
             outputs,
             string.IsNullOrWhiteSpace(stateSchema) ? "unspecified" : stateSchema,
             string.IsNullOrWhiteSpace(readModelSchema) ? "unspecified" : readModelSchema);
-    }
-
-    private static bool TryLoadProviderManifest(
-        CSharpCompilation compilation,
-        out ScriptContractManifest? providerManifest)
-    {
-        providerManifest = null;
-
-        using var assemblyStream = new MemoryStream();
-        var emitResult = compilation.Emit(assemblyStream);
-        if (!emitResult.Success)
-            return false;
-
-        assemblyStream.Position = 0;
-        var loadContext = new AssemblyLoadContext(
-            "Aevatar.DynamicScript.ContractManifest." + Guid.NewGuid().ToString("N"),
-            isCollectible: true);
-        loadContext.Resolving += ResolveFromDefault;
-
-        try
-        {
-            var assembly = loadContext.LoadFromStream(assemblyStream);
-            var runtimeType = assembly
-                .GetTypes()
-                .Where(type =>
-                    !type.IsAbstract &&
-                    !type.IsInterface &&
-                    typeof(IScriptPackageRuntime).IsAssignableFrom(type))
-                .OrderBy(type => type.FullName, StringComparer.Ordinal)
-                .FirstOrDefault();
-            if (runtimeType == null)
-                return false;
-
-            var instance = Activator.CreateInstance(runtimeType);
-            if (instance is IScriptContractProvider provider)
-            {
-                providerManifest = provider.ContractManifest;
-            }
-
-            if (instance is IDisposable disposable)
-                disposable.Dispose();
-
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-        finally
-        {
-            loadContext.Resolving -= ResolveFromDefault;
-            loadContext.Unload();
-        }
     }
 
     private static ScriptContractManifest NormalizeManifest(ScriptContractManifest manifest)
@@ -211,13 +190,6 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
             readModelSchema,
             manifest.ReadModelDefinition,
             readModelStoreCapabilities);
-    }
-
-    private static Assembly? ResolveFromDefault(AssemblyLoadContext context, AssemblyName assemblyName)
-    {
-        _ = context;
-        return AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(
-            x => string.Equals(x.GetName().Name, assemblyName.Name, StringComparison.Ordinal));
     }
 
     private static string MatchSingle(string source, string pattern)
@@ -280,23 +252,21 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
         }
     }
 
-    private sealed class CompiledScriptPackageDefinition : IScriptPackageDefinition
+    private sealed class CompiledScriptPackageDefinition : IScriptPackageDefinition, IAsyncDisposable
     {
-        private readonly string _source;
-        private readonly IScriptExecutionEngine _executionEngine;
+        private readonly ScriptRuntimeLoader.LoadedScriptRuntime _loadedRuntime;
+        private int _disposed;
 
         public CompiledScriptPackageDefinition(
             string scriptId,
             string revision,
-            string source,
             ScriptContractManifest contractManifest,
-            IScriptExecutionEngine executionEngine)
+            ScriptRuntimeLoader.LoadedScriptRuntime loadedRuntime)
         {
             ScriptId = scriptId;
             Revision = revision;
-            _source = source;
             ContractManifest = contractManifest;
-            _executionEngine = executionEngine;
+            _loadedRuntime = loadedRuntime ?? throw new ArgumentNullException(nameof(loadedRuntime));
         }
 
         public string ScriptId { get; }
@@ -308,7 +278,8 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
             ScriptExecutionContext context,
             CancellationToken ct)
         {
-            return _executionEngine.HandleRequestedEventAsync(_source, requestedEvent, context, ct);
+            ThrowIfDisposed();
+            return _loadedRuntime.Runtime.HandleRequestedEventAsync(requestedEvent, context, ct);
         }
 
         public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
@@ -316,7 +287,8 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
             ScriptDomainEventEnvelope domainEvent,
             CancellationToken ct)
         {
-            return _executionEngine.ApplyDomainEventAsync(_source, currentState, domainEvent, ct);
+            ThrowIfDisposed();
+            return _loadedRuntime.Runtime.ApplyDomainEventAsync(currentState, domainEvent, ct);
         }
 
         public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
@@ -324,7 +296,22 @@ public sealed class RoslynScriptPackageCompiler : IScriptPackageCompiler
             ScriptDomainEventEnvelope domainEvent,
             CancellationToken ct)
         {
-            return _executionEngine.ReduceReadModelAsync(_source, currentReadModel, domainEvent, ct);
+            ThrowIfDisposed();
+            return _loadedRuntime.Runtime.ReduceReadModelAsync(currentReadModel, domainEvent, ct);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
+                return;
+
+            await _loadedRuntime.DisposeAsync();
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+                throw new ObjectDisposedException(GetType().Name);
         }
     }
 }

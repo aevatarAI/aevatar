@@ -223,6 +223,7 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
         string targetRevision,
         string reason,
         string proposalId,
+        string expectedCurrentRevision,
         CancellationToken ct)
     {
         var resolvedCatalogActorId = ResolveCatalogActorId(catalogActorId);
@@ -233,7 +234,8 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
                     ScriptId: scriptId ?? string.Empty,
                     TargetRevision: targetRevision ?? string.Empty,
                     Reason: reason ?? string.Empty,
-                    ProposalId: proposalId ?? string.Empty),
+                    ProposalId: proposalId ?? string.Empty,
+                    ExpectedCurrentRevision: expectedCurrentRevision ?? string.Empty),
                 resolvedCatalogActorId),
             ct);
     }

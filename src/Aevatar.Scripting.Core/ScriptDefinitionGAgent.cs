@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Schema;
@@ -39,80 +40,87 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 evt.ScriptRevision ?? string.Empty,
                 sourceText),
             CancellationToken.None);
-        if (!compilation.IsSuccess || compilation.ContractManifest == null)
-            throw new InvalidOperationException(
-                "Script definition compilation failed: " + string.Join("; ", compilation.Diagnostics));
-
-        var readModelSchema = Any.Pack(new Empty());
-        var readModelSchemaHash = string.Empty;
-        var readModelSchemaVersion = string.Empty;
-        IReadOnlyList<string> readModelSchemaStoreKinds = Array.Empty<string>();
-        var hasReadModelSchema = false;
-        var extracted = ScriptReadModelDefinitionExtraction.Empty;
-        if (ScriptReadModelDefinitionExtractor.TryExtractFromContract(
-                compilation.ContractManifest,
-                out extracted))
+        try
         {
-            hasReadModelSchema = true;
-            readModelSchema = extracted.SchemaPayload.Clone();
-            readModelSchemaHash = extracted.SchemaHash;
-            readModelSchemaVersion = extracted.SchemaVersion;
-            readModelSchemaStoreKinds = extracted.StoreCapabilities;
-        }
+            if (!compilation.IsSuccess || compilation.ContractManifest == null)
+                throw new InvalidOperationException(
+                    "Script definition compilation failed: " + string.Join("; ", compilation.Diagnostics));
 
-        await PersistDomainEventAsync(new ScriptDefinitionUpsertedEvent
-        {
-            ScriptId = evt.ScriptId ?? string.Empty,
-            ScriptRevision = evt.ScriptRevision ?? string.Empty,
-            SourceText = sourceText,
-            SourceHash = evt.SourceHash ?? string.Empty,
-            ReadModelSchema = readModelSchema,
-            ReadModelSchemaHash = readModelSchemaHash,
-            ReadModelSchemaVersion = readModelSchemaVersion,
-            ReadModelSchemaStoreKinds = { readModelSchemaStoreKinds },
-        });
+            var readModelSchema = Any.Pack(new Empty());
+            var readModelSchemaHash = string.Empty;
+            var readModelSchemaVersion = string.Empty;
+            IReadOnlyList<string> readModelSchemaStoreKinds = Array.Empty<string>();
+            var hasReadModelSchema = false;
+            var extracted = ScriptReadModelDefinitionExtraction.Empty;
+            if (ScriptReadModelDefinitionExtractor.TryExtractFromContract(
+                    compilation.ContractManifest,
+                    out extracted))
+            {
+                hasReadModelSchema = true;
+                readModelSchema = extracted.SchemaPayload.Clone();
+                readModelSchemaHash = extracted.SchemaHash;
+                readModelSchemaVersion = extracted.SchemaVersion;
+                readModelSchemaStoreKinds = extracted.StoreCapabilities;
+            }
 
-        if (!hasReadModelSchema)
-            return;
-
-        await PersistDomainEventAsync(new ScriptReadModelSchemaDeclaredEvent
-        {
-            ScriptId = evt.ScriptId ?? string.Empty,
-            ScriptRevision = evt.ScriptRevision ?? string.Empty,
-            ReadModelSchema = readModelSchema,
-            ReadModelSchemaHash = readModelSchemaHash,
-            ReadModelSchemaVersion = readModelSchemaVersion,
-            ReadModelSchemaStoreKinds = { readModelSchemaStoreKinds },
-        });
-
-        var activation = _schemaActivationPolicy.ValidateActivation(new ScriptReadModelSchemaActivationRequest(
-            RequiresDocumentStore: extracted.Definition.Fields.Count > 0 || extracted.Definition.Indexes.Count > 0,
-            RequiresGraphStore: extracted.Definition.Relations.Count > 0,
-            DeclaredProviderHints: extracted.StoreCapabilities));
-        if (activation.IsActivated)
-        {
-            await PersistDomainEventAsync(new ScriptReadModelSchemaValidatedEvent
+            await PersistDomainEventAsync(new ScriptDefinitionUpsertedEvent
             {
                 ScriptId = evt.ScriptId ?? string.Empty,
                 ScriptRevision = evt.ScriptRevision ?? string.Empty,
+                SourceText = sourceText,
+                SourceHash = evt.SourceHash ?? string.Empty,
+                ReadModelSchema = readModelSchema,
+                ReadModelSchemaHash = readModelSchemaHash,
                 ReadModelSchemaVersion = readModelSchemaVersion,
-                ValidatedStoreKinds =
+                ReadModelSchemaStoreKinds = { readModelSchemaStoreKinds },
+            });
+
+            if (!hasReadModelSchema)
+                return;
+
+            await PersistDomainEventAsync(new ScriptReadModelSchemaDeclaredEvent
+            {
+                ScriptId = evt.ScriptId ?? string.Empty,
+                ScriptRevision = evt.ScriptRevision ?? string.Empty,
+                ReadModelSchema = readModelSchema,
+                ReadModelSchemaHash = readModelSchemaHash,
+                ReadModelSchemaVersion = readModelSchemaVersion,
+                ReadModelSchemaStoreKinds = { readModelSchemaStoreKinds },
+            });
+
+            var activation = _schemaActivationPolicy.ValidateActivation(new ScriptReadModelSchemaActivationRequest(
+                RequiresDocumentStore: extracted.Definition.Fields.Count > 0 || extracted.Definition.Indexes.Count > 0,
+                RequiresGraphStore: extracted.Definition.Relations.Count > 0,
+                DeclaredProviderHints: extracted.StoreCapabilities));
+            if (activation.IsActivated)
+            {
+                await PersistDomainEventAsync(new ScriptReadModelSchemaValidatedEvent
+                {
+                    ScriptId = evt.ScriptId ?? string.Empty,
+                    ScriptRevision = evt.ScriptRevision ?? string.Empty,
+                    ReadModelSchemaVersion = readModelSchemaVersion,
+                    ValidatedStoreKinds =
                 {
                     activation.ValidatedStoreKinds
                         .Select(x => x.ToString())
                         .ToArray(),
                 },
-            });
-            return;
-        }
+                });
+                return;
+            }
 
-        await PersistDomainEventAsync(new ScriptReadModelSchemaActivationFailedEvent
+            await PersistDomainEventAsync(new ScriptReadModelSchemaActivationFailedEvent
+            {
+                ScriptId = evt.ScriptId ?? string.Empty,
+                ScriptRevision = evt.ScriptRevision ?? string.Empty,
+                ReadModelSchemaVersion = readModelSchemaVersion,
+                FailureReason = activation.FailureReason,
+            });
+        }
+        finally
         {
-            ScriptId = evt.ScriptId ?? string.Empty,
-            ScriptRevision = evt.ScriptRevision ?? string.Empty,
-            ReadModelSchemaVersion = readModelSchemaVersion,
-            FailureReason = activation.FailureReason,
-        });
+            await DisposeCompiledDefinitionAsync(compilation.CompiledDefinition);
+        }
     }
 
     [EventHandler]
@@ -184,6 +192,18 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         CancellationToken ct = default)
     {
         return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
+    }
+
+    private static async Task DisposeCompiledDefinitionAsync(IScriptPackageDefinition? definition)
+    {
+        if (definition is IAsyncDisposable asyncDisposable)
+        {
+            await asyncDisposable.DisposeAsync();
+            return;
+        }
+
+        if (definition is IDisposable disposable)
+            disposable.Dispose();
     }
 
     private static ScriptDefinitionState ApplyDefinitionUpserted(

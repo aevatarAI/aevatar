@@ -57,6 +57,7 @@ public class AIFeatureBootstrapCoverageTests
             options.EnableSkills = true;
             options.SkillDirectories.Add("./skills-a");
             options.EnableMCPTools = false;
+            options.SecretsStore = new InMemorySecretsStore();
         });
 
         using var provider = services.BuildServiceProvider();

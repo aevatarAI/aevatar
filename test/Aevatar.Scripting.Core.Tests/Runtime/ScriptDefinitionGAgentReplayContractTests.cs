@@ -1,9 +1,11 @@
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Schema;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
@@ -172,6 +174,29 @@ public sealed class UnsupportedSchemaReplayScript : IScriptPackageRuntime, IScri
         agent.State.LastAppliedEventVersion.Should().BeGreaterThan(0);
     }
 
+    [Fact]
+    public async Task HandleUpsertRequested_ShouldDisposeCompiledDefinition_WhenCompilerReturnsAsyncDisposableDefinition()
+    {
+        var definition = new DisposableTrackingDefinition();
+        var agent = new ScriptDefinitionGAgent(
+            new DisposableTrackingCompiler(definition),
+            new DefaultScriptReadModelSchemaActivationPolicy())
+        {
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
+                new InMemoryEventStore()),
+        };
+
+        await agent.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
+        {
+            ScriptId = "script-dispose",
+            ScriptRevision = "rev-1",
+            SourceText = "public sealed class PlaceholderScript {}",
+            SourceHash = "hash-dispose",
+        });
+
+        definition.IsDisposed.Should().BeTrue();
+    }
+
     private static ScriptDefinitionGAgent CreateAgent(
         IScriptReadModelSchemaActivationPolicy? activationPolicy = null)
     {
@@ -179,5 +204,70 @@ public sealed class UnsupportedSchemaReplayScript : IScriptPackageRuntime, IScri
         return new ScriptDefinitionGAgent(
             new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
             policy);
+    }
+
+    private sealed class DisposableTrackingCompiler(DisposableTrackingDefinition definition) : IScriptPackageCompiler
+    {
+        private readonly DisposableTrackingDefinition _definition = definition;
+
+        public Task<ScriptPackageCompilationResult> CompileAsync(
+            ScriptPackageCompilationRequest request,
+            CancellationToken ct)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                new ScriptPackageCompilationResult(
+                    IsSuccess: true,
+                    CompiledDefinition: _definition,
+                    ContractManifest: new ScriptContractManifest("input", [], "state", "readmodel"),
+                    Diagnostics: Array.Empty<string>()));
+        }
+    }
+
+    private sealed class DisposableTrackingDefinition : IScriptPackageDefinition, IAsyncDisposable
+    {
+        public bool IsDisposed { get; private set; }
+        public string ScriptId => "script-dispose";
+        public string Revision => "rev-1";
+        public ScriptContractManifest ContractManifest { get; } =
+            new("input", [], "state", "readmodel");
+
+        public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+            ScriptRequestedEventEnvelope requestedEvent,
+            ScriptExecutionContext context,
+            CancellationToken ct)
+        {
+            _ = requestedEvent;
+            _ = context;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new ScriptHandlerResult(Array.Empty<IMessage>()));
+        }
+
+        public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+            IReadOnlyDictionary<string, Any> currentState,
+            ScriptDomainEventEnvelope domainEvent,
+            CancellationToken ct)
+        {
+            _ = domainEvent;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
+        }
+
+        public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+            IReadOnlyDictionary<string, Any> currentReadModel,
+            ScriptDomainEventEnvelope domainEvent,
+            CancellationToken ct)
+        {
+            _ = domainEvent;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            IsDisposed = true;
+            return ValueTask.CompletedTask;
+        }
     }
 }

@@ -57,6 +57,7 @@ public interface IScriptLifecyclePort
         string targetRevision,
         string reason,
         string proposalId,
+        string expectedCurrentRevision,
         CancellationToken ct);
 
     Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(

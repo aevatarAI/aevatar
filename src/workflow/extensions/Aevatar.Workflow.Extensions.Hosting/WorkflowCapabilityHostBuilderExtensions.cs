@@ -10,7 +10,8 @@ public static class WorkflowCapabilityHostBuilderExtensions
 {
     public static WebApplicationBuilder AddWorkflowCapabilityWithAIDefaults(
         this WebApplicationBuilder builder,
-        Action<AevatarAIFeatureOptions>? configureAIFeatures = null)
+        Action<AevatarAIFeatureOptions>? configureAIFeatures = null,
+        bool includeScriptCapability = false)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
@@ -23,7 +24,8 @@ public static class WorkflowCapabilityHostBuilderExtensions
         });
         builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
         builder.AddWorkflowCapability();
-        builder.AddScriptCapability();
+        if (includeScriptCapability)
+            builder.AddScriptCapability();
         builder.Services.AddWorkflowAIProjectionExtensions();
 
         return builder;

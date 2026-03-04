@@ -41,7 +41,7 @@ public class WorkflowHostingExtensionsCoverageTests
             options.EnableSkills = false;
             options.ApiKey = "demo-key";
             options.DefaultProvider = "openai";
-        });
+        }, includeScriptCapability: true);
 
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunRequestExecutor)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
@@ -81,6 +81,13 @@ public class WorkflowHostingExtensionsCoverageTests
             .Where(x => x.ServiceType == typeof(IProjectionGraphStore))
             .ToList();
         graphStores.Should().HaveCount(1);
+
+        builder.Services
+            .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
+            .Select(x => x.ImplementationInstance)
+            .OfType<AevatarCapabilityRegistration>()
+            .Should()
+            .NotContain(x => x.Name == "script");
     }
 
     [Fact]

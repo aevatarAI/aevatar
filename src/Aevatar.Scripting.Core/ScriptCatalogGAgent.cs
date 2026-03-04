@@ -52,6 +52,7 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
         ArgumentNullException.ThrowIfNull(evt);
         var scriptId = evt.ScriptId ?? string.Empty;
         var targetRevision = evt.TargetRevision ?? string.Empty;
+        var expectedCurrentRevision = evt.ExpectedCurrentRevision ?? string.Empty;
         if (string.IsNullOrWhiteSpace(scriptId))
             throw new InvalidOperationException("ScriptId is required.");
         if (string.IsNullOrWhiteSpace(targetRevision))
@@ -59,6 +60,13 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
 
         if (!State.Entries.TryGetValue(scriptId, out var entry))
             throw new InvalidOperationException($"Script `{scriptId}` does not exist in catalog.");
+
+        if (!string.IsNullOrWhiteSpace(expectedCurrentRevision) &&
+            !string.Equals(entry.ActiveRevision, expectedCurrentRevision, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Rollback conflict for script `{scriptId}`. expected_current_revision=`{expectedCurrentRevision}` actual_active_revision=`{entry.ActiveRevision}`.");
+        }
 
         var existsInHistory = entry.RevisionHistory.Any(x =>
             string.Equals(x, targetRevision, StringComparison.Ordinal));

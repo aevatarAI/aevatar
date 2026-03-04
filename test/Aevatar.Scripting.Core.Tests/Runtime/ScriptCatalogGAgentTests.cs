@@ -135,4 +135,87 @@ public class ScriptCatalogGAgentTests
         agent.State.Entries.Should().ContainKey("script-1");
         agent.State.Entries["script-1"].ActiveRevision.Should().Be("rev-1");
     }
+
+    [Fact]
+    public async Task Rollback_WithExpectedCurrentRevisionMismatch_ShouldRejectAndKeepActiveRevision()
+    {
+        var agent = new ScriptCatalogGAgent
+        {
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptCatalogState>(
+                new InMemoryEventStore()),
+        };
+
+        await agent.HandlePromoteScriptRevisionRequested(new PromoteScriptRevisionRequestedEvent
+        {
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            DefinitionActorId = "definition-1",
+            SourceHash = "hash-1",
+            ProposalId = "proposal-1",
+        });
+        await agent.HandlePromoteScriptRevisionRequested(new PromoteScriptRevisionRequestedEvent
+        {
+            ScriptId = "script-1",
+            Revision = "rev-2",
+            DefinitionActorId = "definition-2",
+            SourceHash = "hash-2",
+            ProposalId = "proposal-2",
+            ExpectedBaseRevision = "rev-1",
+        });
+
+        var act = () => agent.HandleRollbackScriptRevisionRequested(new RollbackScriptRevisionRequestedEvent
+        {
+            ScriptId = "script-1",
+            TargetRevision = "rev-1",
+            Reason = "compensate promotion failure",
+            ProposalId = "proposal-3",
+            ExpectedCurrentRevision = "rev-3",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Rollback conflict*expected_current_revision=`rev-3`*actual_active_revision=`rev-2`*");
+
+        agent.State.Entries.Should().ContainKey("script-1");
+        agent.State.Entries["script-1"].ActiveRevision.Should().Be("rev-2");
+    }
+
+    [Fact]
+    public async Task Rollback_WithExpectedCurrentRevisionMatch_ShouldSucceed()
+    {
+        var agent = new ScriptCatalogGAgent
+        {
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptCatalogState>(
+                new InMemoryEventStore()),
+        };
+
+        await agent.HandlePromoteScriptRevisionRequested(new PromoteScriptRevisionRequestedEvent
+        {
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            DefinitionActorId = "definition-1",
+            SourceHash = "hash-1",
+            ProposalId = "proposal-1",
+        });
+        await agent.HandlePromoteScriptRevisionRequested(new PromoteScriptRevisionRequestedEvent
+        {
+            ScriptId = "script-1",
+            Revision = "rev-2",
+            DefinitionActorId = "definition-2",
+            SourceHash = "hash-2",
+            ProposalId = "proposal-2",
+            ExpectedBaseRevision = "rev-1",
+        });
+
+        await agent.HandleRollbackScriptRevisionRequested(new RollbackScriptRevisionRequestedEvent
+        {
+            ScriptId = "script-1",
+            TargetRevision = "rev-1",
+            Reason = "compensate promotion failure",
+            ProposalId = "proposal-3",
+            ExpectedCurrentRevision = "rev-2",
+        });
+
+        agent.State.Entries.Should().ContainKey("script-1");
+        agent.State.Entries["script-1"].ActiveRevision.Should().Be("rev-1");
+    }
 }

@@ -14,6 +14,8 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
     private const string StatusValidated = "validated";
     private const string StatusValidationFailed = "validation_failed";
     private const string StatusRejected = "rejected";
+    private const string StatusPromotionFailed = "promotion_failed";
+    private const string PromotionFailedFailureReasonTag = "[promotion_failed]";
     private const string StatusPromoted = "promoted";
     private const string StatusRollbackRequested = "rollback_requested";
     private const string StatusRolledBack = "rolled_back";
@@ -138,6 +140,38 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             return;
         }
 
+        if (flowResult.Status == ScriptEvolutionFlowStatus.PromotionFailed)
+        {
+            var failureReason = flowResult.FailureReason ?? string.Empty;
+            var persistedFailureReason = TagPromotionFailedFailureReason(failureReason);
+            var fallbackDefinitionActorId = _addressResolver.GetDefinitionActorId(proposal.ScriptId);
+            var fallbackCatalogActorId = _addressResolver.GetCatalogActorId();
+            var failurePromotion = flowResult.Promotion;
+
+            await PersistDomainEventAsync(new ScriptEvolutionRejectedEvent
+            {
+                ProposalId = proposal.ProposalId,
+                ScriptId = proposal.ScriptId,
+                CandidateRevision = proposal.CandidateRevision,
+                FailureReason = persistedFailureReason,
+            });
+            await SendTerminalDecisionResponseAsync(
+                evt,
+                accepted: false,
+                proposal,
+                proposal.CandidateRevision,
+                StatusPromotionFailed,
+                failureReason,
+                string.IsNullOrWhiteSpace(failurePromotion?.DefinitionActorId)
+                    ? fallbackDefinitionActorId
+                    : failurePromotion.DefinitionActorId,
+                string.IsNullOrWhiteSpace(failurePromotion?.CatalogActorId)
+                    ? fallbackCatalogActorId
+                    : failurePromotion.CatalogActorId,
+                validation.Diagnostics);
+            return;
+        }
+
         var defaultFailureReason = flowResult.FailureReason ?? string.Empty;
         await PersistDomainEventAsync(new ScriptEvolutionRejectedEvent
         {
@@ -169,7 +203,8 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
                 ScriptId: evt.ScriptId ?? string.Empty,
                 TargetRevision: evt.TargetRevision ?? string.Empty,
                 CatalogActorId: evt.CatalogActorId ?? string.Empty,
-                Reason: evt.Reason ?? string.Empty),
+                Reason: evt.Reason ?? string.Empty,
+                ExpectedCurrentRevision: string.Empty),
             CancellationToken.None);
 
         await PersistDomainEventAsync(new ScriptEvolutionRolledBackEvent
@@ -388,11 +423,11 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
     {
         var next = state.Clone();
         var proposal = GetOrCreateProposal(next, evt.ProposalId ?? string.Empty, evt.ScriptId ?? string.Empty);
-        proposal.FailureReason = evt.FailureReason ?? string.Empty;
-        proposal.Status = StatusRejected;
+        proposal.FailureReason = NormalizeFailureReason(evt.FailureReason, out var isPromotionFailed);
+        proposal.Status = isPromotionFailed ? StatusPromotionFailed : StatusRejected;
 
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
-        next.LastEventId = string.Concat(proposal.ProposalId, ":", StatusRejected);
+        next.LastEventId = string.Concat(proposal.ProposalId, ":", proposal.Status);
         return next;
     }
 
@@ -462,5 +497,26 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         }
 
         return proposal;
+    }
+
+    private static string TagPromotionFailedFailureReason(string failureReason)
+    {
+        var normalized = failureReason ?? string.Empty;
+        return normalized.StartsWith(PromotionFailedFailureReasonTag, StringComparison.Ordinal)
+            ? normalized
+            : PromotionFailedFailureReasonTag + normalized;
+    }
+
+    private static string NormalizeFailureReason(string? failureReason, out bool isPromotionFailed)
+    {
+        var normalized = failureReason ?? string.Empty;
+        if (normalized.StartsWith(PromotionFailedFailureReasonTag, StringComparison.Ordinal))
+        {
+            isPromotionFailed = true;
+            return normalized[PromotionFailedFailureReasonTag.Length..];
+        }
+
+        isPromotionFailed = false;
+        return normalized;
     }
 }

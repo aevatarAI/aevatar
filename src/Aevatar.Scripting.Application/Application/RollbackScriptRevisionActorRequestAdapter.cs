@@ -22,6 +22,7 @@ public sealed class RollbackScriptRevisionActorRequestAdapter
                 TargetRevision = request.TargetRevision ?? string.Empty,
                 Reason = request.Reason ?? string.Empty,
                 ProposalId = request.ProposalId ?? string.Empty,
+                ExpectedCurrentRevision = request.ExpectedCurrentRevision ?? string.Empty,
             }),
             PublisherId = RequestPublisherId,
             Direction = EventDirection.Self,

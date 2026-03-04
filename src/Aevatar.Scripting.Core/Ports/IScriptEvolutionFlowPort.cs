@@ -12,7 +12,8 @@ public sealed record ScriptRollbackRequest(
     string ScriptId,
     string TargetRevision,
     string CatalogActorId,
-    string Reason);
+    string Reason,
+    string ExpectedCurrentRevision);
 
 public enum ScriptEvolutionFlowStatus
 {
@@ -44,11 +45,12 @@ public sealed record ScriptEvolutionFlowResult(
 
     public static ScriptEvolutionFlowResult PromotionFailed(
         ScriptEvolutionValidationReport validation,
-        string failureReason) =>
+        string failureReason,
+        ScriptPromotionResult? partialPromotion = null) =>
         new(
             ScriptEvolutionFlowStatus.PromotionFailed,
             validation ?? ScriptEvolutionValidationReport.Empty,
-            null,
+            partialPromotion,
             failureReason ?? string.Empty);
 
     public static ScriptEvolutionFlowResult Promoted(
