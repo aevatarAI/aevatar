@@ -1,6 +1,6 @@
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Workflow.Projection.Configuration;
 
@@ -14,15 +14,14 @@ public sealed class WorkflowExecutionProjectionLifecycleService
         WorkflowExecutionProjectionOptions options,
         IProjectionPortActivationService<WorkflowExecutionRuntimeLease> activationService,
         IProjectionPortReleaseService<WorkflowExecutionRuntimeLease> releaseService,
-        IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IEventSink<WorkflowRunEvent>, WorkflowRunEvent> sinkSubscriptionManager,
-        IProjectionPortLiveSinkForwarder<WorkflowExecutionRuntimeLease, IEventSink<WorkflowRunEvent>, WorkflowRunEvent> liveSinkForwarder)
+        IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent> sinkSubscriptionManager,
+        IEventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent> liveSinkForwarder)
         : base(
             () => options.Enabled,
             activationService,
             releaseService,
             sinkSubscriptionManager,
-            liveSinkForwarder,
-            ResolveRuntimeLeaseOrThrow)
+            liveSinkForwarder)
     {
     }
 
@@ -38,8 +37,4 @@ public sealed class WorkflowExecutionProjectionLifecycleService
             input,
             commandId,
             ct);
-
-    private static WorkflowExecutionRuntimeLease ResolveRuntimeLeaseOrThrow(IWorkflowExecutionProjectionLease lease) =>
-        lease as WorkflowExecutionRuntimeLease
-        ?? throw new InvalidOperationException("Unsupported workflow projection lease implementation.");
 }

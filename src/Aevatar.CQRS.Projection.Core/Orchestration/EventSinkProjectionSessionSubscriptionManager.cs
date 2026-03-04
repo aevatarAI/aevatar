@@ -7,7 +7,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// Generic sink subscription manager for projection session event streams.
 /// </summary>
 public class EventSinkProjectionSessionSubscriptionManager<TLease, TEvent>
-    : IProjectionPortSinkSubscriptionManager<TLease, IEventSink<TEvent>, TEvent>
+    : IEventSinkProjectionSubscriptionManager<TLease, TEvent>
     where TLease : ProjectionRuntimeLeaseBase<IEventSink<TEvent>>, IProjectionPortSessionLease
 {
     private readonly IProjectionSessionEventHub<TEvent> _sessionEventHub;

@@ -7,12 +7,12 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// Generic projection live sink forwarder for event-sink based delivery.
 /// </summary>
 public class EventSinkProjectionLiveForwarder<TLease, TEvent>
-    : IProjectionPortLiveSinkForwarder<TLease, IEventSink<TEvent>, TEvent>
+    : IEventSinkProjectionLiveForwarder<TLease, TEvent>
 {
-    private readonly IProjectionPortSinkFailurePolicy<TLease, IEventSink<TEvent>, TEvent> _sinkFailurePolicy;
+    private readonly IEventSinkProjectionFailurePolicy<TLease, TEvent> _sinkFailurePolicy;
 
     public EventSinkProjectionLiveForwarder(
-        IProjectionPortSinkFailurePolicy<TLease, IEventSink<TEvent>, TEvent> sinkFailurePolicy)
+        IEventSinkProjectionFailurePolicy<TLease, TEvent> sinkFailurePolicy)
     {
         _sinkFailurePolicy = sinkFailurePolicy ?? throw new ArgumentNullException(nameof(sinkFailurePolicy));
     }

@@ -11,7 +11,7 @@ public sealed class DefaultEventSinkProjectionFailurePolicy<TLease, TEvent>
     where TEvent : class
 {
     public DefaultEventSinkProjectionFailurePolicy(
-        IProjectionPortSinkSubscriptionManager<TLease, IEventSink<TEvent>, TEvent> sinkSubscriptionManager)
+        IEventSinkProjectionSubscriptionManager<TLease, TEvent> sinkSubscriptionManager)
         : base(sinkSubscriptionManager)
     {
     }

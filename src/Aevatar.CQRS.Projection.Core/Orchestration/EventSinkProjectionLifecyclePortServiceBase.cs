@@ -11,15 +11,12 @@ public abstract class EventSinkProjectionLifecyclePortServiceBase<TLeaseContract
     where TLeaseContract : class
     where TRuntimeLease : class, TLeaseContract
 {
-    private readonly Func<TLeaseContract, TRuntimeLease> _runtimeLeaseResolver;
-
     protected EventSinkProjectionLifecyclePortServiceBase(
         Func<bool> projectionEnabledAccessor,
         IProjectionPortActivationService<TRuntimeLease> activationService,
         IProjectionPortReleaseService<TRuntimeLease> releaseService,
-        IProjectionPortSinkSubscriptionManager<TRuntimeLease, IEventSink<TEvent>, TEvent> sinkSubscriptionManager,
-        IProjectionPortLiveSinkForwarder<TRuntimeLease, IEventSink<TEvent>, TEvent> liveSinkForwarder,
-        Func<TLeaseContract, TRuntimeLease> runtimeLeaseResolver)
+        IEventSinkProjectionSubscriptionManager<TRuntimeLease, TEvent> sinkSubscriptionManager,
+        IEventSinkProjectionLiveForwarder<TRuntimeLease, TEvent> liveSinkForwarder)
         : base(
             projectionEnabledAccessor,
             activationService,
@@ -27,7 +24,6 @@ public abstract class EventSinkProjectionLifecyclePortServiceBase<TLeaseContract
             sinkSubscriptionManager,
             liveSinkForwarder)
     {
-        _runtimeLeaseResolver = runtimeLeaseResolver ?? throw new ArgumentNullException(nameof(runtimeLeaseResolver));
     }
 
     public bool ProjectionEnabled => ProjectionEnabledCore;
@@ -48,10 +44,4 @@ public abstract class EventSinkProjectionLifecyclePortServiceBase<TLeaseContract
         TLeaseContract lease,
         CancellationToken ct = default) =>
         ReleaseProjectionAsync(lease, ct);
-
-    protected sealed override TRuntimeLease ResolveRuntimeLease(TLeaseContract lease)
-    {
-        ArgumentNullException.ThrowIfNull(lease);
-        return _runtimeLeaseResolver(lease);
-    }
 }

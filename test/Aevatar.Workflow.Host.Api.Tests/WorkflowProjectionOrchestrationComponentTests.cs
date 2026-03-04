@@ -670,7 +670,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     private sealed class RecordingSinkSubscriptionManager
-        : IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IEventSink<WorkflowRunEvent>, WorkflowRunEvent>
+        : IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
     {
         public int DetachCalls { get; private set; }
 
@@ -815,7 +815,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     private sealed class RecordingSinkFailurePolicy
-        : IProjectionPortSinkFailurePolicy<WorkflowExecutionRuntimeLease, IEventSink<WorkflowRunEvent>, WorkflowRunEvent>
+        : IEventSinkProjectionFailurePolicy<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
     {
         public bool NextHandledResult { get; set; }
         public List<(WorkflowExecutionRuntimeLease Lease, IEventSink<WorkflowRunEvent> Sink, WorkflowRunEvent Event, Exception Exception)> Calls { get; } = [];

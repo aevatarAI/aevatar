@@ -28,7 +28,7 @@ public sealed class RuntimeScriptEvolutionLifecycleService
         _projectionLifecyclePort = projectionLifecyclePort ?? throw new ArgumentNullException(nameof(projectionLifecyclePort));
         _decisionFallbackPort = decisionFallbackPort ?? throw new ArgumentNullException(nameof(decisionFallbackPort));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
-        _decisionTimeout = NormalizeTimeout(timeouts.EvolutionDecisionTimeout);
+        _decisionTimeout = ScriptingPortTimeouts.NormalizeOrDefault(timeouts.EvolutionDecisionTimeout);
     }
 
     public async Task<ScriptPromotionDecision> ProposeAsync(
@@ -152,7 +152,4 @@ public sealed class RuntimeScriptEvolutionLifecycleService
             CatalogActorId: completed.CatalogActorId ?? string.Empty,
             ValidationReport: validation);
     }
-
-    private static TimeSpan NormalizeTimeout(TimeSpan timeout) =>
-        timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(45);
 }

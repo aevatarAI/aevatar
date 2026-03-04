@@ -506,7 +506,7 @@ public class WorkflowExecutionProjectionServiceTests
 
         var act = async () => await service.AttachLiveSinkAsync(new ExternalLease("root", "cmd"), sink);
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Unsupported workflow projection lease implementation.");
+            .WithMessage("Unsupported projection lease type*WorkflowExecutionRuntimeLease*");
 
         await sink.DisposeAsync();
     }

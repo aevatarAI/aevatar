@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Application;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 
@@ -8,23 +9,23 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
 {
-    private readonly IActorRuntime _runtime;
+    private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly IStreamProvider _streams;
     private readonly TimeSpan _queryTimeout;
     private readonly bool _useEventDrivenDefinitionQuery;
     private readonly QueryScriptDefinitionSnapshotRequestAdapter _queryAdapter = new();
 
     public RuntimeScriptDefinitionSnapshotPort(
-        IActorRuntime runtime,
+        RuntimeScriptActorAccessor actorAccessor,
         IStreamProvider streams,
         IScriptingRuntimeQueryModes queryModes,
         IScriptingPortTimeouts timeouts)
     {
-        _runtime = runtime;
-        _streams = streams;
+        _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
+        _streams = streams ?? throw new ArgumentNullException(nameof(streams));
         _useEventDrivenDefinitionQuery = (queryModes ?? throw new ArgumentNullException(nameof(queryModes)))
             .UseEventDrivenDefinitionQuery;
-        _queryTimeout = NormalizeTimeout(timeouts.DefinitionSnapshotQueryTimeout);
+        _queryTimeout = ScriptingPortTimeouts.NormalizeOrDefault(timeouts.DefinitionSnapshotQueryTimeout);
     }
 
     public bool UseEventDrivenDefinitionQuery => _useEventDrivenDefinitionQuery;
@@ -36,16 +37,15 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(definitionActorId);
 
-        var actor = await _runtime.GetAsync(definitionActorId)
+        var actor = await _actorAccessor.GetAsync(definitionActorId)
             ?? throw new InvalidOperationException($"Script definition actor not found: {definitionActorId}");
 
-        var response = await ScriptQueryReplyAwaiter.QueryAsync<ScriptDefinitionSnapshotRespondedEvent>(
+        var response = await EventStreamQueryReplyAwaiter.QueryActorAsync<ScriptDefinitionSnapshotRespondedEvent>(
             _streams,
+            actor,
             "scripting.query.definition.reply",
             _queryTimeout,
-            (requestId, replyStreamId) => actor.HandleEventAsync(
-                _queryAdapter.Map(definitionActorId, requestId, replyStreamId, requestedRevision),
-                ct),
+            (requestId, replyStreamId) => _queryAdapter.Map(definitionActorId, requestId, replyStreamId, requestedRevision),
             static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
             static requestId => $"Timeout waiting for script definition snapshot query response. request_id={requestId}",
             ct);
@@ -73,7 +73,4 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
         ct.ThrowIfCancellationRequested();
         return snapshot;
     }
-
-    private static TimeSpan NormalizeTimeout(TimeSpan timeout) =>
-        timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(45);
 }

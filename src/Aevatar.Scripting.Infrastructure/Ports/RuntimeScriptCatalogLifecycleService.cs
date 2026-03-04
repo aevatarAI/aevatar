@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 
@@ -26,7 +27,7 @@ public sealed class RuntimeScriptCatalogLifecycleService
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
-        _catalogQueryTimeout = NormalizeTimeout(timeouts.CatalogEntryQueryTimeout);
+        _catalogQueryTimeout = ScriptingPortTimeouts.NormalizeOrDefault(timeouts.CatalogEntryQueryTimeout);
     }
 
     public async Task PromoteCatalogRevisionAsync(
@@ -96,13 +97,12 @@ public sealed class RuntimeScriptCatalogLifecycleService
         if (actor == null)
             return null;
 
-        var response = await ScriptQueryReplyAwaiter.QueryAsync<ScriptCatalogEntryRespondedEvent>(
+        var response = await EventStreamQueryReplyAwaiter.QueryActorAsync<ScriptCatalogEntryRespondedEvent>(
             _streams,
+            actor,
             "scripting.query.catalog.reply",
             _catalogQueryTimeout,
-            (requestId, replyStreamId) => actor.HandleEventAsync(
-                _queryCatalogEntryAdapter.Map(resolvedCatalogActorId, requestId, replyStreamId, scriptId),
-                ct),
+            (requestId, replyStreamId) => _queryCatalogEntryAdapter.Map(resolvedCatalogActorId, requestId, replyStreamId, scriptId),
             static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
             static requestId => $"Timeout waiting for script catalog entry query response. request_id={requestId}",
             ct);
@@ -124,6 +124,4 @@ public sealed class RuntimeScriptCatalogLifecycleService
             ? _addressResolver.GetCatalogActorId()
             : catalogActorId;
 
-    private static TimeSpan NormalizeTimeout(TimeSpan timeout) =>
-        timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(45);
 }

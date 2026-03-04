@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
@@ -14,7 +15,7 @@ public sealed class WorkflowProjectionSinkFailurePolicy
     private readonly IProjectionClock _clock;
 
     public WorkflowProjectionSinkFailurePolicy(
-        IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IEventSink<WorkflowRunEvent>, WorkflowRunEvent> sinkSubscriptionManager,
+        IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent> sinkSubscriptionManager,
         IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
         IProjectionClock clock)
         : base(sinkSubscriptionManager)
