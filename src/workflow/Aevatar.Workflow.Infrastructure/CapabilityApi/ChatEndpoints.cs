@@ -76,7 +76,6 @@ public static class WorkflowCapabilityEndpoints
         }
 
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
-        using var logScope = CapabilityTraceContext.BeginApiScope(logger);
         var startSignal = new TaskCompletionSource<WorkflowChatRunStarted>(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>> executionTask;
 
@@ -172,7 +171,6 @@ public static class WorkflowCapabilityEndpoints
 
         using var socket = await http.WebSockets.AcceptWebSocketAsync();
         var logger = loggerFactory?.CreateLogger("Aevatar.Workflow.Host.Api.Chat.WebSocket");
-        using var logScope = CapabilityTraceContext.BeginApiScope(logger);
         var responseMessageType = WebSocketMessageType.Text;
 
         try

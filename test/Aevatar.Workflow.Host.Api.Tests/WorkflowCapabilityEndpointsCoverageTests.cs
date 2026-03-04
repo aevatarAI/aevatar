@@ -15,6 +15,39 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowCapabilityEndpointsCoverageTests
 {
     [Fact]
+    public async Task HandleChat_WhenStarted_ShouldExposeTraceAndCorrelationHeaders()
+    {
+        using var activity = new System.Diagnostics.Activity("http-chat-trace").Start();
+        var http = new DefaultHttpContext
+        {
+            Response = { Body = new MemoryStream() },
+        };
+
+        var service = new FakeCommandExecutionService
+        {
+            Handler = async (_, _, onStartedAsync, ct) =>
+            {
+                if (onStartedAsync != null)
+                    await onStartedAsync(new WorkflowChatRunStarted("actor-1", "direct", "cmd-header"), ct);
+
+                return new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
+                    WorkflowChatRunStartError.None,
+                    new WorkflowChatRunStarted("actor-1", "direct", "cmd-header"),
+                    new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            CancellationToken.None);
+
+        http.Response.Headers["X-Trace-Id"].ToString().Should().Be(activity.TraceId.ToString());
+        http.Response.Headers["X-Correlation-Id"].ToString().Should().Be("cmd-header");
+    }
+
+    [Fact]
     public async Task HandleChat_WhenOperationCanceled_ShouldSwallowException()
     {
         var http = new DefaultHttpContext
@@ -136,8 +169,9 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     [Fact]
     public async Task HandleChatWebSocket_WhenParseFails_ShouldSendCommandError()
     {
+        using var activity = new System.Diagnostics.Activity("ws-parse-trace").Start();
         var socket = new FakeWebSocket(WebSocketState.Open);
-        socket.EnqueueReceive(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("""{"type":"invalid","payload":{"prompt":"hello"}}"""), true);
+        socket.EnqueueReceive(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("""{"type":"chat.command","requestId":"req-parse","payload":{"prompt":""}}"""), true);
 
         var http = new DefaultHttpContext();
         http.Features.Set<IHttpWebSocketFeature>(new FakeWebSocketFeature(socket));
@@ -154,13 +188,17 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         socket.SentTexts.Should().ContainSingle();
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
         doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
-        doc.RootElement.GetProperty("code").GetString().Should().Be("INVALID_COMMAND");
+        doc.RootElement.GetProperty("code").GetString().Should().Be("INVALID_PROMPT");
+        doc.RootElement.GetProperty("requestId").GetString().Should().Be("req-parse");
+        doc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-parse");
+        doc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
     }
 
     [Fact]
     public async Task HandleChatWebSocket_WhenExecutionThrows_ShouldSendRunExecutionFailed()
     {
+        using var activity = new System.Diagnostics.Activity("ws-exception-trace").Start();
         var socket = new FakeWebSocket(WebSocketState.Open);
         socket.EnqueueReceive(
             WebSocketMessageType.Text,
@@ -186,12 +224,14 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
         doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
+        doc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
     }
 
     [Fact]
     public async Task HandleChatWebSocket_WhenBinaryExecutionThrows_ShouldSendBinaryRunExecutionFailed()
     {
+        using var activity = new System.Diagnostics.Activity("ws-binary-exception-trace").Start();
         var socket = new FakeWebSocket(WebSocketState.Open);
         socket.EnqueueReceive(
             WebSocketMessageType.Binary,
@@ -218,6 +258,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         using var doc = JsonDocument.Parse(socket.SentBinaries[0]);
         doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
+        doc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
