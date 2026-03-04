@@ -5,7 +5,7 @@ using Aevatar.AI.Core.Agents;
 using Aevatar.Demos.Maker;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Maker.Projection;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Observability;
-using Aevatar.Foundation.Runtime.TypeSystem;
+using Aevatar.Foundation.Runtime.Implementations.Local.TypeSystem;
 using FluentAssertions;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;

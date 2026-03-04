@@ -8,7 +8,8 @@
 src/
 ├── Aevatar.Foundation.Abstractions  # 契约层：接口、Proto、基础类型
 ├── Aevatar.Foundation.Core          # 核心层：GAgent 基类、Pipeline、上下文与守卫
-└── Aevatar.Foundation.Runtime       # 运行时层：Local Actor、Stream、路由、内存存储、DI 装配
+├── Aevatar.Foundation.Runtime       # 运行时通用层：Stream、路由、持久化、Observability、停用钩子
+└── Aevatar.Foundation.Runtime.Implementations.Local  # 本地实现层：Local Actor/Runtime/TypeProbe/DI
 ```
 
 ## 核心概念
@@ -84,17 +85,22 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 这保证了状态修改和消息处理串行模型一致。
 
-## Aevatar.Foundation.Runtime
+## Aevatar.Foundation.Runtime + Local 实现
 
-`Aevatar.Foundation.Runtime` 提供本地运行时实现，包含：
+`Aevatar.Foundation.Runtime`（通用层）包含：
 
-- `LocalActorRuntime`：创建/销毁/查找/链接 Actor（按需激活）
-- `LocalActor`：邮箱串行处理、父流订阅、子节点传播
-- `LocalActorPublisher`：按 `EventDirection` 路由事件
 - `InMemoryStream` / `InMemoryStreamProvider`：内存流与订阅分发
 - `EventRouter` / `InMemoryRouterStore`：层级路由与路由快照存储
 - `InMemoryStateStore` / `InMemoryEventStore` / `InMemoryManifestStore`：默认内存持久化
 - `MemoryCacheDeduplicator`：事件去重
+- `IActorDeactivationHook*` / `EventStoreCompactionDeactivationHook`：停用钩子与裁剪触发
+
+`Aevatar.Foundation.Runtime.Implementations.Local`（本地实现层）包含：
+
+- `LocalActorRuntime`：创建/销毁/查找/链接 Actor（按需激活）
+- `LocalActor`：邮箱串行处理、父流订阅、子节点传播
+- `LocalActorPublisher`：按 `EventDirection` 路由事件
+- `LocalActorTypeProbe`：运行时类型探测
 - `AddAevatarRuntime()`：一键注册本地运行时依赖
 
 口径说明：
@@ -187,6 +193,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 ### 1) 注入运行时
 
 ```csharp
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+
 var services = new ServiceCollection();
 services.AddAevatarRuntime();
 var sp = services.BuildServiceProvider();

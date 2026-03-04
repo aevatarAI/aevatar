@@ -4,10 +4,11 @@
 using System.Diagnostics;
 using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Observability;
+using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Foundation.Runtime.Actors;
+namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 
 public sealed class LocalActor : IActor
 {

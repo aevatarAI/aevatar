@@ -24,7 +24,7 @@ using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.Bootstrap;
 using Aevatar.Workflow.Core;
 using Aevatar.Configuration;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;

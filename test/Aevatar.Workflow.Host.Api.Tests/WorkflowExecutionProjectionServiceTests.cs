@@ -8,7 +8,7 @@ using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;

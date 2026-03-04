@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Observability;
+using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -15,7 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Aevatar.Foundation.Runtime.Actors;
+namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 
 /// <summary>Local actor runtime: creates, destroys, links actors, and manages manifest persistence.</summary>
 public sealed class LocalActorRuntime : IActorRuntime

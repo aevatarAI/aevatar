@@ -4,7 +4,7 @@
 - 状态：`Proposed`
 - 版本：`v1`
 - 日期：`2026-03-05`
-- 范围：`Aevatar.Foundation.Abstractions / Foundation.Runtime / Bootstrap / Orleans Runtime`
+- 范围：`Aevatar.Foundation.Abstractions / Foundation.Runtime / Foundation.Runtime.Implementations.Local / Bootstrap / Orleans Runtime`
 - 决策级别：`Architecture Breaking Change`
 
 ## 2. 背景与问题
@@ -26,8 +26,8 @@
 2. 默认 host 通过 `ActorRestoreHostedService` 调用 runtime restore。
    - 证据：`src/Aevatar.Bootstrap/Hosting/ActorRestoreHostedService.cs`
    - 证据：`src/Aevatar.Bootstrap/Hosting/WebApplicationBuilderExtensions.cs`
-3. Local runtime 实现了 manifest 扫描恢复。
-   - 证据：`src/Aevatar.Foundation.Runtime/Actor/LocalActorRuntime.cs`
+3. Local runtime 实现了 manifest 按需物化。
+   - 证据：`src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorRuntime.cs`
 4. Orleans runtime 的 `RestoreAllAsync` 为 no-op，实际依赖 Grain 惰性激活。
    - 证据：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansActorRuntime.cs`
    - 证据：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs`

@@ -1,6 +1,6 @@
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Context;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;

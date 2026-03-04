@@ -22,7 +22,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;

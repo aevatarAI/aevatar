@@ -18,7 +18,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
