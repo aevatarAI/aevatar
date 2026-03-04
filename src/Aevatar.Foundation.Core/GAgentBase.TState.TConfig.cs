@@ -1,16 +1,14 @@
 // ─────────────────────────────────────────────────────────────
 // GAgentBase<TState, TConfig> - configurable GAgent base class.
-// Config is persisted to ManifestStore.
+// Runtime class defaults + instance overrides are applied by agent events/state.
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Foundation.Abstractions.Persistence;
 using Google.Protobuf;
-using System.Text.Json;
 
 namespace Aevatar.Foundation.Core;
 
 /// <summary>
-/// Configurable GAgent base class. Config is persisted as JSON in ManifestStore and restored on activation.
+/// Configurable GAgent base class.
 /// </summary>
 /// <typeparam name="TState">Protobuf-generated state type.</typeparam>
 /// <typeparam name="TConfig">Configuration type with a parameterless constructor.</typeparam>
@@ -25,7 +23,6 @@ public abstract class GAgentBase<TState, TConfig> : GAgentBase<TState>
     public async Task ConfigureAsync(TConfig config, CancellationToken ct = default)
     {
         Config = config;
-        await PersistConfigAsync(ct);
         await OnConfigChangedAsync(config, ct);
     }
 
@@ -33,27 +30,9 @@ public abstract class GAgentBase<TState, TConfig> : GAgentBase<TState>
     protected virtual Task OnConfigChangedAsync(TConfig config, CancellationToken ct) =>
         Task.CompletedTask;
 
-    /// <summary>Activates agent after restoring config from manifest.</summary>
+    /// <summary>Activates agent.</summary>
     public override async Task ActivateAsync(CancellationToken ct = default)
     {
-        // Restore config from manifest
-        if (ManifestStore != null)
-        {
-            var manifest = await ManifestStore.LoadAsync(Id, ct);
-            if (manifest?.ConfigJson != null)
-            {
-                try { Config = JsonSerializer.Deserialize<TConfig>(manifest.ConfigJson) ?? new(); }
-                catch { /* Fallback to default config when deserialization fails */ }
-            }
-        }
         await base.ActivateAsync(ct);
-    }
-
-    private async Task PersistConfigAsync(CancellationToken ct)
-    {
-        if (ManifestStore == null) return;
-        var manifest = await ManifestStore.LoadAsync(Id, ct) ?? new AgentManifest { AgentId = Id };
-        manifest.ConfigJson = JsonSerializer.Serialize(Config);
-        await ManifestStore.SaveAsync(Id, manifest, ct);
     }
 }

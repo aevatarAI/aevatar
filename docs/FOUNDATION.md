@@ -28,7 +28,7 @@ src/
 - Agent/Actor/Runtime 基础接口：`IAgent`、`IActor`、`IActorRuntime`
 - 事件发布与流接口：`IEventPublisher`、`IStream`、`IStreamProvider`
 - 事件模块体系：`IEventModule`、`IEventModuleFactory`、`IEventHandlerContext`
-- 持久化接口：`IStateStore<TState>`、`IEventStore`、`IAgentManifestStore`
+- 持久化接口：`IStateStore<TState>`、`IEventStore`
 - 上下文与运行控制：`IAgentContextAccessor`、`IRunManager`
 - Hook 扩展点：`IGAgentExecutionHook`、`GAgentExecutionHookContext`
 - 核心 Proto：`agent_messages.proto`
@@ -55,7 +55,7 @@ src/
 
 - `GAgentBase`：无状态 Agent 基类，统一事件分发与 Hook 管线
 - `GAgentBase<TState>`：状态型基类，集成 `IStateStore<TState>`
-- `GAgentBase<TState, TConfig>`：配置型基类，配置持久化到 manifest
+- `GAgentBase<TState, TConfig>`：配置型基类（配置由宿主默认值 + 事件/状态覆盖构成）
 - `EventPipelineBuilder`：把静态 `[EventHandler]` 与动态 `IEventModule` 合并为一个按 `Priority` 排序的流水线
 - `StateGuard`：通过 `AsyncLocal` 限制 State 只在允许的生命周期写入
 - `RunManager`/`RunContextScope`：latest-wins 运行管理与作用域传播
@@ -91,7 +91,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 - `InMemoryStream` / `InMemoryStreamProvider`：内存流与订阅分发
 - `EventRouter` / `InMemoryRouterStore`：层级路由与路由快照存储
-- `InMemoryStateStore` / `InMemoryEventStore` / `InMemoryManifestStore`：默认内存持久化
+- `InMemoryStateStore` / `InMemoryEventStore`：默认内存持久化
 - `MemoryCacheDeduplicator`：事件去重
 - `IActorDeactivationHook*` / `EventStoreCompactionDeactivationHook`：停用钩子与裁剪触发
 
@@ -111,7 +111,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 ### 分布式目标态（生产）
 
 1. `IActorRuntime` 在生产环境提供分布式部署能力，保证同一 `actorId` 全局单激活与邮箱串行。
-2. `IStateStore<TState>` / `IEventStore` / `IAgentManifestStore` 使用非 InMemory 持久化实现。
+2. `IStateStore<TState>` / `IEventStore` 使用非 InMemory 持久化实现。
 3. 投影相关编排运行态通过 Actor 化承载；中间层服务不持有跨节点事实态。
 4. `InMemory*` 仅保留本地开发与自动化测试使用。
 

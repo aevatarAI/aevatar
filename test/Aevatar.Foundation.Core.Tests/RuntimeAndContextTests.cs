@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Context;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -93,7 +92,6 @@ public class LocalActorRuntimeTests : IAsyncLifetime
 {
     private ServiceProvider _serviceProvider = null!;
     private IActorRuntime _runtime = null!;
-    private IAgentManifestStore _manifestStore = null!;
     private IStreamForwardingRegistry _forwardingRegistry = null!;
 
     public Task InitializeAsync()
@@ -102,7 +100,6 @@ public class LocalActorRuntimeTests : IAsyncLifetime
         services.AddAevatarRuntime();
         _serviceProvider = services.BuildServiceProvider();
         _runtime = _serviceProvider.GetRequiredService<IActorRuntime>();
-        _manifestStore = _serviceProvider.GetRequiredService<IAgentManifestStore>();
         _forwardingRegistry = _serviceProvider.GetRequiredService<IStreamForwardingRegistry>();
         return Task.CompletedTask;
     }
@@ -208,14 +205,10 @@ public class LocalActorRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task GetAsync_WhenActorExistsOnlyInManifest_ShouldMaterializeActor()
+    public async Task GetAsync_WhenActorExists_ShouldReturnActor()
     {
         var agentId = "restored-1";
-        await _manifestStore.SaveAsync(agentId, new AgentManifest
-        {
-            AgentId = agentId,
-            AgentTypeName = typeof(CollectorAgent).AssemblyQualifiedName!,
-        });
+        await _runtime.CreateAsync<CollectorAgent>(agentId);
 
         var restored = await _runtime.GetAsync(agentId);
         restored.Should().NotBeNull();

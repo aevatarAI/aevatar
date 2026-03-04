@@ -282,7 +282,7 @@ Connector 是**按名称调用的外部能力**：在 `~/.aevatar/connectors.jso
 - 事件处理扩展由 module 完成；
 - 状态事实仍由 EventSourcing 回放恢复；
 - app config 事实可由 EventSourcing 回放恢复（写入 `RoleGAgentState`）；
-- Manifest `ConfigJson` 仍保存完整配置快照（provider/model/system_prompt 等）；
+- 不依赖 Manifest 作为配置恢复路径；
 - 业务扩展与运行时基础设施解耦。
 
 ---

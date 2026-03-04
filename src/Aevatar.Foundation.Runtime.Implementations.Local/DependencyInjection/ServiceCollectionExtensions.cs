@@ -5,12 +5,12 @@
 
 using Aevatar.Foundation.Abstractions.Context;
 using Aevatar.Foundation.Abstractions.Deduplication;
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Implementations.Local.ActivationIndex;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Local.TypeSystem;
 using Aevatar.Foundation.Runtime.Persistence;
@@ -71,7 +71,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
         services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
-        services.TryAddSingleton<IAgentManifestStore, InMemoryManifestStore>();
+        services.TryAddSingleton<ILocalActivationIndexStore, InMemoryLocalActivationIndexStore>();
 
         // Deduplication
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();

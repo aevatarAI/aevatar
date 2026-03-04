@@ -9,20 +9,17 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 public sealed class OrleansActorRuntime : IActorRuntime
 {
     private readonly IGrainFactory _grainFactory;
-    private readonly IAgentManifestStore _manifestStore;
     private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
     private readonly IStreamLifecycleManager _streamLifecycleManager;
     private readonly ILogger<OrleansActorRuntime> _logger;
 
     public OrleansActorRuntime(
         IGrainFactory grainFactory,
-        IAgentManifestStore manifestStore,
         Aevatar.Foundation.Abstractions.IStreamProvider streams,
         IStreamLifecycleManager? streamLifecycleManager = null,
         ILogger<OrleansActorRuntime>? logger = null)
     {
         _grainFactory = grainFactory;
-        _manifestStore = manifestStore;
         _streams = streams;
         _streamLifecycleManager = streamLifecycleManager ?? NullStreamLifecycleManager.Instance;
         _logger = logger ?? NullLogger<OrleansActorRuntime>.Instance;
@@ -45,10 +42,6 @@ public sealed class OrleansActorRuntime : IActorRuntime
         var initialized = await grain.InitializeAgentAsync(agentTypeName);
         if (!initialized)
             throw new InvalidOperationException($"Failed to initialize Orleans actor {actorId}.");
-
-        var manifest = await _manifestStore.LoadAsync(actorId, ct) ?? new AgentManifest { AgentId = actorId };
-        manifest.AgentTypeName = agentTypeName;
-        await _manifestStore.SaveAsync(actorId, manifest, ct);
 
         _logger.LogInformation("Actor {Id} ({Type}) created via Orleans runtime", actorId, agentType.Name);
         return new OrleansActor(actorId, grain, _streams);
@@ -78,7 +71,6 @@ public sealed class OrleansActorRuntime : IActorRuntime
         await grain.DeactivateAsync();
 
         _streamLifecycleManager.RemoveStream(id);
-        await _manifestStore.DeleteAsync(id, ct);
         _logger.LogInformation("Actor {Id} destroyed via Orleans runtime", id);
     }
 

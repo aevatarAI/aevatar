@@ -18,7 +18,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
@@ -133,7 +132,6 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         _childAgentIds.Clear();
 
         InstallCognitiveModules();
-        await PersistWorkflowBindingAsync(workflowName ?? string.Empty, ct);
     }
 
     /// <summary>
@@ -169,7 +167,6 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         _childAgentIds.Clear();
 
         InstallCognitiveModules();
-        await PersistWorkflowBindingAsync(workflowName, ct);
         return WorkflowCompilationResult.Success(parsed);
     }
 
@@ -565,21 +562,6 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
                     yield return childType;
             }
         }
-    }
-
-    private async Task PersistWorkflowBindingAsync(string workflowName, CancellationToken ct = default)
-    {
-        if (ManifestStore == null || string.IsNullOrWhiteSpace(Id))
-            return;
-
-        var manifest = await ManifestStore.LoadAsync(Id, ct) ?? new AgentManifest { AgentId = Id };
-        var agentTypeName = GetType().AssemblyQualifiedName ?? GetType().FullName ?? GetType().Name;
-        manifest.AgentTypeName = agentTypeName;
-
-        if (!string.IsNullOrWhiteSpace(workflowName))
-            manifest.Metadata[WorkflowManifestMetadataKeys.WorkflowName] = workflowName.Trim();
-
-        await ManifestStore.SaveAsync(Id, manifest, ct);
     }
 
     private EventEnvelope CreateRoleAgentConfigureEnvelope(RoleDefinition role)

@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -39,7 +38,6 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddSingleton<IWorkflowExecutionReportArtifactSink>(new FakeReportSink());
         services.AddLogging();
         services.AddSingleton<IActorRuntime>(new FakeActorRuntime());
-        services.AddSingleton<IAgentManifestStore>(new FakeAgentManifestStore());
         services.AddSingleton<IActorTypeProbe, RuntimeBackedActorTypeProbe>();
         services.AddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
         var registry = new WorkflowDefinitionRegistry();
@@ -190,8 +188,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     public async Task WorkflowRunActorPort_ShouldForwardRuntimeCalls_AndValidateArguments()
     {
         var runtime = new FakeActorRuntime();
-        var manifestStore = new FakeAgentManifestStore();
-        var port = CreatePort(runtime, manifestStore);
+        var port = CreatePort(runtime);
 
         runtime.ActorToReturn = new StubActor("actor-1", new StubAgent("agent-1"));
         var got = await port.GetAsync("actor-1", CancellationToken.None);
@@ -221,57 +218,25 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunActorPort_WhenWorkflowManifestExists_ShouldReadWorkflowBinding()
+    public async Task WorkflowRunActorPort_WhenRuntimeTypeMatches_ShouldRecognizeWorkflowAgent()
     {
         var runtime = new FakeActorRuntime();
-        var manifestStore = new FakeAgentManifestStore();
-        var port = CreatePort(runtime, manifestStore);
-        var actor = new StubActor("wf-actor", new StubAgent("wf-agent"));
-
-        await manifestStore.SaveAsync(actor.Id, new AgentManifest
-        {
-            AgentId = actor.Id,
-            AgentTypeName = typeof(WorkflowGAgent).AssemblyQualifiedName!,
-            Metadata =
-            {
-                [WorkflowManifestMetadataKeys.WorkflowName] = "direct",
-            },
-        });
+        var port = CreatePort(runtime);
+        var actor = new StubActor(
+            "wf-actor",
+            new WorkflowGAgent(runtime, new FakeRoleAgentTypeResolver(), new FakeEventModuleFactory(), [new WorkflowCoreModulePack()]));
+        runtime.ActorToReturn = actor;
 
         (await port.IsWorkflowActorAsync(actor, CancellationToken.None)).Should().BeTrue();
-        (await port.GetBoundWorkflowNameAsync(actor, CancellationToken.None)).Should().Be("direct");
+        (await port.GetBoundWorkflowNameAsync(actor, CancellationToken.None)).Should().BeNull();
     }
 
     [Fact]
-    public async Task WorkflowRunActorPort_WhenManifestUsesFullName_ShouldRecognizeWorkflowAgent()
+    public async Task WorkflowRunActorPort_WhenRuntimeTypeLooksSimilar_ShouldRejectWorkflowAgentMatch()
     {
         var runtime = new FakeActorRuntime();
-        var manifestStore = new FakeAgentManifestStore();
-        var port = CreatePort(runtime, manifestStore);
+        var port = CreatePort(runtime);
         var actor = new StubActor("wf-actor", new StubAgent("wf-agent"));
-
-        await manifestStore.SaveAsync(actor.Id, new AgentManifest
-        {
-            AgentId = actor.Id,
-            AgentTypeName = typeof(WorkflowGAgent).FullName!,
-        });
-
-        (await port.IsWorkflowActorAsync(actor, CancellationToken.None)).Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task WorkflowRunActorPort_WhenManifestTypeNameLooksSimilar_ShouldRejectWorkflowAgentMatch()
-    {
-        var runtime = new FakeActorRuntime();
-        var manifestStore = new FakeAgentManifestStore();
-        var port = CreatePort(runtime, manifestStore);
-        var actor = new StubActor("wf-actor", new StubAgent("wf-agent"));
-
-        await manifestStore.SaveAsync(actor.Id, new AgentManifest
-        {
-            AgentId = actor.Id,
-            AgentTypeName = $"{typeof(WorkflowGAgent).FullName}Shadow",
-        });
 
         (await port.IsWorkflowActorAsync(actor, CancellationToken.None)).Should().BeFalse();
     }
@@ -280,8 +245,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     public async Task WorkflowRunActorPort_ParseWorkflowYaml_ShouldRejectUnknownStepTypes()
     {
         var runtime = new FakeActorRuntime();
-        var manifestStore = new FakeAgentManifestStore();
-        var port = CreatePort(runtime, manifestStore);
+        var port = CreatePort(runtime);
 
         var parseResult = await port.ParseWorkflowYamlAsync(
             """
@@ -301,8 +265,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     public async Task WorkflowRunActorPort_ParseWorkflowYaml_ShouldAcceptKnownStepTypes()
     {
         var runtime = new FakeActorRuntime();
-        var manifestStore = new FakeAgentManifestStore();
-        var port = CreatePort(runtime, manifestStore);
+        var port = CreatePort(runtime);
 
         var parseResult = await port.ParseWorkflowYamlAsync(
             """
@@ -379,10 +342,10 @@ public sealed class WorkflowInfrastructureCoverageTests
         options.DuplicatePolicy.Should().Be(WorkflowDefinitionDuplicatePolicy.Override);
     }
 
-    private static WorkflowRunActorPort CreatePort(FakeActorRuntime runtime, FakeAgentManifestStore manifestStore)
+    private static WorkflowRunActorPort CreatePort(FakeActorRuntime runtime)
     {
-        var verifier = new DefaultAgentTypeVerifier(new RuntimeBackedActorTypeProbe(runtime), manifestStore);
-        return new WorkflowRunActorPort(runtime, manifestStore, verifier, [new WorkflowCoreModulePack()]);
+        var verifier = new DefaultAgentTypeVerifier(new RuntimeBackedActorTypeProbe(runtime));
+        return new WorkflowRunActorPort(runtime, verifier, [new WorkflowCoreModulePack()]);
     }
 
     private sealed class FakeReportSink : IWorkflowExecutionReportArtifactSink
@@ -485,38 +448,6 @@ public sealed class WorkflowInfrastructureCoverageTests
         public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-    }
-
-    private sealed class FakeAgentManifestStore : IAgentManifestStore
-    {
-        private readonly Dictionary<string, AgentManifest> _manifests = new(StringComparer.Ordinal);
-
-        public Task<AgentManifest?> LoadAsync(string agentId, CancellationToken ct = default)
-        {
-            _ = ct;
-            _manifests.TryGetValue(agentId, out var manifest);
-            return Task.FromResult(manifest);
-        }
-
-        public Task SaveAsync(string agentId, AgentManifest manifest, CancellationToken ct = default)
-        {
-            _ = ct;
-            _manifests[agentId] = manifest;
-            return Task.CompletedTask;
-        }
-
-        public Task DeleteAsync(string agentId, CancellationToken ct = default)
-        {
-            _ = ct;
-            _manifests.Remove(agentId);
-            return Task.CompletedTask;
-        }
-
-        public Task<IReadOnlyList<AgentManifest>> ListAsync(CancellationToken ct = default)
-        {
-            _ = ct;
-            return Task.FromResult<IReadOnlyList<AgentManifest>>(_manifests.Values.ToList());
-        }
     }
 
     private sealed class FakeRoleAgentTypeResolver : IRoleAgentTypeResolver

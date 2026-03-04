@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -17,19 +16,16 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
 {
     private const string WorkflowRunActorPortPublisherId = "workflow.run.actor.port";
     private readonly IActorRuntime _runtime;
-    private readonly IAgentManifestStore _manifestStore;
     private readonly IAgentTypeVerifier _agentTypeVerifier;
     private readonly ISet<string> _knownStepTypes;
     private readonly WorkflowParser _workflowParser = new();
 
     public WorkflowRunActorPort(
         IActorRuntime runtime,
-        IAgentManifestStore manifestStore,
         IAgentTypeVerifier agentTypeVerifier,
         IEnumerable<IWorkflowModulePack> modulePacks)
     {
         _runtime = runtime;
-        _manifestStore = manifestStore;
         _agentTypeVerifier = agentTypeVerifier;
         var packs = modulePacks?.ToList()
             ?? throw new ArgumentNullException(nameof(modulePacks));
@@ -62,16 +58,17 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         return await _agentTypeVerifier.IsExpectedAsync(actor.Id, typeof(WorkflowGAgent), ct);
     }
 
-    public async Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default)
+    public Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(actor);
-        var manifest = await _manifestStore.LoadAsync(actor.Id, ct);
-        if (manifest?.Metadata == null)
-            return null;
+        ct.ThrowIfCancellationRequested();
+        if (actor.Agent is not WorkflowGAgent workflowAgent)
+            return Task.FromResult<string?>(null);
 
-        return manifest.Metadata.TryGetValue(WorkflowManifestMetadataKeys.WorkflowName, out var workflowName)
-            ? workflowName
-            : null;
+        var workflowName = string.IsNullOrWhiteSpace(workflowAgent.State.WorkflowName)
+            ? null
+            : workflowAgent.State.WorkflowName.Trim();
+        return Task.FromResult(workflowName);
     }
 
     public Task ConfigureWorkflowAsync(

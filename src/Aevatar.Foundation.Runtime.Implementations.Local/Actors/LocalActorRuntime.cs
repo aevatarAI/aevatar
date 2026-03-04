@@ -8,9 +8,9 @@ using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Implementations.Local.ActivationIndex;
 using Aevatar.Foundation.Runtime.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -18,12 +18,13 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 
-/// <summary>Local actor runtime: creates, destroys, links actors, and manages manifest persistence.</summary>
+/// <summary>Local actor runtime: creates, destroys, links actors, and manages local activation index.</summary>
 public sealed class LocalActorRuntime : IActorRuntime
 {
     private readonly ConcurrentDictionary<string, LocalActor> _actors = new();
     private readonly IStreamProvider _streams;
     private readonly IStreamLifecycleManager _streamLifecycleManager;
+    private readonly ILocalActivationIndexStore _activationIndexStore;
     private readonly IServiceProvider _services;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private readonly ILogger<LocalActorRuntime> _logger;
@@ -38,15 +39,17 @@ public sealed class LocalActorRuntime : IActorRuntime
         _streams = streams;
         _services = services;
         _streamLifecycleManager = streamLifecycleManager;
-        _deactivationHookDispatcher = services.GetService<IActorDeactivationHookDispatcher>();
         _logger = logger ?? NullLogger<LocalActorRuntime>.Instance;
+        _activationIndexStore = services.GetService<ILocalActivationIndexStore>()
+            ?? new InMemoryLocalActivationIndexStore();
+        _deactivationHookDispatcher = services.GetService<IActorDeactivationHookDispatcher>();
     }
 
     /// <summary>Creates actor for the specified agent type.</summary>
     public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
         CreateAsync(typeof(TAgent), id, ct);
 
-    /// <summary>Creates actor by type, injects dependencies, and persists manifest.</summary>
+    /// <summary>Creates actor by type and records local activation index.</summary>
     public async Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
     {
         var actorId = id ?? AgentId.New(agentType);
@@ -68,14 +71,8 @@ public sealed class LocalActorRuntime : IActorRuntime
         if (!_actors.TryAdd(actorId, actor))
             throw new InvalidOperationException($"Actor {actorId} already exists");
 
-        // Persist manifest
-        var manifestStore = _services.GetService<IAgentManifestStore>();
-        if (manifestStore != null)
-        {
-            var manifest = await manifestStore.LoadAsync(actorId, ct) ?? new AgentManifest { AgentId = actorId };
-            manifest.AgentTypeName = agentType.AssemblyQualifiedName ?? agentType.FullName ?? agentType.Name;
-            await manifestStore.SaveAsync(actorId, manifest, ct);
-        }
+        var agentTypeName = agentType.AssemblyQualifiedName ?? agentType.FullName ?? agentType.Name;
+        await _activationIndexStore.UpsertAsync(actorId, agentTypeName, ct);
 
         await actor.ActivateAsync(ct);
         AgentMetrics.ActiveActors.Add(1);
@@ -83,23 +80,20 @@ public sealed class LocalActorRuntime : IActorRuntime
         return actor;
     }
 
-    /// <summary>Destroys actor and cleans up stream and manifest.</summary>
+    /// <summary>Destroys actor and cleans up stream and activation index.</summary>
     public async Task DestroyAsync(string id, CancellationToken ct = default)
     {
         if (!_actors.TryRemove(id, out var actor))
         {
             _streamLifecycleManager.RemoveStream(id);
-            var unloadedManifestStore = _services.GetService<IAgentManifestStore>();
-            if (unloadedManifestStore != null)
-                await unloadedManifestStore.DeleteAsync(id, ct);
+            await _activationIndexStore.DeleteAsync(id, ct);
             return;
         }
 
         await actor.DeactivateAsync(ct);
         AgentMetrics.ActiveActors.Add(-1);
         _streamLifecycleManager.RemoveStream(id);
-        var manifestStore = _services.GetService<IAgentManifestStore>();
-        if (manifestStore != null) await manifestStore.DeleteAsync(id, ct);
+        await _activationIndexStore.DeleteAsync(id, ct);
         _logger.LogInformation("Actor {Id} destroyed", id);
     }
 
@@ -120,15 +114,11 @@ public sealed class LocalActorRuntime : IActorRuntime
         if (_actors.ContainsKey(id))
             return true;
 
-        var manifestStore = _services.GetService<IAgentManifestStore>();
-        if (manifestStore == null)
+        var agentTypeName = await _activationIndexStore.GetAgentTypeNameAsync(id);
+        if (string.IsNullOrWhiteSpace(agentTypeName))
             return false;
 
-        var manifest = await manifestStore.LoadAsync(id);
-        if (manifest == null || string.IsNullOrWhiteSpace(manifest.AgentTypeName))
-            return false;
-
-        return ResolveAgentType(manifest.AgentTypeName) != null;
+        return ResolveAgentType(agentTypeName) != null;
     }
 
     /// <summary>Creates parent-child link and registers stream-layer forwarding binding.</summary>
@@ -167,18 +157,14 @@ public sealed class LocalActorRuntime : IActorRuntime
 
     private async Task EnsureActorMaterializedAsync(string actorId, CancellationToken ct = default)
     {
-        var manifestStore = _services.GetService<IAgentManifestStore>();
-        if (manifestStore == null)
+        var agentTypeName = await _activationIndexStore.GetAgentTypeNameAsync(actorId, ct);
+        if (string.IsNullOrWhiteSpace(agentTypeName))
             return;
 
-        var manifest = await manifestStore.LoadAsync(actorId, ct);
-        if (manifest == null || string.IsNullOrWhiteSpace(manifest.AgentTypeName))
-            return;
-
-        var agentType = ResolveAgentType(manifest.AgentTypeName);
+        var agentType = ResolveAgentType(agentTypeName);
         if (agentType == null)
         {
-            _logger.LogWarning("Failed to resolve agent type {Type} for actor {ActorId}.", manifest.AgentTypeName, actorId);
+            _logger.LogWarning("Failed to resolve agent type {Type} for actor {ActorId}.", agentTypeName, actorId);
             return;
         }
 
@@ -235,7 +221,6 @@ public sealed class LocalActorRuntime : IActorRuntime
         gab.EventPublisher = publisher;
         gab.Logger = logger;
         gab.Services = _services;
-        gab.ManifestStore = _services.GetService<IAgentManifestStore>();
         if (gab is IEventSourcingFactoryBinding statefulBinding)
             statefulBinding.BindEventSourcingFactory(_services);
     }

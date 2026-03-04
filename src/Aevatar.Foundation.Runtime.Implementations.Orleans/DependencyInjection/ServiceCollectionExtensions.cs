@@ -48,7 +48,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEventStoreCompactionScheduler, DeferredEventStoreCompactionScheduler>();
         services.TryAddSingleton<IActorDeactivationHook, EventStoreCompactionDeactivationHook>();
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
-        services.TryAddSingleton<IAgentManifestStore, InMemoryManifestStore>();
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
 
         services.TryAddSingleton<IRunManager, RunManager>();

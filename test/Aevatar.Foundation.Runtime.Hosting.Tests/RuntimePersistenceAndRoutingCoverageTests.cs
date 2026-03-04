@@ -56,39 +56,6 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
     }
 
     [Fact]
-    public async Task InMemoryManifestStore_ShouldSaveLoadListAndDelete()
-    {
-        var store = new InMemoryManifestStore();
-        var manifest1 = new AgentManifest
-        {
-            AgentId = "actor-1",
-            AgentTypeName = "type-1",
-            ModuleNames = ["m1"],
-            ConfigJson = "{}",
-            Metadata = new Dictionary<string, string> { ["k1"] = "v1" },
-        };
-        var manifest2 = new AgentManifest
-        {
-            AgentId = "actor-2",
-            AgentTypeName = "type-2",
-            ModuleNames = ["m2"],
-        };
-
-        await store.SaveAsync("actor-1", manifest1);
-        await store.SaveAsync("actor-2", manifest2);
-
-        (await store.LoadAsync("actor-1"))!.AgentTypeName.Should().Be("type-1");
-
-        var listed = await store.ListAsync();
-        listed.Should().HaveCount(2);
-        listed.Select(x => x.AgentId).Should().BeEquivalentTo(["actor-1", "actor-2"]);
-
-        await store.DeleteAsync("actor-1");
-        (await store.LoadAsync("actor-1")).Should().BeNull();
-        (await store.ListAsync()).Should().ContainSingle(x => x.AgentId == "actor-2");
-    }
-
-    [Fact]
     public async Task InMemoryRouterStore_ShouldSaveLoadAndDeleteHierarchy()
     {
         var store = new InMemoryRouterStore();

@@ -83,7 +83,6 @@ extensions:
 - codec 留空会按默认值归一化；未知 codec 会 fail-fast（抛异常，避免 silent corruption）
 - `*_schema_version` 由业务定义并递增，用于后续迁移逻辑
 - app config 会写入 `RoleGAgentState`，可在无 Manifest 场景下通过事件回放恢复
-- Manifest `ConfigJson` 仍作为完整配置快照（provider/model/system_prompt 等）
 
 ## 设计特点
 

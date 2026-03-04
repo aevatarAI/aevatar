@@ -168,17 +168,16 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
-    public async Task ConfigureRoleAgent_ShouldPersistAndRestoreAppConfigFromManifest()
+    public async Task ConfigureRoleAgent_ShouldPersistAndReplayAppConfig()
     {
         var store = new InMemoryEventStoreForTests();
-        var manifestStore = new InMemoryAgentManifestStore();
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(store)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
 
-        var agent1 = CreateAgent(services, "role-app-config", manifestStore);
+        var agent1 = CreateAgent(services, "role-app-config");
         await agent1.ActivateAsync();
         await agent1.HandleConfigureRoleAgent(new ConfigureRoleAgentEvent
         {
@@ -190,7 +189,7 @@ public class RoleGAgentReplayContractTests
         });
         await agent1.DeactivateAsync();
 
-        var agent2 = CreateAgent(services, "role-app-config", manifestStore);
+        var agent2 = CreateAgent(services, "role-app-config");
         await agent2.ActivateAsync();
 
         agent2.Config.AppConfigJson.Should().Be("{\"tenant\":\"a\"}");
@@ -199,17 +198,16 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
-    public async Task SetRoleAppConfigEvent_ShouldPersistAndRestorePatchedConfigWithoutOverwritingBaseSettings()
+    public async Task SetRoleAppConfigEvent_ShouldPersistAndReplayPatchedAppConfig()
     {
         var store = new InMemoryEventStoreForTests();
-        var manifestStore = new InMemoryAgentManifestStore();
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(store)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
 
-        var agent1 = CreateAgent(services, "role-app-config-patch", manifestStore);
+        var agent1 = CreateAgent(services, "role-app-config-patch");
         await agent1.ActivateAsync();
         await agent1.HandleConfigureRoleAgent(new ConfigureRoleAgentEvent
         {
@@ -232,20 +230,21 @@ public class RoleGAgentReplayContractTests
         var persisted = await store.GetEventsAsync("role-app-config-patch");
         persisted.Should().Contain(x => x.EventType.Contains(nameof(SetRoleAppConfigEvent), StringComparison.Ordinal));
 
-        var agent2 = CreateAgent(services, "role-app-config-patch", manifestStore);
+        var agent2 = CreateAgent(services, "role-app-config-patch");
         await agent2.ActivateAsync();
 
         agent2.RoleName.Should().Be("config-role");
-        agent2.Config.ProviderName.Should().Be("mock");
-        agent2.Config.Model.Should().Be("model-a");
-        agent2.Config.SystemPrompt.Should().Be("be helpful");
+        // Without framework-level config manifest, non-app config fields stay on class defaults after replay.
+        agent2.Config.ProviderName.Should().BeEmpty();
+        agent2.Config.Model.Should().BeNull();
+        agent2.Config.SystemPrompt.Should().BeEmpty();
         agent2.Config.AppConfigJson.Should().Be("{\"tenant\":\"new\"}");
         agent2.Config.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
         agent2.Config.AppConfigSchemaVersion.Should().Be(2);
     }
 
     [Fact]
-    public async Task SetRoleAppConfigEvent_ShouldReplayAppConfigWithoutManifestStore()
+    public async Task SetRoleAppConfigEvent_ShouldReplayAppConfigFromEventSourcing()
     {
         var store = new InMemoryEventStoreForTests();
         var services = new ServiceCollection()
@@ -278,8 +277,7 @@ public class RoleGAgentReplayContractTests
         var agent2 = CreateAgent(services, "role-app-config-event-only");
         await agent2.ActivateAsync();
 
-        // Base provider/model settings still come from manifest config;
-        // this assertion verifies app config can recover independently from event replay.
+        // Base provider/model settings come from class defaults.
         agent2.Config.ProviderName.Should().BeEmpty();
         agent2.Config.AppConfigJson.Should().Be("{\"tenant\":\"event\"}");
         agent2.Config.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
@@ -365,14 +363,12 @@ public class RoleGAgentReplayContractTests
 
     private static RoleGAgent CreateAgent(
         IServiceProvider services,
-        string actorId,
-        IAgentManifestStore? manifestStore = null)
+        string actorId)
     {
         var agent = new RoleGAgent
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
-            ManifestStore = manifestStore,
         };
         AssignActorId(agent, actorId);
         return agent;
@@ -387,35 +383,4 @@ public class RoleGAgentReplayContractTests
         setIdMethod!.Invoke(agent, [actorId]);
     }
 
-    private sealed class InMemoryAgentManifestStore : IAgentManifestStore
-    {
-        private readonly Dictionary<string, AgentManifest> _store = new(StringComparer.Ordinal);
-
-        public Task<AgentManifest?> LoadAsync(string agentId, CancellationToken ct = default)
-        {
-            _ = ct;
-            _store.TryGetValue(agentId, out var manifest);
-            return Task.FromResult(manifest);
-        }
-
-        public Task SaveAsync(string agentId, AgentManifest manifest, CancellationToken ct = default)
-        {
-            _ = ct;
-            _store[agentId] = manifest;
-            return Task.CompletedTask;
-        }
-
-        public Task DeleteAsync(string agentId, CancellationToken ct = default)
-        {
-            _ = ct;
-            _store.Remove(agentId);
-            return Task.CompletedTask;
-        }
-
-        public Task<IReadOnlyList<AgentManifest>> ListAsync(CancellationToken ct = default)
-        {
-            _ = ct;
-            return Task.FromResult<IReadOnlyList<AgentManifest>>(_store.Values.ToList());
-        }
-    }
 }
