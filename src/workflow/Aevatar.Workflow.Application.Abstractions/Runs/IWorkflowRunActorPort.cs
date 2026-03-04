@@ -16,7 +16,7 @@ public sealed record WorkflowYamlParseResult(
 }
 
 /// <summary>
-/// Port for resolving, creating, and configuring workflow-capable actors.
+/// Port for resolving, creating, and binding workflow definitions for workflow-capable actors.
 /// Implemented by infrastructure to avoid Application depending on Workflow.Core.
 /// </summary>
 public interface IWorkflowRunActorPort
@@ -31,7 +31,7 @@ public interface IWorkflowRunActorPort
 
     Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default);
 
-    Task ConfigureWorkflowAsync(
+    Task BindWorkflowDefinitionAsync(
         IActor actor,
         string workflowYaml,
         string workflowName,

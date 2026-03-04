@@ -415,7 +415,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
     {
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Payload = Any.Pack(new ConfigureWorkflowEvent
+        Payload = Any.Pack(new BindWorkflowDefinitionEvent
         {
             WorkflowYaml = yaml,
             WorkflowName = name,
@@ -1696,4 +1696,3 @@ sealed record WorkflowYamlSource(string Kind, string DirectoryPath);
 sealed record WorkflowFileEntry(string Name, string FilePath, string SourceKind);
 sealed record WorkflowListClassification(string Category, string Group, string GroupLabel, int SortOrder);
 sealed record LlmProviderRegistration(string Name, string Model, string? Endpoint, string ApiKey);
-

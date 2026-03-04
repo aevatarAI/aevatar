@@ -22,9 +22,9 @@ public class WorkflowGAgentCoverageTests
     public async Task ConfigureWorkflow_WhenSwitchingWorkflowName_ShouldThrow()
     {
         var agent = CreateAgent();
-        await agent.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_a");
+        await agent.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_a");
 
-        Func<Task> act = () => agent.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_b");
+        Func<Task> act = () => agent.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_b");
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*cannot switch*");
@@ -35,7 +35,7 @@ public class WorkflowGAgentCoverageTests
     {
         var agent = CreateAgent();
 
-        await agent.ConfigureWorkflowAsync("", "wf_empty");
+        await agent.BindWorkflowDefinitionAsync("", "wf_empty");
         var description = await agent.GetDescriptionAsync();
 
         agent.State.Compiled.Should().BeFalse();
@@ -51,7 +51,7 @@ public class WorkflowGAgentCoverageTests
         var runtime = new RecordingActorRuntime();
         var agent = CreateAgent(runtime: runtime);
         agent.EventPublisher = publisher;
-        await agent.ConfigureWorkflowAsync("", "wf_invalid");
+        await agent.BindWorkflowDefinitionAsync("", "wf_invalid");
 
         await agent.HandleChatRequest(new ChatRequestEvent
         {
@@ -74,7 +74,7 @@ public class WorkflowGAgentCoverageTests
         var resolver = new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
         var agent = CreateAgent(runtime, resolver);
         agent.EventPublisher = publisher;
-        await agent.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_ok");
+        await agent.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_ok");
 
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "second", SessionId = "s2" });
@@ -101,7 +101,7 @@ public class WorkflowGAgentCoverageTests
         var runtime = new RecordingActorRuntime();
         var resolver = new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
         var agent = CreateAgent(runtime, resolver);
-        await agent.ConfigureWorkflowAsync(BuildWorkflowYamlWithFullRoleConfig(), "wf_role_fields");
+        await agent.BindWorkflowDefinitionAsync(BuildWorkflowYamlWithFullRoleConfig(), "wf_role_fields");
 
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
 
@@ -128,7 +128,7 @@ public class WorkflowGAgentCoverageTests
         var runtime = new RecordingActorRuntime();
         var resolver = new StaticRoleAgentTypeResolver(typeof(FakeNonRoleAgent));
         var agent = CreateAgent(runtime, resolver);
-        await agent.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_x", "RoleX"), "wf_error");
+        await agent.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_x", "RoleX"), "wf_error");
 
         var act = async () => await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "x", SessionId = "s" });
 
@@ -142,7 +142,7 @@ public class WorkflowGAgentCoverageTests
         var runtime = new RecordingActorRuntime();
         var resolver = new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
         var agent = CreateAgent(runtime, resolver);
-        await agent.ConfigureWorkflowAsync(
+        await agent.BindWorkflowDefinitionAsync(
             BuildValidWorkflowYaml(
                 roleId: "role_cfg",
                 roleName: "RoleCfg",
@@ -164,7 +164,7 @@ public class WorkflowGAgentCoverageTests
         var runtime = new RecordingActorRuntime();
         var resolver = new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
         var agent = CreateAgent(runtime, resolver);
-        await agent.ConfigureWorkflowAsync(BuildValidWorkflowYaml("", "RoleNoId"), "wf_missing_role");
+        await agent.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("", "RoleNoId"), "wf_missing_role");
 
         var act = async () => await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "x", SessionId = "s" });
 
@@ -257,10 +257,10 @@ public class WorkflowGAgentCoverageTests
         agent.EventPublisher = publisher;
 
         var originalYaml = BuildValidWorkflowYaml("role_a", "RoleA");
-        await agent.ConfigureWorkflowAsync(originalYaml, "wf_valid");
+        await agent.BindWorkflowDefinitionAsync(originalYaml, "wf_valid");
         var previousVersion = agent.State.Version;
 
-        await agent.HandleReconfigureAndExecute(new ReconfigureAndExecuteWorkflowEvent
+        await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
         {
             WorkflowYaml = "name: broken\nroles: [",
             Input = "hello",
@@ -275,8 +275,8 @@ public class WorkflowGAgentCoverageTests
             .Should().ContainSingle(x => x.Content.Contains("Dynamic workflow YAML compilation failed", StringComparison.Ordinal));
 
         var persisted = await sharedEventStore.GetEventsAsync(agent.Id);
-        persisted.Count(x => x.EventType.Contains(nameof(ConfigureWorkflowEvent), StringComparison.Ordinal))
-            .Should().Be(1, "invalid reconfigure must not persist additional ConfigureWorkflowEvent");
+        persisted.Count(x => x.EventType.Contains(nameof(BindWorkflowDefinitionEvent), StringComparison.Ordinal))
+            .Should().Be(1, "invalid reconfigure must not persist additional BindWorkflowDefinitionEvent");
     }
 
     [Fact]
@@ -290,7 +290,7 @@ public class WorkflowGAgentCoverageTests
         });
         var agent = CreateAgent(runtime: runtime, workflowResolver: resolver);
         agent.EventPublisher = publisher;
-        await agent.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_valid");
+        await agent.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_valid");
 
         await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
         {
@@ -304,7 +304,7 @@ public class WorkflowGAgentCoverageTests
         var pendingBefore = agent.State.PendingSubWorkflowInvocations.Should().ContainSingle().Subject;
         var bindingBefore = agent.State.SubWorkflowBindings.Should().ContainSingle().Subject;
 
-        await agent.HandleReconfigureAndExecute(new ReconfigureAndExecuteWorkflowEvent
+        await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
         {
             WorkflowYaml = BuildValidWorkflowYaml("role_b", "RoleB"),
             Input = "dynamic-input",
@@ -332,11 +332,11 @@ public class WorkflowGAgentCoverageTests
         var agent = CreateAgent(runtime, resolver);
         agent.EventPublisher = publisher;
 
-        await agent.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_same", "RoleSame"), "wf_valid");
+        await agent.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_same", "RoleSame"), "wf_valid");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
         runtime.CreateCalls.Should().Be(1);
 
-        await agent.HandleReconfigureAndExecute(new ReconfigureAndExecuteWorkflowEvent
+        await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
         {
             WorkflowYaml = BuildValidWorkflowYaml("role_same", "RoleSame"),
             Input = "dynamic-input",
@@ -357,7 +357,7 @@ public class WorkflowGAgentCoverageTests
             ["sub_flow"] = BuildValidWorkflowYaml("sub_role", "SubRole"),
         });
         var agent = CreateAgent(runtime: runtime, workflowResolver: resolver);
-        await agent.ConfigureWorkflowAsync(BuildWorkflowYamlWithSingletonWorkflowCall("sub_flow"), "wf_with_call");
+        await agent.BindWorkflowDefinitionAsync(BuildWorkflowYamlWithSingletonWorkflowCall("sub_flow"), "wf_with_call");
 
         await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
         {
@@ -385,7 +385,7 @@ public class WorkflowGAgentCoverageTests
         agent.State.PendingSubWorkflowInvocations.Should().BeEmpty("completed invocation should clear pending state");
         agent.State.SubWorkflowBindings.Should().ContainSingle("singleton binding remains reusable before reconfigure");
 
-        await agent.HandleReconfigureAndExecute(new ReconfigureAndExecuteWorkflowEvent
+        await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
         {
             WorkflowYaml = BuildValidWorkflowYaml("role_b", "RoleB"),
             Input = "dynamic-input",
@@ -920,7 +920,7 @@ public class WorkflowGAgentCoverageTests
 
         var agent1 = CreateAgent(eventStore: sharedEventStore);
         await agent1.ActivateAsync();
-        await agent1.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_replay");
+        await agent1.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_replay");
         await agent1.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
             WorkflowName = "wf_replay",
@@ -937,7 +937,7 @@ public class WorkflowGAgentCoverageTests
 
         var persisted = await sharedEventStore.GetEventsAsync(agent1.Id);
         persisted.Should().HaveCount(3);
-        persisted.Should().Contain(x => x.EventType.Contains(nameof(ConfigureWorkflowEvent), StringComparison.Ordinal));
+        persisted.Should().Contain(x => x.EventType.Contains(nameof(BindWorkflowDefinitionEvent), StringComparison.Ordinal));
         persisted.Count(x => x.EventType.Contains(nameof(WorkflowCompletedEvent), StringComparison.Ordinal)).Should().Be(2);
 
         var agent2 = CreateAgent(eventStore: sharedEventStore);
@@ -958,7 +958,7 @@ public class WorkflowGAgentCoverageTests
         var pack = new TestModulePack([expander], [configurator]);
         var agent = CreateAgent(eventModuleFactory: factory, packs: [pack]);
 
-        await agent.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_modules");
+        await agent.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_modules");
 
         agent.GetModules().Select(x => x.Name).Should().BeEquivalentTo(["module_a", "module_b"]);
         configurator.Configured.Should().BeEquivalentTo(["module_a:wf_valid", "module_b:wf_valid"]);
@@ -973,7 +973,7 @@ public class WorkflowGAgentCoverageTests
         var pack = new TestModulePack([expander], []);
         var agent = CreateAgent(eventModuleFactory: factory, packs: [pack]);
 
-        Func<Task> act = () => agent.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_modules");
+        Func<Task> act = () => agent.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_modules");
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*requires module 'missing_module'*");
@@ -990,7 +990,7 @@ public class WorkflowGAgentCoverageTests
 
         var agent1 = CreateAgent(eventModuleFactory: factory, packs: [pack], eventStore: sharedEventStore);
         await agent1.ActivateAsync();
-        await agent1.ConfigureWorkflowAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_activate");
+        await agent1.BindWorkflowDefinitionAsync(BuildValidWorkflowYaml("role_a", "RoleA"), "wf_activate");
         await agent1.DeactivateAsync();
 
         var agent2 = CreateAgent(eventModuleFactory: factory, packs: [pack], eventStore: sharedEventStore);

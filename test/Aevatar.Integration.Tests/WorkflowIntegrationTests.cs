@@ -206,7 +206,7 @@ public class WorkflowIntegrationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new ConfigureWorkflowEvent
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new BindWorkflowDefinitionEvent
             {
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",

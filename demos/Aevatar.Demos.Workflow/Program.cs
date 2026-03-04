@@ -313,7 +313,7 @@ foreach (var workflowName in workflowsToRun)
     {
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Payload = Any.Pack(new ConfigureWorkflowEvent
+        Payload = Any.Pack(new BindWorkflowDefinitionEvent
         {
             WorkflowYaml = yaml,
             WorkflowName = workflowName,

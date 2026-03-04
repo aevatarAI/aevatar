@@ -71,7 +71,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         return Task.FromResult(workflowName);
     }
 
-    public Task ConfigureWorkflowAsync(
+    public Task BindWorkflowDefinitionAsync(
         IActor actor,
         string workflowYaml,
         string workflowName,
@@ -79,7 +79,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(actor);
-        var envelope = CreateConfigureWorkflowEnvelope(workflowYaml, workflowName, inlineWorkflowYamls);
+        var envelope = CreateWorkflowDefinitionBindEnvelope(workflowYaml, workflowName, inlineWorkflowYamls);
         return actor.HandleEventAsync(envelope, ct);
     }
 
@@ -117,7 +117,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         }
     }
 
-    private static EventEnvelope CreateConfigureWorkflowEnvelope(
+    private static EventEnvelope CreateWorkflowDefinitionBindEnvelope(
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls) =>
@@ -125,18 +125,18 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(BuildConfigureWorkflowEvent(workflowYaml, workflowName, inlineWorkflowYamls)),
+            Payload = Any.Pack(BuildBindWorkflowDefinitionEvent(workflowYaml, workflowName, inlineWorkflowYamls)),
             PublisherId = WorkflowRunActorPortPublisherId,
             Direction = EventDirection.Self,
             CorrelationId = Guid.NewGuid().ToString("N"),
         };
 
-    private static ConfigureWorkflowEvent BuildConfigureWorkflowEvent(
+    private static BindWorkflowDefinitionEvent BuildBindWorkflowDefinitionEvent(
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls)
     {
-        var configure = new ConfigureWorkflowEvent
+        var bind = new BindWorkflowDefinitionEvent
         {
             WorkflowYaml = workflowYaml ?? string.Empty,
             WorkflowName = workflowName ?? string.Empty,
@@ -145,9 +145,9 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         if (inlineWorkflowYamls != null)
         {
             foreach (var (key, value) in inlineWorkflowYamls)
-                configure.InlineWorkflowYamls[key] = value;
+                bind.InlineWorkflowYamls[key] = value;
         }
 
-        return configure;
+        return bind;
     }
 }

@@ -38,7 +38,7 @@
 5. 收到 `ChatRequestEvent` 后发布 `StartWorkflowEvent`，驱动执行
 
 ```
-ConfigureWorkflow(yaml)
+BindWorkflowDefinition(yaml)
   -> WorkflowParser.Parse (YAML -> WorkflowDefinition)
   -> WorkflowValidator.Validate (结构校验)
   -> InstallCognitiveModules:

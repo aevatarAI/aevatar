@@ -240,7 +240,7 @@ await actor.HandleEventAsync(new EventEnvelope
 {
     Id = Guid.NewGuid().ToString("N"),
     Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-    Payload = Any.Pack(new ConfigureWorkflowEvent
+    Payload = Any.Pack(new BindWorkflowDefinitionEvent
     {
         WorkflowYaml = workflowYaml,
         WorkflowName = workflowName,

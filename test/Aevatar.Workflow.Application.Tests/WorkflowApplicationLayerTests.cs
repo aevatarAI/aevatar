@@ -715,7 +715,7 @@ public class WorkflowRunActorResolverTests
         var createdActor = new FakeActor("created-actor", null, new FakeWorkflowAgent("wf-agent-auto"));
         var actorPort = new FakeWorkflowRunActorPort([], () => createdActor)
         {
-            ConfigureWorkflowHandler = (_, _, _, _, _) => throw new InvalidOperationException("configure failed"),
+            BindWorkflowDefinitionHandler = (_, _, _, _, _) => throw new InvalidOperationException("bind failed"),
         };
         var registry = new WorkflowDefinitionRegistry();
         registry.Register("auto", WorkflowDefinitionRegistry.BuiltInAutoYaml);
@@ -736,7 +736,7 @@ public class WorkflowRunActorResolverTests
         var createdActor = new FakeActor("created-actor", null, new FakeWorkflowAgent("wf-agent-inline"));
         var actorPort = new FakeWorkflowRunActorPort([], () => createdActor)
         {
-            ConfigureWorkflowHandler = (_, _, _, _, _) => throw new InvalidOperationException("inline configure failed"),
+            BindWorkflowDefinitionHandler = (_, _, _, _, _) => throw new InvalidOperationException("inline bind failed"),
         };
         var registry = new WorkflowDefinitionRegistry();
         var resolver = new WorkflowRunActorResolver(actorPort, registry);
@@ -750,7 +750,7 @@ public class WorkflowRunActorResolverTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*inline configure failed*");
+            .WithMessage("*inline bind failed*");
     }
 
     [Fact]
@@ -802,7 +802,7 @@ public class WorkflowRunActorResolverTests
     private static IActor CreateWorkflowActor(string actorId, string workflowName)
     {
         var workflowAgent = new FakeWorkflowAgent($"wf-agent-{actorId}");
-        workflowAgent.ConfigureWorkflow(WorkflowDefinitionRegistry.BuiltInDirectYaml, workflowName);
+        workflowAgent.BindWorkflowDefinition(WorkflowDefinitionRegistry.BuiltInDirectYaml, workflowName);
         return new FakeActor(actorId, null, workflowAgent);
     }
 
@@ -1369,7 +1369,7 @@ internal sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
     private readonly Dictionary<string, IActor> _actorsById;
     private readonly Func<IActor>? _createActor;
     public Func<string, WorkflowYamlParseResult>? ParseWorkflowYamlHandler { get; set; }
-    public Func<IActor, string, string, IReadOnlyDictionary<string, string>?, CancellationToken, Task>? ConfigureWorkflowHandler { get; set; }
+    public Func<IActor, string, string, IReadOnlyDictionary<string, string>?, CancellationToken, Task>? BindWorkflowDefinitionHandler { get; set; }
 
     public FakeWorkflowRunActorPort(
         IEnumerable<IActor> actors,
@@ -1416,21 +1416,21 @@ internal sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
         return Task.FromResult((actor.Agent as FakeWorkflowAgent)?.WorkflowName);
     }
 
-    public Task ConfigureWorkflowAsync(
+    public Task BindWorkflowDefinitionAsync(
         IActor actor,
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         CancellationToken ct = default)
     {
-        if (ConfigureWorkflowHandler != null)
-            return ConfigureWorkflowHandler(actor, workflowYaml, workflowName, inlineWorkflowYamls, ct);
+        if (BindWorkflowDefinitionHandler != null)
+            return BindWorkflowDefinitionHandler(actor, workflowYaml, workflowName, inlineWorkflowYamls, ct);
 
         _ = ct;
         if (actor.Agent is not FakeWorkflowAgent workflowAgent)
             throw new InvalidOperationException("Current actor adapter requires FakeWorkflowAgent.");
 
-        workflowAgent.ConfigureWorkflow(workflowYaml, workflowName);
+        workflowAgent.BindWorkflowDefinition(workflowYaml, workflowName);
         return Task.CompletedTask;
     }
 
@@ -1535,7 +1535,7 @@ internal sealed class FakeWorkflowAgent : IAgent
     public string Id { get; }
     public string? WorkflowName { get; private set; }
 
-    public void ConfigureWorkflow(string workflowYaml, string workflowName)
+    public void BindWorkflowDefinition(string workflowYaml, string workflowName)
     {
         _ = workflowYaml;
         if (!string.IsNullOrWhiteSpace(WorkflowName) &&

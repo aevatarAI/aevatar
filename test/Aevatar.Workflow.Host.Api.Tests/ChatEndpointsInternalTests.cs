@@ -1008,7 +1008,7 @@ public class ChatEndpointsInternalTests
         public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
         public Task<bool> IsWorkflowActorAsync(IActor actor, CancellationToken ct = default) => Task.FromResult(IsWorkflowActorValue);
         public Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default) => Task.FromResult<string?>(null);
-        public Task ConfigureWorkflowAsync(
+        public Task BindWorkflowDefinitionAsync(
             IActor actor,
             string workflowYaml,
             string workflowName,

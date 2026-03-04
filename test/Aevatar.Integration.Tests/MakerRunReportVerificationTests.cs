@@ -87,7 +87,7 @@ public class MakerRunReportVerificationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ConfigureWorkflowEvent
+            Payload = Any.Pack(new BindWorkflowDefinitionEvent
             {
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "maker_report_verification",
