@@ -4,7 +4,6 @@ using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
-using Aevatar.Workflow.Infrastructure.Workflows;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
@@ -31,7 +30,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             http,
             new ChatInput { Prompt = "hello" },
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             CancellationToken.None);
 
         await act.Should().NotThrowAsync();
@@ -53,7 +51,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var result = await WorkflowCapabilityEndpoints.HandleCommand(
             new ChatInput { Prompt = "hello" },
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
             CancellationToken.None);
 
@@ -79,7 +76,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var result = await WorkflowCapabilityEndpoints.HandleCommand(
             new ChatInput { Prompt = "hello", Workflow = "direct" },
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
             CancellationToken.None);
 
@@ -106,7 +102,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var result = await WorkflowCapabilityEndpoints.HandleCommand(
             new ChatInput { Prompt = "hello" },
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
             CancellationToken.None);
 
@@ -127,7 +122,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
             CancellationToken.None);
 
@@ -152,7 +146,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
             CancellationToken.None);
 
@@ -184,7 +177,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
             CancellationToken.None);
 
@@ -216,7 +208,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
             service,
-            new AllowAllFileBackedWorkflowNameCatalog(),
             loggerFactory,
             CancellationToken.None);
 
@@ -280,11 +271,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         {
             return Task.FromResult(_socket);
         }
-    }
-
-    private sealed class AllowAllFileBackedWorkflowNameCatalog : IFileBackedWorkflowNameCatalog
-    {
-        public bool Contains(string workflowName) => true;
     }
 
     private sealed class FakeWebSocket : WebSocket

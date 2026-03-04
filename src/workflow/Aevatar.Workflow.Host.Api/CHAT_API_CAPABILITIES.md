@@ -7,8 +7,8 @@
 ## 快速结论
 
 - `/api/chat`（SSE）与 `/api/ws/chat`（WebSocket）能力一致，仅传输协议不同。
-- 支持 `workflowYamls > workflow > default(auto)` 的运行选择优先级。
-- `workflow` 仅用于 file-backed workflow 名称查找；`workflowYamls` 仅用于 inline YAML bundle（首项入口）。
+- 支持 `workflowYamls > workflow > default(auto)` 的运行选择优先级；`default(auto)` 仅在新建 Actor 且未提供 `agentId` 时触发。
+- `workflow` 用于已注册 workflow 名称查找（内建 + 文件加载）；`workflowYamls` 仅用于 inline YAML bundle（首项入口）。
 - 当 `workflow` 与 `workflowYamls` 同时出现时，固定使用 `workflowYamls`。
 - 内建 `direct / auto / auto_review`：
   - `auto`：可根据 prompt 自动生成 workflow YAML，先经过强制校验，再进入 `human_approval`，审批通过即执行。

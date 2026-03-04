@@ -5,7 +5,6 @@ using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
-using Aevatar.Workflow.Infrastructure.Workflows;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -44,7 +43,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 AgentId = "actor-1",
             }, WebSocketMessageType.Text),
             service,
-            new FakeFileBackedWorkflowNameCatalog([]),
             CancellationToken.None);
 
         var types = socket.SentTexts
@@ -79,7 +77,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             socket,
             new ChatWebSocketCommandEnvelope("req-2", new ChatInput { Prompt = "hello" }, WebSocketMessageType.Text),
             service,
-            new FakeFileBackedWorkflowNameCatalog([]),
             CancellationToken.None);
 
         socket.SentTexts.Should().ContainSingle();
@@ -89,6 +86,40 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
         service.LastCommand.Should().NotBeNull();
         service.LastCommand!.WorkflowName.Should().Be("auto");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAgentIdProvidedWithoutWorkflow_ShouldKeepWorkflowUnset()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var service = new FakeCommandExecutionService
+        {
+            Handler = (_, _, _, _) => Task.FromResult(
+                new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
+                    WorkflowChatRunStartError.AgentNotFound,
+                    null,
+                    null)),
+        };
+
+        await ChatWebSocketRunCoordinator.ExecuteAsync(
+            socket,
+            new ChatWebSocketCommandEnvelope(
+                "req-3",
+                new ChatInput
+                {
+                    Prompt = "hello",
+                    AgentId = " actor-1 ",
+                },
+                WebSocketMessageType.Text),
+            service,
+            CancellationToken.None);
+
+        service.LastCommand.Should().NotBeNull();
+        service.LastCommand!.ActorId.Should().Be("actor-1");
+        service.LastCommand.WorkflowName.Should().BeNull();
+        socket.SentTexts.Should().ContainSingle();
+        using var doc = JsonDocument.Parse(socket.SentTexts[0]);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("AGENT_NOT_FOUND");
     }
 
     [Fact]
@@ -194,18 +225,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             LastCommand = command;
             return Handler(command, emitAsync, onStartedAsync, ct);
         }
-    }
-
-    private sealed class FakeFileBackedWorkflowNameCatalog : IFileBackedWorkflowNameCatalog
-    {
-        private readonly ISet<string> _names;
-
-        public FakeFileBackedWorkflowNameCatalog(IEnumerable<string> names)
-        {
-            _names = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
-        }
-
-        public bool Contains(string workflowName) => _names.Contains(workflowName);
     }
 
     private sealed class FakeWebSocket : WebSocket

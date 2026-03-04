@@ -1,7 +1,6 @@
 using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Infrastructure.Workflows;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -11,11 +10,10 @@ internal static class ChatWebSocketRunCoordinator
         WebSocket socket,
         ChatWebSocketCommandEnvelope command,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
-        IFileBackedWorkflowNameCatalog fileBackedWorkflowNames,
         CancellationToken ct = default)
     {
         var responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input, fileBackedWorkflowNames);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);

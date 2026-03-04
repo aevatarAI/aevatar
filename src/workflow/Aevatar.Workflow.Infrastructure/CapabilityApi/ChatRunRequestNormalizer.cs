@@ -1,6 +1,5 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
-using Aevatar.Workflow.Infrastructure.Workflows;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -19,10 +18,9 @@ internal readonly record struct ChatRunRequestNormalizationResult(
 
 internal static class ChatRunRequestNormalizer
 {
-    public static ChatRunRequestNormalizationResult Normalize(
-        ChatInput input,
-        IFileBackedWorkflowNameCatalog fileBackedWorkflowNames)
+    public static ChatRunRequestNormalizationResult Normalize(ChatInput input)
     {
+        var normalizedAgentId = NormalizeAgentId(input.AgentId);
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
         if (inlineWorkflowYamls.Count > 0)
         {
@@ -31,30 +29,30 @@ internal static class ChatRunRequestNormalizer
                 new WorkflowChatRunRequest(
                     input.Prompt,
                     WorkflowName: null,
-                    input.AgentId,
+                    normalizedAgentId,
                     inlineWorkflowYamls));
         }
 
         var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
         if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
         {
-            if (!fileBackedWorkflowNames.Contains(requestedWorkflowName))
-                return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.WorkflowNotFound);
-
             return ChatRunRequestNormalizationResult.Success(
                 new WorkflowChatRunRequest(
                     input.Prompt,
                     requestedWorkflowName,
-                    input.AgentId,
+                    normalizedAgentId,
                     WorkflowYamls: null));
         }
 
-        // Public default mode: prompt-only requests route to auto.
+        // Public default mode: only actor-creation requests route to auto.
+        var defaultWorkflowName = string.IsNullOrWhiteSpace(normalizedAgentId)
+            ? WorkflowRunBehaviorOptions.AutoWorkflowName
+            : null;
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
                 input.Prompt,
-                WorkflowRunBehaviorOptions.AutoWorkflowName,
-                input.AgentId,
+                defaultWorkflowName,
+                normalizedAgentId,
                 WorkflowYamls: null));
     }
 
@@ -71,4 +69,7 @@ internal static class ChatRunRequestNormalizer
 
     private static string NormalizeWorkflowName(string? workflowName) =>
         string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
+
+    private static string? NormalizeAgentId(string? agentId) =>
+        string.IsNullOrWhiteSpace(agentId) ? null : agentId.Trim();
 }

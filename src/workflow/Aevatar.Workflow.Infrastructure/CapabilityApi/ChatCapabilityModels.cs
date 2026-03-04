@@ -11,7 +11,7 @@ public sealed record ChatInput
     public required string Prompt { get; init; }
 
     /// <summary>
-    /// File-backed workflow name lookup only.
+    /// Workflow identifier lookup (built-ins and file-loaded workflows).
     /// This field does not accept inline YAML semantics.
     /// </summary>
     public string? Workflow { get; init; }

@@ -26,7 +26,7 @@
 ```json
 {
   "prompt": "用户输入，必填",
-  "workflow": "可选：文件工作流名称（仅 file-backed lookup）",
+  "workflow": "可选：已注册 workflow 名称（内建 + 文件加载）",
   "agentId": "可选：复用已有 Workflow Actor",
   "workflowYamls": ["可选：inline YAML bundle（数组）"]
 }
@@ -35,15 +35,16 @@
 选择优先级：
 
 1. `workflowYamls`（inline bundle，首项为入口 workflow）
-2. `workflow`（文件工作流名称 lookup）
-3. 当 `workflow/workflowYamls` 都为空时，外部 API 边界默认路由到 `auto`
+2. `workflow`（已注册 workflow 名称 lookup）
+3. 当 `workflow/workflowYamls` 都为空且未提供 `agentId` 时，外部 API 边界默认路由到 `auto`
+4. 当只提供 `agentId` 且 `workflow/workflowYamls` 为空时，保持 workflow 未指定，复用 actor 已绑定 workflow
 
 契约约束：
 
-- `workflow` 只表示“按名称查找文件工作流”（来自配置目录里的 `.yaml/.yml`）。
+- `workflow` 只表示“按名称查找已注册 workflow”（内建 + 文件加载）。
 - `workflowYamls` 只表示“inline YAML bundle”，不承担名称查找语义。
 - 若同时传 `workflow` 与 `workflowYamls`，以 `workflowYamls` 为准。
-- 不做 `direct/auto/auto_review` 字面黑名单；是否允许取决于是否存在同名文件（例如 `direct.yaml`）。
+- `direct/auto/auto_review` 可显式传入，按注册表解析，不要求存在同名文件。
 
 ## 3. 自动编排能力（按 prompt 决策）
 

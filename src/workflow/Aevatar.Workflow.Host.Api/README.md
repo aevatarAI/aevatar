@@ -13,7 +13,7 @@
   - `POST /api/chat`（SSE）
   - `GET /api/ws/chat`（WebSocket）
   - `GET /api/agents`、`GET /api/workflows`、`GET /api/actors/{actorId}`、`GET /api/actors/{actorId}/timeline`
-  - `chat` payload 支持 `prompt` + `agentId` 复用已绑定 Actor，也支持 `workflow`（file-backed 名称 lookup）或 `workflowYamls`（inline YAML bundle）；当 `workflow/workflowYamls` 同时为空时，外部 API 默认走 `auto`
+  - `chat` payload 支持 `prompt` + `agentId` 复用已绑定 Actor，也支持 `workflow`（注册表名称 lookup，含内建与文件工作流）或 `workflowYamls`（inline YAML bundle）；仅在新建 Actor 且 `workflow/workflowYamls` 同时为空时，外部 API 默认走 `auto`
 - 调用应用层：
   - `ICommandExecutionService<WorkflowChatRunRequest,...>`
   - `IWorkflowExecutionQueryApplicationService`
@@ -23,9 +23,10 @@
 
 | 场景 | 示例 |
 |------|------|
-| 按名称加载 file-backed workflow（新建 Actor） | `{ "prompt": "...", "workflow": "publish_pipeline" }` |
+| 按名称加载已注册 workflow（新建 Actor） | `{ "prompt": "...", "workflow": "publish_pipeline" }` |
 | `workflow/workflowYamls` 都不传（新建 Actor） | `{ "prompt": "..." }` |
 | 复用已绑定 workflow 的 Actor | `{ "prompt": "...", "agentId": "actor-123" }` |
+| 显式选择内建 workflow | `{ "prompt": "...", "workflow": "auto_review" }` |
 | inline 提交 workflow YAML bundle（新建 Actor） | `{ "prompt": "...", "workflowYamls": ["name: root\\nroles: ...\\nsteps: ..."] }` |
 | 指定 Actor + inline YAML bundle | `{ "prompt": "...", "agentId": "actor-123", "workflowYamls": ["..."] }` |
 | `workflow` + `workflowYamls` 同传 | 固定以 `workflowYamls` 路径为准，`workflow` 被忽略 |
@@ -34,7 +35,7 @@
 
 - `INVALID_WORKFLOW_YAML`：`workflowYamls` 任一 YAML 解析或校验失败（400）
 - `WORKFLOW_BINDING_MISMATCH`：目标 actor 已绑定其它 workflow（409）
-- `WORKFLOW_NOT_FOUND`：`workflow` 未命中 file-backed 名称（404）
+- `WORKFLOW_NOT_FOUND`：`workflow` 未命中注册表名称（404）
 - `AGENT_WORKFLOW_NOT_CONFIGURED`：传了 `agentId`，但 actor 未绑定且未提供 `workflowYamls`（409）
 
 异常回退语义：
