@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Application;
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 
@@ -10,19 +9,19 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
 {
     private readonly RuntimeScriptActorAccessor _actorAccessor;
-    private readonly IStreamProvider _streams;
+    private readonly RuntimeScriptQueryClient _queryClient;
     private readonly TimeSpan _queryTimeout;
     private readonly bool _useEventDrivenDefinitionQuery;
     private readonly QueryScriptDefinitionSnapshotRequestAdapter _queryAdapter = new();
 
     public RuntimeScriptDefinitionSnapshotPort(
         RuntimeScriptActorAccessor actorAccessor,
-        IStreamProvider streams,
+        RuntimeScriptQueryClient queryClient,
         IScriptingRuntimeQueryModes queryModes,
         IScriptingPortTimeouts timeouts)
     {
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
-        _streams = streams ?? throw new ArgumentNullException(nameof(streams));
+        _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
         _useEventDrivenDefinitionQuery = (queryModes ?? throw new ArgumentNullException(nameof(queryModes)))
             .UseEventDrivenDefinitionQuery;
         _queryTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
@@ -41,8 +40,7 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
         var actor = await _actorAccessor.GetAsync(definitionActorId)
             ?? throw new InvalidOperationException($"Script definition actor not found: {definitionActorId}");
 
-        var response = await EventStreamQueryReplyAwaiter.QueryActorAsync<ScriptDefinitionSnapshotRespondedEvent>(
-            _streams,
+        var response = await _queryClient.QueryActorAsync<ScriptDefinitionSnapshotRespondedEvent>(
             actor,
             ScriptingQueryRouteConventions.DefinitionReplyStreamPrefix,
             _queryTimeout,

@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
 
@@ -19,7 +20,9 @@ public sealed class ScriptEvolutionValidatedEventReducer
         readModel.ProposalId = evt.ProposalId ?? string.Empty;
         readModel.ScriptId = evt.ScriptId ?? string.Empty;
         readModel.CandidateRevision = evt.CandidateRevision ?? string.Empty;
-        readModel.ValidationStatus = evt.IsValid ? "validated" : "validation_failed";
+        readModel.ValidationStatus = evt.IsValid
+            ? ScriptEvolutionStatuses.Validated
+            : ScriptEvolutionStatuses.ValidationFailed;
         readModel.Diagnostics.Clear();
         readModel.Diagnostics.AddRange(evt.Diagnostics);
         readModel.LastEventId = envelope.Id ?? string.Empty;

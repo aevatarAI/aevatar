@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
 
@@ -20,8 +21,8 @@ public sealed class ScriptEvolutionRolledBackEventReducer
         readModel.ScriptId = evt.ScriptId ?? string.Empty;
         readModel.CandidateRevision = evt.TargetRevision ?? string.Empty;
         readModel.CatalogActorId = evt.CatalogActorId ?? string.Empty;
-        readModel.RollbackStatus = "rolled_back";
-        readModel.PromotionStatus = "rolled_back";
+        readModel.RollbackStatus = ScriptEvolutionStatuses.RolledBack;
+        readModel.PromotionStatus = ScriptEvolutionStatuses.RolledBack;
         readModel.LastEventId = envelope.Id ?? string.Empty;
         readModel.UpdatedAt = now;
         return true;

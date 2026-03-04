@@ -25,7 +25,7 @@ public sealed record ScriptPromotionDecision(
             ScriptId: proposal.ScriptId ?? string.Empty,
             BaseRevision: proposal.BaseRevision ?? string.Empty,
             CandidateRevision: proposal.CandidateRevision ?? string.Empty,
-            Status: "rejected",
+            Status: ScriptEvolutionStatuses.Rejected,
             FailureReason: failureReason ?? string.Empty,
             DefinitionActorId: string.Empty,
             CatalogActorId: string.Empty,

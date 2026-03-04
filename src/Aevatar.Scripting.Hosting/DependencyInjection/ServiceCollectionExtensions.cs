@@ -41,6 +41,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptingRuntimeQueryModes, DefaultScriptingRuntimeQueryModes>();
         services.TryAddSingleton<IScriptEvolutionDecisionFallbackPort, RuntimeScriptEvolutionDecisionFallbackPort>();
         services.TryAddSingleton<RuntimeScriptActorAccessor>();
+        services.TryAddSingleton<RuntimeScriptQueryClient>();
         services.TryAddSingleton<RuntimeScriptEvolutionLifecycleService>();
         services.TryAddSingleton<RuntimeScriptDefinitionLifecycleService>();
         services.TryAddSingleton<RuntimeScriptExecutionLifecycleService>();
