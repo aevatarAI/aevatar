@@ -261,8 +261,11 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
         {
             ["AEVATAR_TEST_NODE_VERSION_TAG"] = "old",
             ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = targetTypeUrl,
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "2",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "0",
         });
 
+        var logProbe = new CompatibilityFailureLogProbe();
         var host = await StartSiloHostAsync(
             bootstrapServers,
             topicName,
@@ -270,7 +273,8 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             streamProviderName,
             actorEventNamespace,
             siloPort,
-            gatewayPort);
+            gatewayPort,
+            loggerProvider: logProbe);
 
         try
         {
@@ -288,6 +292,9 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             };
 
             await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
+
+            await logProbe.WaitForInjectedFailureAsync(TimeSpan.FromSeconds(20));
+            await logProbe.WaitForRuntimeRetryScheduledAsync(TimeSpan.FromSeconds(20));
 
             var waitReceived = async () => await RecordingKafkaIntegrationAgent.WaitForEnvelopeAsync(TimeSpan.FromSeconds(8));
             await waitReceived.Should().ThrowAsync<TimeoutException>();
@@ -419,6 +426,199 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
         }
     }
 
+    [KafkaIntegrationFact]
+    public async Task KafkaTransport_ShouldAutoRetryOnRuntimeException_AndEventuallySucceed()
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var topicName = $"aevatar-orleans-it-{Guid.NewGuid():N}";
+        var consumerGroup = $"aevatar-orleans-it-group-{Guid.NewGuid():N}";
+        var streamProviderName = $"aevatar-orleans-provider-{Guid.NewGuid():N}";
+        var actorEventNamespace = $"aevatar.orleans.it.{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        ThrowingKafkaIntegrationAgent.Reset();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "3",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+        });
+
+        var host = await StartSiloHostAsync(
+            bootstrapServers,
+            topicName,
+            consumerGroup,
+            streamProviderName,
+            actorEventNamespace,
+            siloPort,
+            gatewayPort);
+
+        try
+        {
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var initialized = await grain.InitializeAgentAsync(typeof(ThrowingKafkaIntegrationAgent).AssemblyQualifiedName!);
+            initialized.Should().BeTrue();
+
+            var transport = host.Services.GetRequiredService<IMassTransitEnvelopeTransport>();
+            var envelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Payload = Any.Pack(new StringValue { Value = "fail-twice-then-ok" }),
+                Direction = EventDirection.Down,
+            };
+            await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
+
+            var receivedEnvelope = await ThrowingKafkaIntegrationAgent.WaitForEnvelopeAsync(
+                current => current.Payload?.Is(StringValue.Descriptor) == true &&
+                           current.Payload.Unpack<StringValue>().Value == "fail-twice-then-ok",
+                TimeSpan.FromSeconds(30));
+            receivedEnvelope.Metadata.TryGetValue("aevatar.retry.attempt", out var attemptText).Should().BeTrue();
+            int.TryParse(attemptText, out var attempt).Should().BeTrue();
+            attempt.Should().BeGreaterThan(0);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [KafkaIntegrationFact]
+    public async Task KafkaTransport_ShouldKeepProcessingSubsequentEvents_AfterRuntimeRetryExhaustedFailure()
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var topicName = $"aevatar-orleans-it-{Guid.NewGuid():N}";
+        var consumerGroup = $"aevatar-orleans-it-group-{Guid.NewGuid():N}";
+        var streamProviderName = $"aevatar-orleans-provider-{Guid.NewGuid():N}";
+        var actorEventNamespace = $"aevatar.orleans.it.{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        ThrowingKafkaIntegrationAgent.Reset();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "1",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "0",
+        });
+
+        var host = await StartSiloHostAsync(
+            bootstrapServers,
+            topicName,
+            consumerGroup,
+            streamProviderName,
+            actorEventNamespace,
+            siloPort,
+            gatewayPort);
+
+        try
+        {
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var initialized = await grain.InitializeAgentAsync(typeof(ThrowingKafkaIntegrationAgent).AssemblyQualifiedName!);
+            initialized.Should().BeTrue();
+
+            var transport = host.Services.GetRequiredService<IMassTransitEnvelopeTransport>();
+            var failingEnvelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Payload = Any.Pack(new StringValue { Value = "always-fail" }),
+                Direction = EventDirection.Down,
+            };
+            await transport.PublishAsync(actorEventNamespace, actorId, failingEnvelope.ToByteArray(), CancellationToken.None);
+            await Task.Delay(500);
+
+            var succeedingEnvelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Payload = Any.Pack(new StringValue { Value = "ok" }),
+                Direction = EventDirection.Down,
+            };
+            await transport.PublishAsync(actorEventNamespace, actorId, succeedingEnvelope.ToByteArray(), CancellationToken.None);
+
+            var receivedEnvelope = await ThrowingKafkaIntegrationAgent.WaitForEnvelopeAsync(
+                current => current.Payload?.Is(StringValue.Descriptor) == true &&
+                           current.Payload.Unpack<StringValue>().Value == "ok",
+                TimeSpan.FromSeconds(30));
+            receivedEnvelope.Payload!.Unpack<StringValue>().Value.Should().Be("ok");
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [KafkaIntegrationFact]
+    public async Task KafkaTransport_ShouldDeduplicateOriginalEnvelope_AndStillAllowRuntimeRetrySuccess()
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var topicName = $"aevatar-orleans-it-{Guid.NewGuid():N}";
+        var consumerGroup = $"aevatar-orleans-it-group-{Guid.NewGuid():N}";
+        var streamProviderName = $"aevatar-orleans-provider-{Guid.NewGuid():N}";
+        var actorEventNamespace = $"aevatar.orleans.it.{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        ThrowingKafkaIntegrationAgent.Reset();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "3",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+        });
+
+        var host = await StartSiloHostAsync(
+            bootstrapServers,
+            topicName,
+            consumerGroup,
+            streamProviderName,
+            actorEventNamespace,
+            siloPort,
+            gatewayPort);
+
+        try
+        {
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var initialized = await grain.InitializeAgentAsync(typeof(ThrowingKafkaIntegrationAgent).AssemblyQualifiedName!);
+            initialized.Should().BeTrue();
+
+            var transport = host.Services.GetRequiredService<IMassTransitEnvelopeTransport>();
+            var originalEnvelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Payload = Any.Pack(new StringValue { Value = "fail-once-then-ok" }),
+                Direction = EventDirection.Down,
+            };
+
+            await transport.PublishAsync(actorEventNamespace, actorId, originalEnvelope.ToByteArray(), CancellationToken.None);
+            await transport.PublishAsync(actorEventNamespace, actorId, originalEnvelope.ToByteArray(), CancellationToken.None);
+
+            var receivedEnvelope = await ThrowingKafkaIntegrationAgent.WaitForEnvelopeAsync(
+                current => current.Payload?.Is(StringValue.Descriptor) == true &&
+                           current.Payload.Unpack<StringValue>().Value == "fail-once-then-ok",
+                TimeSpan.FromSeconds(30));
+            receivedEnvelope.Metadata["aevatar.retry.origin_event_id"].Should().Be(originalEnvelope.Id);
+
+            var processedCount = ThrowingKafkaIntegrationAgent.GetProcessedCount(originalEnvelope.Id);
+            processedCount.Should().Be(1);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
     private static async Task<IHost> StartSiloHostAsync(
         string bootstrapServers,
         string topicName,
@@ -512,6 +712,8 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
     {
         private readonly TaskCompletionSource<bool> _injectedFailureDetected =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _runtimeRetryScheduledDetected =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public ILogger CreateLogger(string categoryName)
         {
@@ -541,6 +743,8 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             var message = formatter(state, exception);
             if (message.Contains("Injected compatibility failure", StringComparison.Ordinal))
                 _injectedFailureDetected.TrySetResult(true);
+            if (message.Contains("Runtime envelope retry scheduled", StringComparison.Ordinal))
+                _runtimeRetryScheduledDetected.TrySetResult(true);
         }
 
         public async Task WaitForInjectedFailureAsync(TimeSpan timeout)
@@ -552,6 +756,18 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             catch (TimeoutException)
             {
                 throw new TimeoutException($"Timed out after {timeout} waiting for injected compatibility failure log.");
+            }
+        }
+
+        public async Task WaitForRuntimeRetryScheduledAsync(TimeSpan timeout)
+        {
+            try
+            {
+                await _runtimeRetryScheduledDetected.Task.WaitAsync(timeout);
+            }
+            catch (TimeoutException)
+            {
+                throw new TimeoutException($"Timed out after {timeout} waiting for runtime retry scheduling log.");
             }
         }
 
@@ -671,5 +887,151 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                 SingleWriter = false,
                 AllowSynchronousContinuations = false,
             });
+    }
+
+    public sealed class ThrowingKafkaIntegrationAgent : IAgent
+    {
+        private static readonly Lock SyncLock = new();
+        private static Channel<EventEnvelope> _receivedEnvelopes = CreateChannel();
+        private static readonly Dictionary<string, int> AttemptsByOriginId = new(StringComparer.Ordinal);
+        private static readonly Dictionary<string, int> ProcessedByOriginId = new(StringComparer.Ordinal);
+
+        public string Id => "throwing-kafka-integration-agent";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var textValue = envelope.Payload?.Is(StringValue.Descriptor) == true
+                ? envelope.Payload.Unpack<StringValue>().Value
+                : string.Empty;
+
+            if (string.Equals(textValue, "always-fail", StringComparison.Ordinal))
+                throw new InvalidOperationException("always-fail");
+
+            if (string.Equals(textValue, "fail-twice-then-ok", StringComparison.Ordinal))
+            {
+                var originId = ResolveOriginId(envelope);
+                var attempt = IncrementAttempt(originId);
+                if (attempt <= 2)
+                    throw new InvalidOperationException($"flaky-failure-{attempt}");
+            }
+
+            if (string.Equals(textValue, "fail-once-then-ok", StringComparison.Ordinal))
+            {
+                var originId = ResolveOriginId(envelope);
+                var attempt = IncrementAttempt(originId);
+                if (attempt <= 1)
+                    throw new InvalidOperationException($"flaky-failure-{attempt}");
+            }
+
+            var processedOriginId = ResolveOriginId(envelope);
+            IncrementProcessed(processedOriginId);
+
+            lock (SyncLock)
+            {
+                _receivedEnvelopes.Writer.TryWrite(envelope.Clone());
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task<string> GetDescriptionAsync() =>
+            Task.FromResult("throwing-kafka-integration-agent");
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task DeactivateAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public static void Reset()
+        {
+            lock (SyncLock)
+            {
+                _receivedEnvelopes = CreateChannel();
+                AttemptsByOriginId.Clear();
+                ProcessedByOriginId.Clear();
+            }
+        }
+
+        public static int GetProcessedCount(string originId)
+        {
+            lock (SyncLock)
+            {
+                return ProcessedByOriginId.TryGetValue(originId, out var count) ? count : 0;
+            }
+        }
+
+        public static async Task<EventEnvelope> WaitForEnvelopeAsync(
+            Func<EventEnvelope, bool> predicate,
+            TimeSpan timeout)
+        {
+            Channel<EventEnvelope> channel;
+            lock (SyncLock)
+            {
+                channel = _receivedEnvelopes;
+            }
+
+            using var cts = new CancellationTokenSource(timeout);
+            try
+            {
+                while (true)
+                {
+                    var envelope = await channel.Reader.ReadAsync(cts.Token);
+                    if (predicate(envelope))
+                        return envelope;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException($"Timed out after {timeout} waiting for Kafka envelope.");
+            }
+        }
+
+        private static Channel<EventEnvelope> CreateChannel() =>
+            Channel.CreateUnbounded<EventEnvelope>(new UnboundedChannelOptions
+            {
+                SingleReader = false,
+                SingleWriter = false,
+                AllowSynchronousContinuations = false,
+            });
+
+        private static int IncrementAttempt(string originId)
+        {
+            lock (SyncLock)
+            {
+                AttemptsByOriginId.TryGetValue(originId, out var current);
+                var next = current + 1;
+                AttemptsByOriginId[originId] = next;
+                return next;
+            }
+        }
+
+        private static void IncrementProcessed(string originId)
+        {
+            lock (SyncLock)
+            {
+                ProcessedByOriginId.TryGetValue(originId, out var current);
+                ProcessedByOriginId[originId] = current + 1;
+            }
+        }
+
+        private static string ResolveOriginId(EventEnvelope envelope)
+        {
+            if (envelope.Metadata.TryGetValue("aevatar.retry.origin_event_id", out var originId) &&
+                !string.IsNullOrWhiteSpace(originId))
+                return originId;
+            return string.IsNullOrWhiteSpace(envelope.Id) ? Guid.NewGuid().ToString("N") : envelope.Id;
+        }
     }
 }

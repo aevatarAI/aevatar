@@ -12,6 +12,9 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 [ImplicitStreamSubscription(OrleansRuntimeConstants.ActorEventStreamNamespace)]
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
+    private const string RetryAttemptMetadataKey = "aevatar.retry.attempt";
+    private const string RetryOriginEventIdMetadataKey = "aevatar.retry.origin_event_id";
+
     private readonly IPersistentState<RuntimeActorGrainState> _state;
     private IAgent? _agent;
     private IEventDeduplicator? _deduplicator;
@@ -123,7 +126,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         if (!string.IsNullOrWhiteSpace(envelope.Id) && _deduplicator != null)
         {
-            var dedupKey = $"{this.GetPrimaryKeyString()}:{envelope.Id}";
+            var dedupKey = BuildDedupKey(envelope);
             if (!await _deduplicator.TryRecordAsync(dedupKey))
                 return;
         }
@@ -163,13 +166,15 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
         catch (Exception ex)
         {
+            if (await TryScheduleRetryAsync(envelope, ex))
+                return;
+
             _logger.LogError(
                 ex,
-                "Runtime envelope handling failed without auto-retry for actor {ActorId}, envelope {EnvelopeId}, event type '{EventTypeUrl}'.",
+                "Runtime envelope handling failed after retry exhausted (or retry disabled) for actor {ActorId}, envelope {EnvelopeId}, event type '{EventTypeUrl}'.",
                 this.GetPrimaryKeyString(),
                 envelope.Id,
                 envelope.Payload?.TypeUrl ?? "(none)");
-            return;
         }
     }
 
@@ -371,6 +376,27 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             nextAttempt,
             _runtimeEnvelopeRetryPolicy.MaxAttempts);
         return true;
+    }
+
+    private string BuildDedupKey(EventEnvelope envelope)
+    {
+        var originId = envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
+                       !string.IsNullOrWhiteSpace(metadataOriginId)
+            ? metadataOriginId
+            : envelope.Id;
+
+        if (string.IsNullOrWhiteSpace(originId))
+            originId = envelope.Id ?? string.Empty;
+
+        var attempt = 0;
+        if (envelope.Metadata.TryGetValue(RetryAttemptMetadataKey, out var metadataAttempt) &&
+            int.TryParse(metadataAttempt, out var parsedAttempt) &&
+            parsedAttempt > 0)
+        {
+            attempt = parsedAttempt;
+        }
+
+        return $"{this.GetPrimaryKeyString()}:{originId}:{attempt}";
     }
 
     private async Task<bool> TryHandleCompatibilityRetryAsync(EventEnvelope envelope)

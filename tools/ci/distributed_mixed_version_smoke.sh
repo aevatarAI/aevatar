@@ -212,6 +212,11 @@ PY
   echo "Event-path probe HTTP status: ${chat_status}"
   sleep 2
 
+  if [[ "${chat_status}" != "200" && "${chat_status}" != "000" ]]; then
+    echo "Event-path probe returned unexpected status: ${chat_status}"
+    return 1
+  fi
+
   if ! grep -q "POST http://127.0.0.1:${old_node_port}/api/chat" "${log_dir}/node1.log"; then
     echo "Event-path probe did not reach old-node /api/chat endpoint."
     return 1
@@ -219,18 +224,27 @@ PY
 
   if [[ -n "${MIXED_FAIL_EVENT_TYPE_URLS}" ]]; then
     local observed_failure=0
+    local observed_runtime_retry=0
     for ((old_node=1; old_node<=OLD_NODE_COUNT; old_node++)); do
       if grep -q "Injected compatibility failure" "${log_dir}/node${old_node}.log"; then
         observed_failure=1
-        break
+      fi
+      if grep -q "Runtime envelope retry scheduled" "${log_dir}/node${old_node}.log"; then
+        observed_runtime_retry=1
       fi
     done
 
     if [[ "${observed_failure}" -ne 1 ]]; then
-      echo "Injected compatibility failure was not observed in old-node logs; verify with OrleansMassTransitRuntimeIntegrationTests."
-    else
-      echo "Observed injected compatibility failure in old-node logs."
+      echo "Injected compatibility failure was not observed in old-node logs."
+      return 1
     fi
+    echo "Observed injected compatibility failure in old-node logs."
+
+    if [[ "${observed_runtime_retry}" -ne 1 ]]; then
+      echo "Runtime retry scheduling log was not observed in old-node logs."
+      return 1
+    fi
+    echo "Observed runtime retry scheduling in old-node logs."
   fi
 
   if [[ "${chat_status}" == "000" ]]; then

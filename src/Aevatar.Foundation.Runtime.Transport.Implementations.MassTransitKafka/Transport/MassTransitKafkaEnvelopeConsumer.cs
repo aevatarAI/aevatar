@@ -26,18 +26,6 @@ internal sealed class MassTransitKafkaEnvelopeConsumer(
             Payload = message.Payload,
         };
 
-        try
-        {
-            await dispatcher.DispatchAsync(record);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(
-                ex,
-                "Kafka envelope dispatch failed for stream {StreamNamespace}/{StreamId}.",
-                message.StreamNamespace,
-                message.StreamId);
-            throw;
-        }
+        await dispatcher.DispatchAsync(record);
     }
 }
