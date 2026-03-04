@@ -1,126 +1,236 @@
-# Actor Runtime 消息激活重构蓝图（Final）
+# GAgent 配置与激活索引彻底重构蓝图（Zero-Manifest，不兼容）
 
 ## 1. 文档元信息
-- 状态：`Proposed`
-- 版本：`v1`
+- 状态：`Final`
+- 版本：`v4`
 - 日期：`2026-03-05`
-- 范围：`Aevatar.Foundation.Abstractions / Foundation.Runtime / Foundation.Runtime.Implementations.Local / Bootstrap / Orleans Runtime`
 - 决策级别：`Architecture Breaking Change`
+- 适用范围：
+  - `Aevatar.Foundation.Abstractions`
+  - `Aevatar.Foundation.Core`
+  - `Aevatar.Foundation.Runtime.Implementations.Local`
+  - `Aevatar.Foundation.Runtime.Implementations.Orleans`
+  - `Aevatar.Workflow.*`
+  - `Aevatar.Bootstrap* / Aevatar.Configuration`
 
-## 2. 背景与问题
-当前框架层把“恢复（restore）”定义为通用能力：
-1. `IActorRuntime` 暴露 `RestoreAllAsync`。
-2. 默认宿主启动时注册 `ActorRestoreHostedService` 并调用 `RestoreAllAsync`。
+## 2. 问题定义
+现有模型把多类语义混在 `Manifest` 中：
+1. 运行时激活索引（`actorId -> agentType`）。
+2. 模块恢复（`ModuleNames`）。
+3. 配置快照（`ConfigJson`）。
+4. 业务绑定（`Metadata`，如 workflowName）。
 
-该设计与“Actor 默认由消息触发激活”存在冲突，且把实现细节上提到了框架契约层。
+问题：
+1. 分层污染：Local 需求上浮到框架契约。
+2. 语义混杂：类型、配置、业务绑定耦合在同一存储对象。
+3. 可重放风险：配置读取与业务状态更新路径不一致。
 
-## 3. 关键结论（最终决策）
-1. 框架默认语义统一为：**消息驱动激活（message/stream activated）**。
-2. 框架抽象层不再定义 `RestoreAllAsync`。
-3. 启动时全量恢复不再是宿主默认行为。
-4. 若某 runtime 需要恢复策略，必须在**实现内部**完成，不上浮到 `Abstractions` 与 `Host`。
+## 3. 最终架构决策（强制）
+1. **框架层零 Manifest**：`Abstractions/Core` 不再定义任何 Manifest 模型与存储契约。
+2. **Class 默认配置来源**：仅来自 `Host/Infrastructure` 的 `.NET Configuration + Options` 装配结果。
+3. **Instance 覆盖配置与业务绑定**：统一进入 `State/Event`，不走旁路存储。
+4. **Local 惰性激活索引**：`actorId -> agentType` 仅作为 Local 实现内部细节，不上升框架。
+5. **不存在 Class Manifest**：一个 `GAgent class` 不对应任何框架级 Manifest，也不引入“Class Manifest Actor”。
+6. **默认模块不进框架**：`DefaultModules` 不作为 Foundation 通用语义；workflow 需要的模块由 workflow 自身定义与持久化。
+7. **激活语义遵循 Actor 模型**：由 stream/grain 激活；“恢复”是实现层加载 state，不是框架 Manifest 恢复。
+8. 不做兼容适配，不保留双写，不保留旧字段。
 
-## 4. 当前基线（代码事实）
-1. `IActorRuntime` 包含 `RestoreAllAsync`。
-   - 证据：`src/Aevatar.Foundation.Abstractions/IActorRuntime.cs`
-2. 默认 host 通过 `ActorRestoreHostedService` 调用 runtime restore。
-   - 证据：`src/Aevatar.Bootstrap/Hosting/ActorRestoreHostedService.cs`
-   - 证据：`src/Aevatar.Bootstrap/Hosting/WebApplicationBuilderExtensions.cs`
-3. Local runtime 实现了 manifest 按需物化。
-   - 证据：`src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorRuntime.cs`
-4. Orleans runtime 的 `RestoreAllAsync` 为 no-op，实际依赖 Grain 惰性激活。
-   - 证据：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansActorRuntime.cs`
-   - 证据：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs`
+## 4. 目标模型
 
-## 5. 目标架构
+### 4.1 Class 默认配置（Host 语义）
+Class 默认配置不属于框架契约，属于宿主装配输入。
 
-### 5.1 抽象层（Foundation.Abstractions）
-1. `IActorRuntime` 仅保留生命周期与拓扑能力：
-   - `Create / Destroy / Get / Exists / Link / Unlink`
-2. 删除 `RestoreAllAsync`。
+来源：
+1. `appsettings.*`
+2. environment variables
+3. secret/config center
 
-### 5.2 宿主层（Bootstrap）
-1. 删除 `ActorRestoreHostedService`。
-2. 删除 `EnableActorRestoreOnStartup` 及 `ActorRuntime:RestoreOnStartup`。
-3. 默认启动不做“框架级恢复编排”。
+输出：
+1. 强类型 `Options`（按 agent class 分组）。
+2. 注入到运行时创建/激活路径的默认配置对象。
 
-### 5.3 Runtime 实现层（Local / Orleans）
-1. Orleans：保持现有惰性激活语义。
-2. Local：实现内部惰性 materialize（按需创建），不依赖 host restore。
-3. 实现层可使用 `IAgentManifestStore` 作为运行时元数据来源，但这是 runtime 内部机制，不是框架契约。
+约束：
+1. `Core/Abstractions` 不引用 `IConfiguration/IOptions*`。
+2. 事件处理热路径不得动态访问远程配置中心。
+3. 集群共享 class 配置由基础设施配置中心保证，不通过框架内 Manifest/Actor 分发。
 
-## 6. Local Runtime 目标行为（强制）
-1. `GetAsync(actorId)`：
-   - 若 actor 在内存，直接返回。
-   - 若不在内存且 manifest 可解析类型，则内部创建并激活后返回。
-2. `ExistsAsync(actorId)`：
-   - 基于“内存存在或可从 manifest materialize”给出一致语义。
-3. `DestroyAsync(actorId)`：
-   - 保持当前销毁与 manifest 清理语义。
-4. 不提供对外 `RestoreAll` 入口。
+### 4.2 Instance 覆盖配置（Domain 语义）
+实例级配置与绑定统一 state-event 化：
+1. `InstanceConfigOverrides`
+2. `WorkflowBinding`
+3. 业务运行态字段
 
-## 7. Manifest 职责边界（重申）
-1. Manifest 是 runtime 元数据登记，不是框架恢复编排入口。
-2. Manifest 使用场景只允许在 runtime 实现内部（如 Local 惰性 materialize）。
-3. 宿主与应用层不直接驱动“全量扫描恢复”。
+约束：
+1. `Command -> Event -> Apply` 唯一路径。
+2. 不允许直接修改配置中心来覆盖单实例行为。
 
-## 8. 变更清单（按模块）
+### 4.3 Local 激活索引（实现语义）
+Local 为支持按 ID 惰性物化，内部维护索引：
+1. 数据：`actorId -> agentType`
+2. 位置：`Aevatar.Foundation.Runtime.Implementations.Local` 内部
+3. 生命周期：`Create` 写入，`Destroy` 删除，`Get/Exists` 读取
 
-### 8.1 Foundation.Abstractions
-1. 修改 `IActorRuntime`：删除 `RestoreAllAsync`。
-2. 更新 Abstractions README 中对 runtime 能力描述。
+约束：
+1. 非事实源不得上浮到框架层。
+2. Orleans 路径不依赖该索引。
 
-### 8.2 Foundation.Runtime（Local）
-1. 删除/内收 `RestoreAllAsync` 公共语义。
-2. 在 `GetAsync/ExistsAsync` 内实现按需 materialize。
-3. 补充相关日志与容错（类型解析失败 fail-fast + warning）。
+### 4.4 模块装配语义（Workflow 优先）
+1. Foundation 只保留通用扩展点：`IEventModule`、`IEventModuleFactory`、`SetModules(...)`。
+2. Workflow 负责解析“需要哪些模块”（来自 workflow steps/roles）。
+3. 模块选择结果进入 Workflow state/event，不再走 Foundation 级持久化。
+4. 框架不维护 `DefaultModules` 概念；如需默认值，在 workflow 定义或 workflow 自身配置中表达。
 
-### 8.3 Foundation.Runtime.Implementations.Orleans
-1. 删除接口适配残留（`RestoreAllAsync` 实现）。
-2. 保持 Grain `OnActivateAsync -> InitializeAgentInternalAsync` 路径不变。
+## 5. 分层职责重划
 
-### 8.4 Bootstrap
-1. 删除 `ActorRestoreHostedService` 文件与注册逻辑。
-2. 清理 host options 中 restore 相关配置项。
+### 5.1 Aevatar.Foundation.Abstractions
+删除：
+1. `AgentManifest`
+2. `IAgentManifestStore`
 
-### 8.5 Tests
-1. 删除/改写所有 `RestoreAllAsync` 相关断言。
-2. 新增 Local 惰性 materialize 测试：
-   - manifest 存在 -> `GetAsync` 首次命中自动激活。
-   - manifest 缺失/类型不可解析 -> 返回 null 或抛约定异常（需统一约定）。
-3. 保持 Orleans 现有惰性激活用例通过。
+保留：
+1. Actor/Agent/Runtime 基础契约
+2. 事件与模块抽象（无 workflow 专有语义）
 
-## 9. 实施工作包（WBS）
-1. `WP1`：移除抽象层 `RestoreAllAsync`。
-2. `WP2`：清理 Bootstrap restore hosted service 与配置项。
-3. `WP3`：Local runtime 按需 materialize 实现与单测。
-4. `WP4`：Orleans runtime 接口收敛与回归。
-5. `WP5`：文档与守卫同步。
+禁止：
+1. 引入任何 Manifest 等价抽象
+2. 引入 Local 激活索引接口
 
-## 10. 风险与治理
-1. 风险：Local runtime 首次访问延迟增加。  
-   治理：materialize 过程可观测化（metrics + structured logs）。
-2. 风险：manifest 污染导致类型解析失败。  
-   治理：fail-fast + 明确错误信息 + 运维审计脚本。
-3. 风险：历史测试依赖 `RestoreAll` 语义。  
-   治理：统一改造为“首次访问触发激活”的行为断言。
+### 5.2 Aevatar.Foundation.Core
+删除：
+1. `GAgentBase.ManifestStore` 注入点
+2. `GAgentBase` 模块恢复/持久化到 Manifest 逻辑
+3. `GAgentBase<TState, TConfig>` 的 `ConfigJson` 持久化逻辑
+4. `GAgentBase` 上承载 workflow 语义的 `DefaultModules`（若存在）
 
-## 11. 验证矩阵
-| ID | 验证目标 | 命令 | 通过标准 |
-|---|---|---|---|
-| V1 | Foundation 构建 | `dotnet build aevatar.foundation.slnf --nologo` | 全绿 |
-| V2 | Bootstrap 测试 | `dotnet test test/Aevatar.Bootstrap.Tests/Aevatar.Bootstrap.Tests.csproj --nologo` | 全绿 |
-| V3 | Runtime Hosting 测试 | `dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj --nologo` | 全绿 |
-| V4 | Workflow Host API 测试 | `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --nologo` | 全绿 |
-| V5 | 架构守卫 | `bash tools/ci/architecture_guards.sh` | 无违例 |
+新增：
+1. 激活时接收“宿主注入的 class 默认配置”
+2. 与 instance overrides 合并得到 effective config 的策略
 
-## 12. Final DoD
-1. `IActorRuntime` 不再包含 `RestoreAllAsync`。
-2. 默认 host 不再注册 Actor restore hosted service。
-3. Local/Orleans 均在实现层维持各自激活策略，框架层无恢复编排逻辑。
-4. 测试与文档全部同步，门禁通过。
+禁止：
+1. 直接引用 `IConfiguration` / `IOptions*`
 
-## 13. 非目标
-1. 不在本次重构中改动业务层 workflow 编排语义。
-2. 不新增第二套 runtime 抽象接口。
-3. 不保留对旧 `RestoreAll` 入口的兼容适配。
+### 5.3 Aevatar.Foundation.Runtime.Implementations.Local
+新增（internal）：
+1. `ILocalActivationIndexStore`
+2. `LocalActivationIndexRecord { ActorId, AgentTypeName }`
+
+行为：
+1. `Create` 写索引
+2. `Get/Exists` 惰性解析并物化
+3. `Destroy` 删索引
+
+### 5.4 Aevatar.Foundation.Runtime.Implementations.Orleans
+删除：
+1. 对旧 Manifest 存储依赖
+
+行为：
+1. 保持 grain 激活语义
+2. 类型事实优先来自运行时 grain 状态/初始化信息
+
+### 5.5 Aevatar.Workflow.*
+删除：
+1. workflow 绑定写入通用 Manifest 路径
+
+改为：
+1. workflow 绑定与模块需求进入 workflow state/event
+2. 查询走 read model/state
+
+### 5.6 Host / Infrastructure
+职责：
+1. 聚合 `.NET Configuration` 多源
+2. 绑定强类型 class defaults
+3. 在 runtime 装配点注入 class defaults
+4. 若有集群配置中心：处理版本化、缓存失效、发布流程
+
+说明：
+1. 可选：若需审计/审批/发布顺序，可在基础设施层引入配置控制面 Actor
+2. 该 Actor 不是框架契约，不进入 `Abstractions/Core`
+3. 不在框架层定义“配置分发协议”或“Class Manifest 协议”
+
+## 6. 生命周期语义
+
+### 6.1 Create
+1. runtime 接收 `agentType`
+2. 获取宿主装配的 class defaults
+3. 初始化实例 state（含 overrides 容器）
+4. Local 额外写 activation index
+
+### 6.2 Activate
+1. 由 stream/grain 激活实例（Local 用索引定位类型，Orleans 用 grain identity）
+2. 加载实例 state（实现层行为，不依赖框架 Manifest）
+3. 合并 `class defaults + instance overrides`
+4. 生成 `effective config`
+5. 进入事件处理主循环
+
+### 6.3 Reconfigure
+1. 仅通过命令事件更新 instance overrides
+2. 不写外部 manifest 存储
+
+### 6.4 Destroy
+1. 删除实例状态/事件流（按 provider 语义）
+2. Local 删除 activation index
+
+## 7. 不兼容变更清单
+1. 移除 `IAgentManifestStore` 与 `AgentManifest`
+2. 移除 `ConfigJson/ModuleNames/Metadata` 旧路径
+3. 移除所有 Foundation/Core/Workflow 对 Manifest 的读写
+4. 移除基于 Manifest 的类型回退与绑定回退逻辑
+5. 测试按新语义重写，不保留旧断言
+
+## 8. 实施工作包（WBS）
+
+### WP1：抽象层清理
+1. 删除 Manifest 相关契约与模型
+2. 修复编译与调用链
+
+### WP2：Core 去 Manifest 化
+1. 删除 GAgentBase Manifest 读写路径
+2. 建立 effective config 合并点（输入为 class defaults + instance overrides）
+
+### WP3：Local 内部索引化
+1. 实现 internal activation index store
+2. 改造 `Create/Get/Exists/Destroy` 语义
+3. 并发幂等测试覆盖
+
+### WP4：Workflow 状态化
+1. workflow 绑定迁移到 state/event
+2. 模块需求选择迁移到 workflow state/event
+
+### WP5：Host 配置装配
+1. 完成 `IConfiguration -> Options -> class defaults` 装配
+2. 配置中心/缓存失效（如启用）落在 Host/Infrastructure
+
+### WP6：门禁与文档
+1. 守卫：禁止 Core/Workflow 残留 Manifest 调用
+2. 守卫：禁止 Core/Abstractions 依赖 `Microsoft.Extensions.Configuration*`
+3. 守卫：禁止 Actor 事件处理路径直接读取远程配置
+4. 更新相关架构文档
+
+## 9. 验证矩阵
+1. `dotnet build aevatar.slnx --nologo`
+2. `dotnet test aevatar.slnx --nologo`
+3. `bash tools/ci/architecture_guards.sh`
+4. `bash tools/ci/solution_split_guards.sh`
+5. `bash tools/ci/solution_split_test_guards.sh`
+6. `bash tools/ci/test_stability_guards.sh`
+
+通过标准：
+1. 框架层无 Manifest 概念残留
+2. Local 惰性激活仅依赖 Local 内部索引
+3. Workflow 绑定与模块选择均 state-event 化
+4. Core/Abstractions 不出现 `IConfiguration` 直接引用
+5. 多节点配置生效路径一致（同输入下 effective config 一致）
+
+## 10. 非目标
+1. 不提供旧 Manifest 数据迁移脚本
+2. 不保留运行期兼容开关
+3. 不引入新的“框架级 Class Manifest”替代物
+4. 不在框架层引入 `DefaultModules` 语义
+5. 不在框架层引入“Class 配置分发 Actor”标准实现
+
+## 11. DoD
+1. Framework（Abstractions/Core）实现 Zero-Manifest
+2. 配置分层清晰：class defaults 在 Host，instance overrides 在 state/event
+3. Local 激活索引彻底内聚在 Local 实现
+4. Workflow 语义不再泄漏到 Foundation 通用层
+5. 文档、测试、门禁一致通过
