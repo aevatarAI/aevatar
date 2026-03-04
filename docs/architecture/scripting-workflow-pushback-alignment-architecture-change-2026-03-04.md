@@ -1,4 +1,4 @@
-# Aevatar.Scripting 回推链路对齐 Workflow 架构变更文档（2026-03-04 R8）
+# Aevatar.Scripting 回推链路对齐 Workflow 架构变更文档（2026-03-04 R9）
 
 ## 1. 变更范围
 
@@ -114,6 +114,36 @@
 2. `ProjectionReleaseServiceBase` 从 `<TRuntimeLease, TContext, TTopology, TEvent>` 降维到 `<TRuntimeLease, TContext, TTopology>`。
 3. 新增 `EventSinkProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, TEvent>`，统一 runtime lease 解析模板，删除 workflow/scripting service 内重复 cast override。
 
+### 决策 Q：EventSink Lifecycle 基类直接实现 Port 接口
+
+1. `EventSinkProjectionLifecyclePortServiceBase<...>` 直接实现 `IEventSinkProjectionLifecyclePort<TLease, TEvent>`。
+2. workflow/scripting lifecycle service 删除 `ProjectionEnabled + attach/detach/release` pass-through 方法。
+3. 生命周期服务收敛为仅保留 `EnsureActorProjectionAsync` 语义差异。
+
+### 决策 R：删除 workflow/scripting 薄包装 sink 组件
+
+1. 删除 `IWorkflowProjectionSinkSubscriptionManager/IWorkflowProjectionLiveSinkForwarder` 及对应实现类。
+2. 删除 `IScriptEvolutionProjectionSinkSubscriptionManager/IScriptEvolutionProjectionLiveSinkForwarder` 及对应实现类。
+3. DI 直接注册 CQRS 通用实现：`EventSinkProjectionSessionSubscriptionManager`、`EventSinkProjectionLiveForwarder`。
+
+### 决策 S：RuntimeScriptLifecyclePort 按能力拆分为 Facade + 子服务
+
+1. `RuntimeScriptLifecyclePort` 变为 facade，仅负责组合四个子服务。
+2. 新增 `RuntimeScriptEvolutionLifecycleService`、`RuntimeScriptDefinitionLifecycleService`、`RuntimeScriptExecutionLifecycleService`、`RuntimeScriptCatalogLifecycleService`。
+3. 新增 `RuntimeScriptActorAccessor` 统一 actor `get/create/exists` 访问模板，删除端口内聚合式大类逻辑。
+
+### 决策 T：Default Sink Failure Policy 下沉并替换 scripting 空实现
+
+1. 在 CQRS 投影核心新增 `DefaultEventSinkProjectionFailurePolicy<TLease, TEvent>`。
+2. scripting 删除空扩展 `ScriptEvolutionProjectionSinkFailurePolicy`，直接使用默认策略。
+3. workflow 保留自定义 failure policy（run-error 遥测）差异化逻辑。
+
+### 决策 U：删除单行派生 ProjectorBase 空壳
+
+1. 删除 `WorkflowRunSessionEventProjectorBase` 与 `ScriptEvolutionSessionEventProjectorBase`。
+2. `WorkflowExecutionAGUIEventProjector`、`ScriptEvolutionSessionCompletedEventProjector` 直接继承 `ProjectionSessionEventProjectorBase<...>`。
+3. 减少中间层无业务价值继承层级。
+
 ## 4. 变更前后对比
 
 ### 4.1 旧链路（R3）
@@ -131,7 +161,7 @@ sequenceDiagram
     SES-->>PORT: "SendToAsync(scripting.evolution.session.reply:{proposalId})"
 ```
 
-### 4.2 新链路（R8）
+### 4.2 新链路（R9）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -150,7 +180,7 @@ sequenceDiagram
     PORT->>LIFE: "Detach + Release"
 ```
 
-## 5. 关键实现锚点（R8）
+## 5. 关键实现锚点（R9）
 
 1. 通用 sink/channel 抽象：
    - `src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSink.cs`
@@ -183,7 +213,7 @@ sequenceDiagram
    - `src/Aevatar.Scripting.Projection/Orchestration/ScriptEvolutionProjectionActivationService.cs`
    - `src/Aevatar.Scripting.Projection/Orchestration/ScriptEvolutionProjectionReleaseService.cs`
    - `src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionSessionSubscriptionManager.cs`
-   - `src/Aevatar.Scripting.Projection/Orchestration/ScriptEvolutionProjectionSinkFailurePolicy.cs`
+   - `src/Aevatar.CQRS.Projection.Core/Orchestration/DefaultEventSinkProjectionFailurePolicy.cs`
    - `src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLiveForwarder.cs`
    - `src/Aevatar.Scripting.Projection/Orchestration/ScriptEvolutionSessionEventCodec.cs`
 13. Session Actor 行为收敛：`src/Aevatar.Scripting.Core/ScriptEvolutionSessionGAgent.cs`
@@ -204,8 +234,17 @@ sequenceDiagram
    - `src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLifecyclePortServiceBase.cs`
 18. scripting actor 获取/创建模板化：
    - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptLifecyclePort.cs`
+19. scripting lifecycle facade + 子服务拆分：
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptActorAccessor.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionLifecycleService.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptDefinitionLifecycleService.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptExecutionLifecycleService.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptCatalogLifecycleService.cs`
+20. 删除薄包装后的直接继承 projector：
+   - `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionAGUIEventProjector.cs`
+   - `src/Aevatar.Scripting.Projection/Projectors/ScriptEvolutionSessionCompletedEventProjector.cs`
 
-## 6. CQRS 抽象下沉结果（R8）
+## 6. CQRS 抽象下沉结果（R9）
 
 1. 已完成：`IEventSink<TEvent>` + `EventChannel<TEvent>` + 通用异常下沉到 `Aevatar.CQRS.Core.Abstractions`。
 2. 已完成：`ProjectionRuntimeLeaseBase<TSink>` 下沉到 `Aevatar.CQRS.Projection.Core`，workflow/scripting 复用同一 live-sink 运行态模型。
@@ -220,6 +259,9 @@ sequenceDiagram
 11. 已完成：`EventSinkProjectionLifecyclePortExtensions`，应用层 `Ensure+Attach`/`Detach+Release+Dispose` 调用不再重复委托样板。
 12. 已完成：`IProjectionRuntimeLease`，`ProjectionReleaseServiceBase` 从四泛型降为三泛型，释放 `TEvent` 噪声。
 13. 已完成：`EventSinkProjectionLifecyclePortServiceBase`，runtime lease 解析回收到 CQRS 模板基类。
+14. 已完成：`EventSinkProjectionLifecyclePortServiceBase` 直接实现 `IEventSinkProjectionLifecyclePort`，业务 lifecycle service 仅保留 ensure 语义。
+15. 已完成：`DefaultEventSinkProjectionFailurePolicy<TLease, TEvent>`，空策略能力统一下沉到 CQRS。
+16. 已完成：workflow/scripting sink subscription/live-forwarder 直接复用 CQRS 通用实现，移除重复薄包装类型。
 
 ## 7. 兼容性与风险
 
@@ -228,7 +270,7 @@ sequenceDiagram
 3. 风险控制：保留 manager query fallback，避免单次 sink 等待超时导致误失败。
 4. 生命周期安全：统一在 `finally` 执行 `detach/release/sink dispose`，降低泄漏风险。
 
-## 8. 验证记录（2026-03-04 R8）
+## 8. 验证记录（2026-03-04 R9）
 
 1. `dotnet build aevatar.slnx --nologo`：通过。
 2. `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --nologo`：`222/222` 通过。
@@ -241,4 +283,4 @@ sequenceDiagram
 
 ## 9. 结论
 
-本次 R8 变更继续在 R7 基础上完成 `lifecycle port` 接口统一、`release` 泛型降维、`event-sink lifecycle` 模板基类与应用侧委托样板消除。当前 workflow/scripting 在回推链路的编排、生命周期与失败处理已经在接口、模板实现、调用姿势三层同构。
+本次 R9 变更在 R8 基础上完成了“删空壳 + 拆职责 + 继续下沉”：workflow/scripting 的 sink 运行链路已直接复用 CQRS 通用组件，scripting lifecycle 端口已拆分为 facade + 子服务，projector/lifecycle 的无业务价值薄层进一步移除。当前两条回推链路在抽象层、实现骨架、DI 组装三层均已高度同构。

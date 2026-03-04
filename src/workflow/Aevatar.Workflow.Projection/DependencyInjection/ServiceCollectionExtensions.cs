@@ -59,9 +59,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEvent>, ProjectionSessionEventHub<WorkflowRunEvent>>();
         services.TryAddSingleton<IProjectionPortActivationService<WorkflowExecutionRuntimeLease>, WorkflowProjectionActivationService>();
         services.TryAddSingleton<IProjectionPortReleaseService<WorkflowExecutionRuntimeLease>, WorkflowProjectionReleaseService>();
-        services.TryAddSingleton<IWorkflowProjectionSinkSubscriptionManager, WorkflowProjectionSinkSubscriptionManager>();
-        services.TryAddSingleton<IWorkflowProjectionSinkFailurePolicy, WorkflowProjectionSinkFailurePolicy>();
-        services.TryAddSingleton<IWorkflowProjectionLiveSinkForwarder, WorkflowProjectionLiveSinkForwarder>();
+        services.TryAddSingleton<IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IEventSink<WorkflowRunEvent>, WorkflowRunEvent>,
+            EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>>();
+        services.TryAddSingleton<IProjectionPortSinkFailurePolicy<WorkflowExecutionRuntimeLease, IEventSink<WorkflowRunEvent>, WorkflowRunEvent>,
+            WorkflowProjectionSinkFailurePolicy>();
+        services.TryAddSingleton<IProjectionPortLiveSinkForwarder<WorkflowExecutionRuntimeLease, IEventSink<WorkflowRunEvent>, WorkflowRunEvent>,
+            EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>>();
         services.TryAddSingleton<IWorkflowProjectionReadModelUpdater, WorkflowProjectionReadModelUpdater>();
         services.TryAddSingleton<IWorkflowProjectionQueryReader, WorkflowProjectionQueryReader>();
         services.TryAddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>, ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();

@@ -6,7 +6,7 @@ using Aevatar.Scripting.Projection.Orchestration;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptEvolutionSessionCompletedEventProjector
-    : ScriptEvolutionSessionEventProjectorBase
+    : ProjectionSessionEventProjectorBase<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>, ScriptEvolutionSessionCompletedEvent>
 {
     public ScriptEvolutionSessionCompletedEventProjector(
         IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent> sessionEventHub)

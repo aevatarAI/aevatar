@@ -13,7 +13,7 @@ namespace Aevatar.Workflow.Presentation.AGUIAdapter;
 /// Projects workflow execution envelopes to AG-UI live events as a workflow projector branch.
 /// </summary>
 public sealed class WorkflowExecutionAGUIEventProjector
-    : WorkflowRunSessionEventProjectorBase
+    : ProjectionSessionEventProjectorBase<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>, WorkflowRunEvent>
 {
     private readonly IEventEnvelopeToAGUIEventMapper _mapper;
 

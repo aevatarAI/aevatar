@@ -34,9 +34,12 @@ public static class ServiceCollectionExtensions
             ProjectionLifecycleService<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>>();
         services.TryAddSingleton<IProjectionPortActivationService<ScriptEvolutionRuntimeLease>, ScriptEvolutionProjectionActivationService>();
         services.TryAddSingleton<IProjectionPortReleaseService<ScriptEvolutionRuntimeLease>, ScriptEvolutionProjectionReleaseService>();
-        services.TryAddSingleton<IScriptEvolutionProjectionSinkSubscriptionManager, ScriptEvolutionProjectionSinkSubscriptionManager>();
-        services.TryAddSingleton<IScriptEvolutionProjectionSinkFailurePolicy, ScriptEvolutionProjectionSinkFailurePolicy>();
-        services.TryAddSingleton<IScriptEvolutionProjectionLiveSinkForwarder, ScriptEvolutionProjectionLiveSinkForwarder>();
+        services.TryAddSingleton<IProjectionPortSinkSubscriptionManager<ScriptEvolutionRuntimeLease, IEventSink<ScriptEvolutionSessionCompletedEvent>, ScriptEvolutionSessionCompletedEvent>,
+            EventSinkProjectionSessionSubscriptionManager<ScriptEvolutionRuntimeLease, ScriptEvolutionSessionCompletedEvent>>();
+        services.TryAddSingleton<IProjectionPortSinkFailurePolicy<ScriptEvolutionRuntimeLease, IEventSink<ScriptEvolutionSessionCompletedEvent>, ScriptEvolutionSessionCompletedEvent>,
+            DefaultEventSinkProjectionFailurePolicy<ScriptEvolutionRuntimeLease, ScriptEvolutionSessionCompletedEvent>>();
+        services.TryAddSingleton<IProjectionPortLiveSinkForwarder<ScriptEvolutionRuntimeLease, IEventSink<ScriptEvolutionSessionCompletedEvent>, ScriptEvolutionSessionCompletedEvent>,
+            EventSinkProjectionLiveForwarder<ScriptEvolutionRuntimeLease, ScriptEvolutionSessionCompletedEvent>>();
         services.TryAddSingleton<ScriptEvolutionProjectionLifecycleService>();
         services.TryAddSingleton<IScriptEvolutionProjectionLifecyclePort>(sp =>
             sp.GetRequiredService<ScriptEvolutionProjectionLifecycleService>());

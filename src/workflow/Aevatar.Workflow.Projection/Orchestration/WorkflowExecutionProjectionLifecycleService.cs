@@ -7,25 +7,24 @@ using Aevatar.Workflow.Projection.Configuration;
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowExecutionProjectionLifecycleService
-    : WorkflowProjectionLifecyclePortServiceBase,
+    : EventSinkProjectionLifecyclePortServiceBase<IWorkflowExecutionProjectionLease, WorkflowExecutionRuntimeLease, WorkflowRunEvent>,
       IWorkflowExecutionProjectionLifecyclePort
 {
     public WorkflowExecutionProjectionLifecycleService(
         WorkflowExecutionProjectionOptions options,
         IProjectionPortActivationService<WorkflowExecutionRuntimeLease> activationService,
         IProjectionPortReleaseService<WorkflowExecutionRuntimeLease> releaseService,
-        IWorkflowProjectionSinkSubscriptionManager sinkSubscriptionManager,
-        IWorkflowProjectionLiveSinkForwarder liveSinkForwarder)
+        IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IEventSink<WorkflowRunEvent>, WorkflowRunEvent> sinkSubscriptionManager,
+        IProjectionPortLiveSinkForwarder<WorkflowExecutionRuntimeLease, IEventSink<WorkflowRunEvent>, WorkflowRunEvent> liveSinkForwarder)
         : base(
             () => options.Enabled,
             activationService,
             releaseService,
             sinkSubscriptionManager,
-            liveSinkForwarder)
+            liveSinkForwarder,
+            ResolveRuntimeLeaseOrThrow)
     {
     }
-
-    public bool ProjectionEnabled => ProjectionEnabledCore;
 
     public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
         string rootActorId,
@@ -40,20 +39,7 @@ public sealed class WorkflowExecutionProjectionLifecycleService
             commandId,
             ct);
 
-    public Task AttachLiveSinkAsync(
-        IWorkflowExecutionProjectionLease lease,
-        IEventSink<WorkflowRunEvent> sink,
-        CancellationToken ct = default) =>
-        AttachSinkAsync(lease, sink, ct);
-
-    public Task DetachLiveSinkAsync(
-        IWorkflowExecutionProjectionLease lease,
-        IEventSink<WorkflowRunEvent> sink,
-        CancellationToken ct = default) =>
-        DetachSinkAsync(lease, sink, ct);
-
-    public Task ReleaseActorProjectionAsync(
-        IWorkflowExecutionProjectionLease lease,
-        CancellationToken ct = default) =>
-        ReleaseProjectionAsync(lease, ct);
+    private static WorkflowExecutionRuntimeLease ResolveRuntimeLeaseOrThrow(IWorkflowExecutionProjectionLease lease) =>
+        lease as WorkflowExecutionRuntimeLease
+        ?? throw new InvalidOperationException("Unsupported workflow projection lease implementation.");
 }

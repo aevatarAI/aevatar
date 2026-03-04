@@ -6,7 +6,8 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// Event-sink specialized lifecycle port base with runtime lease resolution hook.
 /// </summary>
 public abstract class EventSinkProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, TEvent>
-    : ProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, IEventSink<TEvent>, TEvent>
+    : ProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, IEventSink<TEvent>, TEvent>,
+      IEventSinkProjectionLifecyclePort<TLeaseContract, TEvent>
     where TLeaseContract : class
     where TRuntimeLease : class, TLeaseContract
 {
@@ -28,6 +29,25 @@ public abstract class EventSinkProjectionLifecyclePortServiceBase<TLeaseContract
     {
         _runtimeLeaseResolver = runtimeLeaseResolver ?? throw new ArgumentNullException(nameof(runtimeLeaseResolver));
     }
+
+    public bool ProjectionEnabled => ProjectionEnabledCore;
+
+    public Task AttachLiveSinkAsync(
+        TLeaseContract lease,
+        IEventSink<TEvent> sink,
+        CancellationToken ct = default) =>
+        AttachSinkAsync(lease, sink, ct);
+
+    public Task DetachLiveSinkAsync(
+        TLeaseContract lease,
+        IEventSink<TEvent> sink,
+        CancellationToken ct = default) =>
+        DetachSinkAsync(lease, sink, ct);
+
+    public Task ReleaseActorProjectionAsync(
+        TLeaseContract lease,
+        CancellationToken ct = default) =>
+        ReleaseProjectionAsync(lease, ct);
 
     protected sealed override TRuntimeLease ResolveRuntimeLease(TLeaseContract lease)
     {
