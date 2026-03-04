@@ -93,7 +93,9 @@ roles:
 
       ## Skills
 
-      You MUST call `skill_nyxid-mcp` before starting work. It teaches you how to search for, connect, and call chrono-graph tools via NyxID MCP meta-tools. Follow its instructions exactly.
+      You MUST call these skills before starting work:
+      1. Call `skill_nyxid-mcp` — teaches how to search for and call chrono-graph tools via NyxID MCP meta-tools. Follow its instructions exactly for all tool calling.
+      2. Call `skill_knowledge-tex` — teaches the TeX format for knowledge nodes. Use it as the definitive schema for mapping TeX fields to graph node properties.
 
       ## Graph IDs
 
@@ -107,28 +109,41 @@ roles:
       ## JSON escaping rules for `arguments_json`
 
       `arguments_json` is a JSON string that will be parsed as JSON (JSON-inside-JSON).
-      **NEVER include raw TeX content** (with `\nodeid`, `\begin`, `\noderef`, etc.) in `arguments_json` — TeX backslashes will corrupt the JSON encoding. Store ONLY plain-text metadata as node properties.
+      **The #1 cause of failure is backslashes in property values.** Follow these rules strictly:
+
+      1. **ZERO backslashes in any property value.** Before inserting ANY string value into `arguments_json`, verify it contains NO `\` characters. If it does, you MUST remove them first.
+      2. **Strip ALL TeX commands** from body sections: remove `\noderef[...]{...}`, `\cite{...}`, `\text{...}`, `\frac{...}{...}`, `\sqrt{...}`, and any other `\command{...}` or `\command[...]{...}` sequences. Keep only the surrounding plain text.
+      3. **Convert math notation to plain ASCII**: e.g., write `softmax(QK^T / sqrt(d_k)) * V` NOT `\text{softmax}(\frac{QK^T}{\sqrt{d_k}}) V`. No LaTeX math commands.
+      4. **Double-quote escaping**: The only escape sequences allowed in JSON string values are `\"`, `\\`, `\n`, `\t`. If your content has none of these, it should have ZERO backslashes.
+      5. **If a `nyx_call_tool` call fails with "invalid escape" or "Parse error"**: identify which property value contains backslashes, remove them, and retry immediately. Do NOT give up.
 
       Do NOT read graph snapshots or traverse. That is the Researcher's job.
 
       ## Input Format
 
-      You receive verified TeX knowledge nodes as a JSON object with a `nodes` array. Each element has `temp_id` and `tex_content`. The TeX content contains metadata (`\nodeid`, `\nodetype`, `\confidence`, `\source`, `\sourceref`), body sections, and `\noderef[relation]{target-id}` cross-references that declare edges.
+      You receive verified TeX knowledge nodes as a JSON object with a `nodes` array. Each element has `temp_id` and `tex_content`. The TeX content contains metadata, body sections, and cross-references as defined by the `knowledge-tex` skill spec.
 
       ## Build Workflow
 
-      1. **Extract metadata from ALL TeX nodes first** (before any API calls):
-         For each node, extract:
-         - `type` from `\nodetype{...}`
-         - `confidence` from `\confidence{...}`
-         - `source` from `\source{...}`
-         - `sourceref` from `\sourceref{...}`
-         - `abstract` — plain text from `\begin{abstract}...\end{abstract}`, stripped of ALL TeX commands
-         - `edges` — all `\noderef[<relation>]{<target-id>}` references
+      1. **Extract ALL fields from every TeX node first** (before any API calls).
+         For each node, extract these properties — they map 1:1 from the knowledge-tex spec to graph node properties:
 
-      2. **Create ALL nodes in one batch call**: Call `post_api_graphs_by_graphid_nodes` with the Write Graph ID and ALL nodes in the `nodes` array. Record the returned UUIDs. Map each `temp_id → real UUID` based on array order.
+         | TeX Field | Node Property | Required | Notes |
+         |-----------|---------------|----------|-------|
+         | `\nodetype{...}` | `type` | Yes | The node type value (e.g. hypothesis, fact, inference) |
+         | `\confidence{...}` | `confidence` | Yes | Float string "0.0" to "1.0" |
+         | `\source{...}` | `source` | Yes | "ingestion" or "research" |
+         | `\sourceref{...}` | `sourceref` | Yes | Paper node ID or session ID |
+         | `\begin{abstract}...\end{abstract}` | `abstract` | Yes | Plain text, zero backslashes |
+         | `\section{Claim}` body | `claim` | Yes | Plain text, zero backslashes |
+         | `\section{Evidence}` body | `evidence` | Yes | Plain text, zero backslashes |
+         | `\section{Context}` body | `context` | No | Plain text, zero backslashes. Omit property if section absent |
+         | `\section{Formal}` body | `formal` | No | Plain ASCII math, zero backslashes. Omit property if section absent |
+         | `\noderef[relation]{target-id}` | (edges) | — | Collect ALL as `{relation, target_temp_id}` tuples |
 
-      3. **Create ALL edges in one batch call**: Resolve temp IDs to real UUIDs. Call `post_api_graphs_by_graphid_edges` with ALL edges in the `edges` array.
+      2. **Create ALL nodes in one batch call**: Call `post_api_graphs_by_graphid_nodes` with the Write Graph ID and ALL nodes in the `nodes` array. Each node object must include `type` and `properties` containing ALL extracted fields above (except edges). Record the returned UUIDs. Map each `temp_id → real UUID` based on array order.
+
+      3. **Create ALL edges in one batch call**: Resolve temp IDs to real UUIDs using the mapping from step 2. Call `post_api_graphs_by_graphid_edges` with ALL edges in the `edges` array.
 
       4. **Report results**: List each node created (`temp_id → real UUID`, type) and each edge created (source → target, relation). Note any failures.
     connectors:
@@ -160,7 +175,7 @@ steps:
         type: llm_call
         role: dag_builder
         parameters:
-          prompt_prefix: "Write the following verified TeX knowledge nodes to the knowledge graph using the Write Graph ID from the Original Context block. You MUST make actual nyx_call_tool calls and wait for real responses — do NOT fabricate UUIDs or hallucinate API responses. Only report node UUIDs that were returned by actual tool call responses.\n\n"
+          prompt_prefix: "Write the following verified TeX knowledge nodes to the knowledge graph using the Write Graph ID from the Original Context block. Follow the step-by-step workflow EXACTLY: (1) Call skill_nyxid-mcp, (2) Call skill_knowledge-tex, (3) Extract ALL fields from the TeX nodes as defined in the knowledge-tex spec — type, confidence, source, sourceref, abstract, claim, evidence, context, formal, and edges, (4) Create nodes and edges via nyx_call_tool. You MUST make actual nyx_call_tool calls and wait for real responses — do NOT fabricate UUIDs or hallucinate API responses.\n\n"
 
       - id: next_round
         type: llm_call
