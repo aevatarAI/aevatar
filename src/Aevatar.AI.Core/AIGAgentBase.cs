@@ -184,6 +184,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
     private async Task RegisterToolsFromSourcesAsync(CancellationToken ct)
     {
+        Logger.LogInformation("RegisterToolsFromSources: {Count} tool source(s) registered", _toolSources.Count);
+
         if (_toolSources.Count == 0)
         {
             RefreshSourceTools([]);
@@ -196,7 +198,11 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         {
             try
             {
+                Logger.LogInformation("Discovering tools from source: {Source}", source.GetType().Name);
                 var tools = await source.DiscoverToolsAsync(ct);
+                Logger.LogInformation("Source {Source} discovered {Count} tool(s): [{Names}]",
+                    source.GetType().Name, tools.Count,
+                    string.Join(", ", tools.Select(t => t.Name)));
                 foreach (var tool in tools)
                     discoveredTools[tool.Name] = tool;
             }
@@ -206,6 +212,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             }
         }
 
+        Logger.LogInformation("RegisterToolsFromSources: total {Count} unique tool(s) registered", discoveredTools.Count);
         RefreshSourceTools(discoveredTools.Values);
     }
 
