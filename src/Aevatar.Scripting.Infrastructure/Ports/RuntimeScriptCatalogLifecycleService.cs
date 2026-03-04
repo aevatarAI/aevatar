@@ -2,7 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 
@@ -11,7 +10,7 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 public sealed class RuntimeScriptCatalogLifecycleService
 {
     private readonly RuntimeScriptActorAccessor _actorAccessor;
-    private readonly IStreamProvider _streams;
+    private readonly RuntimeScriptQueryClient _queryClient;
     private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly TimeSpan _catalogQueryTimeout;
     private readonly PromoteScriptRevisionActorRequestAdapter _promoteRevisionAdapter = new();
@@ -20,12 +19,12 @@ public sealed class RuntimeScriptCatalogLifecycleService
 
     public RuntimeScriptCatalogLifecycleService(
         RuntimeScriptActorAccessor actorAccessor,
-        IStreamProvider streams,
+        RuntimeScriptQueryClient queryClient,
         IScriptingActorAddressResolver addressResolver,
         IScriptingPortTimeouts timeouts)
     {
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
-        _streams = streams ?? throw new ArgumentNullException(nameof(streams));
+        _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
         _catalogQueryTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
             .GetCatalogEntryQueryTimeout();
@@ -92,8 +91,7 @@ public sealed class RuntimeScriptCatalogLifecycleService
         if (actor == null)
             return null;
 
-        var response = await EventStreamQueryReplyAwaiter.QueryActorAsync<ScriptCatalogEntryRespondedEvent>(
-            _streams,
+        var response = await _queryClient.QueryActorAsync<ScriptCatalogEntryRespondedEvent>(
             actor,
             ScriptingQueryRouteConventions.CatalogReplyStreamPrefix,
             _catalogQueryTimeout,

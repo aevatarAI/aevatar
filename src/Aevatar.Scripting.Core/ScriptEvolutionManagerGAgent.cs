@@ -9,17 +9,8 @@ namespace Aevatar.Scripting.Core;
 
 public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionManagerState>
 {
-    private const string StatusProposed = "proposed";
-    private const string StatusBuildRequested = "build_requested";
-    private const string StatusValidated = "validated";
-    private const string StatusValidationFailed = "validation_failed";
-    private const string StatusRejected = "rejected";
     private const string StatusPromotionFailed = "promotion_failed";
     private const string PromotionFailedFailureReasonTag = "[promotion_failed]";
-    private const string StatusPromoted = "promoted";
-    private const string StatusRollbackRequested = "rollback_requested";
-    private const string StatusRolledBack = "rolled_back";
-
     private readonly IScriptEvolutionFlowPort _evolutionFlowPort;
     private readonly IScriptingActorAddressResolver _addressResolver;
 
@@ -103,7 +94,7 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
                 accepted: true,
                 proposal,
                 promotion.PromotedRevision,
-                StatusPromoted,
+                ScriptEvolutionStatuses.Promoted,
                 string.Empty,
                 promotion.DefinitionActorId,
                 promotedCatalogActorId,
@@ -212,7 +203,7 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
         {
             RequestId = evt.RequestId,
             Found = true,
-            Accepted = string.Equals(proposal.Status, StatusPromoted, StringComparison.Ordinal),
+            Accepted = string.Equals(proposal.Status, ScriptEvolutionStatuses.Promoted, StringComparison.Ordinal),
             ProposalId = proposal.ProposalId ?? string.Empty,
             ScriptId = proposal.ScriptId ?? string.Empty,
             BaseRevision = proposal.BaseRevision ?? string.Empty,
@@ -310,7 +301,7 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
             accepted: false,
             proposal,
             candidateRevision,
-            StatusRejected,
+            ScriptEvolutionStatuses.Rejected,
             failureReason,
             definitionActorId,
             catalogActorId,
@@ -347,128 +338,142 @@ public sealed class ScriptEvolutionManagerGAgent : GAgentBase<ScriptEvolutionMan
 
     private static ScriptEvolutionManagerState ApplyProposed(
         ScriptEvolutionManagerState state,
-        ScriptEvolutionProposedEvent evt)
-    {
-        var next = state.Clone();
-        var proposal = GetOrCreateProposal(next, evt.ProposalId ?? string.Empty, evt.ScriptId ?? string.Empty);
+        ScriptEvolutionProposedEvent evt) =>
+        ApplyWithProposal(
+            state,
+            evt.ProposalId ?? string.Empty,
+            evt.ScriptId ?? string.Empty,
+            ScriptEvolutionStatuses.Proposed,
+            (next, proposal) =>
+            {
+                proposal.ProposalId = evt.ProposalId ?? string.Empty;
+                proposal.ScriptId = evt.ScriptId ?? string.Empty;
+                proposal.BaseRevision = evt.BaseRevision ?? string.Empty;
+                proposal.CandidateRevision = evt.CandidateRevision ?? string.Empty;
+                proposal.CandidateSourceHash = evt.CandidateSourceHash ?? string.Empty;
+                proposal.Reason = evt.Reason ?? string.Empty;
+                proposal.PolicyAllowed = false;
+                proposal.ValidationSucceeded = false;
+                proposal.ValidationDiagnostics.Clear();
+                proposal.FailureReason = string.Empty;
+                proposal.PromotedDefinitionActorId = string.Empty;
+                proposal.PromotedRevision = string.Empty;
 
-        proposal.ProposalId = evt.ProposalId ?? string.Empty;
-        proposal.ScriptId = evt.ScriptId ?? string.Empty;
-        proposal.BaseRevision = evt.BaseRevision ?? string.Empty;
-        proposal.CandidateRevision = evt.CandidateRevision ?? string.Empty;
-        proposal.CandidateSourceHash = evt.CandidateSourceHash ?? string.Empty;
-        proposal.Reason = evt.Reason ?? string.Empty;
-        proposal.PolicyAllowed = false;
-        proposal.ValidationSucceeded = false;
-        proposal.ValidationDiagnostics.Clear();
-        proposal.FailureReason = string.Empty;
-        proposal.PromotedDefinitionActorId = string.Empty;
-        proposal.PromotedRevision = string.Empty;
-        proposal.Status = StatusProposed;
-
-        if (!string.IsNullOrWhiteSpace(proposal.ScriptId) && !string.IsNullOrWhiteSpace(proposal.ProposalId))
-            next.LatestProposalByScript[proposal.ScriptId] = proposal.ProposalId;
-
-        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
-        next.LastEventId = string.Concat(proposal.ProposalId, ":", StatusProposed);
-        return next;
-    }
+                if (!string.IsNullOrWhiteSpace(proposal.ScriptId) && !string.IsNullOrWhiteSpace(proposal.ProposalId))
+                    next.LatestProposalByScript[proposal.ScriptId] = proposal.ProposalId;
+            });
 
     private static ScriptEvolutionManagerState ApplyBuildRequested(
         ScriptEvolutionManagerState state,
-        ScriptEvolutionBuildRequestedEvent evt)
-    {
-        var next = state.Clone();
-        var proposal = GetOrCreateProposal(next, evt.ProposalId ?? string.Empty, evt.ScriptId ?? string.Empty);
-        proposal.Status = StatusBuildRequested;
-
-        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
-        next.LastEventId = string.Concat(proposal.ProposalId, ":", StatusBuildRequested);
-        return next;
-    }
+        ScriptEvolutionBuildRequestedEvent evt) =>
+        ApplyWithProposal(
+            state,
+            evt.ProposalId ?? string.Empty,
+            evt.ScriptId ?? string.Empty,
+            ScriptEvolutionStatuses.BuildRequested,
+            static (_, _) => { });
 
     private static ScriptEvolutionManagerState ApplyValidated(
         ScriptEvolutionManagerState state,
         ScriptEvolutionValidatedEvent evt)
     {
-        var next = state.Clone();
-        var proposal = GetOrCreateProposal(next, evt.ProposalId ?? string.Empty, evt.ScriptId ?? string.Empty);
-
-        proposal.ValidationDiagnostics.Clear();
-        proposal.ValidationDiagnostics.Add(evt.Diagnostics);
-        proposal.ValidationSucceeded = evt.IsValid;
-        proposal.PolicyAllowed = true;
-        proposal.Status = evt.IsValid ? StatusValidated : StatusValidationFailed;
-
-        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
-        next.LastEventId = string.Concat(
-            proposal.ProposalId,
-            ":",
-            evt.IsValid ? StatusValidated : StatusValidationFailed);
-        return next;
+        var status = evt.IsValid
+            ? ScriptEvolutionStatuses.Validated
+            : ScriptEvolutionStatuses.ValidationFailed;
+        return ApplyWithProposal(
+            state,
+            evt.ProposalId ?? string.Empty,
+            evt.ScriptId ?? string.Empty,
+            status,
+            (_, proposal) =>
+            {
+                proposal.ValidationDiagnostics.Clear();
+                proposal.ValidationDiagnostics.Add(evt.Diagnostics);
+                proposal.ValidationSucceeded = evt.IsValid;
+                proposal.PolicyAllowed = true;
+            });
     }
 
     private static ScriptEvolutionManagerState ApplyRejected(
         ScriptEvolutionManagerState state,
         ScriptEvolutionRejectedEvent evt)
     {
-        var next = state.Clone();
-        var proposal = GetOrCreateProposal(next, evt.ProposalId ?? string.Empty, evt.ScriptId ?? string.Empty);
-        proposal.FailureReason = NormalizeFailureReason(evt.FailureReason, out var isPromotionFailed);
-        proposal.Status = isPromotionFailed ? StatusPromotionFailed : StatusRejected;
-
-        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
-        next.LastEventId = string.Concat(proposal.ProposalId, ":", proposal.Status);
-        return next;
+        var normalizedFailureReason = NormalizeFailureReason(evt.FailureReason, out var isPromotionFailed);
+        return ApplyWithProposal(
+            state,
+            evt.ProposalId ?? string.Empty,
+            evt.ScriptId ?? string.Empty,
+            isPromotionFailed ? StatusPromotionFailed : ScriptEvolutionStatuses.Rejected,
+            (_, proposal) => proposal.FailureReason = normalizedFailureReason);
     }
 
     private static ScriptEvolutionManagerState ApplyPromoted(
         ScriptEvolutionManagerState state,
-        ScriptEvolutionPromotedEvent evt)
-    {
-        var next = state.Clone();
-        var proposal = GetOrCreateProposal(next, evt.ProposalId ?? string.Empty, evt.ScriptId ?? string.Empty);
-
-        proposal.Status = StatusPromoted;
-        proposal.PromotedDefinitionActorId = evt.DefinitionActorId ?? string.Empty;
-        proposal.PromotedRevision = evt.CandidateRevision ?? string.Empty;
-
-        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
-        next.LastEventId = string.Concat(proposal.ProposalId, ":", StatusPromoted);
-        return next;
-    }
+        ScriptEvolutionPromotedEvent evt) =>
+        ApplyWithProposal(
+            state,
+            evt.ProposalId ?? string.Empty,
+            evt.ScriptId ?? string.Empty,
+            ScriptEvolutionStatuses.Promoted,
+            (_, proposal) =>
+            {
+                proposal.PromotedDefinitionActorId = evt.DefinitionActorId ?? string.Empty;
+                proposal.PromotedRevision = evt.CandidateRevision ?? string.Empty;
+                proposal.FailureReason = string.Empty;
+            });
 
     private static ScriptEvolutionManagerState ApplyRollbackRequested(
         ScriptEvolutionManagerState state,
-        ScriptEvolutionRollbackRequestedEvent evt)
-    {
-        var next = state.Clone();
-        var proposal = GetOrCreateProposal(next, evt.ProposalId ?? string.Empty, evt.ScriptId ?? string.Empty);
-
-        proposal.Status = StatusRollbackRequested;
-        proposal.FailureReason = evt.Reason ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(evt.TargetRevision))
-            proposal.PromotedRevision = evt.TargetRevision;
-
-        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
-        next.LastEventId = string.Concat(proposal.ProposalId, ":", StatusRollbackRequested);
-        return next;
-    }
+        ScriptEvolutionRollbackRequestedEvent evt) =>
+        ApplyWithProposal(
+            state,
+            evt.ProposalId ?? string.Empty,
+            evt.ScriptId ?? string.Empty,
+            ScriptEvolutionStatuses.RollbackRequested,
+            (_, proposal) =>
+            {
+                proposal.FailureReason = evt.Reason ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(evt.TargetRevision))
+                    proposal.PromotedRevision = evt.TargetRevision;
+            });
 
     private static ScriptEvolutionManagerState ApplyRolledBack(
         ScriptEvolutionManagerState state,
-        ScriptEvolutionRolledBackEvent evt)
+        ScriptEvolutionRolledBackEvent evt) =>
+        ApplyWithProposal(
+            state,
+            evt.ProposalId ?? string.Empty,
+            evt.ScriptId ?? string.Empty,
+            ScriptEvolutionStatuses.RolledBack,
+            (_, proposal) =>
+            {
+                proposal.PromotedRevision = evt.TargetRevision ?? string.Empty;
+                proposal.FailureReason = string.Empty;
+            });
+
+    private static ScriptEvolutionManagerState ApplyWithProposal(
+        ScriptEvolutionManagerState state,
+        string proposalId,
+        string scriptId,
+        string status,
+        Action<ScriptEvolutionManagerState, ScriptEvolutionProposalState> mutate)
     {
         var next = state.Clone();
-        var proposal = GetOrCreateProposal(next, evt.ProposalId ?? string.Empty, evt.ScriptId ?? string.Empty);
-
-        proposal.Status = StatusRolledBack;
-        proposal.PromotedRevision = evt.TargetRevision ?? string.Empty;
-        proposal.FailureReason = string.Empty;
-
-        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
-        next.LastEventId = string.Concat(proposal.ProposalId, ":", StatusRolledBack);
+        var proposal = GetOrCreateProposal(next, proposalId, scriptId);
+        mutate(next, proposal);
+        proposal.Status = status;
+        StampAppliedEvent(state, next, proposal.ProposalId ?? string.Empty, status);
         return next;
+    }
+
+    private static void StampAppliedEvent(
+        ScriptEvolutionManagerState current,
+        ScriptEvolutionManagerState next,
+        string proposalId,
+        string status)
+    {
+        next.LastAppliedEventVersion = current.LastAppliedEventVersion + 1;
+        next.LastEventId = string.Concat(proposalId, ":", status);
     }
 
     private static ScriptEvolutionProposalState GetOrCreateProposal(

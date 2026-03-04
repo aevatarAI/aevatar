@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
 
@@ -23,8 +24,8 @@ public sealed class ScriptEvolutionProposedEventReducer
         readModel.CandidateRevision = evt.CandidateRevision ?? string.Empty;
         readModel.DefinitionActorId = string.Empty;
         readModel.CatalogActorId = string.Empty;
-        readModel.ValidationStatus = "pending";
-        readModel.PromotionStatus = "pending";
+        readModel.ValidationStatus = ScriptEvolutionStatuses.Pending;
+        readModel.PromotionStatus = ScriptEvolutionStatuses.Pending;
         readModel.RollbackStatus = string.Empty;
         readModel.FailureReason = string.Empty;
         readModel.Diagnostics.Clear();

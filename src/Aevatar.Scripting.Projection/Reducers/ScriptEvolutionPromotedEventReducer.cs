@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
 
@@ -21,7 +22,7 @@ public sealed class ScriptEvolutionPromotedEventReducer
         readModel.CandidateRevision = evt.CandidateRevision ?? string.Empty;
         readModel.DefinitionActorId = evt.DefinitionActorId ?? string.Empty;
         readModel.CatalogActorId = evt.CatalogActorId ?? string.Empty;
-        readModel.PromotionStatus = "promoted";
+        readModel.PromotionStatus = ScriptEvolutionStatuses.Promoted;
         readModel.FailureReason = string.Empty;
         readModel.LastEventId = envelope.Id ?? string.Empty;
         readModel.UpdatedAt = now;

@@ -1,4 +1,4 @@
-# Aevatar.Scripting 回推链路对齐 Workflow 架构变更文档（2026-03-04 R11）
+# Aevatar.Scripting 回推链路对齐 Workflow 架构变更文档（2026-03-04 R12）
 
 ## 1. 变更范围
 
@@ -198,6 +198,36 @@
 2. `WorkflowRunExecutionEngine` 与 `WorkflowRunResourceFinalizer` 删除重复的 `try/catch OperationCanceledException` 样板。
 3. 统一“收尾阶段忽略取消异常”的语义实现，减少维护面。
 
+### 决策 AE：Workflow 延迟/重试/超时推进统一事件化
+
+1. `workflow_loop` 的 step retry 从“失败分支内 `Task.Delay` 后直接重派发”改为“异步等待 -> `WorkflowStepRetryFiredEvent` -> Actor 内对账再派发”。
+2. `delay` 模块从“handler 内阻塞等待”改为“登记 pending -> `WorkflowDelayElapsedEvent` 内部触发 -> Actor 内发布 `StepCompletedEvent`”。
+3. `workflow_loop` 与 `wait_signal` 的 timeout 触发统一复用调度器，仅发布内部触发事件，不在回调线程推进业务分支。
+
+### 决策 AF：Workflow Chat 交互骨架统一
+
+1. 新增 `WorkflowChatInteraction` 统一 chat request 发送与 `TextMessageEnd/ChatResponse` 提取模板。
+2. `LLMCall/Evaluate/Reflect` 三个 module 复用同一 chat 交互工具，删除重复的 payload 判定与 request 封装样板。
+3. module 仅保留各自业务语义（评分、反思循环、worker_id 选择），不再重复底层交互细节。
+
+### 决策 AG：ScriptEvolution 状态常量与状态迁移模板统一
+
+1. 在 abstractions 新增 `ScriptEvolutionStatuses`，统一 `proposed/build_requested/validated/...` 状态字符串事实源。
+2. `ScriptEvolutionManagerGAgent` 删除本地状态常量，全面复用统一常量。
+3. manager 状态迁移新增 `ApplyWithProposal + StampAppliedEvent` 模板，去除各 `Apply*` 方法重复 stamping 样板。
+
+### 决策 AH：Scripting Actor Request/Query Envelope 模板统一
+
+1. 在 application 新增 `ScriptingActorRequestEnvelopeFactory`，统一 `Id/Timestamp/PublisherId/Direction/CorrelationId` 封装。
+2. `run/upsert/promote/rollback/start-session` 五类 actor request adapter 与 definition/catalog query adapter 全部改为调用统一工厂。
+3. 新增 `QueryScriptEvolutionDecisionRequestAdapter`，manager fallback query 也收敛到同一 adapter 模板。
+
+### 决策 AI：Scripting Runtime Query 端口统一经 QueryClient
+
+1. 在 infrastructure 新增 `RuntimeScriptQueryClient`，封装 `EventStreamQueryReplyAwaiter.QueryActorAsync` 通用调用骨架。
+2. definition snapshot、catalog entry query、evolution decision fallback 三条查询链路统一改为依赖该 QueryClient。
+3. hosting DI 新增 `RuntimeScriptQueryClient` 注册，减少端口类内重复 stream-await 拼装逻辑。
+
 ## 4. 变更前后对比
 
 ### 4.1 旧链路（R3）
@@ -215,7 +245,7 @@ sequenceDiagram
     SES-->>PORT: "SendToAsync(scripting.evolution.session.reply:{proposalId})"
 ```
 
-### 4.2 新链路（R11）
+### 4.2 新链路（R12）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "sequence": {"useMaxWidth": false, "actorMargin": 16, "messageMargin": 12, "diagramMarginX": 20, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -234,7 +264,7 @@ sequenceDiagram
     PORT->>LIFE: "Detach + Release"
 ```
 
-## 5. 关键实现锚点（R11）
+## 5. 关键实现锚点（R12）
 
 1. 通用 sink/channel 抽象：
    - `src/Aevatar.CQRS.Core.Abstractions/Streaming/EventSink.cs`
@@ -321,8 +351,44 @@ sequenceDiagram
    - `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunTaskAwaiter.cs`
    - `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunExecutionEngine.cs`
    - `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunResourceFinalizer.cs`
+26. workflow 延迟/重试/超时事件化推进：
+   - `src/workflow/Aevatar.Workflow.Abstractions/workflow_execution_messages.proto`
+   - `src/workflow/Aevatar.Workflow.Core/Primitives/WorkflowInternalTriggerScheduler.cs`
+   - `src/workflow/Aevatar.Workflow.Core/Modules/WorkflowLoopModule.cs`
+   - `src/workflow/Aevatar.Workflow.Core/Modules/DelayModule.cs`
+   - `src/workflow/Aevatar.Workflow.Core/Modules/WaitSignalModule.cs`
+27. workflow chat 交互模板统一：
+   - `src/workflow/Aevatar.Workflow.Core/Primitives/WorkflowChatInteraction.cs`
+   - `src/workflow/Aevatar.Workflow.Core/Modules/LLMCallModule.cs`
+   - `src/workflow/Aevatar.Workflow.Core/Modules/EvaluateModule.cs`
+   - `src/workflow/Aevatar.Workflow.Core/Modules/ReflectModule.cs`
+28. scripting 状态常量与状态迁移模板统一：
+   - `src/Aevatar.Scripting.Abstractions/Definitions/ScriptEvolutionStatuses.cs`
+   - `src/Aevatar.Scripting.Abstractions/Definitions/ScriptPromotionDecision.cs`
+   - `src/Aevatar.Scripting.Core/ScriptEvolutionManagerGAgent.cs`
+   - `src/Aevatar.Scripting.Projection/Reducers/ScriptEvolutionProposedEventReducer.cs`
+   - `src/Aevatar.Scripting.Projection/Reducers/ScriptEvolutionValidatedEventReducer.cs`
+   - `src/Aevatar.Scripting.Projection/Reducers/ScriptEvolutionRejectedEventReducer.cs`
+   - `src/Aevatar.Scripting.Projection/Reducers/ScriptEvolutionPromotedEventReducer.cs`
+   - `src/Aevatar.Scripting.Projection/Reducers/ScriptEvolutionRolledBackEventReducer.cs`
+29. scripting request/query envelope 工厂化：
+   - `src/Aevatar.Scripting.Application/Application/ScriptingActorRequestEnvelopeFactory.cs`
+   - `src/Aevatar.Scripting.Application/Application/RunScriptActorRequestAdapter.cs`
+   - `src/Aevatar.Scripting.Application/Application/UpsertScriptDefinitionActorRequestAdapter.cs`
+   - `src/Aevatar.Scripting.Application/Application/PromoteScriptRevisionActorRequestAdapter.cs`
+   - `src/Aevatar.Scripting.Application/Application/RollbackScriptRevisionActorRequestAdapter.cs`
+   - `src/Aevatar.Scripting.Application/Application/StartScriptEvolutionSessionActorRequestAdapter.cs`
+   - `src/Aevatar.Scripting.Application/Application/QueryScriptDefinitionSnapshotRequestAdapter.cs`
+   - `src/Aevatar.Scripting.Application/Application/QueryScriptCatalogEntryRequestAdapter.cs`
+   - `src/Aevatar.Scripting.Application/Application/QueryScriptEvolutionDecisionRequestAdapter.cs`
+30. scripting runtime query client 收敛：
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptQueryClient.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptDefinitionSnapshotPort.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptCatalogLifecycleService.cs`
+   - `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionDecisionFallbackPort.cs`
+   - `src/Aevatar.Scripting.Hosting/DependencyInjection/ServiceCollectionExtensions.cs`
 
-## 6. CQRS 抽象下沉结果（R11）
+## 6. CQRS 抽象下沉结果（R12）
 
 1. 已完成：`IEventSink<TEvent>` + `EventChannel<TEvent>` + 通用异常下沉到 `Aevatar.CQRS.Core.Abstractions`。
 2. 已完成：`ProjectionRuntimeLeaseBase<TSink>` 下沉到 `Aevatar.CQRS.Projection.Core`，workflow/scripting 复用同一 live-sink 运行态模型。
@@ -348,6 +414,11 @@ sequenceDiagram
 22. 已完成：scripting query `publisherId/reply-prefix` 路由常量集中到 `ScriptingQueryChannels`。
 23. 已完成：scripting timeout 归一化访问集中到 `ScriptingPortTimeoutExtensions`，调用点不再重复 normalize。
 24. 已完成：workflow 运行任务收尾 await 样板统一为 `WorkflowRunTaskAwaiter`。
+25. 已完成：workflow `delay/retry/timeout` 推进统一改为“内部触发事件 + Actor 内对账”模型，消除业务推进中的阻塞等待。
+26. 已完成：`WorkflowChatInteraction` 下沉 workflow chat 交互模板，`LLMCall/Evaluate/Reflect` 复用同一 request/response 骨架。
+27. 已完成：`ScriptEvolutionStatuses` 统一 scripting 状态字符串事实源，core 与 projection 共享常量。
+28. 已完成：`ScriptEvolutionManagerGAgent` 状态迁移模板化（`ApplyWithProposal + StampAppliedEvent`），删除重复 stamping 样板。
+29. 已完成：`RuntimeScriptQueryClient` 收敛 scripting 三条 query 端口对 CQRS `EventStreamQueryReplyAwaiter` 的重复调用拼装。
 
 ## 7. 兼容性与风险
 
@@ -355,8 +426,9 @@ sequenceDiagram
 2. 行为变更：终态不再由 Session Actor 直接推固定 stream，而是由 projection 分支发布会话事件。
 3. 风险控制：保留 manager query fallback，避免单次 sink 等待超时导致误失败。
 4. 生命周期安全：统一在 `finally` 执行 `detach/release/sink dispose`，降低泄漏风险。
+5. 行为一致性：`delay/retry/timeout` 改为内部事件触发后，回放与并发场景下的陈旧触发将被 run/step/attempt 对账拦截。
 
-## 8. 验证记录（2026-03-04 R11）
+## 8. 验证记录（2026-03-04 R12）
 
 1. `dotnet build aevatar.slnx --nologo`：通过。
 2. `dotnet test test/Aevatar.Workflow.Core.Tests/Aevatar.Workflow.Core.Tests.csproj --nologo`：`59/59` 通过。
@@ -370,4 +442,4 @@ sequenceDiagram
 
 ## 9. 结论
 
-本次 R11 变更在 R10 基础上继续完成“策略收敛 + 路由常量集中 + 分支模板降重”：workflow 侧 role actor 解析与 run 收尾 await 均已模板化，scripting 侧 query 路由/timeout 规范与 manager/catalog 分支样板进一步收敛。当前 workflow/scripting 两条回推链路在业务编排细节与基础模板层面对齐度继续提升。
+本次 R12 变更在 R11 基础上继续完成“Actor 化事件推进 + 状态常量统一 + 请求/查询模板收敛”：workflow 侧 delay/retry/timeout 全部改为内部事件驱动，LLM 模块共享 chat 交互骨架；scripting 侧状态字符串、状态迁移模板、actor request/query 封装进一步统一。当前 workflow/scripting 两条回推链路在运行时推进模型与编排模板层面的对齐度继续提升。

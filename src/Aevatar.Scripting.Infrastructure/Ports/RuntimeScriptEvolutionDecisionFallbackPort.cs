@@ -1,25 +1,24 @@
-using Aevatar.Foundation.Abstractions;
+using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Scripting.Core.Ports;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutionDecisionFallbackPort
 {
     private readonly RuntimeScriptActorAccessor _actorAccessor;
-    private readonly IStreamProvider _streams;
+    private readonly RuntimeScriptQueryClient _queryClient;
     private readonly TimeSpan _decisionTimeout;
+    private readonly QueryScriptEvolutionDecisionRequestAdapter _queryAdapter = new();
 
     public RuntimeScriptEvolutionDecisionFallbackPort(
         RuntimeScriptActorAccessor actorAccessor,
-        IStreamProvider streams,
+        RuntimeScriptQueryClient queryClient,
         IScriptingPortTimeouts timeouts)
     {
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
-        _streams = streams ?? throw new ArgumentNullException(nameof(streams));
+        _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
         _decisionTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
             .GetEvolutionDecisionTimeout();
     }
@@ -39,12 +38,11 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
         ScriptEvolutionDecisionRespondedEvent? response;
         try
         {
-            response = await EventStreamQueryReplyAwaiter.QueryActorAsync<ScriptEvolutionDecisionRespondedEvent>(
-                _streams,
+            response = await _queryClient.QueryActorAsync<ScriptEvolutionDecisionRespondedEvent>(
                 managerActor,
                 ScriptingQueryRouteConventions.EvolutionReplyStreamPrefix,
                 _decisionTimeout,
-                (requestId, replyStreamId) => BuildQueryEnvelope(managerActorId, proposalId, requestId, replyStreamId),
+                (requestId, replyStreamId) => _queryAdapter.Map(managerActorId, requestId, replyStreamId, proposalId),
                 static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
                 ScriptingQueryRouteConventions.BuildEvolutionDecisionTimeoutMessage,
                 ct);
@@ -58,29 +56,6 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
             return null;
 
         return MapDecision(response);
-    }
-
-    private static EventEnvelope BuildQueryEnvelope(
-        string targetActorId,
-        string proposalId,
-        string requestId,
-        string replyStreamId)
-    {
-        return new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new QueryScriptEvolutionDecisionRequestedEvent
-            {
-                RequestId = requestId,
-                ReplyStreamId = replyStreamId,
-                ProposalId = proposalId,
-            }),
-            PublisherId = ScriptingQueryChannels.EvolutionPublisherId,
-            Direction = EventDirection.Self,
-            TargetActorId = targetActorId,
-            CorrelationId = proposalId,
-        };
     }
 
     private static ScriptPromotionDecision MapDecision(ScriptEvolutionDecisionRespondedEvent response)
