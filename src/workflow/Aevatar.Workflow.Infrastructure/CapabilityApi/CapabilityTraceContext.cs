@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -47,21 +46,6 @@ internal static class CapabilityTraceContext
         };
     }
 
-    public static Dictionary<string, object?> CreateApiLogScopeState(
-        string correlationId = "",
-        string causationId = "") =>
-        new()
-        {
-            ["trace_id"] = CurrentTraceId(),
-            ["correlation_id"] = correlationId,
-            ["causation_id"] = causationId,
-        };
-
-    public static IDisposable? BeginApiScope(
-        ILogger? logger,
-        string correlationId = "",
-        string causationId = "") =>
-        logger?.BeginScope(CreateApiLogScopeState(correlationId, causationId));
 }
 
 internal sealed record CapabilityMessageTraceContext

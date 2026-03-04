@@ -26,7 +26,6 @@ builder.AddAevatarWorkflowObservability();
 
 var app = builder.Build();
 
-app.UseAevatarApiTracingScope();
 app.UseAevatarDefaultHost();
 
 app.Run();
