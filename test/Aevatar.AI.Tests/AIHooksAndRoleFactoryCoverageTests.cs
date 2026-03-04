@@ -94,7 +94,7 @@ public class AIHooksAndRoleFactoryCoverageTests
     }
 
     [Fact]
-    public async Task RoleAgentInitialization_ShouldUseInitializeEventPath()
+    public async Task RoleAgentInitializeEvent_ShouldApplyConfig()
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
@@ -104,9 +104,9 @@ public class AIHooksAndRoleFactoryCoverageTests
         await using var provider = services.BuildServiceProvider();
 
         var agent = CreateRoleAgent(provider);
-        var roleAgent = (IRoleAgent)agent;
-        await roleAgent.InitializeAsync(new RoleAgentInitialization
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
+            RoleName = "tester",
             ProviderName = "stub",
             Model = "model-z",
             SystemPrompt = "system",

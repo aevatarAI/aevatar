@@ -53,30 +53,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     /// <summary>Role name.</summary>
     public string RoleName { get; private set; } = "";
 
-    /// <summary>Sets role name.</summary>
-    public void SetRoleName(string name) => RoleName = name;
-
-    Task IRoleAgent.InitializeAsync(RoleAgentInitialization initialization, CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(initialization);
-        ct.ThrowIfCancellationRequested();
-
-        var evt = new InitializeRoleAgentEvent
-        {
-            RoleName = RoleName,
-            ProviderName = initialization.ProviderName,
-            Model = initialization.Model ?? string.Empty,
-            SystemPrompt = initialization.SystemPrompt,
-            MaxTokens = initialization.MaxTokens ?? 0,
-            MaxToolRounds = initialization.MaxToolRounds,
-            MaxHistoryMessages = initialization.MaxHistoryMessages,
-            StreamBufferCapacity = initialization.StreamBufferCapacity,
-        };
-        if (initialization.Temperature.HasValue)
-            evt.Temperature = initialization.Temperature.Value;
-        return HandleInitializeRoleAgent(evt);
-    }
-
     [EventHandler]
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
     {

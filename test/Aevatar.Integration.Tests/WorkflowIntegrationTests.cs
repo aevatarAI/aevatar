@@ -298,8 +298,9 @@ public class WorkflowIntegrationTests
 
         var actor = await runtime.CreateAsync<RoleGAgent>("llm-test-1");
         var agent = (RoleGAgent)actor.Agent;
-        await ((IRoleAgent)agent).InitializeAsync(new RoleAgentInitialization
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
+            RoleName = "Researcher",
             SystemPrompt = "你是一个 researcher",
             ProviderName = "mock",
         });
@@ -357,10 +358,18 @@ public class WorkflowIntegrationTests
         var r1 = await runtime.CreateAsync<RoleGAgent>("r1");
         var r2 = await runtime.CreateAsync<RoleGAgent>("r2");
 
-        ((RoleGAgent)r1.Agent).SetRoleName("Agent-R1");
-        ((RoleGAgent)r2.Agent).SetRoleName("Agent-R2");
-        await ((IRoleAgent)r1.Agent).InitializeAsync(new RoleAgentInitialization { ProviderName = "mock", SystemPrompt = "r1" });
-        await ((IRoleAgent)r2.Agent).InitializeAsync(new RoleAgentInitialization { ProviderName = "mock", SystemPrompt = "r2" });
+        await ((RoleGAgent)r1.Agent).HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "Agent-R1",
+            ProviderName = "mock",
+            SystemPrompt = "r1",
+        });
+        await ((RoleGAgent)r2.Agent).HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "Agent-R2",
+            ProviderName = "mock",
+            SystemPrompt = "r2",
+        });
 
         await runtime.LinkAsync("root", "r1");
         await runtime.LinkAsync("root", "r2");
