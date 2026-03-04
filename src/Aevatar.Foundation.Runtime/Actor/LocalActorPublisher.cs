@@ -3,8 +3,9 @@
 
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Core.Propagation;
-using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Observability;
+using Aevatar.Foundation.Runtime.Propagation;
+using Aevatar.Foundation.Runtime.Routing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -49,10 +50,12 @@ public sealed class LocalActorPublisher : IEventPublisher
             PublisherId = _actorId,
             Direction = direction,
         };
-        _envelopePropagationPolicy.Apply(envelope, sourceEnvelope);
-
-        envelope.Metadata["__route_target_count"] = routeTargetCount.ToString();
-        envelope.Metadata["__source_actor_id"] = _actorId;
+        EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
+            envelope,
+            sourceEnvelope,
+            _envelopePropagationPolicy,
+            _actorId,
+            routeTargetCount);
         AgentMetrics.RouteTargets.Add(routeTargetCount,
         [
             new("publisher.id", _actorId),
@@ -96,9 +99,12 @@ public sealed class LocalActorPublisher : IEventPublisher
             Direction = EventDirection.Self, // Point-to-point: target handles it as Self
             TargetActorId = targetActorId,
         };
-        _envelopePropagationPolicy.Apply(envelope, sourceEnvelope);
-        envelope.Metadata["__route_target_count"] = "1";
-        envelope.Metadata["__source_actor_id"] = _actorId;
+        EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
+            envelope,
+            sourceEnvelope,
+            _envelopePropagationPolicy,
+            _actorId,
+            routeTargetCount: 1);
         await _streams.GetStream(targetActorId).ProduceAsync(envelope, ct);
         AgentMetrics.RouteTargets.Add(1,
         [

@@ -20,6 +20,8 @@ internal sealed record ChatWebSocketCommandAckEnvelope
 {
     public string Type { get; init; } = ChatWebSocketMessageTypes.CommandAck;
     public required string RequestId { get; init; }
+    public string CorrelationId { get; init; } = string.Empty;
+    public string TraceId { get; init; } = string.Empty;
     public required ChatWebSocketCommandAckPayload Payload { get; init; }
 }
 
@@ -27,6 +29,8 @@ internal sealed record ChatWebSocketRunEventEnvelope
 {
     public string Type { get; init; } = ChatWebSocketMessageTypes.AguiEvent;
     public required string RequestId { get; init; }
+    public string CorrelationId { get; init; } = string.Empty;
+    public string TraceId { get; init; } = string.Empty;
     public required WorkflowOutputFrame Payload { get; init; }
 }
 
@@ -34,6 +38,8 @@ internal sealed record ChatWebSocketCommandErrorEnvelope
 {
     public string Type { get; init; } = ChatWebSocketMessageTypes.CommandError;
     public string? RequestId { get; init; }
+    public string CorrelationId { get; init; } = string.Empty;
+    public string TraceId { get; init; } = string.Empty;
     public required string Code { get; init; }
     public required string Message { get; init; }
 }
@@ -42,12 +48,15 @@ internal static class ChatWebSocketEnvelopeFactory
 {
     public static ChatWebSocketCommandAckEnvelope CreateCommandAck(
         string requestId,
-        WorkflowChatRunStarted started)
+        WorkflowChatRunStarted started,
+        string traceId)
     {
         ArgumentNullException.ThrowIfNull(started);
         return new ChatWebSocketCommandAckEnvelope
         {
             RequestId = requestId,
+            CorrelationId = started.CommandId,
+            TraceId = traceId,
             Payload = new ChatWebSocketCommandAckPayload
             {
                 CommandId = started.CommandId,
@@ -59,12 +68,16 @@ internal static class ChatWebSocketEnvelopeFactory
 
     public static ChatWebSocketRunEventEnvelope CreateAguiEvent(
         string requestId,
-        WorkflowOutputFrame payload)
+        WorkflowOutputFrame payload,
+        string correlationId,
+        string traceId)
     {
         ArgumentNullException.ThrowIfNull(payload);
         return new ChatWebSocketRunEventEnvelope
         {
             RequestId = requestId,
+            CorrelationId = correlationId,
+            TraceId = traceId,
             Payload = payload,
         };
     }
@@ -72,11 +85,15 @@ internal static class ChatWebSocketEnvelopeFactory
     public static ChatWebSocketCommandErrorEnvelope CreateCommandError(
         string? requestId,
         string code,
-        string message)
+        string message,
+        string correlationId = "",
+        string traceId = "")
     {
         return new ChatWebSocketCommandErrorEnvelope
         {
             RequestId = requestId,
+            CorrelationId = correlationId,
+            TraceId = traceId,
             Code = code,
             Message = message,
         };

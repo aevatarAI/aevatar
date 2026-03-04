@@ -6,6 +6,8 @@ namespace Aevatar.Foundation.Runtime.Observability;
 /// </summary>
 public sealed class AevatarObservabilityOptions
 {
+    public const string SectionName = "AevatarObservability";
+
     /// <summary>
     /// When true, prompts, responses, function call arguments, and results
     /// are included in trace spans. Only enable in development/testing.

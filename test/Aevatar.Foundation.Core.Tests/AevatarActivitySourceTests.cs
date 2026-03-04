@@ -92,6 +92,20 @@ public sealed class AevatarActivitySourceTests
         }
     }
 
+    [Fact]
+    public void StartHandleEvent_ShouldUseEventTypeFirstDisplayName()
+    {
+        using var listener = CreateListener();
+        using var activity = AevatarActivitySource.StartHandleEvent(
+            "Workflow:run-1:assistant",
+            "evt-1",
+            "type.googleapis.com/aevatar.ai.TextMessageContentEvent");
+
+        activity.Should().NotBeNull();
+        activity!.DisplayName.Should().Be("HandleEvent:TextMessageContentEvent");
+        activity.GetTagItem("aevatar.event.type").Should().Be("type.googleapis.com/aevatar.ai.TextMessageContentEvent");
+    }
+
     private static ActivityListener CreateListener()
     {
         var listener = new ActivityListener
@@ -103,4 +117,5 @@ public sealed class AevatarActivitySourceTests
         ActivitySource.AddActivityListener(listener);
         return listener;
     }
+
 }

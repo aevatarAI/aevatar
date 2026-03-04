@@ -7,36 +7,53 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 internal static class CapabilityTraceContext
 {
-    private static readonly ActivitySource WorkflowRunSource = new("Aevatar.Workflow.Run", "1.0.0");
-
     public static string CurrentTraceId() =>
         Activity.Current?.TraceId.ToString() ?? string.Empty;
 
+    public static CapabilityMessageTraceContext CreateMessageContext(
+        string correlationId = "",
+        string fallbackCorrelationId = "") =>
+        new()
+        {
+            TraceId = CurrentTraceId(),
+            CorrelationId = ResolveCorrelationId(correlationId, fallbackCorrelationId),
+        };
+
+    public static string ResolveCorrelationId(
+        string correlationId = "",
+        string fallbackCorrelationId = "") =>
+        !string.IsNullOrWhiteSpace(correlationId)
+            ? correlationId
+            : (fallbackCorrelationId ?? string.Empty);
+
     public static void ApplyTraceHeaders(HttpResponse response)
     {
-        var activity = Activity.Current;
-        if (activity == null)
-            return;
-
-        var traceId = activity.TraceId.ToString();
-        if (!string.IsNullOrWhiteSpace(traceId))
-            response.Headers["X-Trace-Id"] = traceId;
+        var context = CreateMessageContext();
+        if (!string.IsNullOrWhiteSpace(context.TraceId))
+            response.Headers["X-Trace-Id"] = context.TraceId;
     }
 
     public static void ApplyCorrelationHeader(HttpResponse response, string correlationId)
     {
-        if (!string.IsNullOrWhiteSpace(correlationId))
-            response.Headers["X-Correlation-Id"] = correlationId;
+        var context = CreateMessageContext(correlationId);
+        if (!string.IsNullOrWhiteSpace(context.CorrelationId))
+            response.Headers["X-Correlation-Id"] = context.CorrelationId;
     }
 
     public static WorkflowRunAcceptedPayload CreateAcceptedPayload(WorkflowChatRunStarted started) =>
-        new()
+        CreateAcceptedPayload(started.CommandId, started.ActorId);
+
+    public static WorkflowRunAcceptedPayload CreateAcceptedPayload(string commandId, string actorId)
+    {
+        var context = CreateMessageContext(commandId);
+        return new WorkflowRunAcceptedPayload
         {
-            CommandId = started.CommandId,
-            CorrelationId = started.CommandId,
-            TraceId = CurrentTraceId(),
-            ActorId = started.ActorId,
+            CommandId = commandId,
+            CorrelationId = context.CorrelationId,
+            TraceId = context.TraceId,
+            ActorId = actorId,
         };
+    }
 
     public static Dictionary<string, object?> CreateApiLogScopeState(
         string correlationId = "",
@@ -53,59 +70,12 @@ internal static class CapabilityTraceContext
         string correlationId = "",
         string causationId = "") =>
         logger?.BeginScope(CreateApiLogScopeState(correlationId, causationId));
+}
 
-    public static Activity? StartWorkflowRunExecute(
-        string? workflowName,
-        string? agentId,
-        string channel)
-    {
-        var activity = WorkflowRunSource.StartActivity("workflow.run.execute", ActivityKind.Internal);
-        if (activity == null)
-            return null;
-
-        activity.SetTag("aevatar.run.channel", channel);
-        if (!string.IsNullOrWhiteSpace(workflowName))
-            activity.SetTag("aevatar.workflow.name", workflowName);
-        if (!string.IsNullOrWhiteSpace(agentId))
-            activity.SetTag("aevatar.workflow.agent_id", agentId);
-        return activity;
-    }
-
-    public static void MarkRunStarted(Activity? activity, WorkflowChatRunStarted started)
-    {
-        if (activity == null)
-            return;
-
-        activity.SetTag("aevatar.workflow.command_id", started.CommandId);
-        activity.SetTag("aevatar.workflow.actor_id", started.ActorId);
-    }
-
-    public static void MarkFirstOutputLatency(Activity? activity, long elapsedMilliseconds)
-    {
-        if (activity == null)
-            return;
-
-        if (activity.GetTagItem("aevatar.workflow.first_output_latency_ms") != null)
-            return;
-
-        activity.SetTag("aevatar.workflow.first_output_latency_ms", elapsedMilliseconds);
-    }
-
-    public static void MarkRunFinished(
-        Activity? activity,
-        WorkflowChatRunStartError error,
-        long elapsedMilliseconds)
-    {
-        if (activity == null)
-            return;
-
-        activity.SetTag("aevatar.workflow.duration_ms", elapsedMilliseconds);
-        activity.SetTag("aevatar.workflow.start_error", error.ToString());
-        if (error == WorkflowChatRunStartError.None)
-            return;
-
-        activity.SetStatus(ActivityStatusCode.Error, error.ToString());
-    }
+internal sealed record CapabilityMessageTraceContext
+{
+    public required string CorrelationId { get; init; }
+    public required string TraceId { get; init; }
 }
 
 internal sealed record WorkflowRunAcceptedPayload

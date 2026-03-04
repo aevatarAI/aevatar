@@ -6,19 +6,23 @@ namespace Aevatar.Foundation.Runtime.Observability;
 
 public static class TracingContextHelpers
 {
-    public static void PopulateTraceId(EventEnvelope envelope)
+    public static void PopulateTraceId(EventEnvelope envelope, bool overwrite = false)
     {
         var activity = Activity.Current;
         if (activity == null)
             return;
 
-        TrySetMetadata(envelope, EnvelopeMetadataKeys.TraceId, activity.TraceId.ToString());
-        TrySetMetadata(envelope, EnvelopeMetadataKeys.TraceSpanId, activity.SpanId.ToString());
+        SetMetadata(envelope, EnvelopeMetadataKeys.TraceId, activity.TraceId.ToString(), overwrite);
+        SetMetadata(envelope, EnvelopeMetadataKeys.TraceSpanId, activity.SpanId.ToString(), overwrite);
+        SetMetadata(envelope, EnvelopeMetadataKeys.TraceFlags, ((byte)activity.ActivityTraceFlags).ToString("x2"), overwrite);
     }
 
-    private static void TrySetMetadata(EventEnvelope envelope, string key, string? value)
+    private static void SetMetadata(EventEnvelope envelope, string key, string? value, bool overwrite)
     {
-        if (string.IsNullOrWhiteSpace(value) || envelope.Metadata.ContainsKey(key))
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+
+        if (!overwrite && envelope.Metadata.ContainsKey(key))
             return;
 
         envelope.Metadata[key] = value;

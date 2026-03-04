@@ -5,6 +5,9 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Diagnostics;
+using System.Globalization;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Propagation;
 
 namespace Aevatar.Foundation.Runtime.Observability;
 
@@ -18,10 +21,109 @@ public static class AevatarActivitySource
     public static bool EnableSensitiveData { get; set; }
 
     /// <summary>Starts a HandleEvent activity (legacy, used by LocalActor).</summary>
-    public static Activity? StartHandleEvent(string agentId, string eventId) =>
-        Source.StartActivity($"HandleEvent {agentId}")
-            ?.SetTag("aevatar.agent.id", agentId)
-            ?.SetTag("aevatar.event.id", eventId);
+    public static Activity? StartHandleEvent(string agentId, string eventId, string? eventTypeUrl = null)
+    {
+        var eventTypeName = ResolveEventTypeName(eventTypeUrl);
+        var operationName = BuildHandleEventOperationName(eventTypeName);
+
+        var activity = Source.StartActivity(operationName);
+        if (activity == null)
+            return null;
+
+        activity.SetTag("aevatar.agent.id", agentId);
+        activity.SetTag("aevatar.event.id", eventId);
+        if (!string.IsNullOrWhiteSpace(eventTypeUrl))
+            activity.SetTag("aevatar.event.type", eventTypeUrl);
+        else if (!string.IsNullOrWhiteSpace(eventTypeName))
+            activity.SetTag("aevatar.event.type", eventTypeName);
+
+        return activity;
+    }
+
+    public static Activity? StartHandleEvent(string agentId, EventEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        var eventTypeUrl = envelope.Payload?.TypeUrl;
+        var eventTypeName = ResolveEventTypeName(eventTypeUrl);
+        var operationName = BuildHandleEventOperationName(eventTypeName);
+
+        var activity = TryStartWithEnvelopeParent(operationName, envelope) ?? Source.StartActivity(operationName);
+        if (activity == null)
+            return null;
+
+        activity.SetTag("aevatar.agent.id", agentId);
+        activity.SetTag("aevatar.event.id", envelope.Id);
+        if (!string.IsNullOrWhiteSpace(eventTypeUrl))
+            activity.SetTag("aevatar.event.type", eventTypeUrl);
+        else if (!string.IsNullOrWhiteSpace(eventTypeName))
+            activity.SetTag("aevatar.event.type", eventTypeName);
+
+        return activity;
+    }
+
+    private static string BuildHandleEventOperationName(string eventTypeName)
+    {
+        return string.IsNullOrWhiteSpace(eventTypeName)
+            ? "HandleEvent:UnknownEvent"
+            : $"HandleEvent:{eventTypeName}";
+    }
+
+    private static string ResolveEventTypeName(string? eventTypeUrl)
+    {
+        if (string.IsNullOrWhiteSpace(eventTypeUrl))
+            return string.Empty;
+
+        var separator = eventTypeUrl.LastIndexOf('/');
+        var fullTypeName = separator < 0 || separator == eventTypeUrl.Length - 1
+            ? eventTypeUrl
+            : eventTypeUrl[(separator + 1)..];
+
+        var dot = fullTypeName.LastIndexOf('.');
+        if (dot < 0 || dot == fullTypeName.Length - 1)
+            return fullTypeName;
+
+        return fullTypeName[(dot + 1)..];
+    }
+
+    private static Activity? TryStartWithEnvelopeParent(string operationName, EventEnvelope envelope)
+    {
+        if (!envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.TraceId, out var traceIdText) ||
+            string.IsNullOrWhiteSpace(traceIdText) ||
+            !envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.TraceSpanId, out var spanIdText) ||
+            string.IsNullOrWhiteSpace(spanIdText))
+        {
+            return null;
+        }
+
+        try
+        {
+            var traceId = ActivityTraceId.CreateFromString(traceIdText.AsSpan());
+            var spanId = ActivitySpanId.CreateFromString(spanIdText.AsSpan());
+            var traceFlags = ResolveTraceFlags(envelope);
+            var parent = new ActivityContext(traceId, spanId, traceFlags);
+            return Source.StartActivity(operationName, ActivityKind.Internal, parent);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static ActivityTraceFlags ResolveTraceFlags(EventEnvelope envelope)
+    {
+        if (!envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.TraceFlags, out var flagsText) ||
+            string.IsNullOrWhiteSpace(flagsText))
+        {
+            return ActivityTraceFlags.None;
+        }
+
+        if (byte.TryParse(flagsText, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var flagsByte))
+            return (ActivityTraceFlags)flagsByte;
+
+        return Enum.TryParse<ActivityTraceFlags>(flagsText, ignoreCase: true, out var parsed)
+            ? parsed
+            : ActivityTraceFlags.None;
+    }
 
     /// <summary>Starts an invoke_agent span per GenAI semantic conventions.</summary>
     public static Activity? StartInvokeAgent(string agentId, string? agentName = null, string? system = null)

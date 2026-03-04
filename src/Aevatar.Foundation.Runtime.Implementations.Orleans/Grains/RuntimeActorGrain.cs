@@ -1,9 +1,11 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
+using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Orleans.Streams;
 
@@ -106,6 +108,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
+        using var activity = AevatarActivitySource.StartHandleEvent(this.GetPrimaryKeyString(), envelope);
+        activity?.SetTag("aevatar.event.direction", envelope.Direction.ToString());
+        activity?.SetTag("aevatar.event.publisher", envelope.PublisherId);
+        using var logScope = TracingContextHelpers.BeginEnvelopeScope(_logger, envelope);
 
         if (!string.IsNullOrWhiteSpace(envelope.Id) && _deduplicator != null)
         {
@@ -132,7 +138,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                     break;
                 }
 
-                if (envelope.Metadata.TryGetValue("__source_actor_id", out var sourceActorId) &&
+                if (envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.SourceActorId, out var sourceActorId) &&
                     string.Equals(sourceActorId, selfActorId, StringComparison.Ordinal))
                 {
                     return;
