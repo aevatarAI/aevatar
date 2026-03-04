@@ -100,6 +100,15 @@ public abstract class GAgentBase : IAgent
             var ctx = CreateHandlerContext(envelope);
             var pipeline = EventPipelineBuilder.Build(GetStaticHandlers(), _modules, this);
 
+            if (Logger.IsEnabled(LogLevel.Trace))
+            {
+                var handlerCount = pipeline.Count();
+                Logger.LogTrace(
+                    "[EventPipeline] Agent={AgentId} type={EventType} dir={Dir} modules={ModuleCount} handlers={HandlerCount}",
+                    (object)Id, (object)(envelope.Payload?.TypeUrl ?? ""), (object)envelope.Direction,
+                    (object)(_modules?.Length ?? 0), (object)handlerCount);
+            }
+
             foreach (var handler in pipeline)
             {
                 ct.ThrowIfCancellationRequested();
