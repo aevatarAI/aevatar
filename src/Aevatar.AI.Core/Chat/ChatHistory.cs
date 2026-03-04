@@ -85,6 +85,13 @@ public sealed class ChatHistory
         if (_messages.Count <= MaxMessages) return;
         var toRemove = _messages.Count - MaxMessages;
         _messages.RemoveRange(0, toRemove);
+
+        // After naive truncation, the first remaining message(s) might be orphaned
+        // tool results whose assistant tool-call message was removed. OpenAI rejects
+        // conversations where a tool-result has no matching tool-call, so we must
+        // also remove any leading tool-result messages.
+        while (_messages.Count > 0 && _messages[0].Role == "tool")
+            _messages.RemoveAt(0);
     }
 }
 
