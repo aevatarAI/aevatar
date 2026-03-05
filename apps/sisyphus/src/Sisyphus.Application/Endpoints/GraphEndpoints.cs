@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -7,14 +9,37 @@ namespace Sisyphus.Application.Endpoints;
 
 public static class GraphEndpoints
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
     public static IEndpointRouteBuilder MapGraphEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/graph/snapshot", async (
-            ChronoGraphProxyService proxy,
+            ChronoGraphReadService readService,
             CancellationToken ct) =>
         {
-            var json = await proxy.GetSnapshotAsync(ct);
-            return Results.Content(json, "application/json");
+            var snapshot = await readService.GetBlueSnapshotAsync(ct);
+            // Map to the shape the frontend expects
+            var result = new
+            {
+                nodes = snapshot.Nodes.Select(n => new
+                {
+                    n.Id,
+                    n.Type,
+                    n.Properties,
+                }),
+                edges = snapshot.Edges.Select(e => new
+                {
+                    e.Id,
+                    sourceNodeId = e.Source,
+                    targetNodeId = e.Target,
+                    e.Type,
+                }),
+            };
+            return Results.Json(result, JsonOptions);
         }).WithTags("Graph");
 
         app.MapGet("/api/graph/nodes/{nodeId}/traverse", async (

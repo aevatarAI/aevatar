@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Channels;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -26,6 +27,10 @@ public static class ResearchEndpoints
             .Produces(StatusCodes.Status200OK, contentType: "text/event-stream")
             .Produces(StatusCodes.Status409Conflict);
 
+        group.MapGet("/subscribe", HandleSubscribe)
+            .Produces(StatusCodes.Status200OK, contentType: "text/event-stream")
+            .Produces(StatusCodes.Status404NotFound);
+
         group.MapPost("/stop", HandleStop)
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
@@ -50,70 +55,101 @@ public static class ResearchEndpoints
             return;
         }
 
-        // Set SSE headers
+        // Subscribe before starting so we don't miss events
+        var (subId, reader) = loopService.Subscribe();
+
+        // Start the loop in the background (not tied to this HTTP connection)
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await loopService.RunAsync(CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Research loop background task failed");
+            }
+        });
+
+        // Stream events to the caller
+        try
+        {
+            await WriteSseStream(http, reader, logger, ct);
+        }
+        finally
+        {
+            loopService.Unsubscribe(subId);
+        }
+    }
+
+    private static async Task HandleSubscribe(
+        HttpContext http,
+        ResearchLoopService loopService,
+        ILogger<ResearchLoopService> logger,
+        CancellationToken ct)
+    {
+        if (!loopService.IsRunning)
+        {
+            http.Response.StatusCode = StatusCodes.Status404NotFound;
+            await http.Response.WriteAsJsonAsync(
+                new { code = "NOT_RUNNING", message = "No research loop is running" }, ct);
+            return;
+        }
+
+        var (subId, reader) = loopService.Subscribe();
+
+        try
+        {
+            await WriteSseStream(http, reader, logger, ct);
+        }
+        finally
+        {
+            loopService.Unsubscribe(subId);
+        }
+    }
+
+    /// <summary>
+    /// Shared SSE writer that reads from a subscriber channel and writes to the HTTP response.
+    /// </summary>
+    private static async Task WriteSseStream(
+        HttpContext http,
+        ChannelReader<ResearchSseMessage> reader,
+        ILogger logger,
+        CancellationToken ct)
+    {
         http.Response.StatusCode = StatusCodes.Status200OK;
         http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
         http.Response.Headers.CacheControl = "no-store";
         http.Response.Headers["X-Accel-Buffering"] = "no";
         await http.Response.StartAsync(ct);
 
-        var clientDisconnected = false;
-
-        // Run loop with CancellationToken.None so client disconnect doesn't kill it
         try
         {
-            await loopService.RunAsync(async (type, payload, token) =>
+            await foreach (var msg in reader.ReadAllAsync(ct))
             {
+                var eventObj = new Dictionary<string, object> { ["type"] = msg.Type.ToString() };
 
-                if (clientDisconnected) return;
-                try
+                var payloadJson = JsonSerializer.Serialize(msg.Payload, SseJsonOptions);
+                var payloadDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(payloadJson);
+                if (payloadDict is not null)
                 {
-                    var eventObj = new Dictionary<string, object> { ["type"] = type.ToString() };
-
-                    var payloadJson = JsonSerializer.Serialize(payload, SseJsonOptions);
-                    var payloadDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(payloadJson);
-                    if (payloadDict is not null)
-                    {
-                        foreach (var (key, value) in payloadDict)
-                            eventObj[key] = value;
-                    }
-
-                    var json = JsonSerializer.Serialize(eventObj, SseJsonOptions);
-                    var bytes = Encoding.UTF8.GetBytes($"data: {json}\n\n");
-                    await http.Response.Body.WriteAsync(bytes, ct);
-                    await http.Response.Body.FlushAsync(ct);
+                    foreach (var (key, value) in payloadDict)
+                        eventObj[key] = value;
                 }
-                catch (Exception)
-                {
-                    clientDisconnected = true;
-                    logger.LogInformation("SSE client disconnected, research loop continues in background");
-                }
-            }, CancellationToken.None);
-        }
-        catch (InvalidOperationException)
-        {
-            // TOCTOU race: another request started the loop between our check and RunAsync's lock
-            logger.LogWarning("Research loop start rejected — already running (race)");
+
+                var json = JsonSerializer.Serialize(eventObj, SseJsonOptions);
+                var bytes = Encoding.UTF8.GetBytes($"data: {json}\n\n");
+                await http.Response.Body.WriteAsync(bytes, ct);
+                await http.Response.Body.FlushAsync(ct);
+            }
         }
         catch (OperationCanceledException)
         {
-            logger.LogInformation("Research loop ended via cancellation");
+            logger.LogInformation("SSE client disconnected");
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Research loop failed");
-            if (!clientDisconnected)
-            {
-                try
-                {
-                    var errorJson = JsonSerializer.Serialize(
-                        new { type = "LOOP_ERROR", error = "Internal error" }, SseJsonOptions);
-                    var errorBytes = Encoding.UTF8.GetBytes($"data: {errorJson}\n\n");
-                    await http.Response.Body.WriteAsync(errorBytes, ct);
-                    await http.Response.Body.FlushAsync(ct);
-                }
-                catch { /* Response may already be closed */ }
-            }
+            logger.LogWarning(ex, "SSE stream error");
         }
     }
 
