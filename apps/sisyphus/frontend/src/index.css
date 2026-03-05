@@ -28,10 +28,15 @@
     --border-default: #3f3f46;
     --border-strong: #52525b;
 
-    /* === Role Accent Colors (muted to fit monochrome) === */
-    --accent-blue: #8bb3d0;
-    --accent-purple: #a78bcd;
-    --accent-gold: #c9a85c;
+    /* === Neon Accent Colors === */
+    --neon-cyan: #00ffff;
+    --neon-magenta: #ff00aa;
+    --neon-blue: #00d4ff;
+
+    /* === Role Accent Colors === */
+    --accent-blue: #00d4ff;
+    --accent-purple: #bf7fff;
+    --accent-gold: #ffaa00;
 
     /* === Semantic Colors === */
     --accent-green: #53ff8a;
@@ -428,10 +433,132 @@
     pointer-events: none;
   }
 
-  /* === Graph Grid Background === */
-  .graph-grid-bg {
-    background-image: radial-gradient(circle, var(--border-subtle) 1px, transparent 1px);
-    background-size: 24px 24px;
+  /* === Graph Cyber Background === */
+  .graph-cyber-bg {
+    background:
+      radial-gradient(ellipse at 50% 50%, rgba(0, 212, 255, 0.03) 0%, transparent 60%),
+      var(--bg-base);
+  }
+
+  /* === Neon Header Border === */
+  .header-neon-border {
+    height: 1px;
+    background: linear-gradient(90deg, transparent 5%, rgba(0, 255, 255, 0.4) 30%, rgba(255, 0, 170, 0.25) 70%, transparent 95%);
+    box-shadow: 0 1px 8px rgba(0, 255, 255, 0.1);
+  }
+
+  /* === Panel Edge Handle === */
+  .panel-handle {
+    width: 16px;
+    background: var(--bg-surface);
+    border-left: 1px solid rgba(0, 255, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .panel-handle:hover {
+    background: var(--bg-elevated);
+    border-left-color: rgba(0, 255, 255, 0.35);
+  }
+
+  .panel-handle-glow {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(180deg, transparent, rgba(0, 255, 255, 0.3), transparent);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+
+  .panel-handle:hover .panel-handle-glow {
+    opacity: 1;
+  }
+
+  .panel-handle-label {
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    font-size: 8px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text-dimmed);
+    position: relative;
+    z-index: 10;
+    transition: color 0.2s ease;
+  }
+
+  .panel-handle:hover .panel-handle-label {
+    color: rgba(0, 255, 255, 0.6);
+    text-shadow: 0 0 8px rgba(0, 255, 255, 0.2);
+  }
+
+  /* === Neon Buttons === */
+  .btn-neon {
+    @apply inline-flex items-center justify-center gap-2 px-[18px] py-[10px] rounded-md text-sm font-medium;
+    background: rgba(0, 255, 255, 0.1);
+    color: #00ffff;
+    border: 1px solid rgba(0, 255, 255, 0.3);
+    transition: all 0.2s ease;
+    text-shadow: 0 0 8px rgba(0, 255, 255, 0.3);
+  }
+
+  .btn-neon:hover {
+    background: rgba(0, 255, 255, 0.18);
+    border-color: rgba(0, 255, 255, 0.5);
+    box-shadow: 0 0 15px rgba(0, 255, 255, 0.15);
+  }
+
+  .btn-neon:active {
+    transform: scale(0.98);
+  }
+
+  .btn-neon-danger {
+    @apply inline-flex items-center justify-center gap-2 px-[18px] py-[10px] rounded-md text-sm font-medium;
+    background: rgba(255, 46, 46, 0.12);
+    color: #ff4444;
+    border: 1px solid rgba(255, 46, 46, 0.3);
+    transition: all 0.2s ease;
+    text-shadow: 0 0 8px rgba(255, 46, 46, 0.3);
+  }
+
+  .btn-neon-danger:hover {
+    background: rgba(255, 46, 46, 0.2);
+    border-color: rgba(255, 46, 46, 0.5);
+    box-shadow: 0 0 15px rgba(255, 46, 46, 0.15);
+  }
+
+  /* === Neon Badge Pulse === */
+  .badge-neon-pulse {
+    animation: neon-pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes neon-pulse {
+    0%, 100% { box-shadow: 0 0 4px rgba(0, 255, 255, 0.2); }
+    50% { box-shadow: 0 0 12px rgba(0, 255, 255, 0.4); }
+  }
+
+  /* === Panel Slide Animation === */
+  .animate-slide-panel {
+    animation: slide-panel-in 0.25s ease-out;
+  }
+
+  @keyframes slide-panel-in {
+    from {
+      width: 0;
+      opacity: 0;
+    }
+    to {
+      width: 380px;
+      opacity: 1;
+    }
   }
 
   /* === Slide-in Panel === */

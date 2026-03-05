@@ -55,16 +55,16 @@ function eventLabel(event: RoundEvent): string {
 function eventColor(type: string): string {
   switch (type) {
     case 'GRAPH_READ':
-      return 'var(--accent-blue)'
+      return '#00d4ff'
     case 'LLM_CALL_START':
-      return 'var(--accent-gold)'
+      return '#ffaa00'
     case 'LLM_CALL_DONE':
-      return 'var(--accent-green)'
+      return '#00ff88'
     case 'GRAPH_WRITE_DONE':
-      return 'var(--accent-purple)'
+      return '#bf7fff'
     case 'VALIDATION_FAILED':
     case 'LOOP_ERROR':
-      return 'var(--accent-red)'
+      return '#ff4444'
     default:
       return 'var(--text-dimmed)'
   }

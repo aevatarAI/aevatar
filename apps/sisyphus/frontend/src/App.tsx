@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { Activity, FileDown, PanelRightOpen, PanelRightClose, Play, Square } from 'lucide-react'
+import { Activity, FileDown, Play, Square, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useResearchStream } from './hooks/use-research-stream'
 import { exportPaper } from './api'
 import ResearchStream from './components/ResearchStream'
@@ -7,7 +7,7 @@ import GraphView from './components/GraphView'
 import aevatarLogo from './assets/aevatar_ai_logo.svg'
 
 export default function App() {
-  const [panelOpen, setPanelOpen] = useState(true)
+  const [panelOpen, setPanelOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
 
   const { rounds, runStatus, currentRound, totalBlueNodes, error, llmStreamText, startRun, stopRun } =
@@ -34,9 +34,9 @@ export default function App() {
 
   const statusColor = {
     idle: 'var(--text-dimmed)',
-    running: 'var(--text-primary)',
-    completed: 'var(--accent-green)',
-    error: 'var(--accent-red)',
+    running: '#00ffff',
+    completed: '#00ff88',
+    error: '#ff2e2e',
   }[runStatus]
 
   const statusLabel = {
@@ -62,7 +62,7 @@ export default function App() {
             className="h-5 w-px"
             style={{
               background:
-                'linear-gradient(180deg, transparent, var(--border-strong), transparent)',
+                'linear-gradient(180deg, transparent, rgba(0,255,255,0.3), transparent)',
             }}
           />
           <span
@@ -84,54 +84,65 @@ export default function App() {
           </button>
           {/* Start / Stop */}
           {isRunning ? (
-            <button onClick={stopRun} className="btn-warning text-xs gap-1.5 py-1.5 px-3">
+            <button onClick={stopRun} className="btn-neon-danger text-xs gap-1.5 py-1.5 px-3">
               <Square size={14} />
               Stop
             </button>
           ) : (
-            <button onClick={startRun} className="btn-primary text-xs gap-1.5 py-1.5 px-3">
+            <button onClick={startRun} className="btn-neon text-xs gap-1.5 py-1.5 px-3">
               <Play size={14} />
               Start
             </button>
           )}
-          {/* Toggle research panel */}
-          <button
-            onClick={() => setPanelOpen(!panelOpen)}
-            className="icon-btn"
-            title={panelOpen ? 'Hide research panel' : 'Show research panel'}
-            style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}
-          >
-            {panelOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-          </button>
           {/* Status badge */}
           <Activity size={14} style={{ color: statusColor }} />
           <span
-            className="badge text-[10px]"
-            style={{ color: statusColor, borderColor: statusColor }}
+            className={`badge text-[10px] ${isRunning ? 'badge-neon-pulse' : ''}`}
+            style={{
+              color: statusColor,
+              borderColor: statusColor,
+              textShadow: isRunning ? `0 0 8px ${statusColor}` : 'none',
+            }}
           >
             {statusLabel}
           </span>
         </div>
       </header>
-      <div className="divider-h" />
+      {/* Neon header border */}
+      <div className="header-neon-border" />
 
-      {/* Main content: Graph + collapsible Research panel */}
+      {/* Main content: Graph + panel handle + collapsible Research panel */}
       <main className="flex-1 flex min-h-0 min-w-0 overflow-hidden">
         {/* Graph (fills remaining space) */}
-        <GraphView runStatus={runStatus} />
+        <GraphView />
 
-        {/* Research side panel */}
-        {panelOpen && (
-          <>
+        {/* Panel handle (always visible) + Panel content */}
+        <div className="flex shrink-0">
+          {/* Vertical edge handle */}
+          <button
+            onClick={() => setPanelOpen(!panelOpen)}
+            className="panel-handle group"
+            title={panelOpen ? 'Hide research panel' : 'Show research panel'}
+          >
+            <div className="panel-handle-glow" />
+            {panelOpen ? (
+              <ChevronRight size={10} className="relative z-10 text-[var(--text-dimmed)] group-hover:text-[#00ffff] transition-colors" />
+            ) : (
+              <ChevronLeft size={10} className="relative z-10 text-[var(--text-dimmed)] group-hover:text-[#00ffff] transition-colors" />
+            )}
+            {!panelOpen && (
+              <span className="panel-handle-label">RESEARCH</span>
+            )}
+          </button>
+
+          {/* Research panel content */}
+          {panelOpen && (
             <div
-              className="w-px shrink-0"
-              style={{ background: 'var(--border-default)' }}
-            />
-            <div
-              className="shrink-0 flex flex-col overflow-hidden"
+              className="flex flex-col overflow-hidden animate-slide-panel"
               style={{
                 width: 380,
                 background: 'var(--bg-surface)',
+                borderLeft: '1px solid rgba(0, 255, 255, 0.08)',
               }}
             >
               <ResearchStream
@@ -143,8 +154,8 @@ export default function App() {
                 llmStreamText={llmStreamText}
               />
             </div>
-          </>
-        )}
+          )}
+        </div>
       </main>
     </div>
   )

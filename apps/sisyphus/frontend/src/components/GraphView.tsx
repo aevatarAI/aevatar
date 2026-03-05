@@ -4,11 +4,18 @@ import { RefreshCw, Maximize2 } from 'lucide-react'
 import { useGraphData } from '../hooks/use-graph-data'
 import { NODE_COLORS } from '../types/graph'
 import type { GraphNode } from '../types/graph'
-import type { RunStatus } from '../types'
 import NodeDetailsPanel from './NodeDetailsPanel'
 
-interface GraphViewProps {
-  runStatus: RunStatus
+function hashStr(s: string): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) - h + s.charCodeAt(i)) | 0
+  }
+  return Math.abs(h)
+}
+
+function hexAlpha(hex: string, alpha: number): string {
+  return hex + Math.round(alpha * 255).toString(16).padStart(2, '0')
 }
 
 interface GraphLink {
@@ -18,9 +25,9 @@ interface GraphLink {
   id: string
 }
 
-export default function GraphView({ runStatus }: GraphViewProps) {
+export default function GraphView() {
   const { snapshot, selectedNode, traverseResult, loading, error, refresh, selectNode, clearSelection } =
-    useGraphData(runStatus)
+    useGraphData()
   const fgRef = useRef<any>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null)
@@ -42,6 +49,14 @@ export default function GraphView({ runStatus }: GraphViewProps) {
     observer.observe(container)
     return () => observer.disconnect()
   }, [])
+
+  // Tighten node spacing: weaker repulsion + shorter links
+  useEffect(() => {
+    const fg = fgRef.current
+    if (!fg) return
+    fg.d3Force('charge')?.strength(-8)
+    fg.d3Force('link')?.distance(15)
+  }, [snapshot])
 
   const graphData = useMemo(() => {
     if (!snapshot) return { nodes: [], links: [] }
@@ -67,14 +82,16 @@ export default function GraphView({ runStatus }: GraphViewProps) {
 
   const handleNodeHover = useCallback(
     (node: any) => {
-      if (node) {
-        setHoveredNode(node as GraphNode)
-      } else {
-        setHoveredNode(null)
-      }
+      setHoveredNode(node ? (node as GraphNode) : null)
     },
     [],
   )
+
+  const handleNodeDragEnd = useCallback((node: any) => {
+    // Unfix the node so it drifts with force simulation (inertia feel)
+    node.fx = undefined
+    node.fy = undefined
+  }, [])
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     setTooltipPos({ x: e.clientX, y: e.clientY })
@@ -88,39 +105,101 @@ export default function GraphView({ runStatus }: GraphViewProps) {
 
   const nodeCanvasObject = useCallback(
     (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      const label = node.label || node.id
-      const color = NODE_COLORS[node.type] ?? NODE_COLORS.Default
-      const radius = 6
+      const type = node.type || 'Unknown'
+      const color = NODE_COLORS[type] ?? NODE_COLORS.Default
       const x = node.x ?? 0
       const y = node.y ?? 0
+      const isHovered = hoveredNode?.id === node.id
+      const isSelected = selectedNode?.id === node.id
 
-      // Glow
+      // Animated pulse per-node (unique phase from id hash)
+      const t = Date.now() * 0.001
+      const phase = hashStr(node.id) * 0.37
+      const pulse = 0.8 + 0.2 * Math.sin(t * 1.8 + phase)
+
+      const baseRadius = isHovered ? 12 : isSelected ? 11 : 10
+
+      // Outer bloom
+      ctx.save()
       ctx.shadowColor = color
-      ctx.shadowBlur = 12
+      ctx.shadowBlur = (isHovered ? 35 : 20) * pulse
       ctx.beginPath()
-      ctx.arc(x, y, radius, 0, 2 * Math.PI)
+      ctx.arc(x, y, baseRadius + 2, 0, Math.PI * 2)
+      ctx.fillStyle = hexAlpha(color, 0.1 * pulse)
+      ctx.fill()
+      ctx.restore()
+
+      // Core circle
+      ctx.save()
+      ctx.shadowColor = color
+      ctx.shadowBlur = 10
+      ctx.beginPath()
+      ctx.arc(x, y, baseRadius, 0, Math.PI * 2)
       ctx.fillStyle = color
       ctx.fill()
-      ctx.shadowBlur = 0
+      ctx.restore()
 
-      // Selected ring
-      if (selectedNode && selectedNode.id === node.id) {
+      // Hot center spot
+      ctx.beginPath()
+      ctx.arc(x, y, baseRadius * 0.3, 0, Math.PI * 2)
+      ctx.fillStyle = `rgba(255,255,255,${(0.55 * pulse).toFixed(2)})`
+      ctx.fill()
+
+      // Selected ring (dashed, white)
+      if (isSelected) {
         ctx.beginPath()
-        ctx.arc(x, y, radius + 3, 0, 2 * Math.PI)
-        ctx.strokeStyle = '#ffffff'
-        ctx.lineWidth = 1.5
+        ctx.arc(x, y, baseRadius + 5, 0, Math.PI * 2)
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)'
+        ctx.lineWidth = 1
+        ctx.setLineDash([3, 3])
         ctx.stroke()
+        ctx.setLineDash([])
       }
 
-      // Label
-      const fontSize = Math.max(10 / globalScale, 3)
-      ctx.font = `${fontSize}px Inter, sans-serif`
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'top'
-      ctx.fillStyle = 'rgba(250, 250, 250, 0.8)'
-      ctx.fillText(label, x, y + radius + 3)
+      // Type label (only when zoomed enough)
+      if (globalScale > 0.5) {
+        const fontSize = Math.max(9 / globalScale, 2.5)
+        ctx.font = `500 ${fontSize}px Inter, sans-serif`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'top'
+        ctx.fillStyle = hexAlpha(color, 0.7)
+        ctx.fillText(type, x, y + baseRadius + 4)
+      }
     },
-    [selectedNode],
+    [selectedNode, hoveredNode],
+  )
+
+  const linkCanvasObject = useCallback(
+    (link: any, ctx: CanvasRenderingContext2D) => {
+      const src = link.source
+      const tgt = link.target
+      if (src?.x == null || tgt?.x == null) return
+
+      // Subtle neon line
+      ctx.beginPath()
+      ctx.moveTo(src.x, src.y)
+      ctx.lineTo(tgt.x, tgt.y)
+      ctx.strokeStyle = 'rgba(0, 212, 255, 0.07)'
+      ctx.lineWidth = 0.5
+      ctx.stroke()
+
+      // Flowing particle along edge
+      const t = Date.now() * 0.001
+      const dur = 3 + (hashStr(link.id ?? `${src.id}-${tgt.id}`) % 4)
+      const progress = (t / dur) % 1
+      const px = src.x + (tgt.x - src.x) * progress
+      const py = src.y + (tgt.y - src.y) * progress
+
+      ctx.save()
+      ctx.shadowColor = '#00d4ff'
+      ctx.shadowBlur = 4
+      ctx.beginPath()
+      ctx.arc(px, py, 0.8, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(0, 212, 255, 0.45)'
+      ctx.fill()
+      ctx.restore()
+    },
+    [],
   )
 
   // Loading state
@@ -128,7 +207,7 @@ export default function GraphView({ runStatus }: GraphViewProps) {
     return (
       <div className="flex-1 flex items-center justify-center" style={{ background: 'var(--bg-base)' }}>
         <div className="thinking-indicator">
-          <div className="thinking-dots">
+          <div className="thinking-dots" style={{ '--dot-color': '#00ffff' } as React.CSSProperties}>
             <span />
             <span />
             <span />
@@ -166,8 +245,7 @@ export default function GraphView({ runStatus }: GraphViewProps) {
   return (
     <div
       ref={containerRef}
-      className="flex-1 relative graph-grid-bg overflow-hidden"
-      style={{ background: 'var(--bg-base)' }}
+      className="flex-1 relative overflow-hidden graph-cyber-bg"
       onPointerMove={handlePointerMove}
     >
       {/* Force Graph */}
@@ -180,34 +258,42 @@ export default function GraphView({ runStatus }: GraphViewProps) {
           nodeCanvasObject={nodeCanvasObject}
           nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
             ctx.beginPath()
-            ctx.arc(node.x ?? 0, node.y ?? 0, 8, 0, 2 * Math.PI)
+            ctx.arc(node.x ?? 0, node.y ?? 0, 8, 0, Math.PI * 2)
             ctx.fillStyle = color
             ctx.fill()
           }}
+          linkCanvasObject={linkCanvasObject}
+          linkCanvasObjectMode={() => 'replace'}
           onNodeClick={handleNodeClick}
           onNodeHover={handleNodeHover}
-          linkColor={() => 'rgba(0,255,255,0.4)'}
-          linkDirectionalArrowLength={6}
-          linkDirectionalArrowRelPos={1}
+          onNodeDragEnd={handleNodeDragEnd}
           backgroundColor="rgba(0,0,0,0)"
-          cooldownTicks={100}
+          d3AlphaDecay={0.008}
+          d3VelocityDecay={0.3}
+          cooldownTime={Infinity}
+          enableNodeDrag={true}
         />
       )}
 
       {/* Tooltip */}
       {hoveredNode && (
         <div
-          className="fixed px-2 py-1 rounded text-xs pointer-events-none z-50"
+          className="fixed px-3 py-1.5 rounded text-xs pointer-events-none z-50"
           style={{
             left: tooltipPos.x + 12,
             top: tooltipPos.y - 8,
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border-default)',
-            color: 'var(--text-primary)',
+            background: 'rgba(10, 10, 12, 0.9)',
+            border: '1px solid rgba(0, 255, 255, 0.2)',
+            boxShadow: '0 0 12px rgba(0, 255, 255, 0.08)',
+            backdropFilter: 'blur(8px)',
           }}
         >
-          <div className="font-medium">{hoveredNode.label}</div>
-          <div style={{ color: 'var(--text-dimmed)' }}>{hoveredNode.type}</div>
+          <div className="font-medium" style={{ color: NODE_COLORS[hoveredNode.type] ?? '#00ffff' }}>
+            {hoveredNode.type}
+          </div>
+          <div className="text-[10px] font-mono mt-0.5" style={{ color: 'var(--text-dimmed)' }}>
+            {hoveredNode.id.slice(0, 16)}...
+          </div>
         </div>
       )}
 
@@ -217,17 +303,23 @@ export default function GraphView({ runStatus }: GraphViewProps) {
           onClick={refresh}
           className="icon-btn"
           title="Refresh graph"
-          style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}
+          style={{
+            background: 'rgba(10, 10, 12, 0.8)',
+            border: '1px solid rgba(0, 255, 255, 0.15)',
+          }}
         >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} style={{ color: '#00ffff' }} />
         </button>
         <button
           onClick={handleFitToView}
           className="icon-btn"
           title="Fit to view"
-          style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}
+          style={{
+            background: 'rgba(10, 10, 12, 0.8)',
+            border: '1px solid rgba(0, 255, 255, 0.15)',
+          }}
         >
-          <Maximize2 size={14} />
+          <Maximize2 size={14} style={{ color: '#00ffff' }} />
         </button>
       </div>
 
@@ -236,12 +328,14 @@ export default function GraphView({ runStatus }: GraphViewProps) {
         <div
           className="absolute bottom-3 left-3 flex items-center gap-3 px-2.5 py-1.5 rounded z-10 text-[10px] font-mono"
           style={{
-            background: 'var(--bg-surface)',
-            border: '1px solid var(--border-subtle)',
-            color: 'var(--text-dimmed)',
+            background: 'rgba(10, 10, 12, 0.8)',
+            border: '1px solid rgba(0, 255, 255, 0.12)',
+            color: '#00ffff',
+            textShadow: '0 0 6px rgba(0, 255, 255, 0.3)',
           }}
         >
           <span>{snapshot.nodes.length} nodes</span>
+          <span style={{ color: 'rgba(0, 255, 255, 0.3)' }}>|</span>
           <span>{snapshot.edges.length} edges</span>
         </div>
       )}
