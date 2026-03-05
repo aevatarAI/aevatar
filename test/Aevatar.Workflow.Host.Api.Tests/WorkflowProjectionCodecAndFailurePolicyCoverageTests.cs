@@ -124,7 +124,7 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
             CreateLease(string.Empty, "   "),
             new NoopRunEventSink(),
             new WorkflowRunStartedEvent { ThreadId = "thread-1" },
-            new WorkflowRunEventSinkBackpressureException());
+            new EventSinkBackpressureException());
 
         handled.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
@@ -148,7 +148,7 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
             CreateLease("actor-1", "cmd-1"),
             new NoopRunEventSink(),
             new WorkflowRunStartedEvent { ThreadId = "thread-1" },
-            new WorkflowRunEventSinkBackpressureException());
+            new EventSinkBackpressureException());
 
         handled.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
@@ -197,13 +197,13 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
     }
 
     private sealed class RecordingSinkSubscriptionManager
-        : IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent>
+        : IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
     {
         public int DetachCalls { get; private set; }
 
         public Task AttachOrReplaceAsync(
             WorkflowExecutionRuntimeLease lease,
-            IWorkflowRunEventSink sink,
+            IEventSink<WorkflowRunEvent> sink,
             Func<WorkflowRunEvent, ValueTask> handler,
             CancellationToken ct = default)
         {
@@ -216,7 +216,7 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
 
         public Task DetachAsync(
             WorkflowExecutionRuntimeLease lease,
-            IWorkflowRunEventSink sink,
+            IEventSink<WorkflowRunEvent> sink,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -262,7 +262,7 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class NoopRunEventSink : IWorkflowRunEventSink
+    private sealed class NoopRunEventSink : IEventSink<WorkflowRunEvent>
     {
         public void Push(WorkflowRunEvent evt)
         {

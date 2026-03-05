@@ -36,7 +36,7 @@
 | Application | `WorkflowRunContextFactory`、`WorkflowRunExecutionEngine`、`WorkflowRunOutputStreamer` | 上下文构建、执行调度、输出帧流化 |
 | Domain/AI | `WorkflowGAgent`、`LLMCallModule`、`RoleGAgent`、`ChatRuntime` | 触发 LLM 调用、发布文本/工具事件 |
 | Projection | `WorkflowExecutionReadModelProjector`、`WorkflowExecutionAGUIEventProjector` | 读模型更新 + 实时事件分发 |
-| Streaming | `ProjectionSessionEventHub<WorkflowRunEvent>`、`WorkflowRunEventChannel` | 会话事件总线与 live sink 通道 |
+| Streaming | `ProjectionSessionEventHub<WorkflowRunEvent>`、`EventChannel<WorkflowRunEvent>` | 会话事件总线与 live sink 通道 |
 
 关键代码锚点：
 
@@ -71,8 +71,8 @@ flowchart TB
     COOR --> AGP["WorkflowExecutionAGUIEventProjector"]
     AGP --> MAP["EventEnvelopeToAGUIEventMapper"]
     MAP --> HUB["ProjectionSessionEventHub\nworkflow-run:{actorId}:{commandId}"]
-    HUB --> FWD["WorkflowProjectionLiveSinkForwarder"]
-    FWD --> CH["WorkflowRunEventChannel"]
+    HUB --> FWD["EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>"]
+    FWD --> CH["EventChannel<WorkflowRunEvent>"]
     CH --> STR["WorkflowRunOutputStreamer"]
     STR --> FR["WorkflowOutputFrame"]
     FR --> H
@@ -275,7 +275,7 @@ flowchart LR
 锚点：
 
 1. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionRuntimeLease.cs:22`
-2. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionSinkSubscriptionManager.cs:26`
+2. `src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionSessionSubscriptionManager.cs:26`
 3. `src/Aevatar.CQRS.Projection.Core/Streaming/ProjectionSessionEventHub.cs:77`
 4. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionSinkFailurePolicy.cs:39`
 

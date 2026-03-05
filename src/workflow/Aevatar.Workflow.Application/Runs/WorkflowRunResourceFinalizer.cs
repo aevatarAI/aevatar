@@ -20,27 +20,10 @@ public sealed class WorkflowRunResourceFinalizer : IWorkflowRunResourceFinalizer
         ArgumentNullException.ThrowIfNull(processingTask);
         ct.ThrowIfCancellationRequested();
 
-        try
-        {
-            await _projectionPort.DetachLiveSinkAsync(runContext.ProjectionLease, runContext.Sink, CancellationToken.None);
-            await AwaitProcessingTaskSafeAsync(processingTask);
-            await _projectionPort.ReleaseActorProjectionAsync(runContext.ProjectionLease, CancellationToken.None);
-        }
-        finally
-        {
-            runContext.Sink.Complete();
-            await runContext.Sink.DisposeAsync();
-        }
-    }
-
-    private static async Task AwaitProcessingTaskSafeAsync(Task processingTask)
-    {
-        try
-        {
-            await processingTask;
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        await _projectionPort.DetachReleaseAndDisposeAsync(
+            runContext.ProjectionLease,
+            runContext.Sink,
+            () => WorkflowRunTaskAwaiter.AwaitIgnoringCancellationAsync(processingTask),
+            CancellationToken.None);
     }
 }

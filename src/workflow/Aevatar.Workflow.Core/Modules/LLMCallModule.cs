@@ -105,7 +105,7 @@ public sealed class LLMCallModule : IEventModule
         {
             if (!string.IsNullOrEmpty(targetRole))
             {
-                var targetActorId = ResolveTargetActorId(ctx.AgentId, targetRole);
+                var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, targetRole);
 
                 // Point-to-point: send ChatRequestEvent directly to the target role actor by ID
                 ctx.Logger.LogInformation(
@@ -345,18 +345,5 @@ public sealed class LLMCallModule : IEventModule
             cts.Dispose();
         }
     }
-
-    private static string ResolveTargetActorId(string workflowActorId, string targetRole)
-    {
-        if (string.IsNullOrWhiteSpace(targetRole))
-            return targetRole;
-
-        // Workflow role ids are logical names. Concrete role actors are created as "{workflowActorId}:{roleId}".
-        if (!targetRole.Contains(':', StringComparison.Ordinal))
-            return $"{workflowActorId}:{targetRole}";
-
-        return targetRole;
-    }
-
     private sealed record PendingLlmCall(StepRequestEvent Request, string StepRunKey);
 }

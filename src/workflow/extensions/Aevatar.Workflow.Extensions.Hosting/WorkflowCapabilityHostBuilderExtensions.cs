@@ -1,4 +1,5 @@
 using Aevatar.Bootstrap.Extensions.AI;
+using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Workflow.Extensions.AIProjection;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
@@ -9,7 +10,8 @@ public static class WorkflowCapabilityHostBuilderExtensions
 {
     public static WebApplicationBuilder AddWorkflowCapabilityWithAIDefaults(
         this WebApplicationBuilder builder,
-        Action<AevatarAIFeatureOptions>? configureAIFeatures = null)
+        Action<AevatarAIFeatureOptions>? configureAIFeatures = null,
+        bool includeScriptCapability = true)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
@@ -22,6 +24,8 @@ public static class WorkflowCapabilityHostBuilderExtensions
         });
         builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
         builder.AddWorkflowCapability();
+        if (includeScriptCapability)
+            builder.AddScriptCapability();
         builder.Services.AddWorkflowAIProjectionExtensions();
 
         return builder;

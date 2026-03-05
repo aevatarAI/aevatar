@@ -21,7 +21,7 @@ EventEnvelope
      -> AGUIEvent[]
         -> AGUIEventToWorkflowRunEventMapper (一对一)
            -> WorkflowRunEvent
-              -> IWorkflowRunEventSink.PushAsync
+              -> IEventSink<WorkflowRunEvent>.PushAsync
 ```
 
 ## Handler Chain
@@ -46,8 +46,8 @@ EventEnvelope
 3. 写入 run event sink
 
 容错策略：
-- `WorkflowRunEventSinkBackpressureException`：丢弃当前事件，保持 sink 连接
-- `WorkflowRunEventSinkCompletedException` / `InvalidOperationException`：断开 sink，停止后续推送
+- `EventSinkBackpressureException`：丢弃当前事件，保持 sink 连接
+- `EventSinkCompletedException` / `InvalidOperationException`：断开 sink，停止后续推送
 
 ## OCP 扩展
 

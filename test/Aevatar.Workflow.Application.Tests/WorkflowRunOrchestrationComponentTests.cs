@@ -81,7 +81,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         projectionPort.LastAttachedSink.Should().NotBeNull();
         var push = () => projectionPort.LastAttachedSink!.Push(
             new WorkflowRunStartedEvent { ThreadId = "actor-3" });
-        push.Should().Throw<WorkflowRunEventSinkCompletedException>();
+        push.Should().Throw<EventSinkCompletedException>();
     }
 
     [Fact]
@@ -267,9 +267,9 @@ public sealed class WorkflowRunOrchestrationComponentTests
     private static WorkflowRunContext BuildRunContext(
         string actorId,
         string commandId,
-        IWorkflowRunEventSink? sink = null)
+        IEventSink<WorkflowRunEvent>? sink = null)
     {
-        var resolvedSink = sink ?? new WorkflowRunEventChannel();
+        var resolvedSink = sink ?? new EventChannel<WorkflowRunEvent>();
         return new WorkflowRunContext
         {
             Actor = new ComponentActor(actorId),
@@ -345,7 +345,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         public bool EnableActorQueryEndpoints => false;
         public bool ThrowOnAttach { get; set; }
         public bool ThrowOnDetach { get; set; }
-        public IWorkflowRunEventSink? LastAttachedSink { get; private set; }
+        public IEventSink<WorkflowRunEvent>? LastAttachedSink { get; private set; }
         public List<(string ActorId, string WorkflowName, string Input, string CommandId)> EnsureCalls { get; } = [];
         public List<(string ActorId, string CommandId)> DetachCalls { get; } = [];
         public List<(string ActorId, string CommandId)> ReleaseCalls { get; } = [];
@@ -364,7 +364,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         public Task AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            IWorkflowRunEventSink sink,
+            IEventSink<WorkflowRunEvent> sink,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -378,7 +378,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         public Task DetachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            IWorkflowRunEventSink sink,
+            IEventSink<WorkflowRunEvent> sink,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -473,7 +473,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             IActor actor,
             string actorId,
             EventEnvelope requestEnvelope,
-            IWorkflowRunEventSink sink,
+            IEventSink<WorkflowRunEvent> sink,
             CancellationToken ct = default)
         {
             _ = actor;
@@ -494,7 +494,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         }
 
         public async Task StreamAsync(
-            IWorkflowRunEventSink sink,
+            IEventSink<WorkflowRunEvent> sink,
             Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
             CancellationToken ct = default)
         {
@@ -516,7 +516,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         }
 
         public Task StreamAsync(
-            IWorkflowRunEventSink sink,
+            IEventSink<WorkflowRunEvent> sink,
             Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
             CancellationToken ct = default)
         {
@@ -617,7 +617,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         }
     }
 
-    private sealed class TrackingSink : IWorkflowRunEventSink
+    private sealed class TrackingSink : IEventSink<WorkflowRunEvent>
     {
         public bool Completed { get; private set; }
         public bool Disposed { get; private set; }

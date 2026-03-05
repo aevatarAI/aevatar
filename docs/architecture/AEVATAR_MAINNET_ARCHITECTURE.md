@@ -578,7 +578,7 @@ flowchart LR
 
     subgraph realtime ["实时推送"]
         Mapper["EventEnvelopeToAGUIEventMapper"]
-        Sink["IWorkflowRunEventSink"]
+        Sink["IEventSink<WorkflowRunEvent>"]
         SSE["SSE Endpoint (/api/chat)"]
         WS["WebSocket (/api/ws/chat)"]
     end
@@ -605,7 +605,7 @@ flowchart LR
 | `WorkflowExecutionReadModelProjector` | 将事件归约为 `WorkflowExecutionReport` 读模型 |
 | `WorkflowExecutionAGUIEventProjector` | 将事件转换为 AGUI 协议事件 |
 | `EventEnvelopeToAGUIEventMapper` | 事件映射器链，域事件 → AGUI 事件 |
-| `IWorkflowRunEventSink` | 实时事件通道，对接 SSE / WebSocket 端点 |
+| `IEventSink<WorkflowRunEvent>` | 实时事件通道，对接 SSE / WebSocket 端点 |
 
 读模型 Reducer 按事件类型精确路由（基于 `TypeUrl`）：
 - Workflow 核心 Reducer：`StartWorkflowEventReducer`、`StepRequestEventReducer`、`StepCompletedEventReducer`、`WorkflowSuspendedEventReducer`、`WorkflowCompletedEventReducer`
@@ -1098,7 +1098,7 @@ flowchart LR
     Dispatch --> RM["ReadModelProjector"]
     Dispatch --> AGUI["AGUIEventProjector"]
     RM --> RMStore["ReadModel Store"]
-    AGUI --> Sink["IWorkflowRunEventSink"]
+    AGUI --> Sink["IEventSink<WorkflowRunEvent>"]
     Sink --> WS["SSE / WebSocket"]
 
     Dispatch --> Obs["Metrics / Tracing / Audit"]

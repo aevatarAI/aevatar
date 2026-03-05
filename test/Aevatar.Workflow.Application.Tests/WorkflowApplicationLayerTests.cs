@@ -252,7 +252,7 @@ public class WorkflowChatRunApplicationServiceTests
         {
             Actor = new FakeActor(actorId, null, new FakeWorkflowAgent($"wf-agent-{workflowName}")),
             WorkflowName = workflowName,
-            Sink = new WorkflowRunEventChannel(),
+            Sink = new EventChannel<WorkflowRunEvent>(),
             CommandId = commandId,
             CommandContext = new CommandContext(
                 actorId,
@@ -1102,13 +1102,13 @@ internal sealed class FakeProjectionService :
 
     public Task AttachLiveSinkAsync(
         IWorkflowExecutionProjectionLease lease,
-        IWorkflowRunEventSink sink,
+        IEventSink<WorkflowRunEvent> sink,
         CancellationToken ct = default) =>
         Task.CompletedTask;
 
     public Task DetachLiveSinkAsync(
         IWorkflowExecutionProjectionLease lease,
-        IWorkflowRunEventSink sink,
+        IEventSink<WorkflowRunEvent> sink,
         CancellationToken ct = default) =>
         Task.CompletedTask;
 
@@ -1330,7 +1330,7 @@ internal sealed class StubWorkflowRunRequestExecutor : IWorkflowRunRequestExecut
         IActor actor,
         string actorId,
         EventEnvelope requestEnvelope,
-        IWorkflowRunEventSink sink,
+        IEventSink<WorkflowRunEvent> sink,
         CancellationToken ct = default)
     {
         _ = actor;
@@ -1352,7 +1352,7 @@ internal sealed class StubWorkflowRunOutputStreamer : IWorkflowRunOutputStreamer
     }
 
     public async Task StreamAsync(
-        IWorkflowRunEventSink sink,
+        IEventSink<WorkflowRunEvent> sink,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default)
     {

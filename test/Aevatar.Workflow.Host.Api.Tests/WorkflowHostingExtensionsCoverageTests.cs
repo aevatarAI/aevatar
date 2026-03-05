@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.Hosting;
 using Aevatar.Workflow.Application.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
@@ -40,11 +41,17 @@ public class WorkflowHostingExtensionsCoverageTests
             options.EnableSkills = false;
             options.ApiKey = "demo-key";
             options.DefaultProvider = "openai";
-        });
+        }, includeScriptCapability: true);
 
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunRequestExecutor)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>)).Should().BeTrue();
+        builder.Services
+            .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
+            .Select(x => x.ImplementationInstance)
+            .OfType<AevatarCapabilityRegistration>()
+            .Should()
+            .Contain(x => x.Name == "script");
 
         await using var provider = builder.Services.BuildServiceProvider();
         provider.GetService<ILLMProviderFactory>().Should().NotBeNull();
@@ -74,6 +81,31 @@ public class WorkflowHostingExtensionsCoverageTests
             .Where(x => x.ServiceType == typeof(IProjectionGraphStore))
             .ToList();
         graphStores.Should().HaveCount(1);
+
+        builder.Services
+            .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
+            .Select(x => x.ImplementationInstance)
+            .OfType<AevatarCapabilityRegistration>()
+            .Should()
+            .Contain(x => x.Name == "script");
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityWithAIDefaults_WhenScriptCapabilityDisabled_ShouldNotRegisterScriptCapability()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        builder.AddWorkflowCapabilityWithAIDefaults(includeScriptCapability: false);
+
+        builder.Services
+            .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
+            .Select(x => x.ImplementationInstance)
+            .OfType<AevatarCapabilityRegistration>()
+            .Should()
+            .NotContain(x => x.Name == "script");
     }
 
     [Fact]

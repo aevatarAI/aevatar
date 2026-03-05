@@ -1,76 +1,75 @@
-using AGUI = Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Presentation.AGUIAdapter;
 
 internal static class AGUIEventToWorkflowRunEventMapper
 {
-    public static WorkflowRunEvent Map(AGUI.AGUIEvent evt)
+    public static WorkflowRunEvent Map(Aevatar.Presentation.AGUI.AGUIEvent evt)
     {
         return evt switch
         {
-            AGUI.RunStartedEvent e => new WorkflowRunStartedEvent
+            Aevatar.Presentation.AGUI.RunStartedEvent e => new WorkflowRunStartedEvent
             {
                 Timestamp = e.Timestamp,
                 ThreadId = e.ThreadId,
             },
-            AGUI.RunFinishedEvent e => new WorkflowRunFinishedEvent
+            Aevatar.Presentation.AGUI.RunFinishedEvent e => new WorkflowRunFinishedEvent
             {
                 Timestamp = e.Timestamp,
                 ThreadId = e.ThreadId,
                 Result = e.Result,
             },
-            AGUI.RunErrorEvent e => new WorkflowRunErrorEvent
+            Aevatar.Presentation.AGUI.RunErrorEvent e => new WorkflowRunErrorEvent
             {
                 Timestamp = e.Timestamp,
                 Message = e.Message,
                 Code = e.Code,
             },
-            AGUI.StepStartedEvent e => new WorkflowStepStartedEvent
+            Aevatar.Presentation.AGUI.StepStartedEvent e => new WorkflowStepStartedEvent
             {
                 Timestamp = e.Timestamp,
                 StepName = e.StepName,
             },
-            AGUI.StepFinishedEvent e => new WorkflowStepFinishedEvent
+            Aevatar.Presentation.AGUI.StepFinishedEvent e => new WorkflowStepFinishedEvent
             {
                 Timestamp = e.Timestamp,
                 StepName = e.StepName,
             },
-            AGUI.TextMessageStartEvent e => new WorkflowTextMessageStartEvent
+            Aevatar.Presentation.AGUI.TextMessageStartEvent e => new WorkflowTextMessageStartEvent
             {
                 Timestamp = e.Timestamp,
                 MessageId = e.MessageId,
                 Role = e.Role,
             },
-            AGUI.TextMessageContentEvent e => new WorkflowTextMessageContentEvent
+            Aevatar.Presentation.AGUI.TextMessageContentEvent e => new WorkflowTextMessageContentEvent
             {
                 Timestamp = e.Timestamp,
                 MessageId = e.MessageId,
                 Delta = e.Delta,
             },
-            AGUI.TextMessageEndEvent e => new WorkflowTextMessageEndEvent
+            Aevatar.Presentation.AGUI.TextMessageEndEvent e => new WorkflowTextMessageEndEvent
             {
                 Timestamp = e.Timestamp,
                 MessageId = e.MessageId,
             },
-            AGUI.StateSnapshotEvent e => new WorkflowStateSnapshotEvent
+            Aevatar.Presentation.AGUI.StateSnapshotEvent e => new WorkflowStateSnapshotEvent
             {
                 Timestamp = e.Timestamp,
                 Snapshot = e.Snapshot,
             },
-            AGUI.ToolCallStartEvent e => new WorkflowToolCallStartEvent
+            Aevatar.Presentation.AGUI.ToolCallStartEvent e => new WorkflowToolCallStartEvent
             {
                 Timestamp = e.Timestamp,
                 ToolCallId = e.ToolCallId,
                 ToolName = e.ToolName,
             },
-            AGUI.ToolCallEndEvent e => new WorkflowToolCallEndEvent
+            Aevatar.Presentation.AGUI.ToolCallEndEvent e => new WorkflowToolCallEndEvent
             {
                 Timestamp = e.Timestamp,
                 ToolCallId = e.ToolCallId,
                 Result = e.Result,
             },
-            AGUI.HumanInputRequestEvent e => new WorkflowCustomEvent
+            Aevatar.Presentation.AGUI.HumanInputRequestEvent e => new WorkflowCustomEvent
             {
                 Timestamp = e.Timestamp,
                 Name = "aevatar.human_input.request",
@@ -84,7 +83,7 @@ internal static class AGUIEventToWorkflowRunEventMapper
                     e.Metadata,
                 },
             },
-            AGUI.HumanInputResponseEvent e => new WorkflowCustomEvent
+            Aevatar.Presentation.AGUI.HumanInputResponseEvent e => new WorkflowCustomEvent
             {
                 Timestamp = e.Timestamp,
                 Name = "aevatar.human_input.response",
@@ -96,7 +95,7 @@ internal static class AGUIEventToWorkflowRunEventMapper
                     e.UserInput,
                 },
             },
-            AGUI.CustomEvent e => new WorkflowCustomEvent
+            Aevatar.Presentation.AGUI.CustomEvent e => new WorkflowCustomEvent
             {
                 Timestamp = e.Timestamp,
                 Name = e.Name,

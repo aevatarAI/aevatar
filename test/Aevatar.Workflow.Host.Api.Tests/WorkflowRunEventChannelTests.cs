@@ -4,12 +4,12 @@ using System.Threading.Channels;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public class WorkflowRunEventChannelTests
+public class WorkflowRunEventSinkChannelTests
 {
     [Fact]
     public async Task PushAsync_DefaultWaitMode_WhenBufferFull_ShouldWaitUntilConsumerReads()
     {
-        await using var channel = new WorkflowRunEventChannel(capacity: 1);
+        await using var channel = new EventChannel<WorkflowRunEvent>(capacity: 1);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
 
         channel.Push(new WorkflowStepStartedEvent { StepName = "s1" });
@@ -35,7 +35,7 @@ public class WorkflowRunEventChannelTests
     [Fact]
     public async Task PushAsync_WhenCompleted_ShouldThrowCompletedException()
     {
-        await using var channel = new WorkflowRunEventChannel();
+        await using var channel = new EventChannel<WorkflowRunEvent>();
         channel.Complete();
 
         var act = async () => await channel.PushAsync(new WorkflowRunErrorEvent
@@ -44,19 +44,19 @@ public class WorkflowRunEventChannelTests
             Code = "E",
         });
 
-        await act.Should().ThrowAsync<WorkflowRunEventSinkCompletedException>();
+        await act.Should().ThrowAsync<EventSinkCompletedException>();
     }
 
     [Fact]
     public async Task Push_WhenWaitModeAndBufferFull_ShouldThrowBackpressureException()
     {
-        await using var channel = new WorkflowRunEventChannel(
+        await using var channel = new EventChannel<WorkflowRunEvent>(
             capacity: 1,
             fullMode: BoundedChannelFullMode.Wait);
 
         channel.Push(new WorkflowStepStartedEvent { StepName = "s1" });
 
         var act = () => channel.Push(new WorkflowStepFinishedEvent { StepName = "s1" });
-        act.Should().Throw<WorkflowRunEventSinkBackpressureException>();
+        act.Should().Throw<EventSinkBackpressureException>();
     }
 }

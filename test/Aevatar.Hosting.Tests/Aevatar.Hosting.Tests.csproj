@@ -10,6 +10,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.Hosting\Aevatar.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

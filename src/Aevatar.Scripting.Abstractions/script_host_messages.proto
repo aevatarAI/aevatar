@@ -1,0 +1,392 @@
+syntax = "proto3";
+
+package aevatar.scripting;
+
+option csharp_namespace = "Aevatar.Scripting.Abstractions";
+import "google/protobuf/any.proto";
+
+message ScriptReadModelFieldSpec {
+  string name = 1;
+  string type = 2;
+  string path = 3;
+  bool nullable = 4;
+}
+
+message ScriptReadModelIndexSpec {
+  string name = 1;
+  repeated string paths = 2;
+  bool unique = 3;
+  string provider = 4;
+}
+
+message ScriptReadModelRelationSpec {
+  string name = 1;
+  string source_path = 2;
+  string target_schema_id = 3;
+  string target_path = 4;
+  string cardinality = 5;
+  string provider = 6;
+}
+
+message ScriptReadModelSchemaSpec {
+  string schema_id = 1;
+  string schema_version = 2;
+  repeated ScriptReadModelFieldSpec fields = 3;
+  repeated ScriptReadModelIndexSpec indexes = 4;
+  repeated ScriptReadModelRelationSpec relations = 5;
+}
+
+message ScriptDefinitionState {
+  string script_id = 1;
+  string revision = 2;
+  string source_text = 3;
+  string source_hash = 4;
+  int64 last_applied_event_version = 5;
+  string last_event_id = 6;
+  google.protobuf.Any read_model_schema = 7;
+  string read_model_schema_hash = 8;
+  string read_model_schema_version = 9;
+  repeated string read_model_schema_store_kinds = 10;
+  string read_model_schema_status = 11;
+  string read_model_schema_failure_reason = 12;
+}
+
+message ScriptRuntimeState {
+  string definition_actor_id = 1;
+  string revision = 2;
+  string last_run_id = 3;
+  map<string, google.protobuf.Any> state_payloads = 4;
+  map<string, google.protobuf.Any> read_model_payloads = 5;
+  int64 last_applied_event_version = 6;
+  string last_event_id = 7;
+  string last_applied_schema_version = 8;
+  string last_schema_hash = 9;
+  map<string, PendingScriptDefinitionQueryState> pending_definition_queries = 10;
+}
+
+message PendingScriptDefinitionQueryState {
+  RunScriptRequestedEvent run_event = 1;
+  int64 queued_at_unix_time_ms = 2;
+}
+
+message ScriptCatalogEntryState {
+  string script_id = 1;
+  string active_revision = 2;
+  string active_definition_actor_id = 3;
+  string active_source_hash = 4;
+  string previous_revision = 5;
+  repeated string revision_history = 6;
+  string last_proposal_id = 7;
+}
+
+message ScriptCatalogState {
+  map<string, ScriptCatalogEntryState> entries = 1;
+  int64 last_applied_event_version = 2;
+  string last_event_id = 3;
+}
+
+message ScriptEvolutionProposalState {
+  string proposal_id = 1;
+  string script_id = 2;
+  string base_revision = 3;
+  string candidate_revision = 4;
+  string candidate_source_hash = 5;
+  string status = 6;
+  bool policy_allowed = 7;
+  bool validation_succeeded = 8;
+  repeated string validation_diagnostics = 9;
+  string failure_reason = 10;
+  string promoted_definition_actor_id = 11;
+  string promoted_revision = 12;
+  string reason = 13;
+}
+
+message ScriptEvolutionManagerState {
+  map<string, ScriptEvolutionProposalState> proposals = 1;
+  map<string, string> latest_proposal_by_script = 2;
+  int64 last_applied_event_version = 3;
+  string last_event_id = 4;
+}
+
+message ScriptEvolutionSessionState {
+  string proposal_id = 1;
+  string script_id = 2;
+  string base_revision = 3;
+  string candidate_revision = 4;
+  bool completed = 5;
+  bool accepted = 6;
+  string status = 7;
+  string failure_reason = 8;
+  string definition_actor_id = 9;
+  string catalog_actor_id = 10;
+  repeated string diagnostics = 11;
+  int64 last_applied_event_version = 12;
+  string last_event_id = 13;
+}
+
+message UpsertScriptDefinitionRequestedEvent {
+  string script_id = 1;
+  string script_revision = 2;
+  string source_text = 3;
+  string source_hash = 4;
+}
+
+message ScriptDefinitionUpsertedEvent {
+  string script_id = 1;
+  string script_revision = 2;
+  string source_text = 3;
+  string source_hash = 4;
+  google.protobuf.Any read_model_schema = 5;
+  string read_model_schema_hash = 6;
+  string read_model_schema_version = 7;
+  repeated string read_model_schema_store_kinds = 8;
+}
+
+message ScriptReadModelSchemaDeclaredEvent {
+  string script_id = 1;
+  string script_revision = 2;
+  google.protobuf.Any read_model_schema = 3;
+  string read_model_schema_hash = 4;
+  string read_model_schema_version = 5;
+  repeated string read_model_schema_store_kinds = 6;
+}
+
+message ScriptReadModelSchemaValidatedEvent {
+  string script_id = 1;
+  string script_revision = 2;
+  string read_model_schema_version = 3;
+  repeated string validated_store_kinds = 4;
+}
+
+message ScriptReadModelSchemaActivationFailedEvent {
+  string script_id = 1;
+  string script_revision = 2;
+  string read_model_schema_version = 3;
+  string failure_reason = 4;
+}
+
+message RunScriptRequestedEvent {
+  string run_id = 1;
+  google.protobuf.Any input_payload = 2;
+  string script_revision = 3;
+  string definition_actor_id = 4;
+  string requested_event_type = 5;
+}
+
+message ScriptRunDomainEventCommitted {
+  string run_id = 1;
+  string script_revision = 2;
+  string definition_actor_id = 3;
+  string event_type = 4;
+  google.protobuf.Any payload = 5;
+  map<string, google.protobuf.Any> state_payloads = 6;
+  map<string, google.protobuf.Any> read_model_payloads = 7;
+  string read_model_schema_version = 8;
+  string read_model_schema_hash = 9;
+}
+
+message StartScriptEvolutionSessionRequestedEvent {
+  string proposal_id = 1;
+  string script_id = 2;
+  string base_revision = 3;
+  string candidate_revision = 4;
+  string candidate_source = 5;
+  string candidate_source_hash = 6;
+  string reason = 7;
+}
+
+message ProposeScriptEvolutionRequestedEvent {
+  string proposal_id = 1;
+  string script_id = 2;
+  string base_revision = 3;
+  string candidate_revision = 4;
+  string candidate_source = 5;
+  string candidate_source_hash = 6;
+  string reason = 7;
+  string callback_actor_id = 8;
+  string callback_request_id = 9;
+}
+
+message PromoteScriptRevisionRequestedEvent {
+  string script_id = 1;
+  string revision = 2;
+  string definition_actor_id = 3;
+  string source_hash = 4;
+  string proposal_id = 5;
+  string expected_base_revision = 6;
+}
+
+message RollbackScriptRevisionRequestedEvent {
+  string script_id = 1;
+  string target_revision = 2;
+  string reason = 3;
+  string proposal_id = 4;
+  string expected_current_revision = 5;
+}
+
+message QueryScriptDefinitionSnapshotRequestedEvent {
+  string request_id = 1;
+  string reply_stream_id = 2;
+  string requested_revision = 3;
+}
+
+message ScriptDefinitionSnapshotRespondedEvent {
+  string request_id = 1;
+  bool found = 2;
+  string script_id = 3;
+  string revision = 4;
+  string source_text = 5;
+  string read_model_schema_version = 6;
+  string read_model_schema_hash = 7;
+  string failure_reason = 8;
+}
+
+message ScriptDefinitionQueryTimeoutFiredEvent {
+  string request_id = 1;
+  string run_id = 2;
+}
+
+message ScriptDefinitionQueryQueuedEvent {
+  string request_id = 1;
+  RunScriptRequestedEvent run_event = 2;
+  int64 queued_at_unix_time_ms = 3;
+}
+
+message ScriptDefinitionQueryClearedEvent {
+  string request_id = 1;
+  string run_id = 2;
+  string reason = 3;
+}
+
+message QueryScriptCatalogEntryRequestedEvent {
+  string request_id = 1;
+  string reply_stream_id = 2;
+  string script_id = 3;
+}
+
+message ScriptCatalogEntryRespondedEvent {
+  string request_id = 1;
+  bool found = 2;
+  string script_id = 3;
+  string active_revision = 4;
+  string active_definition_actor_id = 5;
+  string active_source_hash = 6;
+  string previous_revision = 7;
+  repeated string revision_history = 8;
+  string last_proposal_id = 9;
+  string failure_reason = 10;
+}
+
+message QueryScriptEvolutionDecisionRequestedEvent {
+  string request_id = 1;
+  string reply_stream_id = 2;
+  string proposal_id = 3;
+}
+
+message ScriptEvolutionDecisionRespondedEvent {
+  string request_id = 1;
+  bool found = 2;
+  bool accepted = 3;
+  string proposal_id = 4;
+  string script_id = 5;
+  string base_revision = 6;
+  string candidate_revision = 7;
+  string status = 8;
+  string failure_reason = 9;
+  string definition_actor_id = 10;
+  string catalog_actor_id = 11;
+  repeated string diagnostics = 12;
+}
+
+message ScriptEvolutionSessionStartedEvent {
+  string proposal_id = 1;
+  string script_id = 2;
+  string base_revision = 3;
+  string candidate_revision = 4;
+}
+
+message ScriptEvolutionSessionCompletedEvent {
+  string proposal_id = 1;
+  bool accepted = 2;
+  string status = 3;
+  string failure_reason = 4;
+  string definition_actor_id = 5;
+  string catalog_actor_id = 6;
+  repeated string diagnostics = 7;
+}
+
+message ScriptEvolutionProposedEvent {
+  string proposal_id = 1;
+  string script_id = 2;
+  string base_revision = 3;
+  string candidate_revision = 4;
+  string candidate_source_hash = 5;
+  string reason = 6;
+}
+
+message ScriptEvolutionBuildRequestedEvent {
+  string proposal_id = 1;
+  string script_id = 2;
+  string candidate_revision = 3;
+}
+
+message ScriptEvolutionValidatedEvent {
+  string proposal_id = 1;
+  string script_id = 2;
+  string candidate_revision = 3;
+  bool is_valid = 4;
+  repeated string diagnostics = 5;
+}
+
+message ScriptEvolutionRejectedEvent {
+  string proposal_id = 1;
+  string script_id = 2;
+  string candidate_revision = 3;
+  string failure_reason = 4;
+}
+
+message ScriptEvolutionPromotedEvent {
+  string proposal_id = 1;
+  string script_id = 2;
+  string candidate_revision = 3;
+  string definition_actor_id = 4;
+  string catalog_actor_id = 5;
+}
+
+message ScriptEvolutionRollbackRequestedEvent {
+  string proposal_id = 1;
+  string script_id = 2;
+  string target_revision = 3;
+  string reason = 4;
+  string catalog_actor_id = 5;
+}
+
+message ScriptEvolutionRolledBackEvent {
+  string proposal_id = 1;
+  string script_id = 2;
+  string target_revision = 3;
+  string previous_revision = 4;
+  string catalog_actor_id = 5;
+}
+
+message ScriptCatalogRevisionPromotedEvent {
+  string script_id = 1;
+  string revision = 2;
+  string definition_actor_id = 3;
+  string source_hash = 4;
+  string proposal_id = 5;
+}
+
+message ScriptCatalogRollbackRequestedEvent {
+  string script_id = 1;
+  string target_revision = 2;
+  string reason = 3;
+  string proposal_id = 4;
+}
+
+message ScriptCatalogRolledBackEvent {
+  string script_id = 1;
+  string target_revision = 2;
+  string previous_revision = 3;
+  string proposal_id = 4;
+}

@@ -6,7 +6,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// Actor-level projection registry built on top of shared actor stream subscriptions.
 /// </summary>
 public sealed class ProjectionSubscriptionRegistry<TContext>
-    : IProjectionSubscriptionRegistry<TContext>, IAsyncDisposable
+    : IProjectionSubscriptionRegistry<TContext>, IAsyncDisposable, IDisposable
     where TContext : IProjectionContext, IProjectionStreamSubscriptionContext
 {
     private readonly IProjectionDispatcher<TContext> _dispatcher;
@@ -121,11 +121,15 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public void Dispose()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
             return;
+    }
 
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
         await Task.CompletedTask;
     }
 

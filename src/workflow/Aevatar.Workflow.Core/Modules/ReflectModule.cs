@@ -110,7 +110,7 @@ public sealed class ReflectModule : IEventModule
 
         if (!string.IsNullOrEmpty(state.TargetRole))
         {
-            var targetActorId = ResolveTargetActorId(ctx.AgentId, state.TargetRole);
+            var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, state.TargetRole);
             await ctx.SendToAsync(targetActorId, new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, ct);
         }
         else
@@ -134,19 +134,11 @@ public sealed class ReflectModule : IEventModule
 
         if (!string.IsNullOrEmpty(state.TargetRole))
         {
-            var targetActorId = ResolveTargetActorId(ctx.AgentId, state.TargetRole);
+            var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, state.TargetRole);
             await ctx.SendToAsync(targetActorId, new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, ct);
         }
         else
             await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, EventDirection.Self, ct);
-    }
-
-    private static string ResolveTargetActorId(string workflowActorId, string targetRole)
-    {
-        if (string.IsNullOrWhiteSpace(targetRole)) return targetRole;
-        return targetRole.Contains(':', StringComparison.Ordinal)
-            ? targetRole
-            : $"{workflowActorId}:{targetRole}";
     }
 
     private enum ReflectPhase { Critique, Improve }

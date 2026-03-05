@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.Scripting.Hosting</AssemblyName>
+    <RootNamespace>Aevatar.Scripting.Hosting</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Hosting\Aevatar.Hosting.csproj" />
+    <ProjectReference Include="..\Aevatar.Scripting.Application\Aevatar.Scripting.Application.csproj" />
+    <ProjectReference Include="..\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
+    <ProjectReference Include="..\Aevatar.Scripting.Projection\Aevatar.Scripting.Projection.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+</Project>

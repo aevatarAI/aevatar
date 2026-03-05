@@ -78,7 +78,7 @@ sequenceDiagram
   participant Resolver as "WorkflowRunActorResolver"
   participant Port as "IWorkflowExecutionProjectionLifecyclePort"
   participant WFAgent as "WorkflowGAgent"
-  participant Sink as "WorkflowRunEventChannel"
+  participant Sink as "EventChannel<WorkflowRunEvent>"
 
   Client->>Api: "POST /api/chat 或 WS command"
   Api->>CmdSvc: "ExecuteAsync(WorkflowChatRunRequest)"
@@ -122,13 +122,13 @@ flowchart LR
   AGP["WorkflowExecutionAGUIEventProjector"]
   MAP["EventEnvelopeToAGUIEventMapper + Handlers"]
   BUS["ProjectionSessionEventHub<WorkflowRunEvent>\nworkflow-run:{actorId}:{commandId}"]
-  CH["WorkflowRunEventChannel"]
+  CH["EventChannel<WorkflowRunEvent>"]
 
   QP["Projection Ports(Lifecycle/Query)"]
   ACT["WorkflowProjectionActivationService"]
   REL["WorkflowProjectionReleaseService"]
-  SUB["WorkflowProjectionSinkSubscriptionManager"]
-  FWD["WorkflowProjectionLiveSinkForwarder"]
+  SUB["EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>"]
+  FWD["EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>"]
   QRYR["WorkflowProjectionQueryReader"]
   QS["WorkflowExecutionQueryApplicationService"]
   APIQ["/api/actors/* Query Endpoints"]

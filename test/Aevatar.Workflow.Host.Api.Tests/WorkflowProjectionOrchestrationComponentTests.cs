@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -473,7 +474,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     public async Task SinkSubscriptionManager_ShouldReplaceSameSinkSubscription()
     {
         var hub = new RecordingRunEventHub();
-        var manager = new WorkflowProjectionSinkSubscriptionManager(hub);
+        var manager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>(hub);
         var lease = CreateLease("actor-4", "cmd-4");
         var sink = new NoopRunEventSink();
 
@@ -509,7 +510,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             lease,
             sink,
             sourceEvent,
-            new WorkflowRunEventSinkBackpressureException());
+            new EventSinkBackpressureException());
 
         handledBackpressure.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
@@ -523,7 +524,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             lease,
             sink,
             sourceEvent,
-            new WorkflowRunEventSinkCompletedException());
+            new EventSinkCompletedException());
 
         handledCompleted.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(2);
@@ -587,7 +588,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         {
             NextHandledResult = true,
         };
-        var forwarder = new WorkflowProjectionLiveSinkForwarder(policy);
+        var forwarder = new EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>(policy);
         var sink = new ThrowingRunEventSink(new InvalidOperationException("sink failed"));
         var sourceEvent = new WorkflowRunStartedEvent { ThreadId = "thread-1" };
 
@@ -608,7 +609,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         {
             NextHandledResult = false,
         };
-        var forwarder = new WorkflowProjectionLiveSinkForwarder(policy);
+        var forwarder = new EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>(policy);
         var sink = new ThrowingRunEventSink(new InvalidOperationException("sink failed"));
         var sourceEvent = new WorkflowRunStartedEvent { ThreadId = "thread-1" };
 
@@ -669,13 +670,13 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     private sealed class RecordingSinkSubscriptionManager
-        : IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent>
+        : IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
     {
         public int DetachCalls { get; private set; }
 
         public Task AttachOrReplaceAsync(
             WorkflowExecutionRuntimeLease lease,
-            IWorkflowRunEventSink sink,
+            IEventSink<WorkflowRunEvent> sink,
             Func<WorkflowRunEvent, ValueTask> handler,
             CancellationToken ct = default)
         {
@@ -688,7 +689,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
         public Task DetachAsync(
             WorkflowExecutionRuntimeLease lease,
-            IWorkflowRunEventSink sink,
+            IEventSink<WorkflowRunEvent> sink,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -813,14 +814,15 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         }
     }
 
-    private sealed class RecordingSinkFailurePolicy : IWorkflowProjectionSinkFailurePolicy
+    private sealed class RecordingSinkFailurePolicy
+        : IEventSinkProjectionFailurePolicy<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
     {
         public bool NextHandledResult { get; set; }
-        public List<(WorkflowExecutionRuntimeLease Lease, IWorkflowRunEventSink Sink, WorkflowRunEvent Event, Exception Exception)> Calls { get; } = [];
+        public List<(WorkflowExecutionRuntimeLease Lease, IEventSink<WorkflowRunEvent> Sink, WorkflowRunEvent Event, Exception Exception)> Calls { get; } = [];
 
         public ValueTask<bool> TryHandleAsync(
             WorkflowExecutionRuntimeLease runtimeLease,
-            IWorkflowRunEventSink sink,
+            IEventSink<WorkflowRunEvent> sink,
             WorkflowRunEvent sourceEvent,
             Exception exception,
             CancellationToken ct = default)
@@ -831,7 +833,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         }
     }
 
-    private sealed class ThrowingRunEventSink : IWorkflowRunEventSink
+    private sealed class ThrowingRunEventSink : IEventSink<WorkflowRunEvent>
     {
         private readonly Exception _exception;
 
@@ -910,7 +912,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         }
     }
 
-    private sealed class NoopRunEventSink : IWorkflowRunEventSink
+    private sealed class NoopRunEventSink : IEventSink<WorkflowRunEvent>
     {
         public void Push(WorkflowRunEvent evt)
         {

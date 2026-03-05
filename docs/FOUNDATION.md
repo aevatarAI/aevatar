@@ -148,8 +148,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `WorkflowProjectionActivationService` 负责 projection 启动与上下文激活
   - `WorkflowProjectionReleaseService` 负责 idle 检测与 stop/release
   - `IProjectionOwnershipCoordinator` 负责 ownership acquire/release（由 Core 抽象直接注入）
-  - `WorkflowProjectionSinkSubscriptionManager` 负责 live sink attach/detach
-  - `WorkflowProjectionLiveSinkForwarder` 负责 run-event 推送与失败策略桥接
+  - `EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>` 负责 live sink attach/detach
+  - `EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>` 负责 run-event 推送与失败策略桥接
   - `WorkflowProjectionSinkFailurePolicy` 负责 sink 异常降级与错误事件发布
   - `WorkflowProjectionReadModelUpdater` 负责 read model 元信息更新
   - `WorkflowProjectionQueryReader` 负责 read model 查询映射

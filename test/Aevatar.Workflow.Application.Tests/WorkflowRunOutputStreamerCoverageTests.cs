@@ -9,7 +9,7 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
     [Fact]
     public async Task StreamAsync_ShouldStopAfterTerminalEvent()
     {
-        var channel = new WorkflowRunEventChannel();
+        var channel = new EventChannel<WorkflowRunEvent>();
         var streamer = new WorkflowRunOutputStreamer();
         var frames = new List<WorkflowOutputFrame>();
 
