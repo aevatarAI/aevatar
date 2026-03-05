@@ -12,6 +12,7 @@ using System.Diagnostics;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Hooks;
+using Aevatar.Foundation.Abstractions.Runtime.Async;
 using Aevatar.Foundation.Core.Pipeline;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -261,7 +262,13 @@ public abstract class GAgentBase : IAgent
         _staticHandlers ??= EventHandlerDiscoverer.Discover(GetType());
 
     private EventHandlerContext CreateHandlerContext(EventEnvelope envelope) =>
-        new(this, EventPublisher, Services, Logger, envelope);
+        new(
+            this,
+            EventPublisher,
+            Services.GetRequiredService<IActorRuntimeAsyncScheduler>(),
+            Services,
+            Logger,
+            envelope);
 
     // Null implementations
 

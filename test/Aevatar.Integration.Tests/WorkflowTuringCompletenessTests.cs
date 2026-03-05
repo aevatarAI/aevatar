@@ -329,49 +329,12 @@ public sealed class WorkflowTuringCompletenessTests
         };
     }
 
-    private static RecordingEventHandlerContext CreateContext()
+    private static TestEventHandlerContext CreateContext()
     {
-        return new RecordingEventHandlerContext(
+        return new TestEventHandlerContext(
             new ServiceCollection().BuildServiceProvider(),
-            new StubAgent("workflow-turing-proof-agent"),
+            new TestAgent("workflow-turing-proof-agent"),
             NullLogger.Instance);
     }
 
-    private sealed class RecordingEventHandlerContext : IEventHandlerContext
-    {
-        public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
-        {
-            Services = services;
-            Agent = agent;
-            Logger = logger;
-            InboundEnvelope = new EventEnvelope();
-        }
-
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
-        public EventEnvelope InboundEnvelope { get; }
-        public string AgentId => Agent.Id;
-        public IAgent Agent { get; }
-        public IServiceProvider Services { get; }
-        public ILogger Logger { get; }
-
-        public Task PublishAsync<TEvent>(
-            TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
-            where TEvent : IMessage
-        {
-            Published.Add((evt, direction));
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class StubAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-    }
 }

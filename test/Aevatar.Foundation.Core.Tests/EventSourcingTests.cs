@@ -321,7 +321,7 @@ public class EventSourcingBehaviorTests
 }
 
 /// <summary>Event Sourcing agent: state restored from event replay on activate, handlers RaiseEvent + ConfirmEventsAsync.</summary>
-public class EventSourcingCounterAgent : GAgentBase<CounterState>
+public class EventSourcingCounterAgent : TestGAgentBase<CounterState>
 {
     [EventHandler]
     public async Task HandleIncrement(IncrementEvent evt)
@@ -351,6 +351,7 @@ public class EventSourcingAgentTests
     private static IServiceProvider MinimalServices()
     {
         var services = new ServiceCollection();
+        services.AddRuntimeScheduler();
         services.AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>());
         return services.BuildServiceProvider();
     }
@@ -445,6 +446,7 @@ public class StateEventApplierIntegrationTests
     {
         var store = new InMemoryEventStore();
         var services = new ServiceCollection()
+            .AddRuntimeScheduler()
             .AddSingleton<IEventStore>(store)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
@@ -475,7 +477,7 @@ public class StateEventApplierIntegrationTests
         agent2.State.Count.ShouldBe(5);
     }
 
-    private sealed class ApplierBackedCounterAgent : GAgentBase<CounterState>
+    private sealed class ApplierBackedCounterAgent : TestGAgentBase<CounterState>
     {
         [EventHandler]
         public Task HandleIncrement(IncrementEvent evt) =>

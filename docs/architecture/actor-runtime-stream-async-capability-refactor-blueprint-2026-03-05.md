@@ -1,8 +1,8 @@
-# Actor Runtime 流式异步能力上提重构蓝图（v3, Zero-Compatibility）
+# Actor Runtime 流式异步能力上提重构蓝图（v4, Zero-Compatibility）
 
 ## 1. 文档元信息
-1. 状态：`Draft`
-2. 版本：`v3`
+1. 状态：`Implemented`
+2. 版本：`v4`
 3. 日期：`2026-03-05`
 4. 决策级别：`Architecture Breaking Change`
 5. 目标：
@@ -96,10 +96,28 @@ flowchart TB
 4. 进程重启任务丢失可接受（开发态语义）。
 
 ### 8.2 Orleans Runtime
-1. 短周期/激活内：使用 `RegisterGrainTimer`。
-2. 跨激活/需持久：使用 reminder 能力 + 持久状态。
-3. 禁止把 `Task.Run + Task.Delay` 作为 Orleans 业务调度主路径。
-4. 回调运行在 grain turn 语义中，但仍只发内部事件。
+1. 双策略并存：
+   1. `Inline`：在 `RuntimeActorGrain` 当前 turn 内直接 `RegisterGrainTimer`，无额外 grain hop。
+   2. `Dedicated`：通过 `RuntimeCallbackSchedulerGrain` 调度，适用于非当前 turn/跨上下文调用。
+2. 策略选择（已落地为可配置算法）：
+   1. `AsyncCallbackSchedulingMode=ForceInline`：
+      1. 必须命中当前 actor turn 绑定（`actor_id` 一致），否则直接抛错（不静默降级）。
+   2. `AsyncCallbackSchedulingMode=ForceDedicated`：
+      1. 永远走 dedicated grain，即使当前 turn 已绑定。
+   3. `AsyncCallbackSchedulingMode=Auto`（默认）：
+      1. 若命中 turn 绑定且 `due_time <= AsyncCallbackInlineMaxDueTimeMs`（默认 `60000`）则走 `Inline`。
+      2. 其余情况走 `Dedicated`。
+3. Dedicated 交付模式（timer/reminder）同样可配置：
+   1. `AsyncCallbackDedicatedDeliveryMode=Timer`：强制 timer。
+   2. `AsyncCallbackDedicatedDeliveryMode=Reminder`：强制 reminder。
+   3. `AsyncCallbackDedicatedDeliveryMode=Auto`（默认）：
+      1. 当 `due_time` 或 `period` 大于等于 `AsyncCallbackReminderThresholdMs`（默认 `300000`）时用 reminder。
+      2. 否则用 timer。
+4. Reminder provider 自动装配（已落地）：
+   1. `PersistenceBackend=InMemory`：`UseInMemoryReminderService()`。
+   2. `PersistenceBackend=Garnet`：`UseRedisReminderService()`，连接串复用 `GarnetConnectionString`。
+5. 禁止把 `Task.Run + Task.Delay` 作为 Orleans 业务调度主路径。
+6. 回调运行在 grain turn 语义中，但仍只发内部事件。
 
 ### 8.3 Timer vs Reminder 选型边界（强制）
 1. `GrainTimer`：
@@ -277,7 +295,23 @@ flowchart TB
 
 ## 20. 当前执行快照（2026-03-05）
 1. 已完成：
-   1. 文档升级至 v3，补齐故障模型、竞态裁决、容量与观测。
-   2. 明确 Orleans 与 Local 差异化实现边界。
-2. 待开始：
-   1. WP1-WP6 代码实施。
+   1. `IActorRuntimeAsyncScheduler` / `IStreamRequestReplyClient` 已落地到 `Aevatar.Foundation.Abstractions`。
+   2. `RuntimeStreamRequestReplyClient` 已落地到 Runtime，并统一回收 reply stream 生命周期。
+   3. `Local` 与 `Orleans` 两套 runtime scheduler 已落地，均采用“回调只发内部事件”模型。
+   4. Workflow 的 `step timeout`、`retry backoff`、`delay` 已迁移为 runtime callback 事件化推进。
+   5. Scripting 的 definition-query timeout 已迁移为 runtime callback 事件化推进。
+   6. `WaitSignal` 与 `LLM watchdog` 已修复 stale generation 竞态处理。
+   7. 兼容路径已裁剪：`SignalReceivedEvent` 需显式 `run_id + step_id` 对账，不再做模糊匹配。
+2. 已验证：
+   1. `dotnet build aevatar.slnx --nologo`
+   2. `dotnet test test/Aevatar.Workflow.Core.Tests/Aevatar.Workflow.Core.Tests.csproj --nologo`
+   3. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo`
+   4. `dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj --nologo`
+   5. `bash tools/ci/architecture_guards.sh`
+   6. `bash tools/ci/solution_split_guards.sh`
+   7. `bash tools/ci/solution_split_test_guards.sh`
+   8. `bash tools/ci/test_stability_guards.sh`
+3. Orleans 双策略实现状态：
+   1. `Inline + Dedicated` 调度路径已同时可用并有单元测试覆盖。
+   2. `Dedicated(Timer + Reminder)` 双交付路径已可配置并有单元测试覆盖。
+   3. reminder service 已在 `ISiloBuilder` 按持久化后端自动配置。

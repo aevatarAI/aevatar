@@ -1,7 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -849,7 +848,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
         chat.Prompt.Should().Be("system\n\nquestion");
-        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1"));
+        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1", attempt: 1));
         chat.Metadata["aevatar.llm_timeout_ms"].Should().Be("1800000");
         ctx.Published.Last().direction.Should().Be(EventDirection.Self);
     }
@@ -872,7 +871,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-text", "llm-text");
+        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-text", "llm-text", attempt: 1);
         await module.HandleAsync(
             Envelope(new TextMessageEndEvent
             {
@@ -901,7 +900,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-chat", "llm-chat");
+        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-chat", "llm-chat", attempt: 1);
         await module.HandleAsync(
             Envelope(new ChatResponseEvent
             {
@@ -935,7 +934,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-failed", "llm-failed");
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-failed", "llm-failed", attempt: 1);
         await module.HandleAsync(
             Envelope(new TextMessageEndEvent
             {
@@ -957,17 +956,6 @@ public sealed class WorkflowCoreModulesCoverageTests
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
-        var timeoutPublished = new TaskCompletionSource<StepCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
-        ctx.OnPublish = (evt, _) =>
-        {
-            if (evt is StepCompletedEvent completed &&
-                completed.StepId == "llm-timeout" &&
-                !completed.Success &&
-                completed.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase))
-            {
-                timeoutPublished.TrySetResult(completed);
-            }
-        };
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -984,7 +972,10 @@ public sealed class WorkflowCoreModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var timeoutEvent = await timeoutPublished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var scheduled = ctx.Scheduled.Should().ContainSingle(x => x.Event is LlmCallWatchdogTimeoutFiredEvent).Subject;
+        await module.HandleAsync(ctx.CreateScheduledEnvelope(scheduled), ctx, CancellationToken.None);
+
+        var timeoutEvent = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         timeoutEvent.StepId.Should().Be("llm-timeout");
         timeoutEvent.RunId.Should().Be("run-timeout");
         timeoutEvent.Success.Should().BeFalse();
@@ -1203,11 +1194,11 @@ public sealed class WorkflowCoreModulesCoverageTests
         completions["cp-1"].Output.Should().Be("snapshot");
     }
 
-    private static RecordingEventHandlerContext CreateContext(IServiceProvider? services = null)
+    private static TestEventHandlerContext CreateContext(IServiceProvider? services = null)
     {
-        return new RecordingEventHandlerContext(
+        return new TestEventHandlerContext(
             services ?? new ServiceCollection().BuildServiceProvider(),
-            new StubAgent("module-test-agent"),
+            new TestAgent("module-test-agent"),
             NullLogger.Instance);
     }
 
@@ -1221,51 +1212,6 @@ public sealed class WorkflowCoreModulesCoverageTests
             PublisherId = publisherId ?? "test-publisher",
             Direction = EventDirection.Self,
         };
-    }
-
-    private sealed class RecordingEventHandlerContext : IEventHandlerContext
-    {
-        private readonly Lock _lock = new();
-
-        public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
-        {
-            Services = services;
-            Agent = agent;
-            Logger = logger;
-            InboundEnvelope = new EventEnvelope();
-        }
-
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
-        public Action<IMessage, EventDirection>? OnPublish { get; set; }
-        public EventEnvelope InboundEnvelope { get; }
-        public string AgentId => Agent.Id;
-        public IAgent Agent { get; }
-        public IServiceProvider Services { get; }
-        public ILogger Logger { get; }
-
-        public Task PublishAsync<TEvent>(
-            TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
-            where TEvent : IMessage
-        {
-            lock (_lock)
-            {
-                Published.Add((evt, direction));
-            }
-            OnPublish?.Invoke(evt, direction);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class StubAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class FakeAgentTool(string name, Func<string, string> execute) : IAgentTool

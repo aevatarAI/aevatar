@@ -82,14 +82,14 @@ public class CorrelationIdPropagationTests
         outgoing.Metadata.ContainsKey("command.id").ShouldBeFalse();
     }
 
-    private sealed class PublishFromHandlerAgent : GAgentBase<CounterState>
+    private sealed class PublishFromHandlerAgent : TestGAgentBase<CounterState>
     {
         [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
         public Task HandlePing(PingEvent evt) =>
             PublishAsync(new PongEvent { Reply = evt.Message }, EventDirection.Down);
     }
 
-    private sealed class SendFromHandlerAgent : GAgentBase<CounterState>
+    private sealed class SendFromHandlerAgent : TestGAgentBase<CounterState>
     {
         [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
         public Task HandlePing(PingEvent evt) =>

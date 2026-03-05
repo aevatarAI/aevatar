@@ -1,3 +1,5 @@
+using System.Globalization;
+using Aevatar.Foundation.Abstractions.Runtime.Async;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
@@ -7,23 +9,26 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
 using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
 [ImplicitStreamSubscription(OrleansRuntimeConstants.ActorEventStreamNamespace)]
-public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
+public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain, IRuntimeActorInlineCallbackScheduler
 {
     private const string RetryAttemptMetadataKey = "aevatar.retry.attempt";
     private const string RetryOriginEventIdMetadataKey = "aevatar.retry.origin_event_id";
 
     private readonly IPersistentState<RuntimeActorGrainState> _state;
+    private readonly Dictionary<string, ScheduledRuntimeCallback> _runtimeCallbacks = new(StringComparer.Ordinal);
     private IAgent? _agent;
     private IEventDeduplicator? _deduplicator;
     private IEnvelopePropagationPolicy _propagationPolicy =
         new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
     private IRuntimeActorStateBindingAccessor? _stateBindingAccessor;
+    private IRuntimeActorInlineCallbackSchedulerBindingAccessor? _inlineCallbackSchedulerBindingAccessor;
     private IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
     private IAsyncStream<EventEnvelope>? _selfStream;
@@ -45,6 +50,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _propagationPolicy = ServiceProvider.GetService<IEnvelopePropagationPolicy>() ?? _propagationPolicy;
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
         _stateBindingAccessor = ServiceProvider.GetService<IRuntimeActorStateBindingAccessor>();
+        _inlineCallbackSchedulerBindingAccessor = ServiceProvider.GetService<IRuntimeActorInlineCallbackSchedulerBindingAccessor>();
         _deactivationHookDispatcher = ServiceProvider.GetService<IActorDeactivationHookDispatcher>();
 
         var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
@@ -71,6 +77,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             await _selfStreamHandle.UnsubscribeAsync();
             _selfStreamHandle = null;
         }
+
+        foreach (var callback in _runtimeCallbacks.Values)
+            callback.Timer.Dispose();
+        _runtimeCallbacks.Clear();
 
         if (_agent != null)
         {
@@ -168,6 +178,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         try
         {
             using var stateBinding = _stateBindingAccessor?.Bind(_state);
+            using var inlineSchedulerBinding = _inlineCallbackSchedulerBindingAccessor?.Bind(this);
             await _agent.HandleEventAsync(envelope);
         }
         catch (Exception ex)
@@ -427,5 +438,144 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             envelope.Payload?.TypeUrl ?? "(none)");
         return true;
     }
+
+    string IRuntimeActorInlineCallbackScheduler.ActorId => this.GetPrimaryKeyString();
+
+    Task<RuntimeCallbackLease> IRuntimeActorInlineCallbackScheduler.ScheduleTimeoutAsync(
+        string callbackId,
+        EventEnvelope triggerEnvelope,
+        TimeSpan dueTime,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ArgumentNullException.ThrowIfNull(triggerEnvelope);
+        ArgumentNullException.ThrowIfNull(triggerEnvelope.Payload);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTime, TimeSpan.Zero);
+        ct.ThrowIfCancellationRequested();
+
+        var generation = ReplaceAndGetNextRuntimeCallbackGeneration(callbackId);
+        var timer = this.RegisterGrainTimer(
+            cancellationToken => OnInlineRuntimeCallbackTickAsync(callbackId, generation, cancellationToken),
+            new GrainTimerCreationOptions(dueTime, Timeout.InfiniteTimeSpan)
+            {
+                KeepAlive = true,
+                Interleave = false,
+            });
+
+        _runtimeCallbacks[callbackId] = new ScheduledRuntimeCallback(
+            generation,
+            false,
+            triggerEnvelope.ToByteArray(),
+            timer);
+
+        return Task.FromResult(new RuntimeCallbackLease(this.GetPrimaryKeyString(), callbackId, generation));
+    }
+
+    Task<RuntimeCallbackLease> IRuntimeActorInlineCallbackScheduler.ScheduleTimerAsync(
+        string callbackId,
+        EventEnvelope triggerEnvelope,
+        TimeSpan dueTime,
+        TimeSpan period,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ArgumentNullException.ThrowIfNull(triggerEnvelope);
+        ArgumentNullException.ThrowIfNull(triggerEnvelope.Payload);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTime, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(period, TimeSpan.Zero);
+        ct.ThrowIfCancellationRequested();
+
+        var generation = ReplaceAndGetNextRuntimeCallbackGeneration(callbackId);
+        var timer = this.RegisterGrainTimer(
+            cancellationToken => OnInlineRuntimeCallbackTickAsync(callbackId, generation, cancellationToken),
+            new GrainTimerCreationOptions(dueTime, period)
+            {
+                KeepAlive = true,
+                Interleave = false,
+            });
+
+        _runtimeCallbacks[callbackId] = new ScheduledRuntimeCallback(
+            generation,
+            true,
+            triggerEnvelope.ToByteArray(),
+            timer);
+
+        return Task.FromResult(new RuntimeCallbackLease(this.GetPrimaryKeyString(), callbackId, generation));
+    }
+
+    Task IRuntimeActorInlineCallbackScheduler.CancelAsync(
+        string callbackId,
+        long? expectedGeneration,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ct.ThrowIfCancellationRequested();
+
+        if (!_runtimeCallbacks.TryGetValue(callbackId, out var callback))
+            return Task.CompletedTask;
+
+        if (expectedGeneration.HasValue &&
+            expectedGeneration.Value > 0 &&
+            callback.Generation != expectedGeneration.Value)
+        {
+            return Task.CompletedTask;
+        }
+
+        callback.Timer.Dispose();
+        _runtimeCallbacks.Remove(callbackId);
+        return Task.CompletedTask;
+    }
+
+    private long ReplaceAndGetNextRuntimeCallbackGeneration(string callbackId)
+    {
+        if (!_runtimeCallbacks.TryGetValue(callbackId, out var existing))
+            return 1;
+
+        existing.Timer.Dispose();
+        _runtimeCallbacks.Remove(callbackId);
+        return existing.Generation + 1;
+    }
+
+    private async Task OnInlineRuntimeCallbackTickAsync(
+        string callbackId,
+        long generation,
+        CancellationToken ct)
+    {
+        if (!_runtimeCallbacks.TryGetValue(callbackId, out var scheduled))
+            return;
+
+        if (scheduled.Generation != generation)
+            return;
+
+        var fireIndex = scheduled.FireIndex + 1;
+        var envelope = EventEnvelope.Parser.ParseFrom(scheduled.EnvelopeBytes);
+        envelope.Direction = EventDirection.Self;
+        envelope.TargetActorId = this.GetPrimaryKeyString();
+        envelope.PublisherId = this.GetPrimaryKeyString();
+        envelope.Id = Guid.NewGuid().ToString("N");
+        envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
+        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackId] = callbackId;
+        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackGeneration] = generation.ToString(CultureInfo.InvariantCulture);
+        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFireIndex] = fireIndex.ToString(CultureInfo.InvariantCulture);
+        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
+
+        await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(envelope, ct);
+
+        if (!scheduled.Periodic)
+        {
+            scheduled.Timer.Dispose();
+            _runtimeCallbacks.Remove(callbackId);
+            return;
+        }
+
+        _runtimeCallbacks[callbackId] = scheduled with { FireIndex = fireIndex };
+    }
+
+    private sealed record ScheduledRuntimeCallback(
+        long Generation,
+        bool Periodic,
+        byte[] EnvelopeBytes,
+        IGrainTimer Timer,
+        int FireIndex = 0);
 
 }

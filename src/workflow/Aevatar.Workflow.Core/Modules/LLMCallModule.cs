@@ -10,12 +10,12 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Async;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
-using System.Collections.Concurrent;
 using System.Globalization;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -26,10 +26,10 @@ public sealed class LLMCallModule : IEventModule
     private const int DefaultLlmTimeoutMs = 1_800_000;
     private const string LlmTimeoutMetadataKey = "aevatar.llm_timeout_ms";
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
+    private const string LlmWatchdogCallbackPrefix = "llm-watchdog";
 
-    private readonly ConcurrentDictionary<string, PendingLlmCall> _pending = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, int> _attemptsByRunStep = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _watchdogs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, PendingLlmCall> _pending = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _attemptsByRunStep = new(StringComparer.Ordinal);
 
     public string Name => "llm_call";
     public int Priority => 10;
@@ -41,7 +41,8 @@ public sealed class LLMCallModule : IEventModule
         return payload != null &&
                (payload.Is(StepRequestEvent.Descriptor)
                 || payload.Is(TextMessageEndEvent.Descriptor)
-                || payload.Is(ChatResponseEvent.Descriptor));
+                || payload.Is(ChatResponseEvent.Descriptor)
+                || payload.Is(LlmCallWatchdogTimeoutFiredEvent.Descriptor));
     }
 
     /// <inheritdoc />
@@ -68,6 +69,13 @@ public sealed class LLMCallModule : IEventModule
         {
             var evt = payload.Unpack<ChatResponseEvent>();
             await HandleChatResponseAsync(evt, ctx, ct);
+            return;
+        }
+
+        if (payload.Is(LlmCallWatchdogTimeoutFiredEvent.Descriptor))
+        {
+            var evt = payload.Unpack<LlmCallWatchdogTimeoutFiredEvent>();
+            await HandleWatchdogTimeoutFiredAsync(evt, envelope, ctx, ct);
         }
     }
 
@@ -88,13 +96,18 @@ public sealed class LLMCallModule : IEventModule
 
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var stepRunKey = $"{runId}:{request.StepId}";
-        var attempt = _attemptsByRunStep.AddOrUpdate(stepRunKey, 1, static (_, current) => current + 1);
+        var attempt = _attemptsByRunStep.GetValueOrDefault(stepRunKey, 0) + 1;
+        _attemptsByRunStep[stepRunKey] = attempt;
 
         // Use run/step/attempt-scoped session id to avoid collisions across concurrent runs and retries.
         var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
         var timeoutMs = ResolveLlmTimeoutMs(request);
-        _pending[chatSessionId] = new PendingLlmCall(request, stepRunKey);
-        StartWatchdog(chatSessionId, timeoutMs, ctx);
+        var watchdogCallbackId = BuildWatchdogCallbackId(chatSessionId);
+        _pending[chatSessionId] = new PendingLlmCall(
+            request,
+            stepRunKey,
+            watchdogCallbackId,
+            WatchdogGeneration: 0);
 
         var targetRole = request.TargetRole;
         var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
@@ -123,6 +136,19 @@ public sealed class LLMCallModule : IEventModule
 
                 await ctx.PublishAsync(chatEvt, EventDirection.Self, ct);
             }
+
+            var lease = await ctx.ScheduleSelfTimeoutAsync(
+                watchdogCallbackId,
+                TimeSpan.FromMilliseconds(timeoutMs),
+                new LlmCallWatchdogTimeoutFiredEvent
+                {
+                    SessionId = chatSessionId,
+                    TimeoutMs = timeoutMs,
+                    RunId = runId,
+                    StepId = request.StepId,
+                },
+                ct: ct);
+            _pending[chatSessionId] = _pending[chatSessionId] with { WatchdogGeneration = lease.Generation };
         }
         catch (Exception ex)
         {
@@ -140,11 +166,11 @@ public sealed class LLMCallModule : IEventModule
         var sessionId = evt.SessionId;
         if (string.IsNullOrEmpty(sessionId))
             return;
-        if (!_pending.TryRemove(sessionId, out var pending))
+        if (!_pending.Remove(sessionId, out var pending))
             return;
 
-        StopWatchdog(sessionId);
-        _attemptsByRunStep.TryRemove(pending.StepRunKey, out _);
+        await StopWatchdogAsync(pending, ctx, ct);
+        _attemptsByRunStep.Remove(pending.StepRunKey);
 
         var outputPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";
         if (TryExtractLlmFailure(evt.Content, out var error))
@@ -175,11 +201,11 @@ public sealed class LLMCallModule : IEventModule
         var sessionId = evt.SessionId;
         if (string.IsNullOrEmpty(sessionId))
             return;
-        if (!_pending.TryRemove(sessionId, out var pending))
+        if (!_pending.Remove(sessionId, out var pending))
             return;
 
-        StopWatchdog(sessionId);
-        _attemptsByRunStep.TryRemove(pending.StepRunKey, out _);
+        await StopWatchdogAsync(pending, ctx, ct);
+        _attemptsByRunStep.Remove(pending.StepRunKey);
 
         var nsPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";
         if (TryExtractLlmFailure(evt.Content, out var error))
@@ -235,51 +261,44 @@ public sealed class LLMCallModule : IEventModule
         return true;
     }
 
-    private void StartWatchdog(string sessionId, int timeoutMs, IEventHandlerContext ctx)
+    private async Task HandleWatchdogTimeoutFiredAsync(
+        LlmCallWatchdogTimeoutFiredEvent evt,
+        EventEnvelope envelope,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
     {
-        if (timeoutMs <= 0)
+        if (string.IsNullOrWhiteSpace(evt.SessionId))
             return;
 
-        StopWatchdog(sessionId);
-        var cts = new CancellationTokenSource();
-        if (!_watchdogs.TryAdd(sessionId, cts))
+        if (!_pending.TryGetValue(evt.SessionId, out var pending))
+            return;
+
+        if (TryReadGeneration(envelope, out var firedGeneration) &&
+            firedGeneration != pending.WatchdogGeneration)
         {
-            cts.Dispose();
+            ctx.Logger.LogDebug(
+                "LLMCallModule: ignore stale watchdog session={SessionId} fired_generation={FiredGeneration} expected_generation={ExpectedGeneration}",
+                evt.SessionId,
+                firedGeneration,
+                pending.WatchdogGeneration);
             return;
         }
 
-        _ = WatchdogAsync(sessionId, timeoutMs, ctx, cts.Token);
-    }
-
-    private async Task WatchdogAsync(string sessionId, int timeoutMs, IEventHandlerContext ctx, CancellationToken ct)
-    {
-        try
-        {
-            await Task.Delay(timeoutMs, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-
-        if (!_pending.TryRemove(sessionId, out var pending))
-            return;
-
-        StopWatchdog(sessionId);
-        _attemptsByRunStep.TryRemove(pending.StepRunKey, out _);
+        _pending.Remove(evt.SessionId);
+        _attemptsByRunStep.Remove(pending.StepRunKey);
 
         var request = pending.Request;
         ctx.Logger.LogWarning(
             "LLMCallModule: step={StepId} timeout after {Timeout}ms (run={RunId}).",
             request.StepId,
-            timeoutMs,
+            evt.TimeoutMs,
             request.RunId);
 
         try
         {
             await PublishFailedCompletionAsync(
                 request,
-                $"LLM call timed out after {timeoutMs}ms",
+                $"LLM call timed out after {evt.TimeoutMs}ms",
                 request.TargetRole,
                 ctx,
                 CancellationToken.None);
@@ -300,11 +319,11 @@ public sealed class LLMCallModule : IEventModule
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
-        if (!_pending.TryRemove(sessionId, out var pending))
+        if (!_pending.Remove(sessionId, out var pending))
             return;
 
-        StopWatchdog(sessionId);
-        _attemptsByRunStep.TryRemove(pending.StepRunKey, out _);
+        await StopWatchdogAsync(pending, ctx, ct);
+        _attemptsByRunStep.Remove(pending.StepRunKey);
 
         await PublishFailedCompletionAsync(pending.Request, error, workerId, ctx, ct);
     }
@@ -327,23 +346,44 @@ public sealed class LLMCallModule : IEventModule
             EventDirection.Self,
             ct);
 
-    private void StopWatchdog(string sessionId)
+    private static string BuildWatchdogCallbackId(string sessionId) =>
+        string.Concat(LlmWatchdogCallbackPrefix, ":", sessionId);
+
+    private async Task StopWatchdogAsync(
+        PendingLlmCall pending,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
     {
-        if (!_watchdogs.TryRemove(sessionId, out var cts))
+        if (string.IsNullOrWhiteSpace(pending.WatchdogCallbackId) || pending.WatchdogGeneration <= 0)
             return;
 
         try
         {
-            cts.Cancel();
+            await ctx.CancelScheduledCallbackAsync(
+                pending.WatchdogCallbackId,
+                pending.WatchdogGeneration,
+                ct);
         }
-        catch (ObjectDisposedException)
+        catch (Exception ex)
         {
-            // best effort cancellation
-        }
-        finally
-        {
-            cts.Dispose();
+            ctx.Logger.LogDebug(
+                ex,
+                "LLMCallModule: failed to cancel watchdog callback={CallbackId} generation={Generation}",
+                pending.WatchdogCallbackId,
+                pending.WatchdogGeneration);
         }
     }
-    private sealed record PendingLlmCall(StepRequestEvent Request, string StepRunKey);
+
+    private static bool TryReadGeneration(EventEnvelope envelope, out long generation)
+    {
+        generation = 0;
+        return envelope.Metadata.TryGetValue(RuntimeCallbackMetadataKeys.CallbackGeneration, out var raw) &&
+               long.TryParse(raw, out generation);
+    }
+
+    private sealed record PendingLlmCall(
+        StepRequestEvent Request,
+        string StepRunKey,
+        string WatchdogCallbackId,
+        long WatchdogGeneration);
 }

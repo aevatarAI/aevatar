@@ -5,6 +5,7 @@
 
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
+using Aevatar.Foundation.Abstractions.Runtime.Async;
 
 namespace Aevatar.Foundation.Abstractions.EventModules;
 
@@ -41,4 +42,24 @@ public interface IEventHandlerContext
         throw new NotSupportedException(
             $"{GetType().Name} does not support SendToAsync.");
     }
+
+    Task<RuntimeCallbackLease> ScheduleSelfTimeoutAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        IMessage evt,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default);
+
+    Task<RuntimeCallbackLease> ScheduleSelfTimerAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        TimeSpan period,
+        IMessage evt,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default);
+
+    Task CancelScheduledCallbackAsync(
+        string callbackId,
+        long? expectedGeneration = null,
+        CancellationToken ct = default);
 }

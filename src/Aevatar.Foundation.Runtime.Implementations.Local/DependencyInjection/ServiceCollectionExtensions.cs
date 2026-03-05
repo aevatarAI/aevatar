@@ -10,7 +10,9 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.Configurations;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.Propagation;
+using Aevatar.Foundation.Abstractions.Runtime.Async;
 using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Async;
 using Aevatar.Foundation.Runtime.Implementations.Local.ActivationIndex;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Local.TypeSystem;
@@ -52,6 +54,8 @@ public static class ServiceCollectionExtensions
             (IStreamLifecycleManager)sp.GetRequiredService<IStreamProvider>());
         services.TryAddSingleton<IStreamForwardingRegistry>(sp =>
             sp.GetRequiredService<InMemoryStreamForwardingRegistry>());
+        services.TryAddSingleton<IStreamRequestReplyClient, RuntimeStreamRequestReplyClient>();
+        services.TryAddSingleton<IActorRuntimeAsyncScheduler, InMemoryActorRuntimeAsyncScheduler>();
 
         // Actor Runtime
         services.TryAddSingleton<IActorRuntime>(sp =>

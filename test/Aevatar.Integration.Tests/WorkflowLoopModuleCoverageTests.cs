@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
@@ -612,34 +611,16 @@ public sealed class WorkflowLoopModuleCoverageTests
             TimeoutMs = 1,
         }));
         var ctx = CreateContext();
-        var timeoutFired = new TaskCompletionSource<WorkflowStepTimeoutFiredEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var timeoutPublished = new TaskCompletionSource<StepCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
-        ctx.OnPublish = (evt, _) =>
-        {
-            if (evt is WorkflowStepTimeoutFiredEvent fired &&
-                fired.StepId == "s1")
-            {
-                timeoutFired.TrySetResult(fired);
-            }
-
-            if (evt is StepCompletedEvent completed &&
-                completed.StepId == "s1" &&
-                !completed.Success &&
-                completed.Error.Contains("TIMEOUT", StringComparison.Ordinal))
-            {
-                timeoutPublished.TrySetResult(completed);
-            }
-        };
 
         await module.HandleAsync(
             Envelope(new StartWorkflowEvent { RunId = "run-timeout", Input = "start" }),
             ctx,
             CancellationToken.None);
 
-        var timeoutFiredEvent = await timeoutFired.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await module.HandleAsync(Envelope(timeoutFiredEvent), ctx, CancellationToken.None);
+        var scheduled = ctx.Scheduled.Should().ContainSingle(x => x.Event is WorkflowStepTimeoutFiredEvent).Subject;
+        await module.HandleAsync(ctx.CreateScheduledEnvelope(scheduled), ctx, CancellationToken.None);
 
-        var timeoutEvent = await timeoutPublished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var timeoutEvent = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         timeoutEvent.Error.Should().Contain("TIMEOUT");
     }
 
@@ -672,7 +653,10 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var retry = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        var scheduled = ctx.Scheduled.Should().ContainSingle(x => x.Event is WorkflowStepRetryBackoffFiredEvent).Subject;
+        await module.HandleAsync(ctx.CreateScheduledEnvelope(scheduled), ctx, CancellationToken.None);
+
+        var retry = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
         retry.StepId.Should().Be("s1");
         retry.Input.Should().Be("start");
     }
@@ -762,6 +746,7 @@ public sealed class WorkflowLoopModuleCoverageTests
 
         var next = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
         next.StepId.Should().Be("s2");
+        ctx.Canceled.Should().ContainSingle(x => x.CallbackId == "workflow-step-timeout:run-cancel-timeout:s1");
     }
 
     [Fact]
@@ -962,11 +947,11 @@ public sealed class WorkflowLoopModuleCoverageTests
         };
     }
 
-    private static RecordingEventHandlerContext CreateContext()
+    private static TestEventHandlerContext CreateContext()
     {
-        return new RecordingEventHandlerContext(
+        return new TestEventHandlerContext(
             new ServiceCollection().BuildServiceProvider(),
-            new StubAgent("workflow-loop-test-agent"),
+            new TestAgent("workflow-loop-test-agent"),
             NullLogger.Instance);
     }
 
@@ -982,43 +967,4 @@ public sealed class WorkflowLoopModuleCoverageTests
         };
     }
 
-    private sealed class RecordingEventHandlerContext : IEventHandlerContext
-    {
-        public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
-        {
-            Services = services;
-            Agent = agent;
-            Logger = logger;
-            InboundEnvelope = new EventEnvelope();
-        }
-
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
-        public Action<IMessage, EventDirection>? OnPublish { get; set; }
-        public EventEnvelope InboundEnvelope { get; }
-        public string AgentId => Agent.Id;
-        public IAgent Agent { get; }
-        public IServiceProvider Services { get; }
-        public ILogger Logger { get; }
-
-        public Task PublishAsync<TEvent>(
-            TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
-            where TEvent : IMessage
-        {
-            Published.Add((evt, direction));
-            OnPublish?.Invoke(evt, direction);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class StubAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-    }
 }

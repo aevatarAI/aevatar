@@ -21,7 +21,7 @@ public static class TestHelper
 
 // Shared test agents
 
-public class CounterAgent : GAgentBase<CounterState>
+public class CounterAgent : TestGAgentBase<CounterState>
 {
     public int HandleCount { get; private set; }
 
@@ -42,9 +42,9 @@ public class CounterAgent : GAgentBase<CounterState>
     }
 }
 
-public class EmptyAgent : GAgentBase<CounterState>;
+public class EmptyAgent : TestGAgentBase<CounterState>;
 
-public class CollectorAgent : GAgentBase<CounterState>
+public class CollectorAgent : TestGAgentBase<CounterState>
 {
     private readonly object _gate = new();
     private readonly List<(int Threshold, TaskCompletionSource<bool> Signal)> _waiters = [];
@@ -93,4 +93,4 @@ public class CollectorAgent : GAgentBase<CounterState>
     }
 }
 
-public class EchoAgent : GAgentBase<CounterState>;
+public class EchoAgent : TestGAgentBase<CounterState>;

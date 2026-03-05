@@ -8,7 +8,7 @@ namespace Aevatar.Foundation.Core.Tests;
 
 // Test agents.
 
-public class AgentBaseCounterAgent : GAgentBase<CounterState>
+public class AgentBaseCounterAgent : TestGAgentBase<CounterState>
 {
     public int HandleCount { get; private set; }
 

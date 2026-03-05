@@ -257,7 +257,7 @@ public class RuntimeScriptInfrastructurePortsTests
     {
         var runtime = new TestActorRuntime();
         var streams = new InMemoryStreamProvider();
-        var queryClient = new RuntimeScriptQueryClient(streams);
+        var queryClient = new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient());
         var port = new RuntimeScriptDefinitionSnapshotPort(
             new RuntimeScriptActorAccessor(runtime),
             queryClient,
@@ -292,7 +292,7 @@ public class RuntimeScriptInfrastructurePortsTests
         }));
         var port = new RuntimeScriptEvolutionDecisionFallbackPort(
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams),
+            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(50) });
 
         var decision = await port.TryResolveAsync("manager-1", "proposal-timeout", CancellationToken.None);
@@ -374,7 +374,7 @@ public class RuntimeScriptInfrastructurePortsTests
         };
         var service = new RuntimeScriptCatalogLifecycleService(
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(new InMemoryStreamProvider()),
+            new RuntimeScriptQueryClient(new InMemoryStreamProvider(), new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
             new FixedTimeouts());
 
@@ -409,7 +409,7 @@ public class RuntimeScriptInfrastructurePortsTests
         };
         var service = new RuntimeScriptCatalogLifecycleService(
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(new InMemoryStreamProvider()),
+            new RuntimeScriptQueryClient(new InMemoryStreamProvider(), new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
             new FixedTimeouts());
 
@@ -680,7 +680,7 @@ public class RuntimeScriptInfrastructurePortsTests
         }));
         return new RuntimeScriptDefinitionSnapshotPort(
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams),
+            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new FixedQueryModes(useEventDrivenDefinitionQuery: false),
             new FixedTimeouts { DefinitionSnapshotQueryTimeout = TimeSpan.FromMilliseconds(200) });
     }
@@ -698,7 +698,7 @@ public class RuntimeScriptInfrastructurePortsTests
         }));
         return new RuntimeScriptEvolutionDecisionFallbackPort(
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams),
+            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(200) });
     }
 
@@ -727,7 +727,7 @@ public class RuntimeScriptInfrastructurePortsTests
 
         return new RuntimeScriptCatalogLifecycleService(
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams),
+            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
             new FixedTimeouts { CatalogEntryQueryTimeout = TimeSpan.FromMilliseconds(200) });
     }

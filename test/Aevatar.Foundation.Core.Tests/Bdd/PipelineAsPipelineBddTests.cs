@@ -90,7 +90,7 @@ public class PipelineAsPipelineBddTests
 
 // ─── Test Agent: Ping → Pong hardcoded transformation ───
 
-public class PingToPongAgent : GAgentBase<CounterState>
+public class PingToPongAgent : TestGAgentBase<CounterState>
 {
     [EventHandler]
     public async Task Handle(PingEvent evt)

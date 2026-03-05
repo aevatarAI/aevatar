@@ -6,6 +6,7 @@
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.Tests;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -28,7 +29,7 @@ public class AgentLifecycleBddTests
             EventSourcing = behavior,
         };
         agent.SetId("lifecycle-1");
-        agent.Services = new ServiceCollection().BuildServiceProvider();
+        agent.Services = TestRuntimeServices.BuildProvider();
 
         // When
         await agent.ActivateAsync();
@@ -63,7 +64,7 @@ public class AgentLifecycleBddTests
             EventSourcing = behavior,
         };
         agent.SetId("lifecycle-2");
-        agent.Services = new ServiceCollection().BuildServiceProvider();
+        agent.Services = TestRuntimeServices.BuildProvider();
 
         // When
         await agent.ActivateAsync();
@@ -83,7 +84,7 @@ public class AgentLifecycleBddTests
             EventSourcing = behavior,
         };
         agent.SetId("lifecycle-3");
-        agent.Services = new ServiceCollection().BuildServiceProvider();
+        agent.Services = TestRuntimeServices.BuildProvider();
         await agent.ActivateAsync();
         behavior.RaiseEvent(new IncrementEvent { Amount = 7 });
 
@@ -105,7 +106,7 @@ public class AgentLifecycleBddTests
             EventSourcing = null,
         };
         agent.SetId("lifecycle-4");
-        agent.Services = new ServiceCollection().BuildServiceProvider();
+        agent.Services = TestRuntimeServices.BuildProvider();
 
         // When / Then
         var act = () => agent.ActivateAsync();

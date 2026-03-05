@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
@@ -1901,11 +1900,11 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         completed.Output.Should().Contain("name: validate_ok");
     }
 
-    private static RecordingEventHandlerContext CreateContext(IServiceProvider? services = null)
+    private static TestEventHandlerContext CreateContext(IServiceProvider? services = null)
     {
-        return new RecordingEventHandlerContext(
+        return new TestEventHandlerContext(
             services ?? new ServiceCollection().AddAevatarWorkflow().BuildServiceProvider(),
-            new StubAgent("workflow-advanced-module-test-agent"),
+            new TestAgent("workflow-advanced-module-test-agent"),
             NullLogger.Instance);
     }
 
@@ -1921,41 +1920,4 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         };
     }
 
-    private sealed class RecordingEventHandlerContext : IEventHandlerContext
-    {
-        public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
-        {
-            Services = services;
-            Agent = agent;
-            Logger = logger;
-            InboundEnvelope = new EventEnvelope();
-        }
-
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
-        public EventEnvelope InboundEnvelope { get; }
-        public string AgentId => Agent.Id;
-        public IAgent Agent { get; }
-        public IServiceProvider Services { get; }
-        public ILogger Logger { get; }
-
-        public Task PublishAsync<TEvent>(
-            TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
-            where TEvent : IMessage
-        {
-            Published.Add((evt, direction));
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class StubAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-    }
 }

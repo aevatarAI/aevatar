@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Runtime.Async;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Extensions.Maker.Modules;
 using FluentAssertions;
@@ -217,6 +218,49 @@ public class MakerVoteModuleCoverageTests
         {
             Published.Add((evt, direction));
             return Task.CompletedTask;
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleSelfTimeoutAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            IMessage evt,
+            IReadOnlyDictionary<string, string>? metadata = null,
+            CancellationToken ct = default)
+        {
+            _ = callbackId;
+            _ = dueTime;
+            _ = evt;
+            _ = metadata;
+            _ = ct;
+            throw new NotSupportedException("This test context does not support scheduling.");
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleSelfTimerAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            TimeSpan period,
+            IMessage evt,
+            IReadOnlyDictionary<string, string>? metadata = null,
+            CancellationToken ct = default)
+        {
+            _ = callbackId;
+            _ = dueTime;
+            _ = period;
+            _ = evt;
+            _ = metadata;
+            _ = ct;
+            throw new NotSupportedException("This test context does not support scheduling.");
+        }
+
+        public Task CancelScheduledCallbackAsync(
+            string callbackId,
+            long? expectedGeneration = null,
+            CancellationToken ct = default)
+        {
+            _ = callbackId;
+            _ = expectedGeneration;
+            _ = ct;
+            throw new NotSupportedException("This test context does not support scheduling.");
         }
     }
 

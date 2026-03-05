@@ -56,3 +56,6 @@ message WaitingForSignalEvent { string step_id = 1; string signal_name = 2; stri
 message SignalReceivedEvent   { string signal_name = 1; string payload = 2; string run_id = 3; string step_id = 4; }
 message WaitSignalTimeoutFiredEvent { string run_id = 1; string step_id = 2; string signal_name = 3; int32 timeout_ms = 4; }
 message WorkflowStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 timeout_ms = 3; }
+message WorkflowStepRetryBackoffFiredEvent { string run_id = 1; string step_id = 2; int32 delay_ms = 3; int32 next_attempt = 4; }
+message DelayStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 duration_ms = 3; }
+message LlmCallWatchdogTimeoutFiredEvent { string run_id = 1; string step_id = 2; string session_id = 3; int32 timeout_ms = 4; }

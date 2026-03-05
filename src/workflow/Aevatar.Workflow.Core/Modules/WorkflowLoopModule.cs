@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Async;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
@@ -20,7 +21,8 @@ public sealed class WorkflowLoopModule : IEventModule
     private readonly Dictionary<string, Dictionary<string, string>> _variablesByRunId = new(StringComparer.Ordinal);
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
     private readonly Dictionary<string, int> _retryAttempts = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, CancellationTokenSource> _timeouts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _timeouts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RetryBackoffLease> _retryBackoffs = new(StringComparer.Ordinal);
 
     public string Name => "workflow_loop";
     public int Priority => 0;
@@ -33,7 +35,8 @@ public sealed class WorkflowLoopModule : IEventModule
         return payload != null &&
                (payload.Is(StartWorkflowEvent.Descriptor) ||
                 payload.Is(StepCompletedEvent.Descriptor) ||
-                payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor));
+                payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor) ||
+                payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor));
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
@@ -70,7 +73,7 @@ public sealed class WorkflowLoopModule : IEventModule
             var entry = _workflow.Steps.FirstOrDefault();
             if (entry == null)
             {
-                CleanupRun(runId);
+                await CleanupRunAsync(runId, ctx, ct);
                 await ctx.PublishAsync(new WorkflowCompletedEvent
                 {
                     WorkflowName = _workflow.Name,
@@ -94,6 +97,28 @@ public sealed class WorkflowLoopModule : IEventModule
             if (string.IsNullOrWhiteSpace(stepId))
                 return;
 
+            var stepRunKey = GetStepRunKey(runId, stepId);
+            if (!_timeouts.TryGetValue(stepRunKey, out var expectedGeneration))
+            {
+                ctx.Logger.LogDebug(
+                    "workflow_loop: ignore timeout without active lease run={RunId} step={StepId}",
+                    runId,
+                    stepId);
+                return;
+            }
+
+            if (TryReadGeneration(envelope, out var firedGeneration) &&
+                firedGeneration != expectedGeneration)
+            {
+                ctx.Logger.LogDebug(
+                    "workflow_loop: ignore stale timeout generation run={RunId} step={StepId} fired={FiredGeneration} expected={ExpectedGeneration}",
+                    runId,
+                    stepId,
+                    firedGeneration,
+                    expectedGeneration);
+                return;
+            }
+
             if (!_currentStepByRunId.TryGetValue(runId, out var expectedStepId) ||
                 !string.Equals(expectedStepId, stepId, StringComparison.Ordinal))
             {
@@ -105,7 +130,7 @@ public sealed class WorkflowLoopModule : IEventModule
                 return;
             }
 
-            CancelTimeout(runId, stepId);
+            _timeouts.Remove(stepRunKey);
             ctx.Logger.LogWarning("workflow_loop: step={StepId} timed out after {Ms}ms", stepId, evt.TimeoutMs);
             await ctx.PublishAsync(new StepCompletedEvent
             {
@@ -114,6 +139,11 @@ public sealed class WorkflowLoopModule : IEventModule
                 Success = false,
                 Error = $"TIMEOUT after {evt.TimeoutMs}ms",
             }, EventDirection.Self, ct);
+        }
+        else if (payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor))
+        {
+            var evt = payload.Unpack<WorkflowStepRetryBackoffFiredEvent>();
+            await HandleRetryBackoffFiredAsync(evt, envelope, ctx, ct);
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
@@ -154,7 +184,19 @@ public sealed class WorkflowLoopModule : IEventModule
                 return;
             }
 
-            CancelTimeout(runId, evt.StepId);
+            var stepRunKey = GetStepRunKey(runId, evt.StepId);
+            await CancelTimeoutAsync(runId, evt.StepId, ctx, ct);
+            if (!evt.Success && _retryBackoffs.ContainsKey(stepRunKey))
+            {
+                ctx.Logger.LogDebug(
+                    "workflow_loop: ignore duplicate failed completion while retry backoff is pending run={RunId} step={StepId}",
+                    runId,
+                    evt.StepId);
+                return;
+            }
+
+            if (evt.Success)
+                await CancelRetryBackoffAsync(runId, evt.StepId, ctx, CancellationToken.None);
 
             var outputPreview = (evt.Output ?? "").Length > 200 ? evt.Output![..200] + "..." : evt.Output ?? "";
             if (evt.Success)
@@ -202,7 +244,7 @@ public sealed class WorkflowLoopModule : IEventModule
                         runId,
                         evt.StepId,
                         evt.Error);
-                    CleanupRun(runId);
+                    await CleanupRunAsync(runId, ctx, ct);
                     await ctx.PublishAsync(new WorkflowCompletedEvent
                     {
                         WorkflowName = _workflow.Name,
@@ -221,7 +263,7 @@ public sealed class WorkflowLoopModule : IEventModule
                     runId,
                     evt.StepId,
                     evt.Error);
-                CleanupRun(runId);
+                await CleanupRunAsync(runId, ctx, ct);
                 await ctx.PublishAsync(new WorkflowCompletedEvent
                 {
                     WorkflowName = _workflow.Name,
@@ -232,7 +274,8 @@ public sealed class WorkflowLoopModule : IEventModule
                 return;
             }
 
-            _retryAttempts.Remove(GetStepRunKey(runId, evt.StepId));
+            _retryAttempts.Remove(stepRunKey);
+            _retryBackoffs.Remove(stepRunKey);
 
             StepDefinition? next;
             if (evt.Metadata.TryGetValue("next_step", out var directNextStepId) &&
@@ -246,7 +289,7 @@ public sealed class WorkflowLoopModule : IEventModule
                         runId,
                         current.Id,
                         directNextStepId);
-                    CleanupRun(runId);
+                    await CleanupRunAsync(runId, ctx, ct);
                     await ctx.PublishAsync(new WorkflowCompletedEvent
                     {
                         WorkflowName = _workflow.Name,
@@ -265,7 +308,7 @@ public sealed class WorkflowLoopModule : IEventModule
 
             if (next == null)
             {
-                CleanupRun(runId);
+                await CleanupRunAsync(runId, ctx, ct);
                 await ctx.PublishAsync(new WorkflowCompletedEvent
                 {
                     WorkflowName = _workflow.Name,
@@ -311,9 +354,6 @@ public sealed class WorkflowLoopModule : IEventModule
         ctx.Logger.LogWarning("workflow_loop: step={StepId} retry attempt={Attempt}/{Max} delay={Delay}ms error={Error}",
             step.Id, attempt + 1, maxAttempts, delayMs, evt.Error);
 
-        if (delayMs > 0)
-            await Task.Delay(delayMs, ct);
-
         if (!_currentStepInputByRunId.TryGetValue(runId, out var retryInput))
         {
             ctx.Logger.LogWarning(
@@ -323,8 +363,119 @@ public sealed class WorkflowLoopModule : IEventModule
             retryInput = string.Empty;
         }
 
-        await DispatchStep(step, retryInput, runId, ctx, ct);
+        if (delayMs <= 0)
+        {
+            await DispatchStep(step, retryInput, runId, ctx, ct);
+            return true;
+        }
+
+        await StartRetryBackoffAsync(
+            runId,
+            step.Id,
+            delayMs,
+            attempt + 1,
+            ctx,
+            ct);
         return true;
+    }
+
+    private async Task HandleRetryBackoffFiredAsync(
+        WorkflowStepRetryBackoffFiredEvent evt,
+        EventEnvelope envelope,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        if (_workflow == null)
+            return;
+
+        var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
+        var stepId = evt.StepId?.Trim();
+        if (string.IsNullOrWhiteSpace(runId) ||
+            string.IsNullOrWhiteSpace(stepId) ||
+            !_activeRunIds.Contains(runId))
+        {
+            return;
+        }
+
+        var stepRunKey = GetStepRunKey(runId, stepId);
+        if (!_retryBackoffs.TryGetValue(stepRunKey, out var pending))
+            return;
+
+        if (TryReadGeneration(envelope, out var firedGeneration) &&
+            firedGeneration != pending.Generation)
+        {
+            ctx.Logger.LogDebug(
+                "workflow_loop: ignore stale retry backoff run={RunId} step={StepId} fired={FiredGeneration} expected={ExpectedGeneration}",
+                runId,
+                stepId,
+                firedGeneration,
+                pending.Generation);
+            return;
+        }
+
+        if (!_currentStepByRunId.TryGetValue(runId, out var expectedStepId) ||
+            !string.Equals(expectedStepId, stepId, StringComparison.Ordinal))
+        {
+            ctx.Logger.LogDebug(
+                "workflow_loop: ignore retry backoff for stale step run={RunId} step={StepId} expected={ExpectedStepId}",
+                runId,
+                stepId,
+                expectedStepId ?? "(none)");
+            return;
+        }
+
+        _retryBackoffs.Remove(stepRunKey);
+        var step = _workflow.GetStep(stepId);
+        if (step == null)
+        {
+            ctx.Logger.LogWarning(
+                "workflow_loop: retry backoff fired but step definition not found run={RunId} step={StepId}",
+                runId,
+                stepId);
+            return;
+        }
+
+        if (!_currentStepInputByRunId.TryGetValue(runId, out var retryInput))
+            retryInput = string.Empty;
+
+        ctx.Logger.LogWarning(
+            "workflow_loop: retry backoff fired run={RunId} step={StepId} next_attempt={Attempt} delay_ms={DelayMs}",
+            runId,
+            stepId,
+            pending.NextAttempt,
+            evt.DelayMs);
+        await DispatchStep(step, retryInput, runId, ctx, ct);
+    }
+
+    private async Task StartRetryBackoffAsync(
+        string runId,
+        string stepId,
+        int delayMs,
+        int nextAttempt,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var stepRunKey = GetStepRunKey(runId, stepId);
+        await CancelRetryBackoffAsync(runId, stepId, ctx, CancellationToken.None);
+
+        var callbackId = BuildStepRetryBackoffCallbackId(runId, stepId);
+        var lease = await ctx.ScheduleSelfTimeoutAsync(
+            callbackId,
+            TimeSpan.FromMilliseconds(delayMs),
+            new WorkflowStepRetryBackoffFiredEvent
+            {
+                RunId = runId,
+                StepId = stepId,
+                DelayMs = delayMs,
+                NextAttempt = nextAttempt,
+            },
+            ct: ct);
+
+        _retryBackoffs[stepRunKey] = new RetryBackoffLease(
+            callbackId,
+            lease.Generation,
+            nextAttempt,
+            delayMs);
     }
 
     private async Task<bool> TryOnErrorAsync(
@@ -349,11 +500,11 @@ public sealed class WorkflowLoopModule : IEventModule
                 var next = _workflow!.GetNextStep(step.Id);
                 if (next == null)
                 {
-                    CleanupRun(runId);
-                    await ctx.PublishAsync(new WorkflowCompletedEvent
-                    {
-                        WorkflowName = _workflow.Name,
-                        RunId = runId,
+                await CleanupRunAsync(runId, ctx, ct);
+                await ctx.PublishAsync(new WorkflowCompletedEvent
+                {
+                    WorkflowName = _workflow.Name,
+                    RunId = runId,
                         Success = true,
                         Output = output,
                     }, EventDirection.Both, ct);
@@ -446,7 +597,7 @@ public sealed class WorkflowLoopModule : IEventModule
                 req.Parameters["allowed_connectors"] = string.Join(",", role.Connectors);
         }
 
-        StartTimeout(step, runId, ctx, ct);
+        await StartTimeoutAsync(step, runId, ctx, ct);
         await ctx.PublishAsync(req, EventDirection.Self, ct);
     }
 
@@ -459,39 +610,58 @@ public sealed class WorkflowLoopModule : IEventModule
         !string.IsNullOrWhiteSpace(error) &&
         error.Contains("TIMEOUT", StringComparison.OrdinalIgnoreCase);
 
-    private void StartTimeout(StepDefinition step, string runId, IEventHandlerContext ctx, CancellationToken ct)
+    private async Task StartTimeoutAsync(StepDefinition step, string runId, IEventHandlerContext ctx, CancellationToken ct)
     {
         if (step.TimeoutMs is not > 0) return;
 
-        CancelTimeout(runId, step.Id);
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var stepRunKey = GetStepRunKey(runId, step.Id);
-        _timeouts[stepRunKey] = cts;
+        await CancelTimeoutAsync(runId, step.Id, ctx, ct);
 
         var stepId = step.Id;
         var timeoutMs = Math.Clamp(step.TimeoutMs.Value, 100, 600_000);
-
-        _ = Task.Run(async () =>
-        {
-            try
+        var lease = await ctx.ScheduleSelfTimeoutAsync(
+            BuildStepTimeoutCallbackId(runId, stepId),
+            TimeSpan.FromMilliseconds(timeoutMs),
+            new WorkflowStepTimeoutFiredEvent
             {
-                await Task.Delay(timeoutMs, cts.Token);
-                await ctx.PublishAsync(new WorkflowStepTimeoutFiredEvent
-                {
-                    RunId = runId,
-                    StepId = stepId,
-                    TimeoutMs = timeoutMs,
-                }, EventDirection.Self, CancellationToken.None);
-            }
-            catch (OperationCanceledException) { }
-        }, CancellationToken.None);
+                RunId = runId,
+                StepId = stepId,
+                TimeoutMs = timeoutMs,
+            },
+            ct: ct);
+        _timeouts[stepRunKey] = lease.Generation;
     }
 
-    private void CancelTimeout(string runId, string stepId)
+    private async Task CancelTimeoutAsync(
+        string runId,
+        string stepId,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
     {
-        if (!_timeouts.Remove(GetStepRunKey(runId, stepId), out var cts)) return;
-        cts.Cancel();
-        cts.Dispose();
+        var stepRunKey = GetStepRunKey(runId, stepId);
+        if (!_timeouts.Remove(stepRunKey, out var generation))
+            return;
+
+        await ctx.CancelScheduledCallbackAsync(
+            BuildStepTimeoutCallbackId(runId, stepId),
+            generation,
+            ct);
+    }
+
+    private async Task CancelRetryBackoffAsync(
+        string runId,
+        string stepId,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var stepRunKey = GetStepRunKey(runId, stepId);
+        if (!_retryBackoffs.Remove(stepRunKey, out var pending))
+            return;
+
+        await ctx.CancelScheduledCallbackAsync(
+            pending.CallbackId,
+            pending.Generation,
+            ct);
     }
 
     private Dictionary<string, string> ResolveVariables(string runId)
@@ -511,7 +681,20 @@ public sealed class WorkflowLoopModule : IEventModule
         return WorkflowRunIdNormalizer.Normalize(evt.RunId);
     }
 
-    private void CleanupRun(string runId)
+    private static bool TryReadGeneration(EventEnvelope envelope, out long generation)
+    {
+        generation = 0;
+        return envelope.Metadata.TryGetValue(RuntimeCallbackMetadataKeys.CallbackGeneration, out var raw) &&
+               long.TryParse(raw, out generation);
+    }
+
+    private static string BuildStepTimeoutCallbackId(string runId, string stepId) =>
+        string.Concat("workflow-step-timeout:", runId, ":", stepId);
+
+    private static string BuildStepRetryBackoffCallbackId(string runId, string stepId) =>
+        string.Concat("workflow-step-retry-backoff:", runId, ":", stepId);
+
+    private async Task CleanupRunAsync(string runId, IEventHandlerContext ctx, CancellationToken ct)
     {
         _activeRunIds.Remove(runId);
         _currentStepByRunId.Remove(runId);
@@ -524,11 +707,36 @@ public sealed class WorkflowLoopModule : IEventModule
 
         foreach (var key in _timeouts.Keys.Where(k => k.StartsWith(retryPrefix, StringComparison.Ordinal)).ToList())
         {
-            var cts = _timeouts[key];
+            var generation = _timeouts[key];
             _timeouts.Remove(key);
-            cts.Cancel();
-            cts.Dispose();
+            var stepId = key.Length > retryPrefix.Length
+                ? key[retryPrefix.Length..]
+                : string.Empty;
+            if (string.IsNullOrWhiteSpace(stepId))
+                continue;
+
+            await ctx.CancelScheduledCallbackAsync(
+                BuildStepTimeoutCallbackId(runId, stepId),
+                generation,
+                ct);
+        }
+
+        foreach (var key in _retryBackoffs.Keys.Where(k => k.StartsWith(retryPrefix, StringComparison.Ordinal)).ToList())
+        {
+            if (!_retryBackoffs.Remove(key, out var pending))
+                continue;
+
+            await ctx.CancelScheduledCallbackAsync(
+                pending.CallbackId,
+                pending.Generation,
+                ct);
         }
 
     }
+
+    private sealed record RetryBackoffLease(
+        string CallbackId,
+        long Generation,
+        int NextAttempt,
+        int DelayMs);
 }

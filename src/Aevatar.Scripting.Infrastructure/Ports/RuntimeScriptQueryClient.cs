@@ -1,5 +1,5 @@
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Google.Protobuf;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
@@ -7,10 +7,14 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 public sealed class RuntimeScriptQueryClient
 {
     private readonly IStreamProvider _streams;
+    private readonly IStreamRequestReplyClient _requestReplyClient;
 
-    public RuntimeScriptQueryClient(IStreamProvider streams)
+    public RuntimeScriptQueryClient(
+        IStreamProvider streams,
+        IStreamRequestReplyClient requestReplyClient)
     {
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
+        _requestReplyClient = requestReplyClient ?? throw new ArgumentNullException(nameof(requestReplyClient));
     }
 
     public Task<TResponse> QueryActorAsync<TResponse>(
@@ -29,7 +33,7 @@ public sealed class RuntimeScriptQueryClient
         ArgumentNullException.ThrowIfNull(isMatch);
         ArgumentNullException.ThrowIfNull(timeoutMessageFactory);
 
-        return EventStreamQueryReplyAwaiter.QueryActorAsync<TResponse>(
+        return _requestReplyClient.QueryActorAsync<TResponse>(
             _streams,
             actor,
             replyStreamPrefix,
