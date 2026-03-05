@@ -11,7 +11,7 @@ public static class WorkflowCapabilityHostBuilderExtensions
     public static WebApplicationBuilder AddWorkflowCapabilityWithAIDefaults(
         this WebApplicationBuilder builder,
         Action<AevatarAIFeatureOptions>? configureAIFeatures = null,
-        bool includeScriptCapability = false)
+        bool includeScriptCapability = true)
     {
         ArgumentNullException.ThrowIfNull(builder);
 

@@ -288,7 +288,8 @@ public sealed class RevisionScript : IScriptPackageRuntime
 
         var runtimeState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
         runtimeState.LastRunId.Should().Be("run-revision-check");
-        runtimeState.Revision.Should().Be("rev-requested-mismatch");
+        runtimeState.Revision.Should().BeEmpty();
+        runtimeState.DefinitionActorId.Should().BeEmpty();
 
         var persisted = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
         var committed = persisted

@@ -199,10 +199,24 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
         var scriptId = evt.ScriptId ?? string.Empty;
         var targetRevision = evt.TargetRevision ?? string.Empty;
         var entry = GetOrCreateEntry(next, scriptId);
+        var previouslyActiveRevision = entry.ActiveRevision ?? string.Empty;
+        var previouslyActiveDefinitionActorId = entry.ActiveDefinitionActorId ?? string.Empty;
+        var previouslyActiveSourceHash = entry.ActiveSourceHash ?? string.Empty;
 
         entry.ScriptId = scriptId;
-        entry.PreviousRevision = evt.PreviousRevision ?? entry.ActiveRevision ?? string.Empty;
+        entry.PreviousRevision = evt.PreviousRevision ?? previouslyActiveRevision;
         entry.ActiveRevision = targetRevision;
+        if (string.Equals(targetRevision, previouslyActiveRevision, StringComparison.Ordinal))
+        {
+            entry.ActiveDefinitionActorId = previouslyActiveDefinitionActorId;
+            entry.ActiveSourceHash = previouslyActiveSourceHash;
+        }
+        else
+        {
+            entry.ActiveDefinitionActorId = string.Empty;
+            entry.ActiveSourceHash = string.Empty;
+        }
+
         entry.LastProposalId = evt.ProposalId ?? string.Empty;
 
         if (!entry.RevisionHistory.Any(x => string.Equals(x, targetRevision, StringComparison.Ordinal)))

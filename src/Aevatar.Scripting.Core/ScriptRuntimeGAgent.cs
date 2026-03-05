@@ -497,8 +497,12 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         ScriptRunDomainEventCommitted committed)
     {
         var next = state.Clone();
-        next.DefinitionActorId = committed.DefinitionActorId ?? string.Empty;
-        next.Revision = committed.ScriptRevision ?? string.Empty;
+        if (!string.Equals(committed.EventType, RunFailedEventType, StringComparison.Ordinal))
+        {
+            next.DefinitionActorId = committed.DefinitionActorId ?? string.Empty;
+            next.Revision = committed.ScriptRevision ?? string.Empty;
+        }
+
         next.LastRunId = committed.RunId ?? string.Empty;
         CopyPayloads(committed.StatePayloads, next.StatePayloads);
         CopyPayloads(committed.ReadModelPayloads, next.ReadModelPayloads);

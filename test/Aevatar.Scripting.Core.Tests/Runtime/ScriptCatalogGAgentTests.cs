@@ -46,6 +46,8 @@ public class ScriptCatalogGAgentTests
         var entry = agent.State.Entries["script-1"];
         entry.ActiveRevision.Should().Be("rev-1");
         entry.PreviousRevision.Should().Be("rev-2");
+        entry.ActiveDefinitionActorId.Should().BeEmpty();
+        entry.ActiveSourceHash.Should().BeEmpty();
         entry.RevisionHistory.Should().Contain(new[] { "rev-1", "rev-2" });
     }
 
@@ -216,6 +218,52 @@ public class ScriptCatalogGAgentTests
         });
 
         agent.State.Entries.Should().ContainKey("script-1");
-        agent.State.Entries["script-1"].ActiveRevision.Should().Be("rev-1");
+        var entry = agent.State.Entries["script-1"];
+        entry.ActiveRevision.Should().Be("rev-1");
+        entry.ActiveDefinitionActorId.Should().BeEmpty();
+        entry.ActiveSourceHash.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Rollback_ToCurrentActiveRevision_ShouldPreserveActiveMetadata()
+    {
+        var agent = new ScriptCatalogGAgent
+        {
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptCatalogState>(
+                new InMemoryEventStore()),
+        };
+
+        await agent.HandlePromoteScriptRevisionRequested(new PromoteScriptRevisionRequestedEvent
+        {
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            DefinitionActorId = "definition-1",
+            SourceHash = "hash-1",
+            ProposalId = "proposal-1",
+        });
+        await agent.HandlePromoteScriptRevisionRequested(new PromoteScriptRevisionRequestedEvent
+        {
+            ScriptId = "script-1",
+            Revision = "rev-2",
+            DefinitionActorId = "definition-2",
+            SourceHash = "hash-2",
+            ProposalId = "proposal-2",
+            ExpectedBaseRevision = "rev-1",
+        });
+
+        await agent.HandleRollbackScriptRevisionRequested(new RollbackScriptRevisionRequestedEvent
+        {
+            ScriptId = "script-1",
+            TargetRevision = "rev-2",
+            Reason = "idempotent rollback",
+            ProposalId = "proposal-3",
+            ExpectedCurrentRevision = "rev-2",
+        });
+
+        agent.State.Entries.Should().ContainKey("script-1");
+        var entry = agent.State.Entries["script-1"];
+        entry.ActiveRevision.Should().Be("rev-2");
+        entry.ActiveDefinitionActorId.Should().Be("definition-2");
+        entry.ActiveSourceHash.Should().Be("hash-2");
     }
 }

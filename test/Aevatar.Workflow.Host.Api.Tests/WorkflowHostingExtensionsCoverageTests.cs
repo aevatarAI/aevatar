@@ -87,6 +87,24 @@ public class WorkflowHostingExtensionsCoverageTests
             .Select(x => x.ImplementationInstance)
             .OfType<AevatarCapabilityRegistration>()
             .Should()
+            .Contain(x => x.Name == "script");
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityWithAIDefaults_WhenScriptCapabilityDisabled_ShouldNotRegisterScriptCapability()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+
+        builder.AddWorkflowCapabilityWithAIDefaults(includeScriptCapability: false);
+
+        builder.Services
+            .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
+            .Select(x => x.ImplementationInstance)
+            .OfType<AevatarCapabilityRegistration>()
+            .Should()
             .NotContain(x => x.Name == "script");
     }
 

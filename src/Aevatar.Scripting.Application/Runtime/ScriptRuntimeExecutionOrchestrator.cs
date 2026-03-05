@@ -35,55 +35,64 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
                 request.ScriptRevision,
                 request.SourceText),
             ct);
-        if (!compilation.IsSuccess || compilation.CompiledDefinition == null)
+        var definition = compilation.CompiledDefinition;
+        if (!compilation.IsSuccess || definition == null)
+        {
+            await DisposeCompiledDefinitionAsync(definition);
             throw new InvalidOperationException(
                 "Script compilation failed in runtime: " + string.Join("; ", compilation.Diagnostics));
-        var definition = compilation.CompiledDefinition;
-        await using var _ = definition as IAsyncDisposable;
+        }
 
-        var runId = request.RunEvent.RunId ?? string.Empty;
-        var correlationId = runId;
-        var capabilities = _capabilityComposer.Compose(new ScriptRuntimeCapabilityContext(
-            request.RuntimeActorId,
-            request.ScriptId,
-            request.ScriptRevision,
-            request.RunEvent.DefinitionActorId ?? string.Empty,
-            runId,
-            correlationId));
+        try
+        {
+            var runId = request.RunEvent.RunId ?? string.Empty;
+            var correlationId = runId;
+            var capabilities = _capabilityComposer.Compose(new ScriptRuntimeCapabilityContext(
+                request.RuntimeActorId,
+                request.ScriptId,
+                request.ScriptRevision,
+                request.RunEvent.DefinitionActorId ?? string.Empty,
+                runId,
+                correlationId));
 
-        var context = new ScriptExecutionContext(
-            ActorId: request.RuntimeActorId,
-            ScriptId: request.ScriptId,
-            Revision: request.ScriptRevision,
-            RunId: runId,
-            CorrelationId: correlationId,
-            DefinitionActorId: request.RunEvent.DefinitionActorId ?? string.Empty,
-            CurrentState: NormalizePayloads(request.CurrentState),
-            CurrentReadModel: NormalizePayloads(request.CurrentReadModel),
-            InputPayload: request.RunEvent.InputPayload?.Clone(),
-            Capabilities: capabilities);
+            var context = new ScriptExecutionContext(
+                ActorId: request.RuntimeActorId,
+                ScriptId: request.ScriptId,
+                Revision: request.ScriptRevision,
+                RunId: runId,
+                CorrelationId: correlationId,
+                DefinitionActorId: request.RunEvent.DefinitionActorId ?? string.Empty,
+                CurrentState: NormalizePayloads(request.CurrentState),
+                CurrentReadModel: NormalizePayloads(request.CurrentReadModel),
+                InputPayload: request.RunEvent.InputPayload?.Clone(),
+                Capabilities: capabilities);
 
-        var requestedEvent = new ScriptRequestedEventEnvelope(
-            EventType: string.IsNullOrWhiteSpace(request.RunEvent.RequestedEventType)
-                ? "script.run.requested"
-                : request.RunEvent.RequestedEventType,
-            Payload: request.RunEvent.InputPayload?.Clone() ?? Any.Pack(new Empty()),
-            EventId: runId,
-            CorrelationId: correlationId,
-            CausationId: runId);
+            var requestedEvent = new ScriptRequestedEventEnvelope(
+                EventType: string.IsNullOrWhiteSpace(request.RunEvent.RequestedEventType)
+                    ? "script.run.requested"
+                    : request.RunEvent.RequestedEventType,
+                Payload: request.RunEvent.InputPayload?.Clone() ?? Any.Pack(new Empty()),
+                EventId: runId,
+                CorrelationId: correlationId,
+                CausationId: runId);
 
-        var decision = await definition.HandleRequestedEventAsync(requestedEvent, context, ct);
+            var decision = await definition.HandleRequestedEventAsync(requestedEvent, context, ct);
 
-        return await BuildCommittedEventsAsync(
-            definition,
-            request.RunEvent,
-            request.ScriptRevision,
-            request.ReadModelSchemaVersion,
-            request.ReadModelSchemaHash,
-            request.CurrentState,
-            request.CurrentReadModel,
-            decision,
-            ct);
+            return await BuildCommittedEventsAsync(
+                definition,
+                request.RunEvent,
+                request.ScriptRevision,
+                request.ReadModelSchemaVersion,
+                request.ReadModelSchemaHash,
+                request.CurrentState,
+                request.CurrentReadModel,
+                decision,
+                ct);
+        }
+        finally
+        {
+            await DisposeCompiledDefinitionAsync(definition);
+        }
     }
 
     private static async Task<IReadOnlyList<IMessage>> BuildCommittedEventsAsync(
@@ -201,5 +210,17 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
 
             target[key] = value.Clone();
         }
+    }
+
+    private static async ValueTask DisposeCompiledDefinitionAsync(IScriptPackageDefinition? definition)
+    {
+        if (definition is IAsyncDisposable asyncDisposable)
+        {
+            await asyncDisposable.DisposeAsync();
+            return;
+        }
+
+        if (definition is IDisposable disposable)
+            disposable.Dispose();
     }
 }

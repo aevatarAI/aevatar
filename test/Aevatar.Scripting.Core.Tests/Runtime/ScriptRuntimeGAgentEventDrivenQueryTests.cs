@@ -210,6 +210,33 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
         agent.State.PendingDefinitionQueries.Should().NotContainKey(query.RequestId);
     }
 
+    [Fact]
+    public async Task DirectSnapshotFailure_ShouldPersistFailureWithoutDriftingActiveRevision()
+    {
+        var orchestrator = new RecordingOrchestrator();
+        var publisher = new RecordingEventPublisher();
+        var agent = new ScriptRuntimeGAgent(orchestrator, new FailingSnapshotPort())
+        {
+            EventPublisher = publisher,
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(
+                new InMemoryEventStore()),
+        };
+
+        await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
+        {
+            RunId = "run-fail-1",
+            InputPayload = Any.Pack(new Struct()),
+            ScriptRevision = "rev-requested",
+            DefinitionActorId = "definition-fail-1",
+            RequestedEventType = "chat.requested",
+        });
+
+        orchestrator.Requests.Should().BeEmpty();
+        agent.State.LastRunId.Should().Be("run-fail-1");
+        agent.State.Revision.Should().BeEmpty();
+        agent.State.DefinitionActorId.Should().BeEmpty();
+    }
+
     private static ScriptRuntimeGAgent CreateAgent(
         RecordingOrchestrator orchestrator,
         RecordingEventPublisher publisher)
@@ -235,6 +262,22 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
             _ = requestedRevision;
             ct.ThrowIfCancellationRequested();
             throw new NotSupportedException("Event-driven query path should not call snapshot port directly.");
+        }
+    }
+
+    private sealed class FailingSnapshotPort : IScriptDefinitionSnapshotPort
+    {
+        public bool UseEventDrivenDefinitionQuery => false;
+
+        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
+            string definitionActorId,
+            string requestedRevision,
+            CancellationToken ct)
+        {
+            _ = definitionActorId;
+            _ = requestedRevision;
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("snapshot-load-failed");
         }
     }
 
