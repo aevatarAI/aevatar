@@ -10,6 +10,7 @@ message SyncEntityState {
   map<string, SyncEntity> entities = 1;
   SyncMeta meta = 2;
   LastSyncResult last_sync_result = 3;
+  repeated string processed_sync_ids = 4;
 }
 
 message SyncEntity {

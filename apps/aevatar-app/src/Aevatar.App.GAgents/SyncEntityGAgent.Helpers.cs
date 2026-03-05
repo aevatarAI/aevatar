@@ -157,6 +157,14 @@ public sealed partial class SyncEntityGAgent
                 };
                 current.LastSyncResult.Accepted.AddRange(synced.Accepted);
                 current.LastSyncResult.Rejected.AddRange(synced.Rejected);
+
+                if (!string.IsNullOrEmpty(synced.SyncId))
+                {
+                    current.ProcessedSyncIds.Add(synced.SyncId);
+                    while (current.ProcessedSyncIds.Count > IdempotencyWindowSize)
+                        current.ProcessedSyncIds.RemoveAt(0);
+                }
+
                 return current;
             }
             case AccountDeletedEvent deleted:

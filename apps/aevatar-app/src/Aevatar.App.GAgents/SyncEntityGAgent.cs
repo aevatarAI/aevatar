@@ -3,14 +3,25 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.App.GAgents;
 
 public sealed partial class SyncEntityGAgent : GAgentBase<SyncEntityState>
 {
+    private const int IdempotencyWindowSize = 32;
+
     [EventHandler]
     public async Task HandleSyncEntities(EntitiesSyncRequestedEvent @event)
     {
+        if (State.ProcessedSyncIds.Contains(@event.SyncId))
+        {
+            Logger.LogWarning(
+                "Duplicate syncId detected, skipping. syncId={SyncId}",
+                @event.SyncId);
+            return;
+        }
+
         if (@event.IncomingEntities.Count > 500)
             throw new ArgumentException("Too many entities per sync (max 500)");
 

@@ -195,4 +195,29 @@ public sealed class SyncEntitySyncTests
         result.DeltaEntities.Should().ContainKey("c3");
         result.DeltaEntities.Should().NotContainKey("c1");
     }
+
+    [Fact]
+    public async Task SyncAsync_DuplicateSyncId_IsIdempotent()
+    {
+        var agent = await GAgentTestHelper.CreateAndActivate<SyncEntityGAgent, SyncEntityState>("sync-entity:idempotent");
+        var entity = MakeEntity("c1");
+        await SendSyncAsync(agent, "s1", "user1", 0, [entity]);
+
+        var revAfterFirst = agent.State.Meta!.Revision;
+        var entityCountAfterFirst = agent.State.Entities.Count;
+
+        await SendSyncAsync(agent, "s1", "user1", 0, [entity]);
+
+        agent.State.Meta.Revision.Should().Be(revAfterFirst);
+        agent.State.Entities.Should().HaveCount(entityCountAfterFirst);
+    }
+
+    [Fact]
+    public async Task SyncAsync_ProcessedSyncIds_RecordedInState()
+    {
+        var agent = await GAgentTestHelper.CreateAndActivate<SyncEntityGAgent, SyncEntityState>("sync-entity:syncid-track");
+        await SendSyncAsync(agent, "s1", "user1", 0, [MakeEntity("c1")]);
+
+        agent.State.ProcessedSyncIds.Should().Contain("s1");
+    }
 }
