@@ -1,0 +1,52 @@
+syntax = "proto3";
+package aevatar_app;
+option csharp_namespace = "Aevatar.App.GAgents";
+import "google/protobuf/timestamp.proto";
+
+// ─── State ───
+
+message UserProfileState {
+  Profile profile = 1;
+}
+
+message Profile {
+  string user_id = 1;
+  string first_name = 2;
+  string last_name = 3;
+  string gender = 4;
+  google.protobuf.Timestamp date_of_birth = 5;
+  string timezone = 6;
+  repeated string interests = 7;
+  string purpose = 8;
+  bool notifications_enabled = 9;
+  string reminder_time = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+// ─── Domain Events (inbound trigger + event-sourced persistence + Projection Reducer) ───
+// Application fills business fields; GAgent adds server-side timestamps before persisting.
+
+message ProfileCreatedEvent {
+  string user_id = 1;
+  string first_name = 2;
+  string last_name = 3;
+  repeated string interests = 4;
+  string purpose = 5;
+  string timezone = 6;
+  google.protobuf.Timestamp created_at = 7;
+  string gender = 8;
+  google.protobuf.Timestamp date_of_birth = 9;
+  bool notifications_enabled = 10;
+  string reminder_time = 11;
+}
+
+message ProfileUpdatedEvent {
+  string user_id = 1;
+  Profile profile = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+message ProfileDeletedEvent {
+  string user_id = 1;
+}

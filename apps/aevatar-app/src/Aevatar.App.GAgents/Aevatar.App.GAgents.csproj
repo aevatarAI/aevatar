@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.App.GAgents</AssemblyName>
+    <RootNamespace>Aevatar.App.GAgents</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Proto\sync_entity.proto" GrpcServices="None" />
+    <Protobuf Include="Proto\user_account.proto" GrpcServices="None" />
+    <Protobuf Include="Proto\user_profile.proto" GrpcServices="None" />
+    <Protobuf Include="Proto\auth_lookup.proto" GrpcServices="None" />
+  </ItemGroup>
+</Project>

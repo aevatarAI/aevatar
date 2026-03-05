@@ -1,0 +1,135 @@
+syntax = "proto3";
+package aevatar_app;
+option csharp_namespace = "Aevatar.App.GAgents";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// ─── State ───
+
+message SyncEntityState {
+  map<string, SyncEntity> entities = 1;
+  SyncMeta meta = 2;
+  LastSyncResult last_sync_result = 3;
+}
+
+message SyncEntity {
+  string client_id = 1;
+  string entity_type = 2;
+  string user_id = 3;
+  int32 revision = 4;
+  map<string, string> refs = 5;
+  int32 position = 6;
+  google.protobuf.Struct inputs = 7;
+  google.protobuf.Struct output = 8;
+  google.protobuf.Struct state = 9;
+  EntitySource source = 10;
+  bool bank_eligible = 11;
+  string bank_hash = 12;
+  google.protobuf.Timestamp deleted_at = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+}
+
+enum EntitySource {
+  ENTITY_SOURCE_AI = 0;
+  ENTITY_SOURCE_BANK = 1;
+  ENTITY_SOURCE_USER = 2;
+  ENTITY_SOURCE_EDITED = 3;
+}
+
+message SyncMeta {
+  string user_id = 1;
+  int32 revision = 2;
+}
+
+// ─── Events ───
+
+message EntitiesSyncedEvent {
+  string sync_id = 1;
+  string user_id = 2;
+  int32 client_revision = 3;
+  int32 server_revision = 4;
+  repeated string accepted = 5;
+  repeated RejectedEntity rejected = 6;
+  int32 accepted_count = 7;
+  int32 rejected_count = 8;
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+message RejectedEntity {
+  string client_id = 1;
+  int32 server_revision = 2;
+  string reason = 3;
+}
+
+message EntityCreatedEvent {
+  string user_id = 1;
+  string client_id = 2;
+  string entity_type = 3;
+  int32 revision = 4;
+  EntitySource source = 5;
+  map<string, string> refs = 6;
+  google.protobuf.Struct inputs = 7;
+  google.protobuf.Struct output = 8;
+  google.protobuf.Struct state = 9;
+  int32 position = 10;
+  bool bank_eligible = 11;
+  string bank_hash = 12;
+  google.protobuf.Timestamp created_at = 13;
+}
+
+message EntityUpdatedEvent {
+  string user_id = 1;
+  string client_id = 2;
+  string entity_type = 3;
+  int32 previous_revision = 4;
+  int32 revision = 5;
+  EntitySource source = 6;
+  map<string, string> refs = 7;
+  google.protobuf.Struct inputs = 8;
+  google.protobuf.Struct output = 9;
+  google.protobuf.Struct state = 10;
+  int32 position = 11;
+  bool bank_eligible = 12;
+  string bank_hash = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message EntityDeletedEvent {
+  string user_id = 1;
+  string client_id = 2;
+  string entity_type = 3;
+  int32 revision = 4;
+  google.protobuf.Timestamp deleted_at = 5;
+}
+
+message CascadeDeleteEvent {
+  string user_id = 1;
+  string parent_client_id = 2;
+  repeated string deleted_client_ids = 3;
+  int32 depth = 4;
+  google.protobuf.Timestamp deleted_at = 5;
+}
+
+message EntitiesSyncRequestedEvent {
+  string sync_id = 1;
+  string user_id = 2;
+  int32 client_revision = 3;
+  repeated SyncEntity incoming_entities = 4;
+}
+
+message EntitiesSoftDeleteRequestedEvent {
+  string user_id = 1;
+}
+
+message EntitiesHardDeleteRequestedEvent {}
+
+// ─── Sync result stored in state for command callers ───
+
+message LastSyncResult {
+  string sync_id = 1;
+  int32 client_revision = 2;
+  int32 server_revision = 3;
+  repeated string accepted = 4;
+  repeated RejectedEntity rejected = 5;
+}

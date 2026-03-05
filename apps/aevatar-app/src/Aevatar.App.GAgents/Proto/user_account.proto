@@ -1,0 +1,59 @@
+syntax = "proto3";
+package aevatar_app;
+option csharp_namespace = "Aevatar.App.GAgents";
+import "google/protobuf/timestamp.proto";
+
+// ─── State ───
+
+message UserAccountState {
+  User user = 1;
+}
+
+message User {
+  string id = 1;
+  string auth_provider = 2;
+  string auth_provider_id = 3;
+  string email = 4;
+  bool email_verified = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  google.protobuf.Timestamp last_login_at = 8;
+  google.protobuf.Timestamp last_synced_at = 9;
+}
+
+// ─── Domain Events (inbound trigger + event-sourced persistence + Projection Reducer) ───
+// Application fills business fields; GAgent fills server-side fields (user_id from State,
+// timestamps) before persisting.
+
+message UserRegisteredEvent {
+  string user_id = 1;
+  string auth_provider = 2;
+  string auth_provider_id = 3;
+  string email = 4;
+  bool email_verified = 5;
+  google.protobuf.Timestamp registered_at = 6;
+}
+
+message UserProviderLinkedEvent {
+  string user_id = 1;
+  string auth_provider = 2;
+  string auth_provider_id = 3;
+  bool email_verified = 4;
+  google.protobuf.Timestamp linked_at = 5;
+}
+
+message UserLoginUpdatedEvent {
+  string user_id = 1;
+  string email = 2;
+  bool email_verified = 3;
+  google.protobuf.Timestamp login_at = 4;
+}
+
+message AccountDeletedEvent {
+  string user_id = 1;
+  string email = 2;
+  string mode = 3;
+  int32 entities_anonymized_count = 4;
+  int32 entities_deleted_count = 5;
+  google.protobuf.Timestamp deleted_at = 6;
+}

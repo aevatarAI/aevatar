@@ -1,0 +1,16 @@
+name: garden_affirmation
+description: >
+  Generate personalized daily affirmations based on user's mantra,
+  goal, and plant name.
+
+roles:
+  - id: garden_affirmer
+    name: Garden Affirmer
+    system_prompt: ""
+    temperature: 0.8
+    max_tokens: 100
+
+steps:
+  - id: generate
+    type: llm_call
+    role: garden_affirmer

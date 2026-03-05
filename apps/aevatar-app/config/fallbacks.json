@@ -1,0 +1,45 @@
+{
+  "fallbacks": {
+    "content": [
+      {
+        "name": "Seed of Potential",
+        "mantra": "I am growing toward my highest self.",
+        "description": "A seedling of infinite potential, waiting to bloom into your dreams."
+      },
+      {
+        "name": "Bloom of Hope",
+        "mantra": "Each day brings new opportunities for growth.",
+        "description": "A delicate flower representing the hope that lives within your heart."
+      },
+      {
+        "name": "Tree of Intention",
+        "mantra": "My roots grow deeper as my branches reach higher.",
+        "description": "A mighty tree grounded in purpose, stretching toward the light of possibility."
+      },
+      {
+        "name": "Garden of Dreams",
+        "mantra": "I nurture my dreams with patience and love.",
+        "description": "A mystical garden where your intentions take root and flourish."
+      },
+      {
+        "name": "Fern of Focus",
+        "mantra": "I channel my energy toward what matters most.",
+        "description": "Ancient and wise, this fern helps you maintain clarity on your path."
+      }
+    ],
+    "fixedContent": {
+      "name": "Celestial Potential",
+      "mantraTemplate": "I am successfully manifesting: {userGoal}",
+      "description": "A beautiful plant full of potential, glowing with an inner light."
+    },
+    "affirmations": [
+      "I nurture my dreams with belief and action.",
+      "Each drop of water feeds my growing intentions.",
+      "My dedication today creates tomorrow's blooming success.",
+      "I tend to my goals with patience and love.",
+      "Every moment of care brings me closer to flourishing."
+    ],
+    "fixedAffirmation": "I nurture my dreams with belief and action.",
+    "placeholderImage": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+  }
+}

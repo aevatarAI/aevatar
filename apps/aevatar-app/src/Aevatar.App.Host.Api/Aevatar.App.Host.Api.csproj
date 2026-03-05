@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.App.Host.Api</AssemblyName>
+    <RootNamespace>Aevatar.App.Host.Api</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.App.Application\Aevatar.App.Application.csproj" />
+    <ProjectReference Include="..\..\..\..\src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
+    <ProjectReference Include="..\..\..\..\src\Aevatar.CQRS.Projection.Providers.Elasticsearch\Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
+    <ProjectReference Include="..\..\..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Hosting\Aevatar.Workflow.Extensions.Hosting.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\workflows\**\*.yaml" Link="workflows\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,24 @@
+name: garden_image
+description: >
+  Generate plant images using Gemini image generation API.
+  Garden Manager constructs the stage-specific prompt and passes it
+  as the Workflow input.
+
+roles:
+  - id: garden_artist
+    name: Garden Artist
+    system_prompt: ""
+    connectors:
+      - gemini_imagen
+
+steps:
+  - id: generate
+    type: connector_call
+    role: garden_artist
+    parameters:
+      connector: "gemini_imagen"
+      path: "/v1beta/models/gemini-2.5-flash-image:generateContent"
+      timeout_ms: "90000"
+      retry: "1"
+    on_error:
+      strategy: fail

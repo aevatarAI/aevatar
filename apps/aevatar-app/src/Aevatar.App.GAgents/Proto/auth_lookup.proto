@@ -1,0 +1,21 @@
+syntax = "proto3";
+package aevatar_app;
+option csharp_namespace = "Aevatar.App.GAgents";
+
+// Grain key format: "firebase:{uid}" / "trial:{trialId}" / "email:{email}"
+
+message AuthLookupState {
+  string lookup_key = 1;
+  string user_id = 2;
+}
+
+// ─── Domain Events (inbound trigger + event-sourced persistence + Projection Reducer) ───
+
+message AuthLookupSetEvent {
+  string lookup_key = 1;
+  string user_id = 2;
+}
+
+message AuthLookupClearedEvent {
+  string lookup_key = 1;
+}

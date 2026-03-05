@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.App.Application</AssemblyName>
+    <RootNamespace>Aevatar.App.Application</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\src\Aevatar.Foundation.Runtime.Implementations.Orleans\Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
+    <ProjectReference Include="..\..\..\..\src\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\..\src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
+    <ProjectReference Include="..\..\..\..\src\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\..\src\Aevatar.CQRS.Projection.Providers.InMemory\Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
+    <ProjectReference Include="..\Aevatar.App.GAgents\Aevatar.App.GAgents.csproj" />
+    <ProjectReference Include="..\..\..\..\src\workflow\Aevatar.Workflow.Application\Aevatar.Workflow.Application.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" />
+    <PackageReference Include="FluentValidation" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+  </ItemGroup>
+</Project>

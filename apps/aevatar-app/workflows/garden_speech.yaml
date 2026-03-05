@@ -1,0 +1,22 @@
+name: garden_speech
+description: >
+  Text-to-speech synthesis using Gemini TTS API.
+
+roles:
+  - id: garden_speaker
+    name: Garden Speaker
+    system_prompt: ""
+    connectors:
+      - gemini_tts
+
+steps:
+  - id: synthesize
+    type: connector_call
+    role: garden_speaker
+    parameters:
+      connector: "gemini_tts"
+      path: "/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
+      timeout_ms: "90000"
+      retry: "1"
+    on_error:
+      strategy: fail

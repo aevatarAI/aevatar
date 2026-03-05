@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Propagation;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.Propagation;
 using Google.Protobuf.WellKnownTypes;
 using Shouldly;
@@ -86,5 +87,28 @@ public sealed class PropagationPolicyTests
 
         thirdEnvelope.CorrelationId.ShouldBe("corr-chain");
         thirdEnvelope.Metadata[EnvelopeMetadataKeys.TraceCausationId].ShouldBe("evt-2");
+    }
+
+    [Fact]
+    public void Apply_ShouldNotPropagatePublisherChain()
+    {
+        var inbound = new EventEnvelope
+        {
+            Id = "evt-in-pub",
+            CorrelationId = "corr-pub",
+            Payload = Any.Pack(new PingEvent { Message = "in" }),
+        };
+        inbound.Metadata[PublisherChainMetadata.PublishersMetadataKey] = "parent-actor";
+
+        var outbound = new EventEnvelope
+        {
+            Id = "evt-out-pub",
+            Payload = Any.Pack(new PongEvent { Reply = "out" }),
+        };
+
+        Policy.Apply(outbound, inbound);
+
+        outbound.CorrelationId.ShouldBe("corr-pub");
+        outbound.Metadata.ContainsKey(PublisherChainMetadata.PublishersMetadataKey).ShouldBeFalse();
     }
 }
