@@ -1,5 +1,5 @@
 using System.Globalization;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
@@ -468,7 +468,11 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain, IRuntimeActor
             triggerEnvelope.ToByteArray(),
             timer);
 
-        return Task.FromResult(new RuntimeCallbackLease(this.GetPrimaryKeyString(), callbackId, generation));
+        return Task.FromResult(new RuntimeCallbackLease(
+            this.GetPrimaryKeyString(),
+            callbackId,
+            generation,
+            RuntimeCallbackBackend.Inline));
     }
 
     Task<RuntimeCallbackLease> IRuntimeActorInlineCallbackScheduler.ScheduleTimerAsync(
@@ -500,7 +504,11 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain, IRuntimeActor
             triggerEnvelope.ToByteArray(),
             timer);
 
-        return Task.FromResult(new RuntimeCallbackLease(this.GetPrimaryKeyString(), callbackId, generation));
+        return Task.FromResult(new RuntimeCallbackLease(
+            this.GetPrimaryKeyString(),
+            callbackId,
+            generation,
+            RuntimeCallbackBackend.Inline));
     }
 
     Task IRuntimeActorInlineCallbackScheduler.CancelAsync(

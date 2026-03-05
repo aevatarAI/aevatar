@@ -7,11 +7,11 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.DependencyInjection;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Orleans.Hosting;
 using Orleans.Streams;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Async;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Streaming;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
@@ -63,7 +63,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
         services.TryAddSingleton<IStreamRequestReplyClient, RuntimeStreamRequestReplyClient>();
-        services.TryAddSingleton<IActorRuntimeAsyncScheduler, OrleansActorRuntimeAsyncScheduler>();
+        services.TryAddSingleton<IActorRuntimeCallbackScheduler, OrleansActorRuntimeCallbackScheduler>();
         services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
         services.AddAevatarFoundationRuntimeOrleansStreaming();
 
@@ -107,10 +107,10 @@ public static class ServiceCollectionExtensions
                 orleansOptions.GarnetConnectionString = options.GarnetConnectionString;
                 orleansOptions.QueueCount = options.QueueCount;
                 orleansOptions.QueueCacheSize = options.QueueCacheSize;
-                orleansOptions.AsyncCallbackSchedulingMode = options.AsyncCallbackSchedulingMode;
-                orleansOptions.AsyncCallbackDedicatedDeliveryMode = options.AsyncCallbackDedicatedDeliveryMode;
-                orleansOptions.AsyncCallbackReminderThresholdMs = options.AsyncCallbackReminderThresholdMs;
-                orleansOptions.AsyncCallbackInlineMaxDueTimeMs = options.AsyncCallbackInlineMaxDueTimeMs;
+                orleansOptions.RuntimeCallbackSchedulingMode = options.RuntimeCallbackSchedulingMode;
+                orleansOptions.RuntimeCallbackDedicatedDeliveryMode = options.RuntimeCallbackDedicatedDeliveryMode;
+                orleansOptions.RuntimeCallbackReminderThresholdMs = options.RuntimeCallbackReminderThresholdMs;
+                orleansOptions.RuntimeCallbackInlineMaxDueTimeMs = options.RuntimeCallbackInlineMaxDueTimeMs;
             });
         });
 
@@ -132,18 +132,18 @@ public static class ServiceCollectionExtensions
         if (isGarnetPersistence && string.IsNullOrWhiteSpace(options.GarnetConnectionString))
             throw new InvalidOperationException("ActorRuntime Orleans Garnet connection string is required.");
 
-        if (!string.Equals(options.AsyncCallbackSchedulingMode, AevatarOrleansRuntimeOptions.AsyncCallbackSchedulingModeAuto, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(options.AsyncCallbackSchedulingMode, AevatarOrleansRuntimeOptions.AsyncCallbackSchedulingModeForceInline, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(options.AsyncCallbackSchedulingMode, AevatarOrleansRuntimeOptions.AsyncCallbackSchedulingModeForceDedicated, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(options.RuntimeCallbackSchedulingMode, AevatarOrleansRuntimeOptions.RuntimeCallbackSchedulingModeAuto, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(options.RuntimeCallbackSchedulingMode, AevatarOrleansRuntimeOptions.RuntimeCallbackSchedulingModeForceInline, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(options.RuntimeCallbackSchedulingMode, AevatarOrleansRuntimeOptions.RuntimeCallbackSchedulingModeForceDedicated, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException($"Unsupported Orleans async callback scheduling mode '{options.AsyncCallbackSchedulingMode}'.");
+            throw new InvalidOperationException($"Unsupported Orleans runtime callback scheduling mode '{options.RuntimeCallbackSchedulingMode}'.");
         }
 
-        if (!string.Equals(options.AsyncCallbackDedicatedDeliveryMode, AevatarOrleansRuntimeOptions.AsyncCallbackDedicatedDeliveryModeAuto, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(options.AsyncCallbackDedicatedDeliveryMode, AevatarOrleansRuntimeOptions.AsyncCallbackDedicatedDeliveryModeTimer, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(options.AsyncCallbackDedicatedDeliveryMode, AevatarOrleansRuntimeOptions.AsyncCallbackDedicatedDeliveryModeReminder, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(options.RuntimeCallbackDedicatedDeliveryMode, AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeAuto, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(options.RuntimeCallbackDedicatedDeliveryMode, AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeTimer, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(options.RuntimeCallbackDedicatedDeliveryMode, AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeReminder, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException($"Unsupported Orleans async callback dedicated delivery mode '{options.AsyncCallbackDedicatedDeliveryMode}'.");
+            throw new InvalidOperationException($"Unsupported Orleans runtime callback dedicated delivery mode '{options.RuntimeCallbackDedicatedDeliveryMode}'.");
         }
     }
 

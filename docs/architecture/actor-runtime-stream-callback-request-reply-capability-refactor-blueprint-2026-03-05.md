@@ -1,4 +1,4 @@
-# Actor Runtime 流式异步能力上提重构蓝图（v4, Zero-Compatibility）
+# Actor Runtime 流式回调与 Request/Reply 能力重构蓝图（v4, Zero-Compatibility）
 
 ## 1. 文档元信息
 1. 状态：`Implemented`
@@ -56,7 +56,7 @@
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
-    BIZ["Business Actor/Module"] --> ABS["IActorRuntimeAsyncScheduler + IStreamRequestReplyClient"]
+    BIZ["Business Actor/Module"] --> ABS["IActorRuntimeCallbackScheduler + IStreamRequestReplyClient"]
     ABS --> LOC["Local Scheduler Impl"]
     ABS --> ORL["Orleans Scheduler Impl"]
     LOC --> EVT["Publish Internal Trigger Event"]
@@ -67,9 +67,9 @@ flowchart TB
 
 ## 7. 抽象层契约（Abstractions）
 ### 7.1 必须新增
-1. `IActorRuntimeAsyncScheduler`
-2. `RuntimeTimeoutRequest`
-3. `RuntimeTimerRequest`
+1. `IActorRuntimeCallbackScheduler`
+2. `RuntimeCallbackTimeoutRequest`
+3. `RuntimeCallbackTimerRequest`
 4. `RuntimeCallbackLease`
 5. `RuntimeCallbackStatus`
 6. `IStreamRequestReplyClient`
@@ -78,46 +78,53 @@ flowchart TB
 
 ### 7.2 契约语义
 1. 同一 `actor_id + callback_id` 重复注册必须产生递增 `generation`。
-2. `CancelAsync(actorId, callbackId, expectedGeneration)` 使用 CAS 语义。
-3. 触发事件必须携带：
+2. `CancelAsync(RuntimeCallbackLease lease)` 使用 lease/CAS 语义，取消路由必须由 lease 中记录的调度后端决定。
+3. `RuntimeCallbackLease` 必须至少携带：
+   1. `actor_id`
+   2. `callback_id`
+   3. `generation`
+   4. `backend`
+4. 触发事件必须携带：
    1. `callback_id`
    2. `generation`
    3. `fire_index`（timer）
    4. `fired_at_utc`
-4. request/reply 异常语义分离：
+5. request/reply 异常语义分离：
    1. 取消 -> `OperationCanceledException`
    2. 超时 -> `TimeoutException`
 
 ## 8. Runtime 实现矩阵（契约一致，机制不同）
 ### 8.1 Local Runtime
-1. 使用进程内调度器（最小堆或时间轮）管理到期任务。
+1. 使用进程内调度器管理到期任务。
 2. 到期只发布内部触发事件到 Actor Self Stream。
 3. 不在调度线程内执行业务逻辑。
 4. 进程重启任务丢失可接受（开发态语义）。
+5. InMemory `CancelAsync` 必须满足 generation 条件删除；旧 lease 取消不得误删新 generation callback。
 
 ### 8.2 Orleans Runtime
 1. 双策略并存：
    1. `Inline`：在 `RuntimeActorGrain` 当前 turn 内直接 `RegisterGrainTimer`，无额外 grain hop。
    2. `Dedicated`：通过 `RuntimeCallbackSchedulerGrain` 调度，适用于非当前 turn/跨上下文调用。
 2. 策略选择（已落地为可配置算法）：
-   1. `AsyncCallbackSchedulingMode=ForceInline`：
+   1. `RuntimeCallbackSchedulingMode=ForceInline`：
       1. 必须命中当前 actor turn 绑定（`actor_id` 一致），否则直接抛错（不静默降级）。
-   2. `AsyncCallbackSchedulingMode=ForceDedicated`：
+   2. `RuntimeCallbackSchedulingMode=ForceDedicated`：
       1. 永远走 dedicated grain，即使当前 turn 已绑定。
-   3. `AsyncCallbackSchedulingMode=Auto`（默认）：
-      1. 若命中 turn 绑定且 `due_time <= AsyncCallbackInlineMaxDueTimeMs`（默认 `60000`）则走 `Inline`。
+   3. `RuntimeCallbackSchedulingMode=Auto`（默认）：
+      1. 若命中 turn 绑定且 `due_time <= RuntimeCallbackInlineMaxDueTimeMs`（默认 `60000`）则走 `Inline`。
       2. 其余情况走 `Dedicated`。
-3. Dedicated 交付模式（timer/reminder）同样可配置：
-   1. `AsyncCallbackDedicatedDeliveryMode=Timer`：强制 timer。
-   2. `AsyncCallbackDedicatedDeliveryMode=Reminder`：强制 reminder。
-   3. `AsyncCallbackDedicatedDeliveryMode=Auto`（默认）：
-      1. 当 `due_time` 或 `period` 大于等于 `AsyncCallbackReminderThresholdMs`（默认 `300000`）时用 reminder。
+3. Orleans `CancelAsync` 必须以 `RuntimeCallbackLease.Backend` 为唯一路由依据，禁止根据“当前是否存在 inline binding”猜测 callback 所在位置。
+4. Dedicated 交付模式（timer/reminder）同样可配置：
+   1. `RuntimeCallbackDedicatedDeliveryMode=Timer`：强制 timer。
+   2. `RuntimeCallbackDedicatedDeliveryMode=Reminder`：强制 reminder。
+   3. `RuntimeCallbackDedicatedDeliveryMode=Auto`（默认）：
+      1. 当 `due_time` 或 `period` 大于等于 `RuntimeCallbackReminderThresholdMs`（默认 `300000`）时用 reminder。
       2. 否则用 timer。
-4. Reminder provider 自动装配（已落地）：
+5. Reminder provider 自动装配（已落地）：
    1. `PersistenceBackend=InMemory`：`UseInMemoryReminderService()`。
    2. `PersistenceBackend=Garnet`：`UseRedisReminderService()`，连接串复用 `GarnetConnectionString`。
-5. 禁止把 `Task.Run + Task.Delay` 作为 Orleans 业务调度主路径。
-6. 回调运行在 grain turn 语义中，但仍只发内部事件。
+6. 禁止把 `Task.Run + Task.Delay` 作为 Orleans 业务调度主路径。
+7. 回调运行在 grain turn 语义中，但仍只发内部事件。
 
 ### 8.3 Timer vs Reminder 选型边界（强制）
 1. `GrainTimer`：
@@ -218,100 +225,22 @@ flowchart TB
 1. 内部触发事件新增 `schema_version`。
 2. 升级策略：
    1. 新版本先兼容读取旧版本。
-   2. 稳定后再移除旧写入路径。
-3. 版本切换期间禁止同时改业务语义与调度语义。
-4. 文档、守卫、测试必须同 PR 同步。
+   2. 全量切换后再删除旧字段。
+3. 由于本次为 zero-compatibility 重构，仓内实现允许直接迁移，不保留旧契约转发层。
 
-## 15. 迁移工作包（WBS）
-### WP1 抽象层
-1. 定义 scheduler/request-reply 契约与 metadata 常量。
-2. 定义状态机与错误码。
-
-### WP2 Runtime 通用层
-1. 实现 `RuntimeStreamRequestReplyClient`。
-2. 实现 generation/CAS/tombstone 语义。
-
-### WP3 Local 实现
-1. 落地本地调度器。
-2. 支持指标与日志。
-
-### WP4 Orleans 实现
-1. timer/reminder 双机制接入与边界策略。
-2. 持久状态恢复与重复触发对账。
-
-### WP5 调用方迁移
-1. Workflow 三模块迁移。
-2. Scripting timeout/query 迁移。
-3. 删除 CQRS 旧 helper。
-
-### WP6 治理与门禁
-1. 新增守卫：阻止业务目录散落 `Task.Run + Task.Delay`。
-2. 新增守卫：新增 runtime callback 事件必须包含 `callback_id + generation`。
-3. 新增守卫：request/reply 路径必须显式释放订阅。
-
-## 16. 测试策略（补齐）
-1. 单元测试：
-   1. CAS cancel/fired 竞态
-   2. generation 覆盖
-   3. timeout vs cancel 异常语义
-2. 组件测试：
-   1. one-shot 与 periodic 的 fire_index 行为
-   2. orphan reply 回收
-3. 集成测试：
-   1. Workflow timeout 经 runtime 回推触发
-   2. Scripting timeout 经 runtime 回推触发
-4. Orleans 专项：
-   1. 重启恢复
-   2. reminder 重复触发幂等
-5. 稳定性测试：
-   1. 虚拟时钟/可控时间优先
-   2. 避免无界 `Task.Delay` 轮询
-
-## 17. 验证矩阵
-1. `dotnet restore aevatar.slnx --nologo`
-2. `dotnet build aevatar.slnx --nologo`
-3. `dotnet test aevatar.slnx --nologo`
-4. `bash tools/ci/architecture_guards.sh`
-5. `bash tools/ci/solution_split_test_guards.sh`
-6. `bash tools/ci/test_stability_guards.sh`
-7. 新增：`bash tools/ci/runtime_async_callback_guards.sh`
-
-## 18. 验收标准（DoD）
-1. request/reply 已上提到 Foundation 抽象 + Runtime 实现。
-2. CQRS 旧 helper 已删除。
-3. 目标业务模块不再自行线程回调推进业务。
-4. Orleans 路径采用原生调度机制且可恢复。
-5. Local 与 Orleans 契约一致、机制分离、语义一致。
-6. 竞态裁决、容量治理、可观测性、协议演进都有代码与测试落地。
-7. 全部门禁通过。
-
-## 19. 风险与应对
-1. 风险：timer/reminder 混用造成重复。
-   1. 应对：统一幂等键和状态机。
-2. 风险：高峰触发风暴。
-   1. 应对：配额 + jitter + 并发闸门。
-3. 风险：滚动升级事件版本不兼容。
-   1. 应对：schema version + 双读窗口。
-
-## 20. 当前执行快照（2026-03-05）
-1. 已完成：
-   1. `IActorRuntimeAsyncScheduler` / `IStreamRequestReplyClient` 已落地到 `Aevatar.Foundation.Abstractions`。
-   2. `RuntimeStreamRequestReplyClient` 已落地到 Runtime，并统一回收 reply stream 生命周期。
-   3. `Local` 与 `Orleans` 两套 runtime scheduler 已落地，均采用“回调只发内部事件”模型。
-   4. Workflow 的 `step timeout`、`retry backoff`、`delay` 已迁移为 runtime callback 事件化推进。
-   5. Scripting 的 definition-query timeout 已迁移为 runtime callback 事件化推进。
-   6. `WaitSignal` 与 `LLM watchdog` 已修复 stale generation 竞态处理。
-   7. 兼容路径已裁剪：`SignalReceivedEvent` 需显式 `run_id + step_id` 对账，不再做模糊匹配。
-2. 已验证：
+## 15. 测试与门禁要求
+1. 必须覆盖：
+   1. `Auto` 模式长延时 callback 返回 `Dedicated` lease，且取消时按 lease 后端命中 dedicated。
+   2. InMemory 路径下旧 lease 取消不会误删新 generation callback。
+   3. callback 触发事件包含完整 reconciliation metadata。
+2. 必须通过：
    1. `dotnet build aevatar.slnx --nologo`
-   2. `dotnet test test/Aevatar.Workflow.Core.Tests/Aevatar.Workflow.Core.Tests.csproj --nologo`
-   3. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo`
-   4. `dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj --nologo`
-   5. `bash tools/ci/architecture_guards.sh`
-   6. `bash tools/ci/solution_split_guards.sh`
-   7. `bash tools/ci/solution_split_test_guards.sh`
-   8. `bash tools/ci/test_stability_guards.sh`
-3. Orleans 双策略实现状态：
-   1. `Inline + Dedicated` 调度路径已同时可用并有单元测试覆盖。
-   2. `Dedicated(Timer + Reminder)` 双交付路径已可配置并有单元测试覆盖。
-   3. reminder service 已在 `ISiloBuilder` 按持久化后端自动配置。
+   2. `bash tools/ci/architecture_guards.sh`
+   3. `bash tools/ci/test_stability_guards.sh`
+
+## 16. 当前实现落点（2026-03-06）
+1. 抽象层命名已从 `Runtime.Async` 收敛到 `Runtime.Callbacks`。
+2. 对外取消契约已从参数式 `actorId + callbackId + generation` 收敛为 `RuntimeCallbackLease`。
+3. `RuntimeCallbackLease` 已显式携带 `Backend`，作为取消路由的权威事实。
+4. Orleans `Auto` 模式下的 dedicated callback 取消已修复为按 lease 后端路由。
+5. InMemory scheduler 已修复旧 lease cancel 误删新 generation 的 compare/remove 竞态。

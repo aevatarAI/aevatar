@@ -1,7 +1,7 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
@@ -11,7 +11,7 @@ using Orleans;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
-public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
+public sealed class OrleansActorRuntimeCallbackSchedulerDualStrategyTests
 {
     [Fact]
     public async Task ScheduleTimeoutAsync_ShouldUseInlineStrategy_WhenActorTurnBindingMatches()
@@ -22,9 +22,9 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
         grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => throw new InvalidOperationException("Dedicated path should not be called.");
 
-        var scheduler = new OrleansActorRuntimeAsyncScheduler(grainFactory, bindingAccessor);
+        var scheduler = new OrleansActorRuntimeCallbackScheduler(grainFactory, bindingAccessor);
 
-        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeTimeoutRequest
+        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
         {
             ActorId = "actor-1",
             CallbackId = "cb-1",
@@ -33,6 +33,7 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         });
 
         lease.Generation.Should().Be(1);
+        lease.Backend.Should().Be(RuntimeCallbackBackend.Inline);
         inlineScheduler.TimeoutCalls.Should().Be(1);
         grainFactoryProxy.CallbackSchedulerGrainCalls.Should().Be(0);
     }
@@ -47,9 +48,9 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
         grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
 
-        var scheduler = new OrleansActorRuntimeAsyncScheduler(grainFactory, bindingAccessor);
+        var scheduler = new OrleansActorRuntimeCallbackScheduler(grainFactory, bindingAccessor);
 
-        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeTimeoutRequest
+        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
         {
             ActorId = "actor-1",
             CallbackId = "cb-1",
@@ -58,6 +59,7 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         });
 
         lease.Generation.Should().Be(77);
+        lease.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
         inlineScheduler.TimeoutCalls.Should().Be(0);
         dedicatedGrain.ScheduleTimeoutCalls.Should().Be(1);
         dedicatedGrain.LastTimeoutDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.Timer);
@@ -69,12 +71,12 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
     {
         var options = new AevatarOrleansRuntimeOptions
         {
-            AsyncCallbackSchedulingMode = AevatarOrleansRuntimeOptions.AsyncCallbackSchedulingModeForceInline,
+            RuntimeCallbackSchedulingMode = AevatarOrleansRuntimeOptions.RuntimeCallbackSchedulingModeForceInline,
         };
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
-        var scheduler = new OrleansActorRuntimeAsyncScheduler(grainFactory, inlineSchedulerBindingAccessor: null, options);
+        var scheduler = new OrleansActorRuntimeCallbackScheduler(grainFactory, inlineSchedulerBindingAccessor: null, options);
 
-        var action = () => scheduler.ScheduleTimeoutAsync(new RuntimeTimeoutRequest
+        var action = () => scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
         {
             ActorId = "actor-1",
             CallbackId = "cb-1",
@@ -93,15 +95,15 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 33 };
         var options = new AevatarOrleansRuntimeOptions
         {
-            AsyncCallbackSchedulingMode = AevatarOrleansRuntimeOptions.AsyncCallbackSchedulingModeForceDedicated,
+            RuntimeCallbackSchedulingMode = AevatarOrleansRuntimeOptions.RuntimeCallbackSchedulingModeForceDedicated,
         };
         var bindingAccessor = new InlineBindingAccessor(inlineScheduler);
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
         var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
         grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
-        var scheduler = new OrleansActorRuntimeAsyncScheduler(grainFactory, bindingAccessor, options);
+        var scheduler = new OrleansActorRuntimeCallbackScheduler(grainFactory, bindingAccessor, options);
 
-        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeTimeoutRequest
+        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
         {
             ActorId = "actor-1",
             CallbackId = "cb-1",
@@ -110,6 +112,7 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         });
 
         lease.Generation.Should().Be(33);
+        lease.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
         inlineScheduler.TimeoutCalls.Should().Be(0);
         dedicatedGrain.ScheduleTimeoutCalls.Should().Be(1);
     }
@@ -121,15 +124,15 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 21 };
         var options = new AevatarOrleansRuntimeOptions
         {
-            AsyncCallbackInlineMaxDueTimeMs = 500,
+            RuntimeCallbackInlineMaxDueTimeMs = 500,
         };
         var bindingAccessor = new InlineBindingAccessor(inlineScheduler);
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
         var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
         grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
-        var scheduler = new OrleansActorRuntimeAsyncScheduler(grainFactory, bindingAccessor, options);
+        var scheduler = new OrleansActorRuntimeCallbackScheduler(grainFactory, bindingAccessor, options);
 
-        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeTimeoutRequest
+        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
         {
             ActorId = "actor-1",
             CallbackId = "cb-1",
@@ -138,6 +141,7 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         });
 
         lease.Generation.Should().Be(21);
+        lease.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
         inlineScheduler.TimeoutCalls.Should().Be(0);
         dedicatedGrain.ScheduleTimeoutCalls.Should().Be(1);
     }
@@ -148,15 +152,15 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 13 };
         var options = new AevatarOrleansRuntimeOptions
         {
-            AsyncCallbackSchedulingMode = AevatarOrleansRuntimeOptions.AsyncCallbackSchedulingModeForceDedicated,
-            AsyncCallbackDedicatedDeliveryMode = AevatarOrleansRuntimeOptions.AsyncCallbackDedicatedDeliveryModeTimer,
+            RuntimeCallbackSchedulingMode = AevatarOrleansRuntimeOptions.RuntimeCallbackSchedulingModeForceDedicated,
+            RuntimeCallbackDedicatedDeliveryMode = AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeTimer,
         };
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
         var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
         grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
-        var scheduler = new OrleansActorRuntimeAsyncScheduler(grainFactory, inlineSchedulerBindingAccessor: null, options);
+        var scheduler = new OrleansActorRuntimeCallbackScheduler(grainFactory, inlineSchedulerBindingAccessor: null, options);
 
-        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeTimeoutRequest
+        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
         {
             ActorId = "actor-1",
             CallbackId = "cb-1",
@@ -165,6 +169,7 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         });
 
         lease.Generation.Should().Be(13);
+        lease.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
         dedicatedGrain.LastTimeoutDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.Timer);
     }
 
@@ -174,15 +179,15 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 17 };
         var options = new AevatarOrleansRuntimeOptions
         {
-            AsyncCallbackSchedulingMode = AevatarOrleansRuntimeOptions.AsyncCallbackSchedulingModeForceDedicated,
-            AsyncCallbackDedicatedDeliveryMode = AevatarOrleansRuntimeOptions.AsyncCallbackDedicatedDeliveryModeReminder,
+            RuntimeCallbackSchedulingMode = AevatarOrleansRuntimeOptions.RuntimeCallbackSchedulingModeForceDedicated,
+            RuntimeCallbackDedicatedDeliveryMode = AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeReminder,
         };
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
         var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
         grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
-        var scheduler = new OrleansActorRuntimeAsyncScheduler(grainFactory, inlineSchedulerBindingAccessor: null, options);
+        var scheduler = new OrleansActorRuntimeCallbackScheduler(grainFactory, inlineSchedulerBindingAccessor: null, options);
 
-        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeTimeoutRequest
+        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
         {
             ActorId = "actor-1",
             CallbackId = "cb-1",
@@ -191,6 +196,7 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         });
 
         lease.Generation.Should().Be(17);
+        lease.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
         dedicatedGrain.LastTimeoutDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.Reminder);
     }
 
@@ -200,16 +206,16 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 9 };
         var options = new AevatarOrleansRuntimeOptions
         {
-            AsyncCallbackSchedulingMode = AevatarOrleansRuntimeOptions.AsyncCallbackSchedulingModeForceDedicated,
-            AsyncCallbackDedicatedDeliveryMode = AevatarOrleansRuntimeOptions.AsyncCallbackDedicatedDeliveryModeAuto,
-            AsyncCallbackReminderThresholdMs = 1000,
+            RuntimeCallbackSchedulingMode = AevatarOrleansRuntimeOptions.RuntimeCallbackSchedulingModeForceDedicated,
+            RuntimeCallbackDedicatedDeliveryMode = AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeAuto,
+            RuntimeCallbackReminderThresholdMs = 1000,
         };
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
         var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
         grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
-        var scheduler = new OrleansActorRuntimeAsyncScheduler(grainFactory, inlineSchedulerBindingAccessor: null, options);
+        var scheduler = new OrleansActorRuntimeCallbackScheduler(grainFactory, inlineSchedulerBindingAccessor: null, options);
 
-        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeTimeoutRequest
+        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
         {
             ActorId = "actor-1",
             CallbackId = "cb-1",
@@ -218,6 +224,7 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         });
 
         lease.Generation.Should().Be(9);
+        lease.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
         dedicatedGrain.LastTimeoutDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.Reminder);
     }
 
@@ -230,9 +237,9 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
         grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => throw new InvalidOperationException("Dedicated path should not be called.");
 
-        var scheduler = new OrleansActorRuntimeAsyncScheduler(grainFactory, bindingAccessor);
+        var scheduler = new OrleansActorRuntimeCallbackScheduler(grainFactory, bindingAccessor);
 
-        await scheduler.CancelAsync("actor-1", "cb-1", expectedGeneration: 5);
+        await scheduler.CancelAsync(new RuntimeCallbackLease("actor-1", "cb-1", 5, RuntimeCallbackBackend.Inline));
 
         inlineScheduler.CancelCalls.Should().Be(1);
         inlineScheduler.LastCancelExpectedGeneration.Should().Be(5);
@@ -246,19 +253,50 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
         var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 1 };
         var options = new AevatarOrleansRuntimeOptions
         {
-            AsyncCallbackSchedulingMode = AevatarOrleansRuntimeOptions.AsyncCallbackSchedulingModeForceDedicated,
+            RuntimeCallbackSchedulingMode = AevatarOrleansRuntimeOptions.RuntimeCallbackSchedulingModeForceDedicated,
         };
         var bindingAccessor = new InlineBindingAccessor(inlineScheduler);
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
         var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
         grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
-        var scheduler = new OrleansActorRuntimeAsyncScheduler(grainFactory, bindingAccessor, options);
+        var scheduler = new OrleansActorRuntimeCallbackScheduler(grainFactory, bindingAccessor, options);
 
-        await scheduler.CancelAsync("actor-1", "cb-1", expectedGeneration: 5);
+        await scheduler.CancelAsync(new RuntimeCallbackLease("actor-1", "cb-1", 5, RuntimeCallbackBackend.Dedicated));
 
         inlineScheduler.CancelCalls.Should().Be(0);
         dedicatedGrain.CancelCalls.Should().Be(1);
         dedicatedGrain.LastCancelExpectedGeneration.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task CancelAsync_ShouldUseDedicatedBackend_FromReturnedLease_WhenAutoModeSchedulesDedicated()
+    {
+        var inlineScheduler = new RecordingInlineScheduler("actor-1");
+        var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 21 };
+        var options = new AevatarOrleansRuntimeOptions
+        {
+            RuntimeCallbackInlineMaxDueTimeMs = 500,
+        };
+        var bindingAccessor = new InlineBindingAccessor(inlineScheduler);
+        var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
+        var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
+        grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
+        var scheduler = new OrleansActorRuntimeCallbackScheduler(grainFactory, bindingAccessor, options);
+
+        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
+        {
+            ActorId = "actor-1",
+            CallbackId = "cb-1",
+            DueTime = TimeSpan.FromSeconds(2),
+            TriggerEnvelope = CreateEnvelope(),
+        });
+
+        await scheduler.CancelAsync(lease);
+
+        lease.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
+        dedicatedGrain.CancelCalls.Should().Be(1);
+        dedicatedGrain.LastCancelExpectedGeneration.Should().Be(21);
+        inlineScheduler.CancelCalls.Should().Be(0);
     }
 
     private static EventEnvelope CreateEnvelope() => new()
@@ -412,7 +450,7 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
             ct.ThrowIfCancellationRequested();
             TimeoutCalls++;
             _generation++;
-            return Task.FromResult(new RuntimeCallbackLease(ActorId, callbackId, _generation));
+            return Task.FromResult(new RuntimeCallbackLease(ActorId, callbackId, _generation, RuntimeCallbackBackend.Inline));
         }
 
         public Task<RuntimeCallbackLease> ScheduleTimerAsync(
@@ -427,7 +465,7 @@ public sealed class OrleansActorRuntimeAsyncSchedulerDualStrategyTests
             _ = period;
             ct.ThrowIfCancellationRequested();
             _generation++;
-            return Task.FromResult(new RuntimeCallbackLease(ActorId, callbackId, _generation));
+            return Task.FromResult(new RuntimeCallbackLease(ActorId, callbackId, _generation, RuntimeCallbackBackend.Inline));
         }
 
         public Task CancelAsync(

@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 

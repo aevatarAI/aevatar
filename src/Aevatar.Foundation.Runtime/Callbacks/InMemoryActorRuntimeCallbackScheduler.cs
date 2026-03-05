@@ -1,22 +1,24 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Foundation.Runtime.Async;
+namespace Aevatar.Foundation.Runtime.Callbacks;
 
-public sealed class InMemoryActorRuntimeAsyncScheduler : IActorRuntimeAsyncScheduler
+public sealed class InMemoryActorRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
 {
     private readonly IStreamProvider _streams;
     private readonly ConcurrentDictionary<string, ScheduledCallback> _callbacks = new(StringComparer.Ordinal);
+    private readonly ICollection<KeyValuePair<string, ScheduledCallback>> _callbackEntries;
 
-    public InMemoryActorRuntimeAsyncScheduler(IStreamProvider streams)
+    public InMemoryActorRuntimeCallbackScheduler(IStreamProvider streams)
     {
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
+        _callbackEntries = _callbacks;
     }
 
-    public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(RuntimeTimeoutRequest request, CancellationToken ct = default)
+    public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(RuntimeCallbackTimeoutRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateScheduleRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
@@ -29,10 +31,14 @@ public sealed class InMemoryActorRuntimeAsyncScheduler : IActorRuntimeAsyncSched
             (_, existing) => existing.Replace(request.TriggerEnvelope.Clone(), isPeriodic: false, TimeSpan.Zero));
 
         callback.Start(this, request.DueTime);
-        return Task.FromResult(new RuntimeCallbackLease(request.ActorId, request.CallbackId, callback.Generation));
+        return Task.FromResult(new RuntimeCallbackLease(
+            request.ActorId,
+            request.CallbackId,
+            callback.Generation,
+            RuntimeCallbackBackend.InMemory));
     }
 
-    public Task<RuntimeCallbackLease> ScheduleTimerAsync(RuntimeTimerRequest request, CancellationToken ct = default)
+    public Task<RuntimeCallbackLease> ScheduleTimerAsync(RuntimeCallbackTimerRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateScheduleRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
@@ -46,24 +52,31 @@ public sealed class InMemoryActorRuntimeAsyncScheduler : IActorRuntimeAsyncSched
             (_, existing) => existing.Replace(request.TriggerEnvelope.Clone(), isPeriodic: true, request.Period));
 
         callback.Start(this, request.DueTime);
-        return Task.FromResult(new RuntimeCallbackLease(request.ActorId, request.CallbackId, callback.Generation));
+        return Task.FromResult(new RuntimeCallbackLease(
+            request.ActorId,
+            request.CallbackId,
+            callback.Generation,
+            RuntimeCallbackBackend.InMemory));
     }
 
-    public Task CancelAsync(string actorId, string callbackId, long? expectedGeneration = null, CancellationToken ct = default)
+    public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ArgumentNullException.ThrowIfNull(lease);
         ct.ThrowIfCancellationRequested();
+        if (lease.Backend != RuntimeCallbackBackend.InMemory)
+            throw new InvalidOperationException($"In-memory callback scheduler cannot cancel backend '{lease.Backend}'.");
 
-        var key = BuildKey(actorId, callbackId);
+        var key = BuildKey(lease.ActorId, lease.CallbackId);
         if (!_callbacks.TryGetValue(key, out var callback))
             return Task.CompletedTask;
 
-        if (expectedGeneration.HasValue && callback.Generation != expectedGeneration.Value)
+        if (callback.Generation != lease.Generation)
             return Task.CompletedTask;
 
-        if (_callbacks.TryRemove(key, out var removed))
-            removed.Stop();
+        if (!_callbackEntries.Remove(new KeyValuePair<string, ScheduledCallback>(key, callback)))
+            return Task.CompletedTask;
+
+        callback.Stop();
 
         return Task.CompletedTask;
     }
@@ -107,7 +120,15 @@ public sealed class InMemoryActorRuntimeAsyncScheduler : IActorRuntimeAsyncSched
         await _streams.GetStream(callback.ActorId).ProduceAsync(envelope, ct);
 
         if (!callback.IsPeriodic)
-            await CancelAsync(callback.ActorId, callback.CallbackId, callback.Generation, CancellationToken.None);
+        {
+            await CancelAsync(
+                new RuntimeCallbackLease(
+                    callback.ActorId,
+                    callback.CallbackId,
+                    callback.Generation,
+                    RuntimeCallbackBackend.InMemory),
+                CancellationToken.None);
+        }
     }
 
     private sealed class ScheduledCallback
@@ -170,7 +191,7 @@ public sealed class InMemoryActorRuntimeAsyncScheduler : IActorRuntimeAsyncSched
                 Generation + 1);
         }
 
-        public void Start(InMemoryActorRuntimeAsyncScheduler owner, TimeSpan dueTime)
+        public void Start(InMemoryActorRuntimeCallbackScheduler owner, TimeSpan dueTime)
         {
             var cts = new CancellationTokenSource();
             lock (_gate)
@@ -205,7 +226,7 @@ public sealed class InMemoryActorRuntimeAsyncScheduler : IActorRuntimeAsyncSched
         public long IncrementFireIndex() => Interlocked.Increment(ref _fireIndex);
 
         private async Task RunLoopAsync(
-            InMemoryActorRuntimeAsyncScheduler owner,
+            InMemoryActorRuntimeCallbackScheduler owner,
             TimeSpan dueTime,
             CancellationToken ct)
         {

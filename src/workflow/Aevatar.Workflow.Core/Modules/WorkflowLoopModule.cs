@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
@@ -21,7 +21,7 @@ public sealed class WorkflowLoopModule : IEventModule
     private readonly Dictionary<string, Dictionary<string, string>> _variablesByRunId = new(StringComparer.Ordinal);
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
     private readonly Dictionary<string, int> _retryAttempts = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, long> _timeouts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RuntimeCallbackLease> _timeouts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RetryBackoffLease> _retryBackoffs = new(StringComparer.Ordinal);
 
     public string Name => "workflow_loop";
@@ -98,7 +98,7 @@ public sealed class WorkflowLoopModule : IEventModule
                 return;
 
             var stepRunKey = GetStepRunKey(runId, stepId);
-            if (!_timeouts.TryGetValue(stepRunKey, out var expectedGeneration))
+            if (!_timeouts.TryGetValue(stepRunKey, out var expectedLease))
             {
                 ctx.Logger.LogDebug(
                     "workflow_loop: ignore timeout without active lease run={RunId} step={StepId}",
@@ -108,14 +108,14 @@ public sealed class WorkflowLoopModule : IEventModule
             }
 
             if (TryReadGeneration(envelope, out var firedGeneration) &&
-                firedGeneration != expectedGeneration)
+                firedGeneration != expectedLease.Generation)
             {
                 ctx.Logger.LogDebug(
                     "workflow_loop: ignore stale timeout generation run={RunId} step={StepId} fired={FiredGeneration} expected={ExpectedGeneration}",
                     runId,
                     stepId,
                     firedGeneration,
-                    expectedGeneration);
+                    expectedLease.Generation);
                 return;
             }
 
@@ -402,14 +402,14 @@ public sealed class WorkflowLoopModule : IEventModule
             return;
 
         if (TryReadGeneration(envelope, out var firedGeneration) &&
-            firedGeneration != pending.Generation)
+            firedGeneration != pending.Lease.Generation)
         {
             ctx.Logger.LogDebug(
                 "workflow_loop: ignore stale retry backoff run={RunId} step={StepId} fired={FiredGeneration} expected={ExpectedGeneration}",
                 runId,
                 stepId,
                 firedGeneration,
-                pending.Generation);
+                pending.Lease.Generation);
             return;
         }
 
@@ -472,8 +472,7 @@ public sealed class WorkflowLoopModule : IEventModule
             ct: ct);
 
         _retryBackoffs[stepRunKey] = new RetryBackoffLease(
-            callbackId,
-            lease.Generation,
+            lease,
             nextAttempt,
             delayMs);
     }
@@ -629,7 +628,7 @@ public sealed class WorkflowLoopModule : IEventModule
                 TimeoutMs = timeoutMs,
             },
             ct: ct);
-        _timeouts[stepRunKey] = lease.Generation;
+        _timeouts[stepRunKey] = lease;
     }
 
     private async Task CancelTimeoutAsync(
@@ -639,13 +638,10 @@ public sealed class WorkflowLoopModule : IEventModule
         CancellationToken ct)
     {
         var stepRunKey = GetStepRunKey(runId, stepId);
-        if (!_timeouts.Remove(stepRunKey, out var generation))
+        if (!_timeouts.Remove(stepRunKey, out var lease))
             return;
 
-        await ctx.CancelScheduledCallbackAsync(
-            BuildStepTimeoutCallbackId(runId, stepId),
-            generation,
-            ct);
+        await ctx.CancelScheduledCallbackAsync(lease, ct);
     }
 
     private async Task CancelRetryBackoffAsync(
@@ -658,10 +654,7 @@ public sealed class WorkflowLoopModule : IEventModule
         if (!_retryBackoffs.Remove(stepRunKey, out var pending))
             return;
 
-        await ctx.CancelScheduledCallbackAsync(
-            pending.CallbackId,
-            pending.Generation,
-            ct);
+        await ctx.CancelScheduledCallbackAsync(pending.Lease, ct);
     }
 
     private Dictionary<string, string> ResolveVariables(string runId)
@@ -707,7 +700,7 @@ public sealed class WorkflowLoopModule : IEventModule
 
         foreach (var key in _timeouts.Keys.Where(k => k.StartsWith(retryPrefix, StringComparison.Ordinal)).ToList())
         {
-            var generation = _timeouts[key];
+            var lease = _timeouts[key];
             _timeouts.Remove(key);
             var stepId = key.Length > retryPrefix.Length
                 ? key[retryPrefix.Length..]
@@ -715,10 +708,7 @@ public sealed class WorkflowLoopModule : IEventModule
             if (string.IsNullOrWhiteSpace(stepId))
                 continue;
 
-            await ctx.CancelScheduledCallbackAsync(
-                BuildStepTimeoutCallbackId(runId, stepId),
-                generation,
-                ct);
+            await ctx.CancelScheduledCallbackAsync(lease, ct);
         }
 
         foreach (var key in _retryBackoffs.Keys.Where(k => k.StartsWith(retryPrefix, StringComparison.Ordinal)).ToList())
@@ -726,17 +716,13 @@ public sealed class WorkflowLoopModule : IEventModule
             if (!_retryBackoffs.Remove(key, out var pending))
                 continue;
 
-            await ctx.CancelScheduledCallbackAsync(
-                pending.CallbackId,
-                pending.Generation,
-                ct);
+            await ctx.CancelScheduledCallbackAsync(pending.Lease, ct);
         }
 
     }
 
     private sealed record RetryBackoffLease(
-        string CallbackId,
-        long Generation,
+        RuntimeCallbackLease Lease,
         int NextAttempt,
         int DelayMs);
 }

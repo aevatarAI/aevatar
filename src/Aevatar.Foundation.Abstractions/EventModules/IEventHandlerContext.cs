@@ -5,7 +5,7 @@
 
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 
 namespace Aevatar.Foundation.Abstractions.EventModules;
 
@@ -59,7 +59,6 @@ public interface IEventHandlerContext
         CancellationToken ct = default);
 
     Task CancelScheduledCallbackAsync(
-        string callbackId,
-        long? expectedGeneration = null,
+        RuntimeCallbackLease lease,
         CancellationToken ct = default);
 }

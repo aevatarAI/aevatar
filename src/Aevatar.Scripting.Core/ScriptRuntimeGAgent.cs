@@ -2,7 +2,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
@@ -370,7 +370,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         if (string.IsNullOrWhiteSpace(requestId))
             return;
 
-        var scheduler = Services.GetService<IActorRuntimeAsyncScheduler>();
+        var scheduler = Services.GetService<IActorRuntimeCallbackScheduler>();
         if (scheduler == null)
         {
             Logger.LogDebug(
@@ -390,7 +390,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         try
         {
             await scheduler.ScheduleTimeoutAsync(
-                new RuntimeTimeoutRequest
+                new RuntimeCallbackTimeoutRequest
                 {
                     ActorId = Id,
                     CallbackId = BuildDefinitionQueryTimeoutCallbackId(requestId),

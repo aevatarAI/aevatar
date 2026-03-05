@@ -3,9 +3,9 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Async;
+using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Abstractions;
@@ -1020,7 +1020,7 @@ public class WorkflowGAgentCoverageTests
         var serviceCollection = new ServiceCollection()
             .AddSingleton(eventStore)
             .AddSingleton<IStreamProvider, InMemoryStreamProvider>()
-            .AddSingleton<IActorRuntimeAsyncScheduler, InMemoryActorRuntimeAsyncScheduler>()
+            .AddSingleton<IActorRuntimeCallbackScheduler, InMemoryActorRuntimeCallbackScheduler>()
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         if (workflowResolver != null)

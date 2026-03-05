@@ -1,9 +1,9 @@
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Foundation.Runtime.Async;
+namespace Aevatar.Foundation.Runtime.Callbacks;
 
-public static class RuntimeScheduledEnvelopeFactory
+public static class RuntimeCallbackEnvelopeFactory
 {
     public static EventEnvelope CreateSelfEnvelope(string actorId, EventEnvelope triggerEnvelope)
     {

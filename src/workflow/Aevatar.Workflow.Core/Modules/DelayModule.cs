@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
@@ -95,8 +95,7 @@ public sealed class DelayModule : IEventModule
                 ct: ct);
 
             _pending[pendingKey] = new PendingDelay(
-                callbackId,
-                lease.Generation,
+                lease,
                 request.Input ?? string.Empty);
             return;
         }
@@ -115,14 +114,14 @@ public sealed class DelayModule : IEventModule
             return;
 
         if (TryReadGeneration(envelope, out var firedGeneration) &&
-            firedGeneration != pending.Generation)
+            firedGeneration != pending.Lease.Generation)
         {
             ctx.Logger.LogDebug(
                 "Delay {StepId}: ignore stale fired callback generation run={RunId} fired={FiredGeneration} expected={ExpectedGeneration}",
                 stepIdFired,
                 runIdFired,
                 firedGeneration,
-                pending.Generation);
+                pending.Lease.Generation);
             return;
         }
 
@@ -145,8 +144,7 @@ public sealed class DelayModule : IEventModule
             return;
 
         await ctx.CancelScheduledCallbackAsync(
-            pending.CallbackId,
-            pending.Generation,
+            pending.Lease,
             ct);
     }
 
@@ -163,7 +161,6 @@ public sealed class DelayModule : IEventModule
     private readonly record struct DelayPendingKey(string RunId, string StepId);
 
     private sealed record PendingDelay(
-        string CallbackId,
-        long Generation,
+        RuntimeCallbackLease Lease,
         string Input);
 }

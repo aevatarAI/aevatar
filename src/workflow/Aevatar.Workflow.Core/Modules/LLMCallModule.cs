@@ -10,7 +10,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
@@ -106,8 +106,7 @@ public sealed class LLMCallModule : IEventModule
         _pending[chatSessionId] = new PendingLlmCall(
             request,
             stepRunKey,
-            watchdogCallbackId,
-            WatchdogGeneration: 0);
+            WatchdogLease: null);
 
         var targetRole = request.TargetRole;
         var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
@@ -148,7 +147,7 @@ public sealed class LLMCallModule : IEventModule
                     StepId = request.StepId,
                 },
                 ct: ct);
-            _pending[chatSessionId] = _pending[chatSessionId] with { WatchdogGeneration = lease.Generation };
+            _pending[chatSessionId] = _pending[chatSessionId] with { WatchdogLease = lease };
         }
         catch (Exception ex)
         {
@@ -274,13 +273,13 @@ public sealed class LLMCallModule : IEventModule
             return;
 
         if (TryReadGeneration(envelope, out var firedGeneration) &&
-            firedGeneration != pending.WatchdogGeneration)
+            firedGeneration != pending.WatchdogLease?.Generation)
         {
             ctx.Logger.LogDebug(
                 "LLMCallModule: ignore stale watchdog session={SessionId} fired_generation={FiredGeneration} expected_generation={ExpectedGeneration}",
                 evt.SessionId,
                 firedGeneration,
-                pending.WatchdogGeneration);
+                pending.WatchdogLease?.Generation ?? 0);
             return;
         }
 
@@ -354,23 +353,20 @@ public sealed class LLMCallModule : IEventModule
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(pending.WatchdogCallbackId) || pending.WatchdogGeneration <= 0)
+        if (pending.WatchdogLease == null)
             return;
 
         try
         {
-            await ctx.CancelScheduledCallbackAsync(
-                pending.WatchdogCallbackId,
-                pending.WatchdogGeneration,
-                ct);
+            await ctx.CancelScheduledCallbackAsync(pending.WatchdogLease, ct);
         }
         catch (Exception ex)
         {
             ctx.Logger.LogDebug(
                 ex,
                 "LLMCallModule: failed to cancel watchdog callback={CallbackId} generation={Generation}",
-                pending.WatchdogCallbackId,
-                pending.WatchdogGeneration);
+                pending.WatchdogLease.CallbackId,
+                pending.WatchdogLease.Generation);
         }
     }
 
@@ -384,6 +380,5 @@ public sealed class LLMCallModule : IEventModule
     private sealed record PendingLlmCall(
         StepRequestEvent Request,
         string StepRunKey,
-        string WatchdogCallbackId,
-        long WatchdogGeneration);
+        RuntimeCallbackLease? WatchdogLease);
 }

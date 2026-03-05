@@ -12,7 +12,7 @@ using System.Diagnostics;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Hooks;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.Pipeline;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -265,7 +265,7 @@ public abstract class GAgentBase : IAgent
         new(
             this,
             EventPublisher,
-            Services.GetRequiredService<IActorRuntimeAsyncScheduler>(),
+            Services.GetRequiredService<IActorRuntimeCallbackScheduler>(),
             Services,
             Logger,
             envelope);

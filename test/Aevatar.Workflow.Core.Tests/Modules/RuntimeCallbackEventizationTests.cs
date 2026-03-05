@@ -1,6 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
@@ -299,7 +299,7 @@ public class RuntimeCallbackEventizationTests
             var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
             _generations[callbackId] = generation;
             Scheduled.Add(new ScheduledCallback(callbackId, generation, evt));
-            return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation));
+            return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory));
         }
 
         public Task<RuntimeCallbackLease> ScheduleSelfTimerAsync(
@@ -317,16 +317,15 @@ public class RuntimeCallbackEventizationTests
             var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
             _generations[callbackId] = generation;
             Scheduled.Add(new ScheduledCallback(callbackId, generation, evt));
-            return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation));
+            return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory));
         }
 
         public Task CancelScheduledCallbackAsync(
-            string callbackId,
-            long? expectedGeneration = null,
+            RuntimeCallbackLease lease,
             CancellationToken ct = default)
         {
             _ = ct;
-            Canceled.Add(new CanceledCallback(callbackId, expectedGeneration));
+            Canceled.Add(new CanceledCallback(lease));
             return Task.CompletedTask;
         }
     }
@@ -358,6 +357,10 @@ public class RuntimeCallbackEventizationTests
         IMessage Event);
 
     private sealed record CanceledCallback(
-        string CallbackId,
-        long? ExpectedGeneration);
+        RuntimeCallbackLease Lease)
+    {
+        public string CallbackId => Lease.CallbackId;
+
+        public long ExpectedGeneration => Lease.Generation;
+    }
 }

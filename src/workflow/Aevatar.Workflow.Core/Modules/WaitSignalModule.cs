@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
@@ -98,8 +98,7 @@ public sealed class WaitSignalModule : IEventModule
                     runId,
                     request.Input ?? "",
                     signalName,
-                    callbackId,
-                    lease.Generation);
+                    lease);
             }
             else
             {
@@ -108,8 +107,7 @@ public sealed class WaitSignalModule : IEventModule
                     runId,
                     request.Input ?? "",
                     signalName,
-                    CallbackId: string.Empty,
-                    TimeoutGeneration: 0);
+                    TimeoutLease: null);
             }
         }
         else if (payload.Is(WaitSignalTimeoutFiredEvent.Descriptor))
@@ -126,7 +124,7 @@ public sealed class WaitSignalModule : IEventModule
                 return;
 
             if (TryReadGeneration(envelope, out var firedGeneration) &&
-                firedGeneration != pending.TimeoutGeneration)
+                firedGeneration != pending.TimeoutLease?.Generation)
             {
                 ctx.Logger.LogDebug(
                     "WaitSignal: ignore stale timeout run={RunId} step={StepId} signal={Signal} fired_generation={FiredGeneration} expected_generation={ExpectedGeneration}",
@@ -134,7 +132,7 @@ public sealed class WaitSignalModule : IEventModule
                     stepId,
                     signalName,
                     firedGeneration,
-                    pending.TimeoutGeneration);
+                    pending.TimeoutLease?.Generation ?? 0);
                 return;
             }
 
@@ -167,12 +165,9 @@ public sealed class WaitSignalModule : IEventModule
             }
 
             _pending.Remove(pendingKey);
-            if (!string.IsNullOrWhiteSpace(pending.CallbackId) && pending.TimeoutGeneration > 0)
+            if (pending.TimeoutLease != null)
             {
-                await ctx.CancelScheduledCallbackAsync(
-                    pending.CallbackId,
-                    pending.TimeoutGeneration,
-                    CancellationToken.None);
+                await ctx.CancelScheduledCallbackAsync(pending.TimeoutLease, CancellationToken.None);
             }
 
             ctx.Logger.LogInformation(
@@ -252,6 +247,5 @@ public sealed class WaitSignalModule : IEventModule
         string RunId,
         string Input,
         string SignalName,
-        string CallbackId,
-        long TimeoutGeneration);
+        RuntimeCallbackLease? TimeoutLease);
 }

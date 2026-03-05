@@ -1,14 +1,14 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
-using Aevatar.Foundation.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Google.Protobuf;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Async;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 
-public sealed class OrleansActorRuntimeAsyncScheduler : IActorRuntimeAsyncScheduler
+public sealed class OrleansActorRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
 {
     private enum SchedulingMode
     {
@@ -31,7 +31,7 @@ public sealed class OrleansActorRuntimeAsyncScheduler : IActorRuntimeAsyncSchedu
     private readonly int _inlineMaxDueTimeMs;
     private readonly int _reminderThresholdMs;
 
-    public OrleansActorRuntimeAsyncScheduler(
+    public OrleansActorRuntimeCallbackScheduler(
         IGrainFactory grainFactory,
         IRuntimeActorInlineCallbackSchedulerBindingAccessor? inlineSchedulerBindingAccessor = null,
         AevatarOrleansRuntimeOptions? options = null)
@@ -39,21 +39,21 @@ public sealed class OrleansActorRuntimeAsyncScheduler : IActorRuntimeAsyncSchedu
         _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
         _inlineSchedulerBindingAccessor = inlineSchedulerBindingAccessor;
         var runtimeOptions = options ?? new AevatarOrleansRuntimeOptions();
-        _schedulingMode = ParseSchedulingMode(runtimeOptions.AsyncCallbackSchedulingMode);
-        _dedicatedDeliveryMode = ParseDedicatedDeliveryMode(runtimeOptions.AsyncCallbackDedicatedDeliveryMode);
-        _inlineMaxDueTimeMs = runtimeOptions.AsyncCallbackInlineMaxDueTimeMs;
-        _reminderThresholdMs = runtimeOptions.AsyncCallbackReminderThresholdMs;
+        _schedulingMode = ParseSchedulingMode(runtimeOptions.RuntimeCallbackSchedulingMode);
+        _dedicatedDeliveryMode = ParseDedicatedDeliveryMode(runtimeOptions.RuntimeCallbackDedicatedDeliveryMode);
+        _inlineMaxDueTimeMs = runtimeOptions.RuntimeCallbackInlineMaxDueTimeMs;
+        _reminderThresholdMs = runtimeOptions.RuntimeCallbackReminderThresholdMs;
     }
 
     public async Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
-        RuntimeTimeoutRequest request,
+        RuntimeCallbackTimeoutRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
         ct.ThrowIfCancellationRequested();
 
-        var envelope = RuntimeScheduledEnvelopeFactory.CreateSelfEnvelope(request.ActorId, request.TriggerEnvelope);
+        var envelope = RuntimeCallbackEnvelopeFactory.CreateSelfEnvelope(request.ActorId, request.TriggerEnvelope);
         if (TryResolveInlineScheduler(request.ActorId, request.DueTime, out var inlineScheduler))
         {
             return await inlineScheduler.ScheduleTimeoutAsync(
@@ -70,11 +70,15 @@ public sealed class OrleansActorRuntimeAsyncScheduler : IActorRuntimeAsyncSchedu
             request.DueTime,
             period: null);
 
-        return new RuntimeCallbackLease(request.ActorId, request.CallbackId, generation);
+        return new RuntimeCallbackLease(
+            request.ActorId,
+            request.CallbackId,
+            generation,
+            RuntimeCallbackBackend.Dedicated);
     }
 
     public async Task<RuntimeCallbackLease> ScheduleTimerAsync(
-        RuntimeTimerRequest request,
+        RuntimeCallbackTimerRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -82,7 +86,7 @@ public sealed class OrleansActorRuntimeAsyncScheduler : IActorRuntimeAsyncSchedu
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(request.Period, TimeSpan.Zero);
         ct.ThrowIfCancellationRequested();
 
-        var envelope = RuntimeScheduledEnvelopeFactory.CreateSelfEnvelope(request.ActorId, request.TriggerEnvelope);
+        var envelope = RuntimeCallbackEnvelopeFactory.CreateSelfEnvelope(request.ActorId, request.TriggerEnvelope);
         if (TryResolveInlineScheduler(request.ActorId, request.DueTime, out var inlineScheduler))
         {
             return await inlineScheduler.ScheduleTimerAsync(
@@ -100,38 +104,26 @@ public sealed class OrleansActorRuntimeAsyncScheduler : IActorRuntimeAsyncSchedu
             request.DueTime,
             request.Period);
 
-        return new RuntimeCallbackLease(request.ActorId, request.CallbackId, generation);
+        return new RuntimeCallbackLease(
+            request.ActorId,
+            request.CallbackId,
+            generation,
+            RuntimeCallbackBackend.Dedicated);
     }
 
     public Task CancelAsync(
-        string actorId,
-        string callbackId,
-        long? expectedGeneration = null,
+        RuntimeCallbackLease lease,
         CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ArgumentNullException.ThrowIfNull(lease);
         ct.ThrowIfCancellationRequested();
 
-        if (TryResolveInlineSchedulerForCancel(actorId, out var inlineScheduler))
+        return lease.Backend switch
         {
-            if (_schedulingMode == SchedulingMode.ForceDedicated)
-            {
-                var dedicatedGrain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
-                return dedicatedGrain.CancelAsync(callbackId, expectedGeneration ?? 0);
-            }
-
-            return inlineScheduler.CancelAsync(callbackId, expectedGeneration, ct);
-        }
-
-        if (_schedulingMode == SchedulingMode.ForceInline)
-        {
-            throw new InvalidOperationException(
-                $"Orleans async scheduler is configured as ForceInline, but no inline grain turn binding is available for actor '{actorId}'.");
-        }
-
-        var grain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
-        return grain.CancelAsync(callbackId, expectedGeneration ?? 0);
+            RuntimeCallbackBackend.Inline => CancelInlineAsync(lease, ct),
+            RuntimeCallbackBackend.Dedicated => CancelDedicatedCallbackAsync(lease.ActorId, lease.CallbackId, lease.Generation),
+            _ => throw new InvalidOperationException($"Orleans callback scheduler cannot cancel backend '{lease.Backend}'."),
+        };
     }
 
     private bool TryResolveInlineScheduler(
@@ -150,7 +142,7 @@ public sealed class OrleansActorRuntimeAsyncScheduler : IActorRuntimeAsyncSchedu
             if (_schedulingMode == SchedulingMode.ForceInline)
             {
                 throw new InvalidOperationException(
-                    $"Orleans async scheduler is configured as ForceInline, but no inline grain turn binding is available for actor '{actorId}'.");
+                    $"Orleans runtime callback scheduler is configured as ForceInline, but no inline grain turn binding is available for actor '{actorId}'.");
             }
 
             return false;
@@ -165,17 +157,15 @@ public sealed class OrleansActorRuntimeAsyncScheduler : IActorRuntimeAsyncSchedu
         return true;
     }
 
-    private bool TryResolveInlineSchedulerForCancel(
-        string actorId,
-        out IRuntimeActorInlineCallbackScheduler inlineScheduler)
+    private Task CancelInlineAsync(RuntimeCallbackLease lease, CancellationToken ct)
     {
-        if (_schedulingMode == SchedulingMode.ForceDedicated)
+        if (!TryGetInlineScheduler(lease.ActorId, out var inlineScheduler))
         {
-            inlineScheduler = null!;
-            return false;
+            throw new InvalidOperationException(
+                $"Orleans callback scheduler cannot cancel inline callback '{lease.CallbackId}' for actor '{lease.ActorId}' outside the owning grain turn.");
         }
 
-        return TryGetInlineScheduler(actorId, out inlineScheduler);
+        return inlineScheduler.CancelAsync(lease.CallbackId, lease.Generation, ct);
     }
 
     private bool TryGetInlineScheduler(
@@ -218,6 +208,15 @@ public sealed class OrleansActorRuntimeAsyncScheduler : IActorRuntimeAsyncSchedu
             ResolveDedicatedDeliveryMode(dueTime, period));
     }
 
+    private Task CancelDedicatedCallbackAsync(
+        string actorId,
+        string callbackId,
+        long expectedGeneration = 0)
+    {
+        var grain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+        return grain.CancelAsync(callbackId, expectedGeneration);
+    }
+
     private RuntimeCallbackDeliveryMode ResolveDedicatedDeliveryMode(
         TimeSpan dueTime,
         TimeSpan? period)
@@ -248,18 +247,18 @@ public sealed class OrleansActorRuntimeAsyncScheduler : IActorRuntimeAsyncSchedu
 
     private static SchedulingMode ParseSchedulingMode(string mode)
     {
-        if (string.Equals(mode, AevatarOrleansRuntimeOptions.AsyncCallbackSchedulingModeForceInline, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(mode, AevatarOrleansRuntimeOptions.RuntimeCallbackSchedulingModeForceInline, StringComparison.OrdinalIgnoreCase))
             return SchedulingMode.ForceInline;
-        if (string.Equals(mode, AevatarOrleansRuntimeOptions.AsyncCallbackSchedulingModeForceDedicated, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(mode, AevatarOrleansRuntimeOptions.RuntimeCallbackSchedulingModeForceDedicated, StringComparison.OrdinalIgnoreCase))
             return SchedulingMode.ForceDedicated;
         return SchedulingMode.Auto;
     }
 
     private static DedicatedDeliveryMode ParseDedicatedDeliveryMode(string mode)
     {
-        if (string.Equals(mode, AevatarOrleansRuntimeOptions.AsyncCallbackDedicatedDeliveryModeTimer, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(mode, AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeTimer, StringComparison.OrdinalIgnoreCase))
             return DedicatedDeliveryMode.Timer;
-        if (string.Equals(mode, AevatarOrleansRuntimeOptions.AsyncCallbackDedicatedDeliveryModeReminder, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(mode, AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeReminder, StringComparison.OrdinalIgnoreCase))
             return DedicatedDeliveryMode.Reminder;
         return DedicatedDeliveryMode.Auto;
     }

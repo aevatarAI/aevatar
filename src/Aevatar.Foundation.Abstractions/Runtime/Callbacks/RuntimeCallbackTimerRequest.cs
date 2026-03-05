@@ -1,6 +1,6 @@
-namespace Aevatar.Foundation.Abstractions.Runtime.Async;
+namespace Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 
-public sealed class RuntimeTimeoutRequest
+public sealed class RuntimeCallbackTimerRequest
 {
     public required string ActorId { get; init; }
 
@@ -9,4 +9,6 @@ public sealed class RuntimeTimeoutRequest
     public required EventEnvelope TriggerEnvelope { get; init; }
 
     public required TimeSpan DueTime { get; init; }
+
+    public required TimeSpan Period { get; init; }
 }

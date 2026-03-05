@@ -1,4 +1,4 @@
-namespace Aevatar.Foundation.Abstractions.Runtime.Async;
+namespace Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 
 public static class RuntimeCallbackMetadataKeys
 {

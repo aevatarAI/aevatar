@@ -1,7 +1,7 @@
 using System.Globalization;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -66,11 +66,11 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext
     }
 
     public Task CancelScheduledCallbackAsync(
-        string callbackId,
-        long? expectedGeneration = null,
+        RuntimeCallbackLease lease,
         CancellationToken ct = default)
     {
-        Canceled.Add(new CanceledCallback(callbackId, expectedGeneration));
+        _ = ct;
+        Canceled.Add(new CanceledCallback(lease));
         return Task.CompletedTask;
     }
 
@@ -117,7 +117,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext
             period,
             copiedMetadata));
 
-        return new RuntimeCallbackLease(AgentId, callbackId, generation);
+        return new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory);
     }
 }
 
@@ -130,8 +130,12 @@ internal sealed record ScheduledCallback(
     IReadOnlyDictionary<string, string> Metadata);
 
 internal sealed record CanceledCallback(
-    string CallbackId,
-    long? ExpectedGeneration);
+    RuntimeCallbackLease Lease)
+{
+    public string CallbackId => Lease.CallbackId;
+
+    public long ExpectedGeneration => Lease.Generation;
+}
 
 internal sealed class TestAgent(string id) : IAgent
 {

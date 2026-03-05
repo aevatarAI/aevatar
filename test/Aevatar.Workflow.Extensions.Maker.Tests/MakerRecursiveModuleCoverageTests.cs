@@ -1,6 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Extensions.Maker.Modules;
@@ -255,12 +255,10 @@ public class MakerRecursiveModuleCoverageTests
         }
 
         public Task CancelScheduledCallbackAsync(
-            string callbackId,
-            long? expectedGeneration = null,
+            RuntimeCallbackLease lease,
             CancellationToken ct = default)
         {
-            _ = callbackId;
-            _ = expectedGeneration;
+            _ = lease;
             _ = ct;
             throw new NotSupportedException("This test context does not support scheduling.");
         }

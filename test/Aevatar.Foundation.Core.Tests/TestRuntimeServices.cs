@@ -1,6 +1,6 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
-using Aevatar.Foundation.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Streaming;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,7 +12,7 @@ internal static class TestRuntimeServices
     public static IServiceCollection AddRuntimeScheduler(this IServiceCollection services)
     {
         services.AddSingleton<IStreamProvider, InMemoryStreamProvider>();
-        services.AddSingleton<IActorRuntimeAsyncScheduler, InMemoryActorRuntimeAsyncScheduler>();
+        services.AddSingleton<IActorRuntimeCallbackScheduler, InMemoryActorRuntimeCallbackScheduler>();
         return services;
     }
 

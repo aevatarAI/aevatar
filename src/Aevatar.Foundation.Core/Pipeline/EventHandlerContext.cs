@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Abstractions.Runtime.Async;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -17,21 +17,21 @@ namespace Aevatar.Foundation.Core.Pipeline;
 internal sealed class EventHandlerContext : IEventHandlerContext
 {
     private readonly IEventPublisher _publisher;
-    private readonly IActorRuntimeAsyncScheduler _asyncScheduler;
+    private readonly IActorRuntimeCallbackScheduler _callbackScheduler;
     public EventEnvelope InboundEnvelope { get; }
 
     /// <summary>Builds context with agent, publisher, services, and logger.</summary>
     public EventHandlerContext(
         IAgent agent,
         IEventPublisher publisher,
-        IActorRuntimeAsyncScheduler asyncScheduler,
+        IActorRuntimeCallbackScheduler callbackScheduler,
         IServiceProvider services,
         ILogger logger,
         EventEnvelope inboundEnvelope)
     {
         Agent = agent;
         _publisher = publisher;
-        _asyncScheduler = asyncScheduler ?? throw new ArgumentNullException(nameof(asyncScheduler));
+        _callbackScheduler = callbackScheduler ?? throw new ArgumentNullException(nameof(callbackScheduler));
         Services = services;
         Logger = logger;
         InboundEnvelope = inboundEnvelope;
@@ -66,8 +66,8 @@ internal sealed class EventHandlerContext : IEventHandlerContext
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default)
     {
-        return _asyncScheduler.ScheduleTimeoutAsync(
-            new RuntimeTimeoutRequest
+        return _callbackScheduler.ScheduleTimeoutAsync(
+            new RuntimeCallbackTimeoutRequest
             {
                 ActorId = AgentId,
                 CallbackId = callbackId,
@@ -85,8 +85,8 @@ internal sealed class EventHandlerContext : IEventHandlerContext
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default)
     {
-        return _asyncScheduler.ScheduleTimerAsync(
-            new RuntimeTimerRequest
+        return _callbackScheduler.ScheduleTimerAsync(
+            new RuntimeCallbackTimerRequest
             {
                 ActorId = AgentId,
                 CallbackId = callbackId,
@@ -98,11 +98,11 @@ internal sealed class EventHandlerContext : IEventHandlerContext
     }
 
     public Task CancelScheduledCallbackAsync(
-        string callbackId,
-        long? expectedGeneration = null,
+        RuntimeCallbackLease lease,
         CancellationToken ct = default)
     {
-        return _asyncScheduler.CancelAsync(AgentId, callbackId, expectedGeneration, ct);
+        ArgumentNullException.ThrowIfNull(lease);
+        return _callbackScheduler.CancelAsync(lease, ct);
     }
 
     private EventEnvelope BuildSelfEnvelope(
