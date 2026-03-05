@@ -197,6 +197,14 @@
     51%, 100% { opacity: 0; }
   }
 
+  .llm-cursor::after {
+    content: '▊';
+    color: var(--accent-gold);
+    animation: cursor-blink 1s step-end infinite;
+    font-size: 11px;
+    margin-left: 1px;
+  }
+
   /* === Thinking Spinner (Claude-style) === */
   .thinking-indicator {
     display: flex;

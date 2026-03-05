@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -26,12 +28,55 @@ public sealed class ResearchLoopService(
     public bool IsRunning { get; private set; }
     public int CurrentRound { get; private set; }
 
+    // ── Subscriber broadcasting ──
+    private readonly ConcurrentDictionary<Guid, Channel<ResearchSseMessage>> _subscribers = new();
+
+    /// <summary>
+    /// Subscribe to the research event stream. Returns a channel reader
+    /// that receives all events broadcast by the running loop.
+    /// Call <see cref="Unsubscribe"/> when done.
+    /// </summary>
+    public (Guid Id, ChannelReader<ResearchSseMessage> Reader) Subscribe()
+    {
+        var id = Guid.NewGuid();
+        var channel = Channel.CreateBounded<ResearchSseMessage>(new BoundedChannelOptions(512)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
+        _subscribers[id] = channel;
+        logger.LogDebug("SSE subscriber {Id} registered ({Count} total)", id, _subscribers.Count);
+        return (id, channel.Reader);
+    }
+
+    /// <summary>
+    /// Remove a subscriber. Completes its channel so the reader stops.
+    /// </summary>
+    public void Unsubscribe(Guid id)
+    {
+        if (_subscribers.TryRemove(id, out var channel))
+        {
+            channel.Writer.TryComplete();
+            logger.LogDebug("SSE subscriber {Id} removed ({Count} remaining)", id, _subscribers.Count);
+        }
+    }
+
+    private void Broadcast(ResearchSseEventType type, object payload)
+    {
+        var msg = new ResearchSseMessage(type, payload);
+        foreach (var (id, channel) in _subscribers)
+        {
+            if (!channel.Writer.TryWrite(msg))
+            {
+                logger.LogDebug("Subscriber {Id} channel full, message dropped", id);
+            }
+        }
+    }
+
     /// <summary>
     /// Starts the research loop. Runs indefinitely until Stop() is called.
+    /// Events are broadcast to all subscribers.
     /// </summary>
-    public async Task RunAsync(
-        Func<ResearchSseEventType, object, CancellationToken, ValueTask> emitSseAsync,
-        CancellationToken ct)
+    public async Task RunAsync(CancellationToken ct)
     {
         lock (_lock)
         {
@@ -49,30 +94,27 @@ public sealed class ResearchLoopService(
         try
         {
             logger.LogInformation("Research loop started");
-            await emitSseAsync(ResearchSseEventType.LOOP_STARTED,
-                ResearchSsePayloads.LoopStarted(0), loopCt);
+            Broadcast(ResearchSseEventType.LOOP_STARTED, ResearchSsePayloads.LoopStarted(0));
 
             while (!loopCt.IsCancellationRequested)
             {
                 var round = ++CurrentRound;
 
                 logger.LogInformation("Research loop round {Round} starting", round);
-                await emitSseAsync(ResearchSseEventType.ROUND_START,
-                    ResearchSsePayloads.RoundStart(round), loopCt);
+                Broadcast(ResearchSseEventType.ROUND_START, ResearchSsePayloads.RoundStart(round));
 
                 // Step 1: Read blue graph
                 var snapshot = await readService.GetBlueSnapshotAsync(loopCt);
                 logger.LogInformation("Round {Round}: read {NodeCount} blue nodes, {EdgeCount} blue edges",
                     round, snapshot.Nodes.Count, snapshot.Edges.Count);
-                await emitSseAsync(ResearchSseEventType.GRAPH_READ,
-                    ResearchSsePayloads.GraphRead(round, snapshot.Nodes.Count), loopCt);
+                Broadcast(ResearchSseEventType.GRAPH_READ,
+                    ResearchSsePayloads.GraphRead(round, snapshot.Nodes.Count));
 
                 // Step 2: Build prompt with abstracts
                 var prompt = BuildResearchPrompt(snapshot, opts.NodesPerRound);
 
                 // Step 3: Call LLM with retry
-                await emitSseAsync(ResearchSseEventType.LLM_CALL_START,
-                    ResearchSsePayloads.LlmCallStart(round), loopCt);
+                Broadcast(ResearchSseEventType.LLM_CALL_START, ResearchSsePayloads.LlmCallStart(round));
 
                 NodePurgeResult? result = null;
                 for (var attempt = 1; attempt <= opts.LlmMaxRetries; attempt++)
@@ -80,12 +122,12 @@ public sealed class ResearchLoopService(
                     logger.LogInformation("Round {Round}: LLM attempt {Attempt}/{Max}",
                         round, attempt, opts.LlmMaxRetries);
 
-                    var llmOutput = await ExecuteWorkflowAsync(ResearcherWorkflow, prompt, loopCt);
+                    var llmOutput = await ExecuteWorkflowAsync(ResearcherWorkflow, prompt, round, loopCt);
                     if (llmOutput is null)
                     {
                         logger.LogWarning("Round {Round}: LLM returned no output on attempt {Attempt}", round, attempt);
-                        await emitSseAsync(ResearchSseEventType.VALIDATION_FAILED,
-                            ResearchSsePayloads.ValidationFailed(round, attempt, ["LLM returned no output"]), loopCt);
+                        Broadcast(ResearchSseEventType.VALIDATION_FAILED,
+                            ResearchSsePayloads.ValidationFailed(round, attempt, ["LLM returned no output"]));
                         continue;
                     }
 
@@ -98,16 +140,16 @@ public sealed class ResearchLoopService(
                     catch (JsonException ex)
                     {
                         logger.LogWarning(ex, "Round {Round}: JSON parse failed on attempt {Attempt}", round, attempt);
-                        await emitSseAsync(ResearchSseEventType.VALIDATION_FAILED,
-                            ResearchSsePayloads.ValidationFailed(round, attempt, [$"JSON parse error: {ex.Message}"]), loopCt);
+                        Broadcast(ResearchSseEventType.VALIDATION_FAILED,
+                            ResearchSsePayloads.ValidationFailed(round, attempt, [$"JSON parse error: {ex.Message}"]));
                         continue;
                     }
 
                     if (parsed is null || parsed.BlueNodes.Count == 0)
                     {
                         logger.LogWarning("Round {Round}: empty result on attempt {Attempt}", round, attempt);
-                        await emitSseAsync(ResearchSseEventType.VALIDATION_FAILED,
-                            ResearchSsePayloads.ValidationFailed(round, attempt, ["Empty blue_nodes"]), loopCt);
+                        Broadcast(ResearchSseEventType.VALIDATION_FAILED,
+                            ResearchSsePayloads.ValidationFailed(round, attempt, ["Empty blue_nodes"]));
                         continue;
                     }
 
@@ -117,8 +159,8 @@ public sealed class ResearchLoopService(
                     {
                         logger.LogWarning("Round {Round}: validation failed on attempt {Attempt}: {Errors}",
                             round, attempt, string.Join("; ", errors));
-                        await emitSseAsync(ResearchSseEventType.VALIDATION_FAILED,
-                            ResearchSsePayloads.ValidationFailed(round, attempt, errors), loopCt);
+                        Broadcast(ResearchSseEventType.VALIDATION_FAILED,
+                            ResearchSsePayloads.ValidationFailed(round, attempt, errors));
                         continue;
                     }
 
@@ -129,13 +171,13 @@ public sealed class ResearchLoopService(
                 if (result is null)
                 {
                     logger.LogWarning("Round {Round}: all LLM attempts exhausted, skipping round", round);
-                    await emitSseAsync(ResearchSseEventType.ROUND_DONE,
-                        ResearchSsePayloads.RoundDone(round, snapshot.Nodes.Count), loopCt);
+                    Broadcast(ResearchSseEventType.ROUND_DONE,
+                        ResearchSsePayloads.RoundDone(round, snapshot.Nodes.Count));
                     continue;
                 }
 
-                await emitSseAsync(ResearchSseEventType.LLM_CALL_DONE,
-                    ResearchSsePayloads.LlmCallDone(round, result.BlueNodes.Count, result.BlueEdges.Count), loopCt);
+                Broadcast(ResearchSseEventType.LLM_CALL_DONE,
+                    ResearchSsePayloads.LlmCallDone(round, result.BlueNodes.Count, result.BlueEdges.Count));
 
                 // Step 4: Write blue nodes to graph
                 var graphId = await graphIdProvider.WaitWriteAsync(loopCt);
@@ -185,44 +227,40 @@ public sealed class ResearchLoopService(
 
                 logger.LogInformation("Round {Round}: wrote {Nodes} nodes, {Edges} edges",
                     round, blueUuids.Count, edgesWritten);
-                await emitSseAsync(ResearchSseEventType.GRAPH_WRITE_DONE,
-                    ResearchSsePayloads.GraphWriteDone(round, blueUuids.Count, edgesWritten), loopCt);
+                Broadcast(ResearchSseEventType.GRAPH_WRITE_DONE,
+                    ResearchSsePayloads.GraphWriteDone(round, blueUuids.Count, edgesWritten));
 
                 var totalBlueNodes = snapshot.Nodes.Count + blueUuids.Count;
-                await emitSseAsync(ResearchSseEventType.ROUND_DONE,
-                    ResearchSsePayloads.RoundDone(round, totalBlueNodes), loopCt);
+                Broadcast(ResearchSseEventType.ROUND_DONE,
+                    ResearchSsePayloads.RoundDone(round, totalBlueNodes));
 
                 // Brief pause between rounds to allow GC recovery and avoid tight-looping
                 await Task.Delay(TimeSpan.FromSeconds(2), loopCt);
             }
 
             logger.LogInformation("Research loop stopped after {Rounds} rounds (cancellation requested)", CurrentRound);
-            await emitSseAsync(ResearchSseEventType.LOOP_STOPPED,
-                ResearchSsePayloads.LoopStopped(CurrentRound, "Stop requested"), CancellationToken.None);
+            Broadcast(ResearchSseEventType.LOOP_STOPPED,
+                ResearchSsePayloads.LoopStopped(CurrentRound, "Stop requested"));
         }
         catch (OperationCanceledException) when (loopCt.IsCancellationRequested)
         {
             logger.LogInformation("Research loop cancelled after {Rounds} rounds", CurrentRound);
-            try
-            {
-                await emitSseAsync(ResearchSseEventType.LOOP_STOPPED,
-                    ResearchSsePayloads.LoopStopped(CurrentRound, "Stop requested"), CancellationToken.None);
-            }
-            catch { /* SSE write may fail if client disconnected */ }
+            Broadcast(ResearchSseEventType.LOOP_STOPPED,
+                ResearchSsePayloads.LoopStopped(CurrentRound, "Stop requested"));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Research loop failed at round {Round}", CurrentRound);
-            try
-            {
-                await emitSseAsync(ResearchSseEventType.LOOP_ERROR,
-                    ResearchSsePayloads.LoopError(CurrentRound, ex.Message), CancellationToken.None);
-            }
-            catch { /* SSE write may fail */ }
+            Broadcast(ResearchSseEventType.LOOP_ERROR,
+                ResearchSsePayloads.LoopError(CurrentRound, ex.Message));
             throw;
         }
         finally
         {
+            // Complete all subscriber channels so readers finish
+            foreach (var (_, channel) in _subscribers)
+                channel.Writer.TryComplete();
+
             lock (_lock)
             {
                 IsRunning = false;
@@ -271,19 +309,28 @@ public sealed class ResearchLoopService(
         return sb.ToString();
     }
 
-    private async Task<string?> ExecuteWorkflowAsync(string workflowName, string prompt, CancellationToken ct)
+    private async Task<string?> ExecuteWorkflowAsync(
+        string workflowName,
+        string prompt,
+        int round,
+        CancellationToken ct)
     {
         string? lastMessage = null;
 
         await workflowRunService.ExecuteAsync(
             new WorkflowChatRunRequest(prompt, workflowName, null),
-            (frame, token) =>
+            async (frame, token) =>
             {
                 if (frame.Type == "TEXT_MESSAGE_CONTENT" && frame.Delta is not null)
+                {
                     lastMessage = (lastMessage ?? "") + frame.Delta;
+                    Broadcast(ResearchSseEventType.LLM_TOKEN,
+                        ResearchSsePayloads.LlmToken(round, frame.Delta));
+                }
                 else if (frame.Type == "RUN_FINISHED" && frame.Result is JsonElement je)
+                {
                     lastMessage = je.GetRawText();
-                return ValueTask.CompletedTask;
+                }
             },
             ct: ct);
 

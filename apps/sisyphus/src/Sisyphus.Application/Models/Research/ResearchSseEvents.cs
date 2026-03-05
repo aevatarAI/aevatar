@@ -1,4 +1,8 @@
+using System.Threading.Channels;
+
 namespace Sisyphus.Application.Models.Research;
+
+public record ResearchSseMessage(ResearchSseEventType Type, object Payload);
 
 public enum ResearchSseEventType
 {
@@ -6,6 +10,7 @@ public enum ResearchSseEventType
     ROUND_START,
     GRAPH_READ,
     LLM_CALL_START,
+    LLM_TOKEN,
     LLM_CALL_DONE,
     VALIDATION_FAILED,
     GRAPH_WRITE_DONE,
@@ -27,6 +32,9 @@ public static class ResearchSsePayloads
 
     public static object LlmCallStart(int round) =>
         new { round };
+
+    public static object LlmToken(int round, string delta) =>
+        new { round, delta };
 
     public static object LlmCallDone(int round, int newNodes, int newEdges) =>
         new { round, new_nodes = newNodes, new_edges = newEdges };

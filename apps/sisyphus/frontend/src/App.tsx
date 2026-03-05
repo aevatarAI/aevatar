@@ -1,17 +1,16 @@
 import { useState, useCallback } from 'react'
-import { Activity, FileDown } from 'lucide-react'
+import { Activity, FileDown, PanelRightOpen, PanelRightClose, Play, Square } from 'lucide-react'
 import { useResearchStream } from './hooks/use-research-stream'
 import { exportPaper } from './api'
 import ResearchStream from './components/ResearchStream'
-import InputBar from './components/InputBar'
 import GraphView from './components/GraphView'
 import aevatarLogo from './assets/aevatar_ai_logo.svg'
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'research' | 'graph'>('research')
+  const [panelOpen, setPanelOpen] = useState(true)
   const [exporting, setExporting] = useState(false)
 
-  const { rounds, runStatus, currentRound, totalBlueNodes, error, startRun, stopRun } =
+  const { rounds, runStatus, currentRound, totalBlueNodes, error, llmStreamText, startRun, stopRun } =
     useResearchStream()
 
   const handleExportPdf = useCallback(async () => {
@@ -30,6 +29,8 @@ export default function App() {
       setExporting(false)
     }
   }, [])
+
+  const isRunning = runStatus === 'running'
 
   const statusColor = {
     idle: 'var(--text-dimmed)',
@@ -75,11 +76,32 @@ export default function App() {
           {/* PDF export */}
           <button
             onClick={handleExportPdf}
-            disabled={exporting || runStatus === 'running'}
+            disabled={exporting || isRunning}
             className="btn-secondary text-xs gap-1.5 py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <FileDown size={14} />
             {exporting ? 'Exporting...' : 'Export PDF'}
+          </button>
+          {/* Start / Stop */}
+          {isRunning ? (
+            <button onClick={stopRun} className="btn-warning text-xs gap-1.5 py-1.5 px-3">
+              <Square size={14} />
+              Stop
+            </button>
+          ) : (
+            <button onClick={startRun} className="btn-primary text-xs gap-1.5 py-1.5 px-3">
+              <Play size={14} />
+              Start
+            </button>
+          )}
+          {/* Toggle research panel */}
+          <button
+            onClick={() => setPanelOpen(!panelOpen)}
+            className="icon-btn"
+            title={panelOpen ? 'Hide research panel' : 'Show research panel'}
+            style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)' }}
+          >
+            {panelOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
           </button>
           {/* Status badge */}
           <Activity size={14} style={{ color: statusColor }} />
@@ -93,55 +115,35 @@ export default function App() {
       </header>
       <div className="divider-h" />
 
-      {/* Main content */}
-      <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
-        {/* Tab bar */}
-        <div
-          className="flex shrink-0"
-          style={{ borderBottom: '1px solid var(--border-subtle)' }}
-        >
-          {(['research', 'graph'] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider transition-colors relative"
+      {/* Main content: Graph + collapsible Research panel */}
+      <main className="flex-1 flex min-h-0 min-w-0 overflow-hidden">
+        {/* Graph (fills remaining space) */}
+        <GraphView runStatus={runStatus} />
+
+        {/* Research side panel */}
+        {panelOpen && (
+          <>
+            <div
+              className="w-px shrink-0"
+              style={{ background: 'var(--border-default)' }}
+            />
+            <div
+              className="shrink-0 flex flex-col overflow-hidden"
               style={{
-                color:
-                  activeTab === tab
-                    ? 'var(--text-primary)'
-                    : 'var(--text-dimmed)',
+                width: 380,
+                background: 'var(--bg-surface)',
               }}
             >
-              {tab}
-              {activeTab === tab && (
-                <div
-                  className="absolute bottom-0 left-0 right-0 h-[2px]"
-                  style={{ background: 'var(--text-primary)' }}
-                />
-              )}
-            </button>
-          ))}
-        </div>
-
-        {/* Tab content */}
-        {activeTab === 'research' ? (
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <ResearchStream
-              rounds={rounds}
-              runStatus={runStatus}
-              currentRound={currentRound}
-              totalBlueNodes={totalBlueNodes}
-              error={error}
-            />
-            <div className="divider-h" />
-            <InputBar
-              runStatus={runStatus}
-              onStart={startRun}
-              onStop={stopRun}
-            />
-          </div>
-        ) : (
-          <GraphView runStatus={runStatus} />
+              <ResearchStream
+                rounds={rounds}
+                runStatus={runStatus}
+                currentRound={currentRound}
+                totalBlueNodes={totalBlueNodes}
+                error={error}
+                llmStreamText={llmStreamText}
+              />
+            </div>
+          </>
         )}
       </main>
     </div>

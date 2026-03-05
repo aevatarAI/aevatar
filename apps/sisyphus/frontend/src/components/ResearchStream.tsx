@@ -18,6 +18,7 @@ interface ResearchStreamProps {
   currentRound: number
   totalBlueNodes: number
   error: string | null
+  llmStreamText: string
 }
 
 const EVENT_ICONS: Record<string, typeof BookOpen> = {
@@ -74,7 +75,58 @@ function formatTime(ts: number): string {
   return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-function RoundCard({ round, isCurrent }: { round: RoundState; isCurrent: boolean }) {
+/** Check if the round is currently waiting for LLM output (between LLM_CALL_START and LLM_CALL_DONE) */
+function isLlmStreaming(round: RoundState): boolean {
+  const events = round.events
+  for (let i = events.length - 1; i >= 0; i--) {
+    const t = events[i].type
+    if (t === 'LLM_CALL_DONE') return false
+    if (t === 'LLM_CALL_START') return true
+  }
+  return false
+}
+
+function LlmStreamPanel({ text }: { text: string }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight
+    }
+  }, [text])
+
+  if (!text) return null
+
+  return (
+    <div
+      ref={containerRef}
+      className="mx-2 mt-1 px-3 py-2 rounded overflow-auto"
+      style={{
+        background: 'var(--bg-base)',
+        border: '1px solid var(--border-subtle)',
+        maxHeight: 200,
+      }}
+    >
+      <pre
+        className="text-[11px] font-mono whitespace-pre-wrap break-words leading-relaxed"
+        style={{ color: 'var(--text-secondary)' }}
+      >
+        {text}
+        <span className="llm-cursor" />
+      </pre>
+    </div>
+  )
+}
+
+function RoundCard({
+  round,
+  isCurrent,
+  llmStreamText,
+}: {
+  round: RoundState
+  isCurrent: boolean
+  llmStreamText: string
+}) {
   const [collapsed, setCollapsed] = useState(false)
 
   // Auto-collapse completed rounds
@@ -102,6 +154,8 @@ function RoundCard({ round, isCurrent }: { round: RoundState; isCurrent: boolean
   const displayEvents = round.events.filter(
     (e) => e.type !== 'ROUND_START' && e.type !== 'ROUND_DONE',
   )
+
+  const showStream = isCurrent && isLlmStreaming(round) && llmStreamText.length > 0
 
   return (
     <div className="animate-fade-in">
@@ -154,7 +208,8 @@ function RoundCard({ round, isCurrent }: { round: RoundState; isCurrent: boolean
               </div>
             )
           })}
-          {round.status === 'running' && displayEvents.length > 0 && (
+          {showStream && <LlmStreamPanel text={llmStreamText} />}
+          {round.status === 'running' && !showStream && displayEvents.length > 0 && (
             <div className="flex items-center gap-2 px-2 py-1">
               <div className="thinking-dots" style={{ '--dot-color': 'var(--accent-gold)' } as React.CSSProperties}>
                 <span />
@@ -175,6 +230,7 @@ export default function ResearchStream({
   currentRound,
   totalBlueNodes,
   error,
+  llmStreamText,
 }: ResearchStreamProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -184,16 +240,16 @@ export default function ResearchStream({
 
   if (runStatus === 'idle') {
     return (
-      <div className="h-full flex items-center justify-center">
-        <div className="text-center space-y-3">
-          <div
-            className="font-display text-lg font-semibold"
-            style={{ color: 'var(--text-dimmed)' }}
-          >
-            awaiting start
-          </div>
-          <p className="text-[13px]" style={{ color: 'var(--text-dimmed)' }}>
-            Start the research loop to grow the knowledge graph
+      <div className="h-full flex flex-col min-w-0 overflow-hidden">
+        <div className="flex items-center px-4 py-3">
+          <h2 className="text-[13px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+            Research Loop
+          </h2>
+        </div>
+        <div className="divider-h" />
+        <div className="flex-1 flex items-center justify-center">
+          <p className="text-[12px] px-6 text-center" style={{ color: 'var(--text-dimmed)' }}>
+            Click Start to begin growing the knowledge graph
           </p>
         </div>
       </div>
@@ -229,6 +285,7 @@ export default function ResearchStream({
             key={round.round}
             round={round}
             isCurrent={round.round === currentRound && runStatus === 'running'}
+            llmStreamText={llmStreamText}
           />
         ))}
 
