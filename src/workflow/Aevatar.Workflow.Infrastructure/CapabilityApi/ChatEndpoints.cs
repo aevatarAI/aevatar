@@ -87,6 +87,7 @@ public static class WorkflowCapabilityEndpoints
                 (frame, token) => writer.WriteAsync(frame, token),
                 onStartedAsync: async (started, token) =>
                 {
+                    CapabilityTraceContext.ApplyCorrelationHeader(http.Response, started.CommandId);
                     await writer.StartAsync(token);
                     await writer.WriteAsync(BuildRunContextFrame(started), token);
                 },
@@ -166,7 +167,7 @@ public static class WorkflowCapabilityEndpoints
                     startSignal.TrySetResult(started);
                     return ValueTask.CompletedTask;
                 },
-                CancellationToken.None);
+                ct);
         }
         catch (Exception ex)
         {
@@ -195,11 +196,7 @@ public static class WorkflowCapabilityEndpoints
 
             return Results.Accepted(
                 $"/api/actors/{started.ActorId}",
-                new
-                {
-                    commandId = started.CommandId,
-                    actorId = started.ActorId,
-                });
+                CapabilityTraceContext.CreateAcceptedPayload(started));
         }
 
         CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> result;
@@ -231,11 +228,7 @@ public static class WorkflowCapabilityEndpoints
         {
             return Results.Accepted(
                 $"/api/actors/{result.Started.ActorId}",
-                new
-                {
-                    commandId = result.Started.CommandId,
-                    actorId = result.Started.ActorId,
-                });
+                CapabilityTraceContext.CreateAcceptedPayload(result.Started));
         }
 
         return Results.StatusCode(StatusCodes.Status500InternalServerError);
@@ -453,9 +446,14 @@ public static class WorkflowCapabilityEndpoints
 
             if (!ChatWebSocketCommandParser.TryParse(incomingFrame, out var command, out var parseError))
             {
+                var parseContext = CapabilityTraceContext.CreateMessageContext(fallbackCorrelationId: parseError.RequestId ?? string.Empty);
                 await ChatWebSocketProtocol.SendAsync(
                     socket,
-                    ChatWebSocketEnvelopeFactory.CreateCommandError(parseError.RequestId, parseError.Code, parseError.Message),
+                    ChatWebSocketEnvelopeFactory.CreateCommandError(
+                        parseError.RequestId,
+                        parseError.Code,
+                        parseError.Message,
+                        parseContext.CorrelationId),
                     ct,
                     parseError.ResponseMessageType);
                 return;
@@ -472,12 +470,14 @@ public static class WorkflowCapabilityEndpoints
             logger?.LogWarning(ex, "Failed to execute websocket chat command");
             if (socket.State == System.Net.WebSockets.WebSocketState.Open)
             {
+                var failureContext = CapabilityTraceContext.CreateMessageContext();
                 await ChatWebSocketProtocol.SendAsync(
                     socket,
                     ChatWebSocketEnvelopeFactory.CreateCommandError(
                         requestId: null,
                         code: "RUN_EXECUTION_FAILED",
-                        message: "Failed to execute run."),
+                        message: "Failed to execute run.",
+                        correlationId: failureContext.CorrelationId),
                     ct,
                     responseMessageType);
             }
@@ -487,4 +487,5 @@ public static class WorkflowCapabilityEndpoints
             await ChatWebSocketProtocol.CloseAsync(socket, ct);
         }
     }
+
 }

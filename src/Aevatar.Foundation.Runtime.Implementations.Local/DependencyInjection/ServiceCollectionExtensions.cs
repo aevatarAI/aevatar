@@ -15,6 +15,7 @@ using Aevatar.Foundation.Runtime.Implementations.Local.ActivationIndex;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Local.TypeSystem;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -54,11 +55,13 @@ public static class ServiceCollectionExtensions
 
         // Actor Runtime
         services.TryAddSingleton<IActorRuntime>(sp =>
-            new LocalActorRuntime(
+        {
+            return new LocalActorRuntime(
                 sp.GetRequiredService<IStreamProvider>(),
                 sp,
                 sp.GetRequiredService<IStreamLifecycleManager>(),
-                sp.GetService<ILogger<LocalActorRuntime>>()));
+                sp.GetService<ILogger<LocalActorRuntime>>());
+        });
 
         // Persistence
         var eventSourcingOptions = new EventSourcingRuntimeOptions();

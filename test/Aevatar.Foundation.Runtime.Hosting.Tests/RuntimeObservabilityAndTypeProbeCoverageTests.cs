@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Implementations.Local.TypeSystem;
@@ -48,12 +49,84 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
         };
         ActivitySource.AddActivityListener(listener);
 
-        using var activity = AevatarActivitySource.StartHandleEvent("agent-1", "evt-1");
+        using var activity = AevatarActivitySource.StartHandleEvent(
+            "agent-1",
+            "evt-1",
+            "type.googleapis.com/aevatar.ai.ChatRequestEvent");
 
         activity.Should().NotBeNull();
-        activity!.DisplayName.Should().Be("HandleEvent agent-1");
+        activity!.DisplayName.Should().Be("HandleEvent:ChatRequestEvent");
         activity.GetTagItem("aevatar.agent.id").Should().Be("agent-1");
         activity.GetTagItem("aevatar.event.id").Should().Be("evt-1");
+        activity.GetTagItem("aevatar.event.type").Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
+    }
+
+    [Fact]
+    public void AevatarActivitySource_ShouldKeepHandleEventActivity_ForAllEventTypes()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Aevatar.Agents",
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        using var projectionActivity = AevatarActivitySource.StartHandleEvent(
+            "projection.compensation.outbox:workflow",
+            "evt-2",
+            "type.googleapis.com/ProjectionCompensationTriggerReplayEvent");
+        using var contentActivity = AevatarActivitySource.StartHandleEvent(
+            "Workflow:run-1:assistant",
+            "evt-3",
+            "type.googleapis.com/aevatar.ai.TextMessageContentEvent");
+        using var startActivity = AevatarActivitySource.StartHandleEvent(
+            "Workflow:run-1:assistant",
+            "evt-4",
+            "type.googleapis.com/aevatar.ai.TextMessageStartEvent");
+        using var endActivity = AevatarActivitySource.StartHandleEvent(
+            "Workflow:run-1:assistant",
+            "evt-5",
+            "type.googleapis.com/aevatar.ai.TextMessageEndEvent");
+        using var roleChatRequestActivity = AevatarActivitySource.StartHandleEvent(
+            "Workflow:run-1:assistant",
+            "evt-6",
+            "type.googleapis.com/aevatar.ai.ChatRequestEvent");
+
+        projectionActivity.Should().NotBeNull();
+        contentActivity.Should().NotBeNull();
+        startActivity.Should().NotBeNull();
+        endActivity.Should().NotBeNull();
+        roleChatRequestActivity.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AevatarActivitySource_ShouldCreateChildActivity_FromEnvelopeTraceAndSpan()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Aevatar.Agents",
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var traceId = ActivityTraceId.CreateRandom();
+        var parentSpanId = ActivitySpanId.CreateRandom();
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-child",
+        };
+        envelope.Metadata[EnvelopeMetadataKeys.TraceId] = traceId.ToString();
+        envelope.Metadata[EnvelopeMetadataKeys.TraceSpanId] = parentSpanId.ToString();
+        envelope.Metadata[EnvelopeMetadataKeys.TraceFlags] = "01";
+
+        using var activity = AevatarActivitySource.StartHandleEvent("Workflow:run-1", envelope);
+
+        activity.Should().NotBeNull();
+        activity!.TraceId.Should().Be(traceId);
+        activity.ParentSpanId.Should().Be(parentSpanId);
+        activity.ActivityTraceFlags.Should().Be(ActivityTraceFlags.Recorded);
     }
 
     [Fact]

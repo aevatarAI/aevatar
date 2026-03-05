@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -74,6 +75,7 @@ public class ChatEndpointsInternalTests
     public async Task HandleChat_WhenSucceeded_ShouldWriteSseFrame()
     {
         var http = CreateHttpContext();
+        using var activity = new Activity("chat-sse-trace").Start();
         var service = new FakeChatRunApplicationService
         {
             ExecuteHandler = async (_, emitAsync, onStartedAsync, ct) =>
@@ -111,6 +113,8 @@ public class ChatEndpointsInternalTests
             CancellationToken.None);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.Headers["X-Correlation-Id"].ToString().Should().Be("cmd-1");
+        http.Response.Headers.ContainsKey("X-Trace-Id").Should().BeFalse();
         var body = await ReadBodyAsync(http);
         body.Should().Contain("data:");
         body.Should().Contain("aevatar.run.context");
@@ -510,6 +514,39 @@ public class ChatEndpointsInternalTests
 
         statusCode.Should().Be(StatusCodes.Status202Accepted);
         doc.RootElement.GetProperty("commandId").GetString().Should().Be("cmd-1");
+        doc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleCommand_ShouldForwardRequestCancellationToken()
+    {
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var capturedCancellation = CancellationToken.None;
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, ct) =>
+            {
+                capturedCancellation = ct;
+                return Task.FromResult(ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.WorkflowNotFound,
+                        null,
+                        null)));
+            },
+        };
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "missing" },
+            service,
+            loggerFactory,
+            cts.Token);
+        var (statusCode, _) = await ExecuteResultAsync(result);
+
+        capturedCancellation.IsCancellationRequested.Should().BeTrue();
+        statusCode.Should().Be(StatusCodes.Status404NotFound);
     }
 
     [Fact]

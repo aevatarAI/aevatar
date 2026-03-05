@@ -115,10 +115,8 @@ public sealed class LocalActor : IActor
 
     private async Task EnqueueAsync(EventEnvelope envelope, bool propagateFailure = false)
     {
-        using var activity = AevatarActivitySource.StartHandleEvent(Id, envelope.Id);
-        activity?.SetTag("aevatar.event.direction", envelope.Direction.ToString());
-        activity?.SetTag("aevatar.event.type", envelope.Payload?.TypeUrl);
-        activity?.SetTag("aevatar.event.publisher", envelope.PublisherId);
+        using var instrumentation = TracingContextHelpers.BeginHandleEnvelopeInstrumentation(_logger, Id, envelope);
+        var activity = instrumentation.Activity;
 
         var sw = Stopwatch.StartNew();
         var status = "ok";
