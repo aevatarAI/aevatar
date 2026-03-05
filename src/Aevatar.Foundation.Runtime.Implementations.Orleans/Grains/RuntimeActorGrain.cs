@@ -14,6 +14,9 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 [ImplicitStreamSubscription(OrleansRuntimeConstants.ActorEventStreamNamespace)]
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
+    private const string RetryAttemptMetadataKey = "aevatar.retry.attempt";
+    private const string RetryOriginEventIdMetadataKey = "aevatar.retry.origin_event_id";
+
     private readonly IPersistentState<RuntimeActorGrainState> _state;
     private IAgent? _agent;
     private IEventDeduplicator? _deduplicator;
@@ -25,6 +28,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private ILogger<RuntimeActorGrain> _logger = NullLogger<RuntimeActorGrain>.Instance;
     private IAsyncStream<EventEnvelope>? _selfStream;
     private StreamSubscriptionHandle<EventEnvelope>? _selfStreamHandle;
+    private CompatibilityFailureInjectionPolicy _compatibilityFailureInjectionPolicy =
+        CompatibilityFailureInjectionPolicy.Disabled;
+    private RuntimeEnvelopeRetryPolicy _runtimeEnvelopeRetryPolicy =
+        RuntimeEnvelopeRetryPolicy.Disabled;
 
     public RuntimeActorGrain(
         [PersistentState("agent", OrleansRuntimeConstants.GrainStateStorageName)] IPersistentState<RuntimeActorGrainState> state)
@@ -42,6 +49,14 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         var loggerFactory = ServiceProvider.GetService<ILoggerFactory>();
         _logger = loggerFactory?.CreateLogger<RuntimeActorGrain>() ?? NullLogger<RuntimeActorGrain>.Instance;
+        _compatibilityFailureInjectionPolicy = CompatibilityFailureInjectionPolicy.FromEnvironment();
+        _runtimeEnvelopeRetryPolicy = RuntimeEnvelopeRetryPolicy.FromEnvironment();
+        if (_compatibilityFailureInjectionPolicy.Enabled)
+        {
+            _logger.LogWarning(
+                "Compatibility failure injection is enabled for node version tag '{NodeVersionTag}'.",
+                Environment.GetEnvironmentVariable("AEVATAR_TEST_NODE_VERSION_TAG") ?? "(none)");
+        }
 
         await SubscribeSelfStreamAsync();
 
@@ -112,10 +127,12 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             _logger,
             this.GetPrimaryKeyString(),
             envelope);
+        if (await TryHandleCompatibilityRetryAsync(envelope))
+            return;
 
         if (!string.IsNullOrWhiteSpace(envelope.Id) && _deduplicator != null)
         {
-            var dedupKey = $"{this.GetPrimaryKeyString()}:{envelope.Id}";
+            var dedupKey = BuildDedupKey(envelope);
             if (!await _deduplicator.TryRecordAsync(dedupKey))
                 return;
         }
@@ -148,8 +165,23 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 return;
         }
 
-        using var stateBinding = _stateBindingAccessor?.Bind(_state);
-        await _agent.HandleEventAsync(envelope);
+        try
+        {
+            using var stateBinding = _stateBindingAccessor?.Bind(_state);
+            await _agent.HandleEventAsync(envelope);
+        }
+        catch (Exception ex)
+        {
+            if (await TryScheduleRetryAsync(envelope, ex))
+                return;
+
+            _logger.LogError(
+                ex,
+                "Runtime envelope handling failed after retry exhausted (or retry disabled) for actor {ActorId}, envelope {EnvelopeId}, event type '{EventTypeUrl}'.",
+                this.GetPrimaryKeyString(),
+                envelope.Id,
+                envelope.Payload?.TypeUrl ?? "(none)");
+        }
     }
 
     public async Task AddChildAsync(string childId)
@@ -327,6 +359,73 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             return;
 
         _ = _deactivationHookDispatcher.DispatchAsync(this.GetPrimaryKeyString(), CancellationToken.None);
+    }
+
+    private async Task<bool> TryScheduleRetryAsync(EventEnvelope envelope, Exception ex)
+    {
+        if (!_runtimeEnvelopeRetryPolicy.TryBuildRetryEnvelope(
+                envelope,
+                ex,
+                out var retryEnvelope,
+                out var nextAttempt))
+            return false;
+
+        if (_runtimeEnvelopeRetryPolicy.RetryDelayMs > 0)
+            await Task.Delay(_runtimeEnvelopeRetryPolicy.RetryDelayMs);
+
+        await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(retryEnvelope);
+        _logger.LogWarning(
+            ex,
+            "Runtime envelope retry scheduled for actor {ActorId}, attempt {Attempt}/{MaxAttempts}.",
+            this.GetPrimaryKeyString(),
+            nextAttempt,
+            _runtimeEnvelopeRetryPolicy.MaxAttempts);
+        return true;
+    }
+
+    private string BuildDedupKey(EventEnvelope envelope)
+    {
+        var originId = envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
+                       !string.IsNullOrWhiteSpace(metadataOriginId)
+            ? metadataOriginId
+            : envelope.Id;
+
+        if (string.IsNullOrWhiteSpace(originId))
+            originId = envelope.Id ?? string.Empty;
+
+        var attempt = 0;
+        if (envelope.Metadata.TryGetValue(RetryAttemptMetadataKey, out var metadataAttempt) &&
+            int.TryParse(metadataAttempt, out var parsedAttempt) &&
+            parsedAttempt > 0)
+        {
+            attempt = parsedAttempt;
+        }
+
+        return $"{this.GetPrimaryKeyString()}:{originId}:{attempt}";
+    }
+
+    private async Task<bool> TryHandleCompatibilityRetryAsync(EventEnvelope envelope)
+    {
+        if (!_compatibilityFailureInjectionPolicy.ShouldInject(envelope.Payload?.TypeUrl))
+            return false;
+
+        _logger.LogWarning(
+            "Injected compatibility failure for actor {ActorId}, event type '{EventTypeUrl}'.",
+            this.GetPrimaryKeyString(),
+            envelope.Payload?.TypeUrl ?? "(none)");
+
+        var compatibilityException =
+            new InvalidOperationException("Injected compatibility failure for mixed-version rollout testing.");
+        if (await TryScheduleRetryAsync(envelope, compatibilityException))
+            return true;
+
+        _logger.LogError(
+            compatibilityException,
+            "Runtime envelope handling failed after compatibility retry exhausted (or retry disabled) for actor {ActorId}, envelope {EnvelopeId}, event type '{EventTypeUrl}'.",
+            this.GetPrimaryKeyString(),
+            envelope.Id,
+            envelope.Payload?.TypeUrl ?? "(none)");
+        return true;
     }
 
 }
