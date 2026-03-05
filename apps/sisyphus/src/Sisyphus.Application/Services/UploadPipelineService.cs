@@ -4,6 +4,7 @@ using System.Text.Json;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Sisyphus.Application.Models;
 using Sisyphus.Application.Models.Upload;
 
 namespace Sisyphus.Application.Services;
@@ -266,6 +267,7 @@ public sealed class UploadPipelineService(
                         {
                             ["abstract"] = bn.Abstract,
                             ["body"] = bn.Body,
+                            [SisyphusStatus.PropertyName] = SisyphusStatus.Purified,
                         },
                     }).ToList();
 
@@ -300,7 +302,10 @@ public sealed class UploadPipelineService(
                             ["source"] = blueUuid,
                             ["target"] = redUuid,
                             ["type"] = "PURIFIED_FROM",
-                            ["properties"] = new Dictionary<string, object>(),
+                            ["properties"] = new Dictionary<string, object>
+                            {
+                                [SisyphusStatus.PropertyName] = SisyphusStatus.Purified,
+                            },
                         }).ToList();
 
                         if (purifiedFromEdges.Count > 0)
@@ -326,7 +331,10 @@ public sealed class UploadPipelineService(
                                 ["source"] = tempIdToUuid[be.Source!],
                                 ["target"] = tempIdToUuid[be.Target!],
                                 ["type"] = be.EdgeType,
-                                ["properties"] = new Dictionary<string, object>(),
+                                ["properties"] = new Dictionary<string, object>
+                                {
+                                    [SisyphusStatus.PropertyName] = SisyphusStatus.Purified,
+                                },
                             }).ToList();
 
                         if (internalEdges.Count > 0)
@@ -479,7 +487,10 @@ public sealed class UploadPipelineService(
                             ["source"] = be.SourceId!,
                             ["target"] = be.TargetId!,
                             ["type"] = be.EdgeType,
-                            ["properties"] = new Dictionary<string, object>(),
+                            ["properties"] = new Dictionary<string, object>
+                            {
+                                [SisyphusStatus.PropertyName] = SisyphusStatus.Purified,
+                            },
                         }).ToList();
 
                         await graphWriter.CreateEdgesAsync(graphId, edgeProps, ct);
@@ -755,6 +766,7 @@ public sealed class UploadPipelineService(
             ["atom_type"] = node.AtomType,
             ["tex_content"] = node.TexContent,
             ["proof_orphan"] = node.ProofOrphan,
+            [SisyphusStatus.PropertyName] = SisyphusStatus.Raw,
         };
 
         if (node.SourcePath is not null) properties["source_path"] = node.SourcePath;
@@ -781,6 +793,7 @@ public sealed class UploadPipelineService(
         {
             ["edge_source"] = edge.EdgeSource ?? "",
             ["edge_reason"] = edge.EdgeReason ?? "",
+            [SisyphusStatus.PropertyName] = SisyphusStatus.Raw,
         },
     };
 

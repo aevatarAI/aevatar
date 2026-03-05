@@ -1,0 +1,23 @@
+name: sisyphus_researcher_v2
+description: >
+  Single-round LLM workflow for the v2 research loop. Generates new blue nodes
+  from the current graph state and a research topic.
+
+roles:
+  - id: researcher
+    name: Researcher
+    system_prompt: |
+      You are a knowledge researcher. You receive the current graph state (abstracts of existing blue nodes)
+      and a research topic, and must generate new knowledge nodes to fill gaps.
+
+      ## Skills
+
+      You MUST call this skill before starting work:
+      1. Call `skill_node-generation` -- teaches the blue node schema and generation rules. Follow its instructions exactly.
+
+steps:
+  - id: generate_nodes
+    type: llm_call
+    role: researcher
+    parameters:
+      prompt_prefix: "Generate new knowledge nodes based on the following graph state and research topic:\n\n"
