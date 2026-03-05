@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Diagnostics;
+using System.Threading;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
@@ -34,7 +35,7 @@ public static class WorkflowCapabilityEndpoints
     {
         var requestStopwatch = Stopwatch.StartNew();
         var requestResult = ApiMetrics.ResultOk;
-        var firstResponseRecorded = false;
+        var firstResponseRecorded = 0;
         if (string.IsNullOrWhiteSpace(input.Prompt))
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -52,12 +53,7 @@ public static class WorkflowCapabilityEndpoints
                 new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId, input.WorkflowYaml),
                 (frame, token) =>
                 {
-                    if (!firstResponseRecorded)
-                    {
-                        firstResponseRecorded = true;
-                        ApiMetrics.RecordFirstResponse(ApiMetrics.TransportHttp, ApiMetrics.ResultOk, requestStopwatch.Elapsed.TotalMilliseconds);
-                    }
-                    return writer.WriteAsync(frame, token);
+                    return WriteFrameAndRecordFirstResponseOnceAsync(frame, token);
                 },
                 onStartedAsync: (started, token) =>
                 {
@@ -84,6 +80,13 @@ public static class WorkflowCapabilityEndpoints
         {
             requestStopwatch.Stop();
             ApiMetrics.RecordRequest(ApiMetrics.TransportHttp, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
+        }
+
+        async ValueTask WriteFrameAndRecordFirstResponseOnceAsync(WorkflowOutputFrame frame, CancellationToken token)
+        {
+            await writer.WriteAsync(frame, token);
+            if (Interlocked.CompareExchange(ref firstResponseRecorded, 1, 0) == 0)
+                ApiMetrics.RecordFirstResponse(ApiMetrics.TransportHttp, ApiMetrics.ResultOk, requestStopwatch.Elapsed.TotalMilliseconds);
         }
     }
 

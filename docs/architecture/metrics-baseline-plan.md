@@ -124,7 +124,7 @@ Panels (SLO section, default view):
 2. Error Ratio — API and runtime (timeseries)
 3. User Latency: First Response p95 (timeseries)
 4. User Latency: Full Request p95 (timeseries)
-5. API Request Latency p95/p99 (timeseries)
+5. API Request Latency p99 (timeseries)
 6. Runtime Event Handle Latency p95/p99 (timeseries)
 
 Panels (Runtime Diagnostics section, drill-down):
@@ -136,6 +136,8 @@ Panels (Runtime Diagnostics section, drill-down):
 11. Runtime Self Events / API Request (stat)
 12. Runtime Events Rate — Self, by result (timeseries)
 13. API Requests Rate by result (timeseries)
+
+Note: "Runtime Self Events / API Request" is computed only when window API request count is greater than 0; otherwise the panel is intentionally empty to avoid misleading inflation from background self events.
 
 Local stack:
 
@@ -154,20 +156,43 @@ Local stack:
 - Prometheus target `aevatar-workflow-host` is `UP`.
 - Dashboard shows first-response vs full-response latency.
 
-## 9. Next Plan Items
+## 9. Metric Quick Reference (Runbook)
+
+### 9.1 Core SLO Metrics
+
+| Metric | PromQL (Reference) | Why it matters | Suggested alert threshold | Common misread |
+|---|---|---|---|---|
+| API error ratio (5m) | `sum(increase(aevatar_api_requests_total{result="error"}[5m])) / clamp_min(sum(increase(aevatar_api_requests_total[5m])), 1)` | Primary service stability signal for client requests | `> 1%` for 5-10 minutes | Counting 4xx as service error (current contract treats only 5xx as `error`) |
+| Runtime event error ratio (5m) | `sum(increase(aevatar_runtime_events_handled_total{result="error"}[5m])) / clamp_min(sum(increase(aevatar_runtime_events_handled_total[5m])), 1)` | Runtime pipeline health signal | `> 1%` for 5-10 minutes | Comparing directly with API ratio without considering event fan-out |
+| First response latency p95 | `histogram_quantile(0.95, sum by (le) (rate(aevatar_api_first_response_duration_ms_bucket[$__rate_interval])))` | User-perceived responsiveness (TTFB-like) | Set per workload; start from your current p95 baseline + 30% | Treating missing first-response samples as zero (they are "not emitted", not "fast") |
+| Full request latency p95 | `histogram_quantile(0.95, sum by (le) (rate(aevatar_api_request_duration_ms_bucket[$__rate_interval])))` | End-to-end user waiting time | Set per workflow family; usually looser than first response | Assuming high full latency alone means platform issue |
+| API request latency p99 | `histogram_quantile(0.99, sum by (le) (rate(aevatar_api_request_duration_ms_bucket[$__rate_interval])))` | Tail-latency regression detection | Alert when sustained spike exceeds SLO budget | Using p99 as primary product KPI instead of engineering diagnostic |
+| Runtime event handle latency p95/p99 | `histogram_quantile(0.95, sum by (le) (rate(aevatar_runtime_event_handle_duration_ms_bucket[$__rate_interval])))` and p99 equivalent | Detects platform/runtime overhead changes independent of model generation variance | Trigger when both p95 and p99 trend up with stable traffic | Correlating directly to user latency without checking first/full API latency pair |
+
+### 9.2 Diagnostic Order (Fast Triage)
+
+1. Check API and runtime event error ratio (incident vs non-incident).
+2. Check first-response p95 (user "is it responsive?" signal).
+3. Check full-request p95 and API p99 (overall wait and tail behavior).
+4. Check runtime event latency p95/p99 (platform overhead confirmation).
+5. If only full-request worsens while first-response is stable, prioritize model/downstream generation analysis.
+
+Error-ratio panel implementation note: dashboard queries use "empty-as-zero" (`or on() vector(0)`) to keep both API and runtime ratio series visible even when a 5-minute window has no error samples.
+
+## 10. Next Plan Items
 
 1. Add SLO panel group:
    - API error ratio (5m)
-   - Runtime error ratio (5m)
+   - Runtime event error ratio (5m)
    - API first-response p95
 2. Add alert threshold defaults:
    - API error ratio > 1%
-   - Runtime error ratio > 1%
+   - Runtime event error ratio > 1%
    - First response p95 > threshold
 3. Add tests:
    - WebSocket path first-response integration tests (requires WebSocket mock infrastructure)
 
-## 10. Related Documents
+## 11. Related Documents
 
 - `docs/architecture/stream-first-tracing-design.md`
 - `docs/architecture/workflow-jaeger-observability-guide.md`

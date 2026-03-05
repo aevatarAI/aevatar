@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Diagnostics.Metrics;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -169,6 +170,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     [Fact]
     public async Task HandleChatWebSocket_WhenParseFails_ShouldSendCommandError()
     {
+        using var metricCapture = new ApiMetricCapture();
         using var activity = new System.Diagnostics.Activity("ws-parse-trace").Start();
         var socket = new FakeWebSocket(WebSocketState.Open);
         socket.EnqueueReceive(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("""{"type":"chat.command","requestId":"req-parse","payload":{"prompt":""}}"""), true);
@@ -193,11 +195,15 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         doc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-parse");
         doc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
+        metricCapture.FirstResponseMeasurements.Should().ContainSingle();
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "ws"));
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }
 
     [Fact]
     public async Task HandleChatWebSocket_WhenExecutionThrows_ShouldSendRunExecutionFailed()
     {
+        using var metricCapture = new ApiMetricCapture();
         using var activity = new System.Diagnostics.Activity("ws-exception-trace").Start();
         var socket = new FakeWebSocket(WebSocketState.Open);
         socket.EnqueueReceive(
@@ -226,6 +232,10 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
         doc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
+        metricCapture.FirstResponseMeasurements.Should().BeEmpty();
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "ws"));
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "error"));
     }
 
     [Fact]
@@ -259,6 +269,45 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
         doc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
+    }
+
+    [Fact]
+    public async Task HandleChatWebSocket_WhenStarted_ShouldRecordFirstResponseMetric()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Text,
+            Encoding.UTF8.GetBytes("""{"type":"chat.command","requestId":"req-ok","payload":{"prompt":"hello"}}"""),
+            true);
+
+        var http = new DefaultHttpContext();
+        http.Features.Set<IHttpWebSocketFeature>(new FakeWebSocketFeature(socket));
+
+        var service = new FakeCommandExecutionService
+        {
+            Handler = async (_, _, onStartedAsync, ct) =>
+            {
+                if (onStartedAsync != null)
+                    await onStartedAsync(new WorkflowChatRunStarted("actor-1", "direct", "cmd-ok"), ct);
+
+                return new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
+                    WorkflowChatRunStartError.None,
+                    new WorkflowChatRunStarted("actor-1", "direct", "cmd-ok"),
+                    new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+
+        await WorkflowCapabilityEndpoints.HandleChatWebSocket(
+            http,
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        metricCapture.FirstResponseMeasurements.Should().ContainSingle();
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "ws"));
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
@@ -384,4 +433,45 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             return Task.CompletedTask;
         }
     }
+
+    private sealed class ApiMetricCapture : IDisposable
+    {
+        private const string ApiMeterName = "Aevatar.Api";
+        private const string FirstResponseMetricName = "aevatar.api.first_response_duration_ms";
+        private const string RequestsTotalMetricName = "aevatar.api.requests_total";
+        private readonly MeterListener _listener = new();
+
+        public ApiMetricCapture()
+        {
+            _listener.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == ApiMeterName)
+                    listener.EnableMeasurementEvents(instrument);
+            };
+
+            _listener.SetMeasurementEventCallback<double>((instrument, measurement, tags, _) =>
+            {
+                if (instrument.Name == FirstResponseMetricName)
+                    FirstResponseMeasurements.Add(new MetricMeasurement(measurement, tags.ToArray()));
+            });
+
+            _listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
+            {
+                if (instrument.Name == RequestsTotalMetricName)
+                    RequestMeasurements.Add(new MetricMeasurement(measurement, tags.ToArray()));
+            });
+
+            _listener.Start();
+        }
+
+        public List<MetricMeasurement> FirstResponseMeasurements { get; } = [];
+        public List<MetricMeasurement> RequestMeasurements { get; } = [];
+
+        public void Dispose()
+        {
+            _listener.Dispose();
+        }
+    }
+
+    private sealed record MetricMeasurement(double Value, KeyValuePair<string, object?>[] Tags);
 }
