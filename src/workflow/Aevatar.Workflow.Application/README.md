@@ -1,11 +1,46 @@
 # Aevatar.Workflow.Application
 
-`Aevatar.Workflow.Application` 承载 Workflow 用例编排（run/query），不做协议适配与基础设施细节。
+工作流应用层：承载 run 用例编排（启动/执行/流式输出/收敛/回滚）与查询门面，不做协议适配与基础设施细节。
+
+## 目录结构
+
+```
+Aevatar.Workflow.Application/
+├── DependencyInjection/
+│   └── ServiceCollectionExtensions.cs    # AddWorkflowApplication()
+├── Runs/                                 # run 用例编排
+│   ├── WorkflowChatRunApplicationService.cs  # 主入口：ExecuteAsync
+│   ├── WorkflowRunActorResolver.cs           # 解析/创建 workflow actor
+│   ├── WorkflowChatRequestEnvelopeFactory.cs # 构造 ChatRequestEvent 信封
+│   ├── WorkflowRunRequestExecutor.cs         # 投递请求事件 + 异常补偿
+│   ├── WorkflowRunOutputStreamer.cs           # 读取 run 事件 -> WorkflowOutputFrame
+│   ├── WorkflowOutputFrameMapper.cs          # WorkflowRunEvent -> WorkflowOutputFrame
+│   ├── WorkflowRunContext.cs                 # run 内部上下文
+│   ├── IWorkflowRunActorResolver.cs
+│   ├── IWorkflowRunRequestExecutor.cs
+│   ├── IWorkflowRunOutputStreamer.cs
+│   └── IWorkflowChatRequestEnvelopeFactory.cs
+├── Orchestration/                        # 投影 run 生命周期
+│   ├── WorkflowExecutionRunOrchestrator.cs       # start/finalize/rollback
+│   ├── WorkflowExecutionTopologyResolver.cs      # 读取 actor 拓扑
+│   ├── WorkflowRunOrchestrationOptions.cs        # 编排选项
+│   ├── IWorkflowExecutionRunOrchestrator.cs
+│   └── IWorkflowExecutionTopologyResolver.cs
+├── Queries/
+│   └── WorkflowExecutionQueryApplicationService.cs # agents/workflows/runs 查询门面
+├── Workflows/
+│   ├── WorkflowDefinitionRegistry.cs     # 名称 -> YAML 内存注册表
+│   └── WorkflowDefinitionRegistryOptions.cs
+└── Reporting/
+    └── NoopWorkflowExecutionReportArtifactSink.cs  # 默认空实现
+```
 
 ## 核心服务
 
 - `WorkflowChatRunApplicationService`
   - `ExecuteAsync` 单入口：参数校验 + 获取 run context + 委托执行引擎。
+  - `direct` 回退由 `WorkflowDirectFallbackPolicy` 控制：仅白名单 workflow + 白名单异常触发一次回退。
+  - inline `workflowYamls` 请求默认不参与自动回退，避免掩盖编排配置错误。
 - `WorkflowRunContextFactory`
   - 负责 actor 解析、command context 构造、projection lease 初始化与 live sink attach。
 - `WorkflowRunExecutionEngine`
@@ -15,6 +50,9 @@
 - `WorkflowRunResourceFinalizer`
   - 负责 `detach/release/complete/dispose` 兜底清理。
 - `WorkflowRunActorResolver`
+  - 解析优先级：`workflowYamls`（inline bundle，首项入口） > `workflow`（registry 名称） > 默认 workflow（`WorkflowRunBehaviorOptions.DefaultWorkflowName`，默认 `direct`）。
+  - 可通过 `UseAutoAsDefaultWhenWorkflowUnspecified=true` 切换为默认 `auto` 路由。
+  - inline bundle 会把 `name -> yaml` 注入运行态，`workflow_call` 解析顺序为：inline bundle > 外部 resolver。
   - 无 `actorId` 时创建并绑定 workflow actor。
   - 有 `actorId` 时仅复用既有 actor，不负责切换 workflow。
 - `WorkflowRunRequestExecutor`
@@ -29,14 +67,37 @@
 
 ## 分层约束
 
-- 本层不依赖 Presentation 协议实现（AGUI/SSE/WS）。
-- 本层不包含 `Directory/File` 文件系统扫描逻辑。
-- 报告落盘通过 `IWorkflowExecutionReportArtifactSink` 端口交给 Infrastructure。
-- 运行约束：一个 workflow 对应一个 actor，workflow 与 actor 绑定后不可变。
+- 本层不依赖 Presentation 协议实现（AGUI/SSE/WS）
+- 本层不包含文件系统扫描逻辑
+- 报告落盘通过 `IWorkflowExecutionReportArtifactSink` 端口交给 Infrastructure
+- 默认注册 `NoopWorkflowExecutionReportArtifactSink`，Infrastructure 可 Replace 为真实实现
 
 ## DI 入口
 
-- `AddWorkflowApplication()`
-  - 注册应用层用例与默认 `NoopWorkflowExecutionReportArtifactSink`。
+```csharp
+services.AddWorkflowApplication(
+    configureRegistry: opt => opt.RegisterBuiltInDirectWorkflow = true,
+    configureRunBehavior: opt =>
+    {
+        opt.UseAutoAsDefaultWhenWorkflowUnspecified = false; // default
+        opt.DirectFallbackWorkflowWhitelist.Add("auto");
+    });
+```
 
-宿主应组合：`Application + Projection + Infrastructure`，而不是在 API 中实现业务编排。
+注册内容：
+- `IWorkflowChatRunApplicationService`
+- `IWorkflowExecutionQueryApplicationService`
+- `IWorkflowDefinitionRegistry`
+- `WorkflowRunBehaviorOptions` + `WorkflowDirectFallbackPolicy`
+- `IWorkflowExecutionRunOrchestrator` + `IWorkflowExecutionTopologyResolver`
+- `IWorkflowRunActorResolver`、`IWorkflowRunRequestExecutor`、`IWorkflowRunOutputStreamer`
+- `IWorkflowChatRequestEnvelopeFactory`
+- `IWorkflowExecutionReportArtifactSink`（Noop 默认）
+
+## 依赖
+
+- `Aevatar.Workflow.Application.Abstractions`
+- `Aevatar.Workflow.Core`
+- `Aevatar.AI.Abstractions`、`Aevatar.Foundation.Abstractions`
+- `Google.Protobuf`
+- `Microsoft.Extensions.DependencyInjection.Abstractions`、`Microsoft.Extensions.Logging.Abstractions`

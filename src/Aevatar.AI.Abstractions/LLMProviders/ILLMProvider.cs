@@ -17,7 +17,7 @@ public interface ILLMProvider
     /// <returns>LLM 响应，包含文本内容、工具调用、Token 用量等。</returns>
     Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default);
 
-    /// <summary>流式 Chat 调用。按 chunk 逐块返回 delta 内容。</summary>
+    /// <summary>流式 Chat 调用。按 chunk 返回文本增量与工具调用增量。</summary>
     /// <param name="request">LLM 请求。</param>
     /// <param name="ct">取消令牌。</param>
     /// <returns>LLM 流式 chunk 的异步序列。</returns>

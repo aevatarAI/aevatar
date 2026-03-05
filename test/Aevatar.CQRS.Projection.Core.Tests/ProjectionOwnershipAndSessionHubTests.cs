@@ -17,8 +17,7 @@ public class ActorProjectionOwnershipCoordinatorTests
     public async Task AcquireAsync_ShouldCreateCoordinatorActor_AndDispatchAcquireEvent()
     {
         var runtime = new OwnershipCoordinatorRuntime();
-        var manifestStore = new TestAgentManifestStore();
-        var coordinator = CreateCoordinator(runtime, manifestStore);
+        var coordinator = CreateCoordinator(runtime);
 
         await coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -41,10 +40,8 @@ public class ActorProjectionOwnershipCoordinatorTests
     public async Task AcquireAsync_ShouldUseConfiguredLeaseTtl()
     {
         var runtime = new OwnershipCoordinatorRuntime();
-        var manifestStore = new TestAgentManifestStore();
         var coordinator = CreateCoordinator(
             runtime,
-            manifestStore,
             new ProjectionOwnershipCoordinatorOptions
             {
                 LeaseTtlMs = 45_000,
@@ -63,11 +60,10 @@ public class ActorProjectionOwnershipCoordinatorTests
     public async Task ReleaseAsync_ShouldReuseExistingCoordinatorActor()
     {
         var runtime = new OwnershipCoordinatorRuntime();
-        var manifestStore = new TestAgentManifestStore();
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         var actor = new RuntimeActor(actorId, new ProjectionOwnershipCoordinatorGAgent());
         runtime.SetActor(actorId, actor);
-        var coordinator = CreateCoordinator(runtime, manifestStore);
+        var coordinator = CreateCoordinator(runtime);
 
         await coordinator.ReleaseAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -84,11 +80,10 @@ public class ActorProjectionOwnershipCoordinatorTests
     public async Task AcquireAsync_ShouldRecover_WhenCreateRaces()
     {
         var runtime = new OwnershipCoordinatorRuntime();
-        var manifestStore = new TestAgentManifestStore();
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         var racedActor = new RuntimeActor(actorId, new ProjectionOwnershipCoordinatorGAgent());
         runtime.SetCreateRaceActor(actorId, racedActor);
-        var coordinator = CreateCoordinator(runtime, manifestStore);
+        var coordinator = CreateCoordinator(runtime);
 
         await coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -100,15 +95,9 @@ public class ActorProjectionOwnershipCoordinatorTests
     public async Task AcquireAsync_ShouldThrow_WhenResolvedActorTypeIsInvalid()
     {
         var runtime = new OwnershipCoordinatorRuntime();
-        var manifestStore = new TestAgentManifestStore();
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         runtime.SetActor(actorId, new RuntimeActor(actorId, new PlainTestAgent("agent-1")));
-        await manifestStore.SaveAsync(actorId, new AgentManifest
-        {
-            AgentId = actorId,
-            AgentTypeName = typeof(PlainTestAgent).AssemblyQualifiedName!,
-        });
-        var coordinator = CreateCoordinator(runtime, manifestStore);
+        var coordinator = CreateCoordinator(runtime);
 
         Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -116,13 +105,14 @@ public class ActorProjectionOwnershipCoordinatorTests
     }
 
     [Fact]
-    public async Task AcquireAsync_ShouldThrow_WhenManifestMissingAndAgentTypeCannotBeProven()
+    public async Task AcquireAsync_ShouldThrow_WhenRuntimeTypeCannotBeProven()
     {
         var runtime = new OwnershipCoordinatorRuntime();
-        var manifestStore = new TestAgentManifestStore();
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         runtime.SetActor(actorId, new RuntimeActor(actorId, new PlainTestAgent("agent-1")));
-        var coordinator = CreateCoordinator(runtime, manifestStore);
+        var coordinator = new ActorProjectionOwnershipCoordinator(
+            runtime,
+            new DefaultAgentTypeVerifier(new NullActorTypeProbe()));
 
         Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -130,18 +120,12 @@ public class ActorProjectionOwnershipCoordinatorTests
     }
 
     [Fact]
-    public async Task AcquireAsync_ShouldThrow_WhenManifestTypeNameOnlyLooksSimilar()
+    public async Task AcquireAsync_ShouldThrow_WhenRuntimeProbeReturnsNoType()
     {
         var runtime = new OwnershipCoordinatorRuntime();
-        var manifestStore = new TestAgentManifestStore();
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         runtime.SetActor(actorId, new RuntimeActor(actorId, new ProjectionOwnershipCoordinatorGAgent()));
-        await manifestStore.SaveAsync(actorId, new AgentManifest
-        {
-            AgentId = actorId,
-            AgentTypeName = $"{typeof(ProjectionOwnershipCoordinatorGAgent).FullName}Shadow",
-        });
-        var verifier = new DefaultAgentTypeVerifier(new NullActorTypeProbe(), manifestStore);
+        var verifier = new DefaultAgentTypeVerifier(new NullActorTypeProbe());
         var coordinator = new ActorProjectionOwnershipCoordinator(runtime, verifier);
 
         Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
@@ -151,10 +135,9 @@ public class ActorProjectionOwnershipCoordinatorTests
 
     private static ActorProjectionOwnershipCoordinator CreateCoordinator(
         IActorRuntime runtime,
-        IAgentManifestStore manifestStore,
         ProjectionOwnershipCoordinatorOptions? options = null)
     {
-        var verifier = new DefaultAgentTypeVerifier(new RuntimeActorTypeProbe(runtime), manifestStore);
+        var verifier = new DefaultAgentTypeVerifier(new RuntimeActorTypeProbe(runtime));
         return new ActorProjectionOwnershipCoordinator(runtime, verifier, options);
     }
 }
@@ -500,6 +483,65 @@ public class ProjectionSessionEventHubTests
         });
         received.Should().Equal("accepted");
     }
+
+    [Fact]
+    public async Task PublishAsync_ShouldThrow_ForInvalidArguments_AndMissingChannel()
+    {
+        var provider = new SessionHubStreamProvider();
+        var codec = new StringSessionEventCodec();
+        var hub = new ProjectionSessionEventHub<string>(provider, codec);
+
+        Func<Task> blankScope = () => hub.PublishAsync(" ", "session-1", "hello", CancellationToken.None);
+        Func<Task> blankSession = () => hub.PublishAsync("scope-1", " ", "hello", CancellationToken.None);
+        Func<Task> nullEvent = () => hub.PublishAsync("scope-1", "session-1", null!, CancellationToken.None);
+
+        var emptyChannelHub = new ProjectionSessionEventHub<string>(provider, new EmptyChannelSessionEventCodec());
+        Func<Task> emptyChannel = () => emptyChannelHub.PublishAsync("scope-1", "session-1", "hello", CancellationToken.None);
+
+        await blankScope.Should().ThrowAsync<ArgumentException>();
+        await blankSession.Should().ThrowAsync<ArgumentException>();
+        await nullEvent.Should().ThrowAsync<ArgumentNullException>();
+        await emptyChannel.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task SubscribeAsync_ShouldThrow_ForInvalidArguments_AndMissingChannel()
+    {
+        var provider = new SessionHubStreamProvider();
+        var codec = new StringSessionEventCodec();
+        var hub = new ProjectionSessionEventHub<string>(provider, codec);
+
+        Func<Task> blankScope = async () => await hub.SubscribeAsync(" ", "session-1", _ => ValueTask.CompletedTask, CancellationToken.None);
+        Func<Task> blankSession = async () => await hub.SubscribeAsync("scope-1", " ", _ => ValueTask.CompletedTask, CancellationToken.None);
+        Func<Task> nullHandler = async () => await hub.SubscribeAsync("scope-1", "session-1", null!, CancellationToken.None);
+
+        var emptyChannelHub = new ProjectionSessionEventHub<string>(provider, new EmptyChannelSessionEventCodec());
+        Func<Task> emptyChannel = async () => await emptyChannelHub.SubscribeAsync(
+            "scope-1",
+            "session-1",
+            _ => ValueTask.CompletedTask,
+            CancellationToken.None);
+
+        await blankScope.Should().ThrowAsync<ArgumentException>();
+        await blankSession.Should().ThrowAsync<ArgumentException>();
+        await nullHandler.Should().ThrowAsync<ArgumentNullException>();
+        await emptyChannel.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task PublishAsync_ShouldTrimScopeAndSession_WhenResolvingStreamId()
+    {
+        var provider = new SessionHubStreamProvider();
+        var codec = new StringSessionEventCodec();
+        var hub = new ProjectionSessionEventHub<string>(provider, codec);
+
+        await hub.PublishAsync(" scope-1 ", " session-1 ", "hello", CancellationToken.None);
+
+        provider.GetStream("projection.session:scope-1:session-1")
+            .ProducedMessages
+            .Should()
+            .ContainSingle();
+    }
 }
 
 internal sealed class OwnershipCoordinatorRuntime : IActorRuntime
@@ -556,7 +598,6 @@ internal sealed class OwnershipCoordinatorRuntime : IActorRuntime
 
     public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
 
-    public Task RestoreAllAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
 
 internal sealed class RuntimeActor : IActor
@@ -616,6 +657,17 @@ internal sealed class StringSessionEventCodec : IProjectionSessionEventCodec<str
 
     public string? Deserialize(string eventType, string payload) =>
         string.Equals(eventType, "string", StringComparison.Ordinal) ? payload : null;
+}
+
+internal sealed class EmptyChannelSessionEventCodec : IProjectionSessionEventCodec<string>
+{
+    public string Channel => "";
+
+    public string GetEventType(string evt) => "string";
+
+    public string Serialize(string evt) => evt;
+
+    public string? Deserialize(string eventType, string payload) => payload;
 }
 
 internal sealed class TestInMemoryEventStore : IEventStore
@@ -820,37 +872,5 @@ internal sealed class SessionHubSubscription : IAsyncDisposable
 
         _disposeAction();
         return ValueTask.CompletedTask;
-    }
-}
-
-internal sealed class TestAgentManifestStore : IAgentManifestStore
-{
-    private readonly Dictionary<string, AgentManifest> _manifests = new(StringComparer.Ordinal);
-
-    public Task<AgentManifest?> LoadAsync(string agentId, CancellationToken ct = default)
-    {
-        _ = ct;
-        _manifests.TryGetValue(agentId, out var manifest);
-        return Task.FromResult(manifest);
-    }
-
-    public Task SaveAsync(string agentId, AgentManifest manifest, CancellationToken ct = default)
-    {
-        _ = ct;
-        _manifests[agentId] = manifest;
-        return Task.CompletedTask;
-    }
-
-    public Task DeleteAsync(string agentId, CancellationToken ct = default)
-    {
-        _ = ct;
-        _manifests.Remove(agentId);
-        return Task.CompletedTask;
-    }
-
-    public Task<IReadOnlyList<AgentManifest>> ListAsync(CancellationToken ct = default)
-    {
-        _ = ct;
-        return Task.FromResult<IReadOnlyList<AgentManifest>>(_manifests.Values.ToList());
     }
 }

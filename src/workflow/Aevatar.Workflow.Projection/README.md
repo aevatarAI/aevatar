@@ -44,4 +44,3 @@ flowchart LR
 - `Projection:Graph:Providers:Neo4j:Enabled`
 - `Projection:Graph:Providers:InMemory:Enabled`
 - `Projection:Policies:DenyInMemoryGraphFactStore`
-

@@ -2,7 +2,6 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -15,6 +14,39 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowCapabilityEndpointsCoverageTests
 {
+    [Fact]
+    public async Task HandleChat_WhenStarted_ShouldExposeTraceAndCorrelationHeaders()
+    {
+        using var activity = new System.Diagnostics.Activity("http-chat-trace").Start();
+        var http = new DefaultHttpContext
+        {
+            Response = { Body = new MemoryStream() },
+        };
+
+        var service = new FakeCommandExecutionService
+        {
+            Handler = async (_, _, onStartedAsync, ct) =>
+            {
+                if (onStartedAsync != null)
+                    await onStartedAsync(new WorkflowChatRunStarted("actor-1", "direct", "cmd-header"), ct);
+
+                return new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
+                    WorkflowChatRunStartError.None,
+                    new WorkflowChatRunStarted("actor-1", "direct", "cmd-header"),
+                    new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            CancellationToken.None);
+
+        http.Response.Headers.ContainsKey("X-Trace-Id").Should().BeFalse();
+        http.Response.Headers["X-Correlation-Id"].ToString().Should().Be("cmd-header");
+    }
+
     [Fact]
     public async Task HandleChat_WhenOperationCanceled_ShouldSwallowException()
     {
@@ -84,6 +116,8 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         using var doc = JsonDocument.Parse(body);
         statusCode.Should().Be(StatusCodes.Status202Accepted);
         doc.RootElement.GetProperty("commandId").GetString().Should().Be("cmd-1");
+        doc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
         doc.RootElement.GetProperty("actorId").GetString().Should().Be("actor-1");
     }
 
@@ -118,13 +152,11 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             Response = { Body = new MemoryStream() },
         };
         var service = new FakeCommandExecutionService();
-        var query = new FakeQueryService();
         using var loggerFactory = LoggerFactory.Create(_ => { });
 
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
             service,
-            query,
             loggerFactory,
             CancellationToken.None);
 
@@ -137,32 +169,36 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     [Fact]
     public async Task HandleChatWebSocket_WhenParseFails_ShouldSendCommandError()
     {
+        using var activity = new System.Diagnostics.Activity("ws-parse-trace").Start();
         var socket = new FakeWebSocket(WebSocketState.Open);
-        socket.EnqueueReceive(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("""{"type":"invalid","payload":{"prompt":"hello"}}"""), true);
+        socket.EnqueueReceive(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("""{"type":"chat.command","requestId":"req-parse","payload":{"prompt":""}}"""), true);
 
         var http = new DefaultHttpContext();
         http.Features.Set<IHttpWebSocketFeature>(new FakeWebSocketFeature(socket));
 
         var service = new FakeCommandExecutionService();
-        var query = new FakeQueryService();
         using var loggerFactory = LoggerFactory.Create(_ => { });
 
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
             service,
-            query,
             loggerFactory,
             CancellationToken.None);
 
         socket.SentTexts.Should().ContainSingle();
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
-        doc.RootElement.GetProperty("type").GetString().Should().Be("command.error");
-        doc.RootElement.GetProperty("code").GetString().Should().Be("INVALID_COMMAND");
+        doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("INVALID_PROMPT");
+        doc.RootElement.GetProperty("requestId").GetString().Should().Be("req-parse");
+        doc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-parse");
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
     }
 
     [Fact]
     public async Task HandleChatWebSocket_WhenExecutionThrows_ShouldSendRunExecutionFailed()
     {
+        using var activity = new System.Diagnostics.Activity("ws-exception-trace").Start();
         var socket = new FakeWebSocket(WebSocketState.Open);
         socket.EnqueueReceive(
             WebSocketMessageType.Text,
@@ -176,20 +212,53 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         {
             Handler = (_, _, _, _) => throw new InvalidOperationException("boom"),
         };
-        var query = new FakeQueryService();
         using var loggerFactory = LoggerFactory.Create(_ => { });
 
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
             service,
-            query,
             loggerFactory,
             CancellationToken.None);
 
         socket.SentTexts.Should().ContainSingle();
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
-        doc.RootElement.GetProperty("type").GetString().Should().Be("command.error");
+        doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
+        doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleChatWebSocket_WhenBinaryExecutionThrows_ShouldSendBinaryRunExecutionFailed()
+    {
+        using var activity = new System.Diagnostics.Activity("ws-binary-exception-trace").Start();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Binary,
+            Encoding.UTF8.GetBytes("""{"type":"chat.command","requestId":"req-b","payload":{"prompt":"hello"}}"""),
+            true);
+
+        var http = new DefaultHttpContext();
+        http.Features.Set<IHttpWebSocketFeature>(new FakeWebSocketFeature(socket));
+
+        var service = new FakeCommandExecutionService
+        {
+            Handler = (_, _, _, _) => throw new InvalidOperationException("boom"),
+        };
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+
+        await WorkflowCapabilityEndpoints.HandleChatWebSocket(
+            http,
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        socket.SentTexts.Should().BeEmpty();
+        socket.SentBinaries.Should().ContainSingle();
+        using var doc = JsonDocument.Parse(socket.SentBinaries[0]);
+        doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
@@ -230,48 +299,6 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         }
     }
 
-    private sealed class FakeQueryService : IWorkflowExecutionQueryApplicationService
-    {
-        public bool ActorQueryEnabled => true;
-
-        public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowAgentSummary>>([]);
-
-        public IReadOnlyList<string> ListWorkflows() => [];
-
-        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult<WorkflowActorSnapshot?>(null);
-
-        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
-
-        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
-            string actorId,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
-
-        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
-            string actorId,
-            int depth = 2,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowActorGraphSubgraph
-            {
-                RootNodeId = actorId,
-            });
-
-        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
-            string actorId,
-            int depth = 2,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            Task.FromResult<WorkflowActorGraphEnrichedSnapshot?>(null);
-    }
-
     private sealed class FakeWebSocketFeature : IHttpWebSocketFeature
     {
         private readonly WebSocket _socket;
@@ -300,6 +327,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         }
 
         public List<string> SentTexts { get; } = [];
+        public List<byte[]> SentBinaries { get; } = [];
 
         public override WebSocketCloseStatus? CloseStatus => null;
         public override string? CloseStatusDescription => null;
@@ -347,6 +375,12 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         {
             if (messageType == WebSocketMessageType.Text && buffer.Array != null)
                 SentTexts.Add(Encoding.UTF8.GetString(buffer.Array, buffer.Offset, buffer.Count));
+            else if (messageType == WebSocketMessageType.Binary && buffer.Array != null)
+            {
+                var bytes = new byte[buffer.Count];
+                Array.Copy(buffer.Array, buffer.Offset, bytes, 0, buffer.Count);
+                SentBinaries.Add(bytes);
+            }
             return Task.CompletedTask;
         }
     }

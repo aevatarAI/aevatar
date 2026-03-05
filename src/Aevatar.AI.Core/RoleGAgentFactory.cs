@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────
-// RoleGAgentFactory — 角色 Agent 工厂
+// RoleGAgentFactory — 角色 Agent 初始化工厂
 //
-// 从 YAML 配置 RoleGAgent：
-// 1. 基础配置：名称、SystemPrompt、Provider、Model
+// 从 YAML 初始化 RoleGAgent：
+// 1. 初始化字段：名称、SystemPrompt、Provider、Model
 // 2. EventModules：按名字从 IEventModuleFactory 创建
 // 3. EventRoutes：解析路由规则，用 RoutedEventModule 包装非 bypass 模块
 //
@@ -17,6 +17,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.Core.Routing;
+using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -26,8 +27,8 @@ using YamlDotNet.Serialization.NamingConventions;
 namespace Aevatar.AI.Core;
 
 /// <summary>
-/// RoleGAgent 配置工厂。从 YAML 或配置对象装配 Agent：
-/// 基础配置 → 创建 EventModules → 解析 EventRoutes → 路由包装 → 注册到 Agent。
+/// RoleGAgent 初始化工厂。从 YAML 或初始化对象装配 Agent：
+/// 初始化字段 → 创建 EventModules → 解析 EventRoutes → 路由包装 → 注册到 Agent。
 /// </summary>
 public static class RoleGAgentFactory
 {
@@ -36,35 +37,69 @@ public static class RoleGAgentFactory
         .IgnoreUnmatchedProperties()
         .Build();
 
-    /// <summary>从 YAML 字符串配置 RoleGAgent。</summary>
-    public static Task ConfigureFromYaml(RoleGAgent agent, string yaml, IServiceProvider services)
+    /// <summary>从 YAML 字符串初始化 RoleGAgent。</summary>
+    public static Task InitializeFromYaml(RoleGAgent agent, string yaml, IServiceProvider services)
     {
         var config = Yaml.Deserialize<RoleYamlConfig>(yaml);
-        return ApplyConfig(agent, config, services);
+        return ApplyInitialization(agent, config, services);
     }
 
-    /// <summary>应用 RoleYamlConfig 到 RoleGAgent。</summary>
-    public static async Task ApplyConfig(RoleGAgent agent, RoleYamlConfig config, IServiceProvider services)
+    /// <summary>应用 RoleYamlConfig 初始化 RoleGAgent。</summary>
+    public static async Task ApplyInitialization(RoleGAgent agent, RoleYamlConfig config, IServiceProvider services)
     {
-        // ─── 基础配置（事件优先） ───
-        var configureEvent = new ConfigureRoleAgentEvent
+        var eventModules = PreferTopLevelText(config.EventModules, config.Extensions?.EventModules);
+        var eventRoutes = PreferTopLevelText(config.EventRoutes, config.Extensions?.EventRoutes);
+
+        var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
         {
-            RoleName = config.Name ?? string.Empty,
-            SystemPrompt = config.SystemPrompt ?? string.Empty,
-            ProviderName = config.Provider ?? string.Empty,
-            Model = config.Model ?? string.Empty,
+            Id = config.Name,
+            Name = config.Name,
+            SystemPrompt = config.SystemPrompt,
+            Provider = config.Provider,
+            Model = config.Model,
+            Temperature = config.Temperature,
+            MaxTokens = config.MaxTokens,
+            MaxToolRounds = config.MaxToolRounds,
+            MaxHistoryMessages = config.MaxHistoryMessages,
+            StreamBufferCapacity = config.StreamBufferCapacity,
+            EventModules = eventModules,
+            EventRoutes = eventRoutes,
+        });
+
+        // ─── 基础配置（事件优先） ───
+        var initializeEvent = new InitializeRoleAgentEvent
+        {
+            RoleName = normalized.Name,
+            SystemPrompt = normalized.SystemPrompt,
+            ProviderName = normalized.Provider ?? string.Empty,
+            Model = normalized.Model ?? string.Empty,
+            MaxTokens = normalized.MaxTokens ?? 0,
+            MaxToolRounds = normalized.MaxToolRounds ?? 0,
+            MaxHistoryMessages = normalized.MaxHistoryMessages ?? 0,
+            StreamBufferCapacity = normalized.StreamBufferCapacity ?? 0,
+            EventModules = normalized.EventModules ?? string.Empty,
+            EventRoutes = normalized.EventRoutes ?? string.Empty,
         };
-        if (config.Temperature.HasValue)
-            configureEvent.Temperature = config.Temperature.Value;
+        if (normalized.Temperature.HasValue)
+            initializeEvent.Temperature = normalized.Temperature.Value;
 
-        await agent.HandleConfigureRoleAgent(configureEvent);
+        await agent.HandleInitializeRoleAgent(initializeEvent);
+    }
 
-        // ─── EventModules 创建 ───
-        if (string.IsNullOrEmpty(config.Extensions?.EventModules)) return;
+    public static void ApplyModuleExtensions(
+        RoleGAgent agent,
+        string? eventModules,
+        string? eventRoutes,
+        IServiceProvider services)
+    {
+        if (string.IsNullOrWhiteSpace(eventModules))
+            return;
 
         var factories = services.GetServices<IEventModuleFactory>().ToList();
-        var moduleNames = config.Extensions.EventModules
+        var moduleNames = eventModules
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (moduleNames.Length == 0)
+            return;
 
         var logger = services.GetService<ILoggerFactory>()?.CreateLogger("RoleGAgentFactory");
         var rawModules = new List<IEventModule>();
@@ -85,7 +120,7 @@ public static class RoleGAgentFactory
         }
 
         // ─── EventRoutes 解析 + 路由包装 ───
-        var routes = EventRoute.Parse(config.Extensions.EventRoutes, logger);
+        var routes = EventRoute.Parse(eventRoutes, logger);
         var evaluator = services.GetService<IEventRouteEvaluator>()
                         ?? DefaultEventRouteEvaluator.Instance;
 
@@ -107,6 +142,19 @@ public static class RoleGAgentFactory
         if (finalModules.Count > 0)
             agent.SetModules(finalModules);
     }
+
+    private static string? PreferTopLevelText(string? topLevel, string? fallback)
+    {
+        var primary = NormalizeText(topLevel);
+        return primary ?? NormalizeText(fallback);
+    }
+
+    private static string? NormalizeText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        return value.Trim();
+    }
 }
 
 /// <summary>RoleGAgent 的 YAML 配置 DTO。</summary>
@@ -126,6 +174,24 @@ public sealed class RoleYamlConfig
 
     /// <summary>温度参数。</summary>
     public double? Temperature { get; set; }
+
+    /// <summary>最大输出 tokens。</summary>
+    public int? MaxTokens { get; set; }
+
+    /// <summary>最大工具调用轮数。</summary>
+    public int? MaxToolRounds { get; set; }
+
+    /// <summary>最大历史消息条数。</summary>
+    public int? MaxHistoryMessages { get; set; }
+
+    /// <summary>流式缓冲区容量。</summary>
+    public int? StreamBufferCapacity { get; set; }
+
+    /// <summary>平铺写法：逗号分隔的 EventModule 名称列表。</summary>
+    public string? EventModules { get; set; }
+
+    /// <summary>平铺写法：事件路由规则。</summary>
+    public string? EventRoutes { get; set; }
 
     /// <summary>扩展配置。</summary>
     public RoleYamlExtensions? Extensions { get; set; }

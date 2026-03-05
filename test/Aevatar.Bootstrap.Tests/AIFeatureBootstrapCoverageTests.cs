@@ -2,6 +2,8 @@ using System.Collections;
 using System.Reflection;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core.LLMProviders;
+using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
@@ -53,7 +55,9 @@ public class AIFeatureBootstrapCoverageTests
         {
             options.ApiKey = "demo-key";
             options.DefaultProvider = "deepseek";
+            options.SecretsStore = new InMemorySecretsStore();
             options.EnableMEAIProviders = true;
+            options.SecretsStore = new InMemorySecretsStore();
             options.EnableSkills = true;
             options.SkillDirectories.Add("./skills-a");
             options.EnableMCPTools = false;
@@ -68,6 +72,46 @@ public class AIFeatureBootstrapCoverageTests
         var skillOptions = provider.GetRequiredService<SkillsOptions>();
         skillOptions.Directories.Should().ContainSingle().Which.Should().Be("./skills-a");
         provider.GetServices<IAgentToolSource>().Should().ContainSingle(x => x is SkillsAgentToolSource);
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_WhenFailoverEnabled_ShouldRegisterFailoverFactory()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.ApiKey = "demo-key";
+            options.DefaultProvider = "openai";
+            options.EnableMEAIProviders = true;
+            options.EnableMEAIToTornadoFailover = true;
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
+
+        llmFactory.Should().BeOfType<FailoverLLMProviderFactory>();
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_WhenFailoverDisabled_ShouldRegisterMEAIFactory()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.ApiKey = "demo-key";
+            options.DefaultProvider = "openai";
+            options.EnableMEAIProviders = true;
+            options.EnableMEAIToTornadoFailover = false;
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
+
+        llmFactory.Should().BeOfType<MEAILLMProviderFactory>();
     }
 
     [Fact]

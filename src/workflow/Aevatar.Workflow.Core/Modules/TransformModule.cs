@@ -7,6 +7,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -27,8 +28,12 @@ public sealed class TransformModule : IEventModule
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "transform") return;
 
-        var op = request.Parameters.GetValueOrDefault("op", "identity");
+        var op = request.Parameters.GetValueOrDefault("op", "identity").Trim().ToLowerInvariant();
         var input = request.Input ?? "";
+        var separator = WorkflowParameterValueParser.NormalizeEscapedText(
+            WorkflowParameterValueParser.GetString(request.Parameters, "\n", "separator", "delimiter"),
+            "\n");
+        var n = WorkflowParameterValueParser.GetBoundedInt(request.Parameters, 5, 1, 10_000, "n", "count");
 
         string output;
         try
@@ -38,10 +43,12 @@ public sealed class TransformModule : IEventModule
                 "identity" => input,
                 "count" => CountLines(input).ToString(),
                 "count_words" => input.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length.ToString(),
-                "take" => TakeLines(input, int.TryParse(request.Parameters.GetValueOrDefault("n", "5"), out var n) ? n : 5),
-                "take_last" => TakeLastLines(input, int.TryParse(request.Parameters.GetValueOrDefault("n", "5"), out var nl) ? nl : 5),
-                "join" => string.Join(request.Parameters.GetValueOrDefault("separator", "\n"), SplitSections(input)),
-                "split" => string.Join("\n---\n", input.Split(request.Parameters.GetValueOrDefault("separator", "\n"), StringSplitOptions.RemoveEmptyEntries)),
+                "take" => TakeLines(input, n),
+                "take_last" => TakeLastLines(input, n),
+                "join" => string.Join(separator, SplitSections(input)),
+                "split" => string.Join(
+                    "\n---\n",
+                    WorkflowParameterValueParser.SplitInputByDelimiterOrJsonArray(input, separator)),
                 "distinct" => string.Join("\n", input.Split('\n').Distinct()),
                 "uppercase" => input.ToUpperInvariant(),
                 "lowercase" => input.ToLowerInvariant(),
@@ -61,6 +68,7 @@ public sealed class TransformModule : IEventModule
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = request.StepId,
+            RunId = request.RunId,
             Success = true, Output = output,
         }, EventDirection.Self, ct);
     }

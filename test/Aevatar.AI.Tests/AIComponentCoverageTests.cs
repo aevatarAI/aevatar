@@ -214,6 +214,69 @@ public class AIComponentCoverageTests
 
         chunks.Select(x => x.DeltaContent).Should().ContainInOrder("a", "b");
         chunks.Last().IsLast.Should().BeTrue();
+
+        var nonStreamingFallbackCalls = 0;
+        var emptyStreamClient = new StubChatClient
+        {
+            OnGetStreamingResponse = static (_, _, _) => EmptyChatStream(),
+            OnGetResponse = (_, _, _) =>
+            {
+                nonStreamingFallbackCalls++;
+                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "fallback-content")));
+            },
+        };
+        var emptyStreamProvider = new MEAILLMProvider("meai-empty-stream", emptyStreamClient);
+        var emptyStreamChunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in emptyStreamProvider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "hello fallback" }],
+        }))
+        {
+            emptyStreamChunks.Add(chunk);
+        }
+
+        nonStreamingFallbackCalls.Should().Be(1);
+        emptyStreamChunks.Should().Contain(x => x.DeltaContent == "fallback-content");
+        emptyStreamChunks.Last().IsLast.Should().BeTrue();
+
+        var toolStreamClient = new StubChatClient
+        {
+            OnGetStreamingResponse = static (_, _, _) => StreamWithToolCall(),
+        };
+        var toolStreamProvider = new MEAILLMProvider("meai-tool-stream", toolStreamClient);
+        var toolStreamChunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in toolStreamProvider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "trigger tool" }],
+        }))
+        {
+            toolStreamChunks.Add(chunk);
+        }
+
+        toolStreamChunks.Should().Contain(x => x.DeltaToolCall != null);
+        var streamedToolCall = toolStreamChunks.First(x => x.DeltaToolCall != null).DeltaToolCall!;
+        streamedToolCall.Id.Should().Be("call-stream-1");
+        streamedToolCall.Name.Should().Be("lookup");
+        streamedToolCall.ArgumentsJson.Should().Contain("term");
+
+        var toolStreamMissingIdClient = new StubChatClient
+        {
+            OnGetStreamingResponse = static (_, _, _) => StreamWithToolCallMissingId(),
+        };
+        var toolStreamMissingIdProvider = new MEAILLMProvider("meai-tool-stream-missing-id", toolStreamMissingIdClient);
+        var toolStreamMissingIdChunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in toolStreamMissingIdProvider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "trigger tool without id" }],
+        }))
+        {
+            toolStreamMissingIdChunks.Add(chunk);
+        }
+
+        var missingIdToolCall = toolStreamMissingIdChunks.First(x => x.DeltaToolCall != null).DeltaToolCall!;
+        missingIdToolCall.Id.Should().BeEmpty();
+        missingIdToolCall.Name.Should().Be("lookup");
+        missingIdToolCall.ArgumentsJson.Should().Contain("term");
     }
 
     [Fact]
@@ -230,12 +293,17 @@ public class AIComponentCoverageTests
         var tornadoFactory = new TornadoLLMProviderFactory();
         tornadoFactory.Register("t1", LLmProviders.OpenAi, "key", "model");
         tornadoFactory.RegisterOpenAICompatible("t2", "key", "model");
+        tornadoFactory.RegisterOpenAICompatible("t3", "key", "model", "https://example.test/v1");
         tornadoFactory.SetDefault("t2");
 
         tornadoFactory.GetDefault().Name.Should().Be("t2");
-        tornadoFactory.GetAvailableProviders().Should().Contain(["t1", "t2"]);
+        tornadoFactory.GetAvailableProviders().Should().Contain(["t1", "t2", "t3"]);
         Action missingTornado = () => tornadoFactory.GetProvider("missing");
         missingTornado.Should().Throw<InvalidOperationException>();
+
+        var t3Provider = (TornadoLLMProvider)tornadoFactory.GetProvider("t3");
+        var t3Api = GetPrivateField<LlmTornado.TornadoApi>(t3Provider, "_api");
+        t3Api.ApiUrlFormat.Should().Contain("example.test");
     }
 
     [Fact]
@@ -377,6 +445,22 @@ public class AIComponentCoverageTests
 
         var mappedNullResponse = InvokePrivateStatic<LLMResponse>(typeof(TornadoLLMProvider), "MapResponse", new object?[] { null });
         mappedNullResponse.FinishReason.Should().Be("error");
+
+        var deltaToolCall = InvokePrivateStatic<Aevatar.AI.Abstractions.LLMProviders.ToolCall>(
+            typeof(TornadoLLMProvider),
+            "ConvertToolCallDelta",
+            new LlmTornado.ChatFunctions.ToolCall
+            {
+                Id = string.Empty,
+                FunctionCall = new FunctionCall
+                {
+                    Name = "lookup",
+                    Arguments = "{\"term\":\"aevatar\"}",
+                },
+            });
+        deltaToolCall.Id.Should().BeEmpty();
+        deltaToolCall.Name.Should().Be("lookup");
+        deltaToolCall.ArgumentsJson.Should().Be("{\"term\":\"aevatar\"}");
     }
 
     [Fact]
@@ -468,6 +552,39 @@ public class AIComponentCoverageTests
             yield return new ChatResponseUpdate(ChatRole.Assistant, part);
             await Task.Yield();
         }
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> StreamWithToolCall()
+    {
+        yield return new ChatResponseUpdate(ChatRole.Assistant, "prefix");
+        yield return new ChatResponseUpdate(
+            ChatRole.Assistant,
+            [
+                new FunctionCallContent(
+                    "call-stream-1",
+                    "lookup",
+                    new Dictionary<string, object?> { ["term"] = "aevatar" }),
+            ]);
+        await Task.Yield();
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> StreamWithToolCallMissingId()
+    {
+        yield return new ChatResponseUpdate(
+            ChatRole.Assistant,
+            [
+                new FunctionCallContent(
+                    string.Empty,
+                    "lookup",
+                    new Dictionary<string, object?> { ["term"] = "aevatar" }),
+            ]);
+        await Task.Yield();
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> EmptyChatStream()
+    {
+        await Task.CompletedTask;
+        yield break;
     }
 
     private sealed class StubTool : IAgentTool

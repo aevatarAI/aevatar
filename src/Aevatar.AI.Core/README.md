@@ -56,6 +56,22 @@ extensions:
       to: tool_handler
 ```
 
+## RoleGAgent 初始化与配置边界
+
+`RoleGAgent` 现在只保留一条强类型初始化链路，不再提供通用 `app_config_* / app_state_*` 字符串扩展槽位。
+
+### 标准初始化事件
+
+- `InitializeRoleAgentEvent`
+  - 承载角色启动参数：`role_name`、`provider/model/system_prompt`、温度与各类 limits、`event_modules/event_routes`
+  - 事件持久化后可回放恢复 `RoleGAgentState`
+
+### 配置与参数语义
+
+- `InitializeRoleAgentEvent` 表示“启动/重初始化参数”（init input），不是通用业务配置总线
+- 业务配置请定义在业务 GAgent 自己的强类型 `State` / 领域事件中，不走框架通用 `Any`/JSON payload
+- 是否把 init 参数持久化为长期业务状态，由对应 GAgent 在自己的状态模型内决定
+
 ## 设计特点
 
 - 通过接口隔离具体 LLM 供应商实现

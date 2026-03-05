@@ -7,6 +7,7 @@
 - 明确读写分离：`Command -> Event`，`Query -> ReadModel`；异步完成通过事件通知与推送，不在会话内临时拼装流程。
 - 严格依赖反转：上层依赖抽象，禁止跨层反向依赖和对具体实现的直接耦合。
 - 命名语义优先：项目名、命名空间、目录一致；缩写全大写（如 `LLM/CQRS/AGUI`）；集合语义使用复数。
+- API 字段单一语义：一个字段只能表达一个含义，禁止同字段承载“名称查找 + inline 内容”等双重语义。
 - 不保留无效层：空转发、重复抽象、无业务价值代码直接删除。
 - 变更必须可验证：架构调整需同步文档，且 `build/test` 通过。
 
@@ -21,6 +22,14 @@
 - 渐进演进：开发期可用本地/内存实现提升反馈速度，但生产语义必须能无缝迁移到分布式与持久化实现。
 - 删除优于兼容：重构以清晰正确为第一目标；无业务价值或重复层应直接删除，不为历史包袱保留空壳。
 - 治理前置：架构规则必须可自动化验证（门禁、测试、文档一致性），避免依赖口头约定。
+
+## Actor 化执行哲学（强制）
+- 单线程事实源：Actor/模块运行态只能在事件处理主线程修改；禁止在模块内使用 `lock/Monitor/ConcurrentDictionary` 作为并发补丁来维护事实状态。
+- 回调只发信号：`Task.Run`、`Timer`、线程池回调不得直接读写运行态，也不得直接推进业务分支；只能发布“内部触发事件”（如 timeout/retry fired）。
+- 业务推进内聚：工作流推进（成功/失败/分支/重试）必须在 Actor 事件处理流程内完成，保证顺序性与可重放性。
+- 延迟与超时事件化：所有 `delay/timeout/retry backoff` 统一采用“异步等待 -> 发布内部事件 -> Actor 内消费并对账”的模式，禁止回调线程直接改状态。
+- 显式对账：内部触发事件必须携带最小充分相关键（如 `run_id + step_id`），由 Actor 内做活跃态校验，拒绝陈旧事件。
+- 无锁优先：若设计需要加锁才能正确，优先判定为“破坏 Actor 边界”，应先重构为事件化串行模型，再实现功能。
 
 ## 中间层状态约束（强制）
 - 禁止在中间层维护 `entity/actor/workflow-run/session` 等 ID 到上下文或事实状态的进程内映射（`Dictionary<>`、`ConcurrentDictionary<>`、`HashSet<>`、`Queue<>`）。
@@ -74,5 +83,8 @@
 - mermaid 默认指令（所有图统一加在代码块首行）：
   `%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%`
 - mermaid 的标签用引号包起来, 如 A2[“RoleGAgent”], 不要 A2[RoleGAgent]. 
+- `sequenceDiagram` 默认使用紧凑布局（优先收紧 `actorMargin/messageMargin/diagramMarginX/diagramMarginY` 与文案长度），避免图整体过大。
+- 禁止通过固定大宽度样式撑大时序图（如 `min-width: 2200px`、`width: max-content` 强制放大）；优先按容器宽度渲染。
+- 需要查看完整细节时，使用外层容器横向滚动（`overflow-x: auto`），不要放大图本体。
 - 默认将打分/审计文档生成到 `docs/audit-scorecard/` 目录。
 - 工作文档不需要添加到解决方案（`aevatar.slnx`）。

@@ -1,6 +1,5 @@
 using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -11,63 +10,72 @@ internal static class ChatWebSocketRunCoordinator
         WebSocket socket,
         ChatWebSocketCommandEnvelope command,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
-        IWorkflowExecutionQueryApplicationService queryService,
         CancellationToken ct = default)
     {
-        var request = new WorkflowChatRunRequest(
-            command.Input.Prompt,
-            command.Input.Workflow,
-            command.Input.AgentId);
+        var responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
+        var correlationId = string.Empty;
+        CapabilityMessageTraceContext ResolveContext() =>
+            CapabilityTraceContext.CreateMessageContext(correlationId, command.RequestId);
+
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input);
+        if (!normalizedRequest.Succeeded)
+        {
+            var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
+            var context = ResolveContext();
+            await ChatWebSocketProtocol.SendAsync(
+                socket,
+                ChatWebSocketEnvelopeFactory.CreateCommandError(
+                    command.RequestId,
+                    code,
+                    message,
+                    context.CorrelationId),
+                ct,
+                responseMessageType);
+            return;
+        }
 
         var executionResult = await chatRunService.ExecuteAsync(
-            request,
-            (frame, token) => new ValueTask(ChatWebSocketProtocol.SendAsync(socket, new
+            normalizedRequest.Request!,
+            (frame, token) =>
             {
-                type = "agui.event",
-                requestId = command.RequestId,
-                payload = frame,
-            }, token)),
-            onStartedAsync: (started, token) => new ValueTask(ChatWebSocketProtocol.SendAsync(socket, new
+                var context = ResolveContext();
+                return new ValueTask(ChatWebSocketProtocol.SendAsync(
+                    socket,
+                    ChatWebSocketEnvelopeFactory.CreateAguiEvent(
+                        command.RequestId,
+                        frame,
+                        context.CorrelationId),
+                    token,
+                    responseMessageType));
+            },
+            onStartedAsync: (started, token) =>
             {
-                type = "command.ack",
-                requestId = command.RequestId,
-                payload = new
-                {
-                    commandId = started.CommandId,
-                    actorId = started.ActorId,
-                    workflow = started.WorkflowName,
-                },
-            }, token)),
+                correlationId = started.CommandId;
+                return new ValueTask(ChatWebSocketProtocol.SendAsync(
+                    socket,
+                    ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, started),
+                    token,
+                    responseMessageType));
+            },
             ct);
 
         if (executionResult.Error != WorkflowChatRunStartError.None)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(executionResult.Error);
-            await ChatWebSocketProtocol.SendAsync(socket, new
-            {
-                type = "command.error",
-                requestId = command.RequestId,
-                code,
-                message,
-            }, ct);
+            var context = ResolveContext();
+            await ChatWebSocketProtocol.SendAsync(
+                socket,
+                ChatWebSocketEnvelopeFactory.CreateCommandError(
+                    command.RequestId,
+                    code,
+                    message,
+                    context.CorrelationId),
+                ct,
+                responseMessageType);
             return;
         }
 
-        var started = executionResult.Started!;
-        var finalize = executionResult.FinalizeResult;
-        var snapshot = await queryService.GetActorSnapshotAsync(started.ActorId, ct);
-        await ChatWebSocketProtocol.SendAsync(socket, new
-        {
-            type = "query.result",
-            requestId = command.RequestId,
-            payload = new
-            {
-                commandId = started.CommandId,
-                actorId = started.ActorId,
-                projectionCompletionStatus = finalize?.ProjectionCompletionStatus.ToString(),
-                projectionCompleted = finalize?.ProjectionCompleted ?? false,
-                snapshot,
-            },
-        }, ct);
+        if (executionResult.Started != null)
+            correlationId = executionResult.Started.CommandId;
     }
 }

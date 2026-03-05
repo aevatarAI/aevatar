@@ -52,6 +52,7 @@ public class WorkflowExecutionReadModelProjectorTests
             [new AIToolCallProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
         new ToolResultProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
             [new AIToolResultProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
+        new WorkflowSuspendedEventReducer(),
         new WorkflowCompletedEventReducer(),
     ];
 
@@ -208,6 +209,49 @@ public class WorkflowExecutionReadModelProjectorTests
         report!.Timeline.Count(x => x.Stage == "step.request").Should().Be(1);
         report.StateVersion.Should().Be(1);
         report.LastEventId.Should().Be("evt-dup-1");
+    }
+
+    [Fact]
+    public async Task Projector_ShouldApplyWorkflowSuspendedEvent()
+    {
+        var store = CreateStore();
+        var projector = new WorkflowExecutionReadModelProjector(
+            CreateDispatcher(store),
+            CreateDeduplicator(),
+            new SystemProjectionClock(),
+            BuildReducers());
+        var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>([projector]);
+
+        var context = new WorkflowExecutionProjectionContext
+        {
+            ProjectionId = "projection-suspended",
+            CommandId = "cmd-suspended",
+            RootActorId = "root",
+            WorkflowName = "direct",
+            StartedAt = DateTimeOffset.UtcNow,
+            Input = "hello",
+        };
+
+        await coordinator.InitializeAsync(context);
+        await coordinator.ProjectAsync(context, Wrap(new WorkflowSuspendedEvent
+        {
+            StepId = "s1",
+            SuspensionType = "human_input",
+            Prompt = "Need approval",
+            TimeoutSeconds = 60,
+        }));
+        await coordinator.CompleteAsync(context, []);
+
+        var report = await store.GetAsync("root");
+        report.Should().NotBeNull();
+        var step = report!.Steps.Should().ContainSingle(x => x.StepId == "s1").Subject;
+        step.CompletionMetadata.Should().ContainKey("suspension_type").WhoseValue.Should().Be("human_input");
+        step.CompletionMetadata.Should().ContainKey("suspension_prompt").WhoseValue.Should().Be("Need approval");
+        step.CompletionMetadata.Should().ContainKey("suspension_timeout").WhoseValue.Should().Be("60");
+        var suspendedEvent = report.Timeline.Should().ContainSingle(x => x.Stage == "workflow.suspended").Subject;
+        suspendedEvent.Data.Should().ContainKey("suspension_type").WhoseValue.Should().Be("human_input");
+        suspendedEvent.Data.Should().ContainKey("prompt").WhoseValue.Should().Be("Need approval");
+        suspendedEvent.Data.Should().ContainKey("timeout_seconds").WhoseValue.Should().Be("60");
     }
 
     [Fact]

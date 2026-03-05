@@ -1,9 +1,11 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
+using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Orleans.Streams;
 
@@ -121,6 +123,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
+        using var instrumentation = TracingContextHelpers.BeginHandleEnvelopeInstrumentation(
+            _logger,
+            this.GetPrimaryKeyString(),
+            envelope);
         if (await TryHandleCompatibilityRetryAsync(envelope))
             return;
 
@@ -149,7 +155,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                     break;
                 }
 
-                if (envelope.Metadata.TryGetValue("__source_actor_id", out var sourceActorId) &&
+                if (envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.SourceActorId, out var sourceActorId) &&
                     string.Equals(sourceActorId, selfActorId, StringComparison.Ordinal))
                 {
                     return;
@@ -324,7 +330,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             _streams);
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
-        gAgent.ManifestStore = ServiceProvider.GetService<IAgentManifestStore>();
         if (gAgent is IEventSourcingFactoryBinding statefulBinding)
             statefulBinding.BindEventSourcingFactory(ServiceProvider);
     }

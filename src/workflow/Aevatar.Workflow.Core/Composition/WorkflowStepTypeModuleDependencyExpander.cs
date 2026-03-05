@@ -11,38 +11,46 @@ public sealed class WorkflowStepTypeModuleDependencyExpander : IWorkflowModuleDe
         if (workflow == null)
             return;
 
-        CollectModuleTypesFromSteps(workflow.Steps, moduleNames);
+        CollectModuleTypesFromSteps(
+            workflow.Steps,
+            moduleNames,
+            workflow.Configuration.ClosedWorldMode);
     }
 
     private static void CollectModuleTypesFromSteps(
         IEnumerable<StepDefinition> steps,
-        ISet<string> moduleNames)
+        ISet<string> moduleNames,
+        bool closedWorldMode)
     {
         foreach (var step in steps)
         {
-            moduleNames.Add(step.Type);
+            var stepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
+            if (!closedWorldMode || !WorkflowPrimitiveCatalog.IsClosedWorldBlocked(stepType))
+                moduleNames.Add(stepType);
 
-            if (!string.IsNullOrWhiteSpace(step.TargetRole))
+            if (!closedWorldMode && !string.IsNullOrWhiteSpace(step.TargetRole))
                 moduleNames.Add("llm_call");
 
             foreach (var (key, value) in step.Parameters)
             {
-                if (key.EndsWith("_step_type", StringComparison.OrdinalIgnoreCase) &&
+                if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
                     !string.IsNullOrWhiteSpace(value))
                 {
-                    moduleNames.Add(value);
+                    var parameterStepType = WorkflowPrimitiveCatalog.ToCanonicalType(value);
+                    if (!closedWorldMode || !WorkflowPrimitiveCatalog.IsClosedWorldBlocked(parameterStepType))
+                        moduleNames.Add(parameterStepType);
                 }
             }
 
-            if ((step.Type.Equals("foreach", StringComparison.OrdinalIgnoreCase) ||
-                 step.Type.Equals("for_each", StringComparison.OrdinalIgnoreCase)) &&
+            if (stepType.Equals("foreach", StringComparison.OrdinalIgnoreCase) &&
                 !step.Parameters.ContainsKey("sub_step_type"))
             {
-                moduleNames.Add("parallel");
+                if (!closedWorldMode)
+                    moduleNames.Add("parallel");
             }
 
             if (step.Children is { Count: > 0 })
-                CollectModuleTypesFromSteps(step.Children, moduleNames);
+                CollectModuleTypesFromSteps(step.Children, moduleNames, closedWorldMode);
         }
     }
 }

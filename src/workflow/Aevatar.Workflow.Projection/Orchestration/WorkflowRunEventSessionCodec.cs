@@ -16,18 +16,18 @@ public sealed class WorkflowRunEventSessionCodec : IProjectionSessionEventCodec<
     private static readonly IReadOnlyDictionary<string, Func<string, WorkflowRunEvent?>> Deserializers =
         new Dictionary<string, Func<string, WorkflowRunEvent?>>(StringComparer.Ordinal)
         {
-            ["RUN_STARTED"] = payload => DeserializeEvent<WorkflowRunStartedEvent>(payload),
-            ["RUN_FINISHED"] = payload => DeserializeEvent<WorkflowRunFinishedEvent>(payload),
-            ["RUN_ERROR"] = payload => DeserializeEvent<WorkflowRunErrorEvent>(payload),
-            ["STEP_STARTED"] = payload => DeserializeEvent<WorkflowStepStartedEvent>(payload),
-            ["STEP_FINISHED"] = payload => DeserializeEvent<WorkflowStepFinishedEvent>(payload),
-            ["TEXT_MESSAGE_START"] = payload => DeserializeEvent<WorkflowTextMessageStartEvent>(payload),
-            ["TEXT_MESSAGE_CONTENT"] = payload => DeserializeEvent<WorkflowTextMessageContentEvent>(payload),
-            ["TEXT_MESSAGE_END"] = payload => DeserializeEvent<WorkflowTextMessageEndEvent>(payload),
-            ["STATE_SNAPSHOT"] = payload => DeserializeEvent<WorkflowStateSnapshotEvent>(payload),
-            ["TOOL_CALL_START"] = payload => DeserializeEvent<WorkflowToolCallStartEvent>(payload),
-            ["TOOL_CALL_END"] = payload => DeserializeEvent<WorkflowToolCallEndEvent>(payload),
-            ["CUSTOM"] = payload => DeserializeEvent<WorkflowCustomEvent>(payload),
+            [WorkflowRunEventTypes.RunStarted] = payload => DeserializeEvent<WorkflowRunStartedEvent>(payload),
+            [WorkflowRunEventTypes.RunFinished] = payload => DeserializeEvent<WorkflowRunFinishedEvent>(payload),
+            [WorkflowRunEventTypes.RunError] = payload => DeserializeEvent<WorkflowRunErrorEvent>(payload),
+            [WorkflowRunEventTypes.StepStarted] = payload => DeserializeEvent<WorkflowStepStartedEvent>(payload),
+            [WorkflowRunEventTypes.StepFinished] = payload => DeserializeEvent<WorkflowStepFinishedEvent>(payload),
+            [WorkflowRunEventTypes.TextMessageStart] = payload => DeserializeEvent<WorkflowTextMessageStartEvent>(payload),
+            [WorkflowRunEventTypes.TextMessageContent] = payload => DeserializeEvent<WorkflowTextMessageContentEvent>(payload),
+            [WorkflowRunEventTypes.TextMessageEnd] = payload => DeserializeEvent<WorkflowTextMessageEndEvent>(payload),
+            [WorkflowRunEventTypes.StateSnapshot] = payload => DeserializeEvent<WorkflowStateSnapshotEvent>(payload),
+            [WorkflowRunEventTypes.ToolCallStart] = payload => DeserializeEvent<WorkflowToolCallStartEvent>(payload),
+            [WorkflowRunEventTypes.ToolCallEnd] = payload => DeserializeEvent<WorkflowToolCallEndEvent>(payload),
+            [WorkflowRunEventTypes.Custom] = payload => DeserializeEvent<WorkflowCustomEvent>(payload),
         };
 
     public string GetEventType(WorkflowRunEvent evt)

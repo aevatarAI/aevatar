@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -33,8 +34,12 @@ public sealed class ConnectorCallModule : IEventModule
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (!string.Equals(request.StepType, "connector_call", StringComparison.OrdinalIgnoreCase)) return;
 
-        var connectorName = request.Parameters.GetValueOrDefault("connector", "").Trim();
-        var operation = request.Parameters.GetValueOrDefault("operation", "");
+        var connectorName = WorkflowParameterValueParser.GetString(
+            request.Parameters,
+            string.Empty,
+            "connector",
+            "connector_name").Trim();
+        var operation = WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "operation", "action");
         var retry = ParseBoundedInt(request.Parameters.GetValueOrDefault("retry", "0"), 0, 5, 0);
         var timeoutMs = ParseBoundedInt(request.Parameters.GetValueOrDefault("timeout_ms", "30000"), 100, 300_000, 30_000);
         var optional = ParseBool(request.Parameters.GetValueOrDefault("optional", "false"));
@@ -64,8 +69,9 @@ public sealed class ConnectorCallModule : IEventModule
         var allowedKey = request.Parameters.GetValueOrDefault("allowed_connectors", "").Trim();
         if (!string.IsNullOrEmpty(allowedKey))
         {
-            var allowed = allowedKey.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(x => x.Trim()).Where(x => x.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var allowed = WorkflowParameterValueParser.ParseStringList(allowedKey)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (allowed.Count > 0 && !allowed.Contains(connectorName))
             {
                 await PublishFailureAsync(ctx, request,
@@ -86,9 +92,10 @@ public sealed class ConnectorCallModule : IEventModule
 
             try
             {
+                var runId = string.IsNullOrEmpty(request.RunId) ? envelope.CorrelationId : request.RunId;
                 var connectorRequest = new ConnectorRequest
                 {
-                    RunId = envelope.CorrelationId,
+                    RunId = runId,
                     StepId = request.StepId,
                     Connector = connectorName,
                     Operation = operation,
@@ -126,6 +133,7 @@ public sealed class ConnectorCallModule : IEventModule
             var ok = new StepCompletedEvent
             {
                 StepId = request.StepId,
+                RunId = request.RunId,
                 Success = true,
                 Output = response.Output ?? "",
             };
@@ -149,6 +157,7 @@ public sealed class ConnectorCallModule : IEventModule
             var continued = new StepCompletedEvent
             {
                 StepId = request.StepId,
+                RunId = request.RunId,
                 Success = true,
                 Output = request.Input,
             };
@@ -162,6 +171,7 @@ public sealed class ConnectorCallModule : IEventModule
         var failed = new StepCompletedEvent
         {
             StepId = request.StepId,
+            RunId = request.RunId,
             Success = false,
             Error = errorText ?? "connector call failed",
         };
@@ -178,6 +188,7 @@ public sealed class ConnectorCallModule : IEventModule
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = request.StepId,
+            RunId = request.RunId,
             Success = false,
             Error = error,
         }, EventDirection.Self, ct);
@@ -195,6 +206,7 @@ public sealed class ConnectorCallModule : IEventModule
         var skipped = new StepCompletedEvent
         {
             StepId = request.StepId,
+            RunId = request.RunId,
             Success = true,
             Output = request.Input,
         };

@@ -30,6 +30,9 @@ public sealed class LLMStreamChunk
     /// <summary>本块增量文本内容。</summary>
     public string? DeltaContent { get; init; }
 
+    /// <summary>本块增量思考内容（若模型提供）。</summary>
+    public string? DeltaReasoningContent { get; init; }
+
     /// <summary>本块增量 tool_call（若存在）。</summary>
     public ToolCall? DeltaToolCall { get; init; }
 

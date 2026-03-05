@@ -1,0 +1,26 @@
+name: 46_human_approval_release_gate
+description: |
+  Practical release gate demo.
+  human_approval decides whether production release may proceed.
+
+roles: []
+
+steps:
+  - id: draft_change_summary
+    type: assign
+    parameters:
+      value: "Change CR-2026-021: roll out payment hotfix and monitor error budget."
+    next: approval_gate
+
+  - id: approval_gate
+    type: human_approval
+    parameters:
+      prompt: "Approve production release for CR-2026-021?"
+      timeout: "600"
+      on_reject: "fail"
+    next: execute_release
+
+  - id: execute_release
+    type: transform
+    parameters:
+      op: "uppercase"

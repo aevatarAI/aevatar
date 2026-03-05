@@ -489,3 +489,4 @@ scripts/.pids/
 *.db
 docs/agents-working-space/*
 .tools/*
+.plan/

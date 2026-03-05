@@ -26,9 +26,9 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
         });
 
         frames.Should().HaveCount(3);
-        frames[0].Type.Should().Be("RUN_STARTED");
-        frames[1].Type.Should().Be("TEXT_MESSAGE_CONTENT");
-        frames[2].Type.Should().Be("RUN_FINISHED");
+        frames[0].Type.Should().Be(WorkflowRunEventTypes.RunStarted);
+        frames[1].Type.Should().Be(WorkflowRunEventTypes.TextMessageContent);
+        frames[2].Type.Should().Be(WorkflowRunEventTypes.RunFinished);
         frames.Should().NotContain(f => f.Name == "after_terminal");
     }
 
@@ -52,8 +52,8 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
             shouldStop: evt => evt is WorkflowStepFinishedEvent);
 
         frames.Should().HaveCount(2);
-        frames[0].Type.Should().Be("STEP_STARTED");
-        frames[1].Type.Should().Be("STEP_FINISHED");
+        frames[0].Type.Should().Be(WorkflowRunEventTypes.StepStarted);
+        frames[1].Type.Should().Be(WorkflowRunEventTypes.StepFinished);
     }
 
     [Fact]
@@ -62,15 +62,15 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
         var streamer = new WorkflowRunOutputStreamer();
 
         var started = streamer.Map(new WorkflowRunStartedEvent { ThreadId = "a1", Timestamp = 10 });
-        started.Type.Should().Be("RUN_STARTED");
+        started.Type.Should().Be(WorkflowRunEventTypes.RunStarted);
         started.ThreadId.Should().Be("a1");
 
         var finished = streamer.Map(new WorkflowRunFinishedEvent { ThreadId = "a1", Result = "ok", Timestamp = 11 });
-        finished.Type.Should().Be("RUN_FINISHED");
+        finished.Type.Should().Be(WorkflowRunEventTypes.RunFinished);
         finished.Result.Should().Be("ok");
 
         var error = streamer.Map(new WorkflowRunErrorEvent { Message = "boom", Code = "E1", Timestamp = 12 });
-        error.Type.Should().Be("RUN_ERROR");
+        error.Type.Should().Be(WorkflowRunEventTypes.RunError);
         error.Message.Should().Be("boom");
         error.Code.Should().Be("E1");
 
@@ -91,7 +91,7 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
         msgEnd.MessageId.Should().Be("m1");
 
         var snapshot = streamer.Map(new WorkflowStateSnapshotEvent { Snapshot = new { v = 1 }, Timestamp = 18 });
-        snapshot.Type.Should().Be("STATE_SNAPSHOT");
+        snapshot.Type.Should().Be(WorkflowRunEventTypes.StateSnapshot);
         snapshot.Snapshot.Should().NotBeNull();
 
         var toolStart = streamer.Map(new WorkflowToolCallStartEvent { ToolCallId = "t1", ToolName = "search", Timestamp = 19 });

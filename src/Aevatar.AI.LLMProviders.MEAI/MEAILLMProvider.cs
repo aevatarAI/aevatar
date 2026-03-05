@@ -67,13 +67,86 @@ public sealed class MEAILLMProvider : ILLMProvider
         var options = BuildOptions(request);
 
         _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} 条消息", messages.Count);
+        var emittedOutputChunk = false;
 
         await foreach (var update in _client.GetStreamingResponseAsync(messages, options, ct))
         {
+            var emittedTextFromContents = false;
+            if (update.Contents is { Count: > 0 })
+            {
+                foreach (var part in update.Contents)
+                {
+                    switch (part)
+                    {
+                        case TextContent textContent when !string.IsNullOrEmpty(textContent.Text):
+                            emittedTextFromContents = true;
+                            emittedOutputChunk = true;
+                            yield return new LLMStreamChunk
+                            {
+                                DeltaContent = textContent.Text,
+                            };
+                            break;
+                        case TextReasoningContent reasoningContent when !string.IsNullOrEmpty(reasoningContent.Text):
+                            yield return new LLMStreamChunk
+                            {
+                                DeltaReasoningContent = reasoningContent.Text,
+                            };
+                            break;
+                        case FunctionCallContent functionCall:
+                            emittedOutputChunk = true;
+                            yield return new LLMStreamChunk
+                            {
+                                DeltaToolCall = ConvertFunctionCallDelta(functionCall),
+                            };
+                            break;
+                    }
+                }
+            }
+
+            if (!emittedTextFromContents && !string.IsNullOrEmpty(update.Text))
+            {
+                emittedOutputChunk = true;
+                yield return new LLMStreamChunk
+                {
+                    DeltaContent = update.Text,
+                };
+            }
+        }
+
+        // Some models/providers may produce a streaming sequence without user-visible text/tool chunks.
+        // In that case, do a single non-streaming fallback call to avoid returning an empty assistant output.
+        if (!emittedOutputChunk)
+        {
+            _logger.LogWarning(
+                "MEAI ChatStreamAsync emitted no content/tool chunks for provider={Provider}; fallback to non-streaming response.",
+                Name);
+
+            var fallback = ConvertResponse(await _client.GetResponseAsync(messages, options, ct));
+            if (!string.IsNullOrEmpty(fallback.Content))
+            {
+                yield return new LLMStreamChunk
+                {
+                    DeltaContent = fallback.Content,
+                };
+            }
+
+            if (fallback.ToolCalls is { Count: > 0 })
+            {
+                foreach (var toolCall in fallback.ToolCalls)
+                {
+                    yield return new LLMStreamChunk
+                    {
+                        DeltaToolCall = toolCall,
+                    };
+                }
+            }
+
             yield return new LLMStreamChunk
             {
-                DeltaContent = update.Text,
+                IsLast = true,
+                Usage = fallback.Usage,
             };
+            yield break;
         }
 
         // 最后一个 chunk 标记结束
@@ -180,15 +253,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                 if (part is FunctionCallContent fcc)
                 {
                     toolCalls ??= [];
-                    var argsJson = fcc.Arguments != null
-                        ? System.Text.Json.JsonSerializer.Serialize(fcc.Arguments)
-                        : "{}";
-                    toolCalls.Add(new ToolCall
-                    {
-                        Id = fcc.CallId ?? Guid.NewGuid().ToString("N"),
-                        Name = fcc.Name,
-                        ArgumentsJson = argsJson,
-                    });
+                    toolCalls.Add(ConvertFunctionCall(fcc));
                 }
             }
         }
@@ -208,6 +273,33 @@ public sealed class MEAILLMProvider : ILLMProvider
             ToolCalls = toolCalls,
             Usage = usage,
             FinishReason = response.FinishReason?.ToString(),
+        };
+    }
+
+    private static ToolCall ConvertFunctionCall(FunctionCallContent functionCall)
+    {
+        var argsJson = functionCall.Arguments != null
+            ? System.Text.Json.JsonSerializer.Serialize(functionCall.Arguments)
+            : "{}";
+        return new ToolCall
+        {
+            Id = functionCall.CallId ?? Guid.NewGuid().ToString("N"),
+            Name = functionCall.Name ?? string.Empty,
+            ArgumentsJson = argsJson,
+        };
+    }
+
+    // Keep delta semantics: missing callId should stay empty and be resolved by downstream accumulator.
+    private static ToolCall ConvertFunctionCallDelta(FunctionCallContent functionCall)
+    {
+        var argsJson = functionCall.Arguments != null
+            ? System.Text.Json.JsonSerializer.Serialize(functionCall.Arguments)
+            : string.Empty;
+        return new ToolCall
+        {
+            Id = functionCall.CallId ?? string.Empty,
+            Name = functionCall.Name ?? string.Empty,
+            ArgumentsJson = argsJson,
         };
     }
 }

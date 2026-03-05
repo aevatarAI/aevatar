@@ -8,6 +8,7 @@ using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Text.Json;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -66,9 +67,11 @@ public class EventEnvelopeToAGUIEventMapperTests
 
         var events = CreateMapper().Map(envelope);
 
-        events.Should().HaveCount(1);
+        events.Should().HaveCount(2);
         events[0].Should().BeOfType<StepFinishedEvent>();
         ((StepFinishedEvent)events[0]).StepName.Should().Be("analyze");
+        events[1].Should().BeOfType<CustomEvent>();
+        ((CustomEvent)events[1]).Name.Should().Be("aevatar.step.completed");
     }
 
     [Fact]
@@ -125,6 +128,26 @@ public class EventEnvelopeToAGUIEventMapperTests
         ((Aevatar.Presentation.AGUI.TextMessageStartEvent)start[0]).MessageId.Should().Be("msg:s2");
         end.Should().ContainSingle().Which.Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageEndEvent>();
         ((Aevatar.Presentation.AGUI.TextMessageEndEvent)end[0]).MessageId.Should().Be("msg:s2");
+    }
+
+    [Fact]
+    public void TextMessageReasoningEvent_ProjectsTo_CustomReasoningEvent()
+    {
+        var envelope = Wrap(new TextMessageReasoningEvent
+        {
+            SessionId = "s-reasoning",
+            Delta = "thinking chunk",
+        });
+        envelope.PublisherId = "wf:planner";
+
+        var events = CreateMapper().Map(envelope);
+
+        events.Should().ContainSingle().Which.Should().BeOfType<CustomEvent>();
+        var custom = (CustomEvent)events[0];
+        custom.Name.Should().Be("aevatar.llm.reasoning");
+        var value = JsonSerializer.SerializeToElement(custom.Value);
+        value.GetProperty("Delta").GetString().Should().Be("thinking chunk");
+        value.GetProperty("Role").GetString().Should().Be("planner");
     }
 
     [Fact]
@@ -244,6 +267,56 @@ public class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void WorkflowSuspendedEvent_ProjectsTo_HumanInputRequest()
+    {
+        var envelope = Wrap(new WorkflowSuspendedEvent
+        {
+            RunId = "run-1",
+            StepId = "get_context",
+            SuspensionType = "human_input",
+            Prompt = "请提供补充信息",
+            TimeoutSeconds = 1800,
+            Metadata = { { "variable", "user_context" } },
+        });
+
+        var events = CreateMapper().Map(envelope);
+
+        events.Should().HaveCount(1);
+        events[0].Should().BeOfType<HumanInputRequestEvent>();
+
+        var e = (HumanInputRequestEvent)events[0];
+        e.RunId.Should().Be("run-1");
+        e.StepId.Should().Be("get_context");
+        e.SuspensionType.Should().Be("human_input");
+        e.Prompt.Should().Be("请提供补充信息");
+        e.TimeoutSeconds.Should().Be(1800);
+        e.Metadata.Should().NotBeNull();
+        e.Metadata!["variable"].Should().Be("user_context");
+    }
+
+    [Fact]
+    public void WaitingForSignalEvent_ProjectsTo_CustomWaitingSignalEvent()
+    {
+        var envelope = Wrap(new WaitingForSignalEvent
+        {
+            RunId = "run-expected",
+            StepId = "wait_gate",
+            SignalName = "ops_window_open",
+            Prompt = "waiting for ops window",
+            TimeoutMs = 30000,
+        });
+        envelope.CorrelationId = "correlation-should-not-override-run-id";
+
+        var events = CreateMapper().Map(envelope);
+
+        events.Should().ContainSingle().Which.Should().BeOfType<CustomEvent>();
+        var custom = (CustomEvent)events[0];
+        custom.Name.Should().Be("aevatar.workflow.waiting_signal");
+        var value = JsonSerializer.SerializeToElement(custom.Value);
+        value.GetProperty("RunId").GetString().Should().Be("run-expected");
+    }
+
+    [Fact]
     public void UnknownPayload_ReturnsEmpty()
     {
         // ParentChangedEvent 没有投影规则
@@ -275,8 +348,11 @@ public class EventEnvelopeToAGUIEventMapperTests
             new StepRequestAGUIEventEnvelopeMappingHandler(),
             new StepCompletedAGUIEventEnvelopeMappingHandler(),
             new AITextStreamAGUIEventEnvelopeMappingHandler(),
+            new AIReasoningAGUIEventEnvelopeMappingHandler(),
             new WorkflowCompletedAGUIEventEnvelopeMappingHandler(),
             new ToolCallAGUIEventEnvelopeMappingHandler(),
+            new WorkflowSuspendedAGUIEventEnvelopeMappingHandler(),
+            new WorkflowWaitingSignalAGUIEventEnvelopeMappingHandler(),
         ]);
     }
 }

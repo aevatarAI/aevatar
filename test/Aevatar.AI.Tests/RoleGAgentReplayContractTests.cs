@@ -12,49 +12,75 @@ namespace Aevatar.AI.Tests;
 public class RoleGAgentReplayContractTests
 {
     [Fact]
-    public async Task ConfigureRoleEvent_ShouldPersistAndReplayRoleState()
+    public async Task InitializeRoleEvent_ShouldPersistAndReplayRoleState()
     {
         var store = new InMemoryEventStoreForTests();
-        var services = new ServiceCollection()
-            .AddSingleton<IEventStore>(store)
-            .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
-            .BuildServiceProvider();
+        var services = BuildServices(store);
 
-        var agent1 = CreateAgent(services, "role-replay-contract");
+        var agent1 = CreateAgent(services, "role-init-replay");
         await agent1.ActivateAsync();
-        await agent1.HandleConfigureRoleAgent(new ConfigureRoleAgentEvent
+        await agent1.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
             RoleName = "researcher",
             ProviderName = "mock",
             Model = "m1",
             SystemPrompt = "be helpful",
+            MaxToolRounds = 4,
+            MaxHistoryMessages = 32,
+            StreamBufferCapacity = 128,
         });
         await agent1.DeactivateAsync();
 
-        var persisted = await store.GetEventsAsync("role-replay-contract");
-        persisted.Should().ContainSingle(x => x.EventType.Contains(nameof(ConfigureRoleAgentEvent), StringComparison.Ordinal));
+        var persisted = await store.GetEventsAsync("role-init-replay");
+        persisted.Should().ContainSingle(x => x.EventType.Contains(nameof(InitializeRoleAgentEvent), StringComparison.Ordinal));
 
-        var agent2 = CreateAgent(services, "role-replay-contract");
+        var agent2 = CreateAgent(services, "role-init-replay");
         await agent2.ActivateAsync();
 
-        agent2.State.RoleName.Should().Be(agent1.State.RoleName);
         agent2.RoleName.Should().Be("researcher");
+        agent2.State.RoleName.Should().Be("researcher");
+        agent2.EffectiveConfig.ProviderName.Should().Be("mock");
+        agent2.EffectiveConfig.Model.Should().Be("m1");
+        agent2.EffectiveConfig.SystemPrompt.Should().Be("be helpful");
+        agent2.EffectiveConfig.MaxToolRounds.Should().Be(4);
+        agent2.EffectiveConfig.MaxHistoryMessages.Should().Be(32);
+        agent2.EffectiveConfig.StreamBufferCapacity.Should().Be(128);
     }
 
     [Fact]
-    public async Task RoleGAgentFactory_ShouldUseEventSourcedConfigurePath()
+    public async Task InitializeRoleEvent_ShouldPreserveExplicitZeroTemperature()
     {
         var store = new InMemoryEventStoreForTests();
-        var services = new ServiceCollection()
-            .AddSingleton<IEventStore>(store)
-            .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
-            .BuildServiceProvider();
+        var services = BuildServices(store);
+
+        var agent = CreateAgent(services, "role-temperature-zero");
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = "mock",
+            SystemPrompt = "system",
+            Temperature = 0,
+        });
+
+        agent.EffectiveConfig.Temperature.Should().Be(0);
+
+        var persisted = await store.GetEventsAsync("role-temperature-zero");
+        persisted.Should().ContainSingle();
+        var evt = persisted.Single().EventData.Unpack<InitializeRoleAgentEvent>();
+        evt.HasTemperature.Should().BeTrue();
+        evt.Temperature.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RoleGAgentFactory_ShouldUseEventSourcedInitializePath()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
 
         var agent1 = CreateAgent(services, "role-factory-replay");
         await agent1.ActivateAsync();
-        await RoleGAgentFactory.ApplyConfig(agent1, new RoleYamlConfig
+        await RoleGAgentFactory.ApplyInitialization(agent1, new RoleYamlConfig
         {
             Name = "assistant",
             Provider = "mock",
@@ -63,7 +89,7 @@ public class RoleGAgentReplayContractTests
         await agent1.DeactivateAsync();
 
         var persisted = await store.GetEventsAsync("role-factory-replay");
-        persisted.Should().ContainSingle(x => x.EventType.Contains(nameof(ConfigureRoleAgentEvent), StringComparison.Ordinal));
+        persisted.Should().ContainSingle(x => x.EventType.Contains(nameof(InitializeRoleAgentEvent), StringComparison.Ordinal));
 
         var agent2 = CreateAgent(services, "role-factory-replay");
         await agent2.ActivateAsync();
@@ -71,64 +97,18 @@ public class RoleGAgentReplayContractTests
         agent2.RoleName.Should().Be("assistant");
     }
 
-    [Fact]
-    public async Task RoleGAgentFactory_ShouldPreserveExplicitZeroTemperature()
+    private static IServiceProvider BuildServices(InMemoryEventStoreForTests store)
     {
-        var store = new InMemoryEventStoreForTests();
-        var services = new ServiceCollection()
+        return new ServiceCollection()
             .AddSingleton<IEventStore>(store)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
-
-        var agent = CreateAgent(services, "role-factory-temperature-zero");
-        await agent.ActivateAsync();
-        await RoleGAgentFactory.ApplyConfig(agent, new RoleYamlConfig
-        {
-            Name = "assistant",
-            Provider = "mock",
-            SystemPrompt = "system",
-            Temperature = 0,
-        }, services);
-
-        agent.Config.Temperature.Should().Be(0);
-
-        var persisted = await store.GetEventsAsync("role-factory-temperature-zero");
-        persisted.Should().ContainSingle();
-        var evt = persisted.Single().EventData.Unpack<ConfigureRoleAgentEvent>();
-        evt.HasTemperature.Should().BeTrue();
-        evt.Temperature.Should().Be(0);
     }
 
-    [Fact]
-    public async Task RoleGAgentFactory_ShouldKeepTemperatureUnset_WhenYamlTemperatureIsMissing()
-    {
-        var store = new InMemoryEventStoreForTests();
-        var services = new ServiceCollection()
-            .AddSingleton<IEventStore>(store)
-            .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
-            .BuildServiceProvider();
-
-        var agent = CreateAgent(services, "role-factory-temperature-null");
-        await agent.ActivateAsync();
-        await RoleGAgentFactory.ApplyConfig(agent, new RoleYamlConfig
-        {
-            Name = "assistant",
-            Provider = "mock",
-            SystemPrompt = "system",
-            Temperature = null,
-        }, services);
-
-        agent.Config.Temperature.Should().BeNull();
-
-        var persisted = await store.GetEventsAsync("role-factory-temperature-null");
-        persisted.Should().ContainSingle();
-        var evt = persisted.Single().EventData.Unpack<ConfigureRoleAgentEvent>();
-        evt.HasTemperature.Should().BeFalse();
-    }
-
-    private static RoleGAgent CreateAgent(IServiceProvider services, string actorId)
+    private static RoleGAgent CreateAgent(
+        IServiceProvider services,
+        string actorId)
     {
         var agent = new RoleGAgent
         {

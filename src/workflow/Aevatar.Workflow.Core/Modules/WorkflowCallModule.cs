@@ -1,12 +1,12 @@
 // ─────────────────────────────────────────────────────────────
 // WorkflowCallModule — 子工作流调用模块
-// 递归调用另一个 workflow（通过 StartWorkflowEvent）
+// 仅负责将 workflow_call 步骤转换为内部调用请求事件。
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Microsoft.Extensions.Logging;
+using Aevatar.Workflow.Core.Primitives;
 
 namespace Aevatar.Workflow.Core.Modules;
 
@@ -23,27 +23,68 @@ public sealed class WorkflowCallModule : IEventModule
     /// <inheritdoc />
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
-        var request = envelope.Payload!.Unpack<StepRequestEvent>();
-        if (request.StepType != "workflow_call") return;
+        var payload = envelope.Payload;
+        if (payload == null) return;
 
-        var workflowName = request.Parameters.GetValueOrDefault("workflow", "");
-        if (string.IsNullOrEmpty(workflowName))
+        if (!payload.Is(StepRequestEvent.Descriptor))
+            return;
+
+        var request = payload.Unpack<StepRequestEvent>();
+        if (request.StepType != "workflow_call")
+            return;
+
+        var parentRunId = WorkflowRunIdNormalizer.Normalize(request.RunId);
+        var parentStepId = request.StepId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(parentStepId))
         {
             await ctx.PublishAsync(new StepCompletedEvent
             {
-                StepId = request.StepId,
-                Success = false, Error = "workflow_call 缺少 workflow 参数",
+                StepId = request.StepId ?? string.Empty,
+                RunId = parentRunId,
+                Success = false,
+                Error = "workflow_call missing step_id",
             }, EventDirection.Self, ct);
             return;
         }
 
-        ctx.Logger.LogInformation("WorkflowCall: {StepId} → 调用子工作流 {Workflow}", request.StepId, workflowName);
-
-        // 触发子工作流
-        await ctx.PublishAsync(new StartWorkflowEvent
+        var workflowName = request.Parameters.GetValueOrDefault("workflow", "").Trim();
+        if (string.IsNullOrEmpty(workflowName))
         {
+            await ctx.PublishAsync(new StepCompletedEvent
+            {
+                StepId = parentStepId,
+                RunId = parentRunId,
+                Success = false,
+                Error = "workflow_call missing workflow parameter",
+            }, EventDirection.Self, ct);
+            return;
+        }
+
+        var lifecycleRaw = request.Parameters.GetValueOrDefault("lifecycle", string.Empty);
+        if (!WorkflowCallLifecycle.IsSupported(lifecycleRaw))
+        {
+            var invalidLifecycle = lifecycleRaw?.Trim() ?? string.Empty;
+            await ctx.PublishAsync(new StepCompletedEvent
+            {
+                StepId = parentStepId,
+                RunId = parentRunId,
+                Success = false,
+                Error = $"workflow_call lifecycle must be {WorkflowCallLifecycle.AllowedValuesText}, got '{invalidLifecycle}'",
+            }, EventDirection.Self, ct);
+            return;
+        }
+
+        var invocation = new SubWorkflowInvokeRequestedEvent
+        {
+            InvocationId = WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId),
+            ParentRunId = parentRunId,
+            ParentStepId = parentStepId,
             WorkflowName = workflowName,
-            Input = request.Input,
-        }, EventDirection.Self, ct);
+            Input = request.Input ?? string.Empty,
+            Lifecycle = WorkflowCallLifecycle.Normalize(lifecycleRaw),
+            RequestedByActorId = ctx.AgentId,
+        };
+
+        await ctx.PublishAsync(invocation, EventDirection.Self, ct);
     }
 }

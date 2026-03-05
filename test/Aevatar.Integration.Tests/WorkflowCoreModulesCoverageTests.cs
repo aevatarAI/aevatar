@@ -6,6 +6,8 @@ using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -242,6 +244,7 @@ public sealed class WorkflowCoreModulesCoverageTests
                 {
                     ["step"] = "transform",
                     ["max_iterations"] = "3",
+                    ["condition"] = "not(eq(output, 'DONE'))",
                 },
             }),
             ctx,
@@ -272,7 +275,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var secondDispatch = deltaEvents[0].evt.Should().BeOfType<StepRequestEvent>().Subject;
         secondDispatch.StepId.Should().Be("while-1_iter_1");
-        secondDispatch.StepType.Should().Be("llm_call");
+        secondDispatch.StepType.Should().Be("transform");
         secondDispatch.Input.Should().Be("continue");
         deltaEvents[0].direction.Should().Be(EventDirection.Down);
 
@@ -280,6 +283,51 @@ public sealed class WorkflowCoreModulesCoverageTests
         completed.StepId.Should().Be("while-1");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("DONE");
+        completed.Metadata["while.iterations"].Should().Be("2");
+    }
+
+    [Fact]
+    public async Task WhileModule_ShouldEvaluateSubParametersPerIteration()
+    {
+        var module = new WhileModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "while-dynamic",
+                StepType = "while",
+                Input = "seed",
+                TargetRole = "worker",
+                Parameters =
+                {
+                    ["step"] = "transform",
+                    ["max_iterations"] = "3",
+                    ["condition"] = "${lt(iteration, 3)}",
+                    ["sub_param_prompt"] = "${concat('iter=', iteration, ',input=', input)}",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var firstDispatch = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        firstDispatch.Parameters["prompt"].Should().Be("iter=0,input=seed");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "while-dynamic_iter_0", Success = true, Output = "out-0" }),
+            ctx,
+            CancellationToken.None);
+        var secondDispatch = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        secondDispatch.Parameters["prompt"].Should().Be("iter=1,input=out-0");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent { StepId = "while-dynamic_iter_1", Success = true, Output = "out-1" }),
+            ctx,
+            CancellationToken.None);
+        var thirdDispatch = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        thirdDispatch.Parameters["prompt"].Should().Be("iter=2,input=out-1");
     }
 
     [Fact]
@@ -426,7 +474,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowCallModule_ShouldPublishFailureWhenMissingWorkflow_AndStartWhenPresent()
+    public async Task WorkflowCallModule_ShouldPublishFailureWhenMissingWorkflow_AndEmitInvocationRequestWhenPresent()
     {
         var module = new WorkflowCallModule();
         var ctx = CreateContext();
@@ -443,7 +491,7 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var failure = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         failure.Success.Should().BeFalse();
-        failure.Error.Should().Contain("缺少 workflow 参数");
+        failure.Error.Should().Contain("missing workflow parameter");
 
         ctx.Published.Clear();
 
@@ -453,14 +501,309 @@ public sealed class WorkflowCoreModulesCoverageTests
                 StepId = "wf-2",
                 StepType = "workflow_call",
                 Input = "payload-2",
-                Parameters = { ["workflow"] = "sub_flow" },
+                Parameters =
+                {
+                    ["workflow"] = "sub_flow",
+                    ["lifecycle"] = "singleton",
+                },
             }),
             ctx,
             CancellationToken.None);
 
-        var start = ctx.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
-        start.WorkflowName.Should().Be("sub_flow");
-        start.Input.Should().Be("payload-2");
+        var invocation = ctx.Published.Select(x => x.evt).OfType<SubWorkflowInvokeRequestedEvent>().Single();
+        invocation.WorkflowName.Should().Be("sub_flow");
+        invocation.Input.Should().Be("payload-2");
+        invocation.ParentStepId.Should().Be("wf-2");
+        invocation.ParentRunId.Should().Be("default");
+        invocation.Lifecycle.Should().Be("singleton");
+        Regex.IsMatch(invocation.InvocationId, "^default:workflow_call:wf-2:[0-9a-f]{32}$")
+            .Should().BeTrue("workflow_call invocation id should follow canonical format");
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wf-invalid-lifecycle",
+                StepType = "workflow_call",
+                Input = "payload-invalid",
+                Parameters =
+                {
+                    ["workflow"] = "sub_flow",
+                    ["lifecycle"] = "isolate",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var invalidLifecycleFailure = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        invalidLifecycleFailure.Success.Should().BeFalse();
+        invalidLifecycleFailure.Error.Should().Contain("lifecycle must be singleton/transient/scope");
+        ctx.Published.Select(x => x.evt).OfType<SubWorkflowInvokeRequestedEvent>().Should().BeEmpty();
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "",
+                StepType = "workflow_call",
+                Input = "payload-3",
+                Parameters =
+                {
+                    ["workflow"] = "sub_flow",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var emptyStepFailure = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        emptyStepFailure.Success.Should().BeFalse();
+        emptyStepFailure.Error.Should().Contain("missing step_id");
+        ctx.Published.Select(x => x.evt).OfType<SubWorkflowInvokeRequestedEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void WorkflowCallModule_ShouldNotKeepProcessLevelInvocationDictionaries()
+    {
+        var forbidden = new[]
+        {
+            typeof(Dictionary<,>),
+            typeof(ConcurrentDictionary<,>),
+            typeof(HashSet<>),
+            typeof(Queue<>),
+        };
+
+        var fields = typeof(WorkflowCallModule).GetFields(
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic);
+
+        var violations = fields
+            .Where(field => field.FieldType.IsGenericType)
+            .Select(field => (field.Name, genericType: field.FieldType.GetGenericTypeDefinition()))
+            .Where(x => forbidden.Contains(x.genericType))
+            .Select(x => x.Name)
+            .ToList();
+
+        violations.Should().BeEmpty("workflow_call fact state must be persisted in WorkflowGAgent state");
+    }
+
+    [Fact]
+    public void CacheModule_MetadataAndCanHandle_ShouldCoverModuleSurface()
+    {
+        var module = new CacheModule();
+
+        module.Name.Should().Be("cache");
+        module.Priority.Should().Be(3);
+        module.CanHandle(Envelope(new StepRequestEvent { StepId = "cache-1", StepType = "cache" })).Should().BeTrue();
+        module.CanHandle(Envelope(new StepCompletedEvent { StepId = "cache-1", Success = true })).Should().BeTrue();
+        module.CanHandle(Envelope(new WorkflowCompletedEvent { WorkflowName = "wf", Success = true })).Should().BeFalse();
+        module.CanHandle(new EventEnvelope()).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CacheModule_WithLongCacheKey_ShouldShortenMetadataKey()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+        var longKey = new string('k', 80);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-long-1",
+                StepType = "cache",
+                RunId = "run-long-1",
+                Input = "input",
+                Parameters = { ["cache_key"] = longKey },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var childRequest = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = childRequest.StepId,
+                RunId = "run-long-1",
+                Success = true,
+                Output = "ok",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completion.Metadata["cache.key"].Should().EndWith("...");
+        completion.Metadata["cache.key"].Length.Should().Be(63);
+    }
+
+    [Fact]
+    public async Task CacheModule_MissThenHit_ShouldDispatchDefaultChildAndServeCachedValue()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-1",
+                StepType = "cache",
+                RunId = "run-cache-1",
+                Input = "input-1",
+                Parameters =
+                {
+                    ["cache_key"] = "key-1",
+                    ["ttl_seconds"] = "60",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var childRequest = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        childRequest.StepId.Should().StartWith("cache-parent-1_cached_");
+        childRequest.StepType.Should().Be("llm_call");
+        childRequest.RunId.Should().Be("run-cache-1");
+        childRequest.Input.Should().Be("input-1");
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = childRequest.StepId,
+                RunId = "run-cache-1",
+                Success = true,
+                Output = "cached-output",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var missCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        missCompletion.StepId.Should().Be("cache-parent-1");
+        missCompletion.Success.Should().BeTrue();
+        missCompletion.Output.Should().Be("cached-output");
+        missCompletion.Metadata["cache.hit"].Should().Be("false");
+        missCompletion.Metadata.Should().ContainKey("cache.key");
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-2",
+                StepType = "cache",
+                RunId = "run-cache-2",
+                Input = "input-2",
+                Parameters =
+                {
+                    ["cache_key"] = "key-1",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var hitCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        hitCompletion.StepId.Should().Be("cache-parent-2");
+        hitCompletion.Success.Should().BeTrue();
+        hitCompletion.Output.Should().Be("cached-output");
+        hitCompletion.Metadata["cache.hit"].Should().Be("true");
+        hitCompletion.Metadata.Should().ContainKey("cache.key");
+    }
+
+    [Fact]
+    public async Task CacheModule_WhenSecondCallerJoinsPending_ShouldFanOutCompletionAndNotCacheFailures()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-a",
+                StepType = "cache",
+                RunId = "run-a",
+                Input = "input-a",
+                Parameters = { ["cache_key"] = "shared-key" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var childRequest = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-b",
+                StepType = "cache",
+                RunId = "run-b",
+                Input = "input-b",
+                Parameters = { ["cache_key"] = "shared-key" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = childRequest.StepId,
+                RunId = "run-a",
+                Success = false,
+                Error = "child failed",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var waiterCompletions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToList();
+        waiterCompletions.Should().HaveCount(2);
+        waiterCompletions.Should().ContainSingle(x => x.StepId == "cache-parent-a" && !x.Success && x.Error == "child failed");
+        waiterCompletions.Should().ContainSingle(x => x.StepId == "cache-parent-b" && !x.Success && x.Error == "child failed");
+        foreach (var completion in waiterCompletions)
+        {
+            completion.Metadata.TryGetValue("cache.hit", out var hit).Should().BeTrue();
+            hit.Should().Be("false");
+        }
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "cache-parent-c",
+                StepType = "cache",
+                RunId = "run-c",
+                Input = "input-c",
+                Parameters = { ["cache_key"] = "shared-key" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task CacheModule_WhenCompletionDoesNotMatchPendingChild_ShouldIgnore()
+    {
+        var module = new CacheModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "unknown-child",
+                RunId = "run-unknown",
+                Success = true,
+                Output = "x",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
     }
 
     [Fact]
@@ -497,6 +840,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             {
                 StepId = "llm-1",
                 StepType = "llm_call",
+                RunId = "run-llm-1",
                 Input = "question",
                 Parameters = { ["prompt_prefix"] = "system" },
             }),
@@ -505,7 +849,8 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
         chat.Prompt.Should().Be("system\n\nquestion");
-        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-1"));
+        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1"));
+        chat.Metadata["aevatar.llm_timeout_ms"].Should().Be("1800000");
         ctx.Published.Last().direction.Should().Be(EventDirection.Self);
     }
 
@@ -520,13 +865,14 @@ public sealed class WorkflowCoreModulesCoverageTests
             {
                 StepId = "llm-text",
                 StepType = "llm_call",
+                RunId = "run-text",
                 Input = "q1",
             }),
             ctx,
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-text");
+        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-text", "llm-text");
         await module.HandleAsync(
             Envelope(new TextMessageEndEvent
             {
@@ -548,13 +894,14 @@ public sealed class WorkflowCoreModulesCoverageTests
             {
                 StepId = "llm-chat",
                 StepType = "llm_call",
+                RunId = "run-chat",
                 Input = "q2",
             }),
             ctx,
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "llm-chat");
+        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-chat", "llm-chat");
         await module.HandleAsync(
             Envelope(new ChatResponseEvent
             {
@@ -568,6 +915,79 @@ public sealed class WorkflowCoreModulesCoverageTests
         chatCompleted.StepId.Should().Be("llm-chat");
         chatCompleted.WorkerId.Should().Be(ctx.AgentId);
         chatCompleted.Output.Should().Be("a2");
+    }
+
+    [Fact]
+    public async Task LLMCallModule_WhenRolePublishesInternalFailureMarker_ShouldPublishFailedStepCompleted()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-failed",
+                StepType = "llm_call",
+                RunId = "run-failed",
+                Input = "q",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-failed", "llm-failed");
+        await module.HandleAsync(
+            Envelope(new TextMessageEndEvent
+            {
+                SessionId = sessionId,
+                Content = "[[AEVATAR_LLM_ERROR]] provider returned 429",
+            }, publisherId: "role-worker-failed"),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("llm-failed");
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("provider returned 429");
+        completed.WorkerId.Should().Be("role-worker-failed");
+    }
+
+    [Fact]
+    public async Task LLMCallModule_WhenNoCompletionArrivesWithinTimeout_ShouldPublishFailedStepCompleted()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+        var timeoutPublished = new TaskCompletionSource<StepCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ctx.OnPublish = (evt, _) =>
+        {
+            if (evt is StepCompletedEvent completed &&
+                completed.StepId == "llm-timeout" &&
+                !completed.Success &&
+                completed.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase))
+            {
+                timeoutPublished.TrySetResult(completed);
+            }
+        };
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-timeout",
+                StepType = "llm_call",
+                RunId = "run-timeout",
+                Input = "q-timeout",
+                Parameters =
+                {
+                    ["timeout_ms"] = "50",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var timeoutEvent = await timeoutPublished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        timeoutEvent.StepId.Should().Be("llm-timeout");
+        timeoutEvent.RunId.Should().Be("run-timeout");
+        timeoutEvent.Success.Should().BeFalse();
     }
 
     [Fact]
@@ -773,9 +1193,13 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId, x => x);
         completions["assign-1"].Output.Should().Be("input-value");
+        completions["assign-1"].Metadata["assign.target"].Should().Be("x");
+        completions["assign-1"].Metadata["assign.value"].Should().Be("input-value");
         completions["assign-2"].Output.Should().Be("literal");
         completions["cond-1"].Output.Should().Be("contains KEY text");
+        completions["cond-1"].Metadata["branch"].Should().Be("true");
         completions["cond-2"].Output.Should().Be("other text");
+        completions["cond-2"].Metadata["branch"].Should().Be("false");
         completions["cp-1"].Output.Should().Be("snapshot");
     }
 
@@ -801,6 +1225,8 @@ public sealed class WorkflowCoreModulesCoverageTests
 
     private sealed class RecordingEventHandlerContext : IEventHandlerContext
     {
+        private readonly Lock _lock = new();
+
         public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
         {
             Services = services;
@@ -810,6 +1236,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         }
 
         public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+        public Action<IMessage, EventDirection>? OnPublish { get; set; }
         public EventEnvelope InboundEnvelope { get; }
         public string AgentId => Agent.Id;
         public IAgent Agent { get; }
@@ -822,7 +1249,11 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken ct = default)
             where TEvent : IMessage
         {
-            Published.Add((evt, direction));
+            lock (_lock)
+            {
+                Published.Add((evt, direction));
+            }
+            OnPublish?.Invoke(evt, direction);
             return Task.CompletedTask;
         }
     }
