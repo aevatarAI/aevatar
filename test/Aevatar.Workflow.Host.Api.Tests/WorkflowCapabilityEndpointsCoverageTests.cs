@@ -44,7 +44,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             service,
             CancellationToken.None);
 
-        http.Response.Headers["X-Trace-Id"].ToString().Should().Be(activity.TraceId.ToString());
+        http.Response.Headers.ContainsKey("X-Trace-Id").Should().BeFalse();
         http.Response.Headers["X-Correlation-Id"].ToString().Should().Be("cmd-header");
     }
 
@@ -118,7 +118,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         statusCode.Should().Be(StatusCodes.Status202Accepted);
         doc.RootElement.GetProperty("commandId").GetString().Should().Be("cmd-1");
         doc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
-        doc.RootElement.GetProperty("traceId").ValueKind.Should().Be(JsonValueKind.String);
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
         doc.RootElement.GetProperty("actorId").GetString().Should().Be("actor-1");
     }
 
@@ -193,7 +193,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         doc.RootElement.GetProperty("code").GetString().Should().Be("INVALID_PROMPT");
         doc.RootElement.GetProperty("requestId").GetString().Should().Be("req-parse");
         doc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-parse");
-        doc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
         metricCapture.FirstResponseMeasurements.Should().ContainSingle();
         metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "ws"));
@@ -230,7 +230,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
         doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
-        doc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
         metricCapture.FirstResponseMeasurements.Should().BeEmpty();
         metricCapture.RequestMeasurements.Should().ContainSingle();
@@ -268,7 +268,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         using var doc = JsonDocument.Parse(socket.SentBinaries[0]);
         doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
-        doc.RootElement.GetProperty("traceId").GetString().Should().Be(activity.TraceId.ToString());
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
     }
 
     [Fact]

@@ -2,7 +2,7 @@
 
 ## 1. 目标与范围
 - 目标：统一 Aevatar 有状态 Actor 的写侧事实源，强制 `Command -> Domain Event -> Apply -> State`。
-- 适用范围：`Aevatar.Foundation.Core`、`Aevatar.Foundation.Runtime`、`Aevatar.Foundation.Runtime.Implementations.Orleans`。
+- 适用范围：`Aevatar.Foundation.Core`、`Aevatar.Foundation.Runtime`、`Aevatar.Foundation.Runtime.Implementations.Local`、`Aevatar.Foundation.Runtime.Implementations.Orleans`。
 - 非目标：本文件不定义 ReadModel Provider 细节；统一要求与重构计划见 `docs/architecture/generic-event-sourcing-elasticsearch-readmodel-requirements.md`。
 
 ## 2. 当前强制语义
@@ -27,7 +27,7 @@
 - Runtime 默认裁剪钩子：`src/Aevatar.Foundation.Runtime/Actor/EventStoreCompactionDeactivationHook.cs`
 - 本地持久化 EventStore：`src/Aevatar.Foundation.Runtime/Persistence/FileEventStore.cs`
 - 生产持久化 EventStore（Garnet）：`src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/GarnetEventStore.cs`
-- Local Runtime 注入边界：`src/Aevatar.Foundation.Runtime/Actor/LocalActorRuntime.cs`
+- Local Runtime 注入边界：`src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorRuntime.cs`
 - Orleans Runtime 注入边界：`src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs`
 - 防回退门禁：`tools/ci/architecture_guards.sh`
 

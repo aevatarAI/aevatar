@@ -20,15 +20,15 @@ These are the required correlation keys across surfaces:
 
 | Key | Surface | Meaning |
 |---|---|---|
-| `trace_id` | Jaeger + logs + API trace field | distributed trace identity |
+| `trace_id` | Jaeger + logs | distributed trace identity (internal only, not exposed in API responses) |
 | `correlation_id` | API + logs + ws payload | business run identity |
 | `causation_id` | logs + envelope metadata | direct upstream event identity |
 
 Expected API behavior:
 
-- HTTP `/api/chat` sets `X-Trace-Id` and `X-Correlation-Id` when available.
-- HTTP `202 Accepted` payload includes `traceId` and `correlationId`.
-- WebSocket `/api/ws/chat` envelopes (`command.ack`, `agui.event`, `command.error`) include `traceId` and `correlationId`.
+- HTTP `/api/chat` sets `X-Correlation-Id` when available.
+- HTTP `202 Accepted` payload includes `correlationId`.
+- WebSocket `/api/ws/chat` envelopes (`command.ack`, `agui.event`, `command.error`) include `correlationId`.
 
 Expected runtime logging behavior:
 
@@ -84,21 +84,22 @@ curl -i -X POST "http://localhost:5000/api/chat" \
 
 Validate all checks:
 
-1. Response headers include `X-Trace-Id` and `X-Correlation-Id`.
-2. Response body includes `traceId` and `correlationId` for async accepted flow.
+1. Response headers include `X-Correlation-Id`.
+2. Response body includes `correlationId` for async accepted flow.
 3. Runtime logs include `trace_id`, `correlation_id`, and `causation_id`.
 4. Jaeger UI (`http://localhost:16686`) shows trace under `Aevatar.Workflow.Host.Api`.
-5. `X-Trace-Id` equals Jaeger trace id and log `trace_id`.
+5. Log `trace_id` equals Jaeger trace id (trace_id is not exposed in API responses, only in logs).
 
 ## 5. Automated Test Checklist
 
 Recommended minimum checks:
 
-- HTTP accepted payload includes `traceId` and `correlationId`.
-- HTTP/SSE path exposes `X-Trace-Id` and `X-Correlation-Id`.
-- WebSocket parse errors include tracing fields.
-- WebSocket execution failures include tracing fields for text and binary responses.
-- runtime tracing helper tests cover scope construction and metadata fallback.
+- HTTP accepted payload includes `correlationId`.
+- HTTP/SSE path exposes `X-Correlation-Id`.
+- WebSocket parse errors include `correlationId`.
+- WebSocket execution failures include `correlationId` for text and binary responses.
+- Runtime tracing helper tests cover scope construction and metadata fallback.
+- Runtime logs include `trace_id` for correlation with Jaeger (trace_id is internal only).
 
 ## 6. Troubleshooting
 
@@ -108,10 +109,11 @@ No traces in Jaeger:
 - verify OTEL environment variables are visible to host process
 - verify sampling is not effectively zero
 
-Missing `X-Trace-Id`:
+Missing `trace_id` in logs:
 
 - verify request runs inside ASP.NET Core Activity instrumentation
 - verify host tracing registration is enabled
+- note: `trace_id` is not exposed in API responses, only in structured logs
 
 Logs missing `correlation_id` or `causation_id`:
 

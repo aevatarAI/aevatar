@@ -68,6 +68,27 @@ public class AgentYamlLoaderAndWorkflowStateCoverageTests
             SuccessfulExecutions = 8,
             FailedExecutions = 2,
         };
+        state.SubWorkflowBindings.Add(new WorkflowState.Types.SubWorkflowBinding
+        {
+            WorkflowName = "sub_flow",
+            ChildActorId = "actor-sub",
+            Lifecycle = "singleton",
+        });
+        state.PendingSubWorkflowInvocations.Add(new WorkflowState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-1",
+            ParentRunId = "run-parent",
+            ParentStepId = "step-a",
+            WorkflowName = "sub_flow",
+            ChildActorId = "actor-sub",
+            ChildRunId = "run-child",
+            Lifecycle = "singleton",
+        });
+        state.PendingSubWorkflowInvocationIndexByChildRunId["run-child"] = 0;
+        state.PendingChildRunIdsByParentRunId["run-parent"] = new WorkflowState.Types.ChildRunIdSet
+        {
+            ChildRunIds = { "run-child" },
+        };
 
         var clone = state.Clone();
         clone.Should().BeEquivalentTo(state);
@@ -81,6 +102,11 @@ public class AgentYamlLoaderAndWorkflowStateCoverageTests
         parsed.TotalExecutions.Should().Be(10);
         parsed.SuccessfulExecutions.Should().Be(8);
         parsed.FailedExecutions.Should().Be(2);
+        parsed.SubWorkflowBindings.Should().ContainSingle();
+        parsed.PendingSubWorkflowInvocations.Should().ContainSingle();
+        parsed.PendingSubWorkflowInvocationIndexByChildRunId.Should().ContainKey("run-child").WhoseValue.Should().Be(0);
+        parsed.PendingChildRunIdsByParentRunId.Should().ContainKey("run-parent");
+        parsed.PendingChildRunIdsByParentRunId["run-parent"].ChildRunIds.Should().ContainSingle(x => x == "run-child");
 
         WorkflowStateReflection.Descriptor.Should().NotBeNull();
         WorkflowStateReflection.Descriptor.MessageTypes.Should().ContainSingle(x => x.Name == nameof(WorkflowState));
@@ -120,6 +146,27 @@ public class AgentYamlLoaderAndWorkflowStateCoverageTests
             SuccessfulExecutions = 2,
             FailedExecutions = 1,
         };
+        full.SubWorkflowBindings.Add(new WorkflowState.Types.SubWorkflowBinding
+        {
+            WorkflowName = "sub_flow",
+            ChildActorId = "actor-sub",
+            Lifecycle = "singleton",
+        });
+        full.PendingSubWorkflowInvocations.Add(new WorkflowState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-2",
+            ParentRunId = "run-parent",
+            ParentStepId = "step-b",
+            WorkflowName = "sub_flow",
+            ChildActorId = "actor-sub",
+            ChildRunId = "run-child",
+            Lifecycle = "singleton",
+        });
+        full.PendingSubWorkflowInvocationIndexByChildRunId["run-child"] = 0;
+        full.PendingChildRunIdsByParentRunId["run-parent"] = new WorkflowState.Types.ChildRunIdSet
+        {
+            ChildRunIds = { "run-child" },
+        };
 
         var merged = new WorkflowState();
         merged.MergeFrom(full);
@@ -139,5 +186,46 @@ public class AgentYamlLoaderAndWorkflowStateCoverageTests
 
         // Touch timestamp dependency to ensure protobuf well-known types are linked.
         Timestamp.FromDateTime(DateTime.UtcNow).Should().NotBeNull();
+    }
+
+    [Fact]
+    public void WorkflowStateProto_ShouldRoundtripPendingInvocationIndexes()
+    {
+        var state = new WorkflowState();
+        state.PendingSubWorkflowInvocations.AddRange(
+        [
+            new WorkflowState.Types.PendingSubWorkflowInvocation
+            {
+                InvocationId = "invoke-1",
+                ParentRunId = "parent-a",
+                ParentStepId = "step-1",
+                WorkflowName = "sub-a",
+                ChildActorId = "child-a",
+                ChildRunId = "child-run-a",
+                Lifecycle = "singleton",
+            },
+            new WorkflowState.Types.PendingSubWorkflowInvocation
+            {
+                InvocationId = "invoke-2",
+                ParentRunId = "parent-a",
+                ParentStepId = "step-2",
+                WorkflowName = "sub-a",
+                ChildActorId = "child-b",
+                ChildRunId = "child-run-b",
+                Lifecycle = "scope",
+            },
+        ]);
+        state.PendingSubWorkflowInvocationIndexByChildRunId["child-run-a"] = 0;
+        state.PendingSubWorkflowInvocationIndexByChildRunId["child-run-b"] = 1;
+        state.PendingChildRunIdsByParentRunId["parent-a"] = new WorkflowState.Types.ChildRunIdSet
+        {
+            ChildRunIds = { "child-run-a", "child-run-b" },
+        };
+
+        var parsed = WorkflowState.Parser.ParseFrom(state.ToByteArray());
+        parsed.PendingSubWorkflowInvocationIndexByChildRunId.Should().ContainKey("child-run-a").WhoseValue.Should().Be(0);
+        parsed.PendingSubWorkflowInvocationIndexByChildRunId.Should().ContainKey("child-run-b").WhoseValue.Should().Be(1);
+        parsed.PendingChildRunIdsByParentRunId.Should().ContainKey("parent-a");
+        parsed.PendingChildRunIdsByParentRunId["parent-a"].ChildRunIds.Should().BeEquivalentTo(["child-run-a", "child-run-b"]);
     }
 }

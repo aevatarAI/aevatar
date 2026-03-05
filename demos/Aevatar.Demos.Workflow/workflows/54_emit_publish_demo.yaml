@@ -1,0 +1,21 @@
+name: 54_emit_publish_demo
+description: Demonstrates publish alias for emit and continues with deterministic steps.
+
+steps:
+  - id: normalize_input
+    type: transform
+    parameters:
+      op: trim
+    next: publish_event
+
+  - id: publish_event
+    type: publish
+    parameters:
+      event_type: "demo.workflow.event"
+      payload: "$input"
+    next: finalize_output
+
+  - id: finalize_output
+    type: transform
+    parameters:
+      op: uppercase

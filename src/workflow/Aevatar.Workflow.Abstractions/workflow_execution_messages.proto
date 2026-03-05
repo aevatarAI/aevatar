@@ -3,12 +3,54 @@ package aevatar.workflow;
 option csharp_namespace = "Aevatar.Workflow.Abstractions";
 
 message StartWorkflowEvent    { string workflow_name = 1; string input = 2; map<string, string> parameters = 3; string run_id = 4; }
-message ConfigureWorkflowEvent { string workflow_name = 1; string workflow_yaml = 2; }
+message BindWorkflowDefinitionEvent
+{
+  string workflow_name = 1;
+  string workflow_yaml = 2;
+  map<string, string> inline_workflow_yamls = 3;
+}
 message WorkflowCompletedEvent { string workflow_name = 1; bool success = 2; string output = 3; string error = 4; string run_id = 5; }
 message StepRequestEvent      { string step_id = 1; string step_type = 2; string input = 3; string target_role = 4; map<string, string> parameters = 5; string run_id = 6; }
 message StepCompletedEvent    { string step_id = 1; bool success = 2; string output = 3; string error = 4; string worker_id = 5; map<string, string> metadata = 6; string run_id = 7; }
+message SubWorkflowInvokeRequestedEvent
+{
+  string invocation_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string workflow_name = 4;
+  string input = 5;
+  string lifecycle = 6;
+  string requested_by_actor_id = 7;
+}
+message SubWorkflowBindingUpsertedEvent
+{
+  string workflow_name = 1;
+  string child_actor_id = 2;
+  string lifecycle = 3;
+}
+message SubWorkflowInvocationRegisteredEvent
+{
+  string invocation_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string workflow_name = 4;
+  string child_actor_id = 5;
+  string child_run_id = 6;
+  string lifecycle = 7;
+}
+message SubWorkflowInvocationCompletedEvent
+{
+  string invocation_id = 1;
+  string child_run_id = 2;
+  bool success = 3;
+  string output = 4;
+  string error = 5;
+}
 message WorkflowSuspendedEvent { string run_id = 1; string step_id = 2; string suspension_type = 3; string prompt = 4; int32 timeout_seconds = 5; map<string, string> metadata = 6; }
 message WorkflowResumedEvent   { string run_id = 1; string step_id = 2; bool approved = 3; string user_input = 4; map<string, string> metadata = 5; }
+
+// Replaces an existing workflow actor's definition using runtime-provided YAML and starts execution immediately.
+message ReplaceWorkflowDefinitionAndExecuteEvent { string workflow_yaml = 1; string input = 2; }
 
 message WaitingForSignalEvent { string step_id = 1; string signal_name = 2; string prompt = 3; int32 timeout_ms = 4; string run_id = 5; }
 message SignalReceivedEvent   { string signal_name = 1; string payload = 2; string run_id = 3; string step_id = 4; }

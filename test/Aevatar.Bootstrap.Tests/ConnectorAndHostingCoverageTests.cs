@@ -5,7 +5,6 @@ using Aevatar.Bootstrap;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -391,18 +390,6 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
-    public async Task ActorRestoreHostedService_ShouldInvokeRuntimeRestore()
-    {
-        var runtime = new StubActorRuntime();
-        var service = new ActorRestoreHostedService(runtime, NullLogger<ActorRestoreHostedService>.Instance);
-
-        await service.StartAsync(CancellationToken.None);
-        await service.StopAsync(CancellationToken.None);
-
-        runtime.RestoreCalled.Should().BeTrue();
-    }
-
-    [Fact]
     public void ConnectorBuilders_ShouldValidateAndBuild()
     {
         var cliBuilder = new CliConnectorBuilder();
@@ -530,30 +517,4 @@ public class ConnectorAndHostingCoverageTests
         public IReadOnlyList<string> ListNames() => _connectors.Keys.OrderBy(x => x, StringComparer.Ordinal).ToList();
     }
 
-    private sealed class StubActorRuntime : IActorRuntime
-    {
-        public bool RestoreCalled { get; private set; }
-
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
-            throw new NotSupportedException();
-
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
-
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task RestoreAllAsync(CancellationToken ct = default)
-        {
-            RestoreCalled = true;
-            return Task.CompletedTask;
-        }
-    }
 }

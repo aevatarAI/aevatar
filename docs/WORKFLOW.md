@@ -38,7 +38,7 @@
 5. 收到 `ChatRequestEvent` 后发布 `StartWorkflowEvent`，驱动执行
 
 ```
-ConfigureWorkflow(yaml)
+BindWorkflowDefinition(yaml)
   -> WorkflowParser.Parse (YAML -> WorkflowDefinition)
   -> WorkflowValidator.Validate (结构校验)
   -> InstallCognitiveModules:
@@ -74,7 +74,7 @@ YAML 里 `type: parallel` 会经工厂解析到 `ParallelFanOutModule`。
 
 ### Workflow Roles（正式 schema）
 
-`workflow yaml` 里的 `roles` 现在是 `RoleGAgent` 的正式配置入口，运行时会完整透传到 `ConfigureRoleAgentEvent`：
+`workflow yaml` 里的 `roles` 现在是 `RoleGAgent` 的正式初始化入口，运行时会完整透传到 `InitializeRoleAgentEvent`：
 
 ```yaml
 roles:
@@ -118,7 +118,8 @@ roles:
 | **迭代** | `foreach` | `ForEachModule` | 按分隔符拆分输入，逐项执行子步骤 |
 | **流程** | `conditional` | `ConditionalModule` | 条件分支 |
 | | `while` | `WhileModule` | 循环执行（别名 `loop`） |
-| | `workflow_call` | `WorkflowCallModule` | 调用子工作流（别名 `sub_workflow`） |
+| | `workflow_call` | `WorkflowCallModule` | 调用子工作流（别名 `sub_workflow`，支持 `lifecycle=singleton/transient/scope`） |
+| | `dynamic_workflow` | `DynamicWorkflowModule` | 从 LLM 输出提取 YAML，动态重配后继续执行 |
 | | `assign` | `AssignModule` | 变量赋值 |
 | | `checkpoint` | `CheckpointModule` | 检查点 |
 | **数据** | `transform` | `TransformModule` | 纯函数变换（count/take/join/split/distinct 等） |
@@ -126,6 +127,13 @@ roles:
 
 每个原语的作用、参数和 YAML sample，见 [WORKFLOW_PRIMITIVES.md](./WORKFLOW_PRIMITIVES.md)。
 如果要把 `human_input` / `human_approval` / `wait_signal` 接到真实应用交互，优先参考该文档中的“实际应用集成模式”小节。
+
+`workflow_call` 关联规则补充：
+
+- invocation id 统一由共享工厂生成，格式为 `<parent_run_id>:workflow_call:<parent_step_id>:<guidN>`；
+- `parent_step_id` 必须非空；缺失时直接失败，不再生成兜底 step token；
+- `WorkflowCallModule` 与 `WorkflowGAgent` 共用同一规则，避免双点实现漂移；
+- 子流程 run id 复用 invocation id，便于父子流程关联追踪。
 
 ### 从 Foundation Orchestration 迁移
 
@@ -157,7 +165,8 @@ steps:
 POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │
   ├── WorkflowChatRunApplicationService.ExecuteAsync
-  │     ├── WorkflowRunActorResolver: 优先解析 workflowYaml（inline），否则按 workflow 名查 registry，创建/复用 WorkflowGAgent
+  │     ├── WorkflowRunActorResolver: workflowYaml 优先；否则按 workflow 名查 registry；仅当 workflow/workflowYaml 同时为空时走默认 workflow（默认 direct，可配置为 auto）
+  │     ├── WorkflowChatRunApplicationService: fallback 由白名单策略控制（workflow + exception type），direct 本身不再二次回退
   │     ├── WorkflowExecutionRunOrchestrator.StartAsync: 启动投影 run
   │     └── WorkflowRunRequestExecutor: 投递 ChatRequestEvent
   │
@@ -193,6 +202,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
 | 场景 | 推荐请求体 | 说明 |
 |------|------------|------|
 | 新建 Actor，按名称加载已注册 workflow | `{ "prompt": "...", "workflow": "direct" }` | `workflow` 按名称从 registry 查 YAML。 |
+| 新建 Actor，`workflow/workflowYaml` 都不传 | `{ "prompt": "..." }` | 默认走 `direct`；如开启 `UseAutoAsDefaultWhenWorkflowUnspecified`，则默认走 `auto`。 |
 | 复用已绑定 workflow 的 Actor | `{ "prompt": "...", "agentId": "actor-123" }` | 只传 `prompt + agentId` 即可，`workflow/workflowYaml` 可留空。 |
 | 新建 Actor，直接提交 inline YAML | `{ "prompt": "...", "workflowYaml": "name: demo\\nroles: ...\\nsteps: ..." }` | 不依赖预存文件，服务端先解析 `workflowYaml`。 |
 | 给指定 Actor 传 inline YAML | `{ "prompt": "...", "agentId": "actor-123", "workflowYaml": "..." }` | 仅允许“未绑定 actor 首次绑定”或“同名 workflow 更新”；不允许切换到其它 workflow 名。 |
@@ -204,6 +214,11 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
 - `WORKFLOW_NAME_MISMATCH`（400）：`workflow` 与 `workflowYaml.name` 不一致。
 - `WORKFLOW_BINDING_MISMATCH`（409）：目标 actor 已绑定其它 workflow。
 - `AGENT_WORKFLOW_NOT_CONFIGURED`（409）：传了 `agentId`，但 actor 未绑定且未提供 `workflowYaml`。
+
+异常回退语义：
+
+- 应用层仅在“白名单 workflow + 白名单异常类型”命中时尝试一次 `direct` 回退执行。
+- inline `workflowYaml` 与显式 `direct` 请求默认不触发自动回退；已进入回退阶段也不再二次回退（防循环）。
 
 最小可用示例（复用已有 Actor）：
 

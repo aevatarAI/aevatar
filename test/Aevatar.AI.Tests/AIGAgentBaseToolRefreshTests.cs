@@ -14,7 +14,7 @@ namespace Aevatar.AI.Tests;
 public class AIGAgentBaseToolRefreshTests
 {
     [Fact]
-    public async Task ConfigureAsync_WhenSourceToolsShrink_ShouldRemoveStaleTools()
+    public async Task RefreshRuntime_WhenSourceToolsShrink_ShouldRemoveStaleTools()
     {
         var source = new MutableToolSource("tool-a", "tool-b");
         var services = new ServiceCollection();
@@ -33,13 +33,13 @@ public class AIGAgentBaseToolRefreshTests
         agent.GetRegisteredToolNames().Should().Equal("tool-a", "tool-b");
 
         source.SetTools("tool-b");
-        await agent.ConfigureAsync(new AIAgentConfig());
+        await agent.TriggerRuntimeRefreshAsync();
 
         agent.GetRegisteredToolNames().Should().Equal("tool-b");
     }
 
     [Fact]
-    public async Task ConfigureAsync_WhenSourceToolsChanged_ShouldKeepManualTools()
+    public async Task RefreshRuntime_WhenSourceToolsChanged_ShouldKeepManualTools()
     {
         var source = new MutableToolSource("source-old");
         var services = new ServiceCollection();
@@ -59,7 +59,7 @@ public class AIGAgentBaseToolRefreshTests
         agent.GetRegisteredToolNames().Should().Equal("manual-tool", "source-old");
 
         source.SetTools("source-new");
-        await agent.ConfigureAsync(new AIAgentConfig());
+        await agent.TriggerRuntimeRefreshAsync();
 
         agent.GetRegisteredToolNames().Should().Equal("manual-tool", "source-new");
     }
@@ -83,6 +83,14 @@ public class AIGAgentBaseToolRefreshTests
             .ToList();
 
         public void RegisterManualTool(string name) => RegisterTool(new NamedTool(name));
+
+        public Task TriggerRuntimeRefreshAsync() => OnEffectiveConfigChangedAsync(EffectiveConfig, CancellationToken.None);
+
+        protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(RoleGAgentState state)
+        {
+            _ = state;
+            return new AIAgentConfigStateOverrides();
+        }
     }
 
     private sealed class MutableToolSource : IAgentToolSource

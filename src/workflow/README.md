@@ -2,6 +2,8 @@
 
 本文档描述 `src/workflow` 的完整实现关系。当前语义是：一次 `Run` 本质上就是向 `WorkflowGAgent` 触发一次 `ChatRequestEvent`，后续全部通过事件流驱动执行与投影。`commandId` 保留在 CQRS/Application 侧，不注入 Actor 事件 payload 或 Envelope metadata。
 
+如果只关注框架 API 的对外能力与交互协议（`/api/chat`、`/api/ws/chat`、`human_approval` 的 resume/signal），请看：`docs/workflow-chat-ws-api-capability.md`。
+
 ## 0. 运行语义约束（2026-02-19 更新）
 
 - 一个 `Workflow` 对应一个 `WorkflowGAgent`（一个 Actor）。
@@ -94,6 +96,12 @@ sequenceDiagram
   Sink-->>Api: "WorkflowOutputFrame 流"
   Api-->>Client: "SSE/WS 实时输出"
 ```
+
+请求解析与回退规则：
+
+- `WorkflowRunActorResolver` 解析优先级为：`workflowYamls`（inline bundle，首项入口） > `workflow`（名称） > 默认 workflow（应用层选项，默认 `direct`）。
+- 外部 API 边界仅在“新建 Actor 且 `workflow/workflowYamls` 都为空”时显式归一到 `auto`；当仅提供 `agentId` 时保持 workflow 未指定以复用绑定关系。`workflow` 解释为注册表名称查找（内建 + 文件加载）。
+- `WorkflowChatRunApplicationService` 对所有请求类型执行“一次性 direct 回退”：首次异常（含运行期）会重试 `direct`，`direct` 不再二次回退。
 
 ## 3. 统一 Projection Pipeline（读侧 + AGUI）
 

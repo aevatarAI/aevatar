@@ -2,6 +2,8 @@ using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -939,6 +941,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 StepId = "race-2",
                 StepType = "race",
                 Input = "q2",
+                TargetRole = "worker-default",
                 Parameters = { ["count"] = "2" },
             }),
             ctx,
@@ -952,6 +955,359 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         failed.StepId.Should().Be("race-2");
         failed.Success.Should().BeFalse();
         failed.Error.Should().Contain("all race branches failed");
+    }
+
+    [Fact]
+    public async Task RaceModule_ShouldAcceptJsonWorkersAndFailFastWhenNoWorkersOrRole()
+    {
+        var module = new RaceModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "race-json",
+                StepType = "race",
+                RunId = "run-race-json",
+                Input = "q",
+                Parameters =
+                {
+                    ["workers"] = "[\"worker_a\",\"worker_a\",\"worker_b\"]",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var jsonWorkers = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().ToList();
+        jsonWorkers.Should().HaveCount(3);
+        jsonWorkers[0].TargetRole.Should().Be("worker_a");
+        jsonWorkers[1].TargetRole.Should().Be("worker_a");
+        jsonWorkers[2].TargetRole.Should().Be("worker_b");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "race-missing",
+                StepType = "race",
+                RunId = "run-race-missing",
+                Input = "q2",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        failed.StepId.Should().Be("race-missing");
+        failed.RunId.Should().Be("run-race-missing");
+        failed.Success.Should().BeFalse();
+        failed.Error.Should().Contain("race requires parameters.workers");
+    }
+
+    [Fact]
+    public async Task ForEachModule_ShouldSupportEscapedDelimiterAndJsonArrayInput()
+    {
+        var module = new ForEachModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-escaped",
+                StepType = "foreach",
+                RunId = "run-foreach",
+                Input = "a\n---\nb",
+                Parameters =
+                {
+                    ["delimiter"] = "\\n---\\n",
+                    ["sub_step_type"] = "assign",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var escapedDispatches = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().ToList();
+        escapedDispatches.Should().HaveCount(2);
+        escapedDispatches[0].Input.Should().Be("a");
+        escapedDispatches[1].Input.Should().Be("b");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "foreach-escaped_item_0",
+                RunId = "run-foreach",
+                Success = true,
+                Output = "A",
+            }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "foreach-escaped_item_1",
+                RunId = "run-foreach",
+                Success = true,
+                Output = "B",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var merged = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        merged.StepId.Should().Be("foreach-escaped");
+        merged.RunId.Should().Be("run-foreach");
+        merged.Success.Should().BeTrue();
+        merged.Output.Should().Be("A\n---\nB");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-json",
+                StepType = "foreach",
+                RunId = "run-foreach-json",
+                Input = "[\"x\",\"y\"]",
+                Parameters = { ["sub_step_type"] = "assign" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var jsonDispatches = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().ToList();
+        jsonDispatches.Should().HaveCount(2);
+        jsonDispatches[0].Input.Should().Be("x");
+        jsonDispatches[1].Input.Should().Be("y");
+    }
+
+    [Fact]
+    public async Task ParallelFanOutModule_ShouldAcceptJsonArrayWorkersAndMergeCompletions()
+    {
+        var module = new ParallelFanOutModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "parallel-json",
+                StepType = "parallel",
+                RunId = "run-parallel-json",
+                Input = "translate me",
+                Parameters =
+                {
+                    ["workers"] = "[\"worker_a\",\"worker_b\",\"worker_c\"]",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var dispatched = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().ToList();
+        dispatched.Should().HaveCount(3);
+        dispatched[0].TargetRole.Should().Be("worker_a");
+        dispatched[1].TargetRole.Should().Be("worker_b");
+        dispatched[2].TargetRole.Should().Be("worker_c");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "parallel-json_sub_0",
+                RunId = "run-parallel-json",
+                Success = true,
+                Output = "A",
+            }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "parallel-json_sub_1",
+                RunId = "run-parallel-json",
+                Success = true,
+                Output = "B",
+            }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "parallel-json_sub_2",
+                RunId = "run-parallel-json",
+                Success = true,
+                Output = "C",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var merged = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        merged.StepId.Should().Be("parallel-json");
+        merged.RunId.Should().Be("run-parallel-json");
+        merged.Success.Should().BeTrue();
+        merged.Output.Should().Be("A\n---\nB\n---\nC");
+    }
+
+    [Fact]
+    public async Task ParallelFanOutModule_WhenMissingWorkersAndRole_ShouldFailFast()
+    {
+        var module = new ParallelFanOutModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "parallel-missing-role",
+                StepType = "parallel",
+                RunId = "run-parallel-missing-role",
+                Input = "x",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        failed.StepId.Should().Be("parallel-missing-role");
+        failed.RunId.Should().Be("run-parallel-missing-role");
+        failed.Success.Should().BeFalse();
+        failed.Error.Should().Contain("parallel requires parameters.workers");
+    }
+
+    [Fact]
+    public async Task MapReduceModule_ShouldSupportJsonArrayInputAndEscapedDelimiter()
+    {
+        var module = new MapReduceModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "mr-json",
+                StepType = "map_reduce",
+                RunId = "run-mr-json",
+                Input = "[\"a\",\"b\"]",
+                Parameters =
+                {
+                    ["map_step_type"] = "transform",
+                    ["reduce_step_type"] = "",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var mapDispatches = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().ToList();
+        mapDispatches.Should().HaveCount(2);
+        mapDispatches[0].Input.Should().Be("a");
+        mapDispatches[1].Input.Should().Be("b");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "mr-json_map_0",
+                RunId = "run-mr-json",
+                Success = true,
+                Output = "A",
+            }),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "mr-json_map_1",
+                RunId = "run-mr-json",
+                Success = true,
+                Output = "B",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var merged = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        merged.StepId.Should().Be("mr-json");
+        merged.RunId.Should().Be("run-mr-json");
+        merged.Success.Should().BeTrue();
+        merged.Output.Should().Be("A\n---\nB");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "mr-delimiter",
+                StepType = "map_reduce",
+                RunId = "run-mr-delimiter",
+                Input = "x\n---\ny",
+                Parameters =
+                {
+                    ["delimiter"] = "\\n---\\n",
+                    ["map_step_type"] = "transform",
+                    ["reduce_step_type"] = "",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var escapedDispatches = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().ToList();
+        escapedDispatches.Should().HaveCount(2);
+        escapedDispatches[0].Input.Should().Be("x");
+        escapedDispatches[1].Input.Should().Be("y");
+    }
+
+    [Fact]
+    public async Task InteractionModules_ShouldSupportTimeoutAliases()
+    {
+        var waitSignal = new WaitSignalModule();
+        var approval = new HumanApprovalModule();
+        var input = new HumanInputModule();
+        var ctx = CreateContext();
+
+        await waitSignal.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-timeout-alias",
+                StepType = "wait_signal",
+                RunId = "run-timeout-alias",
+                Parameters =
+                {
+                    ["signal"] = "go",
+                    ["timeout"] = "2",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var waiting = ctx.Published.Select(x => x.evt).OfType<WaitingForSignalEvent>().Single();
+        waiting.SignalName.Should().Be("go");
+        waiting.TimeoutMs.Should().Be(2000);
+        ctx.Published.Clear();
+
+        await approval.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "approval-timeout-ms",
+                StepType = "human_approval",
+                RunId = "run-timeout-alias",
+                Parameters =
+                {
+                    ["timeout_ms"] = "2500",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var approvalSuspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
+        approvalSuspended.TimeoutSeconds.Should().Be(3);
+        ctx.Published.Clear();
+
+        await input.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "input-timeout-seconds",
+                StepType = "human_input",
+                RunId = "run-timeout-alias",
+                Parameters =
+                {
+                    ["timeout_seconds"] = "7",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var inputSuspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
+        inputSuspended.TimeoutSeconds.Should().Be(7);
     }
 
     [Fact]
@@ -1266,10 +1622,289 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         completedA.Output.Should().Be("draft-a");
     }
 
+    [Fact]
+    public async Task HumanApprovalModule_ShouldSetBranchMetadataOnApproval()
+    {
+        var module = new HumanApprovalModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "branch-approve",
+                StepType = "human_approval",
+                RunId = "run-branch-1",
+                Input = "pending-content",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-branch-1",
+                StepId = "branch-approve",
+                Approved = true,
+                UserInput = "looks good",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var approved = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        approved.Success.Should().BeTrue();
+        approved.Output.Should().Be("looks good");
+        approved.Metadata["branch"].Should().Be("true");
+    }
+
+    [Fact]
+    public async Task HumanApprovalModule_ShouldSetBranchMetadataAndUserFeedbackOnRejection()
+    {
+        var module = new HumanApprovalModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "branch-reject",
+                StepType = "human_approval",
+                RunId = "run-branch-2",
+                Input = "original-yaml",
+                Parameters = { ["on_reject"] = "skip" },
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-branch-2",
+                StepId = "branch-reject",
+                Approved = false,
+                UserInput = "change the model to gpt-4",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var rejected = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        rejected.Success.Should().BeTrue();
+        rejected.Metadata["branch"].Should().Be("false");
+        rejected.Output.Should().Contain("original-yaml");
+        rejected.Output.Should().Contain("change the model to gpt-4");
+    }
+
+    [Fact]
+    public async Task HumanApprovalModule_RejectionWithoutUserInput_ShouldPreserveOriginalInput()
+    {
+        var module = new HumanApprovalModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "branch-reject-empty",
+                StepType = "human_approval",
+                RunId = "run-branch-3",
+                Input = "keep-me",
+                Parameters = { ["on_reject"] = "skip" },
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-branch-3",
+                StepId = "branch-reject-empty",
+                Approved = false,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var rejected = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        rejected.Metadata["branch"].Should().Be("false");
+        rejected.Output.Should().Be("keep-me");
+    }
+
+    [Fact]
+    public async Task DynamicWorkflowModule_ShouldExtractYamlAndPublishReconfigureEvent()
+    {
+        var module = new DynamicWorkflowModule();
+        var ctx = CreateContext();
+
+        var input = """
+            Here is the workflow I designed:
+
+            ```yaml
+            name: analysis
+            description: Multi-step analysis
+            roles:
+              - id: analyst
+                system_prompt: You analyze data.
+            steps:
+              - id: analyze
+                type: llm_call
+                role: analyst
+            ```
+
+            This workflow will analyze the data in two steps.
+            """;
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "dw-1",
+                StepType = "dynamic_workflow",
+                RunId = "run-dw-1",
+                Input = input,
+                Parameters = { ["original_input"] = "analyze my data" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var reconfigure = ctx.Published.Select(x => x.evt).OfType<ReplaceWorkflowDefinitionAndExecuteEvent>().Single();
+        reconfigure.WorkflowYaml.Should().Contain("name: analysis");
+        reconfigure.WorkflowYaml.Should().Contain("analyst");
+        reconfigure.Input.Should().Be("analyze my data");
+    }
+
+    [Fact]
+    public async Task DynamicWorkflowModule_WhenNoYamlBlock_ShouldFailWithError()
+    {
+        var module = new DynamicWorkflowModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "dw-2",
+                StepType = "dynamic_workflow",
+                RunId = "run-dw-2",
+                Input = "No yaml here, just plain text.",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("dw-2");
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("No workflow YAML found");
+    }
+
+    [Fact]
+    public async Task DynamicWorkflowModule_ShouldIgnoreNonDynamicWorkflowStepType()
+    {
+        var module = new DynamicWorkflowModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "other-step",
+                StepType = "llm_call",
+                RunId = "run-other",
+                Input = "hello",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DynamicWorkflowModule_WithYmlFence_ShouldAlsoExtractYaml()
+    {
+        var module = new DynamicWorkflowModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "dw-yml",
+                StepType = "dynamic_workflow",
+                RunId = "run-dw-yml",
+                Input = "```yml\nname: test2\nroles: []\nsteps:\n  - id: s1\n    type: assign\n```",
+                Parameters = { ["original_input"] = "hello" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var reconfigure = ctx.Published.Select(x => x.evt).OfType<ReplaceWorkflowDefinitionAndExecuteEvent>().Single();
+        reconfigure.WorkflowYaml.Should().Contain("name: test2");
+        reconfigure.Input.Should().Be("hello");
+    }
+
+    [Fact]
+    public async Task DynamicWorkflowModule_WhenYamlValidationFails_ShouldEmitFailedStepAndSkipReconfigure()
+    {
+        var module = new DynamicWorkflowModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "dw-invalid",
+                StepType = "dynamic_workflow",
+                RunId = "run-dw-invalid",
+                Input = """
+                        ```yaml
+                        name: bad_flow
+                        roles: []
+                        steps:
+                          - id: bad_step
+                            type: unknown_step
+                        ```
+                        """,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.evt).OfType<ReplaceWorkflowDefinitionAndExecuteEvent>().Should().BeEmpty();
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("Invalid workflow YAML");
+    }
+
+    [Fact]
+    public async Task WorkflowYamlValidateModule_WhenYamlIsValid_ShouldReturnCanonicalYamlFence()
+    {
+        var module = new WorkflowYamlValidateModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "validate-1",
+                StepType = "workflow_yaml_validate",
+                RunId = "run-validate-1",
+                Input = """
+                        ```yaml
+                        name: validate_ok
+                        roles: []
+                        steps:
+                          - id: done
+                            type: assign
+                            parameters:
+                              target: result
+                              value: "$input"
+                        ```
+                        """,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Contain("```yaml");
+        completed.Output.Should().Contain("name: validate_ok");
+    }
+
     private static RecordingEventHandlerContext CreateContext(IServiceProvider? services = null)
     {
         return new RecordingEventHandlerContext(
-            services ?? new ServiceCollection().BuildServiceProvider(),
+            services ?? new ServiceCollection().AddAevatarWorkflow().BuildServiceProvider(),
             new StubAgent("workflow-advanced-module-test-agent"),
             NullLogger.Instance);
     }

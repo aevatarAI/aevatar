@@ -9,7 +9,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class AevatarDefaultHostOptionsTests
 {
     [Fact]
-    public void AddAevatarDefaultHost_Default_ShouldRegisterActorRestoreHostedService()
+    public void AddAevatarDefaultHost_Default_ShouldRegisterConnectorBootstrapHostedService()
     {
         var builder = WebApplication.CreateBuilder();
 
@@ -19,21 +19,21 @@ public sealed class AevatarDefaultHostOptionsTests
             .Where(x => x.ServiceType == typeof(IHostedService))
             .ToList();
 
-        hostedServices.Should().Contain(x => x.ImplementationType == typeof(ActorRestoreHostedService));
+        hostedServices.Should().Contain(x => x.ImplementationType == typeof(ConnectorBootstrapHostedService));
     }
 
     [Fact]
-    public void AddAevatarDefaultHost_WhenActorRestoreDisabled_ShouldNotRegisterActorRestoreHostedService()
+    public void AddAevatarDefaultHost_WhenConnectorBootstrapDisabled_ShouldNotRegisterConnectorBootstrapHostedService()
     {
         var builder = WebApplication.CreateBuilder();
 
         builder.AddAevatarDefaultHost(
-            configureHost: options => options.EnableActorRestoreOnStartup = false);
+            configureHost: options => options.EnableConnectorBootstrap = false);
 
         var hostedServices = builder.Services
             .Where(x => x.ServiceType == typeof(IHostedService))
             .ToList();
 
-        hostedServices.Should().NotContain(x => x.ImplementationType == typeof(ActorRestoreHostedService));
+        hostedServices.Should().NotContain(x => x.ImplementationType == typeof(ConnectorBootstrapHostedService));
     }
 }

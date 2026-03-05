@@ -157,8 +157,25 @@ public sealed class WorkflowLoopModule : IEventModule
             CancelTimeout(runId, evt.StepId);
 
             var outputPreview = (evt.Output ?? "").Length > 200 ? evt.Output![..200] + "..." : evt.Output ?? "";
-            ctx.Logger.LogInformation("workflow_loop: step={StepId} completed success={Success} output=({Len} chars) {Preview}",
-                evt.StepId, evt.Success, (evt.Output ?? "").Length, outputPreview);
+            if (evt.Success)
+            {
+                ctx.Logger.LogInformation(
+                    "workflow_loop: step={StepId} completed success={Success} output=({Len} chars) {Preview}",
+                    evt.StepId,
+                    evt.Success,
+                    (evt.Output ?? "").Length,
+                    outputPreview);
+            }
+            else
+            {
+                ctx.Logger.LogError(
+                    "workflow_loop: step={StepId} failed run={RunId} error={Error} output=({Len} chars) {Preview}",
+                    evt.StepId,
+                    runId,
+                    string.IsNullOrWhiteSpace(evt.Error) ? "(none)" : evt.Error,
+                    (evt.Output ?? "").Length,
+                    outputPreview);
+            }
 
             if (_variablesByRunId.TryGetValue(runId, out var varsForRun))
             {
@@ -180,6 +197,11 @@ public sealed class WorkflowLoopModule : IEventModule
             {
                 if (IsTimeoutError(evt.Error))
                 {
+                    ctx.Logger.LogError(
+                        "workflow_loop: run={RunId} step={StepId} timed out and run will fail. error={Error}",
+                        runId,
+                        evt.StepId,
+                        evt.Error);
                     CleanupRun(runId);
                     await ctx.PublishAsync(new WorkflowCompletedEvent
                     {
@@ -194,6 +216,11 @@ public sealed class WorkflowLoopModule : IEventModule
                 if (await TryRetryAsync(current, evt, runId, ctx, ct)) return;
                 if (await TryOnErrorAsync(current, evt, runId, ctx, ct)) return;
 
+                ctx.Logger.LogError(
+                    "workflow_loop: run={RunId} step={StepId} failed and no retry/on_error resolved. error={Error}",
+                    runId,
+                    evt.StepId,
+                    evt.Error);
                 CleanupRun(runId);
                 await ctx.PublishAsync(new WorkflowCompletedEvent
                 {
@@ -214,6 +241,11 @@ public sealed class WorkflowLoopModule : IEventModule
                 next = _workflow.GetStep(directNextStepId);
                 if (next == null)
                 {
+                    ctx.Logger.LogError(
+                        "workflow_loop: run={RunId} step={StepId} resolved invalid next_step={NextStepId}",
+                        runId,
+                        current.Id,
+                        directNextStepId);
                     CleanupRun(runId);
                     await ctx.PublishAsync(new WorkflowCompletedEvent
                     {

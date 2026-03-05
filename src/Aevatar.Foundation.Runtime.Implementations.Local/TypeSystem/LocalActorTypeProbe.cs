@@ -1,6 +1,6 @@
 using Aevatar.Foundation.Abstractions.TypeSystem;
 
-namespace Aevatar.Foundation.Runtime.TypeSystem;
+namespace Aevatar.Foundation.Runtime.Implementations.Local.TypeSystem;
 
 /// <summary>
 /// Runtime type probe for local in-process actors.

@@ -135,7 +135,13 @@
       <div id="view-playground" class="view hidden">
         <div class="pg-body">
           <div class="pg-chat-panel">
-            <div class="pg-chat-header">Chat</div>
+            <div class="pg-chat-header">
+              <span class="pg-header-title">Chat</span>
+              <div class="pg-mode-toggle">
+                <button class="pg-mode-btn active" data-mode="manual">Manual</button>
+                <button class="pg-mode-btn" data-mode="auto">Auto</button>
+              </div>
+            </div>
             <div id="pg-messages" class="pg-messages"></div>
             <div class="pg-input-row">
               <textarea id="pg-input" class="pg-input" rows="2" placeholder="Describe your workflow..."></textarea>
@@ -163,6 +169,7 @@
                 <button id="pg-run-btn" class="btn btn-primary" disabled>Run</button>
                 <button id="pg-run-reset" class="btn btn-secondary hidden">Reset</button>
               </div>
+              <div id="pg-auto-status" class="pg-auto-status hidden"></div>
               <div id="pg-exec-log" class="pg-exec-block hidden">
                 <div class="detail-label">Execution Log</div>
                 <div id="pg-log-entries" class="log-entries"></div>

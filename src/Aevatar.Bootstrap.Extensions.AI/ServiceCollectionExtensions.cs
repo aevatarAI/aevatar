@@ -1,7 +1,9 @@
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.Agents;
+using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
+using Aevatar.AI.LLMProviders.Tornado;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Bootstrap.Connectors;
@@ -16,6 +18,10 @@ namespace Aevatar.Bootstrap.Extensions.AI;
 public sealed class AevatarAIFeatureOptions
 {
     public bool EnableMEAIProviders { get; set; } = true;
+    public bool EnableMEAIToTornadoFailover { get; set; } = true;
+    public bool FailoverFallbackToDefaultProviderWhenNamedProviderMissing { get; set; } = true;
+    public bool FailoverPreferFallbackDefaultProvider { get; set; } = true;
+    public bool FailoverPreferDeepSeekAsFallbackDefault { get; set; } = true;
     public bool EnableMCPTools { get; set; }
     public bool EnableSkills { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
@@ -64,44 +70,113 @@ public static class ServiceCollectionExtensions
 
         var secrets = options.SecretsStore ?? new AevatarSecretsStore();
         var configuredProviders = ReadConfiguredProviders(secrets, options);
-        if (configuredProviders.Count > 0)
+        if (configuredProviders.Count == 0)
         {
-            services.AddMEAIProviders(factory =>
+            var fallbackRegistration = ResolveFallbackRegistration(options);
+            if (fallbackRegistration != null)
             {
-                foreach (var provider in configuredProviders)
-                {
-                    factory.RegisterOpenAI(
-                        provider.Name,
-                        provider.Model,
-                        provider.ApiKey,
-                        string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
-                }
-
-                var preferredDefault = secrets.GetDefaultProvider()
-                    ?? configuration["Models:DefaultProvider"]
-                    ?? options.DefaultProvider;
-                var defaultName = configuredProviders.Any(p => string.Equals(p.Name, preferredDefault, StringComparison.OrdinalIgnoreCase))
-                    ? preferredDefault
-                    : configuredProviders[0].Name;
-                factory.SetDefault(defaultName);
-            });
-            return;
+                configuredProviders.Add(new ConfiguredProvider(
+                    fallbackRegistration.ProviderName,
+                    fallbackRegistration.ProviderName,
+                    fallbackRegistration.Model,
+                    fallbackRegistration.Endpoint,
+                    fallbackRegistration.ApiKey));
+            }
         }
 
-        var fallbackRegistration = ResolveFallbackRegistration(options);
-        if (fallbackRegistration is null)
+        var preferredDefault = secrets.GetDefaultProvider()
+            ?? configuration["Models:DefaultProvider"]
+            ?? options.DefaultProvider;
+        var defaultName = ResolveDefaultProviderName(configuredProviders, preferredDefault);
+
+        var meaiFactory = BuildMeaiFactory(configuredProviders, defaultName);
+        if (!options.EnableMEAIToTornadoFailover)
         {
-            services.AddMEAIProviders(_ => { });
+            services.TryAddSingleton<ILLMProviderFactory>(meaiFactory);
             return;
         }
 
-        services.AddMEAIProviders(factory => factory
-            .RegisterOpenAI(
-                fallbackRegistration.ProviderName,
-                fallbackRegistration.Model,
-                fallbackRegistration.ApiKey,
-                fallbackRegistration.Endpoint)
-            .SetDefault(fallbackRegistration.ProviderName));
+        var tornadoDefaultName = ResolveTornadoDefaultProviderName(configuredProviders, defaultName, options);
+        var tornadoFactory = BuildTornadoFactory(configuredProviders, tornadoDefaultName);
+        var failoverFactory = new FailoverLLMProviderFactory(
+            meaiFactory,
+            tornadoFactory,
+            new LLMProviderFailoverOptions
+            {
+                FallbackToDefaultProviderWhenNamedProviderMissing =
+                    options.FailoverFallbackToDefaultProviderWhenNamedProviderMissing,
+                PreferFallbackDefaultProvider = options.FailoverPreferFallbackDefaultProvider,
+            });
+        services.TryAddSingleton<ILLMProviderFactory>(failoverFactory);
+    }
+
+    private static string ResolveTornadoDefaultProviderName(
+        IReadOnlyList<ConfiguredProvider> configuredProviders,
+        string defaultName,
+        AevatarAIFeatureOptions options)
+    {
+        if (!options.FailoverPreferDeepSeekAsFallbackDefault || configuredProviders.Count == 0)
+            return defaultName;
+
+        var deepSeek = configuredProviders.FirstOrDefault(static p =>
+            string.Equals(p.ProviderType, "deepseek", StringComparison.OrdinalIgnoreCase));
+        return deepSeek?.Name ?? defaultName;
+    }
+
+    private static string ResolveDefaultProviderName(
+        IReadOnlyList<ConfiguredProvider> configuredProviders,
+        string? preferredDefault)
+    {
+        var normalizedPreferred = string.IsNullOrWhiteSpace(preferredDefault)
+            ? null
+            : preferredDefault.Trim();
+
+        if (configuredProviders.Count == 0)
+            return normalizedPreferred ?? "openai";
+
+        if (!string.IsNullOrWhiteSpace(normalizedPreferred) &&
+            configuredProviders.Any(p => string.Equals(p.Name, normalizedPreferred, StringComparison.OrdinalIgnoreCase)))
+        {
+            return normalizedPreferred;
+        }
+
+        return configuredProviders[0].Name;
+    }
+
+    private static MEAILLMProviderFactory BuildMeaiFactory(
+        IEnumerable<ConfiguredProvider> configuredProviders,
+        string defaultName)
+    {
+        var factory = new MEAILLMProviderFactory();
+        foreach (var provider in configuredProviders)
+        {
+            factory.RegisterOpenAI(
+                provider.Name,
+                provider.Model,
+                provider.ApiKey,
+                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
+        }
+
+        factory.SetDefault(defaultName);
+        return factory;
+    }
+
+    private static TornadoLLMProviderFactory BuildTornadoFactory(
+        IEnumerable<ConfiguredProvider> configuredProviders,
+        string defaultName)
+    {
+        var factory = new TornadoLLMProviderFactory();
+        foreach (var provider in configuredProviders)
+        {
+            factory.RegisterOpenAICompatible(
+                provider.Name,
+                provider.ApiKey,
+                provider.Model,
+                string.IsNullOrWhiteSpace(provider.Endpoint) ? null : provider.Endpoint);
+        }
+
+        factory.SetDefault(defaultName);
+        return factory;
     }
 
     private static List<ConfiguredProvider> ReadConfiguredProviders(

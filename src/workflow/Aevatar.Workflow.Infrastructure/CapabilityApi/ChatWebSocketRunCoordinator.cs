@@ -27,14 +27,26 @@ internal static class ChatWebSocketRunCoordinator
         CapabilityMessageTraceContext ResolveContext() =>
             CapabilityTraceContext.CreateMessageContext(correlationId, command.RequestId);
 
-        var request = new WorkflowChatRunRequest(
-            command.Input.Prompt,
-            command.Input.Workflow,
-            command.Input.AgentId,
-            command.Input.WorkflowYaml);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input);
+        if (!normalizedRequest.Succeeded)
+        {
+            var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
+            RecordFirstResponseIfNeeded();
+            var context = ResolveContext();
+            await ChatWebSocketProtocol.SendAsync(
+                socket,
+                ChatWebSocketEnvelopeFactory.CreateCommandError(
+                    command.RequestId,
+                    code,
+                    message,
+                    context.CorrelationId),
+                ct,
+                responseMessageType);
+            return firstResponseDurationMs;
+        }
 
         var executionResult = await chatRunService.ExecuteAsync(
-            request,
+            normalizedRequest.Request!,
             (frame, token) =>
             {
                 RecordFirstResponseIfNeeded();
@@ -44,8 +56,7 @@ internal static class ChatWebSocketRunCoordinator
                     ChatWebSocketEnvelopeFactory.CreateAguiEvent(
                         command.RequestId,
                         frame,
-                        context.CorrelationId,
-                        context.TraceId),
+                        context.CorrelationId),
                     token,
                     responseMessageType));
             },
@@ -53,10 +64,9 @@ internal static class ChatWebSocketRunCoordinator
             {
                 correlationId = started.CommandId;
                 RecordFirstResponseIfNeeded();
-                var context = ResolveContext();
                 return new ValueTask(ChatWebSocketProtocol.SendAsync(
                     socket,
-                    ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, started, context.TraceId),
+                    ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, started),
                     token,
                     responseMessageType));
             },
@@ -73,14 +83,14 @@ internal static class ChatWebSocketRunCoordinator
                     command.RequestId,
                     code,
                     message,
-                    context.CorrelationId,
-                    context.TraceId),
+                    context.CorrelationId),
                 ct,
                 responseMessageType);
             return firstResponseDurationMs;
         }
 
-        correlationId = executionResult.Started!.CommandId;
+        if (executionResult.Started != null)
+            correlationId = executionResult.Started.CommandId;
         return firstResponseDurationMs;
     }
 }

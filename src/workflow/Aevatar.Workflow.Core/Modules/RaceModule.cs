@@ -34,13 +34,22 @@ public sealed class RaceModule : IEventModule
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
             var parentKey = (runId, request.StepId);
 
-            var workers = new List<string>();
-            if (request.Parameters.TryGetValue("workers", out var w) && !string.IsNullOrEmpty(w))
-                workers.AddRange(w.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            var workers = WorkflowParameterValueParser.GetStringList(request.Parameters, "workers", "worker_roles");
 
             var count = workers.Count > 0 ? workers.Count
-                : int.TryParse(request.Parameters.GetValueOrDefault("count", "2"), out var n) ? n : 2;
-            count = Math.Clamp(count, 1, 10);
+                : WorkflowParameterValueParser.GetBoundedInt(request.Parameters, 2, 1, 10, "count", "race_count");
+
+            if (workers.Count == 0 && string.IsNullOrWhiteSpace(request.TargetRole))
+            {
+                await ctx.PublishAsync(new StepCompletedEvent
+                {
+                    StepId = request.StepId,
+                    RunId = runId,
+                    Success = false,
+                    Error = "race requires parameters.workers (CSV/JSON list) or target_role",
+                }, EventDirection.Self, ct);
+                return;
+            }
 
             _races[parentKey] = new RaceState(count, 0, false);
 

@@ -159,7 +159,9 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
     public async Task MassTransitKafkaEnvelopeConsumer_ShouldIgnoreInvalidAndDispatchValidMessage()
     {
         var dispatcher = new MassTransitKafkaEnvelopeDispatcher();
-        var consumer = new MassTransitKafkaEnvelopeConsumer(dispatcher, NullLogger<MassTransitKafkaEnvelopeConsumer>.Instance);
+        var consumer = new MassTransitKafkaEnvelopeConsumer(
+            dispatcher,
+            NullLogger<MassTransitKafkaEnvelopeConsumer>.Instance);
         var delivered = new List<MassTransitEnvelopeRecord>();
         await dispatcher.SubscribeAsync(record =>
         {

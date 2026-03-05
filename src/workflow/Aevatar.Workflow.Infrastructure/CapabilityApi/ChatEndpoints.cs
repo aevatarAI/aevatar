@@ -2,9 +2,14 @@ using System.Net.WebSockets;
 using System.Diagnostics;
 using System.Threading;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
 
@@ -15,16 +20,36 @@ public static class WorkflowCapabilityEndpoints
     public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api").WithTags("Chat");
+        MapInteractionEndpoints(group);
+        ChatQueryEndpoints.Map(group);
 
+        return app;
+    }
+
+    public static IEndpointRouteBuilder MapWorkflowChatInteractionEndpoints(this IEndpointRouteBuilder app)
+    {
+        var group = app.MapGroup("/api").WithTags("Chat");
+        MapInteractionEndpoints(group);
+
+        return app;
+    }
+
+    private static void MapInteractionEndpoints(RouteGroupBuilder group)
+    {
         group.MapPost("/chat", HandleChat)
             .Produces(StatusCodes.Status200OK, contentType: "text/event-stream")
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/ws/chat", HandleChatWebSocket);
-        ChatQueryEndpoints.Map(group);
-
-        return app;
+        group.MapPost("/workflows/resume", HandleResume)
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+        group.MapPost("/workflows/signal", HandleSignal)
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
     }
 
     internal static async Task HandleChat(
@@ -45,36 +70,70 @@ public static class WorkflowCapabilityEndpoints
         }
 
         var writer = new ChatSseResponseWriter(http.Response);
-        CapabilityTraceContext.ApplyTraceHeaders(http.Response);
+        var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
+        var loggerFactory = serviceProvider?.GetService(typeof(ILoggerFactory)) as ILoggerFactory;
+        var logger = loggerFactory?.CreateLogger("Aevatar.Workflow.Host.Api.Chat");
 
         try
         {
+            var normalizedRequest = ChatRunRequestNormalizer.Normalize(input);
+            if (!normalizedRequest.Succeeded)
+            {
+                var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
+                var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(normalizedRequest.Error);
+                requestResult = ApiMetrics.ResolveResult(statusCode);
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    statusCode,
+                    code,
+                    message,
+                    ct);
+                return;
+            }
+
             var result = await chatRunService.ExecuteAsync(
-                new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId, input.WorkflowYaml),
-                (frame, token) =>
-                {
-                    return WriteFrameAndRecordFirstResponseOnceAsync(frame, token);
-                },
-                onStartedAsync: (started, token) =>
+                normalizedRequest.Request!,
+                (frame, token) => WriteFrameAndRecordFirstResponseOnceAsync(frame, token),
+                onStartedAsync: async (started, token) =>
                 {
                     CapabilityTraceContext.ApplyCorrelationHeader(http.Response, started.CommandId);
-                    return writer.StartAsync(token);
+                    await writer.StartAsync(token);
+                    await writer.WriteAsync(BuildRunContextFrame(started), token);
                 },
                 ct);
 
             if (result.Error != WorkflowChatRunStartError.None && !writer.Started)
             {
-                http.Response.StatusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
-                requestResult = ApiMetrics.ResolveResult(http.Response.StatusCode);
+                var (code, message) = ChatRunStartErrorMapper.ToCommandError(result.Error);
+                var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
+                requestResult = ApiMetrics.ResolveResult(statusCode);
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    statusCode,
+                    code,
+                    message,
+                    ct);
             }
         }
         catch (OperationCanceledException)
         {
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             requestResult = ApiMetrics.ResultError;
-            throw;
+            logger?.LogError(ex, "Workflow chat execution failed.");
+            if (!writer.Started)
+            {
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    StatusCodes.Status500InternalServerError,
+                    "EXECUTION_FAILED",
+                    "Workflow execution failed.",
+                    CancellationToken.None);
+                return;
+            }
+
+            await WriteStreamErrorFrameAsync(writer, ex, logger, CancellationToken.None);
         }
         finally
         {
@@ -98,6 +157,9 @@ public static class WorkflowCapabilityEndpoints
     {
         var requestStopwatch = Stopwatch.StartNew();
         var requestResult = ApiMetrics.ResultOk;
+        var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
+        var startSignal = new TaskCompletionSource<WorkflowChatRunStarted>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>> executionTask;
         try
         {
             if (string.IsNullOrWhiteSpace(input.Prompt))
@@ -109,14 +171,25 @@ public static class WorkflowCapabilityEndpoints
                 });
             }
 
-            var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
-            var startSignal = new TaskCompletionSource<WorkflowChatRunStarted>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>> executionTask;
+            var normalizedRequest = ChatRunRequestNormalizer.Normalize(input);
+            if (!normalizedRequest.Succeeded)
+            {
+                var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
+                var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(normalizedRequest.Error);
+                requestResult = ApiMetrics.ResolveResult(statusCode);
+                return Results.Json(
+                    new
+                    {
+                        code,
+                        message,
+                    },
+                    statusCode: statusCode);
+            }
 
             try
             {
                 executionTask = chatRunService.ExecuteAsync(
-                    new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId, input.WorkflowYaml),
+                    normalizedRequest.Request!,
                     static (_, _) => ValueTask.CompletedTask,
                     onStartedAsync: (started, _) =>
                     {
@@ -201,6 +274,192 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
+    internal static async Task<IResult> HandleResume(
+        WorkflowResumeInput input,
+        IWorkflowRunActorPort actorPort,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(actorPort);
+
+        var actorId = (input.ActorId ?? string.Empty).Trim();
+        var runId = (input.RunId ?? string.Empty).Trim();
+        var stepId = (input.StepId ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(actorId) ||
+            string.IsNullOrWhiteSpace(runId) ||
+            string.IsNullOrWhiteSpace(stepId))
+        {
+            return Results.BadRequest(new { error = "actorId, runId and stepId are required." });
+        }
+
+        var actor = await actorPort.GetAsync(actorId, ct);
+        if (actor == null)
+            return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
+
+        if (!await actorPort.IsWorkflowActorAsync(actor, ct))
+            return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow actor." });
+
+        var resumed = new WorkflowResumedEvent
+        {
+            RunId = runId,
+            StepId = stepId,
+            Approved = input.Approved,
+            UserInput = input.UserInput ?? string.Empty,
+        };
+        if (input.Metadata is { Count: > 0 })
+        {
+            foreach (var (key, value) in input.Metadata)
+                resumed.Metadata[key] = value;
+        }
+        var commandId = (input.CommandId ?? string.Empty).Trim();
+        var correlationId = string.IsNullOrWhiteSpace(commandId)
+            ? Guid.NewGuid().ToString("N")
+            : commandId;
+
+        await actor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(resumed),
+            PublisherId = "api.workflow.resume",
+            Direction = EventDirection.Self,
+            CorrelationId = correlationId,
+            TargetActorId = actor.Id,
+        }, ct);
+
+        return Results.Ok(new
+        {
+            accepted = true,
+            actorId,
+            runId,
+            stepId,
+            commandId = correlationId,
+        });
+    }
+
+    internal static async Task<IResult> HandleSignal(
+        WorkflowSignalInput input,
+        IWorkflowRunActorPort actorPort,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(actorPort);
+
+        var actorId = (input.ActorId ?? string.Empty).Trim();
+        var runId = (input.RunId ?? string.Empty).Trim();
+        var signalName = (input.SignalName ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(actorId) ||
+            string.IsNullOrWhiteSpace(runId) ||
+            string.IsNullOrWhiteSpace(signalName))
+        {
+            return Results.BadRequest(new { error = "actorId, runId and signalName are required." });
+        }
+
+        var actor = await actorPort.GetAsync(actorId, ct);
+        if (actor == null)
+            return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
+
+        if (!await actorPort.IsWorkflowActorAsync(actor, ct))
+            return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow actor." });
+
+        var commandId = (input.CommandId ?? string.Empty).Trim();
+        var correlationId = string.IsNullOrWhiteSpace(commandId)
+            ? Guid.NewGuid().ToString("N")
+            : commandId;
+
+        await actor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new SignalReceivedEvent
+            {
+                RunId = runId,
+                SignalName = signalName,
+                Payload = input.Payload ?? string.Empty,
+            }),
+            PublisherId = "api.workflow.signal",
+            Direction = EventDirection.Self,
+            CorrelationId = correlationId,
+            TargetActorId = actor.Id,
+        }, ct);
+
+        return Results.Ok(new
+        {
+            accepted = true,
+            actorId,
+            runId,
+            signalName,
+            commandId = correlationId,
+        });
+    }
+
+    private static WorkflowOutputFrame BuildRunContextFrame(WorkflowChatRunStarted started) =>
+        new()
+        {
+            Type = WorkflowRunEventTypes.Custom,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Name = "aevatar.run.context",
+            Value = new
+            {
+                started.ActorId,
+                started.WorkflowName,
+                started.CommandId,
+            },
+        };
+
+    private static async Task WriteJsonErrorResponseAsync(
+        HttpContext http,
+        int statusCode,
+        string code,
+        string message,
+        CancellationToken ct)
+    {
+        http.Response.StatusCode = statusCode;
+        http.Response.ContentType = "application/json; charset=utf-8";
+        await http.Response.WriteAsJsonAsync(
+            new
+            {
+                code,
+                message,
+            },
+            cancellationToken: ct);
+    }
+
+    private static async Task WriteStreamErrorFrameAsync(
+        ChatSseResponseWriter writer,
+        Exception ex,
+        ILogger? logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            await writer.WriteAsync(
+                new WorkflowOutputFrame
+                {
+                    Type = WorkflowRunEventTypes.RunError,
+                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Code = "EXECUTION_FAILED",
+                    Message = $"Workflow execution failed: {SanitizeErrorMessage(ex.Message)}",
+                },
+                ct);
+        }
+        catch (Exception writeEx)
+        {
+            logger?.LogDebug(writeEx, "Failed to write SSE error frame because the stream is no longer writable.");
+        }
+    }
+
+    private static string SanitizeErrorMessage(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return "unknown error";
+
+        return message
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+    }
+
     internal static async Task HandleChatWebSocket(
         HttpContext http,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
@@ -238,8 +497,7 @@ public static class WorkflowCapabilityEndpoints
                         parseError.RequestId,
                         parseError.Code,
                         parseError.Message,
-                        parseContext.CorrelationId,
-                        parseContext.TraceId),
+                        parseContext.CorrelationId),
                     ct,
                     parseError.ResponseMessageType);
                 ApiMetrics.RecordFirstResponse(ApiMetrics.TransportWebSocket, ApiMetrics.ResultOk, requestStopwatch.Elapsed.TotalMilliseconds);
@@ -267,7 +525,7 @@ public static class WorkflowCapabilityEndpoints
                         requestId: null,
                         code: "RUN_EXECUTION_FAILED",
                         message: "Failed to execute run.",
-                        traceId: failureContext.TraceId),
+                        correlationId: failureContext.CorrelationId),
                     ct,
                     responseMessageType);
             }

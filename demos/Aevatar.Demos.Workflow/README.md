@@ -74,73 +74,41 @@ dotnet run -- --all
 |---|---|---|
 | `workflow_loop` | WorkflowLoopModule | 工作流主循环引擎，处理步骤调度、变量、重试、超时、分支解析 |
 
-## Demo 列表
+## Workflow YAML 分类（55 个主 workflow）
 
-### 确定性 Demo（01-07）
+说明：
 
-| 编号 | 文件 | 演示原语 | 说明 |
-|---|---|---|---|
-| 01 | `01_transform.yaml` | `transform` | 管道式变换：uppercase → count |
-| 02 | `02_guard.yaml` | `guard` | 三重校验：not_empty → json_valid → contains |
-| 03 | `03_conditional.yaml` | `conditional` + `transform` | 条件分支：包含 "URGENT" 走大写，否则小写 |
-| 04 | `04_switch.yaml` | `switch` + `transform` | 多路分支：按 bug/feature/question 路由到不同变换 |
-| 05 | `05_assign.yaml` | `assign` + `transform` | 变量赋值后变换 |
-| 06 | `06_retrieve_facts.yaml` | `retrieve_facts` | 从事实列表中检索 top-3 与 "programming language" 相关的条目 |
-| 07 | `07_pipeline.yaml` | `guard` + `assign` + `retrieve_facts` + `transform` | 多原语组合管道：校验 → 赋值 → 检索 → 计数 |
+- `workflows/` 目录里目前是 **58** 个 YAML；
+- 其中 `48_subworkflow_level1/2/3.yaml` 是 `49_workflow_call_multilevel.yaml` 的子流程定义；
+- 文档里说的 **55 个 workflow** 指主流程文件（01-07、08-16、17-38、39-47、49-56）。
 
-### LLM Demo（08-16）
+| 分组 | 文件范围 | 数量 | 主要展示能力 |
+|---|---|---:|---|
+| Start Here（Deterministic Basics） | `01-07` | 7 | 基础确定性原语：`transform`、`guard`、`conditional`、`switch`、`assign`、`retrieve_facts`、组合 pipeline |
+| LLM Workflows | `08-16` | 9 | 基础 LLM 编排：`llm_call`、chain、`parallel`、`race`、`map_reduce`、`foreach`、`evaluate`、`reflect`、`cache` |
+| Custom Step Modules | `17-19` | 3 | 自定义步骤模块：`demo_template`、`demo_csv_markdown`、`demo_json_pick` |
+| Role Event Modules | `20-38` | 19 | Role 级 `event_modules`/`event_routes` 配置、multiplex 路由、`extensions` 兼容与覆盖优先级、混合 step+role 执行链 |
+| Human Interaction（Legacy Auto） | `39-42` | 4 | 自动恢复式人机交互：`human_input`/`human_approval` 自动继续，覆盖 approve/reject(fail/skip) 分支 |
+| Human Interaction（Manual） | `43-47` | 5 | 手动交互场景：人工输入、人工审批、`wait_signal` 成功与超时、审批+信号混合编排 |
+| Workflow Call（Multi-level） | `49` + `48_subworkflow_*` | 1(+3) | 多层子流程调用：`workflow_call` 递归调用 + 子流程文本标准化/去重/反转处理 |
+| Connector Integration | `50` | 1 | `connector_call` 端到端：role 连接器白名单 + 本地 CLI connector 调用 |
+| Ergonomic Aliases | `51-53` | 3 | ergonomic alias 演示：`cli_call`、`foreach_llm`、`map_reduce_llm` |
+| Integration Utility | `54-56` | 3 | 集成辅助场景：`publish/emit`、`tool_call` 失败 fallback、`delay+checkpoint` |
 
-| 编号 | 文件 | 演示原语 | 说明 |
-|---|---|---|---|
-| 08 | `08_llm_call.yaml` | `llm_call` | 单次 LLM 调用 |
-| 09 | `09_llm_chain.yaml` | `llm_call` (chain) | 两步链：Analyst 分析 → Advisor 提方案 |
-| 10 | `10_parallel.yaml` | `parallel` | 3 个角色并行回答同一问题，合并结果 |
-| 11 | `11_race.yaml` | `race` | 3 路竞速，第一个成功响应胜出 |
-| 12 | `12_map_reduce.yaml` | `map_reduce` | 3 个主题分别 map 生成要点，reduce 合成摘要 |
-| 13 | `13_foreach.yaml` | `foreach` | 遍历 3 个技术名，对每个调用 LLM 生成描述 |
-| 14 | `14_evaluate.yaml` | `evaluate` + `llm_call` | 先写诗，再用 LLM-as-Judge 打分 |
-| 15 | `15_reflect.yaml` | `reflect` | 自我反思循环：反复 critique + improve |
-| 16 | `16_cache.yaml` | `cache` + `llm_call` | 缓存包装的 LLM 调用 |
+### Role Event Modules（20-38）子分组速览
 
-## 目录结构
+- `20-22`：单模块路由（template / csv / json）。
+- `23-25`：多模块 multiplex 路由。
+- `26`：多角色链式 role event module。
+- `27-32`：`extensions` 配置与 top-level 覆盖优先级验证。
+- `33`：无 route 配置时的行为。
+- `34`：route DSL 路由语法。
+- `35`：未知模块忽略与容错。
+- `36-38`：普通 step 模块与 role event module 的混合链路。
 
-```
-demos/Aevatar.Demos.Workflow/
-├── Aevatar.Demos.Workflow.csproj
-├── Program.cs
-├── README.md
-└── workflows/
-    ├── 01_transform.yaml
-    ├── 02_guard.yaml
-    ├── 03_conditional.yaml
-    ├── 04_switch.yaml
-    ├── 05_assign.yaml
-    ├── 06_retrieve_facts.yaml
-    ├── 07_pipeline.yaml
-    ├── 08_llm_call.yaml
-    ├── 09_llm_chain.yaml
-    ├── 10_parallel.yaml
-    ├── 11_race.yaml
-    ├── 12_map_reduce.yaml
-    ├── 13_foreach.yaml
-    ├── 14_evaluate.yaml
-    ├── 15_reflect.yaml
-    └── 16_cache.yaml
-```
+## 仍未做“独立 YAML 演示”的原语
 
-## 未在 Demo 中覆盖的原语
+以下原语目前没有单独编号 demo（但在集成测试或组合场景里有覆盖）：
 
-以下原语因需要外部依赖或交互式输入，未编写独立 YAML demo：
-
-- `emit` / `publish` — 发布自定义事件，使用 EventDirection.Both（需要外部流订阅消费）
-- `tool_call` — 需要注册 IAgentToolSource
-- `connector_call` — 需要配置 Connector（参见 Demos.Maker）
-- `workflow_call` — 需要已注册的子工作流
-- `while` / `loop` — 需要 LLM 子步骤产生 "DONE" 终止信号
-- `vote_consensus` — 通常作为 parallel 的 vote_step_type 子步骤使用
-- `delay` / `sleep` — 纯等待，无输出
-- `checkpoint` — 快照恢复，需要配合状态管理
-- `wait_signal` — 需要外部信号源
-- `human_input` / `human_approval` — 需要交互式 UI
-
-这些原语在集成测试和 Demos.Maker 中有完整覆盖。
+- `while` / `loop`
+- `vote_consensus`
