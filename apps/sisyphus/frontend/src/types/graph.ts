@@ -27,9 +27,9 @@ export interface TraverseResult {
 }
 
 export const NODE_COLORS: Record<string, string> = {
-  Plan: '#3b82f6',
-  Knowledge: '#22c55e',
-  Active: '#f97316',
-  Task: '#f97316',
-  Default: '#8bb3d0',
+  Plan: '#00d4ff',
+  Knowledge: '#00ff88',
+  Active: '#ff6600',
+  Task: '#ff00aa',
+  Default: '#00ffff',
 }
