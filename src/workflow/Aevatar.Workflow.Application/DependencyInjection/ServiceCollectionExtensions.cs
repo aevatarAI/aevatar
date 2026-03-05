@@ -19,21 +19,34 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddWorkflowApplication(
         this IServiceCollection services,
-        Action<WorkflowDefinitionRegistryOptions>? configureRegistry = null)
+        Action<WorkflowDefinitionRegistryOptions>? configureRegistry = null,
+        Action<WorkflowRunBehaviorOptions>? configureRunBehavior = null)
     {
         var options = new WorkflowDefinitionRegistryOptions();
         configureRegistry?.Invoke(options);
+        var runBehaviorOptions = new WorkflowRunBehaviorOptions();
+        configureRunBehavior?.Invoke(runBehaviorOptions);
+        services.AddSingleton(runBehaviorOptions);
 
         services.AddSingleton<IWorkflowDefinitionRegistry>(_ =>
         {
             var registry = new WorkflowDefinitionRegistry();
             if (options.RegisterBuiltInDirectWorkflow)
                 registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+            if (options.RegisterBuiltInAutoWorkflow)
+                registry.Register("auto", WorkflowDefinitionRegistry.BuiltInAutoYaml);
+            if (options.RegisterBuiltInAutoReviewWorkflow)
+                registry.Register("auto_review", WorkflowDefinitionRegistry.BuiltInAutoReviewYaml);
 
             return registry;
         });
 
-        services.AddSingleton<IWorkflowRunActorResolver, WorkflowRunActorResolver>();
+        services.AddSingleton<WorkflowDirectFallbackPolicy>();
+        services.AddSingleton<IWorkflowRunActorResolver>(sp =>
+            new WorkflowRunActorResolver(
+                sp.GetRequiredService<IWorkflowRunActorPort>(),
+                sp.GetRequiredService<IWorkflowDefinitionRegistry>(),
+                sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
         services.TryAddSingleton<ICommandContextPolicy, WorkflowCommandContextPolicy>();
         services.AddSingleton<ICommandEnvelopeFactory<WorkflowChatRunRequest>, WorkflowChatRequestEnvelopeFactory>();
         services.AddSingleton<IWorkflowRunRequestExecutor, WorkflowRunRequestExecutor>();

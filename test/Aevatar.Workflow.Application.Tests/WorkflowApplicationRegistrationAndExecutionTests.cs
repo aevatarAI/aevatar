@@ -43,6 +43,117 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
+    public void AddWorkflowApplication_Default_ShouldRegisterBuiltInAutoWorkflow()
+    {
+        var services = new ServiceCollection();
+
+        services.AddWorkflowApplication();
+
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var yaml = registry.GetYaml("auto");
+        yaml.Should().NotBeNullOrWhiteSpace();
+        yaml.Should().Contain("name: auto");
+        yaml.Should().Contain("dynamic_workflow");
+        yaml!.IndexOf("- id: done", StringComparison.Ordinal)
+            .Should().BeGreaterThan(yaml.IndexOf("- id: extract_and_execute", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_WhenConfigured_ShouldAllowDisablingBuiltInAutoWorkflow()
+    {
+        var services = new ServiceCollection();
+
+        services.AddWorkflowApplication(options => options.RegisterBuiltInAutoWorkflow = false);
+
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        registry.GetYaml("auto").Should().BeNull();
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_Default_ShouldRegisterBuiltInAutoReviewWorkflow()
+    {
+        var services = new ServiceCollection();
+
+        services.AddWorkflowApplication();
+
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var yaml = registry.GetYaml("auto_review");
+        yaml.Should().NotBeNullOrWhiteSpace();
+        yaml.Should().Contain("name: auto_review");
+        yaml.Should().Contain("\"true\": done");
+        yaml.Should().Contain("Approve to finalize YAML for manual run");
+        yaml!.IndexOf("- id: done", StringComparison.Ordinal)
+            .Should().BeGreaterThan(yaml.IndexOf("- id: show_for_approval", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_WhenConfigured_ShouldAllowDisablingBuiltInAutoReviewWorkflow()
+    {
+        var services = new ServiceCollection();
+
+        services.AddWorkflowApplication(options => options.RegisterBuiltInAutoReviewWorkflow = false);
+
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        registry.GetYaml("auto_review").Should().BeNull();
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_Default_ShouldRegisterRunBehaviorOptions()
+    {
+        var services = new ServiceCollection();
+
+        services.AddWorkflowApplication();
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<WorkflowRunBehaviorOptions>();
+
+        options.DefaultWorkflowName.Should().Be("direct");
+        options.UseAutoAsDefaultWhenWorkflowUnspecified.Should().BeFalse();
+        options.EnableDirectFallback.Should().BeTrue();
+        options.DirectFallbackWorkflowWhitelist.Should().Contain("auto");
+        options.DirectFallbackWorkflowWhitelist.Should().Contain("auto_review");
+        options.DirectFallbackExceptionWhitelist.Should().Contain(typeof(WorkflowDirectFallbackTriggerException));
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_WhenConfigured_ShouldApplyRunBehaviorOptionsToFallbackPolicy()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication(
+            configureRunBehavior: options =>
+            {
+                options.DefaultWorkflowName = "direct";
+                options.UseAutoAsDefaultWhenWorkflowUnspecified = true;
+                options.EnableDirectFallback = true;
+                options.DirectFallbackWorkflowWhitelist.Clear();
+                options.DirectFallbackWorkflowWhitelist.Add("analysis");
+                options.DirectFallbackExceptionWhitelist.Clear();
+                options.DirectFallbackExceptionWhitelist.Add(typeof(TimeoutException));
+            });
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<WorkflowRunBehaviorOptions>();
+        var policy = provider.GetRequiredService<WorkflowDirectFallbackPolicy>();
+
+        options.UseAutoAsDefaultWhenWorkflowUnspecified.Should().BeTrue();
+        options.DirectFallbackWorkflowWhitelist.Should().ContainSingle().Which.Should().Be("analysis");
+        options.DirectFallbackExceptionWhitelist.Should().ContainSingle().Which.Should().Be(typeof(TimeoutException));
+
+        policy.ShouldFallback(new WorkflowChatRunRequest("hello", "analysis", null), new TimeoutException("timeout"))
+            .Should().BeTrue();
+        policy.ShouldFallback(
+                new WorkflowChatRunRequest("hello", "analysis", null),
+                new WorkflowDirectFallbackTriggerException("boom"))
+            .Should().BeFalse();
+        policy.ShouldFallback(new WorkflowChatRunRequest("hello", "analysis", null), new InvalidOperationException("boom"))
+            .Should().BeFalse();
+    }
+
+    [Fact]
     public void AddWorkflowApplication_ShouldWireWorkflowRunOutputStreamerAcrossAbstractions()
     {
         var services = new ServiceCollection();
@@ -141,7 +252,38 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         sink.Events.Should().ContainSingle();
         var error = sink.Events[0].Should().BeOfType<WorkflowRunErrorEvent>().Subject;
         error.Code.Should().Be("INTERNAL_ERROR");
-        error.Message.Should().Be("工作流执行异常");
+        error.Message.Should().Be("Workflow execution error: boom");
+        sink.CompleteCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task WorkflowRunRequestExecutor_WhenExceptionMessageContainsNewLine_ShouldSanitizeErrorMessage()
+    {
+        var actor = new ThrowingActor(new InvalidOperationException("boom\ntrace"));
+        var sink = new RecordingSink();
+        var executor = new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance);
+
+        await executor.ExecuteAsync(actor, actor.Id, new EventEnvelope { Id = "e-2b" }, sink, CancellationToken.None);
+
+        sink.Events.Should().ContainSingle();
+        var error = sink.Events[0].Should().BeOfType<WorkflowRunErrorEvent>().Subject;
+        error.Code.Should().Be("INTERNAL_ERROR");
+        error.Message.Should().Be("Workflow execution error: boom trace");
+        sink.CompleteCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task WorkflowRunRequestExecutor_WhenExceptionMessageIsBlank_ShouldUseUnknownErrorFallback()
+    {
+        var actor = new ThrowingActor(new InvalidOperationException(string.Empty));
+        var sink = new RecordingSink();
+        var executor = new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance);
+
+        await executor.ExecuteAsync(actor, actor.Id, new EventEnvelope { Id = "e-2c" }, sink, CancellationToken.None);
+
+        sink.Events.Should().ContainSingle();
+        var error = sink.Events[0].Should().BeOfType<WorkflowRunErrorEvent>().Subject;
+        error.Message.Should().Be("Workflow execution error: unknown error");
         sink.CompleteCalls.Should().Be(1);
     }
 

@@ -1,15 +1,6 @@
 namespace Aevatar.AI.Abstractions.Agents;
 
 /// <summary>
-/// Raw role extension input from YAML.
-/// </summary>
-public sealed class RoleExtensionsInput
-{
-    public string? EventModules { get; init; }
-    public string? EventRoutes { get; init; }
-}
-
-/// <summary>
 /// Cross-entry role configuration input.
 /// Used by both workflow roles and standalone role yaml.
 /// </summary>
@@ -29,7 +20,6 @@ public sealed class RoleConfigurationInput
 
     public string? EventModules { get; init; }
     public string? EventRoutes { get; init; }
-    public RoleExtensionsInput? Extensions { get; init; }
     public IReadOnlyList<string>? Connectors { get; init; }
 }
 
@@ -65,11 +55,8 @@ public static class RoleConfigurationNormalizer
         var effectiveId = input.Id ?? input.Name ?? string.Empty;
         var effectiveName = input.Name ?? input.Id ?? string.Empty;
 
-        // Top-level fields win over extensions.* to keep explicit override semantics.
-        var eventModules = NormalizeText(input.EventModules)
-                           ?? NormalizeText(input.Extensions?.EventModules);
-        var eventRoutes = NormalizeText(input.EventRoutes)
-                          ?? NormalizeText(input.Extensions?.EventRoutes);
+        var eventModules = NormalizeText(input.EventModules);
+        var eventRoutes = NormalizeText(input.EventRoutes);
 
         var connectors = input.Connectors?.ToList() ?? [];
         return new RoleConfigurationNormalized

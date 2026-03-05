@@ -1,16 +1,18 @@
 # Aevatar
 
-Aevatar 是一个 **AI Agent 工作流框架**：用 YAML 定义多步工作流（调用 LLM、并行、投票、外部接口等），通过 **HTTP Chat 接口（SSE / WebSocket）** 触发并流式拿到结果。  
-适合「略懂技术、熟悉 AI Agent 概念、想快速接工作流或二次开发」的读者；不要求熟悉 .NET。
+Aevatar 是一个 **多 Agent 协作系统（Multi-Agent Collaboration System）**：以 Actor + Event 为运行内核，让多个角色 Agent 在同一任务中分工、并行、协商与收敛。  
+`Workflow YAML` 是 Aevatar 的默认编排方式：用 YAML 定义角色、步骤、路由与策略（如 `llm_call`、`parallel`、`vote_consensus`、`connector_call`），再通过 **HTTP Chat 接口（SSE / WebSocket）** 触发并流式观察整个协作过程。
+
+> **Aevatar = 多 Agent 协作运行时 + Workflow YAML 编排层**。
 
 ---
 
 ## 你能做什么
 
-- **跑现成工作流**：启动内置 API 服务，用 `POST /api/chat` 传入提示词和工作流名，以 SSE 流接收运行过程与结果。
-- **用 YAML 编工作流**：在 YAML 里写步骤类型（如 `llm_call`、`parallel`、`connector_call`），无需写代码即可组合顺序、分支、循环、并行与投票。
+- **跑多 Agent 协作任务**：启动内置 API 服务，用 `POST /api/chat` 传入提示词和 workflow，以 SSE 流接收角色协作过程与最终结果。
+- **用 Workflow YAML 做编排**：在 YAML 里声明 `roles + steps + routes`，无需写代码即可组合顺序、分支、循环、并行、投票与人工审批。
 - **接 LLM 与外部能力**：配置 API Key 和 Connector（HTTP/CLI/MCP），工作流里按名称调用。
-- **扩展步骤与 Connector**：需要自定义步骤或工具时，可扩展框架的模块与 Connector 配置。
+- **扩展协作能力**：需要自定义步骤、工具或协作策略时，可扩展框架模块与 Connector 配置。
 
 **不熟悉 .NET 也没关系**：日常使用只需配置 + 启动 API + 发 HTTP 请求；涉及「仓库结构」「模块列表」时，按需查阅即可。
 
@@ -67,14 +69,15 @@ curl -X POST http://localhost:5000/api/chat \
 
 ---
 
-## 架构一眼看懂
+## 架构一眼看懂（多 Agent 协作 + YAML 编排）
 
+- **协作内核（Multi-Agent Runtime）**：`WorkflowGAgent` 作为根 Agent，按 YAML `roles` 派生 `RoleGAgent` 子 Agent，形成可持续运行的 Agent 树。
+- **编排层（Workflow YAML）**：通过声明式 YAML 定义协作拓扑、步骤执行策略、分支与收敛规则。
 - **Mainnet Host**：`Aevatar.Mainnet.Host.Api` 作为默认统一入口，内置 Workflow Capability。
 - **Workflow Api**：`Aevatar.Workflow.Host.Api` 只做协议适配（HTTP/SSE/WebSocket）并调用 Application 层，不直接编排工作流。
 - **Maker Extension**：作为 Workflow 插件装配到 Mainnet，不再单独提供 Maker Host/API。
 - **Workflow Application**：解析/创建 Actor、启动投影 run、发送请求事件、等待收敛并输出查询结果。
-- **工作流 Agent**：按 YAML 里的步骤顺序，一步步派发任务（例如「这一步调 LLM」「这一步调外部接口」）。
-- **步骤**：由对应的「步骤模块」执行（LLM 调用、并行、投票、Connector 等），结果再交回工作流，进入下一步或结束。
+- **协作执行**：根/子 Agent 通过事件流协作推进任务；步骤模块负责具体执行（LLM、并行、投票、Connector 等）。
 - **结果**：事件先进入统一 Projection Pipeline，再由 API 通过 SSE / WebSocket 推给你。
 
 ### Run 语义（重要）
@@ -95,7 +98,7 @@ curl -X POST http://localhost:5000/api/chat \
 | ReadModel 存储 | 默认通过 `Aevatar.CQRS.Projection.Providers.InMemory` 注册通用 InMemory Store，可按 Provider 机制替换。 | 生产默认切换到持久化读模型 Provider，实现跨节点一致读。 |
 | 审计评分口径 | 以“当前已落地代码”为准评分。 | 目标态能力上线后，评分按实现结果重新审计。 |
 
-下面这张图概括了「宿主（API + 运行时 + LLM + Connector）」与「Agent 树 + 工作流步骤」的关系。
+下面这张图概括了「宿主（API + 运行时 + LLM + Connector）」与「多 Agent 协作树 + Workflow 编排步骤」的关系。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%

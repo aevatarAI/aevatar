@@ -7,6 +7,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -27,14 +28,19 @@ public sealed class RetrieveFactsModule : IEventModule
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "retrieve_facts") return;
 
-        var topK = int.TryParse(request.Parameters.GetValueOrDefault("top_k", "5"), out var k) ? k : 5;
-        var query = request.Parameters.GetValueOrDefault("query", "");
+        var topK = WorkflowParameterValueParser.GetBoundedInt(request.Parameters, 5, 1, 100, "top_k", "k");
+        var query = WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "query", "keywords");
+        var delimiter = WorkflowParameterValueParser.NormalizeEscapedText(
+            WorkflowParameterValueParser.GetString(request.Parameters, "\n", "delimiter", "separator"),
+            "\n");
 
         // input 包含事实列表（每行一个事实或 --- 分隔）
-        var facts = request.Input.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var facts = WorkflowParameterValueParser.SplitInputByDelimiterOrJsonArray(request.Input, delimiter);
+        if (facts.Length == 0 && request.Parameters.TryGetValue("facts", out var factsRaw))
+            facts = WorkflowParameterValueParser.ParseStringList(factsRaw).ToArray();
 
         // 简化检索：按包含 query 关键词排序
-        var queryWords = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var queryWords = query.Split([' ', ',', '\n', '\r', '\t'], StringSplitOptions.RemoveEmptyEntries);
         var scored = facts
             .Select(f => (Fact: f, Score: queryWords.Count(w => f.Contains(w, StringComparison.OrdinalIgnoreCase))))
             .OrderByDescending(x => x.Score)

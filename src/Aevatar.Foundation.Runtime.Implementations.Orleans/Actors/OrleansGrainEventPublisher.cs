@@ -1,6 +1,8 @@
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Runtime.Propagation;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
@@ -41,9 +43,12 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             PublisherId = _actorId,
             Direction = direction,
         };
-        envelope.Metadata["__source_actor_id"] = _actorId;
-
-        _propagationPolicy.Apply(envelope, sourceEnvelope);
+        EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
+            envelope,
+            sourceEnvelope,
+            _propagationPolicy,
+            _actorId,
+            EstimateRouteTargetCount(direction));
 
         switch (direction)
         {
@@ -91,11 +96,23 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             Direction = EventDirection.Self,
             TargetActorId = targetActorId,
         };
-        envelope.Metadata["__source_actor_id"] = _actorId;
-
-        _propagationPolicy.Apply(envelope, sourceEnvelope);
+        EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
+            envelope,
+            sourceEnvelope,
+            _propagationPolicy,
+            _actorId,
+            routeTargetCount: 1);
         return DispatchAsync(_actorId, targetActorId, envelope, ct);
     }
+
+    private long? EstimateRouteTargetCount(EventDirection direction) =>
+        direction switch
+        {
+            EventDirection.Self => 1,
+            EventDirection.Up => string.IsNullOrWhiteSpace(_getParentId()) ? 0 : 1,
+            // Down/Both fan-out count is stream-subscriber dependent and unknown at publish time.
+            _ => null,
+        };
 
     private Task DispatchAsync(string senderActorId, string targetActorId, EventEnvelope envelope, CancellationToken ct)
     {

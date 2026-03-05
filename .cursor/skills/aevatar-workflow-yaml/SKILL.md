@@ -75,6 +75,10 @@ steps:                          # required in practice
 8. Dynamic parameter keys are used by some modules, e.g. `branch.{key}`, `sub_param_{key}`, `vote_param_{key}`.
 9. Workflow roles and standalone role YAML share the same normalization semantics.
 10. `event_modules` / `event_routes` precedence: top-level fields > `extensions.*`.
+11. Ergonomic aliases are normalized at parse-time to canonical primitives:
+   - `http_get/http_post/http_put/http_delete/mcp_call/cli_call` -> `connector_call`
+   - `foreach_llm` -> `foreach`
+   - `map_reduce_llm` -> `map_reduce`
 
 ## Validation Constraints
 
@@ -93,6 +97,7 @@ When `configuration.closed_world_mode: true`, the following step types are block
 - `llm_call`
 - `tool_call`
 - `connector_call` / `bridge_call`
+- `http_get` / `http_post` / `http_put` / `http_delete` / `mcp_call` / `cli_call`
 - `evaluate` / `judge`
 - `reflect`
 - `human_input`
@@ -102,8 +107,9 @@ When `configuration.closed_world_mode: true`, the following step types are block
 - `parallel` / `parallel_fanout` / `fan_out`
 - `race` / `select`
 - `map_reduce` / `mapreduce`
+- `map_reduce_llm`
 - `vote_consensus` / `vote`
-- `foreach` / `for_each`
+- `foreach` / `for_each` / `foreach_llm`
 
 ## Primitive Catalog (26 Total)
 
@@ -124,13 +130,13 @@ When `configuration.closed_world_mode: true`, the following step types are block
 | ai | `tool_call` | tool_call | Invoke registered tool |
 | ai | `evaluate` | evaluate, judge | LLM-as-judge scoring |
 | ai | `reflect` | reflect | Self-critique and improve |
-| composition | `foreach` | foreach, for_each | Iterate by delimiter |
+| composition | `foreach` | foreach, for_each, foreach_llm | Iterate by delimiter |
 | composition | `parallel` | parallel_fanout, parallel, fan_out | Fan-out to multiple workers |
 | composition | `race` | race, select | First-response-wins |
-| composition | `map_reduce` | map_reduce, mapreduce | Split -> map -> reduce |
+| composition | `map_reduce` | map_reduce, mapreduce, map_reduce_llm | Split -> map -> reduce |
 | composition | `workflow_call` | workflow_call, sub_workflow | Invoke sub-workflow |
 | composition | `vote_consensus` | vote_consensus, vote | Consensus aggregation |
-| integration | `connector_call` | connector_call, bridge_call | Call external connector |
+| integration | `connector_call` | connector_call, bridge_call, cli_call, mcp_call, http_get, http_post, http_put, http_delete | Call external connector |
 | integration | `emit` | emit, publish | Publish external event |
 | human | `human_input` | human_input | Wait for human text input |
 | human | `human_approval` | human_approval | Wait for human approval |
@@ -255,6 +261,28 @@ steps:
     on_error:
       strategy: fallback
       fallback_step: safe_default
+```
+
+### Connector Ergonomic Aliases
+
+```yaml
+steps:
+  - id: read_health
+    type: http_get
+    parameters:
+      connector: "internal_http"
+      path: "/healthz"
+
+  - id: run_cli
+    type: cli_call
+    parameters:
+      connector: "demo_cli_dotnet"
+
+  - id: invoke_mcp
+    type: mcp_call
+    parameters:
+      connector: "demo_mcp"
+      tool: "list_tools"
 ```
 
 ## References

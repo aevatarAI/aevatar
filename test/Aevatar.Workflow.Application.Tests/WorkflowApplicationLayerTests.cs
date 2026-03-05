@@ -136,6 +136,180 @@ public class WorkflowChatRunApplicationServiceTests
         projectionPort.ReleasedActorId.Should().Be("actor-1");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenContextFactoryThrowsForPrimaryRequest_ShouldFallbackToDirect()
+    {
+        var contextFactory = new RecordingRunContextFactory(request =>
+        {
+            if (string.Equals(request.WorkflowName, "analysis", StringComparison.OrdinalIgnoreCase))
+                throw new WorkflowDirectFallbackTriggerException("startup failed");
+
+            return new WorkflowRunContextCreateResult(
+                WorkflowChatRunStartError.None,
+                CreateFallbackRunContext(request.WorkflowName ?? "inline"));
+        });
+        var executionEngine = new RecordingRunExecutionEngine((_, request) => Task.FromResult(
+            new WorkflowChatRunExecutionResult(
+                WorkflowChatRunStartError.None,
+                new WorkflowChatRunStarted("actor-1", request.WorkflowName ?? "inline", "cmd-1"),
+                null)));
+        var behaviorOptions = new WorkflowRunBehaviorOptions();
+        behaviorOptions.DirectFallbackWorkflowWhitelist.Add("analysis");
+        var service = new WorkflowChatRunApplicationService(
+            contextFactory,
+            executionEngine,
+            new WorkflowDirectFallbackPolicy(behaviorOptions));
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", "analysis", null),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        contextFactory.Requests.Should().HaveCount(2);
+        contextFactory.Requests[0].WorkflowName.Should().Be("analysis");
+        contextFactory.Requests[1].WorkflowName.Should().Be("direct");
+        contextFactory.Requests[1].WorkflowYamls.Should().BeNull();
+        executionEngine.Requests.Should().ContainSingle();
+        executionEngine.Requests[0].WorkflowName.Should().Be("direct");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenExecutionThrowsForInlineWorkflowYaml_ShouldNotFallbackToDirect()
+    {
+        var contextFactory = new RecordingRunContextFactory(request => new WorkflowRunContextCreateResult(
+            WorkflowChatRunStartError.None,
+            CreateFallbackRunContext(request.WorkflowName ?? "inline")));
+        var executionEngine = new RecordingRunExecutionEngine((_, request) =>
+        {
+            if (request.WorkflowYamls is { Count: > 0 })
+                throw new InvalidOperationException("runtime failed");
+
+            return Task.FromResult(new WorkflowChatRunExecutionResult(
+                WorkflowChatRunStartError.None,
+                new WorkflowChatRunStarted("actor-1", request.WorkflowName ?? "inline", "cmd-2"),
+                null));
+        });
+        var behaviorOptions = new WorkflowRunBehaviorOptions();
+        behaviorOptions.DirectFallbackWorkflowWhitelist.Add("inline_test");
+        var service = new WorkflowChatRunApplicationService(
+            contextFactory,
+            executionEngine,
+            new WorkflowDirectFallbackPolicy(behaviorOptions));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                null,
+                null,
+                [
+                    """
+                    name: inline_test
+                    roles: []
+                    steps:
+                      - id: done
+                        type: assign
+                        parameters:
+                          target: result
+                          value: "$input"
+                    """,
+                ]),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None));
+
+        executionEngine.Requests.Should().HaveCount(1);
+        executionEngine.Requests[0].WorkflowYamls.Should().NotBeNull();
+        executionEngine.Requests[0].WorkflowYamls![0].Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenDirectRequestThrows_ShouldNotRetryFallback()
+    {
+        var contextFactory = new RecordingRunContextFactory(request => new WorkflowRunContextCreateResult(
+            WorkflowChatRunStartError.None,
+            CreateFallbackRunContext(request.WorkflowName ?? "inline")));
+        var executionEngine = new RecordingRunExecutionEngine((_, _) =>
+            throw new InvalidOperationException("direct failed"));
+        var service = new WorkflowChatRunApplicationService(
+            contextFactory,
+            executionEngine,
+            new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", "direct", null),
+            (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None));
+
+        contextFactory.Requests.Should().ContainSingle();
+        executionEngine.Requests.Should().ContainSingle();
+    }
+
+    private static WorkflowRunContext CreateFallbackRunContext(string workflowName)
+    {
+        var actorId = $"actor-{workflowName}";
+        var commandId = $"cmd-{workflowName}";
+        return new WorkflowRunContext
+        {
+            Actor = new FakeActor(actorId, null, new FakeWorkflowAgent($"wf-agent-{workflowName}")),
+            WorkflowName = workflowName,
+            Sink = new EventChannel<WorkflowRunEvent>(),
+            CommandId = commandId,
+            CommandContext = new CommandContext(
+                actorId,
+                commandId,
+                $"corr-{workflowName}",
+                new Dictionary<string, string>(StringComparer.Ordinal)),
+            ProjectionLease = new TestProjectionLease(actorId, commandId),
+        };
+    }
+
+    private sealed record TestProjectionLease(string ActorId, string CommandId) : IWorkflowExecutionProjectionLease;
+
+    private sealed class RecordingRunContextFactory : IWorkflowRunContextFactory
+    {
+        private readonly Func<WorkflowChatRunRequest, WorkflowRunContextCreateResult> _handler;
+
+        public RecordingRunContextFactory(Func<WorkflowChatRunRequest, WorkflowRunContextCreateResult> handler)
+        {
+            _handler = handler;
+        }
+
+        public List<WorkflowChatRunRequest> Requests { get; } = [];
+
+        public Task<WorkflowRunContextCreateResult> CreateAsync(WorkflowChatRunRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(_handler(request));
+        }
+    }
+
+    private sealed class RecordingRunExecutionEngine : IWorkflowRunExecutionEngine
+    {
+        private readonly Func<WorkflowRunContext, WorkflowChatRunRequest, Task<WorkflowChatRunExecutionResult>> _handler;
+
+        public RecordingRunExecutionEngine(Func<WorkflowRunContext, WorkflowChatRunRequest, Task<WorkflowChatRunExecutionResult>> handler)
+        {
+            _handler = handler;
+        }
+
+        public List<WorkflowChatRunRequest> Requests { get; } = [];
+
+        public Task<WorkflowChatRunExecutionResult> ExecuteAsync(
+            WorkflowRunContext runContext,
+            WorkflowChatRunRequest request,
+            Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+            Func<WorkflowChatRunStarted, CancellationToken, ValueTask>? onStartedAsync = null,
+            CancellationToken ct = default)
+        {
+            _ = emitAsync;
+            _ = onStartedAsync;
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return _handler(runContext, request);
+        }
+    }
+
     private static WorkflowChatRunApplicationService CreateWorkflowRunService(
         IWorkflowRunContextFactory runContextFactory,
         ICommandEnvelopeFactory<WorkflowChatRunRequest> envelopeFactory,
@@ -153,7 +327,102 @@ public class WorkflowChatRunApplicationServiceTests
             completionPolicy,
             resourceFinalizer,
             snapshotEmitter);
-        return new WorkflowChatRunApplicationService(runContextFactory, executionEngine);
+        return new WorkflowChatRunApplicationService(
+            runContextFactory,
+            executionEngine,
+            new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
+    }
+}
+
+public class WorkflowDirectFallbackPolicyTests
+{
+    [Fact]
+    public void ShouldFallback_WhenDirectWorkflowWithoutInlineYaml_ShouldReturnFalse()
+    {
+        var policy = new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions());
+        var request = new WorkflowChatRunRequest("hello", "direct", null, null);
+
+        var shouldFallback = policy.ShouldFallback(
+            request,
+            new WorkflowDirectFallbackTriggerException("boom"));
+
+        shouldFallback.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShouldFallback_WhenOperationCanceled_ShouldReturnFalse()
+    {
+        var options = new WorkflowRunBehaviorOptions();
+        options.DirectFallbackWorkflowWhitelist.Add("analysis");
+        var policy = new WorkflowDirectFallbackPolicy(options);
+        var request = new WorkflowChatRunRequest("hello", "analysis", null, null);
+
+        var shouldFallback = policy.ShouldFallback(
+            request,
+            new OperationCanceledException("cancelled"));
+
+        shouldFallback.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShouldFallback_WhenWorkflowIsNotWhitelisted_ShouldReturnFalse()
+    {
+        var policy = new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions());
+        var request = new WorkflowChatRunRequest("hello", "analysis", null, null);
+
+        var shouldFallback = policy.ShouldFallback(
+            request,
+            new WorkflowDirectFallbackTriggerException("boom"));
+
+        shouldFallback.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShouldFallback_WhenWorkflowAndExceptionAreWhitelisted_ShouldReturnTrue()
+    {
+        var options = new WorkflowRunBehaviorOptions();
+        options.DirectFallbackWorkflowWhitelist.Add("analysis");
+        var policy = new WorkflowDirectFallbackPolicy(options);
+        var request = new WorkflowChatRunRequest("hello", "analysis", null, null);
+
+        var shouldFallback = policy.ShouldFallback(
+            request,
+            new WorkflowDirectFallbackTriggerException("boom"));
+
+        shouldFallback.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ShouldFallback_WhenInlineYamlProvided_ShouldReturnFalse()
+    {
+        var options = new WorkflowRunBehaviorOptions();
+        options.DirectFallbackWorkflowWhitelist.Add("analysis");
+        var policy = new WorkflowDirectFallbackPolicy(options);
+        var request = new WorkflowChatRunRequest("hello", "analysis", null, ["name: inline"]);
+
+        var shouldFallback = policy.ShouldFallback(
+            request,
+            new WorkflowDirectFallbackTriggerException("boom"));
+
+        shouldFallback.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ToFallbackRequest_ShouldForceDirectAndClearInlineYaml()
+    {
+        var policy = new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions());
+        var request = new WorkflowChatRunRequest(
+            Prompt: "hello",
+            WorkflowName: "analysis",
+            ActorId: "actor-1",
+            WorkflowYamls: ["name: inline"]);
+
+        var fallback = policy.ToFallbackRequest(request);
+
+        fallback.WorkflowName.Should().Be("direct");
+        fallback.WorkflowYamls.Should().BeNull();
+        fallback.ActorId.Should().Be("actor-1");
+        fallback.Prompt.Should().Be("hello");
     }
 }
 
@@ -293,7 +562,7 @@ public class WorkflowRunActorResolverTests
                 "hello",
                 null,
                 null,
-                BuildInlineWorkflowYaml("inline_direct")),
+                [BuildInlineWorkflowYaml("inline_direct")]),
             CancellationToken.None);
 
         resolved.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -313,7 +582,7 @@ public class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(actorPort, registry);
 
         var resolved = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null, "invalid"),
+            new WorkflowChatRunRequest("hello", null, null, ["invalid"]),
             CancellationToken.None);
 
         resolved.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
@@ -331,7 +600,7 @@ public class WorkflowRunActorResolverTests
         var resolver = new WorkflowRunActorResolver(actorPort, registry);
 
         var resolved = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, null, "name: ignored"),
+            new WorkflowChatRunRequest("hello", null, null, ["name: ignored"]),
             CancellationToken.None);
 
         resolved.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
@@ -339,9 +608,10 @@ public class WorkflowRunActorResolverTests
     }
 
     [Fact]
-    public async Task ResolveOrCreateAsync_WhenWorkflowNameDoesNotMatchInlineWorkflowYaml_ShouldReturnMismatch()
+    public async Task ResolveOrCreateAsync_WhenWorkflowNameProvidedWithInlineWorkflowYamls_ShouldPreferInlineBundle()
     {
-        var actorPort = new FakeWorkflowRunActorPort([]);
+        var createdActor = new FakeActor("created-actor", null, new FakeWorkflowAgent("wf-agent-created"));
+        var actorPort = new FakeWorkflowRunActorPort([], () => createdActor);
         var registry = new WorkflowDefinitionRegistry();
         var resolver = new WorkflowRunActorResolver(actorPort, registry);
 
@@ -350,11 +620,11 @@ public class WorkflowRunActorResolverTests
                 "hello",
                 "direct",
                 null,
-                BuildInlineWorkflowYaml("inline_direct")),
+                [BuildInlineWorkflowYaml("inline_direct")]),
             CancellationToken.None);
 
-        resolved.Error.Should().Be(WorkflowChatRunStartError.WorkflowNameMismatch);
-        resolved.Actor.Should().BeNull();
+        resolved.Error.Should().Be(WorkflowChatRunStartError.None);
+        resolved.Actor.Should().BeSameAs(createdActor);
         resolved.WorkflowNameForRun.Should().Be("inline_direct");
     }
 
@@ -371,13 +641,116 @@ public class WorkflowRunActorResolverTests
                 "hello",
                 null,
                 "actor-1",
-                BuildInlineWorkflowYaml("inline_direct")),
+                [BuildInlineWorkflowYaml("inline_direct")]),
             CancellationToken.None);
 
         resolved.Error.Should().Be(WorkflowChatRunStartError.None);
         resolved.Actor.Should().BeSameAs(actor);
         resolved.WorkflowNameForRun.Should().Be("inline_direct");
         ((FakeWorkflowAgent)actor.Agent).WorkflowName.Should().Be("inline_direct");
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenNoWorkflowSpecified_ShouldDefaultToDirectWorkflow()
+    {
+        var createdActor = new FakeActor("created-actor", null, new FakeWorkflowAgent("wf-agent-direct"));
+        var actorPort = new FakeWorkflowRunActorPort([], () => createdActor);
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+        var resolver = new WorkflowRunActorResolver(actorPort, registry);
+
+        var resolved = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", null, null),
+            CancellationToken.None);
+
+        resolved.Error.Should().Be(WorkflowChatRunStartError.None);
+        resolved.Actor.Should().BeSameAs(createdActor);
+        resolved.WorkflowNameForRun.Should().Be("direct");
+        ((FakeWorkflowAgent)createdActor.Agent).WorkflowName.Should().Be("direct");
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenInlineWorkflowYamlsContainsWhitespaceYaml_ShouldReturnInvalidWorkflowYaml()
+    {
+        var createdActor = new FakeActor("created-actor", null, new FakeWorkflowAgent("wf-agent-direct"));
+        var actorPort = new FakeWorkflowRunActorPort([], () => createdActor);
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+        var resolver = new WorkflowRunActorResolver(actorPort, registry);
+
+        var resolved = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", null, null, ["   "]),
+            CancellationToken.None);
+
+        resolved.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        resolved.Actor.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenAutoDefaultEnabled_ShouldDefaultToAutoWorkflow()
+    {
+        var createdActor = new FakeActor("created-actor", null, new FakeWorkflowAgent("wf-agent-auto"));
+        var actorPort = new FakeWorkflowRunActorPort([], () => createdActor);
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("auto", WorkflowDefinitionRegistry.BuiltInAutoYaml);
+        var behaviorOptions = new WorkflowRunBehaviorOptions
+        {
+            UseAutoAsDefaultWhenWorkflowUnspecified = true,
+        };
+        var resolver = new WorkflowRunActorResolver(actorPort, registry, behaviorOptions);
+
+        var resolved = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", null, null),
+            CancellationToken.None);
+
+        resolved.Error.Should().Be(WorkflowChatRunStartError.None);
+        resolved.Actor.Should().BeSameAs(createdActor);
+        resolved.WorkflowNameForRun.Should().Be("auto");
+        ((FakeWorkflowAgent)createdActor.Agent).WorkflowName.Should().Be("auto");
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenRegistryWorkflowConfigureThrows_ShouldWrapAsFallbackTriggerException()
+    {
+        var createdActor = new FakeActor("created-actor", null, new FakeWorkflowAgent("wf-agent-auto"));
+        var actorPort = new FakeWorkflowRunActorPort([], () => createdActor)
+        {
+            BindWorkflowDefinitionHandler = (_, _, _, _, _) => throw new InvalidOperationException("bind failed"),
+        };
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("auto", WorkflowDefinitionRegistry.BuiltInAutoYaml);
+        var resolver = new WorkflowRunActorResolver(actorPort, registry);
+
+        Func<Task> act = async () => _ = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", "auto", null),
+            CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<WorkflowDirectFallbackTriggerException>();
+        exception.Which.InnerException.Should().BeOfType<InvalidOperationException>();
+        exception.Which.Message.Should().Contain("auto");
+    }
+
+    [Fact]
+    public async Task ResolveOrCreateAsync_WhenInlineWorkflowConfigureThrows_ShouldKeepOriginalExceptionType()
+    {
+        var createdActor = new FakeActor("created-actor", null, new FakeWorkflowAgent("wf-agent-inline"));
+        var actorPort = new FakeWorkflowRunActorPort([], () => createdActor)
+        {
+            BindWorkflowDefinitionHandler = (_, _, _, _, _) => throw new InvalidOperationException("inline bind failed"),
+        };
+        var registry = new WorkflowDefinitionRegistry();
+        var resolver = new WorkflowRunActorResolver(actorPort, registry);
+
+        Func<Task> act = async () => _ = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                null,
+                null,
+                [BuildInlineWorkflowYaml("inline_direct")]),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*inline bind failed*");
     }
 
     [Fact]
@@ -394,7 +767,7 @@ public class WorkflowRunActorResolverTests
                 "hello",
                 "direct",
                 "actor-1",
-                BuildInlineWorkflowYaml("direct")),
+                [BuildInlineWorkflowYaml("direct")]),
             CancellationToken.None);
 
         resolved.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -418,7 +791,7 @@ public class WorkflowRunActorResolverTests
                 "hello",
                 null,
                 "actor-1",
-                BuildInlineWorkflowYaml("inline_other")),
+                [BuildInlineWorkflowYaml("inline_other")]),
             CancellationToken.None);
 
         resolved.Error.Should().Be(WorkflowChatRunStartError.WorkflowBindingMismatch);
@@ -429,7 +802,7 @@ public class WorkflowRunActorResolverTests
     private static IActor CreateWorkflowActor(string actorId, string workflowName)
     {
         var workflowAgent = new FakeWorkflowAgent($"wf-agent-{actorId}");
-        workflowAgent.ConfigureWorkflow(WorkflowDefinitionRegistry.BuiltInDirectYaml, workflowName);
+        workflowAgent.BindWorkflowDefinition(WorkflowDefinitionRegistry.BuiltInDirectYaml, workflowName);
         return new FakeActor(actorId, null, workflowAgent);
     }
 
@@ -930,7 +1303,6 @@ internal sealed class FakeActorRuntime : IActorRuntime
         return Task.CompletedTask;
     }
 
-    public Task RestoreAllAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
 
 internal sealed class StubWorkflowRunActorResolver : IWorkflowRunActorResolver
@@ -997,6 +1369,7 @@ internal sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
     private readonly Dictionary<string, IActor> _actorsById;
     private readonly Func<IActor>? _createActor;
     public Func<string, WorkflowYamlParseResult>? ParseWorkflowYamlHandler { get; set; }
+    public Func<IActor, string, string, IReadOnlyDictionary<string, string>?, CancellationToken, Task>? BindWorkflowDefinitionHandler { get; set; }
 
     public FakeWorkflowRunActorPort(
         IEnumerable<IActor> actors,
@@ -1043,17 +1416,21 @@ internal sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
         return Task.FromResult((actor.Agent as FakeWorkflowAgent)?.WorkflowName);
     }
 
-    public Task ConfigureWorkflowAsync(
+    public Task BindWorkflowDefinitionAsync(
         IActor actor,
         string workflowYaml,
         string workflowName,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         CancellationToken ct = default)
     {
+        if (BindWorkflowDefinitionHandler != null)
+            return BindWorkflowDefinitionHandler(actor, workflowYaml, workflowName, inlineWorkflowYamls, ct);
+
         _ = ct;
         if (actor.Agent is not FakeWorkflowAgent workflowAgent)
             throw new InvalidOperationException("Current actor adapter requires FakeWorkflowAgent.");
 
-        workflowAgent.ConfigureWorkflow(workflowYaml, workflowName);
+        workflowAgent.BindWorkflowDefinition(workflowYaml, workflowName);
         return Task.CompletedTask;
     }
 
@@ -1158,7 +1535,7 @@ internal sealed class FakeWorkflowAgent : IAgent
     public string Id { get; }
     public string? WorkflowName { get; private set; }
 
-    public void ConfigureWorkflow(string workflowYaml, string workflowName)
+    public void BindWorkflowDefinition(string workflowYaml, string workflowName)
     {
         _ = workflowYaml;
         if (!string.IsNullOrWhiteSpace(WorkflowName) &&

@@ -69,6 +69,32 @@ internal static class AGUIEventToWorkflowRunEventMapper
                 ToolCallId = e.ToolCallId,
                 Result = e.Result,
             },
+            Aevatar.Presentation.AGUI.HumanInputRequestEvent e => new WorkflowCustomEvent
+            {
+                Timestamp = e.Timestamp,
+                Name = "aevatar.human_input.request",
+                Value = new
+                {
+                    e.RunId,
+                    e.StepId,
+                    e.SuspensionType,
+                    e.Prompt,
+                    e.TimeoutSeconds,
+                    e.Metadata,
+                },
+            },
+            Aevatar.Presentation.AGUI.HumanInputResponseEvent e => new WorkflowCustomEvent
+            {
+                Timestamp = e.Timestamp,
+                Name = "aevatar.human_input.response",
+                Value = new
+                {
+                    e.RunId,
+                    e.StepId,
+                    e.Approved,
+                    e.UserInput,
+                },
+            },
             Aevatar.Presentation.AGUI.CustomEvent e => new WorkflowCustomEvent
             {
                 Timestamp = e.Timestamp,

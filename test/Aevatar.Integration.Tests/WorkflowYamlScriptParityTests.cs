@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Core.Agents;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -55,7 +55,7 @@ public class WorkflowYamlScriptParityTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ConfigureWorkflowEvent
+            Payload = Any.Pack(new BindWorkflowDefinitionEvent
             {
                 WorkflowYaml = BuildParityWorkflowYaml(),
                 WorkflowName = "yaml_script_parity",

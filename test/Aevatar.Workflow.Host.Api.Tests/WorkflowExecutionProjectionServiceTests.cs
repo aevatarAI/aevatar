@@ -8,7 +8,7 @@ using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -564,7 +564,6 @@ public class WorkflowExecutionProjectionServiceTests
 
         // Use a dedicated local actor runtime for projection coordinator actors.
         var runtimeServices = new ServiceCollection();
-        runtimeServices.AddSingleton<IAgentManifestStore, InMemoryManifestStore>();
         runtimeServices.AddSingleton<IEventStore, InMemoryEventStore>();
         runtimeServices.AddSingleton<EventSourcingRuntimeOptions>();
         runtimeServices.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
@@ -574,9 +573,7 @@ public class WorkflowExecutionProjectionServiceTests
             runtimeProvider,
             streams);
         var runtimeTypeProbe = new RuntimeActorTypeProbe(runtime);
-        var ownershipTypeVerifier = new DefaultAgentTypeVerifier(
-            runtimeTypeProbe,
-            runtimeProvider.GetRequiredService<IAgentManifestStore>());
+        var ownershipTypeVerifier = new DefaultAgentTypeVerifier(runtimeTypeProbe);
         var ownershipCoordinator = new ActorProjectionOwnershipCoordinator(
             runtime,
             ownershipTypeVerifier);

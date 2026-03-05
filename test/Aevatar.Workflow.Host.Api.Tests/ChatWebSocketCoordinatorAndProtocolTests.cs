@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -12,9 +13,10 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class ChatWebSocketCoordinatorAndProtocolTests
 {
     [Fact]
-    public async Task ExecuteAsync_WhenSuccess_ShouldSendAckAndRunEventsOnly()
+    public async Task ExecuteAsync_WhenSuccess_ShouldSendAckAndRunEvents()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
+        using var activity = new Activity("ws-success-trace").Start();
         var service = new FakeCommandExecutionService
         {
             Handler = async (_, emitAsync, onStartedAsync, ct) =>
@@ -39,7 +41,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             {
                 Prompt = "hello",
                 Workflow = "direct",
-                WorkflowYaml = "name: direct",
+                WorkflowYamls = ["name: direct"],
                 AgentId = "actor-1",
             }, WebSocketMessageType.Text),
             service,
@@ -55,13 +57,24 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
         service.LastCommand.Should().NotBeNull();
         service.LastCommand!.Prompt.Should().Be("hello");
-        service.LastCommand.WorkflowYaml.Should().Be("name: direct");
+        service.LastCommand.WorkflowName.Should().BeNull();
+        service.LastCommand.WorkflowYamls.Should().NotBeNull();
+        service.LastCommand.WorkflowYamls![0].Should().Be("name: direct");
+
+        using var ackDoc = JsonDocument.Parse(socket.SentTexts[0]);
+        ackDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
+        ackDoc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
+
+        using var eventDoc = JsonDocument.Parse(socket.SentTexts[1]);
+        eventDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
+        eventDoc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
     }
 
     [Fact]
     public async Task ExecuteAsync_WhenStartFails_ShouldSendCommandErrorOnly()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
+        using var activity = new Activity("ws-error-trace").Start();
         var service = new FakeCommandExecutionService
         {
             Handler = (_, _, _, _) => Task.FromResult(
@@ -81,7 +94,84 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
         doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("WORKFLOW_NOT_FOUND");
+        doc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-2");
+        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
+        service.LastCommand.Should().NotBeNull();
+        service.LastCommand!.WorkflowName.Should().Be("auto");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAgentIdProvidedWithoutWorkflow_ShouldKeepWorkflowUnset()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var service = new FakeCommandExecutionService
+        {
+            Handler = (_, _, _, _) => Task.FromResult(
+                new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
+                    WorkflowChatRunStartError.AgentNotFound,
+                    null,
+                    null)),
+        };
+
+        await ChatWebSocketRunCoordinator.ExecuteAsync(
+            socket,
+            new ChatWebSocketCommandEnvelope(
+                "req-3",
+                new ChatInput
+                {
+                    Prompt = "hello",
+                    AgentId = " actor-1 ",
+                },
+                WebSocketMessageType.Text),
+            service,
+            CancellationToken.None);
+
+        service.LastCommand.Should().NotBeNull();
+        service.LastCommand!.ActorId.Should().Be("actor-1");
+        service.LastCommand.WorkflowName.Should().BeNull();
+        socket.SentTexts.Should().ContainSingle();
+        using var doc = JsonDocument.Parse(socket.SentTexts[0]);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("AGENT_NOT_FOUND");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRunEventArrivesBeforeAck_ShouldUseRequestIdAsCorrelationFallback()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var activity = new Activity("ws-out-of-order-trace").Start();
+        var service = new FakeCommandExecutionService
+        {
+            Handler = async (_, emitAsync, onStartedAsync, ct) =>
+            {
+                await emitAsync(new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" }, ct);
+                var started = new WorkflowChatRunStarted("actor-1", "direct", "cmd-late");
+                if (onStartedAsync != null)
+                    await onStartedAsync(started, ct);
+
+                return new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
+                    WorkflowChatRunStartError.None,
+                    started,
+                    new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+
+        await ChatWebSocketRunCoordinator.ExecuteAsync(
+            socket,
+            new ChatWebSocketCommandEnvelope("req-fallback", new ChatInput { Prompt = "hello" }, WebSocketMessageType.Text),
+            service,
+            CancellationToken.None);
+
+        socket.SentTexts.Should().HaveCount(2);
+        using var eventDoc = JsonDocument.Parse(socket.SentTexts[0]);
+        eventDoc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.AguiEvent);
+        eventDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-fallback");
+        eventDoc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
+
+        using var ackDoc = JsonDocument.Parse(socket.SentTexts[1]);
+        ackDoc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandAck);
+        ackDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-late");
+
     }
 
     [Fact]

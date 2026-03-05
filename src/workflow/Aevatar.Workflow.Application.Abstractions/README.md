@@ -28,7 +28,7 @@ Aevatar.Workflow.Application.Abstractions/
 | 类型 | 说明 |
 |------|------|
 | `IWorkflowChatRunApplicationService` | `ExecuteAsync` 单入口，接收 request + emit 回调 |
-| `WorkflowChatRunRequest` | 请求：prompt、workflow、workflowYaml、agentId |
+| `WorkflowChatRunRequest` | 请求：prompt、workflow、workflowYamls、agentId |
 | `WorkflowChatRunExecutionResult` | 结果：包含 start error、started info、finalize result |
 | `WorkflowOutputFrame` | 输出帧：type + payload，用于 SSE 流 |
 | `WorkflowChatRunStartError` | 启动错误枚举 |

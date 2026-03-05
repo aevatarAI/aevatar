@@ -1,0 +1,21 @@
+{
+  "connectors": [
+    {
+      "name": "demo_cli_dotnet",
+      "type": "cli",
+      "enabled": true,
+      "timeoutMs": 5000,
+      "retry": 0,
+      "cli": {
+        "command": "dotnet",
+        "fixedArguments": [
+          "--version"
+        ],
+        "allowedOperations": [],
+        "allowedInputKeys": [],
+        "workingDirectory": "",
+        "environment": {}
+      }
+    }
+  ]
+}

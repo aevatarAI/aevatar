@@ -43,9 +43,14 @@ public sealed class HumanApprovalModule : IEventModule
             if (request.StepType != "human_approval") return;
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
 
-            var prompt = request.Parameters.GetValueOrDefault("prompt", "Approve this step?");
-            var timeoutSeconds = int.TryParse(
-                request.Parameters.GetValueOrDefault("timeout", "3600"), out var t) ? t : 3600;
+            var prompt = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                "Approve this step?",
+                "prompt",
+                "message");
+            var timeoutSeconds = WorkflowParameterValueParser.ResolveTimeoutSeconds(
+                request.Parameters,
+                defaultSeconds: 3600);
 
             _pending[(runId, request.StepId)] = request;
 
@@ -80,13 +85,15 @@ public sealed class HumanApprovalModule : IEventModule
                     "HumanApproval: run={RunId} step={StepId} approved",
                     pending.RunId,
                     pending.StepId);
-                await ctx.PublishAsync(new StepCompletedEvent
+                var approved = new StepCompletedEvent
                 {
                     StepId = pending.StepId,
                     RunId = pending.RunId,
                     Success = true,
                     Output = string.IsNullOrEmpty(resumed.UserInput) ? pending.Input : resumed.UserInput,
-                }, EventDirection.Self, ct);
+                };
+                approved.Metadata["branch"] = "true";
+                await ctx.PublishAsync(approved, EventDirection.Self, ct);
             }
             else
             {
@@ -95,14 +102,21 @@ public sealed class HumanApprovalModule : IEventModule
                     pending.RunId,
                     pending.StepId,
                     onReject);
-                await ctx.PublishAsync(new StepCompletedEvent
+
+                var rejectionOutput = !string.IsNullOrEmpty(resumed.UserInput)
+                    ? $"[Previous content]\n{pending.Input}\n\n[User feedback]\n{resumed.UserInput}"
+                    : pending.Input;
+
+                var rejected = new StepCompletedEvent
                 {
                     StepId = pending.StepId,
                     RunId = pending.RunId,
                     Success = onReject != "fail",
-                    Output = pending.Input,
+                    Output = rejectionOutput,
                     Error = onReject == "fail" ? "Human approval rejected" : "",
-                }, EventDirection.Self, ct);
+                };
+                rejected.Metadata["branch"] = "false";
+                await ctx.PublishAsync(rejected, EventDirection.Self, ct);
             }
         }
     }

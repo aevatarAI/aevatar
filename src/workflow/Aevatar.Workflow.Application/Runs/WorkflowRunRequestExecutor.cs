@@ -26,13 +26,20 @@ public sealed class WorkflowRunRequestExecutor : IWorkflowRunRequestExecutor
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Workflow execution failed for actor {ActorId}", actorId);
+            var payloadType = requestEnvelope.Payload?.TypeUrl ?? "(none)";
+            _logger.LogError(
+                ex,
+                "Workflow execution failed. actorId={ActorId}, envelopeId={EnvelopeId}, correlationId={CorrelationId}, payloadType={PayloadType}",
+                actorId,
+                requestEnvelope.Id,
+                requestEnvelope.CorrelationId,
+                payloadType);
             try
             {
                 await sink.PushAsync(new WorkflowRunErrorEvent
                 {
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    Message = "工作流执行异常",
+                    Message = $"Workflow execution error: {SanitizeErrorMessage(ex.Message)}",
                     Code = "INTERNAL_ERROR",
                 }, ct);
             }
@@ -42,5 +49,16 @@ public sealed class WorkflowRunRequestExecutor : IWorkflowRunRequestExecutor
 
             sink.Complete();
         }
+    }
+
+    private static string SanitizeErrorMessage(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return "unknown error";
+
+        return message
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
     }
 }

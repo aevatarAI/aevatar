@@ -53,7 +53,7 @@
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
-    C["Client"] --> H["Workflow Capability API\nPOST /api/chat | GET /api/ws/chat"]
+    C["Client"] --> H["Workflow Capability API\nPOST /api/chat | GET /api/ws/chat | POST /api/workflows/resume | POST /api/workflows/signal"]
     H --> CMD["ICommandExecutionService"]
     CMD --> APP["WorkflowChatRunApplicationService"]
     APP --> CTX["WorkflowRunContextFactory"]
@@ -186,6 +186,38 @@ sequenceDiagram
 1. `chat.command` 协议输入模型（`ChatInput`/`ChatWsCommand`）已下沉到 `Infrastructure/CapabilityApi`。
 2. `Application.Abstractions` 保留运行编排契约，不再承载宿主传输协议 DTO。
 
+### 5.3 人工交互回传路径（`POST /api/workflows/resume` / `POST /api/workflows/signal`）
+
+该路径用于 `human_input` / `human_approval` / `wait_signal` 的外部回传，约束如下：
+
+1. 请求必须显式携带 `actorId + runId`（无中间层 `runId -> actorId` 内存映射）。
+2. `resume` 还需携带 `stepId`；`signal` 还需携带 `signalName`。
+3. Endpoint 通过 `IWorkflowRunActorPort` 定位 actor 后，分别投递 `WorkflowResumedEvent` / `SignalReceivedEvent`。
+4. `wait_signal` 的 runId 以 `WaitingForSignalEvent.run_id` 为准，不再通过 `CorrelationId` 推断。
+
+最小请求示例：
+
+```json
+POST /api/workflows/resume
+{
+  "actorId": "wf-2f3f...",
+  "runId": "run-8b34...",
+  "stepId": "approval_gate",
+  "approved": true,
+  "userInput": "LGTM"
+}
+```
+
+```json
+POST /api/workflows/signal
+{
+  "actorId": "wf-2f3f...",
+  "runId": "run-8b34...",
+  "signalName": "ops_window_open",
+  "payload": "window=2026-02-25T21:00Z"
+}
+```
+
 ## 6. 统一投影分支与一对多分发
 
 `ProjectionCoordinator` 按注册顺序调用多个 projector；单分支失败会聚合后统一上抛，不阻断其他分支尝试。
@@ -291,6 +323,7 @@ flowchart LR
 | 文本增量流（delta text） | 已支持 | 主链路能力 |
 | 工具调用结果流 | 已支持 | 通过 AGUI ToolCall 映射进入统一输出 |
 | 状态快照流 | 已支持 | `STATE_SNAPSHOT` 统一携带 `actorId/commandId/projectionCompletion*` 与可选 projection snapshot |
+| 人工交互事件流 | 已支持 | `CUSTOM` 事件输出 `aevatar.step.request` / `aevatar.step.completed` / `aevatar.workflow.waiting_signal`（含显式 runId），用于 UI 渲染与回传 |
 | 流式 `DeltaToolCall` | 已支持 | Provider -> `ChatRuntime` -> `RoleGAgent` 贯通，转为 `ToolCallEvent` |
 | WS 二进制命令/事件帧 | 已支持 | `ChatWebSocketProtocol` + `ChatWebSocketMessageContracts` 统一 text/binary 与 `ack/event/error` 强类型出站 |
 | 多模态业务事件（音频/图像/video） | 待扩展 | 统一事件模型尚无 `MEDIA_*` 专用语义事件类型 |

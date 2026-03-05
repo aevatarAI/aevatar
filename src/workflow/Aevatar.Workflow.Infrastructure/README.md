@@ -52,6 +52,7 @@ Aevatar.Workflow.Infrastructure/
 | 选项 | 默认 | 说明 |
 |------|------|------|
 | `WorkflowDirectories` | `[]` | workflow YAML 扫描目录列表 |
+| `DuplicatePolicy` | `Throw` | 重名处理策略：`Throw` / `Skip` / `Override` |
 
 ## DI 入口
 
@@ -67,6 +68,7 @@ services.AddWorkflowDefinitionFileSource(opt =>
 {
     opt.WorkflowDirectories.Add("workflows/");
     opt.WorkflowDirectories.Add(Path.Combine(homeDir, ".aevatar/workflows"));
+    opt.DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override;
 });
 ```
 

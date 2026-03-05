@@ -39,6 +39,8 @@ Aevatar.Workflow.Application/
 
 - `WorkflowChatRunApplicationService`
   - `ExecuteAsync` 单入口：参数校验 + 获取 run context + 委托执行引擎。
+  - `direct` 回退由 `WorkflowDirectFallbackPolicy` 控制：仅白名单 workflow + 白名单异常触发一次回退。
+  - inline `workflowYamls` 请求默认不参与自动回退，避免掩盖编排配置错误。
 - `WorkflowRunContextFactory`
   - 负责 actor 解析、command context 构造、projection lease 初始化与 live sink attach。
 - `WorkflowRunExecutionEngine`
@@ -48,6 +50,9 @@ Aevatar.Workflow.Application/
 - `WorkflowRunResourceFinalizer`
   - 负责 `detach/release/complete/dispose` 兜底清理。
 - `WorkflowRunActorResolver`
+  - 解析优先级：`workflowYamls`（inline bundle，首项入口） > `workflow`（registry 名称） > 默认 workflow（`WorkflowRunBehaviorOptions.DefaultWorkflowName`，默认 `direct`）。
+  - 可通过 `UseAutoAsDefaultWhenWorkflowUnspecified=true` 切换为默认 `auto` 路由。
+  - inline bundle 会把 `name -> yaml` 注入运行态，`workflow_call` 解析顺序为：inline bundle > 外部 resolver。
   - 无 `actorId` 时创建并绑定 workflow actor。
   - 有 `actorId` 时仅复用既有 actor，不负责切换 workflow。
 - `WorkflowRunRequestExecutor`
@@ -72,13 +77,18 @@ Aevatar.Workflow.Application/
 ```csharp
 services.AddWorkflowApplication(
     configureRegistry: opt => opt.RegisterBuiltInDirectWorkflow = true,
-    configureOrchestration: opt => opt.RunProjectionFinalizeGraceTimeoutMs = 3000);
+    configureRunBehavior: opt =>
+    {
+        opt.UseAutoAsDefaultWhenWorkflowUnspecified = false; // default
+        opt.DirectFallbackWorkflowWhitelist.Add("auto");
+    });
 ```
 
 注册内容：
 - `IWorkflowChatRunApplicationService`
 - `IWorkflowExecutionQueryApplicationService`
 - `IWorkflowDefinitionRegistry`
+- `WorkflowRunBehaviorOptions` + `WorkflowDirectFallbackPolicy`
 - `IWorkflowExecutionRunOrchestrator` + `IWorkflowExecutionTopologyResolver`
 - `IWorkflowRunActorResolver`、`IWorkflowRunRequestExecutor`、`IWorkflowRunOutputStreamer`
 - `IWorkflowChatRequestEnvelopeFactory`

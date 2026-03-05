@@ -1,0 +1,14 @@
+name: 49_workflow_call_multilevel
+description: Parent workflow calls nested sub-workflows (L1 -> L2 -> L3), then formats final output.
+
+steps:
+  - id: call_level1
+    type: workflow_call
+    parameters:
+      workflow: "48_subworkflow_level1"
+
+  - id: format_final_output
+    type: transform
+    parameters:
+      op: "join"
+      separator: " | "

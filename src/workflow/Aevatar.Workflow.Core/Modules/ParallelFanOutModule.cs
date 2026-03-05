@@ -66,9 +66,26 @@ public sealed class ParallelFanOutModule : IEventModule
             var workerRoles = new List<string>();
             if (evt.Parameters.TryGetValue("workers", out var workersParam) && !string.IsNullOrEmpty(workersParam))
             {
-                workerRoles.AddRange(workersParam.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                workerRoles.AddRange(WorkflowParameterValueParser.ParseStringList(workersParam));
                 count = workerRoles.Count;
                 _expected[parentKey] = count;
+            }
+
+            if (workerRoles.Count == 0 && string.IsNullOrWhiteSpace(evt.TargetRole))
+            {
+                ctx.Logger.LogWarning(
+                    "ParallelFanOut: step={StepId} missing workers and target_role; cannot fan-out.",
+                    evt.StepId);
+                await ctx.PublishAsync(new StepCompletedEvent
+                {
+                    StepId = evt.StepId,
+                    RunId = runId,
+                    Success = false,
+                    Error = "parallel requires parameters.workers (CSV/JSON list) or target_role",
+                }, EventDirection.Self, ct);
+                _collected.Remove(parentKey);
+                _expected.Remove(parentKey);
+                return;
             }
 
             var voteStepType = evt.Parameters.TryGetValue("vote_step_type", out var vst) ? vst : "";

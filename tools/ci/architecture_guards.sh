@@ -273,6 +273,11 @@ if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
   exit 1
 fi
 
+if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevatar.Workflow.Core/Modules/WorkflowCallModule.cs; then
+  echo "WorkflowCallModule must stay stateless; workflow_call fact state must live in WorkflowGAgent persisted state."
+  exit 1
+fi
+
 transition_override_without_matcher=""
 while IFS= read -r transition_file; do
   [ -z "${transition_file}" ] && continue

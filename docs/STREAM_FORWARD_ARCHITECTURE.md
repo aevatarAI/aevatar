@@ -64,7 +64,7 @@ flowchart LR
 1. `src/Aevatar.Foundation.Runtime.Hosting/DependencyInjection/ServiceCollectionExtensions.cs:51`
 2. `src/Aevatar.Foundation.Runtime.Hosting/DependencyInjection/ServiceCollectionExtensions.cs:57`
 3. `src/Aevatar.Foundation.Runtime.Hosting/DependencyInjection/ServiceCollectionExtensions.cs:65`
-4. `src/Aevatar.Foundation.Runtime/DependencyInjection/ServiceCollectionExtensions.cs:40`
+4. `src/Aevatar.Foundation.Runtime.Implementations.Local/DependencyInjection/ServiceCollectionExtensions.cs:40`
 5. `src/Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit/DependencyInjection/ServiceCollectionExtensions.cs:21`
 6. `src/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming/DependencyInjection/ServiceCollectionExtensions.cs:15`
 

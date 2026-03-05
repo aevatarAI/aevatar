@@ -152,6 +152,31 @@ public class WorkflowValidatorCoverageTests
     }
 
     [Fact]
+    public void Validate_WhenClosedWorldModeContainsDynamicWorkflow_ShouldReportError()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Configuration = new WorkflowRuntimeConfiguration
+            {
+                ClosedWorldMode = true,
+            },
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "s1",
+                    Type = "dynamic_workflow",
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(wf);
+        errors.Should().Contain(e => e.Contains("closed_world_mode") && e.Contains("dynamic_workflow"));
+    }
+
+    [Fact]
     public void Validate_WhenWorkflowCallTargetIsUnknown_ShouldReportErrorWhenRegistryProvided()
     {
         var wf = new WorkflowDefinition
@@ -182,6 +207,82 @@ public class WorkflowValidatorCoverageTests
             availableWorkflowNames: available);
 
         errors.Should().Contain(e => e.Contains("sub_flow"));
+    }
+
+    [Fact]
+    public void Validate_WhenWorkflowCallLifecycleUnknown_ShouldReportError()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "call-sub",
+                    Type = "workflow_call",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["workflow"] = "sub_flow",
+                        ["lifecycle"] = "isolate",
+                    },
+                },
+            ],
+        };
+
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "sub_flow" };
+        var errors = WorkflowValidator.Validate(
+            wf,
+            options: new WorkflowValidator.WorkflowValidationOptions
+            {
+                RequireResolvableWorkflowCallTargets = true,
+            },
+            availableWorkflowNames: available);
+
+        errors.Should().Contain(e =>
+            e.Contains("workflow_call") &&
+            e.Contains("lifecycle") &&
+            e.Contains("singleton/transient/scope"));
+    }
+
+    [Theory]
+    [InlineData("singleton")]
+    [InlineData("transient")]
+    [InlineData("scope")]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void Validate_WhenWorkflowCallLifecycleMissingOrKnown_ShouldNotReportLifecycleError(string lifecycle)
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "call-sub",
+                    Type = "workflow_call",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["workflow"] = "sub_flow",
+                        ["lifecycle"] = lifecycle,
+                    },
+                },
+            ],
+        };
+
+        var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "sub_flow" };
+        var errors = WorkflowValidator.Validate(
+            wf,
+            options: new WorkflowValidator.WorkflowValidationOptions
+            {
+                RequireResolvableWorkflowCallTargets = true,
+            },
+            availableWorkflowNames: available);
+
+        errors.Should().NotContain(e => e.Contains("lifecycle"));
     }
 
     [Fact]

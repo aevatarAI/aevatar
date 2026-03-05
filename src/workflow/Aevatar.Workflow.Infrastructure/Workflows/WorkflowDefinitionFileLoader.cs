@@ -8,7 +8,8 @@ public sealed class WorkflowDefinitionFileLoader
     public int LoadInto(
         IWorkflowDefinitionRegistry registry,
         IEnumerable<string> directories,
-        ILogger logger)
+        ILogger logger,
+        WorkflowDefinitionDuplicatePolicy duplicatePolicy = WorkflowDefinitionDuplicatePolicy.Throw)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(directories);
@@ -33,8 +34,25 @@ public sealed class WorkflowDefinitionFileLoader
                 var name = Path.GetFileNameWithoutExtension(file);
                 if (!registeredNames.Add(name))
                 {
-                    throw new InvalidOperationException(
-                        $"Duplicate workflow definition name '{name}' detected in '{file}'.");
+                    if (duplicatePolicy == WorkflowDefinitionDuplicatePolicy.Throw)
+                    {
+                        throw new InvalidOperationException(
+                            $"Duplicate workflow definition name '{name}' detected in '{file}'.");
+                    }
+
+                    if (duplicatePolicy == WorkflowDefinitionDuplicatePolicy.Skip)
+                    {
+                        logger.LogWarning(
+                            "Skipping duplicate workflow definition '{Name}' from '{File}'.",
+                            name,
+                            file);
+                        continue;
+                    }
+
+                    logger.LogWarning(
+                        "Overriding existing workflow definition '{Name}' with file '{File}'.",
+                        name,
+                        file);
                 }
 
                 var yaml = File.ReadAllText(file);

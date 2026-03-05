@@ -29,7 +29,12 @@ public sealed class WorkflowExecutionAGUIEventProjector
         WorkflowExecutionProjectionContext context,
         EventEnvelope envelope)
     {
-        var commandId = envelope.CorrelationId;
+        // Keep streaming pinned to the projection session command id.
+        // Resume/signal events may arrive without (or with a different) correlation id,
+        // but they still belong to the same live run session.
+        var commandId = string.IsNullOrWhiteSpace(context.CommandId)
+            ? envelope.CorrelationId
+            : context.CommandId;
         if (string.IsNullOrWhiteSpace(commandId))
             return EmptyEntries;
 

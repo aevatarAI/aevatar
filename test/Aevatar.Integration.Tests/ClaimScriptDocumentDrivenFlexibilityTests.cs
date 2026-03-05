@@ -1,6 +1,6 @@
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;

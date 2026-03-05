@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Observability;
 using FluentAssertions;
 
@@ -62,34 +63,34 @@ public sealed class AevatarActivitySourceTests
     }
 
     [Fact]
-    public void RecordSensitiveData_ShouldRespectGlobalSwitchAndNullValue()
+    public void StartHandleEvent_ShouldUseEventTypeFirstDisplayName()
     {
         using var listener = CreateListener();
-        using var chat = AevatarActivitySource.StartChat("model-x");
-        chat.Should().NotBeNull();
+        using var activity = AevatarActivitySource.StartHandleEvent(
+            "Workflow:run-1:assistant",
+            "evt-1",
+            "type.googleapis.com/aevatar.ai.TextMessageContentEvent");
 
-        const string key = "gen_ai.input";
-        var originalFlag = AevatarActivitySource.EnableSensitiveData;
-        try
+        activity.Should().NotBeNull();
+        activity!.DisplayName.Should().Be("HandleEvent:TextMessageContentEvent");
+        activity.GetTagItem("aevatar.event.type").Should().Be("type.googleapis.com/aevatar.ai.TextMessageContentEvent");
+    }
+
+    [Fact]
+    public void StartHandleEvent_WithEnvelope_ShouldSetDirectionAndPublisherTags()
+    {
+        using var listener = CreateListener();
+        var envelope = new EventEnvelope
         {
-            AevatarActivitySource.EnableSensitiveData = false;
-            AevatarActivitySource.RecordSensitiveData(chat, key, "hidden");
-            chat!.GetTagItem(key).Should().BeNull();
+            Id = "evt-2",
+            Direction = EventDirection.Both,
+            PublisherId = "publisher-1",
+        };
 
-            AevatarActivitySource.EnableSensitiveData = true;
-            AevatarActivitySource.RecordSensitiveData(chat, key, null);
-            chat.GetTagItem(key).Should().BeNull();
-
-            AevatarActivitySource.RecordSensitiveData(chat, key, "visible");
-            chat.GetTagItem(key).Should().Be("visible");
-
-            var act = () => AevatarActivitySource.RecordSensitiveData(null, key, "ignored");
-            act.Should().NotThrow();
-        }
-        finally
-        {
-            AevatarActivitySource.EnableSensitiveData = originalFlag;
-        }
+        using var activity = AevatarActivitySource.StartHandleEvent("agent-1", envelope);
+        activity.Should().NotBeNull();
+        activity!.GetTagItem("aevatar.event.direction").Should().Be(EventDirection.Both.ToString());
+        activity.GetTagItem("aevatar.event.publisher").Should().Be("publisher-1");
     }
 
     private static ActivityListener CreateListener()
@@ -103,4 +104,5 @@ public sealed class AevatarActivitySourceTests
         ActivitySource.AddActivityListener(listener);
         return listener;
     }
+
 }

@@ -54,7 +54,7 @@ public sealed class GarnetEventStoreIntegrationTests
 
         var conflicting = () => store.AppendAsync(
             agentId,
-            CreateEvents(agentId, startVersion: 2, count: 1),
+            CreateEvents(agentId, startVersion: 1, count: 1),
             expectedVersion: 0);
         await conflicting.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Optimistic concurrency conflict*");
