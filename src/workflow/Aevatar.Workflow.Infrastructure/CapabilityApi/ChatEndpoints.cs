@@ -37,7 +37,6 @@ public static class WorkflowCapabilityEndpoints
         var firstResponseRecorded = false;
         if (string.IsNullOrWhiteSpace(input.Prompt))
         {
-            requestResult = ApiMetrics.ResultError;
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             requestStopwatch.Stop();
             ApiMetrics.RecordRequest(ApiMetrics.TransportHttp, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
@@ -69,13 +68,17 @@ public static class WorkflowCapabilityEndpoints
 
             if (result.Error != WorkflowChatRunStartError.None && !writer.Started)
             {
-                requestResult = ApiMetrics.ResultError;
                 http.Response.StatusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
+                requestResult = ResolveMetricResult(http.Response.StatusCode);
             }
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (Exception)
+        {
             requestResult = ApiMetrics.ResultError;
+            throw;
         }
         finally
         {
@@ -190,7 +193,6 @@ public static class WorkflowCapabilityEndpoints
         var requestResult = ApiMetrics.ResultOk;
         if (!http.WebSockets.IsWebSocketRequest)
         {
-            requestResult = ApiMetrics.ResultError;
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             await http.Response.WriteAsync("Expected websocket request.", ct);
             requestStopwatch.Stop();
@@ -211,7 +213,6 @@ public static class WorkflowCapabilityEndpoints
 
             if (!ChatWebSocketCommandParser.TryParse(incomingFrame, out var command, out var parseError))
             {
-                requestResult = ApiMetrics.ResultError;
                 var parseContext = CapabilityTraceContext.CreateMessageContext(fallbackCorrelationId: parseError.RequestId ?? string.Empty);
                 await ChatWebSocketProtocol.SendAsync(
                     socket,
@@ -233,7 +234,6 @@ public static class WorkflowCapabilityEndpoints
         }
         catch (OperationCanceledException)
         {
-            requestResult = ApiMetrics.ResultError;
         }
         catch (Exception ex)
         {
@@ -259,6 +259,13 @@ public static class WorkflowCapabilityEndpoints
             requestStopwatch.Stop();
             ApiMetrics.RecordRequest(ApiMetrics.TransportWebSocket, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
         }
+    }
+
+    private static string ResolveMetricResult(int statusCode)
+    {
+        return statusCode >= StatusCodes.Status500InternalServerError
+            ? ApiMetrics.ResultError
+            : ApiMetrics.ResultOk;
     }
 
 }

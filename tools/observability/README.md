@@ -20,7 +20,7 @@ docker compose -f docker-compose.observability.yml up -d
 Services:
 
 - Prometheus: `http://localhost:9090`
-- Grafana: `http://localhost:3000` (`admin` / `admin`)
+- Grafana: `http://localhost:3000` (default on fresh volume: `admin` / `admin`)
 
 ## 3. Validate Scraping
 
@@ -43,7 +43,9 @@ A provisioned dashboard is available after startup:
 
 - Folder: `Aevatar`
 - Dashboard: `Aevatar Runtime Overview`
-- Includes `AI vs Core Runtime Latency`, `AI vs Core Throughput`, and `SSE/WS First Response vs Full`
+- Includes two sections:
+  - SLO section (error ratio, first-response p95, full-request p95, runtime/api latency)
+  - Runtime diagnostics section (self-direction runtime events, event amplification signals)
 
 ## 5. Stop Stack
 
