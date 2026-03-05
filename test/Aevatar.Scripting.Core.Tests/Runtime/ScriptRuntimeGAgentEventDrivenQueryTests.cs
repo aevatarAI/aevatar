@@ -14,6 +14,26 @@ namespace Aevatar.Scripting.Core.Tests.Runtime;
 public class ScriptRuntimeGAgentEventDrivenQueryTests
 {
     [Fact]
+    public async Task HandleRunScriptRequested_ShouldThrow_WhenDefinitionActorIdIsMissing()
+    {
+        var orchestrator = new RecordingOrchestrator();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(orchestrator, publisher);
+
+        var act = () => agent.HandleRunScriptRequested(new RunScriptRequestedEvent
+        {
+            RunId = "run-missing-definition",
+            InputPayload = Any.Pack(new Struct()),
+            ScriptRevision = "rev-missing-definition",
+            DefinitionActorId = string.Empty,
+            RequestedEventType = "chat.requested",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*DefinitionActorId is required*");
+    }
+
+    [Fact]
     public async Task EventDrivenQuery_ShouldExecuteRun_WhenSnapshotResponseMatchesPendingRequest()
     {
         var orchestrator = new RecordingOrchestrator();
@@ -237,6 +257,140 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
         agent.State.DefinitionActorId.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task EventDrivenQuery_ShouldPersistFailure_WhenQueryDispatchFails()
+    {
+        var orchestrator = new RecordingOrchestrator();
+        var publisher = new RecordingEventPublisher
+        {
+            SendToException = new InvalidOperationException("dispatch-failed"),
+        };
+        var agent = CreateAgent(orchestrator, publisher);
+
+        await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
+        {
+            RunId = "run-dispatch-failed",
+            InputPayload = Any.Pack(new Struct()),
+            ScriptRevision = "rev-dispatch-failed",
+            DefinitionActorId = "definition-dispatch-failed",
+            RequestedEventType = "chat.requested",
+        });
+
+        orchestrator.Requests.Should().BeEmpty();
+        agent.State.LastRunId.Should().Be("run-dispatch-failed");
+        agent.State.PendingDefinitionQueries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SnapshotResponseNotFound_ShouldPersistFailure_AndClearPendingQuery()
+    {
+        var orchestrator = new RecordingOrchestrator();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(orchestrator, publisher);
+
+        await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
+        {
+            RunId = "run-not-found",
+            InputPayload = Any.Pack(new Struct()),
+            ScriptRevision = "rev-not-found",
+            DefinitionActorId = "definition-not-found",
+            RequestedEventType = "chat.requested",
+        });
+
+        var query = publisher.Sent
+            .Where(x => x.TargetActorId == "definition-not-found")
+            .Select(x => x.Payload)
+            .OfType<QueryScriptDefinitionSnapshotRequestedEvent>()
+            .Single();
+
+        await agent.HandleScriptDefinitionSnapshotResponded(new ScriptDefinitionSnapshotRespondedEvent
+        {
+            RequestId = query.RequestId,
+            Found = false,
+            FailureReason = "not-found",
+        });
+
+        orchestrator.Requests.Should().BeEmpty();
+        agent.State.LastRunId.Should().Be("run-not-found");
+        agent.State.PendingDefinitionQueries.Should().NotContainKey(query.RequestId);
+    }
+
+    [Fact]
+    public async Task SnapshotResponseEmptySource_ShouldPersistFailure_AndClearPendingQuery()
+    {
+        var orchestrator = new RecordingOrchestrator();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(orchestrator, publisher);
+
+        await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
+        {
+            RunId = "run-empty-source",
+            InputPayload = Any.Pack(new Struct()),
+            ScriptRevision = "rev-empty-source",
+            DefinitionActorId = "definition-empty-source",
+            RequestedEventType = "chat.requested",
+        });
+
+        var query = publisher.Sent
+            .Where(x => x.TargetActorId == "definition-empty-source")
+            .Select(x => x.Payload)
+            .OfType<QueryScriptDefinitionSnapshotRequestedEvent>()
+            .Single();
+
+        await agent.HandleScriptDefinitionSnapshotResponded(new ScriptDefinitionSnapshotRespondedEvent
+        {
+            RequestId = query.RequestId,
+            Found = true,
+            ScriptId = "script-empty-source",
+            Revision = "rev-empty-source",
+            SourceText = string.Empty,
+            ReadModelSchemaVersion = "v-empty-source",
+            ReadModelSchemaHash = "hash-empty-source",
+        });
+
+        orchestrator.Requests.Should().BeEmpty();
+        agent.State.LastRunId.Should().Be("run-empty-source");
+        agent.State.PendingDefinitionQueries.Should().NotContainKey(query.RequestId);
+    }
+
+    [Fact]
+    public async Task SnapshotResponseRevisionMismatch_ShouldPersistFailure_AndClearPendingQuery()
+    {
+        var orchestrator = new RecordingOrchestrator();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(orchestrator, publisher);
+
+        await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
+        {
+            RunId = "run-revision-mismatch",
+            InputPayload = Any.Pack(new Struct()),
+            ScriptRevision = "rev-requested",
+            DefinitionActorId = "definition-revision-mismatch",
+            RequestedEventType = "chat.requested",
+        });
+
+        var query = publisher.Sent
+            .Where(x => x.TargetActorId == "definition-revision-mismatch")
+            .Select(x => x.Payload)
+            .OfType<QueryScriptDefinitionSnapshotRequestedEvent>()
+            .Single();
+
+        await agent.HandleScriptDefinitionSnapshotResponded(new ScriptDefinitionSnapshotRespondedEvent
+        {
+            RequestId = query.RequestId,
+            Found = true,
+            ScriptId = "script-revision-mismatch",
+            Revision = "rev-actual",
+            SourceText = "public sealed class RuntimeMismatchScript {}",
+            ReadModelSchemaVersion = "v-revision-mismatch",
+            ReadModelSchemaHash = "hash-revision-mismatch",
+        });
+
+        orchestrator.Requests.Should().BeEmpty();
+        agent.State.LastRunId.Should().Be("run-revision-mismatch");
+        agent.State.PendingDefinitionQueries.Should().NotContainKey(query.RequestId);
+    }
+
     private static ScriptRuntimeGAgent CreateAgent(
         RecordingOrchestrator orchestrator,
         RecordingEventPublisher publisher)
@@ -310,6 +464,7 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
     private sealed class RecordingEventPublisher : IEventPublisher
     {
         public List<PublishedMessage> Sent { get; } = [];
+        public Exception? SendToException { get; set; }
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -334,6 +489,8 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
         {
             _ = sourceEnvelope;
             ct.ThrowIfCancellationRequested();
+            if (SendToException != null)
+                throw SendToException;
             Sent.Add(new PublishedMessage(targetActorId, evt));
             return Task.CompletedTask;
         }

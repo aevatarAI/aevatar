@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -197,6 +198,119 @@ public sealed class UnsupportedSchemaReplayScript : IScriptPackageRuntime, IScri
         definition.IsDisposed.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task QuerySnapshot_ShouldIgnore_WhenRequestOrReplyStreamMissing()
+    {
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent();
+        agent.EventPublisher = publisher;
+        agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
+            new InMemoryEventStore());
+
+        await agent.HandleQueryScriptDefinitionSnapshotRequested(new QueryScriptDefinitionSnapshotRequestedEvent
+        {
+            RequestId = string.Empty,
+            ReplyStreamId = "reply-stream",
+            RequestedRevision = string.Empty,
+        });
+        await agent.HandleQueryScriptDefinitionSnapshotRequested(new QueryScriptDefinitionSnapshotRequestedEvent
+        {
+            RequestId = "request-1",
+            ReplyStreamId = string.Empty,
+            RequestedRevision = string.Empty,
+        });
+
+        publisher.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task QuerySnapshot_ShouldReturnMismatch_WhenRequestedRevisionDiffers()
+    {
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent();
+        agent.EventPublisher = publisher;
+        agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
+            new InMemoryEventStore());
+
+        await agent.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
+        {
+            ScriptId = "script-query",
+            ScriptRevision = "rev-1",
+            SourceText = BuildMinimalRuntimeSource(),
+            SourceHash = "hash-1",
+        });
+
+        await agent.HandleQueryScriptDefinitionSnapshotRequested(new QueryScriptDefinitionSnapshotRequestedEvent
+        {
+            RequestId = "request-mismatch",
+            ReplyStreamId = "reply-stream",
+            RequestedRevision = "rev-2",
+        });
+
+        publisher.Sent.Should().ContainSingle();
+        var response = publisher.Sent[0].Payload.Should().BeOfType<ScriptDefinitionSnapshotRespondedEvent>().Subject;
+        response.RequestId.Should().Be("request-mismatch");
+        response.Found.Should().BeFalse();
+        response.FailureReason.Should().Contain("does not match active revision");
+    }
+
+    [Fact]
+    public async Task QuerySnapshot_ShouldReturnNotFound_WhenSourceIsEmpty()
+    {
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent();
+        agent.EventPublisher = publisher;
+        agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
+            new InMemoryEventStore());
+
+        await agent.HandleQueryScriptDefinitionSnapshotRequested(new QueryScriptDefinitionSnapshotRequestedEvent
+        {
+            RequestId = "request-empty-source",
+            ReplyStreamId = "reply-stream",
+            RequestedRevision = string.Empty,
+        });
+
+        publisher.Sent.Should().ContainSingle();
+        var response = publisher.Sent[0].Payload.Should().BeOfType<ScriptDefinitionSnapshotRespondedEvent>().Subject;
+        response.RequestId.Should().Be("request-empty-source");
+        response.Found.Should().BeFalse();
+        response.FailureReason.Contains("source text is empty", StringComparison.OrdinalIgnoreCase).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task QuerySnapshot_ShouldReturnSnapshot_WhenRevisionMatches()
+    {
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent();
+        agent.EventPublisher = publisher;
+        agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
+            new InMemoryEventStore());
+
+        await agent.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
+        {
+            ScriptId = "script-query",
+            ScriptRevision = "rev-hit",
+            SourceText = BuildMinimalRuntimeSource(),
+            SourceHash = "hash-hit",
+        });
+
+        await agent.HandleQueryScriptDefinitionSnapshotRequested(new QueryScriptDefinitionSnapshotRequestedEvent
+        {
+            RequestId = "request-hit",
+            ReplyStreamId = "reply-stream",
+            RequestedRevision = "rev-hit",
+        });
+
+        publisher.Sent.Should().ContainSingle();
+        var response = publisher.Sent[0].Payload.Should().BeOfType<ScriptDefinitionSnapshotRespondedEvent>().Subject;
+        response.RequestId.Should().Be("request-hit");
+        response.Found.Should().BeTrue();
+        response.ScriptId.Should().Be("script-query");
+        response.Revision.Should().Be("rev-hit");
+        response.SourceText.Should().Contain("SimpleQueryRuntimeScript");
+        response.FailureReason.Should().BeEmpty();
+    }
+
     private static ScriptDefinitionGAgent CreateAgent(
         IScriptReadModelSchemaActivationPolicy? activationPolicy = null)
     {
@@ -205,6 +319,36 @@ public sealed class UnsupportedSchemaReplayScript : IScriptPackageRuntime, IScri
             new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
             policy);
     }
+
+    private static string BuildMinimalRuntimeSource() =>
+        """
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+public sealed class SimpleQueryRuntimeScript : IScriptPackageRuntime
+{
+    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
+        ScriptRequestedEventEnvelope requestedEvent,
+        ScriptExecutionContext context,
+        CancellationToken ct) =>
+        Task.FromResult(new ScriptHandlerResult(System.Array.Empty<IMessage>()));
+
+    public ValueTask<System.Collections.Generic.IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
+        System.Collections.Generic.IReadOnlyDictionary<string, Any> currentState,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<System.Collections.Generic.IReadOnlyDictionary<string, Any>?>(currentState);
+
+    public ValueTask<System.Collections.Generic.IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
+        System.Collections.Generic.IReadOnlyDictionary<string, Any> currentReadModel,
+        ScriptDomainEventEnvelope domainEvent,
+        CancellationToken ct) =>
+        ValueTask.FromResult<System.Collections.Generic.IReadOnlyDictionary<string, Any>?>(currentReadModel);
+}
+""";
 
     private sealed class DisposableTrackingCompiler(DisposableTrackingDefinition definition) : IScriptPackageCompiler
     {
@@ -270,4 +414,38 @@ public sealed class UnsupportedSchemaReplayScript : IScriptPackageRuntime, IScri
             return ValueTask.CompletedTask;
         }
     }
+
+    private sealed class RecordingEventPublisher : IEventPublisher
+    {
+        public List<PublishedMessage> Sent { get; } = [];
+
+        public Task PublishAsync<T>(
+            T evt,
+            EventDirection direction = EventDirection.Down,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null)
+            where T : IMessage
+        {
+            _ = evt;
+            _ = direction;
+            _ = sourceEnvelope;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<T>(
+            string targetActorId,
+            T evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null)
+            where T : IMessage
+        {
+            _ = sourceEnvelope;
+            ct.ThrowIfCancellationRequested();
+            Sent.Add(new PublishedMessage(targetActorId, evt));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record PublishedMessage(string TargetActorId, IMessage Payload);
 }

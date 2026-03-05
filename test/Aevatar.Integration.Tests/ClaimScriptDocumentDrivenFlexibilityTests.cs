@@ -130,7 +130,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             DefinitionActorId = "missing-definition-actor",
         });
         runtimeWithoutDependencies.State.LastRunId.Should().Be("run-snapshot-check");
-        runtimeWithoutDependencies.State.Revision.Should().Be(orchestrator.Revision);
+        runtimeWithoutDependencies.State.LastEventId.Should().Be("run-snapshot-check");
 
         var supportsDynamicDecisionEvents = decision.DomainEvents.Count > 0;
         var enforcesDefinitionSnapshotLookup = true;
