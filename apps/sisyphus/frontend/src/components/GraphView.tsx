@@ -54,8 +54,8 @@ export default function GraphView() {
   useEffect(() => {
     const fg = fgRef.current
     if (!fg) return
-    fg.d3Force('charge')?.strength(-8)
-    fg.d3Force('link')?.distance(15)
+    fg.d3Force('charge')?.strength(-30)
+    fg.d3Force('link')?.distance(45)
   }, [snapshot])
 
   const graphData = useMemo(() => {
@@ -205,7 +205,7 @@ export default function GraphView() {
   // Loading state
   if (!snapshot && loading) {
     return (
-      <div className="flex-1 flex items-center justify-center" style={{ background: 'var(--bg-base)' }}>
+      <div className="h-full w-full flex items-center justify-center" style={{ background: 'var(--bg-base)' }}>
         <div className="thinking-indicator">
           <div className="thinking-dots" style={{ '--dot-color': '#00ffff' } as React.CSSProperties}>
             <span />
@@ -223,7 +223,7 @@ export default function GraphView() {
   // Error state
   if (error && !snapshot) {
     return (
-      <div className="flex-1 flex items-center justify-center" style={{ background: 'var(--bg-base)' }}>
+      <div className="h-full w-full flex items-center justify-center" style={{ background: 'var(--bg-base)' }}>
         <p className="text-xs" style={{ color: 'var(--accent-red)' }}>
           {error}
         </p>
@@ -234,7 +234,7 @@ export default function GraphView() {
   // Empty state
   if (snapshot && snapshot.nodes.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center" style={{ background: 'var(--bg-base)' }}>
+      <div className="h-full w-full flex items-center justify-center" style={{ background: 'var(--bg-base)' }}>
         <p className="text-xs" style={{ color: 'var(--text-dimmed)' }}>
           No graph data yet. Start a research run to see the knowledge graph.
         </p>
@@ -245,7 +245,7 @@ export default function GraphView() {
   return (
     <div
       ref={containerRef}
-      className="flex-1 relative overflow-hidden graph-cyber-bg"
+      className="h-full w-full relative overflow-hidden graph-cyber-bg"
       onPointerMove={handlePointerMove}
     >
       {/* Force Graph */}
@@ -267,6 +267,7 @@ export default function GraphView() {
           onNodeClick={handleNodeClick}
           onNodeHover={handleNodeHover}
           onNodeDragEnd={handleNodeDragEnd}
+          onBackgroundClick={clearSelection}
           backgroundColor="rgba(0,0,0,0)"
           d3AlphaDecay={0.008}
           d3VelocityDecay={0.3}

@@ -19,10 +19,14 @@ export default function NodeDetailsPanel({ node, traverseResult, onClose }: Node
 
   return (
     <div
-      className="absolute right-0 top-0 bottom-0 w-80 flex flex-col overflow-hidden z-20 animate-slide-in"
+      className="absolute right-0 top-0 bottom-0 flex flex-col overflow-hidden z-20 animate-slide-in"
       style={{
-        background: 'var(--bg-surface)',
-        borderLeft: '1px solid var(--border-default)',
+        width: '66vw',
+        background: 'rgba(10, 10, 12, 0.3)',
+        backdropFilter: 'blur(20px) saturate(1.3)',
+        WebkitBackdropFilter: 'blur(20px) saturate(1.3)',
+        borderLeft: '1px solid rgba(255, 255, 255, 0.06)',
+        boxShadow: '-4px 0 24px rgba(0, 0, 0, 0.15)',
       }}
     >
       {/* Header */}
