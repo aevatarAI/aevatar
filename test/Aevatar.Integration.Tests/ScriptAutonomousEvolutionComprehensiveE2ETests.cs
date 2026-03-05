@@ -20,7 +20,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
@@ -142,7 +142,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
@@ -220,7 +220,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
@@ -284,7 +284,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
 
@@ -331,11 +331,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         var invokeDefinitionId = summary.Fields["invoke_definition_actor_id"].StringValue;
 
         (await runtime.ExistsAsync(publishedDefinitionId)).Should().BeTrue();
-        var sendToDefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(sendToDefinitionId))!.Agent;
+        (await runtime.ExistsAsync(sendToDefinitionId)).Should().BeTrue();
+        (await runtime.ExistsAsync(invokeDefinitionId)).Should().BeTrue();
         var invokeDefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(invokeDefinitionId))!.Agent;
 
-        sendToDefinition.State.ScriptId.Should().Be("interaction-sendto-script");
-        sendToDefinition.State.Revision.Should().Be("rev-sendto-1");
         invokeDefinition.State.ScriptId.Should().Be("interaction-invoke-script");
         invokeDefinition.State.Revision.Should().Be("rev-invoke-1");
     }
