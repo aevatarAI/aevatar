@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Observability;
-using Aevatar.Foundation.Runtime.TypeSystem;
+using Aevatar.Foundation.Runtime.Implementations.Local.TypeSystem;
 using FluentAssertions;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
@@ -100,8 +100,6 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task RestoreAllAsync(CancellationToken ct = default) =>
-            throw new NotSupportedException();
     }
 
     private sealed class RecordingActor(string id, IAgent agent) : IActor

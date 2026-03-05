@@ -199,7 +199,6 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task RestoreAllAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class AlwaysTrueTypeVerifier : IAgentTypeVerifier

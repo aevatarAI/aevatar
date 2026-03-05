@@ -27,7 +27,11 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
     public Task StartAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _loader.LoadInto(_registry, _options.Value.WorkflowDirectories, _logger);
+        _loader.LoadInto(
+            _registry,
+            _options.Value.WorkflowDirectories,
+            _logger,
+            _options.Value.DuplicatePolicy);
         return Task.CompletedTask;
     }
 

@@ -38,9 +38,27 @@ public sealed class WaitSignalModule : IEventModule
             if (request.StepType != "wait_signal") return;
 
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
-            var signalName = NormalizeSignalName(request.Parameters.GetValueOrDefault("signal_name", "default"));
-            var prompt = request.Parameters.GetValueOrDefault("prompt", "");
-            var timeoutMs = int.TryParse(request.Parameters.GetValueOrDefault("timeout_ms", "0"), out var t) ? t : 0;
+            var signalName = NormalizeSignalName(
+                WorkflowParameterValueParser.GetString(request.Parameters, "default", "signal_name", "signal"));
+            var prompt = WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "prompt", "message");
+
+            var timeoutMs = WorkflowParameterValueParser.GetBoundedInt(
+                request.Parameters,
+                0,
+                0,
+                3_600_000,
+                "timeout_ms");
+            if (timeoutMs <= 0 &&
+                WorkflowParameterValueParser.TryGetBoundedInt(
+                    request.Parameters,
+                    out var timeoutSeconds,
+                    0,
+                    3_600,
+                    "timeout_seconds",
+                    "timeout"))
+            {
+                timeoutMs = Math.Clamp(timeoutSeconds * 1000, 0, 3_600_000);
+            }
             var pendingKey = new PendingSignalKey(runId, signalName, request.StepId);
 
             _pending[pendingKey] = new PendingSignal(request.StepId, runId, request.Input ?? "", signalName);

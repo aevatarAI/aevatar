@@ -95,6 +95,36 @@ public class WorkflowDefinitionRegistryTests
     }
 
     [Fact]
+    public void FileLoader_DuplicateWorkflowName_WithOverridePolicy_ShouldUseFileVersion()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), $"wf_test_dup_override_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmpDir);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tmpDir, "direct.yaml"), "name: direct\nsteps:\n  - id: from_file\n");
+
+            var registry = new WorkflowDefinitionRegistry();
+            registry.Register("direct", "name: direct\nsteps:\n  - id: built_in\n");
+            var loader = new WorkflowDefinitionFileLoader();
+
+            var count = loader.LoadInto(
+                registry,
+                [tmpDir],
+                NullLogger.Instance,
+                WorkflowDefinitionDuplicatePolicy.Override);
+
+            count.Should().Be(1);
+            registry.GetYaml("direct").Should().Contain("from_file");
+            registry.GetYaml("direct").Should().NotContain("built_in");
+        }
+        finally
+        {
+            Directory.Delete(tmpDir, true);
+        }
+    }
+
+    [Fact]
     public void FileLoader_DuplicateDirectoryEntries_ShouldLoadOnlyOnce()
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), $"wf_test_dup_dir_{Guid.NewGuid():N}");

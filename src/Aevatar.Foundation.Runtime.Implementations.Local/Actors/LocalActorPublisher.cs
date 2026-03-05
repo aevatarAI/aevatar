@@ -8,7 +8,7 @@ using Aevatar.Foundation.Runtime.Observability;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Foundation.Runtime.Actors;
+namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 
 /// <summary>IEventPublisher that routes events to streams using EventDirection.</summary>
 public sealed class LocalActorPublisher : IEventPublisher

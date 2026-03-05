@@ -1,0 +1,19 @@
+name: 53_map_reduce_llm_alias
+description: Demonstrates map_reduce_llm ergonomic alias (defaults map/reduce to llm_call).
+
+roles:
+  - id: mapper
+    name: Mapper
+    system_prompt: Extract one key insight from the given input chunk.
+  - id: reducer
+    name: Reducer
+    system_prompt: Merge all insights into one compact summary paragraph.
+
+steps:
+  - id: map_reduce_summary
+    type: map_reduce_llm
+    parameters:
+      delimiter: "\n---\n"
+      map_target_role: mapper
+      reduce_target_role: reducer
+      reduce_prompt_prefix: "Merge these mapped insights:"

@@ -3,7 +3,7 @@
 //
 // Responsibilities:
 // 1. Unified event pipeline ([EventHandler] + IEventModule interleaved by priority)
-// 2. Module management APIs (RegisterModule / SetModules / manifest persistence)
+// 2. Module management APIs (RegisterModule / SetModules)
 // 3. Dual hook channels (virtual methods + IGAgentExecutionHook pipeline)
 // 4. Publishing helpers (PublishAsync / SendToAsync)
 // ─────────────────────────────────────────────────────────────
@@ -12,7 +12,6 @@ using System.Diagnostics;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Hooks;
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.Pipeline;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -47,9 +46,6 @@ public abstract class GAgentBase : IAgent
     /// <summary>DI service provider injected by runtime.</summary>
     public IServiceProvider Services { get; set; } = EmptyServiceProvider.Instance;
 
-    /// <summary>Manifest persistence store injected by runtime.</summary>
-    public IAgentManifestStore? ManifestStore { get; set; }
-
     // IAgent implementation
 
     /// <summary>Returns the agent description string.</summary>
@@ -65,11 +61,11 @@ public abstract class GAgentBase : IAgent
         return Task.FromResult<IReadOnlyList<Type>>(types);
     }
 
-    /// <summary>Activates agent: restores modules and loads hooks.</summary>
+    /// <summary>Activates agent and loads hooks.</summary>
     public virtual async Task ActivateAsync(CancellationToken ct = default)
     {
         using var guard = StateGuard.BeginWriteScope();
-        await RestoreModulesAsync(ct);
+        ct.ThrowIfCancellationRequested();
         LoadHooksFromDI();
     }
 
@@ -197,7 +193,7 @@ public abstract class GAgentBase : IAgent
 
     // Module management APIs
 
-    /// <summary>Registers a dynamic event module and persists it to manifest.</summary>
+    /// <summary>Registers a dynamic event module.</summary>
     public void RegisterModule(IEventModule module)
     {
         var current = _modules;
@@ -205,14 +201,12 @@ public abstract class GAgentBase : IAgent
         current.CopyTo(next, 0);
         next[current.Length] = module;
         _modules = next;
-        SchedulePersistModules();
     }
 
-    /// <summary>Replaces dynamic event modules in batch and persists them.</summary>
+    /// <summary>Replaces dynamic event modules in batch.</summary>
     public void SetModules(IEnumerable<IEventModule> modules)
     {
         _modules = modules.ToArray();
-        SchedulePersistModules();
     }
 
     /// <summary>Gets all currently registered dynamic modules.</summary>
@@ -260,48 +254,6 @@ public abstract class GAgentBase : IAgent
             {
                 Logger.LogWarning(ex, "Hook {Hook} failed during phase {Phase} (best-effort)", hook.Name, phase);
             }
-        }
-    }
-
-    /// <summary>Restores registered modules from ManifestStore.</summary>
-    private async Task RestoreModulesAsync(CancellationToken ct)
-    {
-        if (ManifestStore == null) return;
-        var manifest = await ManifestStore.LoadAsync(Id, ct);
-        if (manifest?.ModuleNames is not { Count: > 0 }) return;
-
-        var factories = Services.GetServices<IEventModuleFactory>().ToList();
-        var modules = new List<IEventModule>();
-        foreach (var name in manifest.ModuleNames)
-            foreach (var factory in factories)
-                if (factory.TryCreate(name, out var m) && m != null)
-                { modules.Add(m); break; }
-        _modules = modules.ToArray();
-    }
-
-    /// <summary>Persists current module names to ManifestStore.</summary>
-    private async Task PersistModulesAsync()
-    {
-        if (ManifestStore == null) return;
-        var manifest = await ManifestStore.LoadAsync(Id) ?? new AgentManifest { AgentId = Id };
-        manifest.ModuleNames = _modules.Select(m => m.Name).ToList();
-        await ManifestStore.SaveAsync(Id, manifest);
-    }
-
-    private void SchedulePersistModules()
-    {
-        _ = PersistModulesSafeAsync();
-    }
-
-    private async Task PersistModulesSafeAsync()
-    {
-        try
-        {
-            await PersistModulesAsync();
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Failed to persist module manifest for agent {AgentId}", Id);
         }
     }
 

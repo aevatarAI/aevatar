@@ -31,7 +31,7 @@ using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.Workflow.Core;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Extensions.Maker;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -240,7 +240,7 @@ await actor.HandleEventAsync(new EventEnvelope
 {
     Id = Guid.NewGuid().ToString("N"),
     Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-    Payload = Any.Pack(new ConfigureWorkflowEvent
+    Payload = Any.Pack(new BindWorkflowDefinitionEvent
     {
         WorkflowYaml = workflowYaml,
         WorkflowName = workflowName,

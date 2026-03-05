@@ -15,6 +15,15 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Framework fallback reads these names via Environment.GetEnvironmentVariable(...)
+  DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  AEVATAR_LLM_API_KEY: ${{ secrets.AEVATAR_LLM_API_KEY }}
+  # Optional test overrides for real OpenAI integration test.
+  AEVATAR_TEST_OPENAI_BASE_URL: ${{ secrets.AEVATAR_TEST_OPENAI_BASE_URL }}
+  AEVATAR_TEST_OPENAI_MODEL: ${{ secrets.AEVATAR_TEST_OPENAI_MODEL }}
+
 jobs:
   changes:
     if: github.event_name != 'schedule'

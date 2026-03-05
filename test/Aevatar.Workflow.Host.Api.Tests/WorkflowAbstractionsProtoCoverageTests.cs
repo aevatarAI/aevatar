@@ -162,6 +162,52 @@ public class WorkflowAbstractionsProtoCoverageTests
     }
 
     [Fact]
+    public void SubWorkflowEvents_ShouldRoundtripAndSupportReflection()
+    {
+        var invoke = new SubWorkflowInvokeRequestedEvent
+        {
+            InvocationId = "invoke-1",
+            ParentRunId = "run-parent",
+            ParentStepId = "step-a",
+            WorkflowName = "sub_flow",
+            Input = "payload",
+            Lifecycle = "singleton",
+            RequestedByActorId = "actor-parent",
+        };
+        var parsedInvoke = SubWorkflowInvokeRequestedEvent.Parser.ParseFrom(invoke.ToByteArray());
+        parsedInvoke.Should().BeEquivalentTo(invoke);
+
+        var registered = new SubWorkflowInvocationRegisteredEvent
+        {
+            InvocationId = "invoke-1",
+            ParentRunId = "run-parent",
+            ParentStepId = "step-a",
+            WorkflowName = "sub_flow",
+            ChildActorId = "actor-child",
+            ChildRunId = "run-child",
+            Lifecycle = "singleton",
+        };
+        var completed = new SubWorkflowInvocationCompletedEvent
+        {
+            InvocationId = "invoke-1",
+            ChildRunId = "run-child",
+            Success = true,
+            Output = "ok",
+            Error = "",
+        };
+        var binding = new SubWorkflowBindingUpsertedEvent
+        {
+            WorkflowName = "sub_flow",
+            ChildActorId = "actor-child",
+            Lifecycle = "singleton",
+        };
+
+        ((IMessage)registered).Descriptor.Name.Should().Be(nameof(SubWorkflowInvocationRegisteredEvent));
+        ((IMessage)completed).Descriptor.Name.Should().Be(nameof(SubWorkflowInvocationCompletedEvent));
+        ((IMessage)binding).Descriptor.Name.Should().Be(nameof(SubWorkflowBindingUpsertedEvent));
+    }
+
+    [Fact]
     public void WorkflowAbstractionsReflection_ShouldExposeAllMessages()
     {
         WorkflowExecutionMessagesReflection.Descriptor.Should().NotBeNull();
@@ -169,5 +215,9 @@ public class WorkflowAbstractionsProtoCoverageTests
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(WorkflowCompletedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(StepRequestEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(StepCompletedEvent));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvokeRequestedEvent));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowBindingUpsertedEvent));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationRegisteredEvent));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationCompletedEvent));
     }
 }

@@ -13,15 +13,20 @@ internal static class ChatWebSocketRunCoordinator
         CancellationToken ct = default)
     {
         var responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-
-        var request = new WorkflowChatRunRequest(
-            command.Input.Prompt,
-            command.Input.Workflow,
-            command.Input.AgentId,
-            command.Input.WorkflowYaml);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input);
+        if (!normalizedRequest.Succeeded)
+        {
+            var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
+            await ChatWebSocketProtocol.SendAsync(
+                socket,
+                ChatWebSocketEnvelopeFactory.CreateCommandError(command.RequestId, code, message),
+                ct,
+                responseMessageType);
+            return;
+        }
 
         var executionResult = await chatRunService.ExecuteAsync(
-            request,
+            normalizedRequest.Request!,
             (frame, token) => new ValueTask(ChatWebSocketProtocol.SendAsync(
                 socket,
                 ChatWebSocketEnvelopeFactory.CreateAguiEvent(command.RequestId, frame),

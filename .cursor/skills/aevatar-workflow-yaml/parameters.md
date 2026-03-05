@@ -140,6 +140,8 @@ Loops until critic says "PASS" or max rounds reached.
 
 ### foreach
 
+Aliases: `for_each`, `foreach_llm` (the `foreach_llm` alias defaults `sub_step_type=llm_call` when omitted).
+
 | Parameter        | Description                               | Default    | Values |
 |------------------|-------------------------------------------|------------|--------|
 | `delimiter`      | Separator to split input into items       | `\n---\n`  | string |
@@ -164,6 +166,8 @@ Loops until critic says "PASS" or max rounds reached.
 | `count`   | Worker count if `workers` not set        | `2`     | integer (1–10) |
 
 ### map_reduce
+
+Aliases: `mapreduce`, `map_reduce_llm` (the `map_reduce_llm` alias defaults both map/reduce step types to `llm_call` when omitted).
 
 | Parameter             | Description                         | Default    | Values |
 |-----------------------|-------------------------------------|------------|--------|
@@ -190,9 +194,16 @@ No parameters. Uses input directly (typically from parallel fan-out output).
 
 ### connector_call
 
+Aliases:
+- `bridge_call` (semantic alias)
+- `cli_call` (semantic alias)
+- `mcp_call` (semantic alias; if `tool` is set and `operation` is omitted, parser fills `operation=<tool>`)
+- `http_get` / `http_post` / `http_put` / `http_delete` (parser fills `method=GET/POST/PUT/DELETE` when omitted)
+
 | Parameter           | Description                              | Default  | Values |
 |---------------------|------------------------------------------|----------|--------|
 | `connector`         | Connector name (required)                | —        | string |
+| `method`            | HTTP method (mainly for HTTP connectors) | connector default | `GET`, `POST`, `PUT`, `DELETE`, ... |
 | `operation`         | Operation/method on the connector        | `""`     | string |
 | `retry`             | Retry attempts on failure                | `0`      | integer (0–5) |
 | `timeout_ms`        | Timeout in ms                            | `30000`  | integer (100–300000) |
