@@ -1,7 +1,5 @@
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
-using Aevatar.Foundation.Runtime.Persistence;
 using FluentAssertions;
 
 namespace Aevatar.Foundation.Core.Tests;
@@ -11,13 +9,11 @@ public class AgentTypeVerifierTests
     [Fact]
     public async Task IsExpectedAsync_WhenRuntimeTypeMatches_ShouldReturnTrue()
     {
-        var manifestStore = new InMemoryManifestStore();
         var verifier = new DefaultAgentTypeVerifier(
             new StaticActorTypeProbe(new Dictionary<string, string?>
             {
                 ["actor-1"] = typeof(CollectorAgent).AssemblyQualifiedName,
-            }),
-            manifestStore);
+            }));
 
         var result = await verifier.IsExpectedAsync("actor-1", typeof(CollectorAgent), CancellationToken.None);
 
@@ -25,21 +21,13 @@ public class AgentTypeVerifierTests
     }
 
     [Fact]
-    public async Task IsExpectedAsync_WhenRuntimeTypeMismatches_ShouldNotFallbackToManifest()
+    public async Task IsExpectedAsync_WhenRuntimeTypeMismatches_ShouldReturnFalse()
     {
-        var manifestStore = new InMemoryManifestStore();
-        await manifestStore.SaveAsync("actor-1", new AgentManifest
-        {
-            AgentId = "actor-1",
-            AgentTypeName = typeof(CollectorAgent).AssemblyQualifiedName!,
-        });
-
         var verifier = new DefaultAgentTypeVerifier(
             new StaticActorTypeProbe(new Dictionary<string, string?>
             {
                 ["actor-1"] = typeof(EchoAgent).AssemblyQualifiedName,
-            }),
-            manifestStore);
+            }));
 
         var result = await verifier.IsExpectedAsync("actor-1", typeof(CollectorAgent), CancellationToken.None);
 
@@ -47,50 +35,21 @@ public class AgentTypeVerifierTests
     }
 
     [Fact]
-    public async Task IsExpectedAsync_WhenRuntimeTypeMissing_ShouldFallbackToManifestAssemblyQualifiedName()
+    public async Task IsExpectedAsync_WhenRuntimeTypeMissing_ShouldReturnFalse()
     {
-        var manifestStore = new InMemoryManifestStore();
-        await manifestStore.SaveAsync("actor-1", new AgentManifest
-        {
-            AgentId = "actor-1",
-            AgentTypeName = typeof(CollectorAgent).AssemblyQualifiedName!,
-        });
-
-        var verifier = new DefaultAgentTypeVerifier(new StaticActorTypeProbe(), manifestStore);
-
+        var verifier = new DefaultAgentTypeVerifier(new StaticActorTypeProbe());
         var result = await verifier.IsExpectedAsync("actor-1", typeof(CollectorAgent), CancellationToken.None);
-
-        result.Should().BeTrue();
+        result.Should().BeFalse();
     }
 
     [Fact]
-    public async Task IsExpectedAsync_WhenRuntimeTypeMissing_ShouldFallbackToManifestFullName()
+    public async Task IsExpectedAsync_WhenRuntimeTypeLooksSimilar_ShouldReturnFalse()
     {
-        var manifestStore = new InMemoryManifestStore();
-        await manifestStore.SaveAsync("actor-1", new AgentManifest
-        {
-            AgentId = "actor-1",
-            AgentTypeName = typeof(CollectorAgent).FullName!,
-        });
-
-        var verifier = new DefaultAgentTypeVerifier(new StaticActorTypeProbe(), manifestStore);
-
-        var result = await verifier.IsExpectedAsync("actor-1", typeof(CollectorAgent), CancellationToken.None);
-
-        result.Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task IsExpectedAsync_WhenManifestTypeLooksSimilar_ShouldReturnFalse()
-    {
-        var manifestStore = new InMemoryManifestStore();
-        await manifestStore.SaveAsync("actor-1", new AgentManifest
-        {
-            AgentId = "actor-1",
-            AgentTypeName = $"{typeof(CollectorAgent).FullName}Shadow",
-        });
-
-        var verifier = new DefaultAgentTypeVerifier(new StaticActorTypeProbe(), manifestStore);
+        var verifier = new DefaultAgentTypeVerifier(
+            new StaticActorTypeProbe(new Dictionary<string, string?>
+            {
+                ["actor-1"] = $"{typeof(CollectorAgent).FullName}Shadow",
+            }));
 
         var result = await verifier.IsExpectedAsync("actor-1", typeof(CollectorAgent), CancellationToken.None);
 

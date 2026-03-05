@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
-using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -141,9 +140,8 @@ public sealed class OrleansActorRuntimeForwardingTests
         grains = grainMap;
         return new OrleansActorRuntime(
             grainFactory,
-            new InMemoryManifestStore(),
             streams,
-            streamLifecycleManager);
+            streamLifecycleManager: streamLifecycleManager);
     }
 
     private class GrainFactoryProxy : DispatchProxy

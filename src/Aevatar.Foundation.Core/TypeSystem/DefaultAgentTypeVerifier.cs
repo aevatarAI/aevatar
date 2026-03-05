@@ -3,17 +3,15 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 namespace Aevatar.Foundation.Core.TypeSystem;
 
 /// <summary>
-/// Default verifier that prefers runtime type evidence, then falls back to manifest.
+/// Default verifier based on runtime type evidence.
 /// </summary>
 public sealed class DefaultAgentTypeVerifier : IAgentTypeVerifier
 {
     private readonly IActorTypeProbe _typeProbe;
-    private readonly IAgentManifestStore _manifestStore;
 
-    public DefaultAgentTypeVerifier(IActorTypeProbe typeProbe, IAgentManifestStore manifestStore)
+    public DefaultAgentTypeVerifier(IActorTypeProbe typeProbe)
     {
         _typeProbe = typeProbe;
-        _manifestStore = manifestStore;
     }
 
     public async Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default)
@@ -25,7 +23,6 @@ public sealed class DefaultAgentTypeVerifier : IAgentTypeVerifier
         if (!string.IsNullOrWhiteSpace(runtimeTypeName))
             return AgentTypeNameMatcher.MatchesExpectedType(runtimeTypeName, expectedType);
 
-        var manifest = await _manifestStore.LoadAsync(actorId, ct);
-        return AgentTypeNameMatcher.MatchesExpectedType(manifest?.AgentTypeName, expectedType);
+        return false;
     }
 }

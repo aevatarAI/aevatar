@@ -1,0 +1,8 @@
+name: 48_subworkflow_level3
+description: Level 3 sub-workflow normalizes the input text.
+
+steps:
+  - id: trim_level3
+    type: transform
+    parameters:
+      op: "trim"

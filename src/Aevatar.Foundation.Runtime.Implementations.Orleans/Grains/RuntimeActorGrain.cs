@@ -298,7 +298,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             _streams);
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
-        gAgent.ManifestStore = ServiceProvider.GetService<IAgentManifestStore>();
         if (gAgent is IEventSourcingFactoryBinding statefulBinding)
             statefulBinding.BindEventSourcingFactory(ServiceProvider);
     }

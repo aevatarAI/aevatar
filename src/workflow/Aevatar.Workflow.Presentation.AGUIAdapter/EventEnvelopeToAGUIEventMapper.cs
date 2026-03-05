@@ -95,7 +95,14 @@ public sealed class StepRequestAGUIEventEnvelopeMappingHandler : IAGUIEventEnvel
             {
                 Timestamp = ts,
                 Name = "aevatar.step.request",
-                Value = new { evt.StepId, evt.StepType, evt.TargetRole },
+                Value = new
+                {
+                    evt.RunId,
+                    evt.StepId,
+                    evt.StepType,
+                    evt.TargetRole,
+                    evt.Input,
+                },
             },
         ];
         return true;
@@ -115,12 +122,29 @@ public sealed class StepCompletedAGUIEventEnvelopeMappingHandler : IAGUIEventEnv
         }
 
         var evt = envelope.Payload.Unpack<StepCompletedEvent>();
+        var metadata = new Dictionary<string, string>();
+        foreach (var (key, value) in evt.Metadata)
+            metadata[key] = value;
         events =
         [
             new StepFinishedEvent
             {
                 Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
                 StepName = evt.StepId,
+            },
+            new CustomEvent
+            {
+                Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                Name = "aevatar.step.completed",
+                Value = new
+                {
+                    evt.RunId,
+                    evt.StepId,
+                    evt.Success,
+                    evt.Output,
+                    evt.Error,
+                    Metadata = metadata,
+                },
             },
         ];
         return true;
@@ -215,6 +239,37 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
         }
 
         return false;
+    }
+}
+
+public sealed class AIReasoningAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+{
+    public int Order => 35;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    {
+        if (envelope.Payload?.Is(AIEvents.TextMessageReasoningEvent.Descriptor) != true)
+        {
+            events = [];
+            return false;
+        }
+
+        var evt = envelope.Payload.Unpack<AIEvents.TextMessageReasoningEvent>();
+        events =
+        [
+            new CustomEvent
+            {
+                Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                Name = "aevatar.llm.reasoning",
+                Value = new
+                {
+                    evt.SessionId,
+                    evt.Delta,
+                    Role = AGUIEventEnvelopeMappingHelpers.ResolveRoleFromPublisher(envelope.PublisherId),
+                },
+            },
+        ];
+        return true;
     }
 }
 
@@ -348,6 +403,44 @@ public sealed class WorkflowSuspendedAGUIEventEnvelopeMappingHandler : IAGUIEven
     }
 }
 
+public sealed class WorkflowWaitingSignalAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+{
+    public int Order => 46;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    {
+        if (envelope.Payload?.Is(WaitingForSignalEvent.Descriptor) != true)
+        {
+            events = [];
+            return false;
+        }
+
+        var evt = envelope.Payload.Unpack<WaitingForSignalEvent>();
+        var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
+        var runId = string.IsNullOrWhiteSpace(evt.RunId)
+            ? AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, string.Empty)
+            : evt.RunId;
+
+        events =
+        [
+            new CustomEvent
+            {
+                Timestamp = ts,
+                Name = "aevatar.workflow.waiting_signal",
+                Value = new
+                {
+                    RunId = runId,
+                    evt.StepId,
+                    evt.SignalName,
+                    evt.Prompt,
+                    evt.TimeoutMs,
+                },
+            },
+        ];
+        return true;
+    }
+}
+
 internal static class AGUIEventEnvelopeMappingHelpers
 {
     public static long? ToUnixMs(Timestamp? ts)
@@ -378,5 +471,18 @@ internal static class AGUIEventEnvelopeMappingHelpers
             return $"msg:{sessionId}";
 
         return $"msg:{envelopeId}";
+    }
+
+    public static string ResolveRoleFromPublisher(string? publisherId)
+    {
+        if (string.IsNullOrWhiteSpace(publisherId))
+            return "assistant";
+
+        var normalized = publisherId.Trim();
+        var idx = normalized.LastIndexOf(':');
+        if (idx >= 0 && idx < normalized.Length - 1)
+            return normalized[(idx + 1)..];
+
+        return normalized;
     }
 }

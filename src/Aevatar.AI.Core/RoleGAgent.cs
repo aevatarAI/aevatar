@@ -21,6 +21,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
+using System.Globalization;
 
 namespace Aevatar.AI.Core;
 
@@ -29,6 +30,9 @@ namespace Aevatar.AI.Core;
 /// </summary>
 public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 {
+    private const string LlmTimeoutMetadataKey = "aevatar.llm_timeout_ms";
+    private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
+
     public RoleGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
@@ -49,38 +53,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     /// <summary>Role name.</summary>
     public string RoleName { get; private set; } = "";
 
-    /// <summary>Sets role name.</summary>
-    public void SetRoleName(string name) => RoleName = name;
-
-    Task IRoleAgent.ConfigureAsync(RoleAgentConfig config, CancellationToken ct) =>
-        ConfigureAsync(new AIAgentConfig
-        {
-            ProviderName = config.ProviderName,
-            Model = config.Model,
-            SystemPrompt = config.SystemPrompt,
-            Temperature = config.Temperature,
-            MaxTokens = config.MaxTokens,
-            MaxToolRounds = config.MaxToolRounds,
-            MaxHistoryMessages = config.MaxHistoryMessages,
-            StreamBufferCapacity = config.StreamBufferCapacity,
-        }, ct);
-
     [EventHandler]
-    public async Task HandleConfigureRoleAgent(ConfigureRoleAgentEvent evt)
+    public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        await ((IRoleAgent)this).ConfigureAsync(new RoleAgentConfig
-        {
-            ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName,
-            Model = string.IsNullOrWhiteSpace(evt.Model) ? null : evt.Model,
-            SystemPrompt = evt.SystemPrompt ?? string.Empty,
-            Temperature = evt.HasTemperature ? evt.Temperature : null,
-            MaxTokens = evt.MaxTokens == 0 ? null : evt.MaxTokens,
-            MaxToolRounds = evt.MaxToolRounds <= 0 ? 10 : evt.MaxToolRounds,
-            MaxHistoryMessages = evt.MaxHistoryMessages <= 0 ? 100 : evt.MaxHistoryMessages,
-            StreamBufferCapacity = evt.StreamBufferCapacity <= 0 ? 256 : evt.StreamBufferCapacity,
-        });
-
         RoleGAgentFactory.ApplyModuleExtensions(this, evt.EventModules, evt.EventRoutes, Services);
     }
 
@@ -91,14 +67,41 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     protected override RoleGAgentState TransitionState(RoleGAgentState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
-            .On<ConfigureRoleAgentEvent>(ApplyConfigureRoleAgent)
+            .On<InitializeRoleAgentEvent>(ApplyInitializeRoleAgent)
             .OrCurrent();
 
-    protected override Task OnStateChangedAsync(RoleGAgentState state, CancellationToken ct)
+    protected override Task OnStateChangedAfterConfigAppliedAsync(RoleGAgentState state, CancellationToken ct)
     {
         _ = ct;
         RoleName = state.RoleName ?? string.Empty;
         return Task.CompletedTask;
+    }
+
+    protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(RoleGAgentState state)
+    {
+        var overrides = state.ConfigOverrides;
+        if (overrides == null)
+            return new AIAgentConfigStateOverrides();
+
+        return new AIAgentConfigStateOverrides
+        {
+            HasProviderName = overrides.HasProviderName,
+            ProviderName = overrides.HasProviderName ? overrides.ProviderName : null,
+            HasModel = overrides.HasModel,
+            Model = overrides.HasModel ? overrides.Model : null,
+            HasSystemPrompt = overrides.HasSystemPrompt,
+            SystemPrompt = overrides.HasSystemPrompt ? overrides.SystemPrompt : null,
+            HasTemperature = overrides.HasTemperature,
+            Temperature = overrides.HasTemperature ? overrides.Temperature : null,
+            HasMaxTokens = overrides.HasMaxTokens,
+            MaxTokens = overrides.HasMaxTokens ? overrides.MaxTokens : null,
+            HasMaxToolRounds = overrides.HasMaxToolRounds,
+            MaxToolRounds = overrides.HasMaxToolRounds ? overrides.MaxToolRounds : null,
+            HasMaxHistoryMessages = overrides.HasMaxHistoryMessages,
+            MaxHistoryMessages = overrides.HasMaxHistoryMessages ? overrides.MaxHistoryMessages : null,
+            HasStreamBufferCapacity = overrides.HasStreamBufferCapacity,
+            StreamBufferCapacity = overrides.HasStreamBufferCapacity ? overrides.StreamBufferCapacity : null,
+        };
     }
 
     /// <summary>
@@ -112,6 +115,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             ? request.Prompt[..200] + "..."
             : request.Prompt;
         Logger.LogInformation("[{Role}] LLM request: {Preview}", RoleName, promptPreview);
+        var timeoutMs = ResolveLlmTimeoutMs(request);
+        var useWorkflowFailureMarker = timeoutMs > 0;
+        using var timeoutCts = timeoutMs > 0 ? new CancellationTokenSource(timeoutMs) : null;
+        var streamCt = timeoutCts?.Token ?? CancellationToken.None;
 
         // ─── AG-UI: TEXT_MESSAGE_START ───
         await PublishAsync(new TextMessageStartEvent
@@ -120,57 +127,161 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             AgentId = Id,
         }, EventDirection.Up);
 
-        // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
-        var fullContent = new StringBuilder();
-        var toolCalls = new StreamingToolCallAccumulator();
-
-        await foreach (var chunk in ChatStreamAsync(request.Prompt))
+        try
         {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
+            var fullContent = new StringBuilder();
+            var fullReasoning = new StringBuilder();
+            var toolCalls = new StreamingToolCallAccumulator();
+
+            await foreach (var chunk in ChatStreamAsync(request.Prompt, streamCt))
             {
-                fullContent.Append(chunk.DeltaContent);
-                await PublishAsync(new TextMessageContentEvent
+                if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 {
-                    Delta = chunk.DeltaContent,
-                    SessionId = request.SessionId,
+                    fullContent.Append(chunk.DeltaContent);
+                    await PublishAsync(new TextMessageContentEvent
+                    {
+                        Delta = chunk.DeltaContent,
+                        SessionId = request.SessionId,
+                    }, EventDirection.Up);
+                }
+
+                if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
+                {
+                    fullReasoning.Append(chunk.DeltaReasoningContent);
+                    await PublishAsync(new TextMessageReasoningEvent
+                    {
+                        Delta = chunk.DeltaReasoningContent,
+                        SessionId = request.SessionId,
+                    }, EventDirection.Up);
+                }
+
+                if (chunk.DeltaToolCall != null)
+                    toolCalls.TrackDelta(chunk.DeltaToolCall);
+            }
+
+            foreach (var toolCall in toolCalls.BuildToolCalls())
+            {
+                await PublishAsync(new ToolCallEvent
+                {
+                    CallId = toolCall.Id,
+                    ToolName = toolCall.Name,
+                    ArgumentsJson = toolCall.ArgumentsJson,
                 }, EventDirection.Up);
             }
 
-            if (chunk.DeltaToolCall != null)
-                toolCalls.TrackDelta(chunk.DeltaToolCall);
-        }
+            var response = fullContent.ToString();
+            var responsePreview = response.Length > 300
+                ? response[..300] + "..."
+                : response;
+            Logger.LogInformation("[{Role}] LLM response ({Len} chars): {Preview}",
+                RoleName, response.Length, responsePreview);
 
-        foreach (var toolCall in toolCalls.BuildToolCalls())
-        {
-            await PublishAsync(new ToolCallEvent
+            if (fullReasoning.Length > 0)
             {
-                CallId = toolCall.Id,
-                ToolName = toolCall.Name,
-                ArgumentsJson = toolCall.ArgumentsJson,
+                var reasoning = fullReasoning.ToString();
+                var reasoningPreview = reasoning.Length > 300
+                    ? reasoning[..300] + "..."
+                    : reasoning;
+                Logger.LogInformation(
+                    "[{Role}] LLM reasoning ({Len} chars): {Preview}",
+                    RoleName,
+                    reasoning.Length,
+                    reasoningPreview);
+            }
+
+            // ─── AG-UI: TEXT_MESSAGE_END ───
+            await PublishAsync(new TextMessageEndEvent
+            {
+                Content = response,
+                SessionId = request.SessionId,
             }, EventDirection.Up);
         }
-
-        var response = fullContent.ToString();
-        var responsePreview = response.Length > 300
-            ? response[..300] + "..."
-            : response;
-        Logger.LogInformation("[{Role}] LLM response ({Len} chars): {Preview}",
-            RoleName, response.Length, responsePreview);
-
-        // ─── AG-UI: TEXT_MESSAGE_END ───
-        await PublishAsync(new TextMessageEndEvent
+        catch (OperationCanceledException) when (timeoutCts is { IsCancellationRequested: true })
         {
-            Content = response,
-            SessionId = request.SessionId,
-        }, EventDirection.Up);
+            Logger.LogWarning(
+                "[{Role}] LLM request timeout after {TimeoutMs}ms. session={SessionId}",
+                RoleName,
+                timeoutMs,
+                request.SessionId);
+            await PublishAsync(new TextMessageEndEvent
+            {
+                Content = BuildLlmFailureContent($"LLM request timed out after {timeoutMs}ms"),
+                SessionId = request.SessionId,
+            }, EventDirection.Up);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[{Role}] LLM request failed. session={SessionId}", RoleName, request.SessionId);
+            await PublishAsync(new TextMessageEndEvent
+            {
+                Content = useWorkflowFailureMarker
+                    ? BuildLlmFailureContent(ex.Message)
+                    : $"LLM request failed: {SanitizeFailureMessage(ex.Message)}",
+                SessionId = request.SessionId,
+            }, EventDirection.Up);
+        }
     }
 
-    private static RoleGAgentState ApplyConfigureRoleAgent(
+    private static int ResolveLlmTimeoutMs(ChatRequestEvent request)
+    {
+        if (request.Metadata.TryGetValue(LlmTimeoutMetadataKey, out var raw) &&
+            int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var timeoutMs) &&
+            timeoutMs > 0)
+        {
+            return timeoutMs;
+        }
+
+        return 0;
+    }
+
+    private static string BuildLlmFailureContent(string? message)
+    {
+        var safeMessage = SanitizeFailureMessage(message);
+        return $"{LlmFailureContentPrefix} {safeMessage}";
+    }
+
+    private static string SanitizeFailureMessage(string? message) =>
+        string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
+
+    private static RoleGAgentState ApplyInitializeRoleAgent(
         RoleGAgentState current,
-        ConfigureRoleAgentEvent evt)
+        InitializeRoleAgentEvent evt)
     {
         var next = current.Clone();
+        var overrides = EnsureConfigOverrides(next);
         next.RoleName = evt.RoleName ?? string.Empty;
+        overrides.ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName.Trim();
+        overrides.Model = string.IsNullOrWhiteSpace(evt.Model) ? string.Empty : evt.Model.Trim();
+        overrides.SystemPrompt = evt.SystemPrompt ?? string.Empty;
+        if (evt.HasTemperature)
+            overrides.Temperature = evt.Temperature;
+        else
+            overrides.ClearTemperature();
+        if (evt.MaxTokens > 0)
+            overrides.MaxTokens = evt.MaxTokens;
+        else
+            overrides.ClearMaxTokens();
+        if (evt.MaxToolRounds > 0)
+            overrides.MaxToolRounds = evt.MaxToolRounds;
+        else
+            overrides.ClearMaxToolRounds();
+        if (evt.MaxHistoryMessages > 0)
+            overrides.MaxHistoryMessages = evt.MaxHistoryMessages;
+        else
+            overrides.ClearMaxHistoryMessages();
+        if (evt.StreamBufferCapacity > 0)
+            overrides.StreamBufferCapacity = evt.StreamBufferCapacity;
+        else
+            overrides.ClearStreamBufferCapacity();
         return next;
     }
+
+    private static AIAgentConfigOverrides EnsureConfigOverrides(RoleGAgentState state)
+    {
+        if (state.ConfigOverrides == null)
+            state.ConfigOverrides = new AIAgentConfigOverrides();
+        return state.ConfigOverrides;
+    }
+
 }

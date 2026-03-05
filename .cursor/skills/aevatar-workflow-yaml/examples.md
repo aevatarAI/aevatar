@@ -413,3 +413,46 @@ steps:
       timeout: "3600"
       on_reject: "fail"
 ```
+
+---
+
+## 16. Ergonomic Connector + LLM Aliases
+
+```yaml
+name: ergonomic_aliases_demo
+description: Use ergonomic aliases that normalize to canonical primitives.
+
+roles:
+  - id: analyst
+    system_prompt: "Summarize in one paragraph."
+
+steps:
+  - id: fetch_status
+    type: http_get
+    parameters:
+      connector: "internal_http"
+      path: "/status"
+
+  - id: run_local_check
+    type: cli_call
+    parameters:
+      connector: "demo_cli_dotnet"
+
+  - id: list_mcp_tools
+    type: mcp_call
+    parameters:
+      connector: "demo_mcp"
+      tool: "list_tools"
+
+  - id: summarize_items
+    type: foreach_llm
+    target_role: analyst
+    parameters:
+      delimiter: "\n---\n"
+
+  - id: reduce_summary
+    type: map_reduce_llm
+    target_role: analyst
+    parameters:
+      delimiter: "\n---\n"
+```

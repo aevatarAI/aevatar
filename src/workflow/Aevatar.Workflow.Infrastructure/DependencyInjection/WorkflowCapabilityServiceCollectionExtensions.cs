@@ -1,6 +1,7 @@
 using Aevatar.Configuration;
 using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Presentation.AGUIAdapter.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
@@ -27,6 +28,7 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             options.WorkflowDirectories.Add(AevatarPaths.RepoRootWorkflows);
             options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "workflows"));
             options.WorkflowDirectories.Add(AevatarPaths.Workflows);
+            options.DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override;
         });
         services.AddWorkflowInfrastructure(options =>
             configuration.GetSection("WorkflowExecutionReportArtifacts").Bind(options));

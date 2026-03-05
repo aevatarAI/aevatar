@@ -7,4 +7,7 @@ public static class WorkflowRunIdNormalizer
 {
     public static string Normalize(string? runId) =>
         string.IsNullOrWhiteSpace(runId) ? "default" : runId.Trim();
+
+    public static string NormalizeWorkflowName(string? workflowName) =>
+        string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
 }

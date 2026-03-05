@@ -17,14 +17,25 @@ internal static class ChatWebSocketRunCoordinator
         CapabilityMessageTraceContext ResolveContext() =>
             CapabilityTraceContext.CreateMessageContext(correlationId, command.RequestId);
 
-        var request = new WorkflowChatRunRequest(
-            command.Input.Prompt,
-            command.Input.Workflow,
-            command.Input.AgentId,
-            command.Input.WorkflowYaml);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input);
+        if (!normalizedRequest.Succeeded)
+        {
+            var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
+            var context = ResolveContext();
+            await ChatWebSocketProtocol.SendAsync(
+                socket,
+                ChatWebSocketEnvelopeFactory.CreateCommandError(
+                    command.RequestId,
+                    code,
+                    message,
+                    context.CorrelationId),
+                ct,
+                responseMessageType);
+            return;
+        }
 
         var executionResult = await chatRunService.ExecuteAsync(
-            request,
+            normalizedRequest.Request!,
             (frame, token) =>
             {
                 var context = ResolveContext();
@@ -64,6 +75,7 @@ internal static class ChatWebSocketRunCoordinator
             return;
         }
 
-        correlationId = executionResult.Started!.CommandId;
+        if (executionResult.Started != null)
+            correlationId = executionResult.Started.CommandId;
     }
 }

@@ -43,10 +43,18 @@ public sealed class HumanInputModule : IEventModule
             if (request.StepType != "human_input") return;
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
 
-            var prompt = request.Parameters.GetValueOrDefault("prompt", "Please provide input:");
-            var variable = request.Parameters.GetValueOrDefault("variable", "user_input");
-            var timeoutSeconds = int.TryParse(
-                request.Parameters.GetValueOrDefault("timeout", "1800"), out var t) ? t : 1800;
+            var prompt = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                "Please provide input:",
+                "prompt",
+                "message");
+            var variable = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                "user_input",
+                "variable");
+            var timeoutSeconds = WorkflowParameterValueParser.ResolveTimeoutSeconds(
+                request.Parameters,
+                defaultSeconds: 1800);
 
             _pending[(runId, request.StepId)] = request;
 

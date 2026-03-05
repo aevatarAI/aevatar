@@ -10,6 +10,7 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
         <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
+        <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Local\Aevatar.Foundation.Runtime.Implementations.Local.csproj" />
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Google.Protobuf" />

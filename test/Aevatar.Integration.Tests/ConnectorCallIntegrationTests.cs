@@ -7,7 +7,7 @@ using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -191,7 +191,7 @@ public class ConnectorCallIntegrationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new ConfigureWorkflowEvent
+            Payload = Any.Pack(new BindWorkflowDefinitionEvent
             {
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "connector_flow",

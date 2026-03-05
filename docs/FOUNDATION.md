@@ -8,7 +8,8 @@
 src/
 ├── Aevatar.Foundation.Abstractions  # 契约层：接口、Proto、基础类型
 ├── Aevatar.Foundation.Core          # 核心层：GAgent 基类、Pipeline、上下文与守卫
-└── Aevatar.Foundation.Runtime       # 运行时层：Local Actor、Stream、路由、内存存储、DI 装配
+├── Aevatar.Foundation.Runtime       # 运行时通用层：Stream、路由、持久化、Observability、停用钩子
+└── Aevatar.Foundation.Runtime.Implementations.Local  # 本地实现层：Local Actor/Runtime/TypeProbe/DI
 ```
 
 ## 核心概念
@@ -27,7 +28,7 @@ src/
 - Agent/Actor/Runtime 基础接口：`IAgent`、`IActor`、`IActorRuntime`
 - 事件发布与流接口：`IEventPublisher`、`IStream`、`IStreamProvider`
 - 事件模块体系：`IEventModule`、`IEventModuleFactory`、`IEventHandlerContext`
-- 持久化接口：`IStateStore<TState>`、`IEventStore`、`IAgentManifestStore`
+- 持久化接口：`IStateStore<TState>`、`IEventStore`
 - 上下文与运行控制：`IAgentContextAccessor`、`IRunManager`
 - Hook 扩展点：`IGAgentExecutionHook`、`GAgentExecutionHookContext`
 - 核心 Proto：`agent_messages.proto`
@@ -54,7 +55,7 @@ src/
 
 - `GAgentBase`：无状态 Agent 基类，统一事件分发与 Hook 管线
 - `GAgentBase<TState>`：状态型基类，集成 `IStateStore<TState>`
-- `GAgentBase<TState, TConfig>`：配置型基类，配置持久化到 manifest
+- `GAgentBase<TState, TConfig>`：有效配置型基类（`EffectiveConfig` 由类默认值 + 状态覆盖合并得到）
 - `EventPipelineBuilder`：把静态 `[EventHandler]` 与动态 `IEventModule` 合并为一个按 `Priority` 排序的流水线
 - `StateGuard`：通过 `AsyncLocal` 限制 State 只在允许的生命周期写入
 - `RunManager`/`RunContextScope`：latest-wins 运行管理与作用域传播
@@ -84,17 +85,22 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 这保证了状态修改和消息处理串行模型一致。
 
-## Aevatar.Foundation.Runtime
+## Aevatar.Foundation.Runtime + Local 实现
 
-`Aevatar.Foundation.Runtime` 提供本地运行时实现，包含：
+`Aevatar.Foundation.Runtime`（通用层）包含：
 
-- `LocalActorRuntime`：创建/销毁/查找/链接/恢复 Actor
-- `LocalActor`：邮箱串行处理、父流订阅、子节点传播
-- `LocalActorPublisher`：按 `EventDirection` 路由事件
 - `InMemoryStream` / `InMemoryStreamProvider`：内存流与订阅分发
 - `EventRouter` / `InMemoryRouterStore`：层级路由与路由快照存储
-- `InMemoryStateStore` / `InMemoryEventStore` / `InMemoryManifestStore`：默认内存持久化
+- `InMemoryStateStore` / `InMemoryEventStore`：默认内存持久化
 - `MemoryCacheDeduplicator`：事件去重
+- `IActorDeactivationHook*` / `EventStoreCompactionDeactivationHook`：停用钩子与裁剪触发
+
+`Aevatar.Foundation.Runtime.Implementations.Local`（本地实现层）包含：
+
+- `LocalActorRuntime`：创建/销毁/查找/链接 Actor（按需激活）
+- `LocalActor`：邮箱串行处理、父流订阅、子节点传播
+- `LocalActorPublisher`：按 `EventDirection` 路由事件
+- `LocalActorTypeProbe`：运行时类型探测
 - `AddAevatarRuntime()`：一键注册本地运行时依赖
 
 口径说明：
@@ -105,7 +111,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 ### 分布式目标态（生产）
 
 1. `IActorRuntime` 在生产环境提供分布式部署能力，保证同一 `actorId` 全局单激活与邮箱串行。
-2. `IStateStore<TState>` / `IEventStore` / `IAgentManifestStore` 使用非 InMemory 持久化实现。
+2. `IStateStore<TState>` / `IEventStore` 使用非 InMemory 持久化实现。
 3. 投影相关编排运行态通过 Actor 化承载；中间层服务不持有跨节点事实态。
 4. `InMemory*` 仅保留本地开发与自动化测试使用。
 
@@ -187,6 +193,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 ### 1) 注入运行时
 
 ```csharp
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+
 var services = new ServiceCollection();
 services.AddAevatarRuntime();
 var sp = services.BuildServiceProvider();

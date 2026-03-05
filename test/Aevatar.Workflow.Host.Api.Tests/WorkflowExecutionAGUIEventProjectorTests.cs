@@ -15,7 +15,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowExecutionAGUIEventProjectorTests
 {
     [Fact]
-    public async Task ProjectAsync_ShouldPublishToMatchingCommandStreamOnly()
+    public async Task ProjectAsync_ShouldPublishToContextCommandStream_WhenEnvelopeCorrelationDiffers()
     {
         var streams = new InMemoryStreamProvider();
         var streamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
@@ -55,7 +55,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
         await projector.ProjectAsync(context, new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            CorrelationId = "cmd-1",
+            CorrelationId = "cmd-2",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         });
         await cmd1Sink.WaitForCountAsync(1, TimeSpan.FromSeconds(2));
@@ -65,7 +65,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_WithoutCorrelationId_ShouldNotPublishToAnyCommandStream()
+    public async Task ProjectAsync_WithoutCorrelationId_ShouldPublishToContextCommandStream()
     {
         var streams = new InMemoryStreamProvider();
         var streamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
@@ -108,7 +108,8 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         });
 
-        cmd1Sink.SnapshotEvents().Should().BeEmpty();
+        await cmd1Sink.WaitForCountAsync(1, TimeSpan.FromSeconds(2));
+        cmd1Sink.SnapshotEvents().Should().ContainSingle(x => x is WorkflowRunFinishedEvent);
         cmd2Sink.SnapshotEvents().Should().BeEmpty();
     }
 

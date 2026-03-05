@@ -50,12 +50,17 @@ public sealed class ForEachModule : IEventModule
             var parentKey = BuildRunStepKey(runId, evt.StepId);
 
             // ─── Parameters ───
-            var delimiter = evt.Parameters.TryGetValue("delimiter", out var d) ? d : "\n---\n";
-            var subStepType = evt.Parameters.TryGetValue("sub_step_type", out var sst) ? sst : "parallel";
-            var subTargetRole = evt.Parameters.TryGetValue("sub_target_role", out var str) ? str : evt.TargetRole;
+            var delimiter = WorkflowParameterValueParser.NormalizeEscapedText(
+                WorkflowParameterValueParser.GetString(evt.Parameters, "\n---\n", "delimiter", "separator"),
+                "\n---\n");
+            var subStepType = WorkflowPrimitiveCatalog.ToCanonicalType(
+                WorkflowParameterValueParser.GetString(evt.Parameters, "parallel", "sub_step_type", "step"));
+            var subTargetRole = WorkflowParameterValueParser.GetString(evt.Parameters, evt.TargetRole, "sub_target_role", "sub_role");
 
             // ─── Split input into items ───
-            var items = evt.Input.Split(delimiter, StringSplitOptions.RemoveEmptyEntries);
+            var items = WorkflowParameterValueParser.SplitInputByDelimiterOrJsonArray(evt.Input, delimiter);
+            if (items.Length == 0 && evt.Parameters.TryGetValue("items", out var itemListRaw))
+                items = WorkflowParameterValueParser.ParseStringList(itemListRaw).ToArray();
             if (items.Length == 0)
             {
                 await ctx.PublishAsync(new StepCompletedEvent

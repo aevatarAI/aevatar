@@ -4,10 +4,11 @@
 using System.Diagnostics;
 using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Observability;
+using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Foundation.Runtime.Actors;
+namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 
 public sealed class LocalActor : IActor
 {
@@ -52,7 +53,11 @@ public sealed class LocalActor : IActor
             }
 
             // Handle Up events from children (they produce to parent's stream).
-            if (envelope.Direction == EventDirection.Up)
+            // Child events may use Both (self + parent), so treat direct-child Both as upward.
+            if (envelope.Direction == EventDirection.Up ||
+                (envelope.Direction == EventDirection.Both &&
+                 !string.IsNullOrWhiteSpace(envelope.PublisherId) &&
+                 _router.ChildrenIds.Contains(envelope.PublisherId)))
             {
                 await EnqueueAsync(envelope);
                 return;

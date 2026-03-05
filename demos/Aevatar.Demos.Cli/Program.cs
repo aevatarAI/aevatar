@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.Demos.Cli.Messages;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;

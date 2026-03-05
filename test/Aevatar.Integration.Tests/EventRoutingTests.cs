@@ -155,7 +155,7 @@ internal static class TestEnvironmentHelper
     {
         var mockLlm = new MockLLMProvider();
         var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
-        Aevatar.Foundation.Runtime.DependencyInjection.ServiceCollectionExtensions.AddAevatarRuntime(services);
+        Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection.ServiceCollectionExtensions.AddAevatarRuntime(services);
         Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton<Aevatar.AI.Abstractions.LLMProviders.ILLMProvider>(services, mockLlm);
         Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton<Aevatar.AI.Abstractions.LLMProviders.ILLMProviderFactory>(services, mockLlm);
         var sp = Microsoft.Extensions.DependencyInjection.ServiceCollectionContainerBuilderExtensions.BuildServiceProvider(services);

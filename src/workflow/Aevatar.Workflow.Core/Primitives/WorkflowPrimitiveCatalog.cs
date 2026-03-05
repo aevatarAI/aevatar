@@ -12,9 +12,11 @@ public static class WorkflowPrimitiveCatalog
             ["loop"] = "while",
             ["sub_workflow"] = "workflow_call",
             ["for_each"] = "foreach",
+            ["foreach_llm"] = "foreach",
             ["parallel_fanout"] = "parallel",
             ["fan_out"] = "parallel",
             ["mapreduce"] = "map_reduce",
+            ["map_reduce_llm"] = "map_reduce",
             ["judge"] = "evaluate",
             ["select"] = "race",
             ["assert"] = "guard",
@@ -22,6 +24,12 @@ public static class WorkflowPrimitiveCatalog
             ["publish"] = "emit",
             ["wait"] = "wait_signal",
             ["bridge_call"] = "connector_call",
+            ["cli_call"] = "connector_call",
+            ["mcp_call"] = "connector_call",
+            ["http_get"] = "connector_call",
+            ["http_post"] = "connector_call",
+            ["http_put"] = "connector_call",
+            ["http_delete"] = "connector_call",
             // Keep runtime module matching stable: VoteConsensusModule currently handles "vote".
             ["vote_consensus"] = "vote",
         };
@@ -42,12 +50,14 @@ public static class WorkflowPrimitiveCatalog
         "map_reduce",
         "vote",
         "foreach",
+        "dynamic_workflow",
     };
 
     private static readonly string[] IdentityPrimitives =
     [
         "transform", "assign", "retrieve_facts", "cache",
         "conditional", "switch", "checkpoint", "workflow_loop",
+        "workflow_yaml_validate",
     ];
 
     public static IReadOnlySet<string> BuiltInCanonicalTypes { get; } = DeriveBuiltInCanonicalTypes();

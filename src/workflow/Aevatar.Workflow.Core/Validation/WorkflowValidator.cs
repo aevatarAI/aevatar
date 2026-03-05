@@ -183,6 +183,13 @@ public static class WorkflowValidator
                 return;
             }
 
+            var lifecycle = step.Parameters.GetValueOrDefault("lifecycle", "").Trim();
+            if (!WorkflowCallLifecycle.IsSupported(lifecycle))
+            {
+                errors.Add(
+                    $"步骤 '{step.Id}'（workflow_call）lifecycle 仅支持 {WorkflowCallLifecycle.AllowedValuesText}，当前值 '{lifecycle}'");
+            }
+
             if (options.RequireResolvableWorkflowCallTargets &&
                 availableWorkflowNames != null &&
                 !availableWorkflowNames.Contains(workflowName))
