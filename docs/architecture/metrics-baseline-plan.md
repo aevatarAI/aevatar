@@ -35,8 +35,8 @@ Implemented:
   - removed high-cardinality labels (`agent_id`, `publisher_id`).
   - removed low-value instruments (`RouteTargets`, `StateLoads`, `StateSaves`, `HandlerDuration`).
 - Runtime metrics emitted from both Local and Orleans paths.
-- API metrics for request count and full duration (meter `Aevatar.Api`).
-- API first-response duration metric for streaming paths.
+- API metrics for request count and full duration (meter `Aevatar.Api`) on all endpoints (chat, command, websocket).
+- API first-response duration metric for streaming paths and WS parse error responses.
 - Grafana dashboard panels for:
   - health/error ratio
   - runtime/API throughput and latency
@@ -47,7 +47,7 @@ Pending:
 
 - Add explicit SLO panel with thresholds and status coloring.
 - Add alert rule examples (Prometheus/Grafana alerting).
-- Add minimal regression tests for API first-response metric.
+- Add WebSocket path first-response integration tests (requires WebSocket mock infrastructure).
 
 ## 5. Metric Contract (Current)
 
@@ -84,6 +84,10 @@ Pending:
 
 This contract intentionally tracks "first observable response signal" rather than "request finished".
 
+### 5.4 Cancellation Semantics
+
+`OperationCanceledException` is treated as `result=ok` in the request metric. Client-initiated cancellation is not a service error; it reflects normal connection lifecycle behavior (e.g., user navigates away, timeout). This keeps the error ratio focused on genuine service-side failures.
+
 ## 6. Diagnostic Model
 
 When AI is part of the core request path, end-to-end latency alone cannot diagnose health. The layered metric approach separates concerns:
@@ -114,18 +118,24 @@ Grafana dashboard file:
 
 - `tools/observability/grafana/provisioning/dashboards/aevatar-runtime-overview.json`
 
-Panels:
+Panels (SLO section, default view):
 
-1. Active Actors (stat)
-2. Runtime Events Window Total (stat)
-3. API Requests Window Total (stat)
-4. Health Diagnostic Guide (text)
-5. Runtime Events Rate by result (timeseries)
-6. API Requests Rate by result (timeseries)
-7. Runtime Event Handle Latency p95/p99 (timeseries)
-8. API Request Latency p95/p99 (timeseries)
-9. Error Ratio — API and runtime (timeseries)
-10. First Response vs Full Request p95 (timeseries)
+1. SLO Read Guide (text)
+2. Error Ratio — API and runtime (timeseries)
+3. User Latency: First Response p95 (timeseries)
+4. User Latency: Full Request p95 (timeseries)
+5. API Request Latency p95/p99 (timeseries)
+6. Runtime Event Handle Latency p95/p99 (timeseries)
+
+Panels (Runtime Diagnostics section, drill-down):
+
+7. Runtime Diagnostics Guide (text)
+8. Active Actors (stat)
+9. Runtime Events — Self, Window Total (stat)
+10. API Requests — Window Total (stat)
+11. Runtime Self Events / API Request (stat)
+12. Runtime Events Rate — Self, by result (timeseries)
+13. API Requests Rate by result (timeseries)
 
 Local stack:
 
@@ -155,7 +165,7 @@ Local stack:
    - Runtime error ratio > 1%
    - First response p95 > threshold
 3. Add tests:
-   - first-response metric emission for HTTP early return + streaming path
+   - WebSocket path first-response integration tests (requires WebSocket mock infrastructure)
 
 ## 10. Related Documents
 

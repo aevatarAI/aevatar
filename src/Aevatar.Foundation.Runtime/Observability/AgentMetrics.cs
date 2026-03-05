@@ -30,4 +30,17 @@ public static class AgentMetrics
     public static readonly UpDownCounter<long> ActiveActors = Meter.CreateUpDownCounter<long>(
         "aevatar.runtime.active_actors",
         description: "Current number of active actors.");
+
+    public static void RecordEventHandled(string direction, string result, double durationMs)
+    {
+        RuntimeEventsHandled.Add(1,
+        [
+            new(DirectionTag, direction),
+            new(ResultTag, result),
+        ]);
+        RuntimeEventHandleDurationMs.Record(durationMs,
+        [
+            new(ResultTag, result),
+        ]);
+    }
 }

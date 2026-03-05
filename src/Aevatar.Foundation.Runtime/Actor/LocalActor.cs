@@ -133,15 +133,7 @@ public sealed class LocalActor : IActor
         {
             _mailbox.Release();
             sw.Stop();
-            AgentMetrics.RuntimeEventsHandled.Add(1,
-            [
-                new(AgentMetrics.DirectionTag, envelope.Direction.ToString()),
-                new(AgentMetrics.ResultTag, status),
-            ]);
-            AgentMetrics.RuntimeEventHandleDurationMs.Record(sw.Elapsed.TotalMilliseconds,
-            [
-                new(AgentMetrics.ResultTag, status),
-            ]);
+            AgentMetrics.RecordEventHandled(envelope.Direction.ToString(), status, sw.Elapsed.TotalMilliseconds);
         }
     }
 

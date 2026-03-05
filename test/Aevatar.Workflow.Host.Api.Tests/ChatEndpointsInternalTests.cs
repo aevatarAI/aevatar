@@ -282,6 +282,88 @@ public class ChatEndpointsInternalTests
         metricCapture.FirstResponseMeasurements.Should().ContainSingle();
         metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
         metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+    }
+
+    [Fact]
+    public async Task HandleChat_WhenWorkflowNotFound_ShouldClassify404AsResultOk()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        var http = CreateHttpContext();
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) => Task.FromResult(ToCoreResult(
+                new WorkflowChatRunExecutionResult(
+                    WorkflowChatRunStartError.WorkflowNotFound,
+                    null,
+                    null))),
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello", Workflow = "missing" },
+            service,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+    }
+
+    [Fact]
+    public async Task HandleCommand_WhenStarted_ShouldRecordRequestMetric()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = async (_, _, onStartedAsync, ct) =>
+            {
+                var started = new WorkflowChatRunStarted("actor-1", "direct", "cmd-1");
+                if (onStartedAsync != null)
+                    await onStartedAsync(started, ct);
+
+                return ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.None,
+                        started,
+                        new WorkflowChatRunFinalizeResult(
+                            WorkflowProjectionCompletionStatus.Completed,
+                            true)));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+    }
+
+    [Fact]
+    public async Task HandleCommand_WhenExecutionThrows_ShouldRecordRequestMetricAsError()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) => throw new InvalidOperationException("boom"),
+        };
+
+        await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "error"));
     }
 
     [Fact]
@@ -676,30 +758,34 @@ public class ChatEndpointsInternalTests
     {
         private const string ApiMeterName = "Aevatar.Api";
         private const string FirstResponseMetricName = "aevatar.api.first_response_duration_ms";
+        private const string RequestsTotalMetricName = "aevatar.api.requests_total";
         private readonly MeterListener _listener = new();
 
         public ApiMetricCapture()
         {
             _listener.InstrumentPublished = (instrument, listener) =>
             {
-                if (instrument.Meter.Name == ApiMeterName && instrument.Name == FirstResponseMetricName)
-                {
+                if (instrument.Meter.Name == ApiMeterName)
                     listener.EnableMeasurementEvents(instrument);
-                }
             };
 
             _listener.SetMeasurementEventCallback<double>((instrument, measurement, tags, _) =>
             {
-                if (instrument.Name != FirstResponseMetricName)
-                    return;
+                if (instrument.Name == FirstResponseMetricName)
+                    FirstResponseMeasurements.Add(new MetricMeasurement(measurement, tags.ToArray()));
+            });
 
-                FirstResponseMeasurements.Add(new MetricPoint(measurement, tags.ToArray()));
+            _listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
+            {
+                if (instrument.Name == RequestsTotalMetricName)
+                    RequestMeasurements.Add(new MetricMeasurement(measurement, tags.ToArray()));
             });
 
             _listener.Start();
         }
 
-        public List<MetricPoint> FirstResponseMeasurements { get; } = [];
+        public List<MetricMeasurement> FirstResponseMeasurements { get; } = [];
+        public List<MetricMeasurement> RequestMeasurements { get; } = [];
 
         public void Dispose()
         {
@@ -707,5 +793,5 @@ public class ChatEndpointsInternalTests
         }
     }
 
-    private sealed record MetricPoint(double Value, KeyValuePair<string, object?>[] Tags);
+    private sealed record MetricMeasurement(double Value, KeyValuePair<string, object?>[] Tags);
 }

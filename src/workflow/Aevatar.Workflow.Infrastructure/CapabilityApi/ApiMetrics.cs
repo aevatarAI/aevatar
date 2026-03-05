@@ -45,4 +45,9 @@ internal static class ApiMetrics
             new(ResultTag, result),
         ]);
     }
+
+    public static string ResolveResult(int statusCode)
+    {
+        return statusCode >= 500 ? ResultError : ResultOk;
+    }
 }

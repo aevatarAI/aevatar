@@ -69,7 +69,7 @@ public static class WorkflowCapabilityEndpoints
             if (result.Error != WorkflowChatRunStartError.None && !writer.Started)
             {
                 http.Response.StatusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
-                requestResult = ResolveMetricResult(http.Response.StatusCode);
+                requestResult = ApiMetrics.ResolveResult(http.Response.StatusCode);
             }
         }
         catch (OperationCanceledException)
@@ -93,94 +93,107 @@ public static class WorkflowCapabilityEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(input.Prompt))
+        var requestStopwatch = Stopwatch.StartNew();
+        var requestResult = ApiMetrics.ResultOk;
+        try
         {
-            return Results.BadRequest(new
+            if (string.IsNullOrWhiteSpace(input.Prompt))
             {
-                code = "INVALID_PROMPT",
-                message = "Prompt is required.",
-            });
-        }
-
-        var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
-        var startSignal = new TaskCompletionSource<WorkflowChatRunStarted>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>> executionTask;
-
-        try
-        {
-            executionTask = chatRunService.ExecuteAsync(
-                new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId, input.WorkflowYaml),
-                static (_, _) => ValueTask.CompletedTask,
-                onStartedAsync: (started, _) =>
+                return Results.BadRequest(new
                 {
-                    startSignal.TrySetResult(started);
-                    return ValueTask.CompletedTask;
-                },
-                ct);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Workflow command execution failed before start signal");
-            return Results.Json(
-                new { code = "EXECUTION_FAILED", message = "Command execution failed." },
-                statusCode: StatusCodes.Status500InternalServerError);
-        }
+                    code = "INVALID_PROMPT",
+                    message = "Prompt is required.",
+                });
+            }
 
-        var completed = await Task.WhenAny(startSignal.Task, executionTask);
+            var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
+            var startSignal = new TaskCompletionSource<WorkflowChatRunStarted>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>> executionTask;
 
-        if (completed == startSignal.Task)
-        {
-            var started = await startSignal.Task;
-            _ = executionTask.ContinueWith(
-                t =>
-                {
-                    if (t.IsFaulted && t.Exception != null)
+            try
+            {
+                executionTask = chatRunService.ExecuteAsync(
+                    new WorkflowChatRunRequest(input.Prompt, input.Workflow, input.AgentId, input.WorkflowYaml),
+                    static (_, _) => ValueTask.CompletedTask,
+                    onStartedAsync: (started, _) =>
                     {
-                        logger.LogWarning(t.Exception, "Background workflow command failed. commandId={CommandId}", started.CommandId);
-                    }
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+                        startSignal.TrySetResult(started);
+                        return ValueTask.CompletedTask;
+                    },
+                    ct);
+            }
+            catch (Exception ex)
+            {
+                requestResult = ApiMetrics.ResultError;
+                logger.LogError(ex, "Workflow command execution failed before start signal");
+                return Results.Json(
+                    new { code = "EXECUTION_FAILED", message = "Command execution failed." },
+                    statusCode: StatusCodes.Status500InternalServerError);
+            }
 
-            return Results.Accepted(
-                $"/api/actors/{started.ActorId}",
-                CapabilityTraceContext.CreateAcceptedPayload(started));
+            var completed = await Task.WhenAny(startSignal.Task, executionTask);
+
+            if (completed == startSignal.Task)
+            {
+                var started = await startSignal.Task;
+                _ = executionTask.ContinueWith(
+                    t =>
+                    {
+                        if (t.IsFaulted && t.Exception != null)
+                        {
+                            logger.LogWarning(t.Exception, "Background workflow command failed. commandId={CommandId}", started.CommandId);
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+
+                return Results.Accepted(
+                    $"/api/actors/{started.ActorId}",
+                    CapabilityTraceContext.CreateAcceptedPayload(started));
+            }
+
+            CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> result;
+            try
+            {
+                result = await executionTask;
+            }
+            catch (Exception ex)
+            {
+                requestResult = ApiMetrics.ResultError;
+                logger.LogError(ex, "Workflow command execution failed before start signal");
+                return Results.Json(
+                    new { code = "EXECUTION_FAILED", message = "Command execution failed." },
+                    statusCode: StatusCodes.Status500InternalServerError);
+            }
+
+            if (result.Error != WorkflowChatRunStartError.None)
+            {
+                var mappedError = ChatRunStartErrorMapper.ToCommandError(result.Error);
+                return Results.Json(
+                    new
+                    {
+                        code = mappedError.Code,
+                        message = mappedError.Message,
+                    },
+                    statusCode: ChatRunStartErrorMapper.ToHttpStatusCode(result.Error));
+            }
+
+            if (result.Started != null)
+            {
+                return Results.Accepted(
+                    $"/api/actors/{result.Started.ActorId}",
+                    CapabilityTraceContext.CreateAcceptedPayload(result.Started));
+            }
+
+            requestResult = ApiMetrics.ResultError;
+            return Results.StatusCode(StatusCodes.Status500InternalServerError);
         }
-
-        CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> result;
-        try
+        finally
         {
-            result = await executionTask;
+            requestStopwatch.Stop();
+            ApiMetrics.RecordRequest(ApiMetrics.TransportHttp, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
         }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Workflow command execution failed before start signal");
-            return Results.Json(
-                new { code = "EXECUTION_FAILED", message = "Command execution failed." },
-                statusCode: StatusCodes.Status500InternalServerError);
-        }
-
-        if (result.Error != WorkflowChatRunStartError.None)
-        {
-            var mappedError = ChatRunStartErrorMapper.ToCommandError(result.Error);
-            return Results.Json(
-                new
-                {
-                    code = mappedError.Code,
-                    message = mappedError.Message,
-                },
-                statusCode: ChatRunStartErrorMapper.ToHttpStatusCode(result.Error));
-        }
-
-        if (result.Started != null)
-        {
-            return Results.Accepted(
-                $"/api/actors/{result.Started.ActorId}",
-                CapabilityTraceContext.CreateAcceptedPayload(result.Started));
-        }
-
-        return Results.StatusCode(StatusCodes.Status500InternalServerError);
     }
 
     internal static async Task HandleChatWebSocket(
@@ -224,6 +237,7 @@ public static class WorkflowCapabilityEndpoints
                         parseContext.TraceId),
                     ct,
                     parseError.ResponseMessageType);
+                ApiMetrics.RecordFirstResponse(ApiMetrics.TransportWebSocket, ApiMetrics.ResultOk, requestStopwatch.Elapsed.TotalMilliseconds);
                 return;
             }
 
@@ -259,13 +273,6 @@ public static class WorkflowCapabilityEndpoints
             requestStopwatch.Stop();
             ApiMetrics.RecordRequest(ApiMetrics.TransportWebSocket, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
         }
-    }
-
-    private static string ResolveMetricResult(int statusCode)
-    {
-        return statusCode >= StatusCodes.Status500InternalServerError
-            ? ApiMetrics.ResultError
-            : ApiMetrics.ResultOk;
     }
 
 }

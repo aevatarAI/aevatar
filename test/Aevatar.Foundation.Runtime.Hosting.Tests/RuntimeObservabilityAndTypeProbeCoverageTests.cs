@@ -134,8 +134,7 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
     {
         Action act = () =>
         {
-            AgentMetrics.RuntimeEventsHandled.Add(1);
-            AgentMetrics.RuntimeEventHandleDurationMs.Record(18.3);
+            AgentMetrics.RecordEventHandled("Self", AgentMetrics.ResultOk, 18.3);
             AgentMetrics.ActiveActors.Add(1);
         };
 

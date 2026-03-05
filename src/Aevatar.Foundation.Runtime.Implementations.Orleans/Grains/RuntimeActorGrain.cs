@@ -164,15 +164,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         finally
         {
             stopwatch.Stop();
-            AgentMetrics.RuntimeEventsHandled.Add(1,
-            [
-                new(AgentMetrics.DirectionTag, envelope.Direction.ToString()),
-                new(AgentMetrics.ResultTag, handleResult),
-            ]);
-            AgentMetrics.RuntimeEventHandleDurationMs.Record(stopwatch.Elapsed.TotalMilliseconds,
-            [
-                new(AgentMetrics.ResultTag, handleResult),
-            ]);
+            AgentMetrics.RecordEventHandled(envelope.Direction.ToString(), handleResult, stopwatch.Elapsed.TotalMilliseconds);
         }
     }
 
