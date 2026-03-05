@@ -90,8 +90,12 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext
         foreach (var pair in callback.Metadata)
             envelope.Metadata[pair.Key] = pair.Value;
 
+        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackId] = callback.CallbackId;
         envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackGeneration] =
             callback.Generation.ToString(CultureInfo.InvariantCulture);
+        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFireIndex] = "0";
+        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] =
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
         return envelope;
     }
 

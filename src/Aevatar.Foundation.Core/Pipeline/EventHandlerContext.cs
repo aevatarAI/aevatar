@@ -6,7 +6,6 @@
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.Core.Pipeline;
@@ -107,30 +106,6 @@ internal sealed class EventHandlerContext : IEventHandlerContext
 
     private EventEnvelope BuildSelfEnvelope(
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata)
-    {
-        ArgumentNullException.ThrowIfNull(evt);
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-            PublisherId = AgentId,
-            Direction = EventDirection.Self,
-            CorrelationId = InboundEnvelope.CorrelationId ?? string.Empty,
-            TargetActorId = AgentId,
-        };
-
-        foreach (var pair in InboundEnvelope.Metadata)
-            envelope.Metadata[pair.Key] = pair.Value;
-
-        if (metadata != null)
-        {
-            foreach (var pair in metadata)
-                envelope.Metadata[pair.Key] = pair.Value;
-        }
-
-        return envelope;
-    }
+        IReadOnlyDictionary<string, string>? metadata) =>
+        SelfEventEnvelopeFactory.Create(AgentId, evt, InboundEnvelope, metadata);
 }

@@ -39,6 +39,7 @@ public sealed class WaitSignalModule : IEventModule
             if (request.StepType != "wait_signal") return;
 
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
+            var stepId = NormalizeStepId(request.StepId);
             var signalName = NormalizeSignalName(
                 WorkflowParameterValueParser.GetString(request.Parameters, "default", "signal_name", "signal"));
             var prompt = WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "prompt", "message");
@@ -60,26 +61,31 @@ public sealed class WaitSignalModule : IEventModule
             {
                 timeoutMs = Math.Clamp(timeoutSeconds * 1000, 0, 3_600_000);
             }
-            var pendingKey = new PendingSignalKey(runId, signalName, request.StepId);
+            var pendingKey = new PendingSignalKey(runId, signalName, stepId);
 
             ctx.Logger.LogInformation(
                 "WaitSignal: step={StepId} run={RunId} waiting for signal={Signal}",
-                request.StepId,
+                stepId,
                 runId,
                 signalName);
 
             await ctx.PublishAsync(new WaitingForSignalEvent
             {
-                StepId = request.StepId,
+                StepId = stepId,
                 SignalName = signalName,
                 Prompt = prompt,
                 TimeoutMs = timeoutMs,
                 RunId = runId,
             }, EventDirection.Both, ct);
 
+            if (_pending.Remove(pendingKey, out var existingPending) &&
+                existingPending.TimeoutLease != null)
+            {
+                await ctx.CancelScheduledCallbackAsync(existingPending.TimeoutLease, CancellationToken.None);
+            }
+
             if (timeoutMs > 0)
             {
-                var stepId = request.StepId;
                 var timeoutFiredEvent = new WaitSignalTimeoutFiredEvent
                 {
                     RunId = runId,
@@ -94,7 +100,7 @@ public sealed class WaitSignalModule : IEventModule
                     timeoutFiredEvent,
                     ct: ct);
                 _pending[pendingKey] = new PendingSignal(
-                    request.StepId,
+                    stepId,
                     runId,
                     request.Input ?? "",
                     signalName,
@@ -103,7 +109,7 @@ public sealed class WaitSignalModule : IEventModule
             else
             {
                 _pending[pendingKey] = new PendingSignal(
-                    request.StepId,
+                    stepId,
                     runId,
                     request.Input ?? "",
                     signalName,
@@ -123,16 +129,14 @@ public sealed class WaitSignalModule : IEventModule
             if (!_pending.TryGetValue(pendingKey, out var pending))
                 return;
 
-            if (TryReadGeneration(envelope, out var firedGeneration) &&
-                firedGeneration != pending.TimeoutLease?.Generation)
+            if (pending.TimeoutLease == null ||
+                !RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, pending.TimeoutLease))
             {
                 ctx.Logger.LogDebug(
-                    "WaitSignal: ignore stale timeout run={RunId} step={StepId} signal={Signal} fired_generation={FiredGeneration} expected_generation={ExpectedGeneration}",
+                    "WaitSignal: ignore timeout without matching lease run={RunId} step={StepId} signal={Signal}",
                     runId,
                     stepId,
-                    signalName,
-                    firedGeneration,
-                    pending.TimeoutLease?.Generation ?? 0);
+                    signalName);
                 return;
             }
 
@@ -232,14 +236,7 @@ public sealed class WaitSignalModule : IEventModule
         string.IsNullOrWhiteSpace(stepId) ? string.Empty : stepId.Trim();
 
     private static string BuildTimeoutCallbackId(string runId, string signalName, string stepId) =>
-        string.Concat("wait-signal-timeout:", runId, ":", signalName, ":", stepId);
-
-    private static bool TryReadGeneration(EventEnvelope envelope, out long generation)
-    {
-        generation = 0;
-        return envelope.Metadata.TryGetValue(RuntimeCallbackMetadataKeys.CallbackGeneration, out var raw) &&
-               long.TryParse(raw, out generation);
-    }
+        RuntimeCallbackKeyComposer.BuildCallbackId("wait-signal-timeout", runId, signalName, stepId);
 
     private readonly record struct PendingSignalKey(string RunId, string SignalName, string StepId);
     private sealed record PendingSignal(

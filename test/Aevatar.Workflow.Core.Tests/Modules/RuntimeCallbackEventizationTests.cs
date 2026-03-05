@@ -9,6 +9,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Globalization;
 
 namespace Aevatar.Workflow.Core.Tests.Modules;
 
@@ -44,7 +45,7 @@ public class RuntimeCallbackEventizationTests
                     StepId = "delay-step",
                     DurationMs = 1200,
                 },
-                MetadataWithGeneration(scheduled.Generation - 1)),
+                MetadataFor(scheduled with { CallbackId = "other-callback" })),
             ctx,
             CancellationToken.None);
 
@@ -58,7 +59,21 @@ public class RuntimeCallbackEventizationTests
                     StepId = "delay-step",
                     DurationMs = 1200,
                 },
-                MetadataWithGeneration(scheduled.Generation)),
+                MetadataFor(scheduled, generation: scheduled.Generation - 1)),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().NotContain(x => x.Event is StepCompletedEvent);
+
+        await module.HandleAsync(
+            Wrap(
+                new DelayStepTimeoutFiredEvent
+                {
+                    RunId = "run-1",
+                    StepId = "delay-step",
+                    DurationMs = 1200,
+                },
+                MetadataFor(scheduled)),
             ctx,
             CancellationToken.None);
 
@@ -106,7 +121,7 @@ public class RuntimeCallbackEventizationTests
                     SignalName = "approve",
                     TimeoutMs = 5000,
                 },
-                MetadataWithGeneration(scheduled.Generation - 1)),
+                MetadataFor(scheduled, generation: scheduled.Generation - 1)),
             ctx,
             CancellationToken.None);
 
@@ -196,7 +211,7 @@ public class RuntimeCallbackEventizationTests
                     DelayMs = 800,
                     NextAttempt = 2,
                 },
-                MetadataWithGeneration(scheduled.Generation - 1)),
+                MetadataFor(scheduled, generation: scheduled.Generation - 1)),
             ctx,
             CancellationToken.None);
 
@@ -211,7 +226,7 @@ public class RuntimeCallbackEventizationTests
                     DelayMs = 800,
                     NextAttempt = 2,
                 },
-                MetadataWithGeneration(scheduled.Generation)),
+                MetadataFor(scheduled)),
             ctx,
             CancellationToken.None);
 
@@ -246,10 +261,18 @@ public class RuntimeCallbackEventizationTests
         return envelope;
     }
 
-    private static IReadOnlyDictionary<string, string> MetadataWithGeneration(long generation) =>
+    private static IReadOnlyDictionary<string, string> MetadataFor(
+        ScheduledCallback callback,
+        long? generation = null,
+        long fireIndex = 0) =>
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [RuntimeCallbackMetadataKeys.CallbackGeneration] = generation.ToString(),
+            [RuntimeCallbackMetadataKeys.CallbackId] = callback.CallbackId,
+            [RuntimeCallbackMetadataKeys.CallbackGeneration] = (generation ?? callback.Generation)
+                .ToString(CultureInfo.InvariantCulture),
+            [RuntimeCallbackMetadataKeys.CallbackFireIndex] = fireIndex.ToString(CultureInfo.InvariantCulture),
+            [RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                .ToString(CultureInfo.InvariantCulture),
         };
 
     private sealed class SchedulingContext : IEventHandlerContext

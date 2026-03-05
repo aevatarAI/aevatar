@@ -1,7 +1,6 @@
-using System.Globalization;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans;
 using Orleans.Runtime;
@@ -284,16 +283,12 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         byte[] envelopeBytes,
         CancellationToken ct)
     {
-        var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
-        envelope.Direction = EventDirection.Self;
-        envelope.TargetActorId = this.GetPrimaryKeyString();
-        envelope.PublisherId = this.GetPrimaryKeyString();
-        envelope.Id = Guid.NewGuid().ToString("N");
-        envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackId] = callbackId;
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackGeneration] = generation.ToString(CultureInfo.InvariantCulture);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFireIndex] = fireIndex.ToString(CultureInfo.InvariantCulture);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
+        var envelope = RuntimeCallbackEnvelopeFactory.CreateFiredEnvelope(
+            this.GetPrimaryKeyString(),
+            callbackId,
+            generation,
+            fireIndex,
+            EventEnvelope.Parser.ParseFrom(envelopeBytes));
 
         await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(envelope, ct);
     }

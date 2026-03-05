@@ -29,7 +29,7 @@ public sealed class LLMCallModule : IEventModule
     private const string LlmWatchdogCallbackPrefix = "llm-watchdog";
 
     private readonly Dictionary<string, PendingLlmCall> _pending = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, int> _attemptsByRunStep = new(StringComparer.Ordinal);
+    private readonly Dictionary<StepRunKey, int> _attemptsByRunStep = [];
 
     public string Name => "llm_call";
     public int Priority => 10;
@@ -95,12 +95,24 @@ public sealed class LLMCallModule : IEventModule
         }
 
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
-        var stepRunKey = $"{runId}:{request.StepId}";
+        var stepId = request.StepId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(stepId))
+        {
+            await PublishFailedCompletionAsync(
+                request,
+                "llm_call step requires non-empty run_id and step_id",
+                ctx.AgentId,
+                ctx,
+                ct);
+            return;
+        }
+
+        var stepRunKey = new StepRunKey(runId, stepId);
         var attempt = _attemptsByRunStep.GetValueOrDefault(stepRunKey, 0) + 1;
         _attemptsByRunStep[stepRunKey] = attempt;
 
         // Use run/step/attempt-scoped session id to avoid collisions across concurrent runs and retries.
-        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
+        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, stepId, attempt);
         var timeoutMs = ResolveLlmTimeoutMs(request);
         var watchdogCallbackId = BuildWatchdogCallbackId(chatSessionId);
         _pending[chatSessionId] = new PendingLlmCall(
@@ -122,7 +134,7 @@ public sealed class LLMCallModule : IEventModule
                 // Point-to-point: send ChatRequestEvent directly to the target role actor by ID
                 ctx.Logger.LogInformation(
                     "LLMCallModule: step={StepId} → SendTo role={Role} actor={ActorId} timeout={Timeout}ms prompt=({Len} chars) {Preview}",
-                    request.StepId, targetRole, targetActorId, timeoutMs, prompt.Length, promptPreview);
+                    stepId, targetRole, targetActorId, timeoutMs, prompt.Length, promptPreview);
 
                 await ctx.SendToAsync(targetActorId, chatEvt, ct);
             }
@@ -131,7 +143,7 @@ public sealed class LLMCallModule : IEventModule
                 // No target role: publish Self for WorkflowGAgent's own LLM
                 ctx.Logger.LogInformation(
                     "LLMCallModule: step={StepId} → Self (no role) timeout={Timeout}ms prompt=({Len} chars) {Preview}",
-                    request.StepId, timeoutMs, prompt.Length, promptPreview);
+                    stepId, timeoutMs, prompt.Length, promptPreview);
 
                 await ctx.PublishAsync(chatEvt, EventDirection.Self, ct);
             }
@@ -144,14 +156,14 @@ public sealed class LLMCallModule : IEventModule
                     SessionId = chatSessionId,
                     TimeoutMs = timeoutMs,
                     RunId = runId,
-                    StepId = request.StepId,
+                    StepId = stepId,
                 },
                 ct: ct);
             _pending[chatSessionId] = _pending[chatSessionId] with { WatchdogLease = lease };
         }
         catch (Exception ex)
         {
-            ctx.Logger.LogWarning(ex, "LLMCallModule: dispatch failed for step={StepId}", request.StepId);
+            ctx.Logger.LogWarning(ex, "LLMCallModule: dispatch failed for step={StepId}", stepId);
             await FailPendingAsync(chatSessionId, $"LLM dispatch failed: {ex.Message}", ctx.AgentId, ctx, ct);
         }
     }
@@ -272,14 +284,12 @@ public sealed class LLMCallModule : IEventModule
         if (!_pending.TryGetValue(evt.SessionId, out var pending))
             return;
 
-        if (TryReadGeneration(envelope, out var firedGeneration) &&
-            firedGeneration != pending.WatchdogLease?.Generation)
+        if (pending.WatchdogLease == null ||
+            !RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, pending.WatchdogLease))
         {
             ctx.Logger.LogDebug(
-                "LLMCallModule: ignore stale watchdog session={SessionId} fired_generation={FiredGeneration} expected_generation={ExpectedGeneration}",
-                evt.SessionId,
-                firedGeneration,
-                pending.WatchdogLease?.Generation ?? 0);
+                "LLMCallModule: ignore watchdog without matching lease session={SessionId}",
+                evt.SessionId);
             return;
         }
 
@@ -346,7 +356,7 @@ public sealed class LLMCallModule : IEventModule
             ct);
 
     private static string BuildWatchdogCallbackId(string sessionId) =>
-        string.Concat(LlmWatchdogCallbackPrefix, ":", sessionId);
+        RuntimeCallbackKeyComposer.BuildCallbackId(LlmWatchdogCallbackPrefix, sessionId);
 
     private async Task StopWatchdogAsync(
         PendingLlmCall pending,
@@ -370,15 +380,10 @@ public sealed class LLMCallModule : IEventModule
         }
     }
 
-    private static bool TryReadGeneration(EventEnvelope envelope, out long generation)
-    {
-        generation = 0;
-        return envelope.Metadata.TryGetValue(RuntimeCallbackMetadataKeys.CallbackGeneration, out var raw) &&
-               long.TryParse(raw, out generation);
-    }
-
     private sealed record PendingLlmCall(
         StepRequestEvent Request,
-        string StepRunKey,
+        StepRunKey StepRunKey,
         RuntimeCallbackLease? WatchdogLease);
+
+    private readonly record struct StepRunKey(string RunId, string StepId);
 }

@@ -9,7 +9,6 @@ using Aevatar.Scripting.Core.Runtime;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Scripting.Core;
@@ -17,9 +16,11 @@ namespace Aevatar.Scripting.Core;
 public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
 {
     private const string RunFailedEventType = "script.run.failed";
+    private const string DefinitionQueryTimeoutCallbackPrefix = "script-definition-query-timeout";
     private static readonly TimeSpan PendingRunTimeout = TimeSpan.FromSeconds(45);
     private readonly IScriptRuntimeExecutionOrchestrator _orchestrator;
     private readonly IScriptDefinitionSnapshotPort _snapshotPort;
+    private readonly Dictionary<string, PendingRunContext> _pendingDefinitionQueries = new(StringComparer.Ordinal);
 
     public ScriptRuntimeGAgent(
         IScriptRuntimeExecutionOrchestrator orchestrator,
@@ -30,19 +31,12 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         InitializeId();
     }
 
-    protected override async Task OnActivateAsync(CancellationToken ct)
-    {
-        foreach (var (requestId, pending) in State.PendingDefinitionQueries)
-        {
-            if (string.IsNullOrWhiteSpace(requestId) || pending?.RunEvent == null)
-                continue;
+    protected override Task OnActivateAsync(CancellationToken ct) => Task.CompletedTask;
 
-            await ScheduleDefinitionQueryTimeoutAsync(
-                requestId,
-                pending.RunEvent.RunId ?? string.Empty,
-                pending.QueuedAtUnixTimeMs,
-                ct);
-        }
+    protected override Task OnDeactivateAsync(CancellationToken ct)
+    {
+        _pendingDefinitionQueries.Clear();
+        return Task.CompletedTask;
     }
 
     [EventHandler]
@@ -75,7 +69,6 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             await PersistRunCommittedAsync(
                 evt,
                 snapshot,
-                completedQueryRequestId: null,
                 CancellationToken.None);
         }
         catch (Exception ex)
@@ -118,8 +111,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             string.Equals(State.LastRunId, pending.RunEvent.RunId, StringComparison.Ordinal))
         {
             await ClearPendingDefinitionQueryAsync(
-                pending.RequestId,
-                pending.RunEvent.RunId ?? string.Empty,
+                pending,
                 "already_committed",
                 CancellationToken.None);
             Logger.LogDebug(
@@ -190,7 +182,10 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             await PersistRunCommittedAsync(
                 pending.RunEvent,
                 snapshot,
-                pending.RequestId,
+                CancellationToken.None);
+            await ClearPendingDefinitionQueryAsync(
+                pending,
+                "completed",
                 CancellationToken.None);
         }
         catch (Exception ex)
@@ -208,21 +203,78 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         }
     }
 
+    [AllEventHandler(Priority = 0, AllowSelfHandling = true)]
+    public async Task HandleRuntimeCallbackEnvelope(EventEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (envelope.Payload?.Is(ScriptDefinitionQueryTimeoutFiredEvent.Descriptor) != true)
+            return;
+
+        var evt = envelope.Payload.Unpack<ScriptDefinitionQueryTimeoutFiredEvent>();
+        if (!TryGetPendingRunContext(evt.RequestId, out var pending))
+        {
+            Logger.LogDebug(
+                "Ignoring stale script definition query timeout signal. runtime_actor_id={RuntimeActorId} request_id={RequestId}",
+                Id,
+                evt.RequestId);
+            return;
+        }
+
+        if (pending.TimeoutLease == null ||
+            !RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, pending.TimeoutLease))
+        {
+            Logger.LogDebug(
+                "Ignoring script definition query timeout without matching lease metadata. runtime_actor_id={RuntimeActorId} request_id={RequestId}",
+                Id,
+                evt.RequestId);
+            return;
+        }
+
+        await HandleScriptDefinitionQueryTimeoutFiredAsync(evt, pending, CancellationToken.None);
+    }
+
     private async Task QueueRunByDefinitionQueryAsync(RunScriptRequestedEvent evt, CancellationToken ct)
     {
         var requestId = Guid.NewGuid().ToString("N");
         var runEvent = evt.Clone();
         var queuedAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        await PersistDomainEventAsync(new ScriptDefinitionQueryQueuedEvent
-        {
-            RequestId = requestId,
-            RunEvent = runEvent,
-            QueuedAtUnixTimeMs = queuedAtUnixTimeMs,
-        }, ct);
         var pending = new PendingRunContext(
             requestId,
             runEvent,
-            queuedAtUnixTimeMs);
+            queuedAtUnixTimeMs,
+            TimeoutLease: null);
+
+        try
+        {
+            pending = pending with
+            {
+                TimeoutLease = await ScheduleSelfTimeoutAsync(
+                    BuildDefinitionQueryTimeoutCallbackId(requestId),
+                    PendingRunTimeout,
+                    new ScriptDefinitionQueryTimeoutFiredEvent
+                    {
+                        RequestId = requestId,
+                        RunId = evt.RunId ?? string.Empty,
+                    },
+                    ct: ct),
+            };
+        }
+        catch (Exception ex)
+        {
+            await PersistRunFailureAsync(
+                runEvent,
+                $"Failed to schedule definition query timeout. request_id={requestId} reason={ex.Message}",
+                CancellationToken.None);
+            Logger.LogError(
+                ex,
+                "Failed to schedule definition query timeout. runtime_actor_id={RuntimeActorId} run_id={RunId} request_id={RequestId}",
+                Id,
+                evt.RunId,
+                requestId);
+            return;
+        }
+
+        _pendingDefinitionQueries[requestId] = pending;
 
         try
         {
@@ -251,12 +303,6 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             return;
         }
 
-        await ScheduleDefinitionQueryTimeoutAsync(
-            requestId,
-            evt.RunId ?? string.Empty,
-            queuedAtUnixTimeMs,
-            ct);
-
         Logger.LogInformation(
             "Script definition query dispatched. runtime_actor_id={RuntimeActorId} run_id={RunId} request_id={RequestId} definition_actor_id={DefinitionActorId} revision={Revision}",
             Id,
@@ -266,19 +312,12 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             evt.ScriptRevision);
     }
 
-    [EventHandler]
-    public async Task HandleScriptDefinitionQueryTimeoutFired(ScriptDefinitionQueryTimeoutFiredEvent evt)
+    private async Task HandleScriptDefinitionQueryTimeoutFiredAsync(
+        ScriptDefinitionQueryTimeoutFiredEvent evt,
+        PendingRunContext pending,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        if (!TryGetPendingRunContext(evt.RequestId, out var pending))
-        {
-            Logger.LogDebug(
-                "Ignoring stale script definition query timeout signal. runtime_actor_id={RuntimeActorId} request_id={RequestId}",
-                Id,
-                evt.RequestId);
-            return;
-        }
-
         if (!string.IsNullOrWhiteSpace(evt.RunId) &&
             !string.Equals(evt.RunId, pending.RunEvent.RunId, StringComparison.Ordinal))
         {
@@ -295,10 +334,9 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             string.Equals(State.LastRunId, pending.RunEvent.RunId, StringComparison.Ordinal))
         {
             await ClearPendingDefinitionQueryAsync(
-                pending.RequestId,
-                pending.RunEvent.RunId ?? string.Empty,
+                pending,
                 "already_committed",
-                CancellationToken.None);
+                ct);
             Logger.LogDebug(
                 "Script definition query timeout signal ignored because run already committed. runtime_actor_id={RuntimeActorId} run_id={RunId} request_id={RequestId}",
                 Id,
@@ -310,7 +348,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         await PersistPendingRunFailureAsync(
             pending,
             $"Definition snapshot query timed out. request_id={pending.RequestId} timeout_seconds={PendingRunTimeout.TotalSeconds}",
-            CancellationToken.None);
+            ct);
         Logger.LogWarning(
             "Script definition query timed out. runtime_actor_id={RuntimeActorId} run_id={RunId} request_id={RequestId}",
             Id,
@@ -321,7 +359,6 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
     private async Task PersistRunCommittedAsync(
         RunScriptRequestedEvent runEvent,
         ScriptDefinitionSnapshot snapshot,
-        string? completedQueryRequestId,
         CancellationToken ct)
     {
         var committedEvents = await _orchestrator.ExecuteRunAsync(
@@ -336,22 +373,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
                 ReadModelSchemaVersion: snapshot.ReadModelSchemaVersion,
                 ReadModelSchemaHash: snapshot.ReadModelSchemaHash),
             ct);
-        if (string.IsNullOrWhiteSpace(completedQueryRequestId))
-        {
-            await PersistDomainEventsAsync(committedEvents, ct);
-        }
-        else
-        {
-            var eventsToPersist = new List<IMessage>(committedEvents.Count + 1);
-            eventsToPersist.AddRange(committedEvents);
-            eventsToPersist.Add(new ScriptDefinitionQueryClearedEvent
-            {
-                RequestId = completedQueryRequestId,
-                RunId = runEvent.RunId ?? string.Empty,
-                Reason = "completed",
-            });
-            await PersistDomainEventsAsync(eventsToPersist, ct);
-        }
+        await PersistDomainEventsAsync(committedEvents, ct);
 
         Logger.LogInformation(
             "Script run committed. runtime_actor_id={RuntimeActorId} run_id={RunId} committed_events={CommittedEvents} revision={Revision}",
@@ -361,99 +383,52 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             snapshot.Revision);
     }
 
-    private async Task ScheduleDefinitionQueryTimeoutAsync(
-        string requestId,
-        string runId,
-        long queuedAtUnixTimeMs,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(requestId))
-            return;
-
-        var scheduler = Services.GetService<IActorRuntimeCallbackScheduler>();
-        if (scheduler == null)
-        {
-            Logger.LogDebug(
-                "Skipping script definition query timeout scheduling because runtime async scheduler is unavailable. runtime_actor_id={RuntimeActorId} request_id={RequestId}",
-                Id,
-                requestId);
-            return;
-        }
-        var queuedAt = queuedAtUnixTimeMs > 0
-            ? DateTimeOffset.FromUnixTimeMilliseconds(queuedAtUnixTimeMs)
-            : DateTimeOffset.UtcNow;
-        var dueAt = queuedAt + PendingRunTimeout;
-        var delay = dueAt - DateTimeOffset.UtcNow;
-        if (delay <= TimeSpan.Zero)
-            delay = TimeSpan.FromMilliseconds(1);
-
-        try
-        {
-            await scheduler.ScheduleTimeoutAsync(
-                new RuntimeCallbackTimeoutRequest
-                {
-                    ActorId = Id,
-                    CallbackId = BuildDefinitionQueryTimeoutCallbackId(requestId),
-                    DueTime = delay,
-                    TriggerEnvelope = new EventEnvelope
-                    {
-                        Payload = Any.Pack(new ScriptDefinitionQueryTimeoutFiredEvent
-                        {
-                            RequestId = requestId,
-                            RunId = runId ?? string.Empty,
-                        }),
-                    },
-                },
-                ct);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(
-                ex,
-                "Failed to schedule script definition query timeout signal. runtime_actor_id={RuntimeActorId} request_id={RequestId} run_id={RunId}",
-                Id,
-                requestId,
-                runId);
-        }
-    }
-
     private static string BuildDefinitionQueryTimeoutCallbackId(string requestId) =>
-        string.Concat("script-definition-query-timeout:", requestId);
+        RuntimeCallbackKeyComposer.BuildCallbackId(
+            DefinitionQueryTimeoutCallbackPrefix,
+            requestId);
 
     private bool TryGetPendingRunContext(string requestId, out PendingRunContext pending)
     {
         pending = new PendingRunContext(
             string.Empty,
             new RunScriptRequestedEvent(),
-            0);
+            0,
+            TimeoutLease: null);
         if (string.IsNullOrWhiteSpace(requestId))
             return false;
 
-        if (!State.PendingDefinitionQueries.TryGetValue(requestId, out var stored) || stored?.RunEvent == null)
+        if (!_pendingDefinitionQueries.TryGetValue(requestId, out var stored))
             return false;
 
-        pending = new PendingRunContext(
-            requestId,
-            stored.RunEvent.Clone(),
-            stored.QueuedAtUnixTimeMs);
+        pending = stored;
         return true;
     }
 
     private async Task ClearPendingDefinitionQueryAsync(
-        string requestId,
-        string runId,
+        PendingRunContext pending,
         string reason,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(requestId) || !State.PendingDefinitionQueries.ContainsKey(requestId))
+        if (!_pendingDefinitionQueries.Remove(pending.RequestId))
             return;
 
-        await PersistDomainEventAsync(new ScriptDefinitionQueryClearedEvent
+        if (pending.TimeoutLease == null)
+            return;
+
+        try
         {
-            RequestId = requestId,
-            RunId = runId ?? string.Empty,
-            Reason = reason ?? string.Empty,
-        }, ct);
+            await CancelScheduledCallbackAsync(pending.TimeoutLease, ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Failed to cancel script definition query timeout. runtime_actor_id={RuntimeActorId} request_id={RequestId} reason={Reason}",
+                Id,
+                pending.RequestId,
+                reason);
+        }
     }
 
     private async Task PersistRunFailureAsync(
@@ -471,16 +446,13 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         string reason,
         CancellationToken ct)
     {
-        await PersistDomainEventsAsync(
-        [
+        await PersistDomainEventAsync(
             BuildRunFailureCommittedEvent(pending.RunEvent, reason),
-            new ScriptDefinitionQueryClearedEvent
-            {
-                RequestId = pending.RequestId,
-                RunId = pending.RunEvent.RunId ?? string.Empty,
-                Reason = reason ?? string.Empty,
-            },
-        ], ct);
+            ct);
+        await ClearPendingDefinitionQueryAsync(
+            pending,
+            reason,
+            CancellationToken.None);
     }
 
     private ScriptRunDomainEventCommitted BuildRunFailureCommittedEvent(
@@ -509,8 +481,6 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         StateTransitionMatcher
             .Match(current, evt)
             .On<ScriptRunDomainEventCommitted>(ApplyCommitted)
-            .On<ScriptDefinitionQueryQueuedEvent>(ApplyDefinitionQueryQueued)
-            .On<ScriptDefinitionQueryClearedEvent>(ApplyDefinitionQueryCleared)
             .OrCurrent();
 
     private static ScriptRuntimeState ApplyCommitted(
@@ -531,38 +501,6 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         next.LastSchemaHash = committed.ReadModelSchemaHash ?? string.Empty;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = committed.RunId ?? string.Empty;
-        return next;
-    }
-
-    private static ScriptRuntimeState ApplyDefinitionQueryQueued(
-        ScriptRuntimeState state,
-        ScriptDefinitionQueryQueuedEvent evt)
-    {
-        var next = state.Clone();
-        if (!string.IsNullOrWhiteSpace(evt.RequestId) && evt.RunEvent != null)
-        {
-            next.PendingDefinitionQueries[evt.RequestId] = new PendingScriptDefinitionQueryState
-            {
-                RunEvent = evt.RunEvent.Clone(),
-                QueuedAtUnixTimeMs = evt.QueuedAtUnixTimeMs,
-            };
-        }
-
-        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
-        next.LastEventId = string.Concat("definition-query:", evt.RequestId ?? string.Empty, ":queued");
-        return next;
-    }
-
-    private static ScriptRuntimeState ApplyDefinitionQueryCleared(
-        ScriptRuntimeState state,
-        ScriptDefinitionQueryClearedEvent evt)
-    {
-        var next = state.Clone();
-        if (!string.IsNullOrWhiteSpace(evt.RequestId))
-            next.PendingDefinitionQueries.Remove(evt.RequestId);
-
-        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
-        next.LastEventId = string.Concat("definition-query:", evt.RequestId ?? string.Empty, ":cleared");
         return next;
     }
 
@@ -611,5 +549,6 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
     private sealed record PendingRunContext(
         string RequestId,
         RunScriptRequestedEvent RunEvent,
-        long QueuedAtUnixTimeMs);
+        long QueuedAtUnixTimeMs,
+        RuntimeCallbackLease? TimeoutLease);
 }

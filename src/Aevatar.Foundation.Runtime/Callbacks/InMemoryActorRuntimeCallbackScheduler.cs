@@ -1,16 +1,14 @@
 using System.Collections.Concurrent;
-using System.Globalization;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.Runtime.Callbacks;
 
 public sealed class InMemoryActorRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
 {
     private readonly IStreamProvider _streams;
-    private readonly ConcurrentDictionary<string, ScheduledCallback> _callbacks = new(StringComparer.Ordinal);
-    private readonly ICollection<KeyValuePair<string, ScheduledCallback>> _callbackEntries;
+    private readonly ConcurrentDictionary<CallbackKey, ScheduledCallback> _callbacks = [];
+    private readonly ICollection<KeyValuePair<CallbackKey, ScheduledCallback>> _callbackEntries;
 
     public InMemoryActorRuntimeCallbackScheduler(IStreamProvider streams)
     {
@@ -24,7 +22,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler : IActorRuntimeCallbac
         ValidateScheduleRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
         ct.ThrowIfCancellationRequested();
 
-        var key = BuildKey(request.ActorId, request.CallbackId);
+        var key = new CallbackKey(request.ActorId, request.CallbackId);
         var callback = _callbacks.AddOrUpdate(
             key,
             _ => ScheduledCallback.Create(request.ActorId, request.CallbackId, request.TriggerEnvelope.Clone(), isPeriodic: false, TimeSpan.Zero),
@@ -45,7 +43,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler : IActorRuntimeCallbac
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(request.Period, TimeSpan.Zero);
         ct.ThrowIfCancellationRequested();
 
-        var key = BuildKey(request.ActorId, request.CallbackId);
+        var key = new CallbackKey(request.ActorId, request.CallbackId);
         var callback = _callbacks.AddOrUpdate(
             key,
             _ => ScheduledCallback.Create(request.ActorId, request.CallbackId, request.TriggerEnvelope.Clone(), isPeriodic: true, request.Period),
@@ -66,14 +64,14 @@ public sealed class InMemoryActorRuntimeCallbackScheduler : IActorRuntimeCallbac
         if (lease.Backend != RuntimeCallbackBackend.InMemory)
             throw new InvalidOperationException($"In-memory callback scheduler cannot cancel backend '{lease.Backend}'.");
 
-        var key = BuildKey(lease.ActorId, lease.CallbackId);
+        var key = new CallbackKey(lease.ActorId, lease.CallbackId);
         if (!_callbacks.TryGetValue(key, out var callback))
             return Task.CompletedTask;
 
         if (callback.Generation != lease.Generation)
             return Task.CompletedTask;
 
-        if (!_callbackEntries.Remove(new KeyValuePair<string, ScheduledCallback>(key, callback)))
+        if (!_callbackEntries.Remove(new KeyValuePair<CallbackKey, ScheduledCallback>(key, callback)))
             return Task.CompletedTask;
 
         callback.Stop();
@@ -94,11 +92,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler : IActorRuntimeCallbac
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTime, TimeSpan.Zero);
     }
 
-    private static string BuildKey(string actorId, string callbackId) =>
-        string.Concat(actorId, "::", callbackId);
-
     private async Task OnCallbackFiredAsync(
-        string key,
+        CallbackKey key,
         ScheduledCallback callback,
         CancellationToken ct)
     {
@@ -106,16 +101,12 @@ public sealed class InMemoryActorRuntimeCallbackScheduler : IActorRuntimeCallbac
             return;
 
         var fireIndex = callback.IncrementFireIndex();
-        var envelope = callback.TriggerEnvelope.Clone();
-        envelope.Direction = EventDirection.Self;
-        envelope.TargetActorId = callback.ActorId;
-        envelope.PublisherId = callback.ActorId;
-        envelope.Id = Guid.NewGuid().ToString("N");
-        envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackId] = callback.CallbackId;
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackGeneration] = callback.Generation.ToString(CultureInfo.InvariantCulture);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFireIndex] = fireIndex.ToString(CultureInfo.InvariantCulture);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
+        var envelope = RuntimeCallbackEnvelopeFactory.CreateFiredEnvelope(
+            callback.ActorId,
+            callback.CallbackId,
+            callback.Generation,
+            fireIndex,
+            callback.TriggerEnvelope);
 
         await _streams.GetStream(callback.ActorId).ProduceAsync(envelope, ct);
 
@@ -130,6 +121,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler : IActorRuntimeCallbac
                 CancellationToken.None);
         }
     }
+
+    private readonly record struct CallbackKey(string ActorId, string CallbackId);
 
     private sealed class ScheduledCallback
     {
@@ -233,7 +226,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler : IActorRuntimeCallbac
             try
             {
                 await Task.Delay(dueTime, ct);
-                await owner.OnCallbackFiredAsync(BuildKey(ActorId, CallbackId), this, ct);
+                    await owner.OnCallbackFiredAsync(new CallbackKey(ActorId, CallbackId), this, ct);
 
                 if (!IsPeriodic)
                     return;
@@ -241,7 +234,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler : IActorRuntimeCallbac
                 while (!ct.IsCancellationRequested)
                 {
                     await Task.Delay(Period, ct);
-                    await owner.OnCallbackFiredAsync(BuildKey(ActorId, CallbackId), this, ct);
+                    await owner.OnCallbackFiredAsync(new CallbackKey(ActorId, CallbackId), this, ct);
                 }
             }
             catch (OperationCanceledException)

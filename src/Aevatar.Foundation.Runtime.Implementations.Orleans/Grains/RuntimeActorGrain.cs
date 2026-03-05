@@ -7,9 +7,10 @@ using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
-using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -382,9 +383,22 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain, IRuntimeActor
             return false;
 
         if (_runtimeEnvelopeRetryPolicy.RetryDelayMs > 0)
-            await Task.Delay(_runtimeEnvelopeRetryPolicy.RetryDelayMs);
+        {
+            var scheduler = ServiceProvider.GetRequiredService<IActorRuntimeCallbackScheduler>();
+            await scheduler.ScheduleTimeoutAsync(
+                new RuntimeCallbackTimeoutRequest
+                {
+                    ActorId = this.GetPrimaryKeyString(),
+                    CallbackId = BuildRuntimeRetryCallbackId(envelope, nextAttempt),
+                    DueTime = TimeSpan.FromMilliseconds(_runtimeEnvelopeRetryPolicy.RetryDelayMs),
+                    TriggerEnvelope = retryEnvelope,
+                });
+        }
+        else
+        {
+            await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(retryEnvelope);
+        }
 
-        await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(retryEnvelope);
         _logger.LogWarning(
             ex,
             "Runtime envelope retry scheduled for actor {ActorId}, attempt {Attempt}/{MaxAttempts}.",
@@ -413,6 +427,22 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain, IRuntimeActor
         }
 
         return $"{this.GetPrimaryKeyString()}:{originId}:{attempt}";
+    }
+
+    private string BuildRuntimeRetryCallbackId(EventEnvelope envelope, int nextAttempt)
+    {
+        var originId = envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
+                       !string.IsNullOrWhiteSpace(metadataOriginId)
+            ? metadataOriginId
+            : envelope.Id;
+
+        if (string.IsNullOrWhiteSpace(originId))
+            originId = envelope.Id ?? Guid.NewGuid().ToString("N");
+
+        return RuntimeCallbackKeyComposer.BuildCallbackId(
+            "runtime-envelope-retry",
+            originId,
+            nextAttempt.ToString(CultureInfo.InvariantCulture));
     }
 
     private async Task<bool> TryHandleCompatibilityRetryAsync(EventEnvelope envelope)
@@ -556,16 +586,12 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain, IRuntimeActor
             return;
 
         var fireIndex = scheduled.FireIndex + 1;
-        var envelope = EventEnvelope.Parser.ParseFrom(scheduled.EnvelopeBytes);
-        envelope.Direction = EventDirection.Self;
-        envelope.TargetActorId = this.GetPrimaryKeyString();
-        envelope.PublisherId = this.GetPrimaryKeyString();
-        envelope.Id = Guid.NewGuid().ToString("N");
-        envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackId] = callbackId;
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackGeneration] = generation.ToString(CultureInfo.InvariantCulture);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFireIndex] = fireIndex.ToString(CultureInfo.InvariantCulture);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
+        var envelope = RuntimeCallbackEnvelopeFactory.CreateFiredEnvelope(
+            this.GetPrimaryKeyString(),
+            callbackId,
+            generation,
+            fireIndex,
+            EventEnvelope.Parser.ParseFrom(scheduled.EnvelopeBytes));
 
         await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(envelope, ct);
 

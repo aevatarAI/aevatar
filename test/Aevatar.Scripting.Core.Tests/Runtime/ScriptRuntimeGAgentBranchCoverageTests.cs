@@ -24,41 +24,6 @@ public class ScriptRuntimeGAgentBranchCoverageTests
     }
 
     [Fact]
-    public async Task SnapshotResponse_ShouldIgnore_WhenRequestIdMissing_OrPendingRunEventMissing()
-    {
-        var agent = CreateAgent();
-        var beforeVersion = agent.State.LastAppliedEventVersion;
-
-        await agent.HandleScriptDefinitionSnapshotResponded(new ScriptDefinitionSnapshotRespondedEvent
-        {
-            RequestId = string.Empty,
-            Found = true,
-            ScriptId = "script-1",
-            Revision = "rev-1",
-            SourceText = "class A {}",
-        });
-
-        agent.State.LastAppliedEventVersion.Should().Be(beforeVersion);
-
-        agent.State.PendingDefinitionQueries["request-with-null-run-event"] = new PendingScriptDefinitionQueryState
-        {
-            RunEvent = null,
-            QueuedAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        };
-
-        await agent.HandleScriptDefinitionSnapshotResponded(new ScriptDefinitionSnapshotRespondedEvent
-        {
-            RequestId = "request-with-null-run-event",
-            Found = true,
-            ScriptId = "script-1",
-            Revision = "rev-1",
-            SourceText = "class A {}",
-        });
-
-        agent.State.LastAppliedEventVersion.Should().Be(beforeVersion);
-    }
-
-    [Fact]
     public void BuildRunFailureCommittedEvent_ShouldFallbackToStateRevision_AndDefaultReason()
     {
         var agent = CreateAgent();
@@ -152,93 +117,14 @@ public class ScriptRuntimeGAgentBranchCoverageTests
     }
 
     [Fact]
-    public void ApplyDefinitionQueryQueued_ShouldCoverInvalidAndValidBranches()
+    public void BuildDefinitionQueryTimeoutCallbackId_ShouldEncodeStructuredCallbackId()
     {
-        var state = new ScriptRuntimeState();
-
-        var withNullRequestId = new ScriptDefinitionQueryQueuedEvent
-        {
-            RequestId = string.Empty,
-            RunEvent = new RunScriptRequestedEvent { RunId = "run-1" },
-            QueuedAtUnixTimeMs = 1,
-        };
-        var nextNullRequest = InvokePrivateStatic<ScriptRuntimeState>(
+        var callbackId = InvokePrivateStatic<string>(
             typeof(ScriptRuntimeGAgent),
-            "ApplyDefinitionQueryQueued",
-            state,
-            withNullRequestId);
+            "BuildDefinitionQueryTimeoutCallbackId",
+            "request/id:1");
 
-        nextNullRequest.PendingDefinitionQueries.Should().BeEmpty();
-        nextNullRequest.LastEventId.Should().Be("definition-query::queued");
-
-        var withMissingRunEvent = new ScriptDefinitionQueryQueuedEvent
-        {
-            RequestId = "request-missing-run-event",
-            RunEvent = null,
-            QueuedAtUnixTimeMs = 2,
-        };
-        var nextMissingRun = InvokePrivateStatic<ScriptRuntimeState>(
-            typeof(ScriptRuntimeGAgent),
-            "ApplyDefinitionQueryQueued",
-            state,
-            withMissingRunEvent);
-
-        nextMissingRun.PendingDefinitionQueries.Should().NotContainKey("request-missing-run-event");
-
-        var valid = new ScriptDefinitionQueryQueuedEvent
-        {
-            RequestId = "request-valid",
-            RunEvent = new RunScriptRequestedEvent
-            {
-                RunId = "run-valid",
-                ScriptRevision = "rev-valid",
-                DefinitionActorId = "definition-valid",
-            },
-            QueuedAtUnixTimeMs = 3,
-        };
-        var nextValid = InvokePrivateStatic<ScriptRuntimeState>(
-            typeof(ScriptRuntimeGAgent),
-            "ApplyDefinitionQueryQueued",
-            state,
-            valid);
-
-        nextValid.PendingDefinitionQueries.Should().ContainKey("request-valid");
-    }
-
-    [Fact]
-    public void ApplyDefinitionQueryCleared_ShouldHandleNullAndValidRequestId()
-    {
-        var state = new ScriptRuntimeState();
-        state.PendingDefinitionQueries["request-1"] = new PendingScriptDefinitionQueryState
-        {
-            RunEvent = new RunScriptRequestedEvent { RunId = "run-1" },
-            QueuedAtUnixTimeMs = 1,
-        };
-
-        var withNullRequestId = new ScriptDefinitionQueryClearedEvent
-        {
-            RequestId = string.Empty,
-        };
-        var nextWithNull = InvokePrivateStatic<ScriptRuntimeState>(
-            typeof(ScriptRuntimeGAgent),
-            "ApplyDefinitionQueryCleared",
-            state,
-            withNullRequestId);
-
-        nextWithNull.PendingDefinitionQueries.Should().ContainKey("request-1");
-        nextWithNull.LastEventId.Should().Be("definition-query::cleared");
-
-        var withValidRequestId = new ScriptDefinitionQueryClearedEvent
-        {
-            RequestId = "request-1",
-        };
-        var nextWithValid = InvokePrivateStatic<ScriptRuntimeState>(
-            typeof(ScriptRuntimeGAgent),
-            "ApplyDefinitionQueryCleared",
-            nextWithNull,
-            withValidRequestId);
-
-        nextWithValid.PendingDefinitionQueries.Should().NotContainKey("request-1");
+        callbackId.Should().Be("script-definition-query-timeout:request%2Fid%3A1");
     }
 
     [Fact]

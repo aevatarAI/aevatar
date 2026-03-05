@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Collections;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -34,7 +35,7 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
 
         await scheduler.CancelAsync(firstLease);
 
-        var current = GetScheduledCallback(scheduler, "actor-1::cb-1");
+        var current = GetScheduledCallback(scheduler, "actor-1", "cb-1");
         current.Should().NotBeNull();
         GetGeneration(current!).Should().Be(secondLease.Generation);
     }
@@ -65,7 +66,8 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
 
     private static object? GetScheduledCallback(
         InMemoryActorRuntimeCallbackScheduler scheduler,
-        string key)
+        string actorId,
+        string callbackId)
     {
         var field = typeof(InMemoryActorRuntimeCallbackScheduler)
             .GetField("_callbacks", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -74,12 +76,24 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
         var callbacks = field!.GetValue(scheduler);
         callbacks.Should().NotBeNull();
 
-        var tryGetValue = callbacks!.GetType().GetMethod("TryGetValue");
-        tryGetValue.Should().NotBeNull();
+        foreach (var entry in (IEnumerable)callbacks!)
+        {
+            var key = entry.GetType().GetProperty("Key")?.GetValue(entry);
+            if (key == null)
+                continue;
 
-        var args = new object?[] { key, null };
-        var found = (bool)tryGetValue!.Invoke(callbacks, args)!;
-        return found ? args[1] : null;
+            var currentActorId = key.GetType().GetProperty("ActorId")?.GetValue(key) as string;
+            var currentCallbackId = key.GetType().GetProperty("CallbackId")?.GetValue(key) as string;
+            if (!string.Equals(currentActorId, actorId, StringComparison.Ordinal) ||
+                !string.Equals(currentCallbackId, callbackId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            return entry.GetType().GetProperty("Value")?.GetValue(entry);
+        }
+
+        return null;
     }
 
     private static long GetGeneration(object scheduledCallback)

@@ -113,15 +113,12 @@ public sealed class DelayModule : IEventModule
         if (!_pending.TryGetValue(firedKey, out var pending))
             return;
 
-        if (TryReadGeneration(envelope, out var firedGeneration) &&
-            firedGeneration != pending.Lease.Generation)
+        if (!RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, pending.Lease))
         {
             ctx.Logger.LogDebug(
-                "Delay {StepId}: ignore stale fired callback generation run={RunId} fired={FiredGeneration} expected={ExpectedGeneration}",
+                "Delay {StepId}: ignore callback without matching lease metadata run={RunId}",
                 stepIdFired,
-                runIdFired,
-                firedGeneration,
-                pending.Lease.Generation);
+                runIdFired);
             return;
         }
 
@@ -148,15 +145,8 @@ public sealed class DelayModule : IEventModule
             ct);
     }
 
-    private static bool TryReadGeneration(EventEnvelope envelope, out long generation)
-    {
-        generation = 0;
-        return envelope.Metadata.TryGetValue(RuntimeCallbackMetadataKeys.CallbackGeneration, out var raw) &&
-               long.TryParse(raw, out generation);
-    }
-
     private static string BuildDelayCallbackId(string runId, string stepId) =>
-        string.Concat("delay-step:", runId, ":", stepId);
+        RuntimeCallbackKeyComposer.BuildCallbackId("delay-step", runId, stepId);
 
     private readonly record struct DelayPendingKey(string RunId, string StepId);
 

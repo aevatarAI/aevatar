@@ -750,4 +750,7 @@ check_orchestration_class_guard \
   190 \
   10
 
+echo "Running runtime callback guards..."
+bash tools/ci/runtime_callback_guards.sh
+
 echo "Architecture guards passed."

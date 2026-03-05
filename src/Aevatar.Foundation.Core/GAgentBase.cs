@@ -14,6 +14,7 @@ using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.Pipeline;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -225,6 +226,64 @@ public abstract class GAgentBase : IAgent
     protected Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
         CancellationToken ct = default) where TEvent : Google.Protobuf.IMessage =>
         EventPublisher.SendToAsync(targetActorId, evt, ct, _activeInboundEnvelope);
+
+    protected Task<RuntimeCallbackLease> ScheduleSelfTimeoutAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        IMessage evt,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTime, TimeSpan.Zero);
+        ArgumentNullException.ThrowIfNull(evt);
+
+        return Services.GetRequiredService<IActorRuntimeCallbackScheduler>()
+            .ScheduleTimeoutAsync(
+                new RuntimeCallbackTimeoutRequest
+                {
+                    ActorId = Id,
+                    CallbackId = callbackId,
+                    TriggerEnvelope = SelfEventEnvelopeFactory.Create(Id, evt, _activeInboundEnvelope, metadata),
+                    DueTime = dueTime,
+                },
+                ct);
+    }
+
+    protected Task<RuntimeCallbackLease> ScheduleSelfTimerAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        TimeSpan period,
+        IMessage evt,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTime, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(period, TimeSpan.Zero);
+        ArgumentNullException.ThrowIfNull(evt);
+
+        return Services.GetRequiredService<IActorRuntimeCallbackScheduler>()
+            .ScheduleTimerAsync(
+                new RuntimeCallbackTimerRequest
+                {
+                    ActorId = Id,
+                    CallbackId = callbackId,
+                    TriggerEnvelope = SelfEventEnvelopeFactory.Create(Id, evt, _activeInboundEnvelope, metadata),
+                    DueTime = dueTime,
+                    Period = period,
+                },
+                ct);
+    }
+
+    protected Task CancelScheduledCallbackAsync(
+        RuntimeCallbackLease lease,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        return Services.GetRequiredService<IActorRuntimeCallbackScheduler>()
+            .CancelAsync(lease, ct);
+    }
 
     // Internal methods
 
