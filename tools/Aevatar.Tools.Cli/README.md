@@ -27,6 +27,10 @@ aevatar config ui --no-browser
 
 # custom port
 aevatar config ui --port 8080
+
+# ensure config ui is running (probe/start/wait)
+aevatar config ui ensure --json
+aevatar config ui ensure --port 8080 --json
 ```
 
 ```bash
@@ -63,12 +67,26 @@ aevatar config mcp put local-mcp --entry-json '{"command":"npx","args":["-y","de
 # launch embedded workflow playground app
 aevatar app
 
+# if app is already running on the port, open existing UI directly
+# if port is occupied by another service, command exits with a warning
+
 # run without browser and custom port
 aevatar app --no-browser --port 6690
 
 # optional explicit SDK base url
 aevatar app --api-base http://localhost:5000
+
+# force restart app on port (kill listener process then relaunch)
+aevatar app restart
+aevatar app restart --port 6690
 ```
+
+`aevatar app` playground now includes a **Config** button:
+
+- it calls an internal workflow to run `aevatar config ui ensure --no-browser`
+- if config UI is already running, it jumps directly
+- if not running, it auto-starts config UI and then jumps
+- LLM status badge is refreshed continuously to reflect provider updates
 
 ```bash
 # open app UI and auto-send chat prompt
@@ -82,6 +100,20 @@ aevatar chat "hello" --url http://localhost:5000
 ```
 
 ```bash
+# generate workflow YAML from chat message (prints YAML in terminal)
+aevatar chat workflow "build a customer-support triage workflow"
+
+# read message from stdin; save directly without confirmation prompt
+echo "design an incident response workflow with human approval" | aevatar chat workflow --stdin --yes
+
+# custom API base and output filename
+aevatar chat workflow "generate a rollout plan workflow with approval gate" --url http://localhost:5000 --filename rollout_plan
+```
+
+`aevatar chat workflow` writes files to `AEVATAR_HOME/workflows` (`~/.aevatar/workflows` by default).  
+Without `--yes`, it prompts for confirmation before saving.
+
+```bash
 # persist chat/app remote workflow API base url
 aevatar chat config set-url http://localhost:5000
 
@@ -90,14 +122,6 @@ aevatar chat config get-url
 
 # clear persisted url
 aevatar chat config clear-url
-```
-
-```bash
-# OpenClaw provider sync PoC (Aevatar precedence)
-aevatar openclaw sync plan --mode bidirectional --precedence aevatar --dry-run
-
-# apply merge result to both ~/.aevatar/secrets.json and ~/.openclaw/openclaw.json
-aevatar openclaw sync apply --mode bidirectional --precedence aevatar
 ```
 
 URL precedence for both `aevatar chat` and `aevatar app`:

@@ -2,19 +2,36 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Configuration;
+using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Validation;
+using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Sdk;
 using Aevatar.Workflow.Sdk.Contracts;
-using ChatMessage = Aevatar.AI.Abstractions.LLMProviders.ChatMessage;
+using Aevatar.Workflow.Sdk.Errors;
+using QueryWorkflowCatalogItem = Aevatar.Workflow.Application.Abstractions.Queries.WorkflowCatalogItem;
+using QueryWorkflowCatalogItemDetail = Aevatar.Workflow.Application.Abstractions.Queries.WorkflowCatalogItemDetail;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Tools.Cli.Hosting;
 
 internal static class AppDemoPlaygroundEndpoints
 {
     private const int AutoResumeDelayMs = 50;
+    internal const string AppConfigOpenRoute = "/api/app/config/open";
+    private const int DefaultConfigUiPort = 6677;
+    private const string AppConfigOpenWorkflowFileName = "app_open_config.yaml";
+    private const string ConfigUiPortToken = "__CONFIG_UI_PORT__";
+    private static readonly UTF8Encoding Utf8NoBom = new(false);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+    private static readonly JsonSerializerOptions CapabilityDocumentJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true,
     };
 
     private static readonly HashSet<string> LlmLikeStepTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -27,73 +44,286 @@ internal static class AppDemoPlaygroundEndpoints
         "human_approval",
         "wait_signal",
         "connector_call",
-        "openclaw_call",
+        "aevatar_call",
     };
+
+    private static readonly IReadOnlyDictionary<string, string[]> CuratedPrimitiveExamples =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["transform"] = ["01_transform", "07_pipeline"],
+            ["guard"] = ["02_guard", "07_pipeline"],
+            ["conditional"] = ["03_conditional"],
+            ["switch"] = ["04_switch"],
+            ["assign"] = ["05_assign", "07_pipeline"],
+            ["retrieve_facts"] = ["06_retrieve_facts", "07_pipeline"],
+            ["llm_call"] = ["08_llm_call", "09_llm_chain"],
+            ["parallel"] = ["10_parallel"],
+            ["race"] = ["11_race"],
+            ["map_reduce"] = ["12_map_reduce", "53_map_reduce_llm_alias"],
+            ["foreach"] = ["13_foreach"],
+            ["evaluate"] = ["14_evaluate"],
+            ["reflect"] = ["15_reflect"],
+            ["cache"] = ["16_cache"],
+            ["human_input"] = ["43_human_input_manual_triage", "39_human_input_basic_auto_resume"],
+            ["human_approval"] = ["46_human_approval_release_gate", "47_mixed_human_approval_wait_signal"],
+            ["wait_signal"] = ["44_wait_signal_manual_success", "47_mixed_human_approval_wait_signal"],
+            ["workflow_call"] = ["49_workflow_call_multilevel"],
+            ["connector_call"] = ["50_connector_cli_demo", "51_cli_call_alias"],
+            ["emit"] = ["54_emit_publish_demo"],
+            ["tool_call"] = ["55_tool_call_fallback_demo"],
+            ["checkpoint"] = ["56_delay_checkpoint_demo"],
+            ["delay"] = ["56_delay_checkpoint_demo"],
+        };
+
+    private static readonly IReadOnlyDictionary<string, string[]> PrimitiveAliases =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["parallel"] = ["parallel", "parallel_fanout", "fan_out"],
+            ["foreach"] = ["foreach", "for_each", "foreach_llm"],
+            ["map_reduce"] = ["map_reduce", "mapreduce", "map_reduce_llm"],
+            ["evaluate"] = ["evaluate", "judge"],
+            ["race"] = ["race", "select"],
+            ["guard"] = ["guard", "assert"],
+            ["delay"] = ["delay", "sleep"],
+            ["emit"] = ["emit", "publish"],
+            ["wait_signal"] = ["wait_signal", "wait"],
+            ["connector_call"] = ["connector_call", "bridge_call", "cli_call", "mcp_call", "http_get", "http_post", "http_put", "http_delete"],
+            ["aevatar_call"] = ["aevatar_call", "aevatar"],
+            ["vote"] = ["vote", "vote_consensus"],
+            ["workflow_call"] = ["workflow_call", "sub_workflow"],
+            ["while"] = ["while", "loop"],
+        };
+
+    private static readonly IReadOnlyDictionary<string, PrimitiveMetadata> PrimitiveMetadataCatalog =
+        new Dictionary<string, PrimitiveMetadata>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["transform"] = new(
+                "Applies deterministic transformations to the current input or intermediate state, such as uppercase, trim, count, or structural reshaping.",
+                [
+                    new PrimitiveParameter("op", "Transformation operation to apply.", null, "uppercase, trim, count"),
+                ]),
+            ["assign"] = new(
+                "Writes a value into workflow state so later steps can reuse it as named context.",
+                [
+                    new PrimitiveParameter("target", "State field or variable name to update.", null, null),
+                    new PrimitiveParameter("value", "Literal value or expression to store.", null, null),
+                ]),
+            ["retrieve_facts"] = new(
+                "Looks up deterministic reference facts and injects them into the workflow without calling an LLM.",
+                [
+                    new PrimitiveParameter("query", "Fact lookup query.", null, null),
+                    new PrimitiveParameter("top_k", "Maximum number of facts to return.", "3", null),
+                ]),
+            ["cache"] = new(
+                "Reuses a cached result when available, or computes and stores it on a cache miss.",
+                [
+                    new PrimitiveParameter("key", "Cache key used to read or write the result.", null, null),
+                    new PrimitiveParameter("step", "Child step type to execute on cache miss.", null, null),
+                ]),
+            ["guard"] = new(
+                "Validates a precondition before the workflow continues and can stop execution early on invalid input.",
+                [
+                    new PrimitiveParameter("check", "Predicate or built-in validation rule.", null, "not_empty"),
+                    new PrimitiveParameter("on_fail", "Failure behavior when the guard does not pass.", "fail", "fail, skip"),
+                ]),
+            ["conditional"] = new(
+                "Evaluates a boolean condition and routes execution to explicit true and false branches.",
+                [
+                    new PrimitiveParameter("condition", "Boolean expression to evaluate.", null, null),
+                ]),
+            ["switch"] = new(
+                "Selects one branch from several named routes and falls back to `_default` when no case matches.",
+                [
+                    new PrimitiveParameter("expression", "Expression whose result selects the branch.", null, null),
+                ]),
+            ["while"] = new(
+                "Repeats a nested step while a condition stays true or until a max iteration limit is reached.",
+                [
+                    new PrimitiveParameter("condition", "Loop continuation condition.", null, null),
+                    new PrimitiveParameter("max_iterations", "Safety cap for loop iterations.", null, null),
+                    new PrimitiveParameter("step", "Nested step type to execute each iteration.", null, null),
+                ]),
+            ["llm_call"] = new(
+                "Sends the current context to an LLM-backed role and streams the generated response into the workflow.",
+                [
+                    new PrimitiveParameter("prompt", "Prompt template or override for the model call.", null, null),
+                ]),
+            ["evaluate"] = new(
+                "Uses a model as a judge to score, classify, or decide based on explicit criteria.",
+                [
+                    new PrimitiveParameter("criteria", "Evaluation rubric or scoring criteria.", null, null),
+                ]),
+            ["reflect"] = new(
+                "Runs a second-pass critique or refinement step over earlier output to improve quality before continuing.",
+                [
+                    new PrimitiveParameter("prompt", "Reflection or critique instruction.", null, null),
+                ]),
+            ["parallel"] = new(
+                "Runs multiple branches concurrently and combines their outputs when all work completes.",
+                [
+                    new PrimitiveParameter("branches", "Named branch definitions executed in parallel.", null, null),
+                ]),
+            ["race"] = new(
+                "Starts competing branches and keeps the first successful result.",
+                [
+                    new PrimitiveParameter("branches", "Competing branch definitions.", null, null),
+                ]),
+            ["map_reduce"] = new(
+                "Maps a step across a collection of items, then reduces the aggregated outputs into a final result.",
+                [
+                    new PrimitiveParameter("map_step_type", "Step type used for each mapped item.", null, null),
+                    new PrimitiveParameter("reduce_step_type", "Step type used to combine mapped results.", null, null),
+                ]),
+            ["foreach"] = new(
+                "Iterates over a list and runs the same child step for every item.",
+                [
+                    new PrimitiveParameter("items", "Collection to iterate over.", null, null),
+                    new PrimitiveParameter("sub_step_type", "Step type executed for each item.", null, null),
+                ]),
+            ["vote"] = new(
+                "Aggregates multiple candidate outputs and selects the strongest one through consensus or ranking.",
+                [
+                    new PrimitiveParameter("strategy", "Vote or consensus strategy.", null, null),
+                ]),
+            ["human_input"] = new(
+                "Pauses the workflow and waits for a person to provide structured input before continuing.",
+                [
+                    new PrimitiveParameter("prompt", "Question shown to the human participant.", null, null),
+                    new PrimitiveParameter("timeout_seconds", "Optional timeout before the step expires.", null, null),
+                ]),
+            ["human_approval"] = new(
+                "Pauses the workflow until a human explicitly approves or rejects the next action.",
+                [
+                    new PrimitiveParameter("prompt", "Approval request shown to the reviewer.", null, null),
+                    new PrimitiveParameter("timeout_seconds", "Optional timeout for the approval gate.", null, null),
+                ]),
+            ["wait_signal"] = new(
+                "Suspends execution until an external signal arrives or a timeout is reached.",
+                [
+                    new PrimitiveParameter("signal_name", "Signal name that resumes the workflow.", null, null),
+                    new PrimitiveParameter("timeout_ms", "Maximum wait time in milliseconds.", null, null),
+                ]),
+            ["workflow_call"] = new(
+                "Calls another workflow YAML as a subworkflow so larger systems can be built from smaller reusable flows.",
+                [
+                    new PrimitiveParameter("workflow", "Referenced workflow name.", null, null),
+                    new PrimitiveParameter("lifecycle", "How the parent waits for the child workflow.", null, "sync, async"),
+                ]),
+            ["connector_call"] = new(
+                "Invokes an external connector, CLI bridge, MCP server, or HTTP capability from within the workflow.",
+                [
+                    new PrimitiveParameter("connector", "Connector or capability name to invoke.", null, null),
+                    new PrimitiveParameter("operation", "Connector-specific operation or method.", null, null),
+                ]),
+            ["tool_call"] = new(
+                "Calls a tool made available to the workflow runtime and returns the tool result to later steps.",
+                [
+                    new PrimitiveParameter("tool", "Tool name to execute.", null, null),
+                ]),
+            ["aevatar_call"] = new(
+                "Executes an Aevatar CLI command from the workflow runtime.",
+                [
+                    new PrimitiveParameter("args", "Arguments passed to the aevatar CLI command.", null, null),
+                    new PrimitiveParameter("timeout_ms", "Maximum allowed runtime for the command.", null, null),
+                ]),
+            ["emit"] = new(
+                "Publishes an event or message to another part of the system so downstream consumers can react asynchronously.",
+                [
+                    new PrimitiveParameter("event_name", "Logical event name to publish.", null, null),
+                ]),
+            ["delay"] = new(
+                "Waits for a bounded amount of time before resuming the workflow.",
+                [
+                    new PrimitiveParameter("duration_ms", "Delay duration in milliseconds.", null, null),
+                ]),
+            ["checkpoint"] = new(
+                "Persists a named checkpoint so long-running flows can recover or audit their intermediate progress.",
+                [
+                    new PrimitiveParameter("name", "Checkpoint identifier.", null, null),
+                ]),
+            ["workflow_yaml_validate"] = new(
+                "Parses and validates workflow YAML so authoring flows can check generated definitions before saving or running them.",
+                [
+                    new PrimitiveParameter("yaml", "Workflow YAML content to validate.", null, null),
+                ]),
+            ["dynamic_workflow"] = new(
+                "Creates or reconfigures workflow definitions dynamically at runtime based on generated YAML.",
+                [
+                    new PrimitiveParameter("workflow_yaml", "Dynamic workflow YAML to apply.", null, null),
+                ]),
+            ["workflow_loop"] = new(
+                "Internal orchestration primitive used by the workflow runtime to advance serialized loop execution.",
+                Array.Empty<PrimitiveParameter>()),
+        };
 
     public static void Map(IEndpointRouteBuilder app, bool embeddedWorkflowMode)
     {
-        app.MapGet("/api/workflows", HandleListWorkflows);
-        app.MapGet("/api/workflows/{name}", HandleGetWorkflow);
-        app.MapGet("/api/workflows/{name}/run", HandleRunWorkflowAsync);
+        app.MapGet("/api/workflows", (IAevatarWorkflowClient client, IServiceProvider services, CancellationToken ct) =>
+            HandleListWorkflows(client, services, embeddedWorkflowMode, ct));
+        app.MapGet("/api/workflow-catalog", (IAevatarWorkflowClient client, IServiceProvider services, CancellationToken ct) =>
+            HandleListWorkflows(client, services, embeddedWorkflowMode, ct));
+        app.MapGet("/api/workflows/{name}", (string name, IAevatarWorkflowClient client, IServiceProvider services, CancellationToken ct) =>
+            HandleGetWorkflow(name, client, services, embeddedWorkflowMode, ct));
+        app.MapGet("/api/capabilities", (IAevatarWorkflowClient client, IServiceProvider services, CancellationToken ct) =>
+            HandleCapabilitiesAsync(client, services, embeddedWorkflowMode, ct));
+        app.MapGet("/api/workflows/{name}/run", (string name, string? input, bool? autoResume, HttpContext ctx, IAevatarWorkflowClient client, CancellationToken ct) =>
+            HandleRunWorkflowAsync(name, input, autoResume, ctx, client, embeddedWorkflowMode, ct));
         app.MapGet("/api/llm/status", (IServiceProvider services) => HandleLlmStatus(services, embeddedWorkflowMode));
-        app.MapGet("/api/primitives", HandlePrimitives);
+        app.MapGet("/api/primitives", (IAevatarWorkflowClient client, IServiceProvider services, CancellationToken ct) =>
+            HandlePrimitivesAsync(client, services, embeddedWorkflowMode, ct));
         app.MapPost("/api/playground/parse", HandlePlaygroundParseAsync);
-        app.MapPost("/api/playground/chat", (HttpContext ctx, CancellationToken ct) =>
-            HandlePlaygroundChatAsync(ctx, embeddedWorkflowMode, ct));
+        app.MapPost("/api/playground/workflows", HandleSavePlaygroundWorkflowAsync);
+        app.MapPost(AppConfigOpenRoute, (AppConfigOpenRequest? input, IAevatarWorkflowClient client, CancellationToken ct) =>
+            HandleOpenConfigAsync(input, client, embeddedWorkflowMode, ct));
     }
 
-    private static IResult HandleListWorkflows()
+    private static async Task<IResult> HandleListWorkflows(
+        IAevatarWorkflowClient client,
+        IServiceProvider services,
+        bool embeddedWorkflowMode,
+        CancellationToken ct)
     {
-        var parser = new WorkflowParser();
-        var workflows = new List<object>();
-        foreach (var workflowFile in DiscoverWorkflowFiles().Values
-                     .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+        if (!embeddedWorkflowMode)
         {
-            var sortOrder = TryParseWorkflowIndex(workflowFile.Name) ?? 10_000;
-            var (group, groupLabel) = InferGroup(workflowFile.SourceKind);
-
-            try
-            {
-                var yaml = File.ReadAllText(workflowFile.FilePath);
-                var def = parser.Parse(yaml);
-                var primitives = def.Steps
-                    .Select(step => WorkflowPrimitiveCatalog.ToCanonicalType(step.Type))
-                    .Where(type => !string.IsNullOrWhiteSpace(type))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-
-                var category = primitives.Any(p => LlmLikeStepTypes.Contains(p)) ? "llm" : "deterministic";
-
-                workflows.Add(new
-                {
-                    name = workflowFile.Name,
-                    description = def.Description,
-                    category,
-                    group,
-                    groupLabel,
-                    sortOrder,
-                    primitives,
-                    defaultInput = "Hello, world!",
-                });
-            }
-            catch
-            {
-                // Ignore legacy/invalid definitions in list view and fall back to valid sources.
-                continue;
-            }
+            var catalog = await client.GetWorkflowCatalogAsync(ct);
+            return Results.Json(catalog);
         }
 
-        return Results.Json(workflows);
+        var queryCatalog = TryListWorkflowCatalogFromQueryService(services);
+        if (queryCatalog != null)
+            return Results.Json(queryCatalog.Select(MapCatalogItemDto));
+
+        var localCatalog = BuildWorkflowCatalog();
+        return Results.Json(localCatalog.Select(MapCatalogItemDto));
     }
 
-    private static IResult HandleGetWorkflow(string name)
+    private static async Task<IResult> HandleGetWorkflow(
+        string name,
+        IAevatarWorkflowClient client,
+        IServiceProvider services,
+        bool embeddedWorkflowMode,
+        CancellationToken ct)
     {
+        if (!embeddedWorkflowMode)
+        {
+            var detail = await client.GetWorkflowDetailAsync(name, ct);
+            return detail == null
+                ? Results.NotFound(new { error = $"Workflow '{name}' not found" })
+                : Results.Json(detail.Value);
+        }
+
+        var queryDetail = TryGetWorkflowDetailFromQueryService(services, name);
+        if (queryDetail != null)
+            return Results.Json(MapWorkflowDetailDto(queryDetail));
+
         if (!TryResolveWorkflowFile(name, out var workflowFile))
             return Results.NotFound(new { error = $"Workflow '{name}' not found" });
 
         var parser = new WorkflowParser();
         var yaml = File.ReadAllText(workflowFile.FilePath);
         var def = parser.Parse(yaml);
+        var catalogItem = BuildWorkflowCatalog()
+            .FirstOrDefault(item => string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase));
         var steps = def.Steps.Select(step => new
         {
             id = step.Id,
@@ -107,6 +337,22 @@ internal static class AppDemoPlaygroundEndpoints
 
         return Results.Json(new
         {
+            catalog = catalogItem == null
+                ? null
+                : new
+                {
+                    name = catalogItem.Name,
+                    description = catalogItem.Description,
+                    category = catalogItem.Category,
+                    group = catalogItem.Group,
+                    groupLabel = catalogItem.GroupLabel,
+                    sortOrder = catalogItem.SortOrder,
+                    source = catalogItem.Source,
+                    sourceLabel = catalogItem.SourceLabel,
+                    showInLibrary = catalogItem.ShowInLibrary,
+                    isPrimitiveExample = catalogItem.IsPrimitiveExample,
+                    primitives = catalogItem.Primitives,
+                },
             yaml,
             definition = new
             {
@@ -129,8 +375,26 @@ internal static class AppDemoPlaygroundEndpoints
         bool? autoResume,
         HttpContext ctx,
         IAevatarWorkflowClient client,
+        bool embeddedWorkflowMode,
         CancellationToken ct)
     {
+        var prompt = string.IsNullOrWhiteSpace(input) ? "Hello, world!" : input.Trim();
+
+        if (!embeddedWorkflowMode)
+        {
+            await StreamWorkflowRunAsync(
+                ctx,
+                client,
+                new ChatRunRequest
+                {
+                    Prompt = prompt,
+                    Workflow = name,
+                },
+                autoResume == true,
+                ct);
+            return;
+        }
+
         if (!TryResolveWorkflowFile(name, out var workflowFile))
         {
             ctx.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -139,8 +403,25 @@ internal static class AppDemoPlaygroundEndpoints
         }
 
         var yaml = await File.ReadAllTextAsync(workflowFile.FilePath, ct);
-        var prompt = string.IsNullOrWhiteSpace(input) ? "Hello, world!" : input.Trim();
+        await StreamWorkflowRunAsync(
+            ctx,
+            client,
+            new ChatRunRequest
+            {
+                Prompt = prompt,
+                WorkflowYamls = [yaml],
+            },
+            autoResume == true,
+            ct);
+    }
 
+    private static async Task StreamWorkflowRunAsync(
+        HttpContext ctx,
+        IAevatarWorkflowClient client,
+        ChatRunRequest request,
+        bool shouldAutoResume,
+        CancellationToken ct)
+    {
         ctx.Response.Headers["Content-Type"] = "text/event-stream";
         ctx.Response.Headers["Cache-Control"] = "no-cache";
         ctx.Response.Headers["Connection"] = "keep-alive";
@@ -152,20 +433,13 @@ internal static class AppDemoPlaygroundEndpoints
             await ctx.Response.Body.FlushAsync(token);
         }
 
-        var shouldAutoResume = autoResume == true;
         var messageBuffers = new Dictionary<string, StringBuilder>(StringComparer.Ordinal);
         var actorId = string.Empty;
         var runId = string.Empty;
 
         try
         {
-            await foreach (var evt in client.StartRunStreamAsync(
-                               new ChatRunRequest
-                               {
-                                   Prompt = prompt,
-                                   WorkflowYamls = [yaml],
-                               },
-                               ct))
+            await foreach (var evt in client.StartRunStreamAsync(request, ct))
             {
                 var frame = evt.Frame;
                 var type = frame.Type ?? string.Empty;
@@ -240,7 +514,7 @@ internal static class AppDemoPlaygroundEndpoints
                     if (shouldAutoResume &&
                         string.Equals(mapped.EventType, "workflow.suspended", StringComparison.Ordinal))
                     {
-                        _ = TryAutoResumeAsync(mapped.Data, prompt, client, ct);
+                        _ = TryAutoResumeAsync(mapped.Data, request.Prompt, client, ct);
                     }
 
                     continue;
@@ -324,7 +598,7 @@ internal static class AppDemoPlaygroundEndpoints
 
             var provider = factory.GetDefault();
             var config = services.GetService<IConfiguration>();
-            var model = config?["Models:DefaultModel"];
+            var model = ResolveDefaultProviderModel(provider.Name, config);
             return Results.Json(new
             {
                 available = true,
@@ -345,20 +619,311 @@ internal static class AppDemoPlaygroundEndpoints
         }
     }
 
-    private static IResult HandlePrimitives()
+    private static string? ResolveDefaultProviderModel(string providerName, IConfiguration? config)
     {
-        var primitives = WorkflowPrimitiveCatalog.BuiltInCanonicalTypes
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-            .Select(name => new
+        try
+        {
+            var secrets = new AevatarSecretsStore();
+            var configuredModel = secrets.Get($"LLMProviders:Providers:{providerName}:Model");
+            if (!string.IsNullOrWhiteSpace(configuredModel))
+                return configuredModel.Trim();
+        }
+        catch
+        {
+            // Best effort fallback.
+        }
+
+        return config?["Models:DefaultModel"];
+    }
+
+    private static async Task<IResult> HandleCapabilitiesAsync(
+        IAevatarWorkflowClient client,
+        IServiceProvider services,
+        bool embeddedWorkflowMode,
+        CancellationToken ct)
+    {
+        WorkflowCapabilitiesDocument? capabilities = embeddedWorkflowMode
+            ? TryGetCapabilitiesFromQueryService(services)
+            : await TryLoadCapabilitiesDocumentAsync(client, ct);
+
+        if (capabilities == null && embeddedWorkflowMode)
+            capabilities = BuildLocalCapabilitiesDocumentFallback();
+
+        if (capabilities != null)
+            return Results.Json(capabilities);
+
+        return Results.Json(new WorkflowCapabilitiesDocument
+        {
+            SchemaVersion = "capabilities.v1",
+        });
+    }
+
+    private static async Task<IResult> HandlePrimitivesAsync(
+        IAevatarWorkflowClient client,
+        IServiceProvider services,
+        bool embeddedWorkflowMode,
+        CancellationToken ct)
+    {
+        var workflows = await LoadPlaygroundCatalogAsync(client, services, embeddedWorkflowMode, ct);
+        WorkflowCapabilitiesDocument? capabilities = embeddedWorkflowMode
+            ? TryGetCapabilitiesFromQueryService(services)
+            : await TryLoadCapabilitiesDocumentAsync(client, ct);
+        if (capabilities == null && embeddedWorkflowMode)
+            capabilities = BuildLocalCapabilitiesDocumentFallback();
+        var descriptors = BuildPrimitiveDescriptors(capabilities);
+
+        var primitives = descriptors
+            .OrderBy(descriptor => GetPrimitiveCategorySortOrder(descriptor.Category))
+            .ThenBy(descriptor => descriptor.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(descriptor => new
             {
-                name,
-                aliases = new[] { name },
-                category = InferPrimitiveCategory(name),
-                description = string.Empty,
-                parameters = Array.Empty<object>(),
+                name = descriptor.Name,
+                aliases = descriptor.Aliases,
+                category = descriptor.Category,
+                description = descriptor.Description,
+                parameters = descriptor.Parameters,
+                exampleWorkflows = BuildPrimitiveExamples(descriptor.Name, workflows),
             })
             .ToArray();
         return Results.Json(primitives);
+    }
+
+    private static IWorkflowExecutionQueryApplicationService? TryResolveQueryService(IServiceProvider services)
+    {
+        try
+        {
+            return services.GetService<IWorkflowExecutionQueryApplicationService>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static IReadOnlyList<QueryWorkflowCatalogItem>? TryListWorkflowCatalogFromQueryService(IServiceProvider services)
+    {
+        try
+        {
+            return TryResolveQueryService(services)?.ListWorkflowCatalog();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static QueryWorkflowCatalogItemDetail? TryGetWorkflowDetailFromQueryService(
+        IServiceProvider services,
+        string workflowName)
+    {
+        try
+        {
+            return TryResolveQueryService(services)?.GetWorkflowDetail(workflowName);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static WorkflowCapabilitiesDocument? TryGetCapabilitiesFromQueryService(IServiceProvider services)
+    {
+        try
+        {
+            return TryResolveQueryService(services)?.GetCapabilities();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task<IReadOnlyList<QueryWorkflowCatalogItem>?> TryLoadWorkflowCatalogFromClientAsync(
+        IAevatarWorkflowClient client,
+        CancellationToken ct)
+    {
+        try
+        {
+            var payload = await client.GetWorkflowCatalogAsync(ct);
+            var items = new List<QueryWorkflowCatalogItem>(payload.Count);
+            foreach (var entry in payload)
+            {
+                if (entry.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var item = JsonSerializer.Deserialize<QueryWorkflowCatalogItem>(
+                    entry.GetRawText(),
+                    CapabilityDocumentJsonOptions);
+                if (item != null)
+                    items.Add(item);
+            }
+
+            return items;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task<IReadOnlyList<WorkflowCatalogItem>> LoadPlaygroundCatalogAsync(
+        IAevatarWorkflowClient client,
+        IServiceProvider services,
+        bool embeddedWorkflowMode,
+        CancellationToken ct)
+    {
+        if (embeddedWorkflowMode)
+        {
+            var queryCatalog = TryListWorkflowCatalogFromQueryService(services);
+            if (queryCatalog != null)
+                return queryCatalog.Select(ToPlaygroundCatalogItem).ToArray();
+
+            return BuildWorkflowCatalog();
+        }
+
+        var remoteCatalog = await TryLoadWorkflowCatalogFromClientAsync(client, ct);
+        if (remoteCatalog != null && remoteCatalog.Count > 0)
+            return remoteCatalog.Select(ToPlaygroundCatalogItem).ToArray();
+
+        return BuildWorkflowCatalog();
+    }
+
+    private static WorkflowCatalogItem ToPlaygroundCatalogItem(QueryWorkflowCatalogItem workflow)
+    {
+        var normalizedSource = string.IsNullOrWhiteSpace(workflow.Source)
+            ? "file"
+            : workflow.Source;
+        var normalizedCategory = string.IsNullOrWhiteSpace(workflow.Category)
+            ? "deterministic"
+            : workflow.Category;
+        var classification = WorkflowLibraryClassifier.Classify(
+            workflow.Name,
+            normalizedSource,
+            normalizedCategory);
+        return new WorkflowCatalogItem(
+            Name: workflow.Name,
+            Description: workflow.Description ?? string.Empty,
+            Category: normalizedCategory,
+            Group: string.IsNullOrWhiteSpace(workflow.Group) ? classification.Group : workflow.Group,
+            GroupLabel: string.IsNullOrWhiteSpace(workflow.GroupLabel) ? classification.GroupLabel : workflow.GroupLabel,
+            SortOrder: workflow.SortOrder == 0 ? classification.SortOrder : workflow.SortOrder,
+            Source: normalizedSource,
+            Primitives: workflow.Primitives?.ToArray() ?? [],
+            DefaultInput: "Hello, world!",
+            ShowInLibrary: workflow.ShowInLibrary || classification.ShowInLibrary,
+            IsPrimitiveExample: workflow.IsPrimitiveExample || classification.IsPrimitiveExample,
+            RequiresLlmProvider: workflow.RequiresLlmProvider,
+            SourceLabel: string.IsNullOrWhiteSpace(workflow.SourceLabel) ? classification.SourceLabel : workflow.SourceLabel);
+    }
+
+    private static object MapCatalogItemDto(WorkflowCatalogItem workflow) => new
+    {
+        name = workflow.Name,
+        description = workflow.Description,
+        category = workflow.Category,
+        group = workflow.Group,
+        groupLabel = workflow.GroupLabel,
+        sortOrder = workflow.SortOrder,
+        source = workflow.Source,
+        primitives = workflow.Primitives,
+        defaultInput = workflow.DefaultInput,
+        showInLibrary = workflow.ShowInLibrary,
+        isPrimitiveExample = workflow.IsPrimitiveExample,
+        sourceLabel = workflow.SourceLabel,
+    };
+
+    private static object MapCatalogItemDto(QueryWorkflowCatalogItem workflow) =>
+        MapCatalogItemDto(ToPlaygroundCatalogItem(workflow));
+
+    private static object MapWorkflowDetailDto(QueryWorkflowCatalogItemDetail detail) => new
+    {
+        catalog = MapCatalogItemDto(detail.Catalog),
+        yaml = detail.Yaml,
+        definition = new
+        {
+            name = detail.Definition.Name,
+            description = detail.Definition.Description,
+            configuration = new
+            {
+                closedWorldMode = detail.Definition.ClosedWorldMode,
+            },
+            roles = detail.Definition.Roles.Select(role => new
+            {
+                id = role.Id,
+                name = role.Name,
+                systemPrompt = role.SystemPrompt,
+                provider = role.Provider,
+                model = role.Model,
+                temperature = role.Temperature,
+                maxTokens = role.MaxTokens,
+                maxToolRounds = role.MaxToolRounds,
+                maxHistoryMessages = role.MaxHistoryMessages,
+                streamBufferCapacity = role.StreamBufferCapacity,
+                eventModules = role.EventModules,
+                eventRoutes = role.EventRoutes,
+                connectors = role.Connectors,
+            }),
+            steps = detail.Definition.Steps.Select(step => new
+            {
+                id = step.Id,
+                type = step.Type,
+                targetRole = step.TargetRole,
+                parameters = step.Parameters,
+                next = step.Next,
+                branches = step.Branches,
+                children = step.Children.Select(child => new
+                {
+                    id = child.Id,
+                    type = child.Type,
+                    targetRole = child.TargetRole,
+                }),
+            }),
+        },
+        edges = detail.Edges.Select(edge => new
+        {
+            from = edge.From,
+            to = edge.To,
+            label = edge.Label,
+        }),
+    };
+
+    private static WorkflowCapabilitiesDocument BuildLocalCapabilitiesDocumentFallback()
+    {
+        var descriptors = BuildPrimitiveDescriptors(capabilities: null);
+        var workflows = BuildWorkflowCatalog();
+        return new WorkflowCapabilitiesDocument
+        {
+            SchemaVersion = "capabilities.v1",
+            GeneratedAtUtc = DateTimeOffset.UtcNow,
+            Primitives = descriptors.Select(descriptor => new WorkflowPrimitiveCapability
+            {
+                Name = descriptor.Name,
+                Aliases = descriptor.Aliases.ToList(),
+                Category = descriptor.Category,
+                Description = descriptor.Description,
+                Parameters = descriptor.Parameters.Select(parameter => new WorkflowPrimitiveParameterCapability
+                {
+                    Name = parameter.Name,
+                    Type = "string",
+                    Required = false,
+                    Description = parameter.Description,
+                    Default = parameter.Default ?? string.Empty,
+                    Enum = string.IsNullOrWhiteSpace(parameter.Values)
+                        ? []
+                        : parameter.Values
+                            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                            .ToList(),
+                }).ToList(),
+            }).ToList(),
+            Workflows = workflows.Select(workflow => new WorkflowCapabilityWorkflow
+            {
+                Name = workflow.Name,
+                Description = workflow.Description,
+                Source = workflow.Source,
+                RequiresLlmProvider = workflow.RequiresLlmProvider,
+                Primitives = workflow.Primitives.ToList(),
+            }).ToList(),
+        };
     }
 
     private static async Task HandlePlaygroundParseAsync(HttpContext ctx)
@@ -367,164 +932,376 @@ internal static class AppDemoPlaygroundEndpoints
         using (var reader = new StreamReader(ctx.Request.Body, Encoding.UTF8))
             yaml = await reader.ReadToEndAsync();
 
-        if (string.IsNullOrWhiteSpace(yaml))
+        var validation = ValidatePlaygroundWorkflow(yaml, ctx.RequestServices);
+        if (!validation.Valid || validation.Definition == null)
         {
             ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await ctx.Response.WriteAsJsonAsync(new { valid = false, error = "Empty YAML" });
-            return;
-        }
-
-        try
-        {
-            var parser = new WorkflowParser();
-            var def = parser.Parse(yaml);
-            var steps = def.Steps.Select(step => new
-            {
-                id = step.Id,
-                type = step.Type,
-                targetRole = step.TargetRole,
-                parameters = step.Parameters,
-                next = step.Next,
-                branches = step.Branches,
-                children = step.Children?.Select(child => new { id = child.Id, type = child.Type, targetRole = child.TargetRole }).ToList(),
-            }).ToList();
-
             await ctx.Response.WriteAsJsonAsync(new
             {
-                valid = true,
-                definition = new
-                {
-                    name = def.Name,
-                    description = def.Description,
-                    configuration = new
-                    {
-                        closedWorldMode = def.Configuration.ClosedWorldMode,
-                    },
-                    roles = def.Roles.Select(BuildRoleDto),
-                    steps,
-                },
-                edges = ComputeEdges(def),
+                valid = false,
+                error = validation.Error ?? "Invalid YAML",
+                errors = validation.Errors,
             });
+            return;
+        }
+
+        var definition = validation.Definition;
+        var steps = definition.Steps.Select(step => new
+        {
+            id = step.Id,
+            type = step.Type,
+            targetRole = step.TargetRole,
+            parameters = step.Parameters,
+            next = step.Next,
+            branches = step.Branches,
+            children = step.Children?.Select(child => new { id = child.Id, type = child.Type, targetRole = child.TargetRole }).ToList(),
+        }).ToList();
+
+        await ctx.Response.WriteAsJsonAsync(new
+        {
+            valid = true,
+            definition = new
+            {
+                name = definition.Name,
+                description = definition.Description,
+                configuration = new
+                {
+                    closedWorldMode = definition.Configuration.ClosedWorldMode,
+                },
+                roles = definition.Roles.Select(BuildRoleDto),
+                steps,
+            },
+            edges = ComputeEdges(definition),
+        });
+    }
+
+    private static async Task HandleSavePlaygroundWorkflowAsync(HttpContext ctx)
+    {
+        PlaygroundWorkflowSaveRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<PlaygroundWorkflowSaveRequest>(
+                ctx.Request.Body,
+                JsonOptions,
+                ctx.RequestAborted);
+        }
+        catch (JsonException)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await ctx.Response.WriteAsJsonAsync(new { error = "invalid json body" });
+            return;
+        }
+
+        if (request == null)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await ctx.Response.WriteAsJsonAsync(new { error = "request body is required" });
+            return;
+        }
+
+        var validation = ValidatePlaygroundWorkflow(request.Yaml, ctx.RequestServices);
+        if (!validation.Valid || validation.Definition == null)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await ctx.Response.WriteAsJsonAsync(new
+            {
+                error = validation.Error ?? "workflow yaml validation failed",
+                errors = validation.Errors,
+            });
+            return;
+        }
+
+        string filename;
+        try
+        {
+            filename = NormalizeWorkflowSaveFilename(request.Filename, validation.Definition.Name);
         }
         catch (Exception ex)
         {
-            await ctx.Response.WriteAsJsonAsync(new { valid = false, error = ex.Message });
+            ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await ctx.Response.WriteAsJsonAsync(new { error = ex.Message });
+            return;
         }
+
+        Directory.CreateDirectory(AevatarPaths.Workflows);
+        var path = Path.Combine(AevatarPaths.Workflows, filename);
+        var existed = File.Exists(path);
+        if (existed && !request.Overwrite)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status409Conflict;
+            await ctx.Response.WriteAsJsonAsync(new
+            {
+                error = $"Workflow '{filename}' already exists.",
+                filename,
+                path,
+            });
+            return;
+        }
+
+        var content = NormalizeWorkflowContentForSave(request.Yaml);
+        await File.WriteAllTextAsync(path, content, Utf8NoBom, ctx.RequestAborted);
+
+        await ctx.Response.WriteAsJsonAsync(new
+        {
+            saved = true,
+            filename,
+            path,
+            workflowName = validation.Definition.Name,
+            overwritten = existed,
+        });
     }
 
-    private static async Task HandlePlaygroundChatAsync(HttpContext ctx, bool embeddedWorkflowMode, CancellationToken ct)
+    internal static async Task<IResult> HandleOpenConfigAsync(
+        AppConfigOpenRequest? input,
+        IAevatarWorkflowClient client,
+        bool embeddedWorkflowMode,
+        CancellationToken ct)
     {
+        var normalizedPort = NormalizeConfigUiPort(input?.Port);
+        var fallbackConfigUrl = BuildConfigUiUrl(normalizedPort);
         if (!embeddedWorkflowMode)
         {
-            ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await ctx.Response.WriteAsync("Playground chat requires embedded workflow mode.", ct);
-            return;
-        }
-
-        var request = await JsonSerializer.DeserializeAsync<PlaygroundChatRequest>(ctx.Request.Body, JsonOptions, ct);
-        if (request?.Messages is not { Count: > 0 })
-        {
-            ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await ctx.Response.WriteAsync("messages required", ct);
-            return;
-        }
-
-        var factory = ctx.RequestServices.GetService<ILLMProviderFactory>();
-        if (factory == null)
-        {
-            ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await ctx.Response.WriteAsync("LLM provider not configured", ct);
-            return;
-        }
-
-        ILLMProvider provider;
-        IReadOnlyList<string> availableProviders;
-        try
-        {
-            provider = factory.GetDefault();
-            availableProviders = factory.GetAvailableProviders();
-        }
-        catch (Exception ex)
-        {
-            ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await ctx.Response.WriteAsync($"LLM provider unavailable: {ex.Message}", ct);
-            return;
-        }
-
-        var llmMessages = new List<ChatMessage>
-        {
-            ChatMessage.System(BuildPlaygroundSystemPrompt(availableProviders, provider.Name)),
-        };
-        foreach (var message in request.Messages.Where(m => !string.IsNullOrWhiteSpace(m.Content)))
-        {
-            llmMessages.Add(new ChatMessage
+            return Results.BadRequest(new
             {
-                Role = string.IsNullOrWhiteSpace(message.Role) ? "user" : message.Role,
-                Content = message.Content.Trim(),
+                ok = false,
+                code = "APP_CONFIG_OPEN_UNSUPPORTED_MODE",
+                message = "Config open workflow is only available in embedded mode.",
+                configUrl = fallbackConfigUrl,
             });
         }
 
-        ctx.Response.Headers["Content-Type"] = "text/event-stream";
-        ctx.Response.Headers["Cache-Control"] = "no-cache";
-        ctx.Response.Headers["Connection"] = "keep-alive";
+        if (!TryLoadAppConfigOpenWorkflowTemplate(out var workflowTemplate, out var loadError))
+        {
+            return Results.Json(
+                new
+                {
+                    ok = false,
+                    code = "APP_CONFIG_OPEN_WORKFLOW_MISSING",
+                    message = loadError,
+                },
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
+
+        var workflowYaml = workflowTemplate.Replace(
+            ConfigUiPortToken,
+            normalizedPort.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
 
         try
         {
-            await foreach (var chunk in provider.ChatStreamAsync(new LLMRequest
-                           {
-                               Messages = llmMessages,
-                               Temperature = 0.3,
-                           }, ct))
-            {
-                if (string.IsNullOrEmpty(chunk.DeltaContent))
-                    continue;
+            var runResult = await client.RunToCompletionAsync(
+                new ChatRunRequest
+                {
+                    Prompt = $"Open local config UI on port {normalizedPort}.",
+                    WorkflowYamls = [workflowYaml],
+                },
+                ct);
+            var workflowOutput = ExtractWorkflowOutput(runResult);
+            var configUrl = TryExtractConfigUiUrl(workflowOutput) ?? fallbackConfigUrl;
+            var started = TryExtractConfigUiStarted(workflowOutput);
 
-                var json = JsonSerializer.Serialize(new { delta = chunk.DeltaContent }, JsonOptions);
-                await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
-                await ctx.Response.Body.FlushAsync(ct);
-            }
+            return Results.Json(new
+            {
+                ok = true,
+                configUrl,
+                port = normalizedPort,
+                started = started ?? false,
+            });
         }
-        catch (OperationCanceledException)
+        catch (AevatarWorkflowException ex)
         {
+            return Results.BadRequest(new
+            {
+                ok = false,
+                code = ex.Kind.ToString(),
+                message = ex.Message,
+                configUrl = fallbackConfigUrl,
+            });
         }
         catch (Exception ex)
         {
-            if (!ct.IsCancellationRequested)
-            {
-                var json = JsonSerializer.Serialize(new { error = ex.Message }, JsonOptions);
-                await ctx.Response.WriteAsync($"data: {json}\n\n", CancellationToken.None);
-                await ctx.Response.Body.FlushAsync(CancellationToken.None);
-            }
-        }
-
-        if (!ct.IsCancellationRequested)
-        {
-            await ctx.Response.WriteAsync("data: [DONE]\n\n", ct);
-            await ctx.Response.Body.FlushAsync(ct);
+            return Results.Json(
+                new
+                {
+                    ok = false,
+                    code = "APP_CONFIG_OPEN_FAILED",
+                    message = ex.Message,
+                    configUrl = fallbackConfigUrl,
+                },
+                statusCode: StatusCodes.Status500InternalServerError);
         }
     }
 
-    private static string BuildPlaygroundSystemPrompt(IReadOnlyList<string> availableProviders, string defaultProvider)
+    private static int NormalizeConfigUiPort(int? inputPort)
     {
-        var providerList = availableProviders.Count == 0 ? "<none>" : string.Join(", ", availableProviders);
-        var defaultLabel = string.IsNullOrWhiteSpace(defaultProvider) ? "not-set" : defaultProvider.Trim();
+        if (inputPort is > 0 and <= 65535)
+            return inputPort.Value;
+        return DefaultConfigUiPort;
+    }
 
-        return $"""
-You are an expert Aevatar workflow author.
-Return valid workflow YAML only in a fenced ```yaml block.
+    private static string BuildConfigUiUrl(int port) => $"http://localhost:{port}";
 
-Rules:
-- Use snake_case fields.
-- Always provide: name, description, steps.
-- Add roles when using llm_call/evaluate/reflect.
-- Keep parameter values as strings.
-- Make ids stable and unique.
+    private static bool TryLoadAppConfigOpenWorkflowTemplate(
+        out string workflowTemplate,
+        out string error)
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "workflows", AppConfigOpenWorkflowFileName),
+            Path.Combine(AevatarPaths.RepoRoot, "tools", "Aevatar.Tools.Cli", "workflows", AppConfigOpenWorkflowFileName),
+            Path.Combine(Environment.CurrentDirectory, "tools", "Aevatar.Tools.Cli", "workflows", AppConfigOpenWorkflowFileName),
+            Path.Combine(Environment.CurrentDirectory, "workflows", AppConfigOpenWorkflowFileName),
+        };
 
-Runtime providers:
-- available: {providerList}
-- default: {defaultLabel}
-- Prefer omitting provider/model unless user explicitly asks.
-""";
+        foreach (var candidate in candidates)
+        {
+            if (!File.Exists(candidate))
+                continue;
+
+            workflowTemplate = File.ReadAllText(candidate);
+            if (!string.IsNullOrWhiteSpace(workflowTemplate))
+            {
+                error = string.Empty;
+                return true;
+            }
+        }
+
+        workflowTemplate = string.Empty;
+        error = $"Workflow template '{AppConfigOpenWorkflowFileName}' was not found in expected locations.";
+        return false;
+    }
+
+    private static string ExtractWorkflowOutput(WorkflowRunResult runResult)
+    {
+        var terminalResult = runResult.TerminalEvent?.Frame.Result;
+        var output = ExtractRunOutput(terminalResult);
+        if (!string.IsNullOrWhiteSpace(output))
+            return output;
+
+        foreach (var evt in runResult.Events.Reverse())
+        {
+            if (!string.Equals(evt.Frame.Type, WorkflowEventTypes.Custom, StringComparison.Ordinal))
+                continue;
+            if (!string.Equals(evt.Frame.Name, "aevatar.step.completed", StringComparison.Ordinal))
+                continue;
+            if (evt.Frame.Value is not { } value)
+                continue;
+
+            var candidate = ReadJsonValue(value, "output", "Output");
+            if (!string.IsNullOrWhiteSpace(candidate))
+                return candidate;
+        }
+
+        return string.Empty;
+    }
+
+    private static string? TryExtractConfigUiUrl(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+            return null;
+
+        var trimmed = output.Trim();
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var directUrl))
+            return directUrl.ToString();
+
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (TryReadJsonString(doc.RootElement, out var topUrl, "configUrl", "url"))
+                return topUrl;
+
+            if (!doc.RootElement.TryGetProperty("data", out var data) ||
+                data.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return TryReadJsonString(data, out var nestedUrl, "configUrl", "url")
+                ? nestedUrl
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool? TryExtractConfigUiStarted(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(output);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (TryReadJsonBool(doc.RootElement, out var topStarted, "started"))
+                return topStarted;
+
+            if (!doc.RootElement.TryGetProperty("data", out var data) ||
+                data.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return TryReadJsonBool(data, out var nestedStarted, "started")
+                ? nestedStarted
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool TryReadJsonString(JsonElement element, out string value, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (element.TryGetProperty(key, out var property) &&
+                property.ValueKind == JsonValueKind.String)
+            {
+                var candidate = property.GetString();
+                if (!string.IsNullOrWhiteSpace(candidate))
+                {
+                    value = candidate.Trim();
+                    return true;
+                }
+            }
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static bool TryReadJsonBool(JsonElement element, out bool value, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!element.TryGetProperty(key, out var property))
+                continue;
+
+            if (property.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                value = property.GetBoolean();
+                return true;
+            }
+
+            if (property.ValueKind == JsonValueKind.String &&
+                bool.TryParse(property.GetString(), out var parsed))
+            {
+                value = parsed;
+                return true;
+            }
+        }
+
+        value = false;
+        return false;
     }
 
     private static async Task TryAutoResumeAsync(
@@ -883,6 +1660,55 @@ Runtime providers:
     private static bool TryResolveWorkflowFile(string workflowName, out WorkflowFileEntry workflowFile) =>
         DiscoverWorkflowFiles().TryGetValue(workflowName, out workflowFile!);
 
+    private static IReadOnlyList<WorkflowCatalogItem> BuildWorkflowCatalog()
+    {
+        var parser = new WorkflowParser();
+        var items = new List<WorkflowCatalogItem>();
+
+        foreach (var workflowFile in DiscoverWorkflowFiles().Values
+                     .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var yaml = File.ReadAllText(workflowFile.FilePath);
+                var definition = parser.Parse(yaml);
+                var primitives = definition.Steps
+                    .Select(step => WorkflowPrimitiveCatalog.ToCanonicalType(step.Type))
+                    .Where(type => !string.IsNullOrWhiteSpace(type))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                var category = primitives.Any(p => LlmLikeStepTypes.Contains(p)) ? "llm" : "deterministic";
+                var requiresLlmProvider = WorkflowLlmRuntimePolicy.RequiresLlmProvider(definition);
+                var classification = ClassifyWorkflowForLibrary(
+                    workflowFile.Name,
+                    workflowFile.SourceKind,
+                    category);
+
+                items.Add(new WorkflowCatalogItem(
+                    Name: workflowFile.Name,
+                    Description: definition.Description ?? string.Empty,
+                    Category: category,
+                    Group: classification.Group,
+                    GroupLabel: classification.GroupLabel,
+                    SortOrder: classification.SortOrder,
+                    Source: workflowFile.SourceKind,
+                    Primitives: primitives,
+                    DefaultInput: "Hello, world!",
+                    ShowInLibrary: classification.ShowInLibrary,
+                    IsPrimitiveExample: classification.IsPrimitiveExample,
+                    RequiresLlmProvider: requiresLlmProvider,
+                    SourceLabel: classification.SourceLabel));
+            }
+            catch
+            {
+                // Ignore legacy/invalid definitions in list view and fall back to valid sources.
+            }
+        }
+
+        return items;
+    }
+
     private static IReadOnlyList<WorkflowYamlSource> BuildWorkflowSources()
     {
         var sources = new List<WorkflowYamlSource>();
@@ -922,30 +1748,195 @@ Runtime providers:
         }
     }
 
-    private static (string Group, string GroupLabel) InferGroup(string sourceKind) =>
-        sourceKind switch
-        {
-            "home" => ("home-workflows", "Home Workflows"),
-            "demo" => ("demo-workflows", "Demo Workflows"),
-            "turing" => ("turing-completeness", "Turing Completeness"),
-            "repo" => ("repo-workflows", "Repo Workflows"),
-            _ => ("other-workflows", "Other Workflows"),
-        };
+    internal static WorkflowLibraryClassification ClassifyWorkflowForLibrary(
+        string workflowName,
+        string sourceKind,
+        string category) =>
+        WorkflowLibraryClassifier.Classify(workflowName, sourceKind, category);
 
-    private static int? TryParseWorkflowIndex(string workflowName)
+    private static object[] BuildPrimitiveExamples(
+        string primitiveName,
+        IReadOnlyList<WorkflowCatalogItem> workflows)
     {
-        if (string.IsNullOrWhiteSpace(workflowName))
+        if (!CuratedPrimitiveExamples.TryGetValue(primitiveName, out var curatedWorkflowNames))
+            return Array.Empty<object>();
+
+        var workflowLookup = workflows.ToDictionary(workflow => workflow.Name, StringComparer.OrdinalIgnoreCase);
+        return curatedWorkflowNames
+            .Where(name => workflowLookup.ContainsKey(name))
+            .Select(name => workflowLookup[name])
+            .Select(workflow => (object)new
+            {
+                name = workflow.Name,
+                description = workflow.Description,
+                kindLabel = workflow.IsPrimitiveExample ? "Mini Example" : "Workflow",
+            })
+            .ToArray();
+    }
+
+    private static async Task<WorkflowCapabilitiesDocument?> TryLoadCapabilitiesDocumentAsync(
+        IAevatarWorkflowClient client,
+        CancellationToken ct)
+    {
+        try
+        {
+            var payload = await client.GetCapabilitiesAsync(ct);
+            if (payload is not { ValueKind: JsonValueKind.Object } documentJson)
+                return null;
+
+            var document = JsonSerializer.Deserialize<WorkflowCapabilitiesDocument>(
+                documentJson.GetRawText(),
+                CapabilityDocumentJsonOptions);
+            if (document == null)
+                return null;
+
+            if (string.IsNullOrWhiteSpace(document.SchemaVersion))
+                document.SchemaVersion = "capabilities.v1";
+            return document;
+        }
+        catch
+        {
             return null;
+        }
+    }
 
-        var span = workflowName.AsSpan().Trim();
-        var index = 0;
-        while (index < span.Length && char.IsDigit(span[index]))
-            index++;
+    private static IReadOnlyList<PrimitiveDescriptor> BuildPrimitiveDescriptors(
+        WorkflowCapabilitiesDocument? capabilities)
+    {
+        if (capabilities?.Primitives is not { Count: > 0 })
+        {
+            return WorkflowPrimitiveCatalog.BuiltInCanonicalTypes
+                .Select(ResolvePrimitiveDescriptor)
+                .ToArray();
+        }
 
-        if (index == 0 || index >= span.Length || span[index] != '_')
-            return null;
+        var connectorNames = JoinCapabilityValues(capabilities.Connectors.Select(connector => connector.Name));
+        var connectorOperations = JoinCapabilityValues(
+            capabilities.Connectors.SelectMany(connector => connector.AllowedOperations));
+        var resolved = new Dictionary<string, PrimitiveDescriptor>(StringComparer.OrdinalIgnoreCase);
 
-        return int.TryParse(span[..index], out var value) ? value : null;
+        foreach (var primitive in capabilities.Primitives)
+        {
+            if (string.IsNullOrWhiteSpace(primitive.Name))
+                continue;
+
+            var descriptor = ResolvePrimitiveDescriptor(primitive, connectorNames, connectorOperations);
+            resolved[descriptor.Name] = descriptor;
+        }
+
+        foreach (var builtInPrimitive in WorkflowPrimitiveCatalog.BuiltInCanonicalTypes)
+        {
+            var canonical = WorkflowPrimitiveCatalog.ToCanonicalType(builtInPrimitive);
+            if (!resolved.ContainsKey(canonical))
+                resolved[canonical] = ResolvePrimitiveDescriptor(canonical);
+        }
+
+        return resolved.Values.ToArray();
+    }
+
+    private static PrimitiveDescriptor ResolvePrimitiveDescriptor(
+        WorkflowPrimitiveCapability capability,
+        string connectorNames,
+        string connectorOperations)
+    {
+        var canonicalName = WorkflowPrimitiveCatalog.ToCanonicalType(capability.Name);
+        var fallback = ResolvePrimitiveDescriptor(canonicalName);
+        IEnumerable<string> aliases = capability.Aliases is { Count: > 0 }
+            ? capability.Aliases
+            : fallback.Aliases;
+        var normalizedAliases = aliases
+            .Prepend(canonicalName)
+            .Where(alias => !string.IsNullOrWhiteSpace(alias))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var parameters = capability.Parameters is { Count: > 0 }
+            ? capability.Parameters
+                .Select(parameter => new PrimitiveParameter(
+                    parameter.Name,
+                    parameter.Description,
+                    string.IsNullOrWhiteSpace(parameter.Default) ? null : parameter.Default,
+                    parameter.Enum is { Count: > 0 } ? string.Join(", ", parameter.Enum) : null))
+                .ToList()
+            : fallback.Parameters.ToList();
+
+        if (string.Equals(canonicalName, "connector_call", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(canonicalName, "secure_connector_call", StringComparison.OrdinalIgnoreCase))
+        {
+            EnsurePrimitiveParameter(
+                parameters,
+                new PrimitiveParameter(
+                    "connector",
+                    "Connector or capability name to invoke.",
+                    null,
+                    connectorNames));
+            EnsurePrimitiveParameter(
+                parameters,
+                new PrimitiveParameter(
+                    "operation",
+                    "Connector-specific operation or method.",
+                    null,
+                    connectorOperations));
+        }
+
+        return new PrimitiveDescriptor(
+            Name: canonicalName,
+            Aliases: normalizedAliases,
+            Category: string.IsNullOrWhiteSpace(capability.Category)
+                ? fallback.Category
+                : capability.Category,
+            Description: string.IsNullOrWhiteSpace(capability.Description)
+                ? fallback.Description
+                : capability.Description,
+            Parameters: parameters.ToArray());
+    }
+
+    private static string JoinCapabilityValues(IEnumerable<string> values)
+    {
+        var normalized = values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return normalized.Length == 0 ? string.Empty : string.Join(", ", normalized);
+    }
+
+    private static void EnsurePrimitiveParameter(
+        ICollection<PrimitiveParameter> parameters,
+        PrimitiveParameter parameter)
+    {
+        if (parameters.Any(existing => string.Equals(existing.Name, parameter.Name, StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        parameters.Add(parameter);
+    }
+
+    internal static PrimitiveDescriptor ResolvePrimitiveDescriptor(string primitiveName)
+    {
+        var canonicalName = WorkflowPrimitiveCatalog.ToCanonicalType(primitiveName);
+        var aliases = PrimitiveAliases.TryGetValue(canonicalName, out var aliasList)
+            ? aliasList
+            : [canonicalName];
+
+        var normalizedAliases = aliases
+            .Prepend(canonicalName)
+            .Where(alias => !string.IsNullOrWhiteSpace(alias))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var metadata = PrimitiveMetadataCatalog.TryGetValue(canonicalName, out var entry)
+            ? entry
+            : new PrimitiveMetadata(
+                $"Core workflow primitive `{canonicalName}` used by the runtime.",
+                Array.Empty<PrimitiveParameter>());
+
+        return new PrimitiveDescriptor(
+            Name: canonicalName,
+            Aliases: normalizedAliases,
+            Category: InferPrimitiveCategory(canonicalName),
+            Description: metadata.Description,
+            Parameters: metadata.Parameters.ToArray());
     }
 
     private static string InferPrimitiveCategory(string name) =>
@@ -955,9 +1946,21 @@ Runtime providers:
             "guard" or "conditional" or "switch" or "while" or "delay" or "wait_signal" or "checkpoint" => "control",
             "foreach" or "parallel" or "race" or "map_reduce" or "workflow_call" or "vote" => "composition",
             "llm_call" or "tool_call" or "evaluate" or "reflect" => "ai",
-            "connector_call" or "emit" or "openclaw_call" => "integration",
+            "connector_call" or "aevatar_call" or "emit" => "integration",
             "human_input" or "human_approval" => "human",
             _ => "general",
+        };
+
+    private static int GetPrimitiveCategorySortOrder(string category) =>
+        category switch
+        {
+            "data" => 0,
+            "control" => 1,
+            "composition" => 2,
+            "ai" => 3,
+            "human" => 4,
+            "integration" => 5,
+            _ => 6,
         };
 
     private static List<object> ComputeEdges(WorkflowDefinition definition)
@@ -994,6 +1997,141 @@ Runtime providers:
         return edges;
     }
 
+    internal static PlaygroundWorkflowValidationResult ValidatePlaygroundWorkflow(
+        string yaml,
+        IServiceProvider services)
+    {
+        if (string.IsNullOrWhiteSpace(yaml))
+        {
+            return new PlaygroundWorkflowValidationResult(
+                false,
+                null,
+                ["Empty YAML"],
+                "Empty YAML");
+        }
+
+        try
+        {
+            var parser = new WorkflowParser();
+            var definition = parser.Parse(yaml);
+            var errors = ValidateWorkflowDefinitionForRuntime(definition, services);
+            if (errors.Count > 0)
+            {
+                return new PlaygroundWorkflowValidationResult(
+                    false,
+                    definition,
+                    errors,
+                    string.Join("; ", errors));
+            }
+
+            return new PlaygroundWorkflowValidationResult(
+                true,
+                definition,
+                Array.Empty<string>(),
+                null);
+        }
+        catch (Exception ex)
+        {
+            return new PlaygroundWorkflowValidationResult(
+                false,
+                null,
+                [ex.Message],
+                ex.Message);
+        }
+    }
+
+    internal static List<string> ValidateWorkflowDefinitionForRuntime(
+        WorkflowDefinition definition,
+        IServiceProvider services)
+    {
+        var modulePacks = services.GetServices<IWorkflowModulePack>().ToList();
+        var knownStepTypes = modulePacks.Count > 0
+            ? WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
+                modulePacks.SelectMany(pack => pack.Modules).SelectMany(module => module.Names))
+            : WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
+                WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
+
+        var moduleFactory = services.GetService<IEventModuleFactory>();
+        if (moduleFactory != null)
+        {
+            foreach (var stepType in EnumerateReferencedStepTypes(definition.Steps))
+            {
+                var canonical = WorkflowPrimitiveCatalog.ToCanonicalType(stepType);
+                if (string.IsNullOrWhiteSpace(canonical) || knownStepTypes.Contains(canonical))
+                    continue;
+
+                if (moduleFactory.TryCreate(canonical, out _))
+                    knownStepTypes.Add(canonical);
+            }
+        }
+
+        return WorkflowValidator.Validate(
+            definition,
+            new WorkflowValidator.WorkflowValidationOptions
+            {
+                RequireKnownStepTypes = true,
+                KnownStepTypes = knownStepTypes,
+            },
+            availableWorkflowNames: null);
+    }
+
+    internal static string NormalizeWorkflowSaveFilename(string? requestedFilename, string workflowName)
+    {
+        var candidate = string.IsNullOrWhiteSpace(requestedFilename)
+            ? workflowName
+            : requestedFilename.Trim();
+        if (string.IsNullOrWhiteSpace(candidate))
+            throw new InvalidOperationException("workflow filename is required");
+
+        var fileNameOnly = Path.GetFileName(candidate);
+        if (!string.Equals(fileNameOnly, candidate, StringComparison.Ordinal))
+            throw new InvalidOperationException("workflow filename must not include directory segments");
+
+        var stem = Path.GetFileNameWithoutExtension(fileNameOnly);
+        if (string.IsNullOrWhiteSpace(stem))
+            throw new InvalidOperationException("workflow filename is invalid");
+
+        var sanitizedChars = stem
+            .Trim()
+            .Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_')
+            .ToArray();
+        var sanitizedStem = new string(sanitizedChars)
+            .Trim('_');
+        while (sanitizedStem.Contains("__", StringComparison.Ordinal))
+            sanitizedStem = sanitizedStem.Replace("__", "_", StringComparison.Ordinal);
+
+        if (string.IsNullOrWhiteSpace(sanitizedStem))
+            throw new InvalidOperationException("workflow filename must contain letters or digits");
+
+        return sanitizedStem + ".yaml";
+    }
+
+    internal static string NormalizeWorkflowContentForSave(string yaml) =>
+        (yaml ?? string.Empty).Trim() + Environment.NewLine;
+
+    private static IEnumerable<string> EnumerateReferencedStepTypes(IEnumerable<StepDefinition> steps)
+    {
+        foreach (var step in steps)
+        {
+            yield return step.Type;
+
+            foreach (var (key, value) in step.Parameters)
+            {
+                if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
+                    !string.IsNullOrWhiteSpace(value))
+                {
+                    yield return value;
+                }
+            }
+
+            if (step.Children is { Count: > 0 })
+            {
+                foreach (var childType in EnumerateReferencedStepTypes(step.Children))
+                    yield return childType;
+            }
+        }
+    }
+
     private static object BuildRoleDto(RoleDefinition role) => new
     {
         id = role.Id,
@@ -1023,7 +2161,40 @@ Runtime providers:
 
     private sealed record WorkflowYamlSource(string Kind, string DirectoryPath);
     private sealed record WorkflowFileEntry(string Name, string FilePath, string SourceKind);
-    private sealed record PlaygroundChatMessage(string Role, string Content);
-    private sealed record PlaygroundChatRequest(List<PlaygroundChatMessage> Messages);
+    internal sealed record PrimitiveDescriptor(
+        string Name,
+        string[] Aliases,
+        string Category,
+        string Description,
+        PrimitiveParameter[] Parameters);
+    private sealed record PrimitiveMetadata(
+        string Description,
+        IReadOnlyList<PrimitiveParameter> Parameters);
+    internal sealed record PrimitiveParameter(
+        string Name,
+        string Description,
+        string? Default,
+        string? Values);
+    private sealed record WorkflowCatalogItem(
+        string Name,
+        string Description,
+        string Category,
+        string Group,
+        string GroupLabel,
+        int SortOrder,
+        string Source,
+        string[] Primitives,
+        string DefaultInput,
+        bool ShowInLibrary,
+        bool IsPrimitiveExample,
+        bool RequiresLlmProvider,
+        string SourceLabel);
+    private sealed record PlaygroundWorkflowSaveRequest(string Yaml, string? Filename, bool Overwrite);
+    internal sealed record AppConfigOpenRequest(int? Port);
+    internal sealed record PlaygroundWorkflowValidationResult(
+        bool Valid,
+        WorkflowDefinition? Definition,
+        IReadOnlyList<string> Errors,
+        string? Error);
     private sealed record MappedSseEvent(string EventType, Dictionary<string, object?> Data);
 }

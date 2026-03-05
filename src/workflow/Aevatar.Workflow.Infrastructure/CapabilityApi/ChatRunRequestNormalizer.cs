@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Infrastructure.Workflows;
 
@@ -21,23 +22,31 @@ internal static class ChatRunRequestNormalizer
 {
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
-        IFileBackedWorkflowNameCatalog fileBackedWorkflowNames)
+        IFileBackedWorkflowNameCatalog fileBackedWorkflowNames,
+        WorkflowCapabilitiesDocument? capabilities = null)
     {
         var normalizedMetadata = NormalizeMetadata(input.Metadata);
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
+        var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
+        var normalizedPrompt = WorkflowAuthoringSkillPromptAugmentor.AugmentPrompt(
+            input.Prompt,
+            requestedWorkflowName,
+            inlineWorkflowYamls.Count > 0,
+            normalizedMetadata,
+            capabilities);
+
         if (inlineWorkflowYamls.Count > 0)
         {
             // Inline YAML bundle has explicit precedence over workflow-name lookup.
             return ChatRunRequestNormalizationResult.Success(
                 new WorkflowChatRunRequest(
-                    input.Prompt,
+                    normalizedPrompt,
                     WorkflowName: null,
                     input.AgentId,
                     inlineWorkflowYamls,
                     normalizedMetadata));
         }
 
-        var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
         if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
         {
             if (!fileBackedWorkflowNames.Contains(requestedWorkflowName))
@@ -45,7 +54,7 @@ internal static class ChatRunRequestNormalizer
 
             return ChatRunRequestNormalizationResult.Success(
                 new WorkflowChatRunRequest(
-                    input.Prompt,
+                    normalizedPrompt,
                     requestedWorkflowName,
                     input.AgentId,
                     WorkflowYamls: null,
@@ -55,7 +64,7 @@ internal static class ChatRunRequestNormalizer
         // Public default mode: prompt-only requests route to auto.
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
-                input.Prompt,
+                normalizedPrompt,
                 WorkflowRunBehaviorOptions.AutoWorkflowName,
                 input.AgentId,
                 WorkflowYamls: null,

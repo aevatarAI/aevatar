@@ -374,7 +374,10 @@ public sealed class WorkflowLoopModule : IEventModule
                     step.Id, policy.FallbackStep);
 
                 _retryAttempts.Remove(GetStepRunKey(runId, step.Id));
-                await DispatchStep(fallback, evt.Output ?? "", runId, ctx, ct);
+                var fallbackInput = string.IsNullOrWhiteSpace(evt.Output)
+                    ? evt.Error ?? string.Empty
+                    : evt.Output;
+                await DispatchStep(fallback, fallbackInput, runId, ctx, ct);
                 return true;
             }
             default:

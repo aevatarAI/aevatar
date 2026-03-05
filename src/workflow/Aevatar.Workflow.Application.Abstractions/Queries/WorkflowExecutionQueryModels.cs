@@ -5,6 +5,81 @@ public sealed record WorkflowAgentSummary(
     string Type,
     string Description);
 
+public sealed class WorkflowCatalogItem
+{
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    public string Group { get; set; } = string.Empty;
+    public string GroupLabel { get; set; } = string.Empty;
+    public int SortOrder { get; set; }
+    public string Source { get; set; } = string.Empty;
+    public string SourceLabel { get; set; } = string.Empty;
+    public bool ShowInLibrary { get; set; }
+    public bool IsPrimitiveExample { get; set; }
+    public bool RequiresLlmProvider { get; set; }
+    public List<string> Primitives { get; set; } = [];
+}
+
+public sealed class WorkflowCatalogRole
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string SystemPrompt { get; set; } = string.Empty;
+    public string Provider { get; set; } = string.Empty;
+    public string Model { get; set; } = string.Empty;
+    public float? Temperature { get; set; }
+    public int? MaxTokens { get; set; }
+    public int? MaxToolRounds { get; set; }
+    public int? MaxHistoryMessages { get; set; }
+    public int? StreamBufferCapacity { get; set; }
+    public List<string> EventModules { get; set; } = [];
+    public string EventRoutes { get; set; } = string.Empty;
+    public List<string> Connectors { get; set; } = [];
+}
+
+public sealed class WorkflowCatalogChildStep
+{
+    public string Id { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
+    public string TargetRole { get; set; } = string.Empty;
+}
+
+public sealed class WorkflowCatalogStep
+{
+    public string Id { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
+    public string TargetRole { get; set; } = string.Empty;
+    public Dictionary<string, string> Parameters { get; set; } = [];
+    public string Next { get; set; } = string.Empty;
+    public Dictionary<string, string> Branches { get; set; } = [];
+    public List<WorkflowCatalogChildStep> Children { get; set; } = [];
+}
+
+public sealed class WorkflowCatalogEdge
+{
+    public string From { get; set; } = string.Empty;
+    public string To { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+}
+
+public sealed class WorkflowCatalogDefinition
+{
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public bool ClosedWorldMode { get; set; }
+    public List<WorkflowCatalogRole> Roles { get; set; } = [];
+    public List<WorkflowCatalogStep> Steps { get; set; } = [];
+}
+
+public sealed class WorkflowCatalogItemDetail
+{
+    public WorkflowCatalogItem Catalog { get; set; } = new();
+    public string Yaml { get; set; } = string.Empty;
+    public WorkflowCatalogDefinition Definition { get; set; } = new();
+    public List<WorkflowCatalogEdge> Edges { get; set; } = [];
+}
+
 public sealed class WorkflowActorSnapshot
 {
     public string ActorId { get; set; } = string.Empty;

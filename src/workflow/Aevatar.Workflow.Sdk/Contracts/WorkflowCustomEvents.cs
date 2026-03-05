@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json;
 using Aevatar.Workflow.Sdk.Internal;
 
@@ -45,6 +46,7 @@ public sealed record WorkflowHumanInputRequestEventData
     public string? SuspensionType { get; init; }
     public string? Prompt { get; init; }
     public int? TimeoutSeconds { get; init; }
+    public IDictionary<string, string>? Metadata { get; init; }
 }
 
 public sealed record WorkflowWaitingSignalEventData
@@ -146,6 +148,7 @@ public static class WorkflowCustomEventParser
             SuspensionType = WorkflowSdkJson.TryReadString(obj, "suspensionType", "SuspensionType"),
             Prompt = WorkflowSdkJson.TryReadString(obj, "prompt", "Prompt"),
             TimeoutSeconds = TryReadInt(obj, "timeoutSeconds", "TimeoutSeconds"),
+            Metadata = TryReadStringMap(obj, "metadata", "Metadata"),
         };
         return true;
     }
@@ -204,6 +207,27 @@ public static class WorkflowCustomEventParser
 
         obj = default;
         return false;
+    }
+
+    private static Dictionary<string, string>? TryReadStringMap(JsonElement obj, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!obj.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var property in value.EnumerateObject())
+            {
+                result[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                    ? property.Value.GetString() ?? string.Empty
+                    : property.Value.ToString();
+            }
+
+            return result;
+        }
+
+        return null;
     }
 
     private static bool? TryReadBoolean(JsonElement obj, params string[] names)

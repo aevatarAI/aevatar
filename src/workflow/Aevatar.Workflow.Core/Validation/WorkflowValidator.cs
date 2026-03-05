@@ -196,6 +196,14 @@ public static class WorkflowValidator
             {
                 errors.Add($"步骤 '{step.Id}'（workflow_call）引用未注册工作流 '{workflowName}'");
             }
+            return;
+        }
+
+        if (stepType == "dynamic_workflow" &&
+            options.DisallowDynamicWorkflowStep)
+        {
+            errors.Add(
+                $"步骤 '{step.Id}' 使用了保留原语 'dynamic_workflow'。请改为 workflow_call 或其他业务原语。");
         }
     }
 
@@ -237,6 +245,11 @@ public static class WorkflowValidator
         /// 已注册的原语名称集合（可包含别名，校验时会 canonicalize）。
         /// </summary>
         public ISet<string>? KnownStepTypes { get; init; }
+
+        /// <summary>
+        /// 是否禁止在待校验 workflow 中使用 dynamic_workflow（该原语保留给引擎内部重配置流程）。
+        /// </summary>
+        public bool DisallowDynamicWorkflowStep { get; init; }
     }
 
     private static IEnumerable<StepDefinition> EnumerateSteps(IEnumerable<StepDefinition> steps)

@@ -47,6 +47,7 @@ public sealed record WorkflowSignalInput
     public required string ActorId { get; init; }
     public required string RunId { get; init; }
     public required string SignalName { get; init; }
+    public string? StepId { get; init; }
     public string? CommandId { get; init; }
     public string? Payload { get; init; }
 }

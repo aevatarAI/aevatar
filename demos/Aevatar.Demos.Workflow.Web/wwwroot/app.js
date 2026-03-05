@@ -7,6 +7,8 @@
   let llmStatus = { available: false };
   let selectedWorkflow = null;
   let selectedWorkflowMeta = null;
+  let selectedPrimitive = null;
+  let yamlViewerSource = "workflow";
   let workflowDef = null;
   let stepStates = {};
   let turingMachineState = {};
@@ -19,8 +21,10 @@
   let persistStateTimer = null;
   let persistenceHooksBound = false;
   let workflowGroupCollapsed = {};
+  let appSidebarCollapsed = false;
   const UI_STATE_STORAGE_KEY = "aevatar.workflow.web.ui.v1";
   const UI_STATE_STORAGE_VERSION = 1;
+  const PG_MODAL_KEYS = new Set(["save", "log", "result", "interaction"]);
 
   const TYPE_COLORS = {
     transform: "#3b82f6", guard: "#f97316", conditional: "#f59e0b", switch: "#f59e0b",
@@ -28,45 +32,64 @@
     race: "#14b8a6", map_reduce: "#84cc16", foreach: "#84cc16", for_each: "#84cc16",
     evaluate: "#ec4899", reflect: "#ec4899", cache: "#06b6d4", assign: "#94a3b8",
     retrieve_facts: "#3b82f6", emit: "#f43f5e", delay: "#f59e0b", checkpoint: "#6366f1",
-    wait_signal: "#f59e0b", human_approval: "#f97316", human_input: "#f97316",
+    wait_signal: "#f59e0b", human_approval: "#f97316", human_input: "#f97316", secure_input: "#dc2626",
     workflow_call: "#6366f1", vote_consensus: "#22c55e", tool_call: "#a855f7",
-    connector_call: "#14b8a6", workflow_loop: "#64748b",
+    connector_call: "#14b8a6", secure_connector_call: "#0f766e", secure_aevatar_call: "#0f766e", workflow_loop: "#64748b",
   };
   const WORKFLOW_GROUP_ORDER = [
-    "start-here",
-    "llm-workflows",
-    "openclaw-integration",
-    "human-interaction-manual",
-    "human-interaction-legacy",
-    "connector-integration",
-    "integration-utility",
-    "ergonomic-aliases",
-    "custom-step-modules",
-    "role-event-modules",
-    "turing-completeness",
-    "deterministic-other",
-    "other",
+    "your-workflows",
+    "starter-workflows",
+    "ai-workflows",
+    "integration-workflows",
+    "advanced-patterns",
   ];
   const WORKFLOW_GROUP_LABELS = {
-    "start-here": "01-07 Deterministic Basics",
-    "llm-workflows": "08-16 LLM Workflows",
-    "openclaw-integration": "57-67 OpenClaw Integration",
-    "role-event-modules": "Role Event Modules",
-    "human-interaction-manual": "Human Interaction (Manual)",
-    "human-interaction-legacy": "Human Interaction (Legacy Auto)",
-    "connector-integration": "Connector Integration",
-    "integration-utility": "Integration Utility",
-    "ergonomic-aliases": "Ergonomic Aliases",
-    "custom-step-modules": "Custom Step Modules",
-    "turing-completeness": "Turing Completeness",
-    "deterministic-other": "Other Deterministic Demos",
-    "other": "Other",
+    "your-workflows": "Your Workflows",
+    "starter-workflows": "Starter Workflows",
+    "ai-workflows": "AI & Human Workflows",
+    "integration-workflows": "Integrations & Tools",
+    "advanced-patterns": "Advanced Patterns",
+  };
+  const WORKFLOW_GROUP_DESCRIPTIONS = {
+    "your-workflows": "Saved workflows in ~/.aevatar/workflows. These are the most relevant starting point for your own usage.",
+    "starter-workflows": "Representative built-in workflows that show the normal Aevatar structure and YAML layout.",
+    "ai-workflows": "Flows where LLM reasoning and human checkpoints work together inside the same orchestration.",
+    "integration-workflows": "Examples that call tools, connectors, or external systems and show how runtime actions are modeled.",
+    "advanced-patterns": "More advanced control-flow, composition, or system-level examples when you need deeper patterns.",
   };
   const WORKFLOW_GROUP_DEFAULT_EXPANDED = new Set([
-    "start-here",
-    "llm-workflows",
-    "openclaw-integration",
+    "your-workflows",
+    "starter-workflows",
+    "ai-workflows",
   ]);
+  const PRIMITIVE_CATEGORY_ORDER = [
+    "data",
+    "control",
+    "composition",
+    "ai",
+    "human",
+    "integration",
+    "general",
+  ];
+  const PRIMITIVE_CATEGORY_LABELS = {
+    data: "Data & State",
+    control: "Control Flow",
+    composition: "Composition",
+    ai: "AI Reasoning",
+    human: "Human in the Loop",
+    integration: "Integrations",
+    general: "Runtime",
+  };
+  const PRIMITIVE_CATEGORY_DESCRIPTIONS = {
+    data: "Primitives that read, transform, and store values inside the workflow state.",
+    control: "Branching and control-flow primitives that determine how the workflow advances.",
+    composition: "Primitives that assemble sub-workflows, parallelism, and reusable orchestration structure.",
+    ai: "LLM-centered primitives that produce reasoning or model-backed responses.",
+    human: "Manual checkpoints where a workflow pauses for input or approval.",
+    integration: "Primitives that call tools, connectors, or outside systems.",
+    general: "Runtime helpers and general orchestration support.",
+  };
+  const NAV_VIEWS = new Set(["overview", "workflows", "yaml", "primitives", "playground"]);
 
   // ── DOM refs ──
   const $ = (sel) => document.querySelector(sel);
@@ -74,10 +97,18 @@
 
   // ── Init ──
   document.addEventListener("DOMContentLoaded", async () => {
+    const startupChatPrompt = consumeStartupChatPrompt();
     const persistedState = readPersistedUiState();
     setupNavigation();
     await Promise.all([loadWorkflows(), loadLlmStatus(), loadPrimitives()]);
-    await restoreUiState(persistedState);
+    bindStaticActions();
+    if (persistedState) {
+      await restoreUiState(persistedState);
+    } else {
+      activateNavView("playground");
+      scheduleUiStatePersist();
+    }
+    await applyStartupChatPrompt(startupChatPrompt);
   });
 
   function setupNavigation() {
@@ -85,26 +116,171 @@
       btn.addEventListener("click", () => {
         $$(".nav-btn").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
-        const view = btn.dataset.view;
-        $("#sidebar-workflows").classList.toggle("hidden", view !== "workflows");
-        $("#sidebar-primitives").classList.toggle("hidden", view !== "primitives");
-        if (view === "playground") showView("playground");
-        else if (view === "primitives" && !selectedWorkflow) showView("empty");
+        const view = normalizeNavView(btn.dataset.view);
+        applyNavView(view);
         scheduleUiStatePersist();
       });
     });
+    $("#app-sidebar-toggle")?.addEventListener("click", () => {
+      setAppSidebarCollapsed(!appSidebarCollapsed);
+    });
+    setAppSidebarCollapsed(false, { force: true, skipPersist: true });
     $("#btn-run").addEventListener("click", runWorkflow);
     $("#btn-reset").addEventListener("click", resetExecution);
+    $("#config-open")?.addEventListener("click", () => void openConfigUi());
+    $("#btn-open-yaml")?.addEventListener("click", () => {
+      yamlViewerSource = "workflow";
+      renderYamlBrowser();
+      activateNavView("yaml");
+    });
+    $("#yaml-use-workflow")?.addEventListener("click", () => {
+      yamlViewerSource = "workflow";
+      renderYamlBrowser();
+    });
+    $("#yaml-use-playground")?.addEventListener("click", () => {
+      yamlViewerSource = "playground";
+      renderYamlBrowser();
+    });
+    $("#playground-open-yaml")?.addEventListener("click", () => {
+      yamlViewerSource = pgCurrentYaml ? "playground" : "workflow";
+      renderYamlBrowser();
+      activateNavView("yaml");
+    });
     setupPlayground();
     setupStatePersistence();
+  }
+
+  async function openConfigUi() {
+    const button = $("#config-open");
+    if (button) button.disabled = true;
+    try {
+      const payload = await postJson("/api/app/config/open", {});
+      const targetUrl = String(payload?.configUrl || "").trim();
+      if (!targetUrl)
+        throw new Error("Config UI URL is missing in response.");
+      window.location.assign(targetUrl);
+    } catch (error) {
+      const message = error?.message || String(error);
+      window.alert(message);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  function consumeStartupChatPrompt() {
+    const params = new URLSearchParams(window.location.search || "");
+    const prompt = String(params.get("chat") ?? params.get("prompt") ?? "").trim();
+    if (!prompt) return "";
+
+    params.delete("chat");
+    params.delete("prompt");
+
+    const query = params.toString();
+    const cleanedUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash || ""}`;
+    try {
+      window.history.replaceState(window.history.state, "", cleanedUrl);
+    } catch {
+      // Ignore history API issues; prompt handling should still proceed.
+    }
+
+    return prompt;
+  }
+
+  async function applyStartupChatPrompt(prompt) {
+    if (!prompt) return;
+    activateNavView("playground");
+
+    const input = $("#pg-input");
+    if (!input) return;
+    input.value = prompt;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    await pgSend();
+  }
+
+  function bindStaticActions() {
+    bindNavAction("#overview-go-workflows", "workflows");
+    bindNavAction("#overview-go-primitives", "primitives");
+    bindNavAction("#overview-go-playground", "playground");
+    bindNavAction("#workflows-go-playground", "playground");
+    bindNavAction("#primitives-go-workflows", "workflows");
+    bindNavAction("#primitives-go-playground", "playground");
+    bindNavAction("#workflows-go-yaml", "yaml");
+  }
+
+  function bindNavAction(selector, view) {
+    const el = $(selector);
+    if (!el) return;
+    el.addEventListener("click", () => activateNavView(view));
+  }
+
+  function normalizeNavView(view) {
+    const normalized = String(view || "").trim().toLowerCase();
+    return NAV_VIEWS.has(normalized) ? normalized : "overview";
+  }
+
+  function applyNavView(view) {
+    updateSidebarSections(view);
+    if (view === "overview") {
+      renderOverviewPage();
+      showView("overview");
+      return;
+    }
+
+    if (view === "workflows") {
+      renderWorkflowHome();
+      showView(selectedWorkflow ? "workflow" : "workflows-home");
+      return;
+    }
+
+    if (view === "yaml") {
+      renderYamlBrowser();
+      showView("yaml");
+      return;
+    }
+
+    if (view === "primitives") {
+      renderPrimitivesHome();
+      showView(selectedPrimitive ? "primitive" : "primitives-home");
+      return;
+    }
+
+    showView("playground");
+  }
+
+  function updateSidebarSections(view) {
+    const normalized = normalizeNavView(view);
+    const showWorkflowSidebar = normalized === "overview" || normalized === "workflows" || normalized === "yaml";
+    $("#sidebar-workflows")?.classList.toggle("hidden", !showWorkflowSidebar);
+    $("#sidebar-primitives")?.classList.toggle("hidden", normalized !== "primitives");
+  }
+
+  function setAppSidebarCollapsed(collapsed, options = {}) {
+    const force = options.force === true;
+    const next = collapsed === true;
+    if (!force && next === appSidebarCollapsed) return;
+    appSidebarCollapsed = next;
+
+    $("#app")?.classList.toggle("sidebar-collapsed", appSidebarCollapsed);
+    const toggleBtn = $("#app-sidebar-toggle");
+    if (toggleBtn) {
+      toggleBtn.textContent = appSidebarCollapsed ? "Sidebar" : "Hide Sidebar";
+      toggleBtn.setAttribute("aria-expanded", String(!appSidebarCollapsed));
+      toggleBtn.classList.toggle("is-active", appSidebarCollapsed);
+    }
+
+    if (options.skipPersist !== true)
+      scheduleUiStatePersist();
   }
 
   // ── Data Loading ──
   async function loadWorkflows() {
     try {
-      const res = await fetch("/api/workflows");
-      workflows = await res.json();
+      workflows = await fetchWorkflowCatalog();
       renderWorkflowList();
+      renderOverviewPage();
+      renderWorkflowHome();
+      renderYamlBrowser();
     } catch (e) { console.error("Failed to load workflows", e); }
   }
 
@@ -113,6 +289,7 @@
       const res = await fetch("/api/llm/status");
       llmStatus = await res.json();
       renderLlmStatus();
+      renderOverviewPage();
     } catch (e) { console.error("Failed to load LLM status", e); }
   }
 
@@ -121,7 +298,161 @@
       const res = await fetch("/api/primitives");
       primitives = await res.json();
       renderPrimitivesList();
+      renderOverviewPage();
+      renderPrimitivesHome();
     } catch (e) { console.error("Failed to load primitives", e); }
+  }
+
+  async function fetchWorkflowCatalog() {
+    const endpoints = ["/api/workflow-catalog", "/api/workflows"];
+    let lastError = null;
+
+    for (const endpoint of endpoints) {
+      try {
+        const res = await fetch(endpoint);
+        if (!res.ok) {
+          lastError = new Error(`HTTP ${res.status} for ${endpoint}`);
+          continue;
+        }
+
+        const payload = await res.json();
+        return normalizeWorkflowCatalog(payload);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError || new Error("Failed to fetch workflow catalog");
+  }
+
+  function normalizeWorkflowCatalog(payload) {
+    if (!Array.isArray(payload)) return [];
+
+    if (payload.every((item) => typeof item === "string")) {
+      return payload.map((name) => ({
+        name,
+        description: "",
+        category: "deterministic",
+        group: "starter-workflows",
+        groupLabel: WORKFLOW_GROUP_LABELS["starter-workflows"],
+        sortOrder: 10_000,
+        source: "builtin",
+        sourceLabel: "Built-in",
+        primitives: [],
+        showInLibrary: true,
+      }));
+    }
+
+    return payload
+      .filter((item) => item && typeof item === "object")
+      .map((item) => ({
+        name: String(item.name || item.Name || ""),
+        description: String(item.description || item.Description || ""),
+        category: String(item.category || item.Category || "deterministic"),
+        group: String(item.group || item.Group || ""),
+        groupLabel: String(item.groupLabel || item.GroupLabel || ""),
+        sortOrder: Number.isFinite(Number(item.sortOrder || item.SortOrder)) ? Number(item.sortOrder || item.SortOrder) : 10_000,
+        source: String(item.source || item.Source || ""),
+        sourceLabel: String(item.sourceLabel || item.SourceLabel || getWorkflowSourceLabel(item.source || item.Source || "")),
+        primitives: Array.isArray(item.primitives || item.Primitives) ? (item.primitives || item.Primitives).map((value) => String(value)) : [],
+        defaultInput: String(item.defaultInput || item.DefaultInput || ""),
+        showInLibrary: item.showInLibrary !== false && item.ShowInLibrary !== false,
+        isPrimitiveExample: item.isPrimitiveExample === true || item.IsPrimitiveExample === true,
+      }))
+      .filter((item) => item.name.length > 0);
+  }
+
+  function getVisibleWorkflows() {
+    return workflows.filter((item) => item.showInLibrary !== false);
+  }
+
+  function getVisiblePrimitives() {
+    return primitives.filter((item) => item.name !== "workflow_loop");
+  }
+
+  function groupWorkflows(items = getVisibleWorkflows()) {
+    const grouped = new Map();
+    for (const wf of items) {
+      const fallbackGroup = wf.category === "llm" ? "ai-workflows" : "starter-workflows";
+      const groupKey = wf.group || fallbackGroup;
+      const groupLabel = wf.groupLabel || WORKFLOW_GROUP_LABELS[groupKey] || "Other";
+      if (!grouped.has(groupKey)) {
+        grouped.set(groupKey, { key: groupKey, label: groupLabel, items: [] });
+      }
+      grouped.get(groupKey).items.push(wf);
+    }
+
+    return Array.from(grouped.values())
+      .map((group) => ({
+        ...group,
+        items: group.items.sort((a, b) => {
+          const leftOrder = Number.isFinite(a.sortOrder) ? a.sortOrder : 10_000;
+          const rightOrder = Number.isFinite(b.sortOrder) ? b.sortOrder : 10_000;
+          return leftOrder - rightOrder || a.name.localeCompare(b.name);
+        }),
+      }))
+      .sort((left, right) => {
+        const leftIdx = WORKFLOW_GROUP_ORDER.indexOf(left.key);
+        const rightIdx = WORKFLOW_GROUP_ORDER.indexOf(right.key);
+        const leftOrder = leftIdx === -1 ? 999 : leftIdx;
+        const rightOrder = rightIdx === -1 ? 999 : rightIdx;
+        return leftOrder - rightOrder || left.key.localeCompare(right.key);
+      });
+  }
+
+  function groupPrimitives(items = getVisiblePrimitives()) {
+    const grouped = new Map();
+    for (const primitive of items) {
+      const category = primitive.category || "general";
+      if (!grouped.has(category)) {
+        grouped.set(category, []);
+      }
+      grouped.get(category).push(primitive);
+    }
+
+    return Array.from(grouped.entries())
+      .map(([key, values]) => ({
+        key,
+        label: PRIMITIVE_CATEGORY_LABELS[key] || key,
+        items: values.sort((left, right) => left.name.localeCompare(right.name)),
+      }))
+      .sort((left, right) => {
+        const leftIdx = PRIMITIVE_CATEGORY_ORDER.indexOf(left.key);
+        const rightIdx = PRIMITIVE_CATEGORY_ORDER.indexOf(right.key);
+        const leftOrder = leftIdx === -1 ? 999 : leftIdx;
+        const rightOrder = rightIdx === -1 ? 999 : rightIdx;
+        return leftOrder - rightOrder || left.key.localeCompare(right.key);
+      });
+  }
+
+  function getFeaturedWorkflows(limit = 6) {
+    return getVisibleWorkflows()
+      .slice()
+      .sort((a, b) => {
+        const leftGroup = WORKFLOW_GROUP_ORDER.indexOf(a.group || "");
+        const rightGroup = WORKFLOW_GROUP_ORDER.indexOf(b.group || "");
+        const leftOrder = leftGroup === -1 ? 999 : leftGroup;
+        const rightOrder = rightGroup === -1 ? 999 : rightGroup;
+        const leftSort = Number.isFinite(a.sortOrder) ? a.sortOrder : 10_000;
+        const rightSort = Number.isFinite(b.sortOrder) ? b.sortOrder : 10_000;
+        return leftOrder - rightOrder || leftSort - rightSort || a.name.localeCompare(b.name);
+      })
+      .slice(0, limit);
+  }
+
+  function getFeaturedPrimitives(limit = 6) {
+    return getVisiblePrimitives()
+      .slice()
+      .sort((left, right) => {
+        const leftCategory = PRIMITIVE_CATEGORY_ORDER.indexOf(left.category || "");
+        const rightCategory = PRIMITIVE_CATEGORY_ORDER.indexOf(right.category || "");
+        const leftOrder = leftCategory === -1 ? 999 : leftCategory;
+        const rightOrder = rightCategory === -1 ? 999 : rightCategory;
+        const leftExamples = Array.isArray(left.exampleWorkflows) ? left.exampleWorkflows.length : 0;
+        const rightExamples = Array.isArray(right.exampleWorkflows) ? right.exampleWorkflows.length : 0;
+        return leftOrder - rightOrder || rightExamples - leftExamples || left.name.localeCompare(right.name);
+      })
+      .slice(0, limit);
   }
 
   // ── Render: Sidebar ──
@@ -129,41 +460,12 @@
     const groupsContainer = $("#workflow-groups");
     if (!groupsContainer) return;
     groupsContainer.innerHTML = "";
-
-    const grouped = new Map();
-    for (const wf of workflows) {
-      const fallbackGroup = wf.category === "turing"
-        ? "turing-completeness"
-        : wf.category === "llm"
-          ? "llm-workflows"
-          : "start-here";
-      const groupKey = wf.group || fallbackGroup;
-      const groupLabel = wf.groupLabel || WORKFLOW_GROUP_LABELS[groupKey] || "Other";
-      if (!grouped.has(groupKey)) {
-        grouped.set(groupKey, { label: groupLabel, items: [] });
-      }
-      grouped.get(groupKey).items.push(wf);
-    }
-
-    const orderedKeys = Array.from(grouped.keys()).sort((left, right) => {
-      const leftIdx = WORKFLOW_GROUP_ORDER.indexOf(left);
-      const rightIdx = WORKFLOW_GROUP_ORDER.indexOf(right);
-      const leftOrder = leftIdx === -1 ? 999 : leftIdx;
-      const rightOrder = rightIdx === -1 ? 999 : rightIdx;
-      return leftOrder - rightOrder || left.localeCompare(right);
-    });
+    const grouped = groupWorkflows();
 
     const nextCollapsedState = {};
-    for (const groupKey of orderedKeys) {
-      const group = grouped.get(groupKey);
-      if (!group) continue;
-
-      const sortedItems = group.items.sort((a, b) => {
-        const leftOrder = Number.isFinite(a.sortOrder) ? a.sortOrder : 10_000;
-        const rightOrder = Number.isFinite(b.sortOrder) ? b.sortOrder : 10_000;
-        return leftOrder - rightOrder || a.name.localeCompare(b.name);
-      });
-
+    for (const group of grouped) {
+      const groupKey = group.key;
+      const sortedItems = group.items;
       const hasActiveWorkflow = sortedItems.some((item) => item.name === selectedWorkflow);
       let collapsed = workflowGroupCollapsed[groupKey];
       if (typeof collapsed !== "boolean")
@@ -213,12 +515,15 @@
         li.classList.toggle("active", selectedWorkflow === wf.name);
         const summary = truncate(String(wf.description || "").replace(/\s+/g, " ").trim(), 88);
         li.innerHTML = `
-          <div>${wf.name}</div>
+          <div class="wf-title-row">
+            <span class="wf-name">${esc(wf.name)}</span>
+            ${wf.sourceLabel ? `<span class="wf-badge">${esc(wf.sourceLabel)}</span>` : ""}
+          </div>
           ${summary ? `<div class="wf-summary">${esc(summary)}</div>` : ""}
           <div class="wf-primitives">
             ${wf.primitives.map((p) => `<span class="prim-dot" style="background:${TYPE_COLORS[p] || "#64748b"}" title="${p}"></span>`).join("")}
           </div>`;
-        li.addEventListener("click", () => selectWorkflow(wf.name));
+        li.addEventListener("click", () => handleWorkflowSidebarSelection(wf.name));
         list.appendChild(li);
       }
 
@@ -227,6 +532,17 @@
       groupsContainer.appendChild(section);
     }
     workflowGroupCollapsed = nextCollapsedState;
+  }
+
+  function handleWorkflowSidebarSelection(name) {
+    const activeView = getActiveNavView();
+    if (activeView === "yaml") {
+      selectWorkflow(name, { preferredView: "yaml" });
+      return;
+    }
+
+    activateNavView("workflows");
+    selectWorkflow(name, { preferredView: "workflows" });
   }
 
   function renderLlmStatus() {
@@ -243,30 +559,283 @@
   function renderPrimitivesList() {
     const ul = $("#primitives-list");
     ul.innerHTML = "";
-    for (const p of primitives) {
-      if (p.name === "workflow_loop") continue;
-      const li = document.createElement("li");
-      li.innerHTML = `
-        <span class="prim-color" style="background:${TYPE_COLORS[p.name] || "#64748b"}"></span>
-        <span class="prim-info">
-          <div class="prim-label">${p.name}</div>
-          <div class="prim-cat">${p.category}</div>
-        </span>`;
-      li.addEventListener("click", () => showPrimitiveDetail(p));
-      ul.appendChild(li);
+
+    const visiblePrimitives = primitives.filter((p) => p.name !== "workflow_loop");
+    const grouped = new Map();
+    for (const primitive of visiblePrimitives) {
+      const category = primitive.category || "general";
+      if (!grouped.has(category))
+        grouped.set(category, []);
+      grouped.get(category).push(primitive);
+    }
+
+    const orderedCategories = Array.from(grouped.keys()).sort((left, right) => {
+      const leftIdx = PRIMITIVE_CATEGORY_ORDER.indexOf(left);
+      const rightIdx = PRIMITIVE_CATEGORY_ORDER.indexOf(right);
+      const leftOrder = leftIdx === -1 ? 999 : leftIdx;
+      const rightOrder = rightIdx === -1 ? 999 : rightIdx;
+      return leftOrder - rightOrder || left.localeCompare(right);
+    });
+
+    for (const category of orderedCategories) {
+      const heading = document.createElement("li");
+      heading.className = "primitives-group-label";
+      heading.textContent = PRIMITIVE_CATEGORY_LABELS[category] || category;
+      ul.appendChild(heading);
+
+      const items = grouped.get(category)
+        .sort((left, right) => left.name.localeCompare(right.name));
+
+      for (const p of items) {
+        const li = document.createElement("li");
+        li.classList.toggle("active", selectedPrimitive === p.name);
+        const summary = truncate(String(p.description || "").replace(/\s+/g, " ").trim(), 88);
+        const exampleCount = Array.isArray(p.exampleWorkflows) ? p.exampleWorkflows.length : 0;
+        li.innerHTML = `
+          <span class="prim-color" style="background:${TYPE_COLORS[p.name] || "#64748b"}"></span>
+          <span class="prim-info">
+            <div class="prim-row">
+              <div class="prim-label">${esc(p.name)}</div>
+              <div class="prim-count">${exampleCount > 0 ? `${exampleCount} example${exampleCount > 1 ? "s" : ""}` : "reference"}</div>
+            </div>
+            <div class="prim-cat">${esc(PRIMITIVE_CATEGORY_LABELS[p.category] || p.category)}</div>
+            ${summary ? `<div class="prim-summary">${esc(summary)}</div>` : ""}
+          </span>`;
+        li.addEventListener("click", () => showPrimitiveDetail(p));
+        ul.appendChild(li);
+      }
     }
   }
 
+  function renderOverviewPage() {
+    const statsEl = $("#overview-stats");
+    const workflowGroupsEl = $("#overview-workflow-groups");
+    const primitiveGroupsEl = $("#overview-primitive-groups");
+    const featuredEl = $("#overview-featured-workflows");
+    if (!statsEl || !workflowGroupsEl || !primitiveGroupsEl || !featuredEl) return;
+
+    const visibleWorkflows = getVisibleWorkflows();
+    const workflowGroups = groupWorkflows(visibleWorkflows);
+    const visiblePrimitives = getVisiblePrimitives();
+    const primitiveGroups = groupPrimitives(visiblePrimitives);
+
+    statsEl.innerHTML = [
+      renderStatCard(String(visibleWorkflows.length), "Workflows in library", "Existing workflow YAMLs you can inspect right now."),
+      renderStatCard(String(workflowGroups.length), "Workflow groups", "Curated buckets for browsing instead of one long list."),
+      renderStatCard(String(visiblePrimitives.length), "Primitives", "Building blocks with descriptions, parameters, aliases, and examples."),
+      renderStatCard(llmStatus.available ? "LLM ready" : "LLM needed", "Playground status", llmStatus.available ? "AI generation is available in playground." : "Configure an LLM provider to unlock AI-assisted drafting."),
+    ].join("");
+
+    workflowGroupsEl.innerHTML = workflowGroups
+      .map((group) => renderGroupCard(
+        group.label,
+        WORKFLOW_GROUP_DESCRIPTIONS[group.key] || "Workflow group.",
+        `${group.items.length} workflow${group.items.length === 1 ? "" : "s"}`,
+        group.items.slice(0, 3).map((item) => item.name),
+        "workflow",
+        group.items[0]?.name || ""))
+      .join("");
+
+    primitiveGroupsEl.innerHTML = primitiveGroups
+      .map((group) => renderGroupCard(
+        group.label,
+        PRIMITIVE_CATEGORY_DESCRIPTIONS[group.key] || "Primitive category.",
+        `${group.items.length} primitive${group.items.length === 1 ? "" : "s"}`,
+        group.items.slice(0, 3).map((item) => item.name),
+        "primitive",
+        group.items[0]?.name || ""))
+      .join("");
+
+    featuredEl.innerHTML = getFeaturedWorkflows(6)
+      .map((workflow) => renderWorkflowFeatureCard(workflow))
+      .join("");
+
+    bindDynamicActionButtons($("#view-overview"));
+  }
+
+  function renderWorkflowHome() {
+    const groupsEl = $("#workflows-home-groups");
+    const featuredEl = $("#workflows-home-featured");
+    if (!groupsEl || !featuredEl) return;
+
+    const grouped = groupWorkflows();
+    groupsEl.innerHTML = grouped.map((group) => renderWorkflowLibraryGroupCard(group)).join("");
+    featuredEl.innerHTML = getFeaturedWorkflows(8)
+      .map((workflow) => renderWorkflowFeatureCard(workflow, { compact: false }))
+      .join("");
+    bindDynamicActionButtons($("#view-workflows-home"));
+  }
+
+  function renderPrimitivesHome() {
+    const groupsEl = $("#primitives-home-groups");
+    const featuredEl = $("#primitives-home-featured");
+    if (!groupsEl || !featuredEl) return;
+
+    groupsEl.innerHTML = groupPrimitives()
+      .map((group) => renderPrimitiveCategoryCard(group))
+      .join("");
+    featuredEl.innerHTML = getFeaturedPrimitives(8)
+      .map((primitive) => renderPrimitiveFeatureCard(primitive))
+      .join("");
+    bindDynamicActionButtons($("#view-primitives-home"));
+  }
+
+  function renderStatCard(value, label, description) {
+    return `
+      <article class="stat-card">
+        <div class="stat-value">${esc(value)}</div>
+        <div class="stat-label">${esc(label)}</div>
+        <div class="stat-description">${esc(description)}</div>
+      </article>`;
+  }
+
+  function renderGroupCard(title, description, meta, highlights, actionType, actionValue) {
+    const actionAttr = actionType === "workflow"
+      ? `data-open-workflow="${esc(actionValue)}"`
+      : `data-open-primitive="${esc(actionValue)}"`;
+    return `
+      <article class="info-card">
+        <div class="info-card-title">${esc(title)}</div>
+        <p>${esc(description)}</p>
+        <div class="info-card-meta">${esc(meta)}</div>
+        <div class="tag-list">${highlights.map((item) => `<span class="tag">${esc(item)}</span>`).join("")}</div>
+        ${actionValue ? `<button type="button" class="btn btn-ghost info-card-action" ${actionAttr}>Open ${actionType === "workflow" ? "Workflow" : "Primitive"}</button>` : ""}
+      </article>`;
+  }
+
+  function renderWorkflowLibraryGroupCard(group) {
+    const examples = group.items.slice(0, 4);
+    return `
+      <article class="library-card">
+        <div class="library-card-head">
+          <div>
+            <div class="library-card-title">${esc(group.label)}</div>
+            <p class="library-card-copy">${esc(WORKFLOW_GROUP_DESCRIPTIONS[group.key] || "Workflow group.")}</p>
+          </div>
+          <div class="library-card-count">${group.items.length}</div>
+        </div>
+        <div class="library-card-list">
+          ${examples.map((workflow) => `
+            <button type="button" class="library-list-item" data-open-workflow="${esc(workflow.name)}">
+              <span>${esc(workflow.name)}</span>
+              <span class="library-list-meta">${esc(workflow.sourceLabel || "")}</span>
+            </button>`).join("")}
+        </div>
+      </article>`;
+  }
+
+  function renderWorkflowFeatureCard(workflow) {
+    const summary = truncate(String(workflow.description || "").replace(/\s+/g, " ").trim(), 180);
+    return `
+      <article class="feature-card">
+        <div class="feature-card-head">
+          <div>
+            <div class="feature-card-title">${esc(workflow.name)}</div>
+            <div class="feature-card-subtitle">${esc(workflow.groupLabel || WORKFLOW_GROUP_LABELS[workflow.group] || "Workflow")}</div>
+          </div>
+          ${workflow.sourceLabel ? `<span class="wf-badge">${esc(workflow.sourceLabel)}</span>` : ""}
+        </div>
+        ${summary ? `<p class="feature-card-copy">${esc(summary)}</p>` : `<p class="feature-card-copy">Representative workflow YAML in the Aevatar library.</p>`}
+        <div class="tag-list">${(workflow.primitives || []).slice(0, 5).map((name) => `<span class="tag">${esc(name)}</span>`).join("")}</div>
+        <div class="feature-card-actions">
+          <button type="button" class="btn btn-ghost" data-open-workflow="${esc(workflow.name)}">Open Workflow</button>
+          <button type="button" class="btn btn-secondary" data-open-workflow-yaml="${esc(workflow.name)}">View YAML</button>
+        </div>
+      </article>`;
+  }
+
+  function renderPrimitiveCategoryCard(group) {
+    const examples = group.items.slice(0, 4);
+    return `
+      <article class="library-card">
+        <div class="library-card-head">
+          <div>
+            <div class="library-card-title">${esc(group.label)}</div>
+            <p class="library-card-copy">${esc(PRIMITIVE_CATEGORY_DESCRIPTIONS[group.key] || "Primitive category.")}</p>
+          </div>
+          <div class="library-card-count">${group.items.length}</div>
+        </div>
+        <div class="library-card-list">
+          ${examples.map((primitive) => `
+            <button type="button" class="library-list-item" data-open-primitive="${esc(primitive.name)}">
+              <span>${esc(primitive.name)}</span>
+              <span class="library-list-meta">${Array.isArray(primitive.exampleWorkflows) ? `${primitive.exampleWorkflows.length} examples` : "reference"}</span>
+            </button>`).join("")}
+        </div>
+      </article>`;
+  }
+
+  function renderPrimitiveFeatureCard(primitive) {
+    const summary = truncate(String(primitive.description || "").replace(/\s+/g, " ").trim(), 180);
+    const categoryLabel = PRIMITIVE_CATEGORY_LABELS[primitive.category] || primitive.category || "Primitive";
+    return `
+      <article class="feature-card">
+        <div class="feature-card-head">
+          <div>
+            <div class="feature-card-title">${esc(primitive.name)}</div>
+            <div class="feature-card-subtitle">${esc(categoryLabel)}</div>
+          </div>
+          <span class="feature-card-chip">${Array.isArray(primitive.exampleWorkflows) ? `${primitive.exampleWorkflows.length} examples` : "Reference"}</span>
+        </div>
+        <p class="feature-card-copy">${esc(summary || "Workflow building block used by the library.")}</p>
+        <div class="tag-list">${(primitive.aliases || []).slice(0, 4).map((name) => `<span class="tag">${esc(name)}</span>`).join("")}</div>
+        <div class="feature-card-actions">
+          <button type="button" class="btn btn-ghost" data-open-primitive="${esc(primitive.name)}">Open Primitive</button>
+        </div>
+      </article>`;
+  }
+
+  function bindDynamicActionButtons(root) {
+    if (!root) return;
+
+    root.querySelectorAll("[data-open-workflow]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const name = button.getAttribute("data-open-workflow");
+        if (!name) return;
+        activateNavView("workflows");
+        await selectWorkflow(name, { preferredView: "workflows" });
+      });
+    });
+
+    root.querySelectorAll("[data-open-workflow-yaml]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const name = button.getAttribute("data-open-workflow-yaml");
+        if (!name) return;
+        yamlViewerSource = "workflow";
+        activateNavView("yaml");
+        await selectWorkflow(name, { preferredView: "yaml" });
+      });
+    });
+
+    root.querySelectorAll("[data-open-primitive]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const name = button.getAttribute("data-open-primitive");
+        const primitive = primitives.find((item) => item.name === name);
+        if (!primitive) return;
+        activateNavView("primitives");
+        showPrimitiveDetail(primitive);
+      });
+    });
+  }
+
   // ── Select Workflow ──
-  async function selectWorkflow(name) {
+  async function selectWorkflow(name, options = {}) {
     stopExecution();
+    const preferredView = options.preferredView || "workflows";
     selectedWorkflow = name;
     selectedWorkflowMeta = workflows.find((w) => w.name === name) || null;
+    yamlViewerSource = "workflow";
+    workflowDef = null;
     if (selectedWorkflowMeta?.group)
       workflowGroupCollapsed[selectedWorkflowMeta.group] = false;
     renderWorkflowList();
+    renderOverviewPage();
+    renderWorkflowHome();
+    renderYamlSource("");
+    renderYamlBrowser();
 
-    showView("workflow");
+    if (preferredView === "workflows")
+      showView("workflow");
     $("#btn-run").disabled = true;
     $("#wf-name").textContent = name;
     $("#wf-description").textContent = "Loading...";
@@ -274,12 +843,21 @@
     try {
       const res = await fetch(`/api/workflows/${name}`);
       workflowDef = await res.json();
+      if (workflowDef?.catalog && typeof workflowDef.catalog === "object") {
+        selectedWorkflowMeta = {
+          ...(selectedWorkflowMeta || {}),
+          ...workflowDef.catalog,
+          defaultInput: selectedWorkflowMeta?.defaultInput || "",
+        };
+        renderWorkflowList();
+      }
       const def = workflowDef.definition;
 
       $("#wf-description").textContent = def.description || "";
 
       $("#wf-input").value = selectedWorkflowMeta?.defaultInput || "";
       renderTuringDemoPanel(selectedWorkflowMeta);
+      renderWorkflowPlan(selectedWorkflowMeta, workflowDef);
       resetTuringMachineState();
 
       if (def.roles && def.roles.length > 0) {
@@ -294,32 +872,48 @@
       renderYamlSource(workflowDef.yaml);
       resetExecution();
       renderFlowDiagram();
+      renderYamlBrowser();
 
-      $("#btn-run").disabled = selectedWorkflowMeta?.category === "llm" && !llmStatus.available;
+      $("#btn-run").disabled = workflowRequiresLlmProvider(selectedWorkflowMeta, workflowDef) && !llmStatus.available;
+      if (preferredView === "yaml")
+        showView("yaml");
+      else if (preferredView === "workflows")
+        showView("workflow");
       scheduleUiStatePersist();
     } catch (e) {
       console.error("Failed to load workflow", e);
       $("#wf-description").textContent = "Failed to load workflow definition.";
       renderTuringDemoPanel(null);
+      renderWorkflowPlan(null, null);
+      renderYamlBrowser();
       scheduleUiStatePersist();
     }
   }
 
   // ── Views ──
   function showView(name) {
-    $("#view-empty").classList.toggle("hidden", name !== "empty");
+    $("#view-overview").classList.toggle("hidden", name !== "overview");
+    $("#view-workflows-home").classList.toggle("hidden", name !== "workflows-home");
     $("#view-workflow").classList.toggle("hidden", name !== "workflow");
+    $("#view-yaml").classList.toggle("hidden", name !== "yaml");
+    $("#view-primitives-home").classList.toggle("hidden", name !== "primitives-home");
     $("#view-primitive-detail").classList.toggle("hidden", name !== "primitive");
     $("#view-playground").classList.toggle("hidden", name !== "playground");
   }
 
-  function showPrimitiveDetail(p) {
-    showView("primitive");
+  function showPrimitiveDetail(p, options = {}) {
+    selectedPrimitive = p.name;
+    renderPrimitivesList();
+    renderOverviewPage();
+    renderPrimitivesHome();
+    if (options.show !== false)
+      showView("primitive");
     $("#prim-name").textContent = p.name;
     $("#prim-description").textContent = p.description;
-    $("#prim-aliases").innerHTML = p.aliases.map((a) => `<span class="tag">${a}</span>`).join("");
+    const aliases = Array.isArray(p.aliases) ? p.aliases : [];
+    $("#prim-aliases").innerHTML = aliases.map((a) => `<span class="tag">${a}</span>`).join("");
     const cat = $("#prim-category");
-    cat.textContent = p.category;
+    cat.textContent = PRIMITIVE_CATEGORY_LABELS[p.category] || p.category;
     cat.className = `category-badge cat-${p.category}`;
 
     const section = $("#prim-params-section");
@@ -341,6 +935,35 @@
       section.classList.add("hidden");
       tbody.innerHTML = "";
     }
+
+    const examplesSection = $("#prim-examples-section");
+    const examplesContainer = $("#prim-examples");
+    const examples = Array.isArray(p.exampleWorkflows) ? p.exampleWorkflows : [];
+    if (examples.length > 0) {
+      examplesSection.classList.remove("hidden");
+      examplesContainer.innerHTML = examples.map((example, index) => `
+        <div class="prim-example-card" data-example-index="${index}">
+          <div class="prim-example-head">
+            <div class="prim-example-name">${esc(example.name || "")}</div>
+            <div class="prim-example-kind">${esc(example.kindLabel || "Workflow")}</div>
+          </div>
+          ${example.description ? `<div class="prim-example-desc">${esc(example.description)}</div>` : ""}
+          <div class="prim-example-actions">
+            <button type="button" class="btn btn-ghost prim-example-open">Open Workflow</button>
+          </div>
+        </div>`).join("");
+
+      examplesContainer.querySelectorAll(".prim-example-open").forEach((button, index) => {
+        button.addEventListener("click", async () => {
+          activateNavView("workflows");
+          await selectWorkflow(examples[index].name, { preferredView: "workflows" });
+        });
+      });
+    } else {
+      examplesSection.classList.add("hidden");
+      examplesContainer.innerHTML = "";
+    }
+    scheduleUiStatePersist();
   }
 
   // ── Flow Diagram (SVG) ──
@@ -605,6 +1228,116 @@
     el.innerHTML = yaml.split("\n").map(highlightYamlLine).join("\n");
   }
 
+  function renderYamlBrowser() {
+    const titleEl = $("#yaml-browser-title");
+    const descriptionEl = $("#yaml-browser-description");
+    const metaEl = $("#yaml-browser-meta");
+    const actionsEl = $("#yaml-browser-actions");
+    const sourceEl = $("#yaml-browser-source");
+    const graphEl = $("#yaml-browser-graph");
+    const workflowBtn = $("#yaml-use-workflow");
+    const playgroundBtn = $("#yaml-use-playground");
+    if (!titleEl || !descriptionEl || !metaEl || !actionsEl || !sourceEl || !graphEl) return;
+
+    const workflowAvailable = Boolean(selectedWorkflow && workflowDef?.yaml);
+    const playgroundAvailable = Boolean(pgCurrentYaml && pgCurrentYaml.trim());
+
+    if (!workflowAvailable && !playgroundAvailable) {
+      titleEl.textContent = "No YAML selected yet";
+      descriptionEl.textContent = "Open a workflow from the library, or generate a draft in the playground.";
+      metaEl.innerHTML = "";
+      actionsEl.innerHTML = `
+        <button type="button" class="btn btn-secondary" data-yaml-nav="workflows">Browse Workflows</button>
+        <button type="button" class="btn btn-secondary" data-yaml-nav="playground">Open Playground</button>`;
+      sourceEl.textContent = "";
+      graphEl.innerHTML = `<p class="placeholder-copy">Pick a workflow or create a playground draft to render the graph here.</p>`;
+      bindYamlActions(actionsEl);
+      if (workflowBtn) workflowBtn.disabled = true;
+      if (playgroundBtn) playgroundBtn.disabled = true;
+      return;
+    }
+
+    if (yamlViewerSource === "workflow" && !workflowAvailable)
+      yamlViewerSource = playgroundAvailable ? "playground" : "workflow";
+    if (yamlViewerSource === "playground" && !playgroundAvailable)
+      yamlViewerSource = workflowAvailable ? "workflow" : "playground";
+
+    if (workflowBtn) workflowBtn.disabled = !workflowAvailable;
+    if (playgroundBtn) playgroundBtn.disabled = !playgroundAvailable;
+    workflowBtn?.classList.toggle("btn-primary", yamlViewerSource === "workflow");
+    workflowBtn?.classList.toggle("btn-secondary", yamlViewerSource !== "workflow");
+    playgroundBtn?.classList.toggle("btn-primary", yamlViewerSource === "playground");
+    playgroundBtn?.classList.toggle("btn-secondary", yamlViewerSource !== "playground");
+
+    if (yamlViewerSource === "playground" && playgroundAvailable) {
+      titleEl.textContent = $("#pg-save-filename")?.value?.trim() || "Playground Draft";
+      descriptionEl.textContent = pgYamlValidated
+        ? "This is the current playground draft. It has passed validation and can be executed or saved."
+        : "This is the current playground draft. Review it here before you keep iterating.";
+      metaEl.innerHTML = [
+        `<span class="tag">${pgYamlValidated ? "Validated draft" : "Draft YAML"}</span>`,
+        `<span class="tag">${pgYamlGeneratedByAi ? "AI generated" : "Manual or imported"}</span>`,
+      ].join("");
+      actionsEl.innerHTML = `
+        <button type="button" class="btn btn-ghost" data-yaml-nav="playground">Back To Playground</button>
+        <button type="button" class="btn btn-secondary" data-yaml-source="workflow"${workflowAvailable ? "" : " disabled"}>Switch To Library Workflow</button>`;
+      sourceEl.innerHTML = pgCurrentYaml.split("\n").map(highlightYamlLine).join("\n");
+      if (pgParsedDef?.definition?.steps) {
+        renderFlowInto(graphEl, pgParsedDef.definition.steps, pgParsedDef.edges || [], pgStepStates);
+      } else {
+        graphEl.innerHTML = `<p class="placeholder-copy">The playground draft has not been parsed into a graph yet.</p>`;
+      }
+      bindYamlActions(actionsEl);
+      return;
+    }
+
+    titleEl.textContent = selectedWorkflowMeta?.name || selectedWorkflow || "Workflow YAML";
+    descriptionEl.textContent = selectedWorkflowMeta?.description || "Library workflow YAML.";
+    metaEl.innerHTML = [
+      selectedWorkflowMeta?.groupLabel ? `<span class="tag">${esc(selectedWorkflowMeta.groupLabel)}</span>` : "",
+      selectedWorkflowMeta?.sourceLabel ? `<span class="tag">${esc(selectedWorkflowMeta.sourceLabel)}</span>` : "",
+      selectedWorkflowMeta?.category ? `<span class="tag">${esc(selectedWorkflowMeta.category)}</span>` : "",
+    ].join("");
+    actionsEl.innerHTML = `
+      <button type="button" class="btn btn-ghost" data-open-selected-workflow>Open Workflow Details</button>
+      <button type="button" class="btn btn-secondary" data-yaml-nav="playground"${playgroundAvailable ? "" : " disabled"}>Open Playground Draft</button>`;
+    sourceEl.innerHTML = workflowDef?.yaml
+      ? workflowDef.yaml.split("\n").map(highlightYamlLine).join("\n")
+      : "";
+    if (workflowDef?.definition?.steps) {
+      renderFlowInto(graphEl, workflowDef.definition.steps, workflowDef.edges || [], stepStates);
+    } else {
+      graphEl.innerHTML = `<p class="placeholder-copy">Select a library workflow to render the graph here.</p>`;
+    }
+    bindYamlActions(actionsEl);
+  }
+
+  function bindYamlActions(root) {
+    if (!root) return;
+    root.querySelectorAll("[data-yaml-nav]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const view = button.getAttribute("data-yaml-nav");
+        if (!view) return;
+        if (view === "playground" && pgCurrentYaml) {
+          yamlViewerSource = "playground";
+        }
+        activateNavView(view);
+      });
+    });
+    root.querySelectorAll("[data-yaml-source]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const source = button.getAttribute("data-yaml-source");
+        if (!source) return;
+        yamlViewerSource = source;
+        renderYamlBrowser();
+        scheduleUiStatePersist();
+      });
+    });
+    root.querySelectorAll("[data-open-selected-workflow]").forEach((button) => {
+      button.addEventListener("click", () => activateNavView("workflows"));
+    });
+  }
+
   function highlightYamlLine(line) {
     if (/^\s*#/.test(line))
       return `<span class="y-comment">${esc(line)}</span>`;
@@ -780,7 +1513,7 @@
     $("#btn-reset").classList.add("hidden");
     $("#btn-run").disabled = false;
 
-    if (selectedWorkflowMeta?.category === "llm" && !llmStatus.available) {
+    if (workflowRequiresLlmProvider(selectedWorkflowMeta, workflowDef) && !llmStatus.available) {
       $("#btn-run").disabled = true;
     }
 
@@ -800,6 +1533,41 @@
       else if (state === "running") status.textContent = "\u25CB";
       else status.textContent = "";
     }
+  }
+
+  function workflowRequiresLlmProvider(workflowMeta, detail) {
+    const explicit = workflowMeta?.requiresLlmProvider;
+    if (typeof explicit === "boolean") return explicit;
+    const catalogExplicit = detail?.catalog?.requiresLlmProvider;
+    if (typeof catalogExplicit === "boolean") return catalogExplicit;
+
+    const definition = detail?.definition;
+    const steps = Array.isArray(definition?.steps) ? definition.steps : [];
+    const roles = Array.isArray(definition?.roles) ? definition.roles : [];
+    if (!steps.length) return workflowMeta?.category === "llm";
+
+    const rolesById = new Map();
+    for (const role of roles) {
+      const roleId = String(role?.id || "").trim();
+      if (roleId) rolesById.set(roleId, role);
+    }
+
+    return steps.some((step) => stepRequiresLlmProvider(step, rolesById));
+  }
+
+  function stepRequiresLlmProvider(step, rolesById) {
+    const type = String(step?.type || "").trim().toLowerCase();
+    if (type === "evaluate" || type === "reflect") return true;
+    if (type === "llm_call") {
+      const roleId = String(step?.targetRole || "").trim();
+      if (!roleId) return true;
+      const role = rolesById.get(roleId);
+      const modules = Array.isArray(role?.eventModules) ? role.eventModules : [];
+      return modules.length === 0;
+    }
+
+    const children = Array.isArray(step?.children) ? step.children : [];
+    return children.some((child) => stepRequiresLlmProvider(child, rolesById));
   }
 
   function buildLogDetailHtml(detail, options = {}) {
@@ -915,6 +1683,9 @@
     if (!interaction) {
       section.classList.add("hidden");
       panel.innerHTML = "";
+      if (pgActiveModal === "interaction")
+        pgCloseModal({ force: true, skipPersist: true });
+      pgUpdateWorkspaceChromeState();
       scheduleUiStatePersist();
       return;
     }
@@ -933,16 +1704,20 @@
     if (!interaction) {
       section.classList.add("hidden");
       panel.innerHTML = "";
+      pgRenderRunControlSummary();
       scheduleUiStatePersist();
       return;
     }
 
     section.classList.remove("hidden");
-    if (pgAutoMode && interaction.type === "human_approval") {
+    if (interaction.type === "human_approval") {
       renderAutoApprovalPanel(panel, interaction);
     } else {
       renderInteractionPanel(panel, "pg", interaction, pgAddLog, () => setPlaygroundInteraction(null));
     }
+    pgOpenModal("interaction", { skipPersist: true });
+    pgUpdateWorkspaceChromeState();
+    pgRenderRunControlSummary();
     scheduleUiStatePersist();
   }
 
@@ -966,27 +1741,33 @@
     const title = type === "wait_signal"
       ? "External signal required"
       : (type === "human_approval" ? "Manual approval required" : "Manual input required");
+    const missingSession = !runId || !actorId;
+    const disabledAttr = missingSession ? " disabled" : "";
 
     let controlHtml = "";
     if (type === "human_approval") {
       controlHtml = `
-        <textarea id="${prefix}-interaction-comment" class="interaction-input" rows="2" placeholder="Optional comment..."></textarea>
+        <textarea id="${prefix}-interaction-comment" class="interaction-input" rows="2" placeholder="Optional comment..."${disabledAttr}></textarea>
         <div class="interaction-actions">
-          <button id="${prefix}-interaction-approve" class="btn btn-primary">Approve</button>
-          <button id="${prefix}-interaction-reject" class="btn btn-danger">Reject</button>
+          <button id="${prefix}-interaction-approve" class="btn btn-primary"${disabledAttr}>Approve</button>
+          <button id="${prefix}-interaction-reject" class="btn btn-danger"${disabledAttr}>Reject</button>
         </div>`;
     } else if (type === "wait_signal") {
       controlHtml = `
-        <textarea id="${prefix}-interaction-payload" class="interaction-input" rows="2" placeholder="Signal payload (optional)"></textarea>
+        <textarea id="${prefix}-interaction-payload" class="interaction-input" rows="2" placeholder="Signal payload (optional)"${disabledAttr}></textarea>
         <div class="interaction-actions">
-          <button id="${prefix}-interaction-signal" class="btn btn-primary">Send signal</button>
+          <button id="${prefix}-interaction-signal" class="btn btn-primary"${disabledAttr}>Send signal</button>
         </div>`;
     } else {
       const variableName = interaction.metadata?.variable ? ` (${interaction.metadata.variable})` : "";
+      const secure = isSecureInteraction(interaction);
       controlHtml = `
-        <textarea id="${prefix}-interaction-input" class="interaction-input" rows="3" placeholder="Input for human step${esc(variableName)}"></textarea>
+        ${secure
+          ? `<input id="${prefix}-interaction-input" class="interaction-input" type="password" placeholder="Secure input for human step${esc(variableName)}" autocomplete="off"${disabledAttr}>`
+          : `<textarea id="${prefix}-interaction-input" class="interaction-input" rows="3" placeholder="Input for human step${esc(variableName)}"${disabledAttr}></textarea>`}
+        ${secure ? `<div class="interaction-note">Sensitive input is masked locally and will not be echoed back into the workflow log.</div>` : ""}
         <div class="interaction-actions">
-          <button id="${prefix}-interaction-submit" class="btn btn-primary">Submit input</button>
+          <button id="${prefix}-interaction-submit" class="btn btn-primary"${disabledAttr}>Submit input</button>
         </div>`;
     }
 
@@ -996,16 +1777,22 @@
         ${esc(prompt || "No prompt provided by workflow.")}
       </div>
       <div class="interaction-meta">
-        <span class="interaction-chip">type: ${esc(kindLabel)}</span>
-        <span class="interaction-chip">actor: ${esc(actorId || "missing")}</span>
-        <span class="interaction-chip">step: ${esc(stepId || "n/a")}</span>
-        <span class="interaction-chip">run: ${esc(runId || "missing")}</span>
-        ${commandId ? `<span class="interaction-chip">command: ${esc(commandId)}</span>` : ""}
-        ${type === "wait_signal" ? `<span class="interaction-chip">signal: ${esc(signalName || "n/a")}</span>` : ""}
-        <span class="interaction-chip">timeout: ${esc(timeoutLabel)}</span>
+        <span class="interaction-chip">${esc(kindLabel)}</span>
+        ${stepId ? `<span class="interaction-chip">step ${esc(stepId)}</span>` : ""}
+        ${type === "wait_signal" ? `<span class="interaction-chip">signal ${esc(signalName || "n/a")}</span>` : ""}
+        <span class="interaction-chip">timeout ${esc(timeoutLabel)}</span>
       </div>
       ${controlHtml}
-      ${runId && actorId ? "" : `<div class="interaction-note">Cannot submit: missing actorId/runId in SSE context.</div>`}
+      ${missingSession ? `<div class="interaction-note">This run has not exposed a resumable session yet. Wait for the next event or restart the run if the controls stay disabled.</div>` : ""}
+      ${(actorId || runId || commandId) ? `
+        <details class="interaction-tech">
+          <summary>Technical context</summary>
+          <div class="interaction-meta">
+            ${actorId ? `<span class="interaction-chip">actor ${esc(actorId)}</span>` : ""}
+            ${runId ? `<span class="interaction-chip">run ${esc(runId)}</span>` : ""}
+            ${commandId ? `<span class="interaction-chip">command ${esc(commandId)}</span>` : ""}
+          </div>
+        </details>` : ""}
     `;
 
     bindInteractionActions(prefix, interaction, logFn, clearFn);
@@ -1064,13 +1851,17 @@
         sendBtn.disabled = true;
         const payload = payloadEl.value;
         try {
-          await postJson("/api/workflows/signal", {
+          const signalRequest = {
             actorId,
             runId,
             signalName,
             commandId,
             payload,
-          });
+          };
+          if (stepId) {
+            signalRequest.stepId = stepId;
+          }
+          await postJson("/api/workflows/signal", signalRequest);
           logFn("action", "✍ Signal submitted", payload || "(empty payload)");
           clearFn();
         } catch (e) {
@@ -1082,28 +1873,31 @@
       return;
     }
 
-    const submitBtn = $(`#${prefix}-interaction-submit`);
-    const inputEl = $(`#${prefix}-interaction-input`);
-    if (!submitBtn || !inputEl || !stepId) return;
+      const submitBtn = $(`#${prefix}-interaction-submit`);
+      const inputEl = $(`#${prefix}-interaction-input`);
+      if (!submitBtn || !inputEl || !stepId) return;
 
-    submitBtn.addEventListener("click", async () => {
-      submitBtn.disabled = true;
-      const userInput = inputEl.value.trim();
-      try {
-        await postJson("/api/workflows/resume", {
-          actorId,
-          runId,
-          stepId,
-          commandId,
-          approved: true,
-          userInput,
-        });
-        logFn("action", "✍ Human input submitted", userInput || "(empty input)");
-        clearFn();
-      } catch (e) {
-        logFn("error", "\u274C Resume failed", e.message || String(e));
-      } finally {
-        submitBtn.disabled = false;
+      submitBtn.addEventListener("click", async () => {
+        submitBtn.disabled = true;
+        const userInput = inputEl.value.trim();
+        try {
+          await postJson("/api/workflows/resume", {
+            actorId,
+            runId,
+            stepId,
+            commandId,
+            approved: true,
+            userInput,
+          });
+        logFn(
+          "action",
+          isSecureInteraction(interaction) ? "✍ Secure input submitted" : "✍ Human input submitted",
+          isSecureInteraction(interaction) ? "(secure input hidden)" : (userInput || "(empty input)"));
+          clearFn();
+        } catch (e) {
+          logFn("error", "\u274C Resume failed", e.message || String(e));
+        } finally {
+          submitBtn.disabled = false;
       }
     });
   }
@@ -1149,6 +1943,189 @@
   function renderRoleCards(roles) {
     const container = $("#roles-list");
     container.innerHTML = roles.map((role) => renderRoleCard(role)).join("");
+  }
+
+  function renderWorkflowPlan(workflowMeta, detail) {
+    const section = $("#plan-section");
+    const summaryEl = $("#wf-plan-summary");
+    const metaEl = $("#wf-plan-meta");
+    const inputsEl = $("#wf-plan-inputs");
+    const primitivesEl = $("#wf-plan-primitives");
+    const stepsEl = $("#wf-plan-steps");
+    if (!section || !summaryEl || !metaEl || !inputsEl || !primitivesEl || !stepsEl) return;
+
+    if (!workflowMeta || !detail?.definition) {
+      section.classList.add("hidden");
+      summaryEl.textContent = "";
+      metaEl.innerHTML = "";
+      inputsEl.textContent = "";
+      primitivesEl.innerHTML = "";
+      stepsEl.innerHTML = "";
+      return;
+    }
+
+    const steps = Array.isArray(detail.definition.steps) ? detail.definition.steps : [];
+    const roles = Array.isArray(detail.definition.roles) ? detail.definition.roles : [];
+    const primitives = Array.isArray(workflowMeta.primitives) ? workflowMeta.primitives : [];
+    const interactiveSteps = steps.filter((step) =>
+      ["human_input", "secure_input", "human_approval", "wait_signal"].includes(String(step.type || "")));
+    const interactivePrompts = extractInteractivePrompts(steps);
+    const connectorSteps = steps.filter((step) =>
+      ["connector_call", "secure_connector_call"].includes(String(step.type || ""))).length;
+
+    summaryEl.textContent = buildWorkflowPlanSummary(steps, roles, interactiveSteps.length, connectorSteps);
+    metaEl.innerHTML = [
+      renderPlanMetric("Library", workflowMeta.sourceLabel || getWorkflowSourceLabel(workflowMeta.source)),
+      renderPlanMetric("Collection", workflowMeta.groupLabel || workflowMeta.group || "Workflow"),
+      renderPlanMetric("Pattern", workflowMeta.category || "deterministic"),
+      renderPlanMetric("Roles / Steps", `${roles.length} / ${steps.length}`),
+      renderPlanMetric("Human Checkpoints", interactivePrompts.length > 0 ? `${interactivePrompts.length} expected` : "none"),
+    ].join("");
+
+    inputsEl.innerHTML = interactivePrompts.length > 0
+      ? renderPlanInteractionSummary(interactivePrompts)
+      : "This flow can run end-to-end once you press Run. The user mainly needs to understand the graph, YAML, and expected output.";
+
+    primitivesEl.innerHTML = primitives
+      .filter((name) => name && name !== "workflow_loop")
+      .map((name) => `<span class="tag">${esc(name)}</span>`)
+      .join("");
+
+    const visibleSteps = steps.slice(0, 6);
+    stepsEl.innerHTML = visibleSteps.map((step, index) => renderPlanStep(step, index)).join("");
+    if (steps.length > visibleSteps.length) {
+      stepsEl.innerHTML += `<div class="plan-step"><span class="plan-step-index">+</span><div class="plan-step-main"><div class="plan-step-title"><span class="plan-step-id">${steps.length - visibleSteps.length} more step${steps.length - visibleSteps.length > 1 ? "s" : ""}</span></div><div class="plan-step-detail">Open the YAML panel for the full control-plane flow.</div></div></div>`;
+    }
+
+    section.classList.remove("hidden");
+  }
+
+  function buildWorkflowPlanSummary(steps, roles, interactiveCount, connectorSteps) {
+    const parts = [`Aevatar will run ${steps.length} step${steps.length === 1 ? "" : "s"} across ${roles.length} role${roles.length === 1 ? "" : "s"}.`];
+    if (connectorSteps > 0)
+      parts.push(`It verifies ${connectorSteps} connector step${connectorSteps === 1 ? "" : "s"}.`);
+    if (interactiveCount > 0)
+      parts.push(`It can ask for ${interactiveCount} human decision${interactiveCount === 1 ? "" : "s"} in chat.`);
+    return parts.join(" ");
+  }
+
+  function renderPlanMetric(label, value) {
+    return `<div class="plan-metric"><span class="plan-metric-label">${esc(label)}</span><span class="plan-metric-value">${esc(value || "n/a")}</span></div>`;
+  }
+
+  function renderPlanStep(step, index) {
+    const role = step.targetRole ? `@${step.targetRole}` : "";
+    const detail = describePlanStep(step);
+    return `<div class="plan-step"><span class="plan-step-index">${index + 1}</span><div class="plan-step-main"><div class="plan-step-title"><span class="plan-step-id">${esc(step.id || `step_${index + 1}`)}</span><span class="plan-step-type">${esc(step.type || "step")}${role ? ` · ${esc(role)}` : ""}</span></div>${detail ? `<div class="plan-step-detail">${esc(detail)}</div>` : ""}</div></div>`;
+  }
+
+  function describePlanStep(step) {
+    const interaction = describeInteractiveStep(step);
+    if (interaction)
+      return interaction.prompt;
+    const branchCount = step?.branches && typeof step.branches === "object" ? Object.keys(step.branches).length : 0;
+    const childCount = Array.isArray(step?.children) ? step.children.length : 0;
+    if (branchCount > 0)
+      return `${branchCount} explicit branch${branchCount > 1 ? "es" : ""}.`;
+    if (childCount > 0)
+      return `${childCount} child step${childCount > 1 ? "s" : ""} execute inside this stage.`;
+    if (step?.next)
+      return `Then continues to ${step.next}.`;
+    return "Sequential stage in the current workflow.";
+  }
+
+  function renderPlanInteractionSummary(items) {
+    const visible = items.slice(0, 4);
+    const cards = visible.map((item) => `
+      <div class="plan-question">
+        <div class="plan-question-head">
+          <span class="plan-question-kind">${esc(formatInteractiveKind(item.type))}</span>
+          <span class="plan-question-step">${esc(item.id)}</span>
+        </div>
+        <div class="plan-question-prompt">${esc(item.prompt)}</div>
+        ${item.meta ? `<div class="plan-question-meta">${esc(item.meta)}</div>` : ""}
+      </div>`).join("");
+    const more = items.length > visible.length
+      ? `<div class="plan-question"><div class="plan-question-prompt">${items.length - visible.length} more chat question${items.length - visible.length > 1 ? "s" : ""} are expected later in this workflow.</div></div>`
+      : "";
+    return `<div>Aevatar can pause in chat for ${items.length} human step${items.length > 1 ? "s" : ""}. Use the interaction panel below to approve, answer, or continue the run.</div><div class="plan-question-list">${cards}${more}</div>`;
+  }
+
+  function extractInteractivePrompts(steps) {
+    if (!Array.isArray(steps)) return [];
+    return steps
+      .map((step, index) => describeInteractiveStep(step, index))
+      .filter((item) => Boolean(item));
+  }
+
+  function describeInteractiveStep(step, index = 0) {
+    const type = String(step?.type || "").toLowerCase();
+    if (!["human_input", "secure_input", "human_approval", "wait_signal"].includes(type))
+      return null;
+
+    const parameters = step?.parameters && typeof step.parameters === "object" ? step.parameters : {};
+    const prompt = readPlanParameter(parameters, "prompt", "message");
+    const variable = readPlanParameter(parameters, "variable");
+    const signalName = readPlanParameter(parameters, "signal_name", "signal");
+    const timeout = readPlanParameter(parameters, "timeout_ms", "timeout_seconds", "timeout");
+    const secure = type === "secure_input";
+
+    return {
+      id: String(step?.id || `step_${index + 1}`),
+      type,
+      prompt: buildInteractivePrompt(type, prompt, variable, signalName, secure),
+      meta: buildInteractiveMeta(type, variable, signalName, timeout, secure),
+    };
+  }
+
+  function buildInteractivePrompt(type, prompt, variable, signalName, secure) {
+    if (prompt) return prompt;
+    if (type === "human_approval")
+      return "Aevatar will ask for approval before applying the next control-plane action.";
+    if (type === "wait_signal")
+      return `Aevatar will wait for signal '${signalName || "signal"}' before continuing.`;
+    if (secure && variable)
+      return `Aevatar will collect '${variable}' as a masked secret before continuing.`;
+    if (variable)
+      return `Aevatar will collect '${variable}' in chat before continuing.`;
+    return "Aevatar will pause in chat for more input before continuing.";
+  }
+
+  function buildInteractiveMeta(type, variable, signalName, timeout, secure) {
+    const details = [];
+    if (variable && (type === "human_input" || type === "secure_input"))
+      details.push(`${secure ? "stores securely as" : "stores as"} ${variable}`);
+    if (secure)
+      details.push("masked");
+    if (signalName && type === "wait_signal")
+      details.push(`signal ${signalName}`);
+    if (timeout)
+      details.push(`timeout ${timeout}`);
+    return details.join(" · ");
+  }
+
+  function readPlanParameter(parameters, ...keys) {
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(parameters, key))
+        continue;
+      const value = parameters[key];
+      if (value === null || value === undefined)
+        continue;
+      const text = String(value).trim();
+      if (text)
+        return text;
+    }
+    return "";
+  }
+
+  function formatInteractiveKind(type) {
+    if (type === "human_approval")
+      return "approval";
+    if (type === "wait_signal")
+      return "signal";
+    if (type === "secure_input")
+      return "secure input";
+    return "input";
   }
 
   function renderRoleCard(role) {
@@ -1303,6 +2280,18 @@
     return s.length > max ? s.slice(0, max) + "..." : s;
   }
 
+  function getWorkflowSourceLabel(source) {
+    const normalized = String(source || "").trim().toLowerCase();
+    if (normalized === "home") return "Saved";
+    if (normalized === "cwd") return "Workspace";
+    if (normalized === "repo") return "Starter";
+    if (normalized === "demo") return "Demo";
+    if (normalized === "turing") return "Advanced";
+    if (normalized === "file") return "File";
+    if (normalized === "builtin") return "Built-in";
+    return normalized ? normalized : "Workflow";
+  }
+
   function setupStatePersistence() {
     if (persistenceHooksBound) return;
     persistenceHooksBound = true;
@@ -1315,6 +2304,7 @@
     bind("#wf-input");
     bind("#pg-input");
     bind("#pg-run-input");
+    bind("#pg-save-filename");
     bind("#wf-auto-resume", "change");
     bind("#pg-auto-resume", "change");
     window.addEventListener("beforeunload", flushUiStatePersist);
@@ -1389,8 +2379,11 @@
       version: UI_STATE_STORAGE_VERSION,
       activeView: getActiveNavView(),
       selectedWorkflow,
+      selectedPrimitive,
+      yamlViewerSource,
       sidebar: {
         groupCollapsed: { ...workflowGroupCollapsed },
+        collapsed: appSidebarCollapsed === true,
       },
       workflow: {
         input: $("#wf-input")?.value || "",
@@ -1404,13 +2397,18 @@
         },
       },
       playground: {
-        autoMode: pgAutoMode,
+        sidebarCollapsed: pgSidebarCollapsed === true,
+        chatHistoryCollapsed: pgChatHistoryCollapsed === true,
+        activeModal: PG_MODAL_KEYS.has(pgActiveModal) ? pgActiveModal : "",
         input: $("#pg-input")?.value || "",
         runInput: $("#pg-run-input")?.value || "",
+        saveFilename: $("#pg-save-filename")?.value || "",
         messages: Array.isArray(pgMessages)
           ? pgMessages.map((x) => ({ role: String(x.role || "assistant"), content: String(x.content || "") }))
           : [],
         currentYaml: pgCurrentYaml || "",
+        yamlGeneratedByAi: pgYamlGeneratedByAi === true,
+        yamlValidated: pgYamlValidated === true,
         logs: pgLogEntries.map((entry) => ({ ...entry })),
         stepStates: { ...(pgStepStates || {}) },
         result: {
@@ -1431,17 +2429,28 @@
     if (!snapshot || typeof snapshot !== "object") return;
 
     workflowGroupCollapsed = normalizeGroupCollapsed(snapshot.sidebar?.groupCollapsed);
+    setAppSidebarCollapsed(snapshot.sidebar?.collapsed === true, { force: true, skipPersist: true });
     renderWorkflowList();
-    pgSetMode(snapshot.playground?.autoMode === true, { force: true, preserveMessages: true });
+    yamlViewerSource = snapshot.yamlViewerSource === "playground" ? "playground" : "workflow";
 
     const targetWorkflow = typeof snapshot.selectedWorkflow === "string" ? snapshot.selectedWorkflow : "";
     if (targetWorkflow && workflows.some((w) => w.name === targetWorkflow)) {
-      await selectWorkflow(targetWorkflow);
+      await selectWorkflow(targetWorkflow, { preferredView: "none" });
       restoreWorkflowUiState(snapshot.workflow);
     }
 
+    const targetPrimitive = typeof snapshot.selectedPrimitive === "string" ? snapshot.selectedPrimitive : "";
+    const primitive = primitives.find((item) => item.name === targetPrimitive);
+    if (primitive) {
+      showPrimitiveDetail(primitive, { show: false });
+    }
+
     await restorePlaygroundUiState(snapshot.playground);
-    activateNavView(snapshot.activeView);
+    renderOverviewPage();
+    renderWorkflowHome();
+    renderPrimitivesHome();
+    renderYamlBrowser();
+    activateNavView(normalizeNavView(snapshot.activeView));
     scheduleUiStatePersist();
   }
 
@@ -1480,10 +2489,16 @@
   async function restorePlaygroundUiState(snapshot) {
     if (!snapshot || typeof snapshot !== "object") return;
 
+    pgSetSidebarCollapsed(snapshot.sidebarCollapsed === true, { force: true, skipPersist: true });
+    pgSetChatHistoryCollapsed(snapshot.chatHistoryCollapsed === true, { force: true, skipPersist: true });
+    pgCloseModal({ force: true, skipPersist: true });
+
     if (typeof snapshot.input === "string")
       $("#pg-input").value = snapshot.input;
     if (typeof snapshot.runInput === "string")
       $("#pg-run-input").value = snapshot.runInput;
+    if (typeof snapshot.saveFilename === "string")
+      $("#pg-save-filename").value = snapshot.saveFilename;
 
     const restoredMessages = Array.isArray(snapshot.messages)
       ? snapshot.messages
@@ -1495,7 +2510,10 @@
 
     const restoredYaml = typeof snapshot.currentYaml === "string" ? snapshot.currentYaml : "";
     if (restoredYaml.trim())
-      await pgApplyYaml(restoredYaml);
+      await pgApplyYaml(restoredYaml, {
+        generatedByAi: snapshot.yamlGeneratedByAi === true,
+        preferredFilename: typeof snapshot.saveFilename === "string" ? snapshot.saveFilename : "",
+      });
 
     const logs = normalizePersistedLogEntries(snapshot.logs);
     pgLogEntries = logs.map((entry) => ({ ...entry }));
@@ -1524,13 +2542,17 @@
       pgSetAutoStatus("", "info");
     }
 
+    if (PG_MODAL_KEYS.has(snapshot.activeModal)) {
+      pgOpenModal(snapshot.activeModal, { force: true, skipPersist: true });
+    } else {
+      pgCloseModal({ force: true, skipPersist: true });
+    }
+    pgUpdateWorkspaceChromeState();
+
     pgAutoCanRunFinal = false;
     pgUpdateRunBarVisibility();
-    if (pgCurrentYaml && pgParsedDef) {
-      $("#pg-run-btn").disabled = pgAutoMode ? true : false;
-    } else {
-      $("#pg-run-btn").disabled = true;
-    }
+    pgUpdateSaveUi();
+    renderYamlBrowser();
   }
 
   function restorePlaygroundMessages(messages) {
@@ -1570,13 +2592,11 @@
   }
 
   function getActiveNavView() {
-    return document.querySelector(".nav-btn.active")?.dataset.view || "workflows";
+    return document.querySelector(".nav-btn.active")?.dataset.view || "overview";
   }
 
   function activateNavView(view) {
-    const normalized = String(view || "");
-    if (normalized !== "workflows" && normalized !== "primitives" && normalized !== "playground")
-      return;
+    const normalized = normalizeNavView(view);
     const btn = document.querySelector(`.nav-btn[data-view="${normalized}"]`);
     if (btn) btn.click();
   }
@@ -1595,16 +2615,16 @@
   // ══════════════════════════════════════════════
 
   let pgMessages = [];
-  let pgStreaming = false;
-  let pgAbort = null;
   let pgCurrentYaml = "";
   let pgParsedDef = null;
   let pgStepStates = {};
+  let pgYamlGeneratedByAi = false;
+  let pgYamlValidated = false;
+  let pgSaveBusy = false;
   let pgEventSource = null;
   let pgRunning = false;
   let pgPendingInteraction = null;
 
-  let pgAutoMode = false;
   let pgAutoPhase = "idle";
   let pgAutoLlmContent = "";
   let pgAutoValidatedYaml = "";
@@ -1616,81 +2636,386 @@
   let pgAutoActorId = "";
   let pgAutoRunId = "";
   let pgAutoCommandId = "";
+  let pgAutoStatusMessage = "";
+  let pgAutoStatusTone = "info";
   let pgAutoMessageBuffers = new Map();
   let pgRunActorId = "";
   let pgRunRunId = "";
   let pgRunCommandId = "";
   let pgRunMessageBuffers = new Map();
+  let pgLogToastTimer = null;
+  let pgSidebarCollapsed = false;
+  let pgChatHistoryCollapsed = false;
+  let pgActiveModal = "";
 
   function setupPlayground() {
     $("#pg-send").addEventListener("click", () => pgSend());
     $("#pg-input").addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); pgSend(); }
     });
+    $("#pg-save-btn").addEventListener("click", () => pgSaveWorkflow());
     $("#pg-run-btn").addEventListener("click", pgRunWorkflow);
     $("#pg-run-reset").addEventListener("click", pgResetRun);
+    $("#pg-input").placeholder = "Describe what you want to do...";
 
-    $$(".pg-mode-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        pgSetMode(btn.dataset.mode === "auto");
-      });
+    $("#pg-sidebar-edge-toggle")?.addEventListener("click", () => {
+      pgSetSidebarCollapsed(!pgSidebarCollapsed);
+    });
+    $("#pg-chat-history-toggle")?.addEventListener("click", () => {
+      pgSetChatHistoryCollapsed(!pgChatHistoryCollapsed);
+    });
+    $("#pg-open-save-modal")?.addEventListener("click", () => pgOpenModal("save"));
+    $("#pg-open-log-modal")?.addEventListener("click", () => pgOpenModal("log"));
+    $("#pg-open-result-modal")?.addEventListener("click", () => pgOpenModal("result"));
+    $("#pg-open-interaction-modal")?.addEventListener("click", () => pgOpenModal("interaction"));
+    $("#pg-quick-open-log")?.addEventListener("click", () => pgOpenModal("log"));
+    $("#pg-quick-open-result")?.addEventListener("click", () => pgOpenModal("result"));
+    $("#pg-quick-open-interaction")?.addEventListener("click", () => pgOpenModal("interaction"));
+    $("#pg-log-toast")?.addEventListener("click", () => {
+      pgOpenModal("log");
+    });
+    $("#pg-modal-overlay")?.addEventListener("click", () => pgCloseModal());
+    $$(".pg-modal-close").forEach((btn) => {
+      btn.addEventListener("click", () => pgCloseModal());
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape")
+        pgCloseModal();
     });
 
+    pgSetSidebarCollapsed(false, { force: true, skipPersist: true });
+    pgSetChatHistoryCollapsed(false, { force: true, skipPersist: true });
+    pgCloseModal({ force: true, skipPersist: true });
+    pgUpdateWorkspaceChromeState();
     pgUpdateRunBarVisibility();
+    pgUpdateSaveUi();
+    pgRenderRunControlSummary();
   }
 
-  function pgSetMode(autoMode, options = {}) {
+  function pgSetSidebarCollapsed(collapsed, options = {}) {
     const force = options.force === true;
-    const preserveMessages = options.preserveMessages === true;
+    const next = collapsed === true;
+    if (!force && next === pgSidebarCollapsed) return;
+    pgSidebarCollapsed = next;
 
-    $$(".pg-mode-btn").forEach((b) => b.classList.toggle("active", (b.dataset.mode === "auto") === autoMode));
-    if (!force && autoMode === pgAutoMode) {
-      pgUpdateRunBarVisibility();
-      return;
+    $("#pg-workspace-main")?.classList.toggle("pg-sidebar-collapsed", pgSidebarCollapsed);
+    const toggleBtn = $("#pg-sidebar-edge-toggle");
+    if (toggleBtn) {
+      toggleBtn.textContent = pgSidebarCollapsed ? "›" : "‹";
+      toggleBtn.setAttribute("aria-expanded", String(!pgSidebarCollapsed));
+      toggleBtn.setAttribute("aria-label", pgSidebarCollapsed ? "Expand run controls panel" : "Collapse run controls panel");
+      toggleBtn.title = pgSidebarCollapsed ? "Expand run controls panel" : "Collapse run controls panel";
     }
 
-    pgAutoMode = autoMode;
-    pgResetRun();
-    pgAutoReset();
-    if (!preserveMessages) {
-      pgMessages = [];
-      $("#pg-messages").innerHTML = "";
+    if (options.skipPersist !== true)
+      scheduleUiStatePersist();
+  }
+
+  function pgSetChatHistoryCollapsed(collapsed, options = {}) {
+    const force = options.force === true;
+    const next = collapsed === true;
+    if (!force && next === pgChatHistoryCollapsed) return;
+    pgChatHistoryCollapsed = next;
+
+    $("#pg-chat-dock")?.classList.toggle("pg-history-collapsed", pgChatHistoryCollapsed);
+    const toggleBtn = $("#pg-chat-history-toggle");
+    if (toggleBtn) {
+      toggleBtn.textContent = pgChatHistoryCollapsed ? "Show History" : "Hide History";
+      toggleBtn.setAttribute("aria-expanded", String(!pgChatHistoryCollapsed));
     }
-    pgUpdateRunBarVisibility();
-    $("#pg-input").placeholder = pgAutoMode
-      ? "Describe what you want to do..."
-      : "Describe your workflow...";
-    scheduleUiStatePersist();
+
+    if (options.skipPersist !== true)
+      scheduleUiStatePersist();
+  }
+
+  function pgOpenModal(name, options = {}) {
+    if (!PG_MODAL_KEYS.has(name)) return;
+    const force = options.force === true;
+    if (!force && pgActiveModal === name) return;
+
+    for (const key of PG_MODAL_KEYS)
+      $(`#pg-modal-${key}`)?.classList.add("hidden");
+
+    $(`#pg-modal-${name}`)?.classList.remove("hidden");
+    $("#pg-modal-overlay")?.classList.remove("hidden");
+    pgHideRecentLogToast();
+    pgActiveModal = name;
+    pgUpdateWorkspaceChromeState();
+    $(`#pg-modal-${name} .pg-modal-close`)?.focus();
+
+    if (options.skipPersist !== true)
+      scheduleUiStatePersist();
+  }
+
+  function pgCloseModal(options = {}) {
+    const force = options.force === true;
+    if (!force && !pgActiveModal) return;
+
+    for (const key of PG_MODAL_KEYS)
+      $(`#pg-modal-${key}`)?.classList.add("hidden");
+
+    $("#pg-modal-overlay")?.classList.add("hidden");
+    pgActiveModal = "";
+    pgUpdateWorkspaceChromeState();
+    $("#pg-input")?.focus();
+
+    if (options.skipPersist !== true)
+      scheduleUiStatePersist();
+  }
+
+  function pgUpdateWorkspaceChromeState() {
+    $("#pg-open-save-modal")?.classList.toggle("is-active", pgActiveModal === "save");
+    $("#pg-open-log-modal")?.classList.toggle("is-active", pgActiveModal === "log");
+    $("#pg-open-result-modal")?.classList.toggle("is-active", pgActiveModal === "result");
+    $("#pg-open-interaction-modal")?.classList.toggle("is-active", pgActiveModal === "interaction");
+  }
+
+  function pgLogToastIcon(type) {
+    const icons = {
+      request: "\u25B6",
+      completed: "\u2713",
+      failed: "\u2717",
+      suspended: "\u23F8",
+      waiting: "\u23F3",
+      action: "\u270D",
+      done: "\u2705",
+      error: "\u274C",
+    };
+    return icons[String(type || "").toLowerCase()] || "\uD83D\uDCDD";
+  }
+
+  function pgShowRecentLogToast(type, title, detail) {
+    const toast = $("#pg-log-toast");
+    if (!toast) return;
+    if (pgActiveModal) return;
+
+    const titleText = String(title || "Execution update").replace(/\s+/g, " ").trim() || "Execution update";
+    const detailText = shorten(String(detail || "").replace(/\s+/g, " ").trim(), 96);
+
+    toast.innerHTML = `
+      <span class="pg-log-toast-badge">${esc(pgLogToastIcon(type))}</span>
+      <span class="pg-log-toast-copy">
+        <span class="pg-log-toast-title">${esc(titleText)}</span>
+        <span class="pg-log-toast-detail">${esc(detailText || "Recent execution log update")}</span>
+      </span>
+      <span class="pg-log-toast-hint">View all</span>`;
+    toast.classList.remove("hidden");
+
+    if (pgLogToastTimer !== null) {
+      window.clearTimeout(pgLogToastTimer);
+      pgLogToastTimer = null;
+    }
+    pgLogToastTimer = window.setTimeout(() => {
+      pgHideRecentLogToast();
+    }, 5000);
+  }
+
+  function pgHideRecentLogToast() {
+    const toast = $("#pg-log-toast");
+    if (!toast) return;
+    toast.classList.add("hidden");
+    if (pgLogToastTimer !== null) {
+      window.clearTimeout(pgLogToastTimer);
+      pgLogToastTimer = null;
+    }
   }
 
   function pgUpdateRunBarVisibility() {
     const runBar = $(".pg-run-bar");
-    if (!runBar) return;
+    const runBtn = $("#pg-run-btn");
+    if (!runBar || !runBtn) return;
 
-    if (!pgAutoMode) {
-      runBar.style.display = "";
-      $("#pg-run-btn").textContent = "Run";
-      return;
+    const hasRunnableDraft = typeof pgCurrentYaml === "string" &&
+      pgCurrentYaml.trim().length > 0 &&
+      !!pgParsedDef?.definition?.steps?.length;
+    runBar.style.display = "grid";
+    runBtn.textContent = pgRunning ? "Running..." : "Run Draft";
+    runBtn.disabled = !hasRunnableDraft || pgRunning;
+    runBtn.title = !hasRunnableDraft
+      ? "Draft workflow is not ready yet. Generate, load, or validate YAML first."
+      : (pgAutoRunning
+        ? "Stop current AI drafting session and run this draft workflow."
+        : (pgRunning
+          ? "Workflow is currently running."
+          : "Run validated draft workflow."));
+    pgRenderRunControlSummary();
+  }
+
+  function pgRenderRunControlSummary() {
+    const stateChip = $("#pg-run-state-chip");
+    const stateNote = $("#pg-run-state-note");
+    const workflowEl = $("#pg-run-meta-workflow");
+    const stepEl = $("#pg-run-meta-steps");
+    const logEl = $("#pg-run-meta-logs");
+
+    const hasRunnableDraft = typeof pgCurrentYaml === "string" &&
+      pgCurrentYaml.trim().length > 0 &&
+      !!pgParsedDef?.definition?.steps?.length;
+    const workflowName = String(pgParsedDef?.definition?.name || "").trim();
+    if (workflowEl) {
+      workflowEl.textContent = workflowName || (hasRunnableDraft ? "Unsaved draft" : "No draft loaded");
     }
 
-    // Auto mode executes final workflow in the same /api/chat run.
-    // Keep run bar hidden to avoid a second, demo-only execution path.
-    runBar.style.display = "none";
-    $("#pg-run-btn").textContent = "Run";
+    if (stepEl) {
+      const totalSteps = Array.isArray(pgParsedDef?.definition?.steps) ? pgParsedDef.definition.steps.length : 0;
+      const completedSteps = Object.values(pgStepStates || {}).filter((state) => state === "completed").length;
+      const failedSteps = Object.values(pgStepStates || {}).filter((state) => state === "failed").length;
+      if (totalSteps === 0) {
+        stepEl.textContent = "0 / 0 steps";
+      } else if (failedSteps > 0) {
+        stepEl.textContent = `${completedSteps} + ${failedSteps} failed / ${totalSteps}`;
+      } else {
+        stepEl.textContent = `${completedSteps} / ${totalSteps} steps`;
+      }
+    }
+
+    if (logEl) {
+      const count = pgLogEntries.length;
+      logEl.textContent = `${count} ${count === 1 ? "entry" : "entries"}`;
+    }
+
+    if (!stateChip || !stateNote) return;
+
+    let label = "Idle";
+    let tone = "idle";
+    let note = "Send a prompt below to draft and execute a workflow automatically.";
+    if (pgPendingInteraction) {
+      const interactionType = String(pgPendingInteraction.type || "").toLowerCase();
+      label = interactionType === "wait_signal" ? "Waiting Signal" : "Needs Input";
+      tone = "warn";
+      note = interactionType === "wait_signal"
+        ? "Workflow paused until an external signal arrives."
+        : "Workflow paused and waiting for your confirmation or input.";
+    } else if (pgRunning || (pgAutoRunning && pgAutoPhase === "executing")) {
+      label = "Running";
+      tone = "info";
+      note = pgAutoStatusMessage || "Executing workflow steps.";
+    } else if (pgAutoRunning && pgAutoPhase === "approval") {
+      label = "Review";
+      tone = "warn";
+      note = pgAutoStatusMessage || "Review YAML/graph, then approve or refine.";
+    } else if (pgAutoRunning) {
+      label = "Planning";
+      tone = "info";
+      note = pgAutoStatusMessage || "AI is drafting and validating the workflow.";
+    } else if (pgAutoStatusTone === "error") {
+      label = "Failed";
+      tone = "error";
+      note = pgAutoStatusMessage || "Last run failed. Refine and retry.";
+    } else if (pgAutoStatusTone === "success") {
+      label = "Completed";
+      tone = "success";
+      note = pgAutoStatusMessage || "Latest run completed successfully.";
+    } else if (hasRunnableDraft) {
+      label = "Ready";
+      tone = "ready";
+      note = "Draft is valid and ready to run.";
+    }
+
+    stateChip.textContent = label;
+    stateChip.className = `pg-run-state-chip tone-${tone}`;
+    stateNote.textContent = note;
   }
 
   function pgSetAutoStatus(message, tone = "info") {
     const el = $("#pg-auto-status");
     if (!el) return;
     if (!message) {
+      pgAutoStatusMessage = "";
+      pgAutoStatusTone = "info";
       el.textContent = "";
       el.className = "pg-auto-status hidden";
+      pgRenderRunControlSummary();
       scheduleUiStatePersist();
       return;
     }
+    pgAutoStatusMessage = String(message);
+    pgAutoStatusTone = String(tone || "info");
     el.textContent = message;
     el.className = `pg-auto-status ${tone}`;
+    pgRenderRunControlSummary();
     scheduleUiStatePersist();
+  }
+
+  function pgSetSaveStatus(message, tone = "info") {
+    const el = $("#pg-save-status");
+    if (!el) return;
+    if (!message) {
+      el.textContent = "";
+      el.className = "pg-save-status hidden";
+      return;
+    }
+
+    el.textContent = message;
+    el.className = `pg-save-status ${tone}`;
+  }
+
+  function pgCanSaveCurrentYaml() {
+    return !pgSaveBusy &&
+      !pgAutoRunning &&
+      !pgRunning &&
+      typeof pgCurrentYaml === "string" &&
+      pgCurrentYaml.trim().length > 0 &&
+      pgYamlGeneratedByAi === true &&
+      pgYamlValidated === true;
+  }
+
+  function pgUpdateSaveUi() {
+    const saveBtn = $("#pg-save-btn");
+    if (saveBtn) saveBtn.disabled = !pgCanSaveCurrentYaml();
+  }
+
+  async function pgSaveWorkflow(overwrite = false) {
+    if (!pgCanSaveCurrentYaml()) return;
+
+    const filenameInput = $("#pg-save-filename");
+    const requestedFilename = filenameInput?.value?.trim() || "";
+    pgSaveBusy = true;
+    pgUpdateSaveUi();
+    pgSetSaveStatus(overwrite ? "正在覆盖已存在的 workflow 文件…" : "正在保存到 ~/.aevatar/workflows …", "info");
+
+    try {
+      const data = await postJson("/api/playground/workflows", {
+        yaml: pgCurrentYaml,
+        filename: requestedFilename,
+        overwrite,
+      });
+
+      if (filenameInput && data?.filename)
+        filenameInput.value = data.filename;
+      pgSetSaveStatus(`已保存到 ${data?.path || "~/.aevatar/workflows"}`, "success");
+      await loadWorkflows();
+      renderYamlBrowser();
+    } catch (e) {
+      const message = e?.message || String(e);
+      if (!overwrite && message.includes("already exists")) {
+        const confirmed = window.confirm(`${message}\n\n是否覆盖现有文件？`);
+        if (confirmed) {
+          pgSaveBusy = false;
+          pgUpdateSaveUi();
+          await pgSaveWorkflow(true);
+          return;
+        }
+        pgSetSaveStatus(message, "warn");
+      } else {
+        pgSetSaveStatus(message, "error");
+      }
+    } finally {
+      pgSaveBusy = false;
+      pgUpdateSaveUi();
+      scheduleUiStatePersist();
+    }
+  }
+
+  function pgSuggestFilename(name) {
+    const normalized = String(name || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\.(ya?ml)$/i, "")
+      .replace(/[^a-z0-9_-]+/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    return normalized ? `${normalized}.yaml` : "";
   }
 
   function pgExtractLastYaml(text) {
@@ -1702,87 +3027,7 @@
   }
 
   async function pgSend() {
-    if (pgAutoMode) { pgAutoSend(); return; }
-    const input = $("#pg-input");
-    const text = input.value.trim();
-    if (!text || pgStreaming) return;
-
-    input.value = "";
-    pgMessages.push({ role: "user", content: text });
-    pgAddBubble("user", text);
-    scheduleUiStatePersist();
-
-    pgStreaming = true;
-    $("#pg-send").disabled = true;
-    const assistantEl = pgAddBubble("assistant", "");
-    const cursorEl = document.createElement("span");
-    cursorEl.className = "pg-typing";
-    assistantEl.appendChild(cursorEl);
-
-    let fullText = "";
-    pgAbort = new AbortController();
-
-    try {
-      const res = await fetch("/api/playground/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: pgMessages }),
-        signal: pgAbort.signal,
-      });
-
-      if (!res.ok) {
-        const err = await res.text();
-        pgAddBubble("error", err);
-        pgMessages.pop();
-        pgStreaming = false;
-        $("#pg-send").disabled = false;
-        assistantEl.remove();
-        scheduleUiStatePersist();
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-
-        let nlIdx;
-        while ((nlIdx = buf.indexOf("\n")) !== -1) {
-          const line = buf.slice(0, nlIdx).trim();
-          buf = buf.slice(nlIdx + 1);
-          if (!line.startsWith("data: ")) continue;
-          const payload = line.slice(6);
-          if (payload === "[DONE]") break;
-          try {
-            const obj = JSON.parse(payload);
-            if (obj.delta) {
-              fullText += obj.delta;
-              pgUpdateAssistantBubble(assistantEl, fullText, true);
-            }
-            if (obj.error) {
-              pgAddBubble("error", obj.error);
-            }
-          } catch { }
-        }
-      }
-    } catch (e) {
-      if (e.name !== "AbortError") pgAddBubble("error", e.message);
-    }
-
-    pgUpdateAssistantBubble(assistantEl, fullText, false);
-    if (fullText) {
-      pgMessages.push({ role: "assistant", content: fullText });
-      pgExtractAndRenderYaml(fullText);
-      scheduleUiStatePersist();
-    }
-
-    pgStreaming = false;
-    $("#pg-send").disabled = false;
-    scheduleUiStatePersist();
+    await pgAutoSend();
   }
 
   function pgAddBubble(role, text) {
@@ -1816,8 +3061,7 @@
       yamlEl.addEventListener("click", () => {
         const yaml = yamlEl.dataset.yaml;
         if (!yaml) return;
-        if (pgAutoMode) return;
-        pgApplyYaml(yaml);
+        pgApplyYaml(yaml, { generatedByAi: true });
       });
     });
 
@@ -1839,28 +3083,31 @@
     return parts;
   }
 
-  function pgExtractAndRenderYaml(text) {
-    const regex = /```(?:ya?ml)?\s*\n([\s\S]*?)```/gi;
-    let lastYaml = null;
-    let m;
-    while ((m = regex.exec(text)) !== null) lastYaml = m[1].trim();
-    if (lastYaml) pgApplyYaml(lastYaml);
+  async function pgExtractAndRenderYaml(text, options = {}) {
+    const lastYaml = pgExtractLastYaml(text);
+    if (!lastYaml) return { valid: false, error: "No YAML block found." };
+    return pgApplyYaml(lastYaml, options);
   }
 
   function pgApplyValidatedAutoYaml(markdownText) {
     const yaml = pgExtractLastYaml(markdownText || "");
     if (!yaml) return false;
     pgAutoValidatedYaml = yaml;
-    pgApplyYaml(yaml).catch(() => { });
+    pgApplyYaml(yaml, { generatedByAi: true }).catch(() => { });
     return true;
   }
 
-  async function pgApplyYaml(yaml) {
+  async function pgApplyYaml(yaml, options = {}) {
     pgCurrentYaml = yaml;
+    pgYamlGeneratedByAi = options.generatedByAi === true;
+    pgYamlValidated = false;
+    pgParsedDef = null;
     pgResetRun();
+    pgSetSaveStatus("", "info");
 
     const yamlEl = $("#pg-yaml");
     yamlEl.innerHTML = yaml.split("\n").map(highlightYamlLine).join("\n");
+    renderYamlBrowser();
 
     try {
       const res = await fetch("/api/playground/parse", {
@@ -1871,19 +3118,43 @@
       const data = await res.json();
       if (data.valid && data.definition?.steps) {
         pgParsedDef = data;
+        pgYamlValidated = true;
         renderFlowInto($("#pg-graph"), data.definition.steps, data.edges, null);
-        $("#pg-run-btn").disabled = pgAutoMode ? true : false;
+        pgUpdateRunBarVisibility();
+        const suggestedFilename = options.preferredFilename || pgSuggestFilename(data.definition.name);
+        if (suggestedFilename)
+          $("#pg-save-filename").value = suggestedFilename;
+        pgUpdateSaveUi();
+        renderYamlBrowser();
+        scheduleUiStatePersist();
+        return { valid: true, definition: data.definition };
       } else {
+        const errorMessage = data.error || "Invalid YAML";
         pgParsedDef = null;
-        $("#pg-run-btn").disabled = true;
-        $("#pg-graph").innerHTML = `<p style="color:var(--state-failed);padding:16px;font-size:12px">${esc(data.error || "Invalid YAML")}</p>`;
+        pgYamlValidated = false;
+        pgUpdateRunBarVisibility();
+        $("#pg-graph").innerHTML = `<p style="color:var(--state-failed);padding:16px;font-size:12px">${esc(errorMessage)}</p>`;
+        if (pgYamlGeneratedByAi) {
+          pgSetSaveStatus(errorMessage || "当前 YAML 尚未通过校验，暂时不能保存。", "warn");
+        }
+        pgUpdateSaveUi();
+        renderYamlBrowser();
+        scheduleUiStatePersist();
+        return { valid: false, error: errorMessage };
       }
     } catch (e) {
       pgParsedDef = null;
-      $("#pg-run-btn").disabled = true;
+      pgYamlValidated = false;
+      pgUpdateRunBarVisibility();
       $("#pg-graph").innerHTML = `<p style="color:var(--state-failed);padding:16px;font-size:12px">${esc(e.message)}</p>`;
+      if (pgYamlGeneratedByAi) {
+        pgSetSaveStatus(e.message || "当前 YAML 尚未通过校验，暂时不能保存。", "error");
+      }
+      pgUpdateSaveUi();
+      renderYamlBrowser();
+      scheduleUiStatePersist();
+      return { valid: false, error: e.message || String(e) };
     }
-    scheduleUiStatePersist();
   }
 
   async function streamWorkflowChatRun(payload, onFrame, options = {}) {
@@ -1943,6 +3214,17 @@
     return value[camelKey] ?? value[pascalKey] ?? "";
   }
 
+  function normalizePlainObject(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return value;
+  }
+
+  function isSecureInteraction(interaction) {
+    if (!interaction || typeof interaction !== "object") return false;
+    if (String(interaction.type || "").toLowerCase() === "secure_input") return true;
+    return String(interaction.metadata?.secure || "").toLowerCase() === "true";
+  }
+
   function pgExtractRunOutput(result) {
     if (result == null) return "";
     if (typeof result === "string") return result;
@@ -1991,7 +3273,7 @@
           suspensionType: readCustomValue(value, "suspensionType", "SuspensionType") || "human_input",
           prompt: readCustomValue(value, "prompt", "Prompt"),
           timeoutSeconds: value.timeoutSeconds ?? value.TimeoutSeconds ?? 0,
-          metadata: value.metadata || {},
+          metadata: normalizePlainObject(value.metadata || value.Metadata),
         },
       };
     }
@@ -2196,11 +3478,16 @@
     pgSetAutoStatus("AI 正在分析需求并生成 workflow 草稿…", "info");
     $("#pg-send").disabled = true;
     $("#pg-exec-log").classList.remove("hidden");
+    pgSetChatHistoryCollapsed(true, { skipPersist: true });
 
     try {
       await streamWorkflowChatRun(
         {
           prompt: text,
+          metadata: {
+            "workflow.authoring.enabled": "true",
+            "workflow.intent": "workflow_authoring",
+          },
         },
         pgAutoHandleWorkflowFrame,
         { signal: pgAutoAbort.signal });
@@ -2291,6 +3578,7 @@
       const pre = $("#pg-result");
       pre.textContent = data.success ? data.output : (data.error || "Failed");
       pre.className = `result-pre ${data.success ? "success" : "failure"}`;
+      pgOpenModal("result", { skipPersist: true });
       if (data.success) {
         const finalText = data.output || "";
         const finalYaml = pgAutoValidatedYaml;
@@ -2299,7 +3587,6 @@
         }
         pgAutoCanRunFinal = false;
         pgUpdateRunBarVisibility();
-        $("#pg-run-btn").disabled = true;
         pgSetAutoStatus("执行完成：定稿 workflow 已自动运行。", "success");
         if (finalText) {
           pgAddBubble("assistant", finalText);
@@ -2340,11 +3627,20 @@
     $("#pg-log-entries").innerHTML = "";
     $("#pg-yaml").innerHTML = "";
     $("#pg-graph").innerHTML = "";
+    pgHideRecentLogToast();
     pgSetAutoStatus("", "info");
-    pgUpdateRunBarVisibility();
+    pgSetSaveStatus("", "info");
     pgCurrentYaml = "";
     pgParsedDef = null;
-    $("#pg-run-btn").disabled = true;
+    pgYamlGeneratedByAi = false;
+    pgYamlValidated = false;
+    $("#pg-save-filename").value = "";
+    pgUpdateRunBarVisibility();
+    if (pgActiveModal && PG_MODAL_KEYS.has(pgActiveModal))
+      pgCloseModal({ force: true, skipPersist: true });
+    pgUpdateWorkspaceChromeState();
+    pgUpdateSaveUi();
+    renderYamlBrowser();
     scheduleUiStatePersist();
   }
 
@@ -2412,7 +3708,7 @@
           pgSetAutoStatus("已同意，正在运行定稿 workflow…", "info");
           if (pgAutoValidatedYaml) {
             pgCurrentYaml = pgAutoValidatedYaml;
-            await pgRunWorkflow({ forceAuto: true });
+            await pgRunWorkflow();
           }
         } else {
           pgAutoPhase = "planning";
@@ -2434,10 +3730,21 @@
 
   // ── Playground: Run Workflow ──
 
-  async function pgRunWorkflow(options = {}) {
-    const forceAuto = options.forceAuto === true;
+  async function pgRunWorkflow() {
     if (!pgCurrentYaml || pgRunning) return;
-    if (pgAutoMode && !forceAuto) return;
+    if (pgAutoRunning) {
+      if (pgAutoAbort) {
+        try { pgAutoAbort.abort(); } catch { }
+        pgAutoAbort = null;
+      }
+      pgAutoRunning = false;
+      pgAutoPhase = "idle";
+      pgAutoCanRunFinal = false;
+      pgAutoMessageBuffers = new Map();
+      $("#pg-send").disabled = false;
+      setPlaygroundInteraction(null);
+      pgSetAutoStatus("Switched to manual run for the current draft.", "info");
+    }
     pgResetRun();
     pgRunning = true;
     pgRunActorId = "";
@@ -2445,9 +3752,10 @@
     pgRunCommandId = "";
     pgRunMessageBuffers = new Map();
     setPlaygroundInteraction(null);
-    $("#pg-run-btn").disabled = true;
+    pgUpdateRunBarVisibility();
     $("#pg-run-reset").classList.remove("hidden");
     $("#pg-exec-log").classList.remove("hidden");
+    pgSetChatHistoryCollapsed(true, { skipPersist: true });
 
     pgStepStates = {};
     if (pgParsedDef?.definition?.steps) {
@@ -2456,9 +3764,7 @@
     renderFlowInto($("#pg-graph"), pgParsedDef?.definition?.steps || [], pgParsedDef?.edges || [], pgStepStates);
 
     const input = $("#pg-run-input").value || "Hello, world!";
-    if (pgAutoMode) {
-      pgSetAutoStatus("正在运行定稿 workflow…", "info");
-    }
+    pgSetAutoStatus("正在运行定稿 workflow…", "info");
 
     try {
       await streamWorkflowChatRun(
@@ -2469,14 +3775,14 @@
         pgHandleWorkflowFrame);
       if (pgRunning) {
         pgRunning = false;
-        $("#pg-run-btn").disabled = false;
-        if (pgAutoMode) pgSetAutoStatus("定稿 workflow 已运行完成。", "success");
+        pgUpdateRunBarVisibility();
+        pgSetAutoStatus("定稿 workflow 已运行完成。", "success");
       }
     } catch (e) {
       pgAddLog("error", "\u274C Error", e.message);
-      if (pgAutoMode) pgSetAutoStatus("运行失败，请返回继续优化。", "error");
+      pgSetAutoStatus("运行失败，请返回继续优化。", "error");
       pgRunning = false;
-      $("#pg-run-btn").disabled = false;
+      pgUpdateRunBarVisibility();
     }
   }
 
@@ -2533,18 +3839,17 @@
       const pre = $("#pg-result");
       pre.textContent = data.success ? data.output : (data.error || "Failed");
       pre.className = `result-pre ${data.success ? "success" : "failure"}`;
+      pgOpenModal("result", { skipPersist: true });
       setPlaygroundInteraction(null);
       pgRunning = false;
-      $("#pg-run-btn").disabled = false;
-      if (pgAutoMode) {
-        pgSetAutoStatus(data.success ? "定稿 workflow 已运行完成。" : "运行失败，请返回继续优化。", data.success ? "success" : "error");
-      }
+      pgUpdateRunBarVisibility();
+      pgSetAutoStatus(data.success ? "定稿 workflow 已运行完成。" : "运行失败，请返回继续优化。", data.success ? "success" : "error");
     } else if (eventType === "workflow.error") {
       pgAddLog("error", "\u274C Error", data.error);
       setPlaygroundInteraction(null);
       pgRunning = false;
-      $("#pg-run-btn").disabled = false;
-      if (pgAutoMode) pgSetAutoStatus("运行失败，请返回继续优化。", "error");
+      pgUpdateRunBarVisibility();
+      pgSetAutoStatus("运行失败，请返回继续优化。", "error");
     }
   }
 
@@ -2578,6 +3883,13 @@
     const container = $("#pg-log-entries");
     container.appendChild(el);
     container.scrollTop = container.scrollHeight;
+    if (!options.skipStore) {
+      const showTypes = new Set(["request", "completed", "failed", "suspended", "waiting", "action", "done", "error"]);
+      if (showTypes.has(String(type || "").toLowerCase()))
+        pgShowRecentLogToast(type, title, normalizedDetail);
+    }
+    pgRenderRunControlSummary();
+    pgUpdateWorkspaceChromeState();
   }
 
   function pgResetRun() {
@@ -2594,10 +3906,15 @@
     $("#pg-result-section").classList.add("hidden");
     $("#pg-log-entries").innerHTML = "";
     $("#pg-run-reset").classList.add("hidden");
+    pgHideRecentLogToast();
     if (pgCurrentYaml && pgParsedDef) {
-      $("#pg-run-btn").disabled = false;
       renderFlowInto($("#pg-graph"), pgParsedDef.definition.steps, pgParsedDef.edges, null);
     }
+    if (pgActiveModal && PG_MODAL_KEYS.has(pgActiveModal))
+      pgCloseModal({ force: true, skipPersist: true });
+    pgUpdateWorkspaceChromeState();
+    pgUpdateRunBarVisibility();
+    pgUpdateSaveUi();
     scheduleUiStatePersist();
   }
 })();

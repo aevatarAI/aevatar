@@ -767,6 +767,51 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenOnErrorFallbackHasNoOutput_ShouldPassErrorTextToFallbackStep()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "workflow_yaml_validate",
+                OnError = new StepErrorPolicy
+                {
+                    Strategy = "fallback",
+                    FallbackStep = "repair",
+                },
+            },
+            new StepDefinition
+            {
+                Id = "repair",
+                Type = "llm_call",
+            }));
+        var ctx = CreateContext();
+        const string runId = "run-onerror-fallback-error-input";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "invalid-yaml" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = runId,
+                Success = false,
+                Error = "Invalid workflow YAML: Property 'description' not found on type 'RawStep'.",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var fallbackRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        fallbackRequest.StepId.Should().Be("repair");
+        fallbackRequest.Input.Should().Contain("Property 'description' not found");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenStepCompletesBeforeTimeout_ShouldCancelPendingTimeout()
     {
         var module = new WorkflowLoopModule();

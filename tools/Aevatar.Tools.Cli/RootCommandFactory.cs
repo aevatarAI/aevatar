@@ -11,7 +11,6 @@ public static class RootCommandFactory
         root.AddCommand(ConfigCommand.Create());
         root.AddCommand(AppCommand.Create());
         root.AddCommand(ChatCommand.Create());
-        root.AddCommand(OpenClawCommand.Create());
         return root;
     }
 }

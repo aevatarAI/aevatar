@@ -9,6 +9,7 @@ public sealed record ChatRunRequest
     public string? Workflow { get; init; }
     public string? AgentId { get; init; }
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
+    public IDictionary<string, string>? Metadata { get; init; }
 }
 
 public sealed record WorkflowResumeRequest
@@ -27,6 +28,7 @@ public sealed record WorkflowSignalRequest
     public required string ActorId { get; init; }
     public required string RunId { get; init; }
     public required string SignalName { get; init; }
+    public string? StepId { get; init; }
     public string? CommandId { get; init; }
     public string? Payload { get; init; }
 }
@@ -46,6 +48,7 @@ public sealed record WorkflowSignalResponse
     public string? ActorId { get; init; }
     public string? RunId { get; init; }
     public string? SignalName { get; init; }
+    public string? StepId { get; init; }
     public string? CommandId { get; init; }
 }
 

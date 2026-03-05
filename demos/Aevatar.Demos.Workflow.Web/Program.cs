@@ -31,7 +31,6 @@ using Aevatar.Workflow.Infrastructure.Workflows;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using ChatMessage = Aevatar.AI.Abstractions.LLMProviders.ChatMessage;
 
 var port = 5280;
 const int AutoResumeDelayMs = 50;
@@ -199,16 +198,6 @@ var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCas
     "54_emit_publish_demo",
     "55_tool_call_fallback_demo",
     "56_delay_checkpoint_demo",
-    "57_claw_setup",
-    "58_claw_ota_loop",
-    "60_claw_browser_task",
-    "61_claw_screenshot_save",
-    "62_claw_preflight_report",
-    "63_claw_open_snapshot_url",
-    "64_claw_screenshot_from_url",
-    "65_claw_batch_screenshot_foreach",
-    "66_claw_resilient_browser_open",
-    "67_claw_human_approval_screenshot",
     "49_workflow_call_multilevel",
 };
 var turingWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -276,17 +265,6 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
     ["54_emit_publish_demo"] = "workflow event payload demo",
     ["55_tool_call_fallback_demo"] = "tool_call fallback demo input",
     ["56_delay_checkpoint_demo"] = "delay + checkpoint demo input",
-    ["57_claw_setup"] = "Quick setup probe for OpenClaw gateway availability.",
-    ["58_claw_ota_loop"] = "Readiness smoke for OpenClaw gateway + node + browser relay.",
-    ["59_claw_planner"] = "Given a user goal, output one HTTPS URL per line and run screenshot sub-workflow for each line.",
-    ["60_claw_browser_task"] = "https://example.com",
-    ["61_claw_screenshot_save"] = "https://example.com",
-    ["62_claw_preflight_report"] = "Generate a comprehensive preflight report for gateway/node/browser readiness.",
-    ["63_claw_open_snapshot_url"] = "https://example.com",
-    ["64_claw_screenshot_from_url"] = "https://example.com",
-    ["65_claw_batch_screenshot_foreach"] = "https://example.com\nhttps://www.rfc-editor.org",
-    ["66_claw_resilient_browser_open"] = "https://example.com",
-    ["67_claw_human_approval_screenshot"] = "https://example.com",
     ["counter-addition"] = "Run the closed-world two-counter addition demo.",
     ["minsky-inc-dec-jz"] = "Run the closed-world INC/DEC/JZ transfer demo.",
     ["counter_addition"] = "Run the closed-world two-counter addition demo.",
@@ -295,8 +273,7 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
 
 var parser = new WorkflowParser();
 
-// GET /api/workflows — list all workflows
-app.MapGet("/api/workflows", () =>
+IResult BuildWorkflowCatalogResponse()
 {
     var workflowFiles = DiscoverWorkflowFiles(workflowSources);
     var workflows = new List<object>();
@@ -317,6 +294,9 @@ app.MapGet("/api/workflows", () =>
                 group = listMeta.Group,
                 groupLabel = listMeta.GroupLabel,
                 sortOrder = listMeta.SortOrder,
+                source = workflowFile.SourceKind,
+                sourceLabel = DescribeWorkflowSource(workflowFile.SourceKind),
+                requiresLlmProvider = WorkflowLlmRuntimePolicy.RequiresLlmProvider(def),
                 primitives,
                 defaultInput = demoInputs.GetValueOrDefault(name, "Hello, world!"),
             });
@@ -331,13 +311,22 @@ app.MapGet("/api/workflows", () =>
                 group = listMeta.Group,
                 groupLabel = listMeta.GroupLabel,
                 sortOrder = listMeta.SortOrder,
+                source = workflowFile.SourceKind,
+                sourceLabel = DescribeWorkflowSource(workflowFile.SourceKind),
+                requiresLlmProvider = false,
                 primitives = new List<string>(),
                 defaultInput = "",
             });
         }
     }
     return Results.Json(workflows);
-});
+}
+
+// GET /api/workflows — list all workflows
+app.MapGet("/api/workflows", BuildWorkflowCatalogResponse);
+
+// GET /api/workflow-catalog — richer workflow catalog for the app UI
+app.MapGet("/api/workflow-catalog", BuildWorkflowCatalogResponse);
 
 // GET /api/workflows/{name} — workflow definition with edges
 app.MapGet("/api/workflows/{name}", (string name) =>
@@ -347,6 +336,7 @@ app.MapGet("/api/workflows/{name}", (string name) =>
 
     var yaml = File.ReadAllText(workflowFile.FilePath);
     var def = parser.Parse(yaml);
+    var listMeta = ClassifyWorkflowForList(name, workflowFile.SourceKind, deterministicWorkflows, turingWorkflows);
 
     var steps = def.Steps.Select(s => new
     {
@@ -363,6 +353,19 @@ app.MapGet("/api/workflows/{name}", (string name) =>
 
     return Results.Json(new
     {
+        catalog = new
+        {
+            name,
+            description = def.Description,
+            category = listMeta.Category,
+            group = listMeta.Group,
+            groupLabel = listMeta.GroupLabel,
+            sortOrder = listMeta.SortOrder,
+            source = workflowFile.SourceKind,
+            sourceLabel = DescribeWorkflowSource(workflowFile.SourceKind),
+            requiresLlmProvider = WorkflowLlmRuntimePolicy.RequiresLlmProvider(def),
+            primitives = def.Steps.Select(s => s.Type).Distinct().ToList(),
+        },
         yaml,
         definition = new
         {
@@ -389,15 +392,6 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
         return;
     }
 
-    var workflowCategory = ClassifyWorkflowForList(name, workflowFile.SourceKind, deterministicWorkflows, turingWorkflows).Category;
-
-    if (string.Equals(workflowCategory, "llm", StringComparison.OrdinalIgnoreCase) && !llmAvailable)
-    {
-        ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsync("LLM not configured. Set DEEPSEEK_API_KEY or OPENAI_API_KEY.");
-        return;
-    }
-
     ctx.Response.Headers["Content-Type"] = "text/event-stream";
     ctx.Response.Headers["Cache-Control"] = "no-cache";
     ctx.Response.Headers["Connection"] = "keep-alive";
@@ -412,6 +406,13 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
     {
         ctx.Response.StatusCode = 400;
         await ctx.Response.WriteAsync($"Invalid workflow YAML: {ex.Message}");
+        return;
+    }
+
+    if (WorkflowLlmRuntimePolicy.RequiresLlmProvider(parsedDefinition) && !llmAvailable)
+    {
+        ctx.Response.StatusCode = 400;
+        await ctx.Response.WriteAsync("LLM not configured. Set DEEPSEEK_API_KEY or OPENAI_API_KEY.");
         return;
     }
 
@@ -929,76 +930,6 @@ static object[] BuildPrimitivesCatalog()
     ];
 }
 
-// POST /api/playground/chat — streaming LLM chat for workflow authoring
-app.MapPost("/api/playground/chat", async (HttpContext ctx, CancellationToken ct) =>
-{
-    if (!llmAvailable)
-    {
-        ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsync("LLM not configured");
-        return;
-    }
-
-    var body = await JsonSerializer.DeserializeAsync<PlaygroundChatRequest>(ctx.Request.Body, new JsonSerializerOptions
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    }, ct);
-
-    if (body?.Messages is not { Count: > 0 })
-    {
-        ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsync("messages required");
-        return;
-    }
-
-    ctx.Response.Headers["Content-Type"] = "text/event-stream";
-    ctx.Response.Headers["Cache-Control"] = "no-cache";
-    ctx.Response.Headers["Connection"] = "keep-alive";
-
-    var factory = ctx.RequestServices.GetRequiredService<ILLMProviderFactory>();
-    var provider = factory.GetDefault();
-    var playgroundSystemPrompt = BuildPlaygroundSystemPrompt(factory.GetAvailableProviders(), provider.Name);
-
-    var llmMessages = new List<ChatMessage>
-    {
-        ChatMessage.System(playgroundSystemPrompt),
-    };
-    foreach (var m in body.Messages)
-        llmMessages.Add(new ChatMessage { Role = m.Role, Content = m.Content });
-
-    var request = new LLMRequest { Messages = llmMessages, Temperature = 0.3 };
-    var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-
-    try
-    {
-        await foreach (var chunk in provider.ChatStreamAsync(request, ct))
-        {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
-            {
-                var json = JsonSerializer.Serialize(new { delta = chunk.DeltaContent }, jsonOpts);
-                await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
-                await ctx.Response.Body.FlushAsync(ct);
-            }
-        }
-    }
-    catch (OperationCanceledException) { }
-    catch (Exception ex)
-    {
-        if (!ct.IsCancellationRequested)
-        {
-            var json = JsonSerializer.Serialize(new { error = ex.Message }, jsonOpts);
-            await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
-            await ctx.Response.Body.FlushAsync(ct);
-        }
-    }
-
-    if (!ct.IsCancellationRequested)
-    {
-        await ctx.Response.WriteAsync("data: [DONE]\n\n", ct);
-        await ctx.Response.Body.FlushAsync(ct);
-    }
-});
-
 // POST /api/playground/parse — parse YAML and return steps + edges for graph
 app.MapPost("/api/playground/parse", async (HttpContext ctx) =>
 {
@@ -1062,6 +993,103 @@ app.MapPost("/api/playground/parse", async (HttpContext ctx) =>
     {
         await ctx.Response.WriteAsJsonAsync(new { valid = false, error = ex.Message });
     }
+});
+
+// POST /api/playground/workflows — validate and save YAML to ~/.aevatar/workflows
+app.MapPost("/api/playground/workflows", async (HttpContext ctx) =>
+{
+    PlaygroundWorkflowSaveRequest? request;
+    try
+    {
+        request = await JsonSerializer.DeserializeAsync<PlaygroundWorkflowSaveRequest>(
+            ctx.Request.Body,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase },
+            ctx.RequestAborted);
+    }
+    catch (JsonException)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new { error = "invalid json body" });
+        return;
+    }
+
+    if (request == null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new { error = "request body is required" });
+        return;
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Yaml))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new { error = "workflow yaml is required" });
+        return;
+    }
+
+    WorkflowDefinition parsedDefinition;
+    List<string> validationErrors;
+    try
+    {
+        parsedDefinition = parser.Parse(request.Yaml);
+        validationErrors = ValidateWorkflowDefinitionForRuntime(parsedDefinition, ctx.RequestServices);
+    }
+    catch (Exception ex)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new { error = ex.Message });
+        return;
+    }
+
+    if (validationErrors.Count > 0)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new
+        {
+            error = string.Join("; ", validationErrors),
+            errors = validationErrors,
+        });
+        return;
+    }
+
+    string filename;
+    try
+    {
+        filename = NormalizeWorkflowSaveFilename(request.Filename, parsedDefinition.Name);
+    }
+    catch (Exception ex)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new { error = ex.Message });
+        return;
+    }
+
+    Directory.CreateDirectory(AevatarPaths.Workflows);
+    var path = Path.Combine(AevatarPaths.Workflows, filename);
+    var existed = File.Exists(path);
+    if (existed && !request.Overwrite)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status409Conflict;
+        await ctx.Response.WriteAsJsonAsync(new
+        {
+            error = $"Workflow '{filename}' already exists.",
+            filename,
+            path,
+        });
+        return;
+    }
+
+    var content = NormalizeWorkflowContentForSave(request.Yaml);
+    await File.WriteAllTextAsync(path, content, Encoding.UTF8, ctx.RequestAborted);
+
+    await ctx.Response.WriteAsJsonAsync(new
+    {
+        saved = true,
+        filename,
+        path,
+        workflowName = parsedDefinition.Name,
+        overwritten = existed,
+    });
 });
 
 app.MapFallbackToFile("index.html");
@@ -1286,16 +1314,6 @@ static WorkflowListClassification ClassifyWorkflowForList(
             SortOrder: index.Value);
     }
 
-    if (index is >= 57 and <= 67)
-    {
-        var openClawCategory = index == 59 ? "llm" : "deterministic";
-        return new WorkflowListClassification(
-            Category: openClawCategory,
-            Group: "openclaw-integration",
-            GroupLabel: "OpenClaw Integration",
-            SortOrder: index.Value);
-    }
-
     if (!isDeterministic)
     {
         return new WorkflowListClassification(
@@ -1425,6 +1443,40 @@ static IEnumerable<string> EnumerateReferencedStepTypes(IEnumerable<StepDefiniti
     }
 }
 
+static string NormalizeWorkflowSaveFilename(string? requestedFilename, string workflowName)
+{
+    var candidate = string.IsNullOrWhiteSpace(requestedFilename)
+        ? workflowName
+        : requestedFilename.Trim();
+    if (string.IsNullOrWhiteSpace(candidate))
+        throw new InvalidOperationException("workflow filename is required");
+
+    var fileNameOnly = Path.GetFileName(candidate);
+    if (!string.Equals(fileNameOnly, candidate, StringComparison.Ordinal))
+        throw new InvalidOperationException("workflow filename must not include directory segments");
+
+    var stem = Path.GetFileNameWithoutExtension(fileNameOnly);
+    if (string.IsNullOrWhiteSpace(stem))
+        throw new InvalidOperationException("workflow filename is invalid");
+
+    var sanitizedChars = stem
+        .Trim()
+        .Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_')
+        .ToArray();
+    var sanitizedStem = new string(sanitizedChars)
+        .Trim('_');
+    while (sanitizedStem.Contains("__", StringComparison.Ordinal))
+        sanitizedStem = sanitizedStem.Replace("__", "_", StringComparison.Ordinal);
+
+    if (string.IsNullOrWhiteSpace(sanitizedStem))
+        throw new InvalidOperationException("workflow filename must contain letters or digits");
+
+    return sanitizedStem + ".yaml";
+}
+
+static string NormalizeWorkflowContentForSave(string yaml) =>
+    (yaml ?? string.Empty).Trim() + Environment.NewLine;
+
 static int? TryParseWorkflowIndex(string workflowName)
 {
     if (string.IsNullOrWhiteSpace(workflowName))
@@ -1441,134 +1493,16 @@ static int? TryParseWorkflowIndex(string workflowName)
     return int.TryParse(span[..i], out var value) ? value : null;
 }
 
-static string BuildPlaygroundSystemPrompt(IReadOnlyList<string> availableProviders, string? defaultProvider)
-{
-    var providerList = FormatProviderList(availableProviders);
-    var defaultProviderLabel = string.IsNullOrWhiteSpace(defaultProvider) ? "not-set" : defaultProvider.Trim();
-
-    return """
-You are an expert Aevatar Workflow YAML author. You help users design workflows by writing valid YAML.
-
-## YAML Schema (snake_case)
-```
-name: string            # required
-description: string     # optional
-configuration:          # optional
-  closed_world_mode: bool # optional, default false
-roles:                  # optional — LLM persona definitions
-  - id: string          # required (or name)
-    name: string        # required (or id)
-    system_prompt: |    # optional
-      ...
-    provider: string    # optional
-    model: string       # optional
-    temperature: number # optional
-    max_tokens: int     # optional
-    max_tool_rounds: int # optional
-    max_history_messages: int # optional
-    stream_buffer_capacity: int # optional
-    event_modules: string # optional, comma-separated module names
-    event_routes: string  # optional, route DSL/YAML list
-    connectors: [string]  # optional
-    extensions:           # optional compatibility container
-      event_modules: string
-      event_routes: string
-steps:                  # ordered step list
-  - id: string          # required — unique
-    type: string        # default "llm_call"
-    target_role: string # optional (alias: role)
-    parameters: {}      # Dict<string, string>
-    next: string        # explicit next step id
-    branches: {}        # key → step_id ("_default" for fallback)
-    children: []        # nested sub-steps (recursive)
-    retry: { max_attempts: 3, backoff: "fixed"|"exponential", delay_ms: 1000 }
-    on_error: { strategy: "fail"|"skip"|"fallback", fallback_step: "...", default_output: "..." }
-    timeout_ms: int
-```
-
-## Role Customization Guidance
-- You can and should design custom roles based on the user's domain and task.
-- Each role should have a stable `id` (snake_case) and a clear `system_prompt`.
-- For multi-stage workflows, prefer specialized roles (e.g. researcher, reviewer, writer) over one generic role.
-- All role-referenced steps must point to existing role ids (`target_role` or `role`).
-- Runtime tuning fields are optional: `temperature`, `max_tokens`, `max_tool_rounds`,
-  `max_history_messages`, `stream_buffer_capacity`, `event_modules`,
-  `event_routes`, `connectors`.
-- Prefer not to set `provider` and `model` unless the user explicitly asks.
-- If user explicitly wants a single-role workflow, keep exactly one role.
-- If workflow is purely deterministic and has no role-driven AI steps, roles can be omitted.
-
-## Step Types
-| Type | Category | Purpose |
-|------|----------|---------|
-| transform | data | Text ops: op= identity/uppercase/lowercase/trim/count/count_words/take/take_last/join/split/distinct/reverse_lines; n, separator |
-| assign | data | Set variable: target, value ("$input" = current input) |
-| retrieve_facts | data | Keyword search: query, top_k |
-| cache | data | Cache child step: cache_key, ttl_seconds, child_step_type, child_target_role |
-| guard | control | Validation gate: check= not_empty/json_valid/regex/max_length/contains; on_fail= fail/skip/branch; pattern, max, keyword, branch_target |
-| conditional | control | Binary branch: condition (keyword to search in input) |
-| switch | control | Multi-way branch: branch.{key} in parameters + branches in step definition |
-| while | control | Loop: max_iterations, step (sub-step type) |
-| delay | control | Pause: duration_ms (0–300000) |
-| wait_signal | control | Block: signal_name, timeout_ms |
-| checkpoint | control | Save state: name |
-| llm_call | ai | LLM prompt: prompt_prefix. Requires target_role with system_prompt |
-| tool_call | ai | Invoke tool: tool (name) |
-| evaluate | ai | LLM-as-judge: criteria, scale, threshold, on_below. Requires judge role |
-| reflect | ai | Self-improvement loop: max_rounds (1–10), criteria |
-| foreach | composition | Iterate: delimiter, sub_step_type, sub_target_role |
-| parallel | composition | Fan-out: workers (comma-separated role IDs), parallel_count |
-| race | composition | First-wins: workers, count |
-| map_reduce | composition | Split→map→reduce: delimiter, map_step_type, map_target_role, reduce_step_type, reduce_target_role, reduce_prompt_prefix |
-| workflow_call | composition | Sub-workflow: workflow (name) |
-| vote_consensus | composition | Aggregate votes (no params) |
-| connector_call | integration | External call: connector, operation, retry, timeout_ms, on_error= fail/continue |
-| emit | integration | Publish event: event_type, payload |
-| human_input | human | Wait for input: prompt, variable, timeout, on_timeout |
-| human_approval | human | Wait for approval: prompt, timeout, on_reject |
-
-## Rules
-- All parameter values are strings (even numbers: "3" not 3).
-- type defaults to "llm_call" when omitted.
-- target_role and role are aliases; target_role takes precedence.
-- Role fields `event_modules/event_routes` support both top-level and `extensions.*`; top-level has higher priority.
-- For workflows using `llm_call` / `evaluate` / `reflect`, always provide matching roles.
-- When user customizes roles, preserve requested role names/ids and wire all related steps correctly.
-- Steps flow: next → explicit jump; branches → conditional routing; neither → sequential (list order).
-- For switch: both parameters.branch.* AND branches: must be set.
-- Each branch target should have next: pointing to a merge step.
-- "_default" is the reserved fallback branch key.
-
-## Response Format
-- Always wrap workflow YAML in a ```yaml code block.
-- Explain your design choices briefly.
-- If the user's request is ambiguous, ask clarifying questions.
-- Generate complete, valid, parseable YAML.
-- Return a full workflow YAML (including roles) unless the user explicitly asks for a partial snippet.
-""" + $"""
-
-## Runtime Provider Constraints (dynamic)
-- Configured providers in this runtime: {providerList}
-- Default provider: {defaultProviderLabel}
-- Prefer omitting `provider` and `model` in generated roles so runtime default is used.
-- Only set `provider` when user explicitly requests it, and it must be one of the configured providers above.
-- Never invent provider names or models.
-""";
-}
-
-static string FormatProviderList(IReadOnlyList<string>? providers)
-{
-    if (providers is not { Count: > 0 })
-        return "<none>";
-
-    var names = providers
-        .Where(name => !string.IsNullOrWhiteSpace(name))
-        .Select(name => name.Trim())
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .ToList();
-
-    return names.Count == 0 ? "<none>" : string.Join(", ", names);
-}
+static string DescribeWorkflowSource(string sourceKind) =>
+    (sourceKind ?? string.Empty).ToLowerInvariant() switch
+    {
+        "home" => "Saved",
+        "cwd" => "Workspace",
+        "repo" => "Starter",
+        "demo" => "Demo",
+        "turing" => "Advanced",
+        _ => "Workflow",
+    };
 
 static IReadOnlyList<string> LoadNamedConnectors(IServiceProvider services)
 {
@@ -1721,10 +1655,8 @@ static (string Model, string? Endpoint) InferProviderDefaults(string? providerHi
     return (config["Models:OpenAIModel"] ?? config["Models:DefaultModel"] ?? "gpt-4o-mini", null);
 }
 
-sealed record PlaygroundChatMessage(string Role, string Content);
-sealed record PlaygroundChatRequest(List<PlaygroundChatMessage> Messages);
+sealed record PlaygroundWorkflowSaveRequest(string Yaml, string? Filename, bool Overwrite);
 sealed record WorkflowYamlSource(string Kind, string DirectoryPath);
 sealed record WorkflowFileEntry(string Name, string FilePath, string SourceKind);
 sealed record WorkflowListClassification(string Category, string Group, string GroupLabel, int SortOrder);
 sealed record LlmProviderRegistration(string Name, string Model, string? Endpoint, string ApiKey);
-

@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Reflection;
+using System.Text.Json;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.LLMProviders;
@@ -184,6 +185,59 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
+    public void AddAevatarAIFeatures_WhenReloadableFactoryEnabled_ShouldPickUpdatedSecrets()
+    {
+        var tempHome = Path.Combine(Path.GetTempPath(), $"ai-feature-reload-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempHome);
+        var previousHome = Environment.GetEnvironmentVariable(AevatarPaths.HomeEnv);
+        Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, tempHome);
+
+        try
+        {
+            WriteFlatSecrets(
+                AevatarPaths.SecretsJson,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["LLMProviders:Providers:openai:ApiKey"] = "openai-key",
+                    ["LLMProviders:Providers:openai:ProviderType"] = "openai",
+                    ["LLMProviders:Providers:openai:Model"] = "gpt-4o-mini",
+                    ["LLMProviders:Default"] = "openai",
+                });
+
+            var services = new ServiceCollection();
+            var config = new ConfigurationBuilder().Build();
+            services.AddAevatarAIFeatures(config, options =>
+            {
+                options.EnableMEAIProviders = true;
+                options.EnableMEAIToTornadoFailover = false;
+                options.EnableReloadableProviderFactory = true;
+            });
+
+            using var provider = services.BuildServiceProvider();
+            var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
+            llmFactory.GetDefault().Name.Should().Be("openai");
+
+            WriteFlatSecrets(
+                AevatarPaths.SecretsJson,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["LLMProviders:Providers:deepseek:ApiKey"] = "deepseek-key",
+                    ["LLMProviders:Providers:deepseek:ProviderType"] = "deepseek",
+                    ["LLMProviders:Providers:deepseek:Model"] = "deepseek-chat",
+                    ["LLMProviders:Default"] = "deepseek",
+                });
+
+            llmFactory.GetDefault().Name.Should().Be("deepseek");
+            llmFactory.GetAvailableProviders().Should().ContainSingle().Which.Should().Be("deepseek");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, previousHome);
+            Directory.Delete(tempHome, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task AddAevatarAIFeatures_WhenMCPEnabledAndConfigured_ShouldRegisterMCPToolSourceAndConnectorBuilder()
     {
         var tempHome = Path.Combine(Path.GetTempPath(), $"ai-feature-mcp-{Guid.NewGuid():N}");
@@ -350,5 +404,16 @@ public class AIFeatureBootstrapCoverageTests
         public void Set(string key, string value) => _values[key] = value;
 
         public void Remove(string key) => _values.Remove(key);
+    }
+
+    private static void WriteFlatSecrets(string path, IReadOnlyDictionary<string, string> values)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var json = JsonSerializer.Serialize(values);
+        File.WriteAllText(path, json);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(1));
     }
 }

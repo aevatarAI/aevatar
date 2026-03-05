@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.CommandLine.Invocation;
 using Aevatar.Tools.Cli.Hosting;
 
 namespace Aevatar.Tools.Cli.Commands;
@@ -15,6 +16,7 @@ internal static class ChatCommand
         command.AddArgument(messageArgument);
         command.AddOption(portOption);
         command.AddOption(urlOption);
+        command.AddCommand(CreateWorkflowCommand());
         command.AddCommand(CreateConfigCommand());
 
         command.SetHandler(
@@ -23,6 +25,34 @@ internal static class ChatCommand
             messageArgument,
             portOption,
             urlOption);
+
+        return command;
+    }
+
+    private static Command CreateWorkflowCommand()
+    {
+        var command = new Command("workflow", "Generate workflow YAML from a chat message.");
+        var messageArgument = new Argument<string?>("message", "Task message to transform into workflow YAML.");
+        var readFromStdinOption = new Option<bool>("--stdin", () => false, "Read chat message from stdin.");
+        var urlOption = new Option<string?>("--url", "Override workflow API base URL for this invocation.");
+        var filenameOption = new Option<string?>("--filename", "Optional output filename (with or without .yaml).");
+        var yesOption = new Option<bool>("--yes", () => false, "Skip confirmation and save workflow YAML directly.");
+
+        command.AddArgument(messageArgument);
+        command.AddOption(readFromStdinOption);
+        command.AddOption(urlOption);
+        command.AddOption(filenameOption);
+        command.AddOption(yesOption);
+        command.SetHandler(async (InvocationContext context) =>
+        {
+            context.ExitCode = await ChatCommandHandler.RunWorkflowYamlAsync(
+                context.ParseResult.GetValueForArgument(messageArgument),
+                context.ParseResult.GetValueForOption(readFromStdinOption),
+                context.ParseResult.GetValueForOption(urlOption),
+                context.ParseResult.GetValueForOption(filenameOption),
+                context.ParseResult.GetValueForOption(yesOption),
+                context.GetCancellationToken());
+        });
 
         return command;
     }

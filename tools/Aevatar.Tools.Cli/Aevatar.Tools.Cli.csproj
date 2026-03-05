@@ -37,6 +37,11 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
 
+    <Content Include="workflows/**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+
     <Compile Include="..\Aevatar.Tools.Config\ConfigToolHost.cs" Link="SharedConfig/ConfigToolHost.cs" />
     <Compile Include="..\Aevatar.Tools.Config\LLMContracts.cs" Link="SharedConfig/LLMContracts.cs" />
     <Compile Include="..\Aevatar.Tools.Config\LLMProbe.cs" Link="SharedConfig/LLMProbe.cs" />

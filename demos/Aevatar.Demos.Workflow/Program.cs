@@ -112,28 +112,6 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
           apple
         carrot  
         """,
-
-    ["57_claw_setup"] = "Quick setup probe for OpenClaw gateway availability.",
-
-    ["58_claw_ota_loop"] = "Readiness smoke for OpenClaw gateway + node + browser relay.",
-
-    ["59_claw_planner"] = "Given a user goal, output one HTTPS URL per line and run screenshot sub-workflow for each line.",
-
-    ["60_claw_browser_task"] = "https://example.com",
-
-    ["61_claw_screenshot_save"] = "https://example.com",
-
-    ["62_claw_preflight_report"] = "Generate a comprehensive preflight report for gateway/node/browser readiness.",
-
-    ["63_claw_open_snapshot_url"] = "https://example.com",
-
-    ["64_claw_screenshot_from_url"] = "https://example.com",
-
-    ["65_claw_batch_screenshot_foreach"] = "https://example.com\nhttps://www.rfc-editor.org",
-
-    ["66_claw_resilient_browser_open"] = "https://example.com",
-
-    ["67_claw_human_approval_screenshot"] = "https://example.com",
 };
 
 var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -141,15 +119,6 @@ var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCas
     "01_transform", "02_guard", "03_conditional", "04_switch",
     "05_assign", "06_retrieve_facts", "07_pipeline",
     "49_workflow_call_multilevel",
-    "57_claw_setup",
-    "58_claw_ota_loop",
-    "60_claw_browser_task",
-    "61_claw_screenshot_save",
-    "62_claw_preflight_report",
-    "63_claw_open_snapshot_url",
-    "64_claw_screenshot_from_url",
-    "65_claw_batch_screenshot_foreach",
-    "66_claw_resilient_browser_open",
 };
 
 // ─── Parse CLI ───

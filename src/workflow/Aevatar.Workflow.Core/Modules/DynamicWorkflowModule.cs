@@ -132,6 +132,7 @@ public sealed class DynamicWorkflowModule : IEventModule
             {
                 RequireKnownStepTypes = true,
                 KnownStepTypes = knownStepTypes,
+                DisallowDynamicWorkflowStep = true,
             },
             availableWorkflowNames: null);
     }

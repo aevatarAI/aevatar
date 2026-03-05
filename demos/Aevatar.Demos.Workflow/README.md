@@ -21,22 +21,6 @@ export DEEPSEEK_API_KEY="sk-..."
 dotnet run -- --all
 ```
 
-### OpenClaw Demo 前置（57-68）
-
-`57-68` 现已支持 `openclaw_call` 直连 CLI，默认**不需要配置 connectors**。  
-确保本机已安装 OpenClaw，并可执行以下命令：
-
-```bash
-openclaw gateway status --json
-openclaw node status --json
-```
-
-如仍需兼容旧 connector 方案，可选执行：
-
-```bash
-bash tools/openclaw/setup_openclaw_connectors.sh
-```
-
 ## 原语总览
 
 ### 确定性原语（无需 LLM）
@@ -63,7 +47,6 @@ bash tools/openclaw/setup_openclaw_connectors.sh
 | `llm_call` | — | LLMCallModule | 向目标 Role Agent 发送 ChatRequest，返回 LLM 响应 |
 | `tool_call` | — | ToolCallModule | 调用注册的 Agent 工具 |
 | `connector_call` | `bridge_call` | ConnectorCallModule | 调用框架 Connector（MCP/HTTP/CLI），支持 retry + timeout |
-| `openclaw_call` | `openclaw` | OpenClawModule | 直接执行 OpenClaw CLI（仅允许 OpenClaw CLI；如需自定义路径使用 `AEVATAR_OPENCLAW_CLI_PATH`，但路径必须仍指向名为 `openclaw` 的可执行文件；无需 connectors），支持超时、继续策略、截图落盘 |
 | `evaluate` | `judge` | EvaluateModule | LLM-as-Judge 评估：打分 + 阈值分支 |
 | `reflect` | — | ReflectModule | 自我反思循环：critique → improve → critique，直到 PASS 或达到上限 |
 
@@ -95,9 +78,9 @@ bash tools/openclaw/setup_openclaw_connectors.sh
 
 说明：
 
-- `workflows/` 目录里目前是 **70** 个 YAML；
+- `workflows/` 目录里目前是 **71** 个 YAML；
 - 其中 `48_subworkflow_level1/2/3.yaml` 是 `49_workflow_call_multilevel.yaml` 的子流程定义；
-- 文档里说的 **67 个 workflow** 指主流程文件（01-07、08-16、17-38、39-47、49-68）。
+- 文档里说的 **68 个 workflow** 指主流程文件（01-07、08-16、17-38、39-47、49-69）。
 
 | 分组 | 文件范围 | 数量 | 主要展示能力 |
 |---|---|---:|---|
@@ -111,7 +94,6 @@ bash tools/openclaw/setup_openclaw_connectors.sh
 | Connector Integration | `50` | 1 | `connector_call` 端到端：role 连接器白名单 + 本地 CLI connector 调用 |
 | Ergonomic Aliases | `51-53` | 3 | ergonomic alias 演示：`cli_call`、`foreach_llm`、`map_reduce_llm` |
 | Integration Utility | `54-56` | 3 | 集成辅助场景：`publish/emit`、`tool_call` 失败 fallback、`delay+checkpoint` |
-| CLAW Workflows | `57-68` | 12 | OpenClaw 集成能力梯度：setup/readiness、planner 执行链、preflight 报告、single/batch screenshot、retry/delay/checkpoint、human approval 门控、channel 入口编排 |
 
 ### Role Event Modules（20-38）子分组速览
 

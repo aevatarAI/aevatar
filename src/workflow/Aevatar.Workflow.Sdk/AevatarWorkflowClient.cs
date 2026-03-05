@@ -104,6 +104,118 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
             cancellationToken);
     }
 
+    public async Task<IReadOnlyList<JsonElement>> GetWorkflowCatalogAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/workflow-catalog");
+        using var response = await SendAsync(request, cancellationToken);
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw WorkflowSdkJson.BuildHttpException(
+                response.StatusCode,
+                rawPayload,
+                $"Workflow catalog request failed with HTTP {(int)response.StatusCode}.");
+        }
+
+        if (string.IsNullOrWhiteSpace(rawPayload))
+            return [];
+
+        try
+        {
+            using var document = JsonDocument.Parse(rawPayload);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                throw AevatarWorkflowException.StreamPayload(
+                    "Workflow catalog response is not a JSON array.",
+                    rawPayload);
+            }
+
+            return document.RootElement.EnumerateArray().Select(x => x.Clone()).ToArray();
+        }
+        catch (JsonException ex)
+        {
+            throw AevatarWorkflowException.StreamPayload(
+                "Failed to parse workflow catalog response payload.",
+                rawPayload,
+                ex);
+        }
+    }
+
+    public async Task<JsonElement?> GetCapabilitiesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/capabilities");
+        using var response = await SendAsync(request, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw WorkflowSdkJson.BuildHttpException(
+                response.StatusCode,
+                rawPayload,
+                $"Capabilities request failed with HTTP {(int)response.StatusCode}.");
+        }
+
+        if (string.IsNullOrWhiteSpace(rawPayload))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(rawPayload);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException ex)
+        {
+            throw AevatarWorkflowException.StreamPayload(
+                "Failed to parse capabilities response payload.",
+                rawPayload,
+                ex);
+        }
+    }
+
+    public async Task<JsonElement?> GetWorkflowDetailAsync(
+        string workflowName,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureNotBlank(workflowName, nameof(workflowName));
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/workflows/{Uri.EscapeDataString(workflowName)}");
+        using var response = await SendAsync(request, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
+        var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw WorkflowSdkJson.BuildHttpException(
+                response.StatusCode,
+                rawPayload,
+                $"Workflow detail request failed with HTTP {(int)response.StatusCode}.");
+        }
+
+        if (string.IsNullOrWhiteSpace(rawPayload))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(rawPayload);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException ex)
+        {
+            throw AevatarWorkflowException.StreamPayload(
+                "Failed to parse workflow detail response payload.",
+                rawPayload,
+                ex);
+        }
+    }
+
     public async Task<JsonElement?> GetActorSnapshotAsync(
         string actorId,
         CancellationToken cancellationToken = default)

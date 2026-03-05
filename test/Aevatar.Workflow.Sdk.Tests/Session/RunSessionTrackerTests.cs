@@ -49,7 +49,33 @@ public sealed class RunSessionTrackerTests
         signal.ActorId.Should().Be("actor-1");
         signal.RunId.Should().Be("run-1");
         signal.SignalName.Should().Be("ops_window_open");
+        signal.StepId.Should().Be("wait-1");
         signal.CommandId.Should().Be("cmd-1");
+    }
+
+    [Fact]
+    public void CreateSignalRequest_ShouldAllowExplicitStepOverride()
+    {
+        var tracker = new RunSessionTracker();
+        tracker.Track(new WorkflowOutputFrame
+        {
+            Type = WorkflowEventTypes.Custom,
+            Name = "aevatar.run.context",
+            Value = ParseObject("""{"actorId":"actor-1","workflowName":"auto","commandId":"cmd-1"}"""),
+        });
+        tracker.Track(new WorkflowOutputFrame
+        {
+            Type = WorkflowEventTypes.Custom,
+            Name = "aevatar.workflow.waiting_signal",
+            Value = ParseObject("""{"runId":"run-1","stepId":"wait-1","signalName":"ops_window_open"}"""),
+        });
+
+        var signal = tracker.CreateSignalRequest(
+            payload: "window=open",
+            stepId: "wait-override");
+
+        signal.StepId.Should().Be("wait-override");
+        signal.SignalName.Should().Be("ops_window_open");
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Infrastructure.Workflows;
@@ -21,13 +22,6 @@ public static class WorkflowCapabilityEndpoints
         var group = app.MapGroup("/api").WithTags("Chat");
         MapInteractionEndpoints(group);
         ChatQueryEndpoints.Map(group);
-        app.MapPost("/hooks/agent", OpenClawBridgeEndpoints.HandleOpenClawAgentHook)
-            .WithTags("OpenClawBridge")
-            .Produces(StatusCodes.Status202Accepted)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status401Unauthorized)
-            .Produces(StatusCodes.Status404NotFound)
-            .Produces(StatusCodes.Status500InternalServerError);
 
         return app;
     }
@@ -46,13 +40,6 @@ public static class WorkflowCapabilityEndpoints
             .Produces(StatusCodes.Status200OK, contentType: "text/event-stream")
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/openclaw/hooks/agent", OpenClawBridgeEndpoints.HandleOpenClawAgentHook)
-            .WithTags("OpenClawBridge")
-            .Produces(StatusCodes.Status202Accepted)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status401Unauthorized)
-            .Produces(StatusCodes.Status404NotFound)
-            .Produces(StatusCodes.Status500InternalServerError);
 
         group.MapGet("/ws/chat", HandleChatWebSocket);
         group.MapPost("/workflows/resume", HandleResume)
@@ -85,7 +72,11 @@ public static class WorkflowCapabilityEndpoints
 
         try
         {
-            var normalizedRequest = ChatRunRequestNormalizer.Normalize(input, fileBackedWorkflowNames);
+            var capabilities = TryResolveCapabilities(serviceProvider, logger);
+            var normalizedRequest = ChatRunRequestNormalizer.Normalize(
+                input,
+                fileBackedWorkflowNames,
+                capabilities);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -332,6 +323,7 @@ public static class WorkflowCapabilityEndpoints
         var actorId = (input.ActorId ?? string.Empty).Trim();
         var runId = (input.RunId ?? string.Empty).Trim();
         var signalName = (input.SignalName ?? string.Empty).Trim();
+        var stepId = (input.StepId ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(actorId) ||
             string.IsNullOrWhiteSpace(runId) ||
             string.IsNullOrWhiteSpace(signalName))
@@ -358,6 +350,7 @@ public static class WorkflowCapabilityEndpoints
             Payload = Any.Pack(new SignalReceivedEvent
             {
                 RunId = runId,
+                StepId = stepId,
                 SignalName = signalName,
                 Payload = input.Payload ?? string.Empty,
             }),
@@ -373,6 +366,7 @@ public static class WorkflowCapabilityEndpoints
             actorId,
             runId,
             signalName,
+            stepId,
             commandId = correlationId,
         });
     }
@@ -480,7 +474,14 @@ public static class WorkflowCapabilityEndpoints
             }
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, fileBackedWorkflowNames, ct);
+            var capabilities = TryResolveCapabilities(http.RequestServices, logger);
+            await ChatWebSocketRunCoordinator.ExecuteAsync(
+                socket,
+                command,
+                chatRunService,
+                fileBackedWorkflowNames,
+                ct,
+                capabilities);
         }
         catch (OperationCanceledException)
         {
@@ -503,6 +504,24 @@ public static class WorkflowCapabilityEndpoints
         finally
         {
             await ChatWebSocketProtocol.CloseAsync(socket, ct);
+        }
+    }
+
+    private static WorkflowCapabilitiesDocument? TryResolveCapabilities(IServiceProvider? serviceProvider, ILogger? logger)
+    {
+        if (serviceProvider == null)
+            return null;
+
+        try
+        {
+            var queryService = serviceProvider.GetService(typeof(IWorkflowExecutionQueryApplicationService))
+                               as IWorkflowExecutionQueryApplicationService;
+            return queryService?.GetCapabilities();
+        }
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex, "Failed to resolve capabilities for workflow authoring prompt augmentation.");
+            return null;
         }
     }
 }

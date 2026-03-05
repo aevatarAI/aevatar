@@ -441,7 +441,7 @@ public class WorkflowIntegrationTests
     //  Scenario 7: WorkflowModuleFactory 创建所有模块
     // ═══════════════════════════════════════════════════════════
 
-    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有 13 种核心原语模块")]
+    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有核心原语模块")]
     [Trait("Feature", "ModuleFactory")]
     public void Scenario7_AllCoreModules()
     {
@@ -466,7 +466,7 @@ public class WorkflowIntegrationTests
         factory.TryCreate("llm_call", out m).Should().BeTrue(); m!.Name.Should().Be("llm_call");
         factory.TryCreate("tool_call", out m).Should().BeTrue(); m!.Name.Should().Be("tool_call");
         factory.TryCreate("connector_call", out m).Should().BeTrue(); m!.Name.Should().Be("connector_call");
-        factory.TryCreate("openclaw_call", out m).Should().BeTrue(); m!.Name.Should().Be("openclaw_call");
+        factory.TryCreate("aevatar_call", out m).Should().BeTrue(); m!.Name.Should().Be("aevatar_call");
 
         // ─── 数据变换 ───
         factory.TryCreate("transform", out m).Should().BeTrue(); m!.Name.Should().Be("transform");
@@ -479,7 +479,7 @@ public class WorkflowIntegrationTests
         factory.TryCreate("loop", out m).Should().BeTrue(); // loop = while
         factory.TryCreate("sub_workflow", out m).Should().BeTrue(); // sub_workflow = workflow_call
         factory.TryCreate("bridge_call", out m).Should().BeTrue(); // bridge_call = connector_call
-        factory.TryCreate("openclaw", out m).Should().BeTrue(); // openclaw = openclaw_call
+        factory.TryCreate("aevatar", out m).Should().BeTrue(); // aevatar = aevatar_call
 
         // ─── 不存在的类型 ───
         factory.TryCreate("nonexistent", out m).Should().BeFalse();

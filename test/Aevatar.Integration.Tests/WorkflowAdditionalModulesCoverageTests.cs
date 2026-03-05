@@ -69,7 +69,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         ctx.Published.Should().ContainSingle();
-        ctx.Published[0].direction.Should().Be(EventDirection.Both);
+        ctx.Published[0].direction.Should().Be(EventDirection.Self);
         var emitted = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
         emitted.Metadata["emit.event_type"].Should().Be("audit");
         emitted.Metadata["emit.payload"].Should().Be("{\"k\":1}");
@@ -881,6 +881,55 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var resumedA = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         resumedA.RunId.Should().Be("run-a");
         resumedA.Output.Should().Be("input-from-a");
+    }
+
+    [Fact]
+    public async Task SecureInputModule_ShouldCaptureMaskedValueAndPublishSecureEvent()
+    {
+        var module = new SecureInputModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "secure-1",
+                StepType = "secure_input",
+                RunId = "run-secure",
+                Parameters =
+                {
+                    ["prompt"] = "provide secret",
+                    ["variable"] = "api_key",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
+        suspended.SuspensionType.Should().Be("secure_input");
+        suspended.Metadata["secure"].Should().Be("true");
+        suspended.Metadata["variable"].Should().Be("api_key");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-secure",
+                StepId = "secure-1",
+                Approved = true,
+                UserInput = "top-secret-value",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var captured = ctx.Published.Select(x => x.evt).OfType<SecureValueCapturedEvent>().Single();
+        captured.Variable.Should().Be("api_key");
+        captured.Value.Should().BeEmpty();
+
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("[secure input captured]");
+        completed.Metadata["secure.input"].Should().Be("true");
+        completed.Metadata["secure.variable"].Should().Be("api_key");
     }
 
     [Fact]
@@ -1899,6 +1948,41 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         completed.Success.Should().BeTrue();
         completed.Output.Should().Contain("```yaml");
         completed.Output.Should().Contain("name: validate_ok");
+    }
+
+    [Fact]
+    public async Task WorkflowYamlValidateModule_WhenYamlContainsDynamicWorkflowStep_ShouldFailValidation()
+    {
+        var module = new WorkflowYamlValidateModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "validate-dynamic-workflow",
+                StepType = "workflow_yaml_validate",
+                RunId = "run-validate-dynamic-workflow",
+                Input = """
+                        ```yaml
+                        name: dynamic_workflow_not_allowed
+                        roles: []
+                        steps:
+                          - id: ensure_runtime_ready
+                            type: dynamic_workflow
+                          - id: done
+                            type: assign
+                            parameters:
+                              target: result
+                              value: "$input"
+                        ```
+                        """,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("dynamic_workflow");
     }
 
     private static RecordingEventHandlerContext CreateContext(IServiceProvider? services = null)

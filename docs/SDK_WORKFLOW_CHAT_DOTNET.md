@@ -59,6 +59,8 @@ await client.ResumeAsync(resumeRequest);
 For `wait_signal`:
 
 ```csharp
+// Tracker automatically carries runId/signalName and the latest stepId from waiting_signal.
+// Keep stepId in the request for precise resume when one run has multiple wait_signal waiters.
 var signalRequest = tracker.CreateSignalRequest(payload: "ops-window-open");
 await client.SignalAsync(signalRequest);
 ```

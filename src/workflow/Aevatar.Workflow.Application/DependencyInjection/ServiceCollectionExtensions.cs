@@ -3,10 +3,9 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Abstractions.OpenClaw;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Adapters;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
-using Aevatar.Workflow.Application.OpenClaw;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
 using Aevatar.Workflow.Application.Runs;
@@ -36,9 +35,9 @@ public static class ServiceCollectionExtensions
             if (options.RegisterBuiltInDirectWorkflow)
                 registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
             if (options.RegisterBuiltInAutoWorkflow)
-                registry.Register("auto", WorkflowDefinitionRegistry.BuiltInAutoYaml);
+                registry.Register("auto", WorkflowDefinitionRegistry.CreateBuiltInAutoYaml());
             if (options.RegisterBuiltInAutoReviewWorkflow)
-                registry.Register("auto_review", WorkflowDefinitionRegistry.BuiltInAutoReviewYaml);
+                registry.Register("auto_review", WorkflowDefinitionRegistry.CreateBuiltInAutoReviewYaml());
 
             return registry;
         });
@@ -64,8 +63,17 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowExecutionReportArtifactSink, NoopWorkflowExecutionReportArtifactSink>();
         services.TryAddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
         services.AddSingleton<IWorkflowRunCommandService, WorkflowChatRunApplicationService>();
-        services.TryAddSingleton<IOpenClawBridgeOrchestrationService, OpenClawBridgeOrchestrationService>();
-        services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
+        services.TryAddSingleton<RegistryBackedWorkflowCatalogPort>();
+        services.TryAddSingleton<IWorkflowCatalogPort>(sp =>
+            sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
+        services.TryAddSingleton<IWorkflowCapabilitiesPort>(sp =>
+            sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
+        services.AddSingleton<IWorkflowExecutionQueryApplicationService>(sp =>
+            new WorkflowExecutionQueryApplicationService(
+                sp.GetRequiredService<IWorkflowDefinitionRegistry>(),
+                sp.GetRequiredService<IWorkflowExecutionProjectionQueryPort>(),
+                sp.GetRequiredService<IWorkflowCatalogPort>(),
+                sp.GetRequiredService<IWorkflowCapabilitiesPort>()));
         services.TryAddSingleton<WorkflowCommandExecutionServiceAdapter>();
         services.TryAddSingleton<ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>(sp =>
             sp.GetRequiredService<WorkflowCommandExecutionServiceAdapter>());

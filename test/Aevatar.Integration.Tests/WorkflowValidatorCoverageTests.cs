@@ -177,6 +177,34 @@ public class WorkflowValidatorCoverageTests
     }
 
     [Fact]
+    public void Validate_WhenDynamicWorkflowDisallowed_ShouldReportReservedPrimitiveError()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "ensure_runtime_ready",
+                    Type = "dynamic_workflow",
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(
+            wf,
+            options: new WorkflowValidator.WorkflowValidationOptions
+            {
+                DisallowDynamicWorkflowStep = true,
+            },
+            availableWorkflowNames: null);
+
+        errors.Should().Contain(error => error.Contains("保留原语") && error.Contains("dynamic_workflow"));
+    }
+
+    [Fact]
     public void Validate_WhenWorkflowCallTargetIsUnknown_ShouldReportErrorWhenRegistryProvided()
     {
         var wf = new WorkflowDefinition

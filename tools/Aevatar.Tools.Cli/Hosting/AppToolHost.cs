@@ -1,6 +1,8 @@
 using Aevatar.Bootstrap;
+using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Configuration;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Tools.Cli.Bridge;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -36,11 +38,11 @@ internal static class AppToolHost
             ?? Environment.CurrentDirectory;
         var webRootCandidates = new[]
         {
-            Path.Combine(AevatarPaths.RepoRoot, "demos", "Aevatar.Demos.Workflow.Web", "wwwroot"),
-            Path.Combine(Environment.CurrentDirectory, "demos", "Aevatar.Demos.Workflow.Web", "wwwroot"),
-            Path.Combine(toolDir, "wwwroot", "playground"),
-            Path.Combine(AevatarPaths.RepoRoot, "tools", "Aevatar.Tools.Cli", "wwwroot", "playground"),
             Path.Combine(Environment.CurrentDirectory, "tools", "Aevatar.Tools.Cli", "wwwroot", "playground"),
+            Path.Combine(AevatarPaths.RepoRoot, "tools", "Aevatar.Tools.Cli", "wwwroot", "playground"),
+            Path.Combine(Environment.CurrentDirectory, "demos", "Aevatar.Demos.Workflow.Web", "wwwroot"),
+            Path.Combine(AevatarPaths.RepoRoot, "demos", "Aevatar.Demos.Workflow.Web", "wwwroot"),
+            Path.Combine(toolDir, "wwwroot", "playground"),
         };
         var webRootPath = webRootCandidates.FirstOrDefault(path => File.Exists(Path.Combine(path, "index.html")))
             ?? webRootCandidates[0];
@@ -69,6 +71,7 @@ internal static class AppToolHost
             {
                 ai.EnableMEAIProviders = true;
                 ai.EnableMEAIToTornadoFailover = true;
+                ai.EnableReloadableProviderFactory = true;
                 ai.EnableMCPTools = true;
                 ai.EnableSkills = true;
             });
@@ -77,7 +80,10 @@ internal static class AppToolHost
         }
 
         var app = builder.Build();
-        PrintBanner(localUrl, sdkBaseUrl, webRootPath, embeddedWorkflowMode);
+        var loadedConnectors = embeddedWorkflowMode
+            ? LoadNamedConnectors(app.Services)
+            : Array.Empty<string>();
+        PrintBanner(localUrl, sdkBaseUrl, webRootPath, embeddedWorkflowMode, loadedConnectors);
 
         app.Lifetime.ApplicationStarted.Register(() =>
         {
@@ -129,8 +135,17 @@ internal static class AppToolHost
         return compare == 0;
     }
 
-    private static void PrintBanner(string localUrl, string sdkBaseUrl, string webRootPath, bool embeddedWorkflowMode)
+    private static void PrintBanner(
+        string localUrl,
+        string sdkBaseUrl,
+        string webRootPath,
+        bool embeddedWorkflowMode,
+        IReadOnlyList<string> loadedConnectors)
     {
+        var connectorSummary = loadedConnectors.Count == 0 ? "-" : string.Join(", ", loadedConnectors);
+        if (connectorSummary.Length > 41)
+            connectorSummary = connectorSummary[..38] + "...";
+
         Console.WriteLine();
         Console.WriteLine("╔═══════════════════════════════════════════════════════════╗");
         Console.WriteLine("║                      aevatar app                          ║");
@@ -138,9 +153,46 @@ internal static class AppToolHost
         Console.WriteLine($"║  🌐 Playground: {localUrl,-41} ║");
         Console.WriteLine($"║  🔌 SDK base:   {sdkBaseUrl,-41} ║");
         Console.WriteLine($"║  🧠 Mode:       {(embeddedWorkflowMode ? "embedded" : "proxy"),-41} ║");
+        Console.WriteLine($"║  🔗 Connectors: {connectorSummary,-41} ║");
         Console.WriteLine($"║  📦 WebRoot:    {webRootPath,-41} ║");
         Console.WriteLine("║  Press Ctrl+C to stop                                      ║");
         Console.WriteLine("╚═══════════════════════════════════════════════════════════╝");
         Console.WriteLine();
+    }
+
+    internal static IReadOnlyList<string> LoadNamedConnectors(IServiceProvider services, string? connectorsJsonPath = null)
+    {
+        using var scope = services.CreateScope();
+        var scoped = scope.ServiceProvider;
+        var logger = scoped.GetRequiredService<ILoggerFactory>().CreateLogger("Aevatar.App.Connectors");
+        var registry = scoped.GetService<IConnectorRegistry>();
+        if (registry == null)
+        {
+            logger.LogWarning("IConnectorRegistry is not registered. Skip connector loading.");
+            return [];
+        }
+
+        var connectorBuilders = scoped.GetServices<IConnectorBuilder>().ToList();
+        if (connectorBuilders.Count == 0)
+        {
+            logger.LogWarning("No IConnectorBuilder registered. Skip connector loading.");
+            return registry.ListNames();
+        }
+
+        var loadedCount = ConnectorRegistration.RegisterConnectors(
+            registry,
+            connectorBuilders,
+            logger,
+            connectorsJsonPath);
+        var names = registry.ListNames();
+
+        if (loadedCount == 0 && names.Count == 0)
+        {
+            logger.LogWarning(
+                "No named connectors were loaded from {ConnectorsPath}.",
+                connectorsJsonPath ?? AevatarPaths.ConnectorsJson);
+        }
+
+        return names;
     }
 }

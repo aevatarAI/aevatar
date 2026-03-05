@@ -217,14 +217,14 @@ public class WorkflowParserConfigurationTests
     }
 
     [Fact]
-    public void Parse_WhenUsingOpenClawAlias_ShouldCanonicalizeToOpenClawCall()
+    public void Parse_WhenUsingAevatarAlias_WithBrowserArgs_ShouldCanonicalizeToAevatarCall()
     {
         var yaml = """
-            name: openclaw_alias
+            name: aevatar_alias
             roles: []
             steps:
-              - id: s_openclaw
-                type: openclaw
+              - id: s_aevatar
+                type: aevatar
                 parameters:
                   args: "browser status --json"
             """;
@@ -232,8 +232,48 @@ public class WorkflowParserConfigurationTests
         var workflow = new WorkflowParser().Parse(yaml);
 
         workflow.Steps.Should().ContainSingle();
-        workflow.Steps[0].Type.Should().Be("openclaw_call");
+        workflow.Steps[0].Type.Should().Be("aevatar_call");
         workflow.Steps[0].Parameters["args"].Should().Be("browser status --json");
+    }
+
+    [Fact]
+    public void Parse_WhenUsingAevatarAlias_ShouldCanonicalizeToAevatarCall()
+    {
+        var yaml = """
+            name: aevatar_alias
+            roles: []
+            steps:
+              - id: s_aevatar
+                type: aevatar
+                parameters:
+                  args: "config ui ensure --json"
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+
+        workflow.Steps.Should().ContainSingle();
+        workflow.Steps[0].Type.Should().Be("aevatar_call");
+        workflow.Steps[0].Parameters["args"].Should().Be("config ui ensure --json");
+    }
+
+    [Fact]
+    public void Parse_WhenUsingSecureConnectorAlias_ShouldCanonicalizeToSecureConnectorCall()
+    {
+        var yaml = """
+            name: secure_connector_alias
+            roles: []
+            steps:
+              - id: s_secure_connector
+                type: secure_connector
+                parameters:
+                  connector: demo_secure
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+
+        workflow.Steps.Should().ContainSingle();
+        workflow.Steps[0].Type.Should().Be("secure_connector_call");
+        workflow.Steps[0].Parameters["connector"].Should().Be("demo_secure");
     }
 
     [Fact]
@@ -385,38 +425,68 @@ public class WorkflowParserConfigurationTests
             name: auto_pattern
             roles:
               - id: planner
-                system_prompt: "Decide whether input is yaml."
+                system_prompt: "Route request and draft workflow yaml when needed."
               - id: assistant
-                system_prompt: "Refine yaml content."
+                system_prompt: "Answer direct questions clearly."
             steps:
               - id: capture_input
                 type: assign
                 parameters:
-                  target: raw_input
+                  target: user_request
                   value: "$input"
-                next: classify
-              - id: classify
+                next: classify_route
+              - id: classify_route
                 type: llm_call
                 role: planner
-                next: check_is_yaml
-              - id: check_is_yaml
-                type: conditional
                 parameters:
-                  condition: "name:"
+                  prompt_prefix: "Return one token: direct or workflow."
+                next: route_intent
+              - id: route_intent
+                type: switch
                 branches:
-                  "true": show_for_approval
-                  "false": done
+                  workflow: prepare_workflow_request
+                  direct: prepare_direct_response
+                  _default: prepare_direct_response
+              - id: prepare_workflow_request
+                type: assign
+                parameters:
+                  target: user_request
+                  value: "${user_request}"
+                next: generate_workflow_yaml
+              - id: generate_workflow_yaml
+                type: llm_call
+                role: planner
+                next: validate_yaml
+              - id: validate_yaml
+                type: workflow_yaml_validate
+                on_error:
+                  strategy: fallback
+                  fallback_step: refine_yaml
+                next: show_for_approval
               - id: show_for_approval
                 type: human_approval
                 parameters:
                   prompt: "Approve YAML for execution"
-                next: refine_yaml
+                branches:
+                  "true": extract_and_execute
+                  "false": refine_yaml
               - id: refine_yaml
                 type: llm_call
                 role: assistant
-                next: extract_and_execute
+                next: validate_yaml
               - id: extract_and_execute
                 type: dynamic_workflow
+                next: done
+              - id: prepare_direct_response
+                type: assign
+                parameters:
+                  target: user_request
+                  value: "${user_request}"
+                next: reply_direct
+              - id: reply_direct
+                type: llm_call
+                role: assistant
+                next: done
               - id: done
                 type: assign
                 parameters:
@@ -432,12 +502,50 @@ public class WorkflowParserConfigurationTests
         workflow.Roles.Should().Contain(r => r.Id == "planner");
         workflow.Roles.Should().Contain(r => r.Id == "assistant");
 
-        workflow.Steps.Should().HaveCount(7);
+        workflow.Steps.Should().HaveCount(12);
         workflow.Steps.Should().Contain(s => s.Id == "capture_input" && s.Type == "assign");
-        workflow.Steps.Should().Contain(s => s.Id == "classify" && s.Type == "llm_call");
-        workflow.Steps.Should().Contain(s => s.Id == "check_is_yaml" && s.Type == "conditional");
+        workflow.Steps.Should().Contain(s => s.Id == "classify_route" && s.Type == "llm_call");
+        workflow.Steps.Should().Contain(s => s.Id == "route_intent" && s.Type == "switch");
+        workflow.Steps.Should().Contain(s => s.Id == "prepare_workflow_request" && s.Type == "assign");
+        workflow.Steps.Should().Contain(s => s.Id == "generate_workflow_yaml" && s.Type == "llm_call");
+        workflow.Steps.Should().Contain(s => s.Id == "validate_yaml" && s.Type == "workflow_yaml_validate");
         workflow.Steps.Should().Contain(s => s.Id == "show_for_approval" && s.Type == "human_approval");
         workflow.Steps.Should().Contain(s => s.Id == "refine_yaml" && s.Type == "llm_call");
         workflow.Steps.Should().Contain(s => s.Id == "extract_and_execute" && s.Type == "dynamic_workflow");
+        workflow.Steps.Should().Contain(s => s.Id == "prepare_direct_response" && s.Type == "assign");
+        workflow.Steps.Should().Contain(s => s.Id == "reply_direct" && s.Type == "llm_call");
+    }
+
+    [Fact]
+    public void Parse_OnErrorFallbackAlias_ShouldMapToFallbackStep()
+    {
+        var yaml = """
+            name: fallback_alias
+            steps:
+              - id: validate_yaml
+                type: workflow_yaml_validate
+                on_error:
+                  strategy: fallback
+                  fallback: refine_yaml
+                next: done
+              - id: refine_yaml
+                type: assign
+                parameters:
+                  target: output
+                  value: "$input"
+              - id: done
+                type: assign
+                parameters:
+                  target: output
+                  value: "$input"
+            """;
+        var parser = new WorkflowParser();
+
+        var workflow = parser.Parse(yaml);
+        var validateStep = workflow.Steps.Single(step => step.Id == "validate_yaml");
+
+        validateStep.OnError.Should().NotBeNull();
+        validateStep.OnError!.Strategy.Should().Be("fallback");
+        validateStep.OnError.FallbackStep.Should().Be("refine_yaml");
     }
 }

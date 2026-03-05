@@ -94,7 +94,8 @@ public sealed class RunSessionTracker
     public WorkflowSignalRequest CreateSignalRequest(
         string? signalName = null,
         string? payload = null,
-        string? commandId = null)
+        string? commandId = null,
+        string? stepId = null)
     {
         EnsureNotBlank(_actorId, "actorId");
         EnsureNotBlank(_runId, "runId");
@@ -103,12 +104,16 @@ public sealed class RunSessionTracker
             ? _lastSignalName
             : signalName.Trim();
         EnsureNotBlank(resolvedSignalName, "signalName");
+        var resolvedStepId = string.IsNullOrWhiteSpace(stepId)
+            ? _stepId
+            : stepId.Trim();
 
         return new WorkflowSignalRequest
         {
             ActorId = _actorId!,
             RunId = _runId!,
             SignalName = resolvedSignalName!,
+            StepId = resolvedStepId,
             Payload = payload,
             CommandId = commandId ?? _commandId,
         };

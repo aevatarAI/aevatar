@@ -21,6 +21,16 @@ public interface IAevatarWorkflowClient
         WorkflowSignalRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<JsonElement>> GetWorkflowCatalogAsync(
+        CancellationToken cancellationToken = default);
+
+    Task<JsonElement?> GetCapabilitiesAsync(
+        CancellationToken cancellationToken = default);
+
+    Task<JsonElement?> GetWorkflowDetailAsync(
+        string workflowName,
+        CancellationToken cancellationToken = default);
+
     Task<JsonElement?> GetActorSnapshotAsync(
         string actorId,
         CancellationToken cancellationToken = default);

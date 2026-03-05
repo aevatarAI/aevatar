@@ -2,11 +2,29 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.Configuration;
 using Aevatar.Tools.Config;
+using Aevatar.Tools.Cli.Hosting;
 
 namespace Aevatar.Tools.Cli.Commands;
 
 internal static class ConfigCommandHandlers
 {
+    public static async Task<ConfigCliResult> UiEnsureAsync(
+        int port,
+        bool noBrowser,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var ready = await ConfigCommandHandler.EnsureUiAsync(port, noBrowser, cancellationToken);
+        return ConfigCliExecution.Ok(
+            "config ui is ready",
+            new
+            {
+                url = ready.Url,
+                port = ready.Port,
+                started = ready.Started,
+            });
+    }
+
     public static Task<ConfigCliResult> PathsShowAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

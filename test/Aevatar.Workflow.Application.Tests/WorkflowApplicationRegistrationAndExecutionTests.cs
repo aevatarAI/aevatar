@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.DependencyInjection;
@@ -168,6 +169,21 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         outputStreamer.Should().BeSameAs(concrete);
         eventOutputStream.Should().BeSameAs(concrete);
         frameMapper.Should().BeSameAs(concrete);
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_ShouldShareRegistryBackedCatalogAcrossQueryPorts()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+
+        var catalogPort = provider.GetRequiredService<IWorkflowCatalogPort>();
+        var capabilitiesPort = provider.GetRequiredService<IWorkflowCapabilitiesPort>();
+
+        catalogPort.GetType().Name.Should().Be("RegistryBackedWorkflowCatalogPort");
+        capabilitiesPort.GetType().Name.Should().Be("RegistryBackedWorkflowCatalogPort");
+        catalogPort.Should().BeSameAs(capabilitiesPort);
     }
 
     [Fact]

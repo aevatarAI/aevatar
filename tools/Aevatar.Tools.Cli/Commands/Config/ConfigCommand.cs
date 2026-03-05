@@ -17,7 +17,7 @@ internal static class ConfigCommand
         command.AddGlobalOption(quietOption);
         command.AddGlobalOption(yesOption);
 
-        command.AddCommand(CreateUiCommand());
+        command.AddCommand(CreateUiCommand(jsonOption, quietOption));
         command.AddCommand(CreateDoctorCommand(jsonOption, quietOption));
         command.AddCommand(CreatePathsCommand(jsonOption, quietOption));
         command.AddCommand(CreateSecretsCommand(jsonOption, quietOption, yesOption));
@@ -30,15 +30,29 @@ internal static class ConfigCommand
         return command;
     }
 
-    private static Command CreateUiCommand()
+    private static Command CreateUiCommand(Option<bool> jsonOption, Option<bool> quietOption)
     {
         var command = new Command("ui", "Open local Aevatar config UI.");
         var portOption = new Option<int>("--port", () => 6677, "Port for config UI.");
         var noBrowserOption = new Option<bool>("--no-browser", "Do not auto-open browser.");
+        var ensureCommand = new Command("ensure", "Ensure local Aevatar config UI is running.");
+        var ensurePortOption = new Option<int>("--port", () => 6677, "Port for config UI.");
+        var ensureNoBrowserOption = new Option<bool>("--no-browser", () => true, "Start without auto-opening browser.");
+
         command.AddOption(portOption);
         command.AddOption(noBrowserOption);
         command.SetHandler((int port, bool noBrowser) =>
             ConfigCommandHandler.RunUiAsync(port, noBrowser, CancellationToken.None), portOption, noBrowserOption);
+
+        ensureCommand.AddOption(ensurePortOption);
+        ensureCommand.AddOption(ensureNoBrowserOption);
+        SetCommandHandler(ensureCommand, context =>
+            Run(context, jsonOption, quietOption, ct => ConfigCommandHandlers.UiEnsureAsync(
+                context.ParseResult.GetValueForOption(ensurePortOption),
+                context.ParseResult.GetValueForOption(ensureNoBrowserOption),
+                ct)));
+
+        command.AddCommand(ensureCommand);
         return command;
     }
 
@@ -232,8 +246,8 @@ internal static class ConfigCommand
         SetCommandHandler(instancesUpsertCommand, context =>
             Run(context, jsonOption, quietOption, ct => ConfigCommandHandlers.LlmInstancesUpsertAsync(
                 context.ParseResult.GetValueForArgument(instancesUpsertNameArg),
-                context.ParseResult.GetValueForOption(providerTypeOption),
-                context.ParseResult.GetValueForOption(modelOption),
+                GetRequiredOptionValue(context, providerTypeOption),
+                GetRequiredOptionValue(context, modelOption),
                 context.ParseResult.GetValueForOption(endpointOption),
                 context.ParseResult.GetValueForOption(apiKeyOption),
                 context.ParseResult.GetValueForOption(apiKeyStdinOption),
@@ -346,7 +360,7 @@ internal static class ConfigCommand
         listCommand.AddOption(sourceOption);
         SetCommandHandler(listCommand, context =>
             Run(context, jsonOption, quietOption, ct => ConfigCommandHandlers.WorkflowsListAsync(
-                context.ParseResult.GetValueForOption(sourceOption), ct)));
+                GetOptionValueOrDefault(context, sourceOption, "all"), ct)));
 
         var getCommand = new Command("get", "Get workflow file content.");
         var getFilenameArg = new Argument<string>("filename", "Workflow filename (.yaml/.yml).");
@@ -355,7 +369,7 @@ internal static class ConfigCommand
         SetCommandHandler(getCommand, context =>
             Run(context, jsonOption, quietOption, ct => ConfigCommandHandlers.WorkflowsGetAsync(
                 context.ParseResult.GetValueForArgument(getFilenameArg),
-                context.ParseResult.GetValueForOption(sourceOption),
+                GetOptionValueOrDefault(context, sourceOption, "all"),
                 ct)));
 
         var putCommand = new Command("put", "Create or update workflow file.");
@@ -370,7 +384,7 @@ internal static class ConfigCommand
         SetCommandHandler(putCommand, context =>
             Run(context, jsonOption, quietOption, ct => ConfigCommandHandlers.WorkflowsPutAsync(
                 context.ParseResult.GetValueForArgument(putFilenameArg),
-                context.ParseResult.GetValueForOption(putSourceOption),
+                GetOptionValueOrDefault(context, putSourceOption, "home"),
                 context.ParseResult.GetValueForOption(putFileOption),
                 context.ParseResult.GetValueForOption(putStdinOption),
                 ct)));
@@ -383,7 +397,7 @@ internal static class ConfigCommand
         SetCommandHandler(deleteCommand, context =>
             Run(context, jsonOption, quietOption, ct => ConfigCommandHandlers.WorkflowsDeleteAsync(
                 context.ParseResult.GetValueForArgument(deleteFilenameArg),
-                context.ParseResult.GetValueForOption(deleteSourceOption),
+                GetOptionValueOrDefault(context, deleteSourceOption, "home"),
                 context.ParseResult.GetValueForOption(yesOption),
                 ct)));
 
@@ -570,5 +584,23 @@ internal static class ConfigCommand
         var asJson = context.ParseResult.GetValueForOption(jsonOption);
         var quiet = context.ParseResult.GetValueForOption(quietOption);
         return ConfigCliExecution.ExecuteAsync(asJson, quiet, action, CancellationToken.None);
+    }
+
+    private static string GetRequiredOptionValue(InvocationContext context, Option<string> option)
+    {
+        var value = context.ParseResult.GetValueForOption(option);
+        if (!string.IsNullOrWhiteSpace(value))
+            return value;
+
+        throw new InvalidOperationException($"Missing required option: {option.Name}");
+    }
+
+    private static string GetOptionValueOrDefault(
+        InvocationContext context,
+        Option<string> option,
+        string fallback)
+    {
+        var value = context.ParseResult.GetValueForOption(option);
+        return string.IsNullOrWhiteSpace(value) ? fallback : value;
     }
 }
