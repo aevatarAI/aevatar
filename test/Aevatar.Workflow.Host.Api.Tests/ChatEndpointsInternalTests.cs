@@ -367,6 +367,32 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleCommand_WhenProjectionDisabled_ShouldClassify503AsResultError()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) => Task.FromResult(ToCoreResult(
+                new WorkflowChatRunExecutionResult(
+                    WorkflowChatRunStartError.ProjectionDisabled,
+                    null,
+                    null))),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, _) = await ExecuteResultAsync(result);
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "error"));
+    }
+
+    [Fact]
     public async Task HandleCommand_WithEmptyPrompt_ShouldReturn400WithCode()
     {
         using var loggerFactory = LoggerFactory.Create(_ => { });

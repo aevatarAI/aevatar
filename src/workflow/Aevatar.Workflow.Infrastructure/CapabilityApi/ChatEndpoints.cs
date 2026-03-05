@@ -170,13 +170,15 @@ public static class WorkflowCapabilityEndpoints
             if (result.Error != WorkflowChatRunStartError.None)
             {
                 var mappedError = ChatRunStartErrorMapper.ToCommandError(result.Error);
+                var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
+                requestResult = ApiMetrics.ResolveResult(statusCode);
                 return Results.Json(
                     new
                     {
                         code = mappedError.Code,
                         message = mappedError.Message,
                     },
-                    statusCode: ChatRunStartErrorMapper.ToHttpStatusCode(result.Error));
+                    statusCode: statusCode);
             }
 
             if (result.Started != null)
