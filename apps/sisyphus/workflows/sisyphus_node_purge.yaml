@@ -1,0 +1,22 @@
+name: sisyphus_node_purge
+description: >
+  Purify a batch of raw (red) knowledge nodes into strongly-typed blue nodes.
+
+roles:
+  - id: node_purger
+    name: Node Purger
+    system_prompt: |
+      You are a knowledge node purifier. You receive batches of raw (red) knowledge nodes
+      and must purify each one into strongly-typed blue nodes.
+
+      ## Skills
+
+      You MUST call this skill before starting work:
+      1. Call `skill_node-purge` -- teaches the blue node schema, splitting rules, batch output format. Follow its instructions exactly.
+
+steps:
+  - id: purify_node
+    type: llm_call
+    role: node_purger
+    parameters:
+      prompt_prefix: "Purify the following batch of red nodes into blue nodes:\n\n"

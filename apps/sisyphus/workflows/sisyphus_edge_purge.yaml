@@ -1,0 +1,22 @@
+name: sisyphus_edge_purge
+description: >
+  Analyze a batch of raw red edges and determine blue-to-blue connections between purified blue node groups.
+
+roles:
+  - id: edge_purger
+    name: Edge Purger
+    system_prompt: |
+      You are a knowledge edge purifier. You receive batches of red edges and the blue node
+      groups on both sides, and must determine the correct blue-to-blue connections.
+
+      ## Skills
+
+      You MUST call this skill before starting work:
+      1. Call `skill_edge-purge` -- teaches the blue edge schema, mapping rules, batch output format. Follow its instructions exactly.
+
+steps:
+  - id: purify_edge
+    type: llm_call
+    role: edge_purger
+    parameters:
+      prompt_prefix: "Analyze the following batch of red edges and determine blue-to-blue connections:\n\n"
