@@ -29,10 +29,7 @@ public static class Prompts
         """;
 
     public const string ImageStyle =
-        "cute 3D render, soft smooth clay texture, floating in mid-air, completely isolated on a FLAT SOLID PURE WHITE background (#FFFFFF), " +
-        "NO SHADOW, NO DROP SHADOW, NO CAST SHADOW, NO GRADIENT, NO VIGNETTE, NO FLOOR, NO SURFACE, NO TABLE, NO GROUND, NO REFLECTION, " +
-        "bright evenly lit, soft studio lighting, pastel colors, whimsical, clean sharp distinct edges with NO anti-aliasing blur, " +
-        "no white halo at edges, 3d icon aesthetic, c4d render, do NOT render any text or letters or words or labels in the image";
+        "Cute 3D render, soft smooth clay texture, floating in mid-air, completely isolated on a transparent background, NO SHADOW, NO DROP SHADOW, NO VIGNETTE, bright evenly lit, soft studio lighting, pastel colors, whimsical, clean distinct edges, 3D icon aesthetic, c4d render, hyper-realistic lighting, subtle matte and shiny texture mix on surfaces, highly detailed clean cutout.";
 
     public static string PlantImage(string plantName, string plantDescription, string stage) => stage switch
     {

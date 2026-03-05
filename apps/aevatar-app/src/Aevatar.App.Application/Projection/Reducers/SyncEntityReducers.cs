@@ -31,6 +31,7 @@ public sealed class EntityCreatedEventReducer
             Output = StructToJson(evt.Output),
             State = StructToJson(evt.State),
             CreatedAt = TimestampToOffset(evt.CreatedAt),
+            DeletedAt = TimestampToOffset(evt.DeletedAt),
             Refs = new Dictionary<string, string>(evt.Refs, StringComparer.Ordinal),
         };
         readModel.Entities[entry.ClientId] = entry;
@@ -64,34 +65,12 @@ public sealed class EntityUpdatedEventReducer
             Output = StructToJson(evt.Output),
             State = StructToJson(evt.State),
             UpdatedAt = TimestampToOffset(evt.UpdatedAt),
+            DeletedAt = TimestampToOffset(evt.DeletedAt),
             Refs = new Dictionary<string, string>(evt.Refs, StringComparer.Ordinal),
         };
         if (readModel.Entities.TryGetValue(entry.ClientId, out var existing))
             entry.CreatedAt = existing.CreatedAt;
         readModel.Entities[entry.ClientId] = entry;
-        readModel.UserId = evt.UserId;
-        readModel.ServerRevision = Math.Max(readModel.ServerRevision, evt.Revision);
-        return true;
-    }
-}
-
-public sealed class EntityDeletedEventReducer
-    : AppEventReducerBase<AppSyncEntityReadModel, EntityDeletedEvent>
-{
-    protected override bool Reduce(
-        AppSyncEntityReadModel readModel,
-        AppProjectionContext context,
-        EventEnvelope envelope,
-        EntityDeletedEvent evt,
-        DateTimeOffset now)
-    {
-        if (readModel.Entities.TryGetValue(evt.ClientId, out var entry))
-        {
-            entry.DeletedAt = TimestampToOffset(evt.DeletedAt);
-            entry.Revision = evt.Revision;
-            entry.BankEligible = false;
-        }
-
         readModel.UserId = evt.UserId;
         readModel.ServerRevision = Math.Max(readModel.ServerRevision, evt.Revision);
         return true;

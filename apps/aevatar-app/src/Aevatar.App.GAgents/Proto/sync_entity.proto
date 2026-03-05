@@ -76,6 +76,7 @@ message EntityCreatedEvent {
   bool bank_eligible = 11;
   string bank_hash = 12;
   google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp deleted_at = 14;
 }
 
 message EntityUpdatedEvent {
@@ -93,14 +94,7 @@ message EntityUpdatedEvent {
   bool bank_eligible = 12;
   string bank_hash = 13;
   google.protobuf.Timestamp updated_at = 14;
-}
-
-message EntityDeletedEvent {
-  string user_id = 1;
-  string client_id = 2;
-  string entity_type = 3;
-  int32 revision = 4;
-  google.protobuf.Timestamp deleted_at = 5;
+  google.protobuf.Timestamp deleted_at = 15;
 }
 
 message CascadeDeleteEvent {

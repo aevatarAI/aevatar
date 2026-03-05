@@ -37,8 +37,6 @@ public sealed partial class SyncEntityGAgent : GAgentBase<SyncEntityState>
 
                     accepted.Add(entity.ClientId);
                     domainEvents.Add(BuildEntityCreatedEvent(entity));
-                    if (entity.DeletedAt is not null)
-                        domainEvents.Add(BuildEntityDeletedEvent(entity));
                     break;
                 }
                 case SyncRuleResult.Updated:
@@ -66,8 +64,6 @@ public sealed partial class SyncEntityGAgent : GAgentBase<SyncEntityState>
 
                     accepted.Add(updated.ClientId);
                     domainEvents.Add(BuildEntityUpdatedEvent(updated, previousRevision));
-                    if (deletedNow)
-                        domainEvents.Add(BuildEntityDeletedEvent(updated));
                     break;
                 }
                 case SyncRuleResult.Stale:

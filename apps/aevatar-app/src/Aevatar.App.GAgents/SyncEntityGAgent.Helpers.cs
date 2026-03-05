@@ -29,15 +29,12 @@ public sealed partial class SyncEntityGAgent
         {
             currentRevision++;
             var entity = State.Entities[clientId];
+            var cascaded = entity.Clone();
+            cascaded.Revision = currentRevision;
+            cascaded.DeletedAt = now;
+            cascaded.BankEligible = false;
             deletedIds.Add(clientId);
-            domainEvents.Add(new EntityDeletedEvent
-            {
-                UserId = entity.UserId,
-                ClientId = entity.ClientId,
-                EntityType = entity.EntityType,
-                Revision = currentRevision,
-                DeletedAt = now
-            });
+            domainEvents.Add(BuildEntityUpdatedEvent(cascaded, entity.Revision));
         }
 
         domainEvents.Add(new CascadeDeleteEvent
@@ -67,7 +64,8 @@ public sealed partial class SyncEntityGAgent
         Position = entity.Position,
         BankEligible = entity.BankEligible,
         BankHash = entity.BankHash,
-        CreatedAt = entity.CreatedAt
+        CreatedAt = entity.CreatedAt,
+        DeletedAt = entity.DeletedAt
     };
 
     private static EntityUpdatedEvent BuildEntityUpdatedEvent(
@@ -86,15 +84,7 @@ public sealed partial class SyncEntityGAgent
         Position = entity.Position,
         BankEligible = entity.BankEligible,
         BankHash = entity.BankHash,
-        UpdatedAt = entity.UpdatedAt
-    };
-
-    private static EntityDeletedEvent BuildEntityDeletedEvent(SyncEntity entity) => new()
-    {
-        UserId = entity.UserId,
-        ClientId = entity.ClientId,
-        EntityType = entity.EntityType,
-        Revision = entity.Revision,
+        UpdatedAt = entity.UpdatedAt,
         DeletedAt = entity.DeletedAt
     };
 
@@ -117,7 +107,8 @@ public sealed partial class SyncEntityGAgent
                     Position = created.Position,
                     BankEligible = created.BankEligible,
                     BankHash = created.BankHash,
-                    CreatedAt = created.CreatedAt
+                    CreatedAt = created.CreatedAt,
+                    DeletedAt = created.DeletedAt
                 };
                 entity.Refs.Add(created.Refs);
                 current.Entities[entity.ClientId] = entity;
@@ -128,6 +119,7 @@ public sealed partial class SyncEntityGAgent
             }
             case EntityUpdatedEvent updated:
             {
+                current.Entities.TryGetValue(updated.ClientId, out var existing);
                 var entity = new SyncEntity
                 {
                     UserId = updated.UserId,
@@ -141,27 +133,15 @@ public sealed partial class SyncEntityGAgent
                     Position = updated.Position,
                     BankEligible = updated.BankEligible,
                     BankHash = updated.BankHash,
-                    UpdatedAt = updated.UpdatedAt
+                    CreatedAt = existing?.CreatedAt,
+                    UpdatedAt = updated.UpdatedAt,
+                    DeletedAt = updated.DeletedAt
                 };
                 entity.Refs.Add(updated.Refs);
                 current.Entities[entity.ClientId] = entity;
                 current.Meta ??= new SyncMeta();
                 current.Meta.UserId = updated.UserId;
                 current.Meta.Revision = Math.Max(current.Meta.Revision, updated.Revision);
-                return current;
-            }
-            case EntityDeletedEvent deleted:
-            {
-                if (current.Entities.TryGetValue(deleted.ClientId, out var entity))
-                {
-                    entity.DeletedAt = deleted.DeletedAt;
-                    entity.Revision = deleted.Revision;
-                    entity.BankEligible = false;
-                    current.Entities[deleted.ClientId] = entity;
-                }
-                current.Meta ??= new SyncMeta();
-                current.Meta.UserId = deleted.UserId;
-                current.Meta.Revision = Math.Max(current.Meta.Revision, deleted.Revision);
                 return current;
             }
             case EntitiesSyncedEvent synced:

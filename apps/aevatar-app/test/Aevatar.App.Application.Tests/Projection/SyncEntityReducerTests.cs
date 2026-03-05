@@ -77,20 +77,24 @@ public sealed class SyncEntityReducerTests
     }
 
     [Fact]
-    public void EntityDeleted_Sets_DeletedAt_And_Clears_BankEligible()
+    public void EntityUpdated_WithDeletedAt_Sets_DeletedAt()
     {
-        var reducer = new EntityDeletedEventReducer();
+        var reducer = new EntityUpdatedEventReducer();
+        var existingCreated = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var model = new AppSyncEntityReadModel
         {
             Id = "syncentity:u1",
-            Entities = { ["c1"] = new SyncEntityEntry { ClientId = "c1", BankEligible = true, Revision = 1 } }
+            Entities = { ["c1"] = new SyncEntityEntry { ClientId = "c1", CreatedAt = existingCreated, BankEligible = true, Revision = 1 } }
         };
         var deletedAt = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
-        var evt = new EntityDeletedEvent
+        var evt = new EntityUpdatedEvent
         {
             UserId = "u1",
             ClientId = "c1",
+            EntityType = "manifestation",
+            PreviousRevision = 1,
             Revision = 3,
+            BankEligible = false,
             DeletedAt = Timestamp.FromDateTime(deletedAt),
         };
 
@@ -100,20 +104,8 @@ public sealed class SyncEntityReducerTests
         entry.DeletedAt.Should().Be(new DateTimeOffset(deletedAt));
         entry.Revision.Should().Be(3);
         entry.BankEligible.Should().BeFalse();
+        entry.CreatedAt.Should().Be(existingCreated);
         model.ServerRevision.Should().Be(3);
-    }
-
-    [Fact]
-    public void EntityDeleted_Ignores_Unknown_ClientId()
-    {
-        var reducer = new EntityDeletedEventReducer();
-        var model = new AppSyncEntityReadModel { Id = "syncentity:u1" };
-        var evt = new EntityDeletedEvent { UserId = "u1", ClientId = "unknown", Revision = 1 };
-
-        reducer.Reduce(model, CreateContext("syncentity:u1"), PackEnvelope(evt), _now).Should().BeTrue();
-
-        model.Entities.Should().BeEmpty();
-        model.ServerRevision.Should().Be(1);
     }
 
     [Fact]

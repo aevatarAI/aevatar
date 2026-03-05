@@ -34,7 +34,7 @@ public static class AppElasticsearchProjectionExtensions
             _ => BuildOptions(), _ => IndexMeta("user-profiles"), m => m.Id);
 
         services.AddElasticsearchDocumentProjectionStore<AppSyncEntityReadModel, string>(
-            _ => BuildOptions(), _ => IndexMeta("sync-entities"), m => m.Id);
+            _ => BuildOptions(), _ => SyncEntitiesIndexMeta(), m => m.Id);
 
         services.AddElasticsearchDocumentProjectionStore<AppAuthLookupReadModel, string>(
             _ => BuildOptions(), _ => IndexMeta("auth-lookups"), m => m.Id);
@@ -50,4 +50,27 @@ public static class AppElasticsearchProjectionExtensions
 
     private static DocumentIndexMetadata IndexMeta(string name)
         => new(name, EmptyDict, EmptyDict, EmptyDict);
+
+    /// <summary>
+    /// Entities is a Dictionary keyed by dynamic clientId strings.
+    /// Each key generates unique ES field mappings, quickly exceeding the
+    /// default 1000 total_fields limit. Setting <c>enabled: false</c> on
+    /// the Entities property tells ES to store the JSON as-is without
+    /// creating per-key field mappings.
+    /// </summary>
+    private static DocumentIndexMetadata SyncEntitiesIndexMeta()
+    {
+        var mappings = new Dictionary<string, object?>
+        {
+            ["properties"] = new Dictionary<string, object?>
+            {
+                ["Entities"] = new Dictionary<string, object?>
+                {
+                    ["type"] = "object",
+                    ["enabled"] = false
+                }
+            }
+        };
+        return new DocumentIndexMetadata("sync-entities", mappings, EmptyDict, EmptyDict);
+    }
 }
