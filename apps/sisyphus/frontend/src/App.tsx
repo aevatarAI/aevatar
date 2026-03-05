@@ -1,80 +1,35 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { Activity, ChevronDown } from 'lucide-react'
-import clsx from 'clsx'
-import { fetchWorkflows, fetchWorkflowYaml } from './api'
+import { useState, useCallback } from 'react'
+import { Activity, FileDown } from 'lucide-react'
 import { useResearchStream } from './hooks/use-research-stream'
-import YamlViewer from './components/YamlViewer'
+import { exportPaper } from './api'
 import ResearchStream from './components/ResearchStream'
 import InputBar from './components/InputBar'
 import GraphView from './components/GraphView'
 import aevatarLogo from './assets/aevatar_ai_logo.svg'
 
 export default function App() {
-  const [workflows, setWorkflows] = useState<string[]>([])
-  const [selectedWorkflow, setSelectedWorkflow] = useState<string | null>(null)
-  const [workflowYaml, setWorkflowYaml] = useState<string | null>(null)
-  const [yamlLoading, setYamlLoading] = useState(false)
-  const [dropdownOpen, setDropdownOpen] = useState(false)
-  const [leftPanelWidth, setLeftPanelWidth] = useState(35) // percentage
-  const draggingRef = useRef(false)
-  const containerRef = useRef<HTMLElement>(null)
-
   const [activeTab, setActiveTab] = useState<'research' | 'graph'>('research')
+  const [exporting, setExporting] = useState(false)
 
-  const { messages, toolCalls, timeline, runStatus, currentStep, error, iterationCount, startRun, stopRun } = useResearchStream()
+  const { rounds, runStatus, currentRound, totalBlueNodes, error, startRun, stopRun } =
+    useResearchStream()
 
-  const handleMouseDown = useCallback(() => {
-    draggingRef.current = true
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-  }, [])
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!draggingRef.current || !containerRef.current) return
-      const rect = containerRef.current.getBoundingClientRect()
-      const pct = ((e.clientX - rect.left) / rect.width) * 100
-      setLeftPanelWidth(Math.min(60, Math.max(20, pct)))
-    }
-    const handleMouseUp = () => {
-      if (draggingRef.current) {
-        draggingRef.current = false
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-      }
-    }
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleMouseUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleMouseUp)
+  const handleExportPdf = useCallback(async () => {
+    setExporting(true)
+    try {
+      const blob = await exportPaper()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'paper.pdf'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'PDF export failed')
+    } finally {
+      setExporting(false)
     }
   }, [])
-
-  // Load workflows on mount
-  useEffect(() => {
-    fetchWorkflows()
-      .then((wfs) => {
-        setWorkflows(wfs)
-        if (wfs.length > 0) setSelectedWorkflow(wfs[0])
-      })
-      .catch(console.error)
-  }, [])
-
-  // Load YAML when workflow changes
-  useEffect(() => {
-    if (!selectedWorkflow) return
-    setYamlLoading(true)
-    fetchWorkflowYaml(selectedWorkflow)
-      .then(setWorkflowYaml)
-      .catch(console.error)
-      .finally(() => setYamlLoading(false))
-  }, [selectedWorkflow])
-
-  const handleRun = (topic: string, maxIterations: number) => {
-    const prompt = `Research Topic: ${topic}\nMax Rounds: ${maxIterations}`
-    startRun(prompt, selectedWorkflow ?? undefined)
-  }
 
   const statusColor = {
     idle: 'var(--text-dimmed)',
@@ -91,7 +46,10 @@ export default function App() {
   }[runStatus]
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col" style={{ background: 'var(--bg-base)' }}>
+    <div
+      className="h-screen w-screen overflow-hidden flex flex-col"
+      style={{ background: 'var(--bg-base)' }}
+    >
       {/* Header */}
       <header
         className="flex items-center justify-between px-6 py-4 relative z-20"
@@ -99,46 +57,36 @@ export default function App() {
       >
         <div className="flex items-center gap-5">
           <img src={aevatarLogo} alt="aevatar.ai" className="h-6" />
-          <div className="h-5 w-px" style={{ background: 'linear-gradient(180deg, transparent, var(--border-strong), transparent)' }} />
-          <span className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>
+          <div
+            className="h-5 w-px"
+            style={{
+              background:
+                'linear-gradient(180deg, transparent, var(--border-strong), transparent)',
+            }}
+          />
+          <span
+            className="text-sm font-semibold"
+            style={{ color: 'var(--text-muted)' }}
+          >
             Sisyphus
           </span>
-          {/* Workflow selector */}
-          <div className="relative">
-            <button
-              onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="btn-secondary text-xs gap-1 py-1.5 px-3"
-            >
-              {selectedWorkflow ?? 'Select workflow'}
-              <ChevronDown size={14} />
-            </button>
-            {dropdownOpen && (
-              <div
-                className="absolute top-full left-0 mt-1 w-56 py-1 rounded-md z-50"
-                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
-              >
-                {workflows.map((wf) => (
-                  <button
-                    key={wf}
-                    onClick={() => { setSelectedWorkflow(wf); setDropdownOpen(false) }}
-                    className={clsx(
-                      'w-full text-left px-3 py-2 text-xs font-mono transition-colors',
-                      wf === selectedWorkflow
-                        ? 'text-white bg-[var(--bg-accent)]'
-                        : 'text-[var(--text-secondary)] hover:bg-[var(--bg-accent)]'
-                    )}
-                  >
-                    {wf}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
-        {/* Status badge */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {/* PDF export */}
+          <button
+            onClick={handleExportPdf}
+            disabled={exporting || runStatus === 'running'}
+            className="btn-secondary text-xs gap-1.5 py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <FileDown size={14} />
+            {exporting ? 'Exporting...' : 'Export PDF'}
+          </button>
+          {/* Status badge */}
           <Activity size={14} style={{ color: statusColor }} />
-          <span className="badge text-[10px]" style={{ color: statusColor, borderColor: statusColor }}>
+          <span
+            className="badge text-[10px]"
+            style={{ color: statusColor, borderColor: statusColor }}
+          >
             {statusLabel}
           </span>
         </div>
@@ -146,73 +94,55 @@ export default function App() {
       <div className="divider-h" />
 
       {/* Main content */}
-      <main ref={containerRef} className="flex-1 flex min-h-0 min-w-0 overflow-hidden">
-        {/* YAML panel */}
+      <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+        {/* Tab bar */}
         <div
-          className="min-w-0 overflow-hidden shrink-0"
-          style={{ width: `${leftPanelWidth}%`, background: 'var(--bg-surface)' }}
+          className="flex shrink-0"
+          style={{ borderBottom: '1px solid var(--border-subtle)' }}
         >
-          <YamlViewer yaml={workflowYaml} loading={yamlLoading} />
+          {(['research', 'graph'] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider transition-colors relative"
+              style={{
+                color:
+                  activeTab === tab
+                    ? 'var(--text-primary)'
+                    : 'var(--text-dimmed)',
+              }}
+            >
+              {tab}
+              {activeTab === tab && (
+                <div
+                  className="absolute bottom-0 left-0 right-0 h-[2px]"
+                  style={{ background: 'var(--text-primary)' }}
+                />
+              )}
+            </button>
+          ))}
         </div>
-        {/* Draggable divider */}
-        <div
-          className="divider-v shrink-0 relative z-10 group"
-          onMouseDown={handleMouseDown}
-        >
-          <div
-            className="absolute inset-y-0 -left-[3px] w-[7px] cursor-col-resize transition-colors"
-            style={{ background: 'transparent' }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)' }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-          />
-        </div>
-        {/* Right panel with tabs */}
-        <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-          {/* Tab bar */}
-          <div className="flex shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-            {(['research', 'graph'] as const).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className="px-4 py-2.5 text-xs font-medium uppercase tracking-wider transition-colors relative"
-                style={{
-                  color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-dimmed)',
-                }}
-              >
-                {tab}
-                {activeTab === tab && (
-                  <div
-                    className="absolute bottom-0 left-0 right-0 h-[2px]"
-                    style={{ background: 'var(--text-primary)' }}
-                  />
-                )}
-              </button>
-            ))}
+
+        {/* Tab content */}
+        {activeTab === 'research' ? (
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            <ResearchStream
+              rounds={rounds}
+              runStatus={runStatus}
+              currentRound={currentRound}
+              totalBlueNodes={totalBlueNodes}
+              error={error}
+            />
+            <div className="divider-h" />
+            <InputBar
+              runStatus={runStatus}
+              onStart={startRun}
+              onStop={stopRun}
+            />
           </div>
-          {/* Tab content */}
-          {activeTab === 'research' ? (
-            <>
-              <ResearchStream
-                messages={messages}
-                toolCalls={toolCalls}
-                timeline={timeline}
-                runStatus={runStatus}
-                currentStep={currentStep}
-                error={error}
-                iterationCount={iterationCount}
-              />
-              <div className="divider-h" />
-              <InputBar
-                runStatus={runStatus}
-                onRun={handleRun}
-                onStop={stopRun}
-                selectedWorkflow={selectedWorkflow ?? undefined}
-              />
-            </>
-          ) : (
-            <GraphView runStatus={runStatus} />
-          )}
-        </div>
+        ) : (
+          <GraphView runStatus={runStatus} />
+        )}
       </main>
     </div>
   )
