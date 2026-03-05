@@ -45,16 +45,29 @@ internal static class ObservabilityExtensions
 
     private static double ResolveSamplingRatio(WebApplicationBuilder builder, double defaultValue)
     {
-        var configuredValue =
-            builder.Configuration["Observability:Tracing:SampleRatio"] ??
-            builder.Configuration["OTEL_TRACES_SAMPLER_ARG"];
+        var observabilitySampleRatio = builder.Configuration["Observability:Tracing:SampleRatio"];
+        var otelSamplerArg = builder.Configuration["OTEL_TRACES_SAMPLER_ARG"];
+
+        var configuredValue = string.IsNullOrWhiteSpace(observabilitySampleRatio)
+            ? otelSamplerArg
+            : observabilitySampleRatio;
+        var configuredKey = string.IsNullOrWhiteSpace(observabilitySampleRatio)
+            ? "OTEL_TRACES_SAMPLER_ARG"
+            : "Observability:Tracing:SampleRatio";
 
         if (string.IsNullOrWhiteSpace(configuredValue))
             return defaultValue;
 
         if (!double.TryParse(configuredValue, NumberStyles.Float, CultureInfo.InvariantCulture, out var ratio))
-            return defaultValue;
+            throw new InvalidOperationException(
+                $"Invalid sampling ratio '{configuredValue}' in '{configuredKey}'. " +
+                "Expected a finite number between 0 and 1.");
 
-        return Math.Clamp(ratio, 0d, 1d);
+        if (!double.IsFinite(ratio) || ratio < 0d || ratio > 1d)
+            throw new InvalidOperationException(
+                $"Invalid sampling ratio '{configuredValue}' in '{configuredKey}'. " +
+                "Expected a finite number between 0 and 1.");
+
+        return ratio;
     }
 }
