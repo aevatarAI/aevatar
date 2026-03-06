@@ -1,9 +1,9 @@
-# Actor Runtime 流式回调与 Request/Reply 能力重构蓝图（v7, Durable-Only Public Callback Revision）
+# Actor Runtime 流式回调与 Request/Reply 能力重构蓝图（v8, Durable-Only Reminder Backend Revision）
 
 ## 1. 文档元信息
 1. 状态：`Revised`
-2. 版本：`v7`
-3. 日期：`2026-03-06`
+2. 版本：`v8`
+3. 日期：`2026-03-07`
 4. 决策级别：`Architecture Breaking Change`
 5. 本版结论：
    - 公共 callback contract 只保留 `Durable`。
@@ -17,7 +17,7 @@
    - `ScheduleSelfDurableTimerAsync(...)`
    - `CancelDurableCallbackAsync(...)`
 3. 删除公共 `TurnBound` API、公共 kind/type tag、公共 DI 注册，以及 Orleans 的公共 turn-bound wrapper。
-4. Orleans 对外只暴露 dedicated callback engine；内部是否采用 timer / reminder 属于基础设施后端策略，不属于业务语义。
+4. Orleans 对外只暴露 dedicated callback engine；其 durable 后端固定为 reminder，不再保留 timer fallback。
 5. 业务层与 workflow/script/runtime retry 统一只依赖 durable callback，不再感知 inline turn 绑定、`AsyncLocal` binding、或 Orleans activation 上下文。
 
 ## 3. 为什么改成 Durable-Only
@@ -55,7 +55,7 @@ flowchart TB
     CTX --> RR["IStreamRequestReplyClient"]
     DUR --> LOC["Local In-Memory Callback Engine"]
     DUR --> ORL["Orleans Dedicated Callback Engine"]
-    ORL --> DM["Timer / Reminder Delivery Mode"]
+    ORL --> DM["Reminder-Only Durable Delivery"]
     LOC --> EVT["Publish Self Trigger Event"]
     ORL --> EVT
     EVT --> ACT["Actor HandleEventAsync"]
@@ -107,11 +107,8 @@ flowchart TB
 ### 7.2 Orleans Runtime
 1. 公共调度统一通过 dedicated callback engine 完成。
 2. dedicated engine 由 `IRuntimeCallbackSchedulerGrain` 承载。
-3. delivery mode 只保留：
-   - `Timer`
-   - `Reminder`
-   - `Auto`
-4. `Timer / Reminder / Auto` 仅是 Orleans 基础设施后端策略，不是业务 API 语义。
+3. dedicated durable path 统一使用 Orleans reminder 持久化与重启恢复语义。
+4. 删除 timer / auto fallback，避免 sub-threshold callback 在 silo restart/failover 后丢失。
 5. runtime delayed retry 显式走 dedicated durable path，不再存在 turn-bound 逃逸问题。
 
 ## 8. 业务使用规则

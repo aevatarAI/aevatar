@@ -3,8 +3,8 @@
 ## 1. 文档元信息
 
 - 文档状态：`Active`
-- 文档版本：`v7`
-- 更新时间：`2026-03-04`
+- 文档版本：`v8`
+- 更新时间：`2026-03-07`
 - 适用范围：`src/Aevatar.Scripting.*` 与 `test/Aevatar.Scripting.*` / `test/Aevatar.Integration.Tests` 的 Scripting 相关测试
 - 非范围：`Aevatar.Foundation.*`（本轮无架构改动）
 
@@ -70,7 +70,7 @@ flowchart LR
 - 文件：`src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs`
 - 状态：`ScriptRuntimeState`
 - 职责：接收运行请求、加载定义快照、执行脚本并提交 `ScriptRunDomainEventCommitted`。
-- Orleans 路径下使用“事件化 definition 查询 + 待处理运行上下文”避免同步阻塞。
+- Orleans 路径下使用“事件化 definition 查询 + `pending_definition_queries` 持久事实状态 + activation 恢复”避免同步阻塞与 reactivation 丢 run。
 
 ### 4.3 ScriptEvolutionManagerGAgent
 
@@ -119,7 +119,8 @@ Core 响应处理要点：
 关键实现：
 
 1. Orleans Runtime 下，`ScriptRuntimeGAgent` 先发 `QueryScriptDefinitionSnapshotRequestedEvent`，收到响应后再执行脚本。
-2. 是否启用“Actor 内异步恢复执行”由 `Scripting:Runtime:UseEventDrivenDefinitionQuery` 显式配置；未配置时按 Runtime 类型判定（Orleans=`true`，Local=`false`）。
+2. 待处理 definition query 先写入 `ScriptRuntimeState.pending_definition_queries`，activation 时重建 timeout lease 并重发 query，保证 response/timeout 都能继续收敛。
+3. 是否启用“Actor 内异步恢复执行”由 `Scripting:Runtime:UseEventDrivenDefinitionQuery` 显式配置；未配置时按 Runtime 类型判定（Orleans=`true`，Local=`false`）。
 
 ### 6.2 演化链（Evolution）
 

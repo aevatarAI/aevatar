@@ -12,9 +12,10 @@
    - `lease` 取消正确
    - `generation` CAS 正确
    - fired metadata 完整
-2. `business actor runtime coordination` 采用 `volatile execution`：
-   - workflow/script actor 的 timeout/retry/pending wait/session 不持久化到 business state
-   - activation 丢失后，晚到 callback `no-op`
+2. `business actor runtime coordination` 采用“事实态持久 + lease activation-local”分层：
+   - workflow actor 的 timeout/retry/pending wait/session 仍不持久化到 business state
+   - script definition query 的 `pending request` 允许持久化到 `ScriptRuntimeState`
+   - callback lease/backend/generation 仍必须保持 activation-local，晚到 callback 通过 lease 对账后 `no-op`
 3. 本清单覆盖范围：
    - `src/Aevatar.Foundation.Runtime*`
    - `src/workflow/Aevatar.Workflow.Core/*`
@@ -53,9 +54,9 @@
 4. 允许例外：
    - Foundation runtime scheduler 自身在“写 metadata”时可直接使用 key 常量
 
-### G3 volatile runtime state boundary guard
+### G3 runtime state boundary guard
 
-1. 目标：防止 timeout/retry/pending session 等 runtime coordination 重新写进 business actor 的 event-sourced state。
+1. 目标：防止 activation-local callback lease/runtime backend 等运行态重新写进 business actor state，同时允许 script definition query 的 pending fact 可恢复。
 2. 必查规则：
    - `src/workflow/Aevatar.Workflow.Core/workflow_state.proto` 不得新增 callback runtime coordination 字段：
      - `timeout_lease`
@@ -64,11 +65,17 @@
      - `pending_signals`
      - `pending_llm_calls`
      - `runtime_runs`
-   - `src/Aevatar.Scripting.Abstractions/script_host_messages.proto` 不得新增 query timeout lease/pending runtime 协调字段
-   - `WorkflowGAgent` / `ScriptRuntimeGAgent` 不得为 callback runtime coordination 新增 `PersistDomainEventAsync` 持久化技术事件
+   - `src/Aevatar.Scripting.Abstractions/script_host_messages.proto` 允许新增 `pending_definition_queries` / `PendingScriptDefinitionQueryState`
+   - 但不得新增 activation-local lease 字段：
+     - `timeout_generation`
+     - `timeout_backend`
+     - `timeout_lease`
+   - `ScriptRuntimeGAgent` 允许新增 `ScriptDefinitionQueryQueuedEvent` / `ScriptDefinitionQueryClearedEvent` 持久化 pending fact
+   - `WorkflowGAgent` 仍不得为 callback runtime coordination 新增 `PersistDomainEventAsync` 持久化技术事件
 3. 说明：
    - 业务事件可以保留
-   - 纯技术协调事件不应进入 business actor 事件流
+   - script definition query 的 `request_id + run_event + callback_id` 属于需要跨 reactivation 恢复的事实
+   - activation-local callback lease 不应进入 actor 状态
 
 ### G4 callback key construction guard
 
@@ -123,16 +130,19 @@
    - `WorkflowLoopModule` retry/timeout 都走 callback 主链，不再依赖 `Task.Delay`
    - `LLMCallModule` watchdog timeout 只有命中当前 pending session + lease 才能发布失败完成事件
 
-### T3 Script volatile runtime semantics
+### T3 Script runtime recovery semantics
 
 1. 目标模块：`ScriptRuntimeGAgent`
 2. 必测用例：
    - definition query timeout fired 缺 metadata 时不清理/不失败
    - timeout fired `callback_id + generation` 不匹配时忽略
-   - pending query 在 activation runtime 清空后，晚到 timeout `no-op`
+   - pending query 在 reactivation 后仍可接收 response 并继续提交
+   - pending query 在 reactivation 后仍可接收 timeout 并继续失败收敛
+   - 旧 activation 的 timeout 在新 lease 下必须 `no-op`
    - query 完成后如果收到旧 timeout，不得再次推进失败逻辑
 3. 说明：
-   - 如果最终设计统一为 `volatile runtime`，现有“state replay 恢复 pending query”类测试应删除或改写
+   - `pending_definition_queries` 是 ScriptRuntimeState 中允许持久化的恢复事实
+   - callback lease 仍只存在于 activation runtime 索引中
 
 ### T4 Activation loss / stale callback 行为测试
 
@@ -156,7 +166,7 @@
 
 ## 5. 应删除或改写的旧测试口径
 
-1. 任何隐含“callback runtime coordination 会随 business actor state replay 恢复”的测试
+1. 任何隐含“workflow callback runtime coordination 会随 business actor state replay 恢复”的测试
 2. 任何只校验 `generation`、不校验 `callback_id` 的 fired callback 测试
 3. 任何默认接受“缺 metadata 也继续推进业务”的测试替身
 4. `TestEventHandlerContext` 一类测试替身若只写 `CallbackGeneration`，必须补齐完整 metadata 或改为复用统一工厂
@@ -174,7 +184,7 @@
 
 1. `RuntimeActorGrain` 不再存在 `Task.Delay` retry 第二路径
 2. workflow/script callback fired 全部改成强 lease 对账
-3. workflow/script runtime coordination 明确不进入 event-sourced business state
+3. workflow runtime coordination 明确不进入 event-sourced business state；script 仅允许 `pending_definition_queries` 持久化
 4. `tools/ci/runtime_callback_guards.sh` 已接入 `architecture_guards.sh`
 5. Foundation/Workflow/Scripting 目标测试全部补齐并通过
 6. 蓝图与审计文档口径一致，明确 `volatile runtime`
@@ -199,6 +209,6 @@
 
 ## 10. 结论
 
-这份清单的作用不是再讨论“该不该做 volatile runtime”，而是把这个决策变成可以被代码审查、CI 和测试稳定执行的工程约束。
+这份清单的作用不是再讨论“该不该做 callback recovery”，而是把“workflow 保持 volatile、script definition query 持久恢复”这个分层决策变成可以被代码审查、CI 和测试稳定执行的工程约束。
 
-如果没有这份 guard + test 闭环，那么 `volatile runtime` 仍然只是口头架构，不是仓库规则。
+如果没有这份 guard + test 闭环，那么 callback runtime 的事实边界仍然只是口头架构，不是仓库规则。

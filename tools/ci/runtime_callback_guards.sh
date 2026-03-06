@@ -46,16 +46,15 @@ if [ -n "${raw_callback_id_hits}" ]; then
   exit 1
 fi
 
-volatile_script_runtime_hits="$(
-  rg -n "pending_definition_queries|PendingScriptDefinitionQueryState|ScriptDefinitionQueryQueuedEvent|ScriptDefinitionQueryClearedEvent" \
+script_runtime_persistent_lease_hits="$(
+  rg -n "timeout_generation|timeout_backend|timeout_lease|RuntimeCallbackLease" \
     src/Aevatar.Scripting.Abstractions/script_host_messages.proto \
-    src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs \
     || true
 )"
 
-if [ -n "${volatile_script_runtime_hits}" ]; then
-  echo "${volatile_script_runtime_hits}"
-  echo "Script runtime definition-query coordination must remain volatile and must not be event-sourced into ScriptRuntimeState."
+if [ -n "${script_runtime_persistent_lease_hits}" ]; then
+  echo "${script_runtime_persistent_lease_hits}"
+  echo "Script runtime may persist pending definition-query facts, but callback lease/backend metadata must remain activation-local."
   exit 1
 fi
 

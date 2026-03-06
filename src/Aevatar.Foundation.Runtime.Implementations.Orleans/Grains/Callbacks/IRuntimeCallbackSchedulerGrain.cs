@@ -5,15 +5,13 @@ public interface IRuntimeCallbackSchedulerGrain : IGrainWithStringKey
     Task<long> ScheduleTimeoutAsync(
         string callbackId,
         byte[] envelopeBytes,
-        int dueTimeMs,
-        RuntimeCallbackDeliveryMode deliveryMode);
+        int dueTimeMs);
 
     Task<long> ScheduleTimerAsync(
         string callbackId,
         byte[] envelopeBytes,
         int dueTimeMs,
-        int periodMs,
-        RuntimeCallbackDeliveryMode deliveryMode);
+        int periodMs);
 
     Task CancelAsync(string callbackId, long expectedGeneration = 0);
 }

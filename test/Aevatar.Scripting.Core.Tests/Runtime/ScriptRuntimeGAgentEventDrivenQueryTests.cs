@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -136,12 +135,12 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
     }
 
     [Fact]
-    public async Task PendingQuery_ShouldNotSurviveReplay_AndLateSnapshotResponseShouldBeIgnored()
+    public async Task PendingQuery_ShouldSurviveReplay_AndLateSnapshotResponseShouldBeProcessed()
     {
         var eventStore = new InMemoryEventStore();
+        var scheduler = new RecordingCallbackScheduler();
         var orchestrator = new RecordingOrchestrator();
         var publisher = new RecordingEventPublisher();
-        var scheduler = new RecordingCallbackScheduler();
         var agent = CreateAgent(orchestrator, publisher, scheduler, eventStore);
 
         await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
@@ -164,12 +163,13 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
         var replayed = CreateAgent(
             new RecordingOrchestrator(),
             new RecordingEventPublisher(),
-            new RecordingCallbackScheduler(),
+            scheduler,
             eventStore);
         SetAgentId(replayed, agent.Id);
         await replayed.ActivateAsync();
 
-        HasPendingDefinitionQuery(replayed, query.RequestId).Should().BeFalse();
+        HasPendingDefinitionQuery(replayed, query.RequestId).Should().BeTrue();
+        scheduler.Timeouts.Should().HaveCount(2);
 
         await replayed.HandleScriptDefinitionSnapshotResponded(new ScriptDefinitionSnapshotRespondedEvent
         {
@@ -182,7 +182,64 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
             ReadModelSchemaHash = "hash-replay-1",
         });
 
+        replayed.State.LastRunId.Should().Be("run-replay-1");
+        HasPendingDefinitionQuery(replayed, query.RequestId).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PendingQueryTimeout_ShouldSurviveReplay_AndIgnoreStaleLease()
+    {
+        var eventStore = new InMemoryEventStore();
+        var scheduler = new RecordingCallbackScheduler();
+        var orchestrator = new RecordingOrchestrator();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(orchestrator, publisher, scheduler, eventStore);
+
+        await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
+        {
+            RunId = "run-replay-timeout",
+            InputPayload = Any.Pack(new Struct()),
+            ScriptRevision = "rev-replay-timeout",
+            DefinitionActorId = "definition-actor-replay-timeout",
+            RequestedEventType = "chat.requested",
+        });
+
+        var query = publisher.Sent
+            .Where(x => x.TargetActorId == "definition-actor-replay-timeout")
+            .Select(x => x.Payload)
+            .OfType<QueryScriptDefinitionSnapshotRequestedEvent>()
+            .Single();
+        var originalLease = scheduler.Timeouts.Should().ContainSingle().Subject.Lease;
+
+        var replayed = CreateAgent(
+            new RecordingOrchestrator(),
+            new RecordingEventPublisher(),
+            scheduler,
+            eventStore);
+        SetAgentId(replayed, agent.Id);
+        await replayed.ActivateAsync();
+
+        var recoveredLease = scheduler.Timeouts.Last().Lease;
+        recoveredLease.Generation.Should().BeGreaterThan(originalLease.Generation);
+        HasPendingDefinitionQuery(replayed, query.RequestId).Should().BeTrue();
+
+        await replayed.HandleEventAsync(CreateTimeoutEnvelope(
+            replayed.Id,
+            originalLease,
+            query.RequestId,
+            "run-replay-timeout"));
+
         replayed.State.LastRunId.Should().BeEmpty();
+        HasPendingDefinitionQuery(replayed, query.RequestId).Should().BeTrue();
+
+        await replayed.HandleEventAsync(CreateTimeoutEnvelope(
+            replayed.Id,
+            recoveredLease,
+            query.RequestId,
+            "run-replay-timeout"));
+
+        replayed.State.LastRunId.Should().Be("run-replay-timeout");
+        HasPendingDefinitionQuery(replayed, query.RequestId).Should().BeFalse();
     }
 
     [Fact]
@@ -525,21 +582,12 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
 
     private static bool HasPendingDefinitionQuery(ScriptRuntimeGAgent agent, string requestId)
     {
-        return GetPendingDefinitionQueries(agent).Contains(requestId);
+        return agent.State.PendingDefinitionQueries.ContainsKey(requestId);
     }
 
     private static int PendingDefinitionQueryCount(ScriptRuntimeGAgent agent)
     {
-        return GetPendingDefinitionQueries(agent).Count;
-    }
-
-    private static IDictionary GetPendingDefinitionQueries(ScriptRuntimeGAgent agent)
-    {
-        var field = typeof(ScriptRuntimeGAgent).GetField(
-            "_pendingDefinitionQueries",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        field.Should().NotBeNull();
-        return (IDictionary)field!.GetValue(agent)!;
+        return agent.State.PendingDefinitionQueries.Count;
     }
 
     private static void SetAgentId(ScriptRuntimeGAgent agent, string agentId)

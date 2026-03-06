@@ -106,8 +106,6 @@ public static class ServiceCollectionExtensions
                 orleansOptions.GarnetConnectionString = options.GarnetConnectionString;
                 orleansOptions.QueueCount = options.QueueCount;
                 orleansOptions.QueueCacheSize = options.QueueCacheSize;
-                orleansOptions.RuntimeCallbackDedicatedDeliveryMode = options.RuntimeCallbackDedicatedDeliveryMode;
-                orleansOptions.RuntimeCallbackReminderThresholdMs = options.RuntimeCallbackReminderThresholdMs;
             });
         });
 
@@ -128,13 +126,6 @@ public static class ServiceCollectionExtensions
 
         if (isGarnetPersistence && string.IsNullOrWhiteSpace(options.GarnetConnectionString))
             throw new InvalidOperationException("ActorRuntime Orleans Garnet connection string is required.");
-
-        if (!string.Equals(options.RuntimeCallbackDedicatedDeliveryMode, AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeAuto, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(options.RuntimeCallbackDedicatedDeliveryMode, AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeTimer, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(options.RuntimeCallbackDedicatedDeliveryMode, AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeReminder, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException($"Unsupported Orleans runtime callback dedicated delivery mode '{options.RuntimeCallbackDedicatedDeliveryMode}'.");
-        }
     }
 
     private static void ConfigureGrainStateStorage(ISiloBuilder builder, AevatarOrleansRuntimeOptions options)

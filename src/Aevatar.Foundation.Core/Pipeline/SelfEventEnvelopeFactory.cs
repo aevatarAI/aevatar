@@ -5,6 +5,8 @@ namespace Aevatar.Foundation.Core.Pipeline;
 
 internal static class SelfEventEnvelopeFactory
 {
+    private const string RuntimeRetryMetadataPrefix = "aevatar.retry.";
+
     public static EventEnvelope Create(
         string actorId,
         IMessage evt,
@@ -28,7 +30,10 @@ internal static class SelfEventEnvelopeFactory
         if (inboundEnvelope != null)
         {
             foreach (var pair in inboundEnvelope.Metadata)
-                envelope.Metadata[pair.Key] = pair.Value;
+            {
+                if (ShouldPropagateInboundMetadata(pair.Key))
+                    envelope.Metadata[pair.Key] = pair.Value;
+            }
         }
 
         if (metadata != null)
@@ -38,5 +43,13 @@ internal static class SelfEventEnvelopeFactory
         }
 
         return envelope;
+    }
+
+    private static bool ShouldPropagateInboundMetadata(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return false;
+
+        return !key.StartsWith(RuntimeRetryMetadataPrefix, StringComparison.Ordinal);
     }
 }

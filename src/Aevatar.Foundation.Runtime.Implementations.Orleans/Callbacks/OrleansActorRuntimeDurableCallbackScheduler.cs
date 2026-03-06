@@ -1,8 +1,6 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Google.Protobuf;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
@@ -10,25 +8,11 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 public sealed class OrleansActorRuntimeDurableCallbackScheduler
     : IActorRuntimeCallbackScheduler
 {
-    private enum DurableDeliveryMode
-    {
-        Auto = 0,
-        Timer = 1,
-        Reminder = 2,
-    }
-
     private readonly IGrainFactory _grainFactory;
-    private readonly DurableDeliveryMode _durableDeliveryMode;
-    private readonly int _reminderThresholdMs;
 
-    public OrleansActorRuntimeDurableCallbackScheduler(
-        IGrainFactory grainFactory,
-        AevatarOrleansRuntimeOptions? options = null)
+    public OrleansActorRuntimeDurableCallbackScheduler(IGrainFactory grainFactory)
     {
         _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
-        var runtimeOptions = options ?? new AevatarOrleansRuntimeOptions();
-        _durableDeliveryMode = ParseDurableDeliveryMode(runtimeOptions.RuntimeCallbackDedicatedDeliveryMode);
-        _reminderThresholdMs = runtimeOptions.RuntimeCallbackReminderThresholdMs;
     }
 
     public async Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
@@ -44,8 +28,7 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
             request.ActorId,
             request.CallbackId,
             envelope,
-            request.DueTime,
-            period: null);
+            request.DueTime);
 
         return new RuntimeCallbackLease(
             request.ActorId,
@@ -98,15 +81,13 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         string actorId,
         string callbackId,
         EventEnvelope envelope,
-        TimeSpan dueTime,
-        TimeSpan? period)
+        TimeSpan dueTime)
     {
         var grain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
         return await grain.ScheduleTimeoutAsync(
             callbackId,
             envelope.ToByteArray(),
-            ToPositiveMilliseconds(dueTime),
-            ResolveDedicatedDeliveryMode(dueTime, period));
+            ToPositiveMilliseconds(dueTime));
     }
 
     private async Task<long> ScheduleViaDedicatedGrainTimerAsync(
@@ -121,8 +102,7 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
             callbackId,
             envelope.ToByteArray(),
             ToPositiveMilliseconds(dueTime),
-            ToPositiveMilliseconds(period),
-            ResolveDedicatedDeliveryMode(dueTime, period));
+            ToPositiveMilliseconds(period));
     }
 
     private Task CancelDedicatedCallbackAsync(
@@ -132,43 +112,6 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
     {
         var grain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
         return grain.CancelAsync(callbackId, expectedGeneration);
-    }
-
-    private RuntimeCallbackDeliveryMode ResolveDedicatedDeliveryMode(
-        TimeSpan dueTime,
-        TimeSpan? period)
-    {
-        return _durableDeliveryMode switch
-        {
-            DurableDeliveryMode.Timer => RuntimeCallbackDeliveryMode.Timer,
-            DurableDeliveryMode.Reminder => RuntimeCallbackDeliveryMode.Reminder,
-            _ => ShouldUseReminderInAuto(dueTime, period)
-                ? RuntimeCallbackDeliveryMode.Reminder
-                : RuntimeCallbackDeliveryMode.Timer,
-        };
-    }
-
-    private bool ShouldUseReminderInAuto(TimeSpan dueTime, TimeSpan? period)
-    {
-        if (_reminderThresholdMs <= 0)
-            return false;
-
-        if (dueTime.TotalMilliseconds >= _reminderThresholdMs)
-            return true;
-
-        if (period.HasValue && period.Value.TotalMilliseconds >= _reminderThresholdMs)
-            return true;
-
-        return false;
-    }
-
-    private static DurableDeliveryMode ParseDurableDeliveryMode(string mode)
-    {
-        if (string.Equals(mode, AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeTimer, StringComparison.OrdinalIgnoreCase))
-            return DurableDeliveryMode.Timer;
-        if (string.Equals(mode, AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeReminder, StringComparison.OrdinalIgnoreCase))
-            return DurableDeliveryMode.Reminder;
-        return DurableDeliveryMode.Auto;
     }
 
     private static int ToPositiveMilliseconds(TimeSpan value)

@@ -1,4 +1,3 @@
-using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,7 +11,6 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     private const string ReminderNamePrefix = "runtime-callback:";
     private static readonly TimeSpan OneShotReminderPeriod = TimeSpan.FromDays(36500);
 
-    private readonly Dictionary<string, ScheduledTimerCallback> _timerCallbacks = new(StringComparer.Ordinal);
     private readonly IPersistentState<RuntimeCallbackSchedulerGrainState> _state;
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
 
@@ -30,118 +28,48 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         return base.OnActivateAsync(cancellationToken);
     }
 
-    public override Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
-    {
-        foreach (var callback in _timerCallbacks.Values)
-            callback.Timer.Dispose();
-
-        _timerCallbacks.Clear();
-        return base.OnDeactivateAsync(reason, cancellationToken);
-    }
-
     public async Task<long> ScheduleTimeoutAsync(
         string callbackId,
         byte[] envelopeBytes,
-        int dueTimeMs,
-        RuntimeCallbackDeliveryMode deliveryMode)
+        int dueTimeMs)
     {
         ValidateScheduleRequest(callbackId, envelopeBytes, dueTimeMs);
         var dueTime = TimeSpan.FromMilliseconds(dueTimeMs);
         var nextGeneration = await ResetExistingCallbackAndGetNextGenerationAsync(callbackId);
-
-        if (deliveryMode == RuntimeCallbackDeliveryMode.Timer)
-        {
-            var timer = this.RegisterGrainTimer(
-                cancellationToken => OnTimerTickAsync(callbackId, nextGeneration, cancellationToken),
-                new GrainTimerCreationOptions(dueTime, Timeout.InfiniteTimeSpan)
-                {
-                    KeepAlive = true,
-                    Interleave = false,
-                });
-
-            _timerCallbacks[callbackId] = new ScheduledTimerCallback(
-                nextGeneration,
-                false,
-                envelopeBytes,
-                timer);
-            return nextGeneration;
-        }
-
-        if (deliveryMode == RuntimeCallbackDeliveryMode.Reminder)
-        {
-            await UpsertReminderCallbackAsync(
-                callbackId,
-                nextGeneration,
-                periodic: false,
-                periodMs: 0,
-                envelopeBytes,
-                dueTime);
-            return nextGeneration;
-        }
-
-        throw new InvalidOperationException($"Unsupported callback delivery mode '{deliveryMode}'.");
+        await UpsertReminderCallbackAsync(
+            callbackId,
+            nextGeneration,
+            periodic: false,
+            periodMs: 0,
+            envelopeBytes,
+            dueTime);
+        return nextGeneration;
     }
 
     public async Task<long> ScheduleTimerAsync(
         string callbackId,
         byte[] envelopeBytes,
         int dueTimeMs,
-        int periodMs,
-        RuntimeCallbackDeliveryMode deliveryMode)
+        int periodMs)
     {
         ValidateScheduleRequest(callbackId, envelopeBytes, dueTimeMs);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(periodMs, 0);
 
         var dueTime = TimeSpan.FromMilliseconds(dueTimeMs);
-        var period = TimeSpan.FromMilliseconds(periodMs);
         var nextGeneration = await ResetExistingCallbackAndGetNextGenerationAsync(callbackId);
-
-        if (deliveryMode == RuntimeCallbackDeliveryMode.Timer)
-        {
-            var timer = this.RegisterGrainTimer(
-                cancellationToken => OnTimerTickAsync(callbackId, nextGeneration, cancellationToken),
-                new GrainTimerCreationOptions(dueTime, period)
-                {
-                    KeepAlive = true,
-                    Interleave = false,
-                });
-
-            _timerCallbacks[callbackId] = new ScheduledTimerCallback(
-                nextGeneration,
-                true,
-                envelopeBytes,
-                timer);
-            return nextGeneration;
-        }
-
-        if (deliveryMode == RuntimeCallbackDeliveryMode.Reminder)
-        {
-            await UpsertReminderCallbackAsync(
-                callbackId,
-                nextGeneration,
-                periodic: true,
-                periodMs,
-                envelopeBytes,
-                dueTime);
-            return nextGeneration;
-        }
-
-        throw new InvalidOperationException($"Unsupported callback delivery mode '{deliveryMode}'.");
+        await UpsertReminderCallbackAsync(
+            callbackId,
+            nextGeneration,
+            periodic: true,
+            periodMs,
+            envelopeBytes,
+            dueTime);
+        return nextGeneration;
     }
 
     public async Task CancelAsync(string callbackId, long expectedGeneration = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
-        if (_timerCallbacks.TryGetValue(callbackId, out var timerCallback))
-        {
-            if (expectedGeneration > 0 && timerCallback.Generation != expectedGeneration)
-                return;
-
-            timerCallback.Timer.Dispose();
-            _timerCallbacks.Remove(callbackId);
-            return;
-        }
-
         if (!_state.State.ReminderCallbacks.TryGetValue(callbackId, out var reminderCallback))
             return;
 
@@ -163,13 +91,6 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     private async Task<long> ResetExistingCallbackAndGetNextGenerationAsync(string callbackId)
     {
         var generation = 0L;
-        if (_timerCallbacks.TryGetValue(callbackId, out var timerCallback))
-        {
-            generation = Math.Max(generation, timerCallback.Generation);
-            timerCallback.Timer.Dispose();
-            _timerCallbacks.Remove(callbackId);
-        }
-
         if (_state.State.ReminderCallbacks.TryGetValue(callbackId, out var reminderCallback))
         {
             generation = Math.Max(generation, reminderCallback.Generation);
@@ -179,35 +100,6 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         }
 
         return generation + 1;
-    }
-
-    private async Task OnTimerTickAsync(
-        string callbackId,
-        long generation,
-        CancellationToken ct)
-    {
-        if (!_timerCallbacks.TryGetValue(callbackId, out var scheduled))
-            return;
-
-        if (scheduled.Generation != generation)
-            return;
-
-        var fireIndex = scheduled.FireIndex + 1;
-        await PublishScheduledEnvelopeAsync(
-            callbackId,
-            generation,
-            fireIndex,
-            scheduled.EnvelopeBytes,
-            ct);
-
-        if (!scheduled.Periodic)
-        {
-            scheduled.Timer.Dispose();
-            _timerCallbacks.Remove(callbackId);
-            return;
-        }
-
-        _timerCallbacks[callbackId] = scheduled with { FireIndex = fireIndex };
     }
 
     public async Task ReceiveReminder(string reminderName, TickStatus status)
@@ -316,11 +208,4 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         callbackId = reminderName[ReminderNamePrefix.Length..];
         return !string.IsNullOrWhiteSpace(callbackId);
     }
-
-    private sealed record ScheduledTimerCallback(
-        long Generation,
-        bool Periodic,
-        byte[] EnvelopeBytes,
-        IGrainTimer Timer,
-        int FireIndex = 0);
 }

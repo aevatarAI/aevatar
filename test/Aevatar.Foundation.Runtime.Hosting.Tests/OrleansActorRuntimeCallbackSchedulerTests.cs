@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Orleans;
@@ -32,84 +31,31 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
         lease.Generation.Should().Be(77);
         lease.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
         dedicatedGrain.ScheduleTimeoutCalls.Should().Be(1);
-        dedicatedGrain.LastTimeoutDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.Timer);
+        dedicatedGrain.ScheduleTimerCalls.Should().Be(0);
         grainFactoryProxy.CallbackSchedulerGrainCalls.Should().Be(1);
     }
 
     [Fact]
-    public async Task DurableScheduleTimeoutAsync_ShouldSelectTimer_WhenDeliveryModeIsForcedTimer()
+    public async Task DurableScheduleTimerAsync_ShouldAlwaysUseDedicatedReminderScheduler()
     {
         var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 13 };
-        var options = new AevatarOrleansRuntimeOptions
-        {
-            RuntimeCallbackDedicatedDeliveryMode = AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeTimer,
-        };
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
         var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
         grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
-        var scheduler = new OrleansActorRuntimeDurableCallbackScheduler(grainFactory, options);
+        var scheduler = new OrleansActorRuntimeDurableCallbackScheduler(grainFactory);
 
-        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
-        {
-            ActorId = "actor-1",
-            CallbackId = "cb-1",
-            DueTime = TimeSpan.FromMinutes(10),
-            TriggerEnvelope = CreateEnvelope(),
-        });
-
-        lease.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
-        dedicatedGrain.LastTimeoutDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.Timer);
-    }
-
-    [Fact]
-    public async Task DurableScheduleTimeoutAsync_ShouldSelectReminder_WhenDeliveryModeIsForcedReminder()
-    {
-        var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 17 };
-        var options = new AevatarOrleansRuntimeOptions
-        {
-            RuntimeCallbackDedicatedDeliveryMode = AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeReminder,
-        };
-        var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
-        var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
-        grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
-        var scheduler = new OrleansActorRuntimeDurableCallbackScheduler(grainFactory, options);
-
-        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
-        {
-            ActorId = "actor-1",
-            CallbackId = "cb-1",
-            DueTime = TimeSpan.FromMilliseconds(100),
-            TriggerEnvelope = CreateEnvelope(),
-        });
-
-        lease.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
-        dedicatedGrain.LastTimeoutDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.Reminder);
-    }
-
-    [Fact]
-    public async Task DurableScheduleTimeoutAsync_ShouldSelectReminderInAutoMode_WhenDueTimeExceedsThreshold()
-    {
-        var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 9 };
-        var options = new AevatarOrleansRuntimeOptions
-        {
-            RuntimeCallbackDedicatedDeliveryMode = AevatarOrleansRuntimeOptions.RuntimeCallbackDedicatedDeliveryModeAuto,
-            RuntimeCallbackReminderThresholdMs = 1000,
-        };
-        var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
-        var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
-        grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
-        var scheduler = new OrleansActorRuntimeDurableCallbackScheduler(grainFactory, options);
-
-        var lease = await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
+        var lease = await scheduler.ScheduleTimerAsync(new RuntimeCallbackTimerRequest
         {
             ActorId = "actor-1",
             CallbackId = "cb-1",
             DueTime = TimeSpan.FromSeconds(5),
+            Period = TimeSpan.FromSeconds(2),
             TriggerEnvelope = CreateEnvelope(),
         });
 
         lease.Backend.Should().Be(RuntimeCallbackBackend.Dedicated);
-        dedicatedGrain.LastTimeoutDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.Reminder);
+        dedicatedGrain.ScheduleTimerCalls.Should().Be(1);
+        dedicatedGrain.LastTimerPeriodMs.Should().Be(2000);
     }
 
     [Fact]
@@ -165,22 +111,22 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
 
         public int ScheduleTimeoutCalls { get; private set; }
 
+        public int ScheduleTimerCalls { get; private set; }
+
         public int CancelCalls { get; private set; }
 
-        public long LastCancelExpectedGeneration { get; private set; }
+        public int LastTimerPeriodMs { get; private set; }
 
-        public RuntimeCallbackDeliveryMode LastTimeoutDeliveryMode { get; private set; }
+        public long LastCancelExpectedGeneration { get; private set; }
 
         public Task<long> ScheduleTimeoutAsync(
             string callbackId,
             byte[] envelopeBytes,
-            int dueTimeMs,
-            RuntimeCallbackDeliveryMode deliveryMode)
+            int dueTimeMs)
         {
             _ = callbackId;
             _ = envelopeBytes;
             _ = dueTimeMs;
-            LastTimeoutDeliveryMode = deliveryMode;
             ScheduleTimeoutCalls++;
             return Task.FromResult(NextGeneration);
         }
@@ -189,14 +135,13 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             string callbackId,
             byte[] envelopeBytes,
             int dueTimeMs,
-            int periodMs,
-            RuntimeCallbackDeliveryMode deliveryMode)
+            int periodMs)
         {
             _ = callbackId;
             _ = envelopeBytes;
             _ = dueTimeMs;
-            _ = periodMs;
-            _ = deliveryMode;
+            LastTimerPeriodMs = periodMs;
+            ScheduleTimerCalls++;
             return Task.FromResult(NextGeneration);
         }
 

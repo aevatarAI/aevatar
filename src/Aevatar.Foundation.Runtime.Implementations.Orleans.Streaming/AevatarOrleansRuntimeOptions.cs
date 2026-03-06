@@ -7,9 +7,6 @@ public sealed class AevatarOrleansRuntimeOptions
     public const string PersistenceBackendInMemory = "InMemory";
     public const string PersistenceBackendGarnet = "Garnet";
     public const string DefaultGarnetConnectionString = "localhost:6379";
-    public const string RuntimeCallbackDedicatedDeliveryModeAuto = "Auto";
-    public const string RuntimeCallbackDedicatedDeliveryModeTimer = "Timer";
-    public const string RuntimeCallbackDedicatedDeliveryModeReminder = "Reminder";
 
     public string StreamBackend { get; set; } = StreamBackendInMemory;
 
@@ -24,17 +21,4 @@ public sealed class AevatarOrleansRuntimeOptions
     public int QueueCount { get; set; } = 8;
 
     public int QueueCacheSize { get; set; } = 4096;
-
-    /// <summary>
-    /// Dedicated scheduling delivery mode:
-    /// Auto | Timer | Reminder
-    /// </summary>
-    public string RuntimeCallbackDedicatedDeliveryMode { get; set; } = RuntimeCallbackDedicatedDeliveryModeAuto;
-
-    /// <summary>
-    /// Auto mode threshold: when due_time >= threshold, dedicated path prefers reminder.
-    /// Set <= 0 to disable reminder auto-selection.
-    /// </summary>
-    public int RuntimeCallbackReminderThresholdMs { get; set; } = 300_000;
-
 }
