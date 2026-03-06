@@ -6,7 +6,7 @@ rule_files:
   - /etc/prometheus/alerts.yml
 
 scrape_configs:
-  - job_name: "aevatar-workflow-host"
+  - job_name: "aevatar-otel-collector"
     metrics_path: /metrics
     static_configs:
-      - targets: ["host.docker.internal:5000"]
+      - targets: ["otel-collector:9464"]

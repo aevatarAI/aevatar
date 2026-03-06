@@ -1,4 +1,28 @@
 services:
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: aevatar-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: aevatar-otel-collector
+    command:
+      - --config=/etc/otelcol-contrib/config.yml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "9464:9464"
+    volumes:
+      - ./tools/observability/otel-collector-config.yml:/etc/otelcol-contrib/config.yml:ro
+    depends_on:
+      - jaeger
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:latest
     container_name: aevatar-prometheus
@@ -11,6 +35,8 @@ services:
     volumes:
       - ./tools/observability/prometheus:/etc/prometheus:ro
       - prometheus-data:/prometheus
+    depends_on:
+      - otel-collector
     restart: unless-stopped
 
   grafana:

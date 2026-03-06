@@ -15,7 +15,7 @@ Provide a low-cardinality, production-safe observability baseline for workflow r
 - One meter per domain boundary: `Aevatar.Agents` for runtime, `Aevatar.Api` for API layer.
 - Prefer low-cardinality labels over high-cardinality identifiers.
 - Track both user-perceived latency (API) and backend processing overhead (runtime).
-- Use Prometheus + Grafana as the default display stack.
+- Use OpenTelemetry OTLP export with Prometheus + Grafana as the default metrics display stack.
 
 ## 3. Anti-Patterns to Avoid
 
@@ -29,8 +29,8 @@ Provide a low-cardinality, production-safe observability baseline for workflow r
 
 Implemented:
 
-- Prometheus scraping endpoint (`/metrics`) in `Workflow.Host.Api`.
-- Grafana + Prometheus local stack (`docker-compose.observability.yml`).
+- OTLP metric export from `Workflow.Host.Api`.
+- Collector-centered local stack (`docker-compose.observability.yml`) with Jaeger, Prometheus, and Grafana.
 - Runtime metric cleanup and low-cardinality refactor:
   - removed high-cardinality labels (`agent_id`, `publisher_id`).
   - removed low-value instruments (`RouteTargets`, `StateLoads`, `StateSaves`, `HandlerDuration`).
@@ -166,19 +166,21 @@ Note: "Runtime Self Events / API Request" is computed only when window API reque
 Local stack:
 
 - `docker-compose.observability.yml`
+- OpenTelemetry Collector OTLP HTTP ingest endpoint: `http://localhost:4318` (ingest only, no UI)
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3000`
+- Jaeger: `http://localhost:16686`
 - Prometheus alert examples: `tools/observability/prometheus/alerts.yml`
 
 ## 8. Verification Checklist
 
-- `curl http://localhost:5000/metrics` shows:
+- Prometheus target `aevatar-otel-collector` is `UP`.
+- Collector-exposed metrics include:
   - `aevatar_runtime_events_handled_total`
   - `aevatar_api_requests_total`
   - `aevatar_api_first_response_duration_ms`
 - No high-cardinality labels appear in metric series.
 - No `pipeline` label in runtime metrics.
-- Prometheus target `aevatar-workflow-host` is `UP`.
 - Dashboard shows first-response vs full-response latency.
 - `alerts.yml` loads successfully in Prometheus rule status page.
 

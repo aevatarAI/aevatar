@@ -10,8 +10,8 @@ namespace Aevatar.Workflow.Host.Api;
 internal static class ObservabilityExtensions
 {
     /// <summary>
-    /// Registers OpenTelemetry tracing. Service name is resolved from
-    /// OTEL_SERVICE_NAME; OTLP exporter is enabled when
+    /// Registers OpenTelemetry tracing and metrics. Service name is resolved from
+    /// OTEL_SERVICE_NAME; OTLP exporters are enabled when
     /// OTEL_EXPORTER_OTLP_ENDPOINT is set.
     /// </summary>
     internal static WebApplicationBuilder AddAevatarWorkflowObservability(
@@ -27,6 +27,7 @@ internal static class ObservabilityExtensions
         var runtimeLatencyBucketsMs = ResolveHistogramBuckets(
             builder.Configuration["Observability:Metrics:RuntimeLatencyBucketsMs"],
             [1d, 5d, 10d, 25d, 50d, 100d, 250d, 500d, 1000d, 2500d, 5000d, 10000d]);
+        var otlpEndpoint = ResolveOtlpEndpoint(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
 
         builder.Services
             .AddOpenTelemetry()
@@ -39,11 +40,9 @@ internal static class ObservabilityExtensions
                     .AddSource("Aevatar.Agents")
                     .SetSampler(new ParentBasedSampler(new TraceIdRatioBasedSampler(samplingRatio)));
 
-                var endpoint = builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"];
-                if (!string.IsNullOrWhiteSpace(endpoint) &&
-                    Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
+                if (otlpEndpoint is not null)
                 {
-                    tracing.AddOtlpExporter(options => options.Endpoint = uri);
+                    tracing.AddOtlpExporter(options => options.Endpoint = otlpEndpoint);
                 }
             })
             .WithMetrics(metrics =>
@@ -61,8 +60,12 @@ internal static class ObservabilityExtensions
                         new ExplicitBucketHistogramConfiguration { Boundaries = apiLatencyBucketsMs })
                     .AddView(
                         instrumentName: "aevatar.runtime.event_handle_duration_ms",
-                        new ExplicitBucketHistogramConfiguration { Boundaries = runtimeLatencyBucketsMs })
-                    .AddPrometheusExporter();
+                        new ExplicitBucketHistogramConfiguration { Boundaries = runtimeLatencyBucketsMs });
+
+                if (otlpEndpoint is not null)
+                {
+                    metrics.AddOtlpExporter(options => options.Endpoint = otlpEndpoint);
+                }
             });
 
         return builder;
@@ -94,6 +97,20 @@ internal static class ObservabilityExtensions
                 "Expected a finite number between 0 and 1.");
 
         return ratio;
+    }
+
+    private static Uri? ResolveOtlpEndpoint(string? configuredValue)
+    {
+        if (string.IsNullOrWhiteSpace(configuredValue))
+            return null;
+
+        if (!Uri.TryCreate(configuredValue, UriKind.Absolute, out var uri))
+        {
+            throw new InvalidOperationException(
+                $"Invalid OTLP endpoint '{configuredValue}' in 'OTEL_EXPORTER_OTLP_ENDPOINT'. Expected an absolute URI.");
+        }
+
+        return uri;
     }
 
     private static double[] ResolveHistogramBuckets(string? configuredValue, double[] defaultBuckets)

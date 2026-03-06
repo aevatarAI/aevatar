@@ -1,12 +1,16 @@
-# Local Metrics Display (Grafana)
+# Local Observability Stack
 
-This repository uses Prometheus + Grafana for local metrics display.
+This repository uses an OpenTelemetry Collector in front of Prometheus, Grafana, and Jaeger for local observability.
 
 ## 1. Start Workflow Host
 
-Run the API host (default expected metrics endpoint: `http://localhost:5000/metrics`):
+Run the API host with OTLP pointed at the local collector:
 
 ```bash
+export OTEL_SERVICE_NAME=Aevatar.Workflow.Host.Api
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+
 ASPNETCORE_URLS=http://localhost:5000 \
 dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
 ```
@@ -19,8 +23,10 @@ docker compose -f docker-compose.observability.yml up -d
 
 Services:
 
+- OpenTelemetry Collector OTLP HTTP ingest endpoint: `http://localhost:4318` (ingest only, no UI)
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3000` (`admin` / `admin`)
+- Jaeger: `http://localhost:16686`
 
 ## 3. Validate Scraping
 
@@ -28,7 +34,7 @@ Open Prometheus targets page:
 
 `http://localhost:9090/targets`
 
-Expect `aevatar-workflow-host` to be `UP`.
+Expect `aevatar-otel-collector` to be `UP`.
 
 ## 4. Explore Metrics in Grafana
 
@@ -86,8 +92,17 @@ Override them with configuration values:
 
 Use comma-separated millisecond values in ascending order.
 
-## 8. Docker Host Notes
+## 8. Data Flow
 
-The default Prometheus target uses `host.docker.internal:5000`, which works on Docker Desktop environments such as macOS.
+The local metric and trace path is:
 
-If you run the stack on Linux, update `tools/observability/prometheus/prometheus.yml` to point at a reachable host address for the workflow API before starting the stack.
+- Workflow host exports traces and metrics to OTLP (`localhost:4317`)
+- OpenTelemetry Collector forwards traces to Jaeger
+- OpenTelemetry Collector exposes Prometheus metrics on `:9464`
+- Prometheus scrapes the collector and Grafana queries Prometheus
+
+## 9. Docker Host Notes
+
+The application runs on the host by default and exports OTLP to `localhost:4317`, which is published by the collector container.
+
+If you change the collector port mapping, update `OTEL_EXPORTER_OTLP_ENDPOINT` before starting the workflow host.
