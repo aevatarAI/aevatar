@@ -12,7 +12,8 @@ internal static class ChatWebSocketMessageTypes
 internal sealed record ChatWebSocketCommandAckPayload
 {
     public required string CommandId { get; init; }
-    public required string ActorId { get; init; }
+    public required string RunActorId { get; init; }
+    public string? DefinitionActorId { get; init; }
     public required string Workflow { get; init; }
 }
 
@@ -55,7 +56,8 @@ internal static class ChatWebSocketEnvelopeFactory
             Payload = new ChatWebSocketCommandAckPayload
             {
                 CommandId = started.CommandId,
-                ActorId = started.ActorId,
+                RunActorId = started.RunActorId,
+                DefinitionActorId = started.DefinitionActorId,
                 Workflow = started.WorkflowName,
             },
         };

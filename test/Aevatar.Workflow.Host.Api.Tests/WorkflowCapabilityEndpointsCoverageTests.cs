@@ -76,7 +76,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         {
             Handler = (_, _, _, _) => Task.FromResult(
                 new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
-                    WorkflowChatRunStartError.AgentTypeNotSupported,
+                    WorkflowChatRunStartError.DefinitionActorTypeNotSupported,
                     null,
                     null)),
         };
@@ -90,7 +90,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var (statusCode, body) = await ExecuteResultAsync(result);
         using var doc = JsonDocument.Parse(body);
         statusCode.Should().Be(StatusCodes.Status400BadRequest);
-        doc.RootElement.GetProperty("code").GetString().Should().Be("AGENT_TYPE_NOT_SUPPORTED");
+        doc.RootElement.GetProperty("code").GetString().Should().Be("DEFINITION_ACTOR_TYPE_NOT_SUPPORTED");
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         doc.RootElement.GetProperty("commandId").GetString().Should().Be("cmd-1");
         doc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
         doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
-        doc.RootElement.GetProperty("actorId").GetString().Should().Be("actor-1");
+        doc.RootElement.GetProperty("runActorId").GetString().Should().Be("actor-1");
     }
 
     [Fact]

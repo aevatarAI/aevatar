@@ -2,7 +2,6 @@ using Aevatar.Configuration;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Integration.Tests;
 
@@ -55,87 +54,106 @@ public class AgentYamlLoaderAndWorkflowStateCoverageTests
     }
 
     [Fact]
-    public void WorkflowStateProto_ShouldRoundtripCloneAndExposeDescriptor()
+    public void WorkflowStateProto_ShouldRoundtripDefinitionBindingFacts()
     {
         var state = new WorkflowState
         {
-            WorkflowYaml = "steps:\n- id: s1",
+            WorkflowYaml = "name: demo\nsteps:\n  - id: s1\n    type: transform",
             WorkflowName = "demo",
             Version = 7,
             Compiled = true,
-            CompilationError = "",
+            CompilationError = string.Empty,
             TotalExecutions = 10,
             SuccessfulExecutions = 8,
             FailedExecutions = 2,
         };
-        state.SubWorkflowBindings.Add(new WorkflowState.Types.SubWorkflowBinding
-        {
-            WorkflowName = "sub_flow",
-            ChildActorId = "actor-sub",
-            Lifecycle = "singleton",
-        });
-        state.PendingSubWorkflowInvocations.Add(new WorkflowState.Types.PendingSubWorkflowInvocation
-        {
-            InvocationId = "invoke-1",
-            ParentRunId = "run-parent",
-            ParentStepId = "step-a",
-            WorkflowName = "sub_flow",
-            ChildActorId = "actor-sub",
-            ChildRunId = "run-child",
-            Lifecycle = "singleton",
-        });
-        state.PendingSubWorkflowInvocationIndexByChildRunId["run-child"] = 0;
-        state.PendingChildRunIdsByParentRunId["run-parent"] = new WorkflowState.Types.ChildRunIdSet
-        {
-            ChildRunIds = { "run-child" },
-        };
+        state.InlineWorkflowYamls["sub_flow"] = "name: sub_flow";
 
         var clone = state.Clone();
         clone.Should().BeEquivalentTo(state);
 
-        var bytes = state.ToByteArray();
-        WorkflowState parsed = WorkflowState.Parser.ParseFrom(bytes)
-            ?? throw new InvalidOperationException("WorkflowState parse returned null");
+        var parsed = WorkflowState.Parser.ParseFrom(state.ToByteArray());
         parsed.WorkflowName.Should().Be("demo");
         parsed.Version.Should().Be(7);
         parsed.Compiled.Should().BeTrue();
         parsed.TotalExecutions.Should().Be(10);
         parsed.SuccessfulExecutions.Should().Be(8);
         parsed.FailedExecutions.Should().Be(2);
-        parsed.SubWorkflowBindings.Should().ContainSingle();
-        parsed.PendingSubWorkflowInvocations.Should().ContainSingle();
-        parsed.PendingSubWorkflowInvocationIndexByChildRunId.Should().ContainKey("run-child").WhoseValue.Should().Be(0);
-        parsed.PendingChildRunIdsByParentRunId.Should().ContainKey("run-parent");
-        parsed.PendingChildRunIdsByParentRunId["run-parent"].ChildRunIds.Should().ContainSingle(x => x == "run-child");
+        parsed.InlineWorkflowYamls.Should().ContainKey("sub_flow");
 
         WorkflowStateReflection.Descriptor.Should().NotBeNull();
-        WorkflowStateReflection.Descriptor.MessageTypes.Should().ContainSingle(x => x.Name == nameof(WorkflowState));
+        WorkflowStateReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(WorkflowState));
     }
 
     [Fact]
-    public void WorkflowStateProto_ShouldCoverMergeNullUnknownFieldsAndValidationBranches()
+    public void WorkflowRunStateProto_ShouldRoundtripPendingRunFacts()
     {
-        // Field 1 + field 2 + unknown varint field(99)
-        var raw = new byte[] { 10, 2, (byte)'y', (byte)'1', 18, 2, (byte)'w', (byte)'f', 0x98, 0x06, 0x01 };
-        WorkflowState parsed = WorkflowState.Parser.ParseFrom(raw)
-            ?? throw new InvalidOperationException("WorkflowState parse returned null");
+        var state = new WorkflowRunState
+        {
+            WorkflowName = "demo",
+            WorkflowYaml = "name: demo",
+            Compiled = true,
+            RunId = "run-1",
+            Status = "suspended",
+            ActiveStepId = "wait-signal",
+        };
+        state.InlineWorkflowYamls["sub_flow"] = "name: sub_flow";
+        state.Variables["input"] = "hello";
+        state.PendingSignalWaits["wait-signal"] = new WorkflowPendingSignalWaitState
+        {
+            StepId = "wait-signal",
+            SignalName = "approval",
+            Input = "hello",
+            Prompt = "waiting",
+            TimeoutMs = 3000,
+            TimeoutGeneration = 2,
+            WaitToken = "wait-token-1",
+        };
+        state.PendingHumanGates["approval-1"] = new WorkflowPendingHumanGateState
+        {
+            StepId = "approval-1",
+            GateType = "human_approval",
+            Input = "draft",
+            Prompt = "approve?",
+            Variable = "user_input",
+            TimeoutSeconds = 60,
+            OnTimeout = "fail",
+            OnReject = "continue",
+            ResumeToken = "resume-token-1",
+        };
+        state.PendingSubWorkflows["child-run-1"] = new WorkflowPendingSubWorkflowState
+        {
+            InvocationId = "invoke-1",
+            ParentStepId = "workflow-call-1",
+            WorkflowName = "sub_flow",
+            Input = "payload",
+            Lifecycle = "singleton",
+            ChildActorId = "child-actor-1",
+            ChildRunId = "child-run-1",
+            ParentRunId = "run-1",
+        };
 
-        parsed.WorkflowYaml.Should().Be("y1");
-        parsed.WorkflowName.Should().Be("wf");
-        parsed.ToByteArray().Length.Should().BeGreaterThan(raw.Length - 2);
+        var clone = state.Clone();
+        clone.Should().BeEquivalentTo(state);
 
-        parsed.Equals(parsed).Should().BeTrue();
-        parsed.Equals((object?)null).Should().BeFalse();
-        parsed!.GetHashCode().Should().NotBe(0);
-        parsed.ToString().Should().Contain("workflowYaml");
-        ((IMessage)parsed).Descriptor.Name.Should().Be(nameof(WorkflowState));
+        var parsed = WorkflowRunState.Parser.ParseFrom(state.ToByteArray());
+        parsed.RunId.Should().Be("run-1");
+        parsed.Status.Should().Be("suspended");
+        parsed.PendingSignalWaits.Should().ContainKey("wait-signal");
+        parsed.PendingSignalWaits["wait-signal"].WaitToken.Should().Be("wait-token-1");
+        parsed.PendingHumanGates.Should().ContainKey("approval-1");
+        parsed.PendingHumanGates["approval-1"].ResumeToken.Should().Be("resume-token-1");
+        parsed.PendingSubWorkflows.Should().ContainKey("child-run-1");
+        parsed.PendingSubWorkflows["child-run-1"].ParentRunId.Should().Be("run-1");
 
-        var empty = new WorkflowState();
-        empty.CalculateSize().Should().Be(0);
-        empty.MergeFrom((WorkflowState)null!);
-        empty.Should().BeEquivalentTo(new WorkflowState());
+        WorkflowRunStateReflection.Descriptor.Should().NotBeNull();
+        WorkflowRunStateReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(WorkflowRunState));
+    }
 
-        var full = new WorkflowState
+    [Fact]
+    public void WorkflowStateAndRunStateProto_ShouldCoverMergeNullAndDescriptorBranches()
+    {
+        var definitionState = new WorkflowState
         {
             WorkflowYaml = "yaml",
             WorkflowName = "name",
@@ -146,86 +164,42 @@ public class AgentYamlLoaderAndWorkflowStateCoverageTests
             SuccessfulExecutions = 2,
             FailedExecutions = 1,
         };
-        full.SubWorkflowBindings.Add(new WorkflowState.Types.SubWorkflowBinding
-        {
-            WorkflowName = "sub_flow",
-            ChildActorId = "actor-sub",
-            Lifecycle = "singleton",
-        });
-        full.PendingSubWorkflowInvocations.Add(new WorkflowState.Types.PendingSubWorkflowInvocation
-        {
-            InvocationId = "invoke-2",
-            ParentRunId = "run-parent",
-            ParentStepId = "step-b",
-            WorkflowName = "sub_flow",
-            ChildActorId = "actor-sub",
-            ChildRunId = "run-child",
-            Lifecycle = "singleton",
-        });
-        full.PendingSubWorkflowInvocationIndexByChildRunId["run-child"] = 0;
-        full.PendingChildRunIdsByParentRunId["run-parent"] = new WorkflowState.Types.ChildRunIdSet
-        {
-            ChildRunIds = { "run-child" },
-        };
+        definitionState.InlineWorkflowYamls["inline"] = "yaml-inline";
 
-        var merged = new WorkflowState();
-        merged.MergeFrom(full);
-        merged.Should().BeEquivalentTo(full);
+        var mergedDefinition = new WorkflowState();
+        mergedDefinition.MergeFrom(definitionState);
+        mergedDefinition.Should().BeEquivalentTo(definitionState);
+        mergedDefinition.MergeFrom(new WorkflowState());
+        mergedDefinition.WorkflowName.Should().Be("name");
 
-        // Merge with default values should keep existing values in generated merge branches.
-        merged.MergeFrom(new WorkflowState());
-        merged.WorkflowName.Should().Be("name");
-        merged.Version.Should().Be(2);
-
-        Action setYamlNull = () => full.WorkflowYaml = null!;
-        Action setNameNull = () => full.WorkflowName = null!;
-        Action setErrorNull = () => full.CompilationError = null!;
+        Action setYamlNull = () => definitionState.WorkflowYaml = null!;
+        Action setNameNull = () => definitionState.WorkflowName = null!;
+        Action setErrorNull = () => definitionState.CompilationError = null!;
         setYamlNull.Should().Throw<ArgumentNullException>();
         setNameNull.Should().Throw<ArgumentNullException>();
         setErrorNull.Should().Throw<ArgumentNullException>();
 
-        // Touch timestamp dependency to ensure protobuf well-known types are linked.
-        Timestamp.FromDateTime(DateTime.UtcNow).Should().NotBeNull();
-    }
-
-    [Fact]
-    public void WorkflowStateProto_ShouldRoundtripPendingInvocationIndexes()
-    {
-        var state = new WorkflowState();
-        state.PendingSubWorkflowInvocations.AddRange(
-        [
-            new WorkflowState.Types.PendingSubWorkflowInvocation
-            {
-                InvocationId = "invoke-1",
-                ParentRunId = "parent-a",
-                ParentStepId = "step-1",
-                WorkflowName = "sub-a",
-                ChildActorId = "child-a",
-                ChildRunId = "child-run-a",
-                Lifecycle = "singleton",
-            },
-            new WorkflowState.Types.PendingSubWorkflowInvocation
-            {
-                InvocationId = "invoke-2",
-                ParentRunId = "parent-a",
-                ParentStepId = "step-2",
-                WorkflowName = "sub-a",
-                ChildActorId = "child-b",
-                ChildRunId = "child-run-b",
-                Lifecycle = "scope",
-            },
-        ]);
-        state.PendingSubWorkflowInvocationIndexByChildRunId["child-run-a"] = 0;
-        state.PendingSubWorkflowInvocationIndexByChildRunId["child-run-b"] = 1;
-        state.PendingChildRunIdsByParentRunId["parent-a"] = new WorkflowState.Types.ChildRunIdSet
+        var runState = new WorkflowRunState
         {
-            ChildRunIds = { "child-run-a", "child-run-b" },
+            WorkflowName = "run-demo",
+            WorkflowYaml = "yaml",
+            RunId = "run-2",
+            Status = "active",
         };
+        runState.Variables["input"] = "hello";
 
-        var parsed = WorkflowState.Parser.ParseFrom(state.ToByteArray());
-        parsed.PendingSubWorkflowInvocationIndexByChildRunId.Should().ContainKey("child-run-a").WhoseValue.Should().Be(0);
-        parsed.PendingSubWorkflowInvocationIndexByChildRunId.Should().ContainKey("child-run-b").WhoseValue.Should().Be(1);
-        parsed.PendingChildRunIdsByParentRunId.Should().ContainKey("parent-a");
-        parsed.PendingChildRunIdsByParentRunId["parent-a"].ChildRunIds.Should().BeEquivalentTo(["child-run-a", "child-run-b"]);
+        var mergedRun = new WorkflowRunState();
+        mergedRun.MergeFrom(runState);
+        mergedRun.Should().BeEquivalentTo(runState);
+        mergedRun.MergeFrom(new WorkflowRunState());
+        mergedRun.RunId.Should().Be("run-2");
+
+        Action setRunIdNull = () => runState.RunId = null!;
+        Action setStatusNull = () => runState.Status = null!;
+        setRunIdNull.Should().Throw<ArgumentNullException>();
+        setStatusNull.Should().Throw<ArgumentNullException>();
+
+        ((IMessage)mergedDefinition).Descriptor.Name.Should().Be(nameof(WorkflowState));
+        ((IMessage)mergedRun).Descriptor.Name.Should().Be(nameof(WorkflowRunState));
     }
 }

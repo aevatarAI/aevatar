@@ -10,7 +10,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
 /// <summary>
-/// Infrastructure adapter for workflow actor lifecycle and binding operations.
+/// Infrastructure adapter for workflow definition lookup and run actor lifecycle.
 /// </summary>
 internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
 {
@@ -35,52 +35,58 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             packs.SelectMany(x => x.Modules).SelectMany(x => x.Names));
     }
 
-    public Task<IActor?> GetAsync(string actorId, CancellationToken ct = default)
+    public Task<IActor?> GetDefinitionActorAsync(string definitionActorId, CancellationToken ct = default)
     {
         _ = ct;
-        return _runtime.GetAsync(actorId);
+        return _runtime.GetAsync(definitionActorId);
     }
 
-    public Task<IActor> CreateAsync(CancellationToken ct = default) =>
-        _runtime.CreateAsync<WorkflowGAgent>(ct: ct);
-
-    public Task DestroyAsync(string actorId, CancellationToken ct = default)
+    public Task<IActor?> GetRunActorAsync(string runActorId, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(actorId))
-            throw new ArgumentException("Actor id is required.", nameof(actorId));
-
-        return _runtime.DestroyAsync(actorId, ct);
+        _ = ct;
+        return _runtime.GetAsync(runActorId);
     }
 
-    public async Task<bool> IsWorkflowActorAsync(IActor actor, CancellationToken ct = default)
+    public Task<IActor> CreateRunActorAsync(CancellationToken ct = default) =>
+        _runtime.CreateAsync<WorkflowRunGAgent>(ct: ct);
+
+    public Task DestroyRunActorAsync(string runActorId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(runActorId))
+            throw new ArgumentException("Run actor id is required.", nameof(runActorId));
+
+        return _runtime.DestroyAsync(runActorId, ct);
+    }
+
+    public Task<bool> IsWorkflowDefinitionActorAsync(IActor actor, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(actor);
-        return await _agentTypeVerifier.IsExpectedAsync(actor.Id, typeof(WorkflowGAgent), ct);
+        return _agentTypeVerifier.IsExpectedAsync(actor.Id, typeof(WorkflowGAgent), ct);
     }
 
-    public Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default)
+    public Task<bool> IsWorkflowRunActorAsync(IActor actor, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        return _agentTypeVerifier.IsExpectedAsync(actor.Id, typeof(WorkflowRunGAgent), ct);
+    }
+
+    public Task<WorkflowDefinitionBindingSnapshot?> GetDefinitionBindingSnapshotAsync(IActor actor, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ct.ThrowIfCancellationRequested();
-        if (actor.Agent is not WorkflowGAgent workflowAgent)
-            return Task.FromResult<string?>(null);
-
-        var workflowName = string.IsNullOrWhiteSpace(workflowAgent.State.WorkflowName)
-            ? null
-            : workflowAgent.State.WorkflowName.Trim();
-        return Task.FromResult(workflowName);
+        return Task.FromResult(BuildBindingSnapshot(actor.Agent));
     }
 
     public Task BindWorkflowDefinitionAsync(
-        IActor actor,
+        IActor runActor,
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(runActor);
         var envelope = CreateWorkflowDefinitionBindEnvelope(workflowYaml, workflowName, inlineWorkflowYamls);
-        return actor.HandleEventAsync(envelope, ct);
+        return runActor.HandleEventAsync(envelope, ct);
     }
 
     public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default)
@@ -149,5 +155,32 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         }
 
         return bind;
+    }
+
+    private static WorkflowDefinitionBindingSnapshot? BuildBindingSnapshot(IAgent? agent)
+    {
+        switch (agent)
+        {
+            case WorkflowRunGAgent runAgent:
+            {
+                var snapshot = runAgent.GetBindingSnapshot();
+                return new WorkflowDefinitionBindingSnapshot(
+                    snapshot.WorkflowName,
+                    snapshot.WorkflowYaml,
+                    snapshot.InlineWorkflowYamls);
+            }
+            case WorkflowGAgent workflowAgent:
+            {
+                return new WorkflowDefinitionBindingSnapshot(
+                    workflowAgent.State.WorkflowName ?? string.Empty,
+                    workflowAgent.State.WorkflowYaml ?? string.Empty,
+                    workflowAgent.State.InlineWorkflowYamls.ToDictionary(
+                        x => x.Key,
+                        x => x.Value,
+                        StringComparer.OrdinalIgnoreCase));
+            }
+            default:
+                return null;
+        }
     }
 }

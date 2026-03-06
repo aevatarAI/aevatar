@@ -16,6 +16,8 @@ public sealed class WorkflowSuspendedEventReducer : WorkflowExecutionEventReduce
         step.CompletionMetadata["suspension_type"] = evt.SuspensionType;
         step.CompletionMetadata["suspension_prompt"] = evt.Prompt;
         step.CompletionMetadata["suspension_timeout"] = evt.TimeoutSeconds.ToString();
+        if (!string.IsNullOrWhiteSpace(evt.ResumeToken))
+            step.CompletionMetadata["resume_token"] = evt.ResumeToken;
 
         var data = new Dictionary<string, string>
         {
@@ -23,6 +25,8 @@ public sealed class WorkflowSuspendedEventReducer : WorkflowExecutionEventReduce
             ["prompt"] = evt.Prompt,
             ["timeout_seconds"] = evt.TimeoutSeconds.ToString(),
         };
+        if (!string.IsNullOrWhiteSpace(evt.ResumeToken))
+            data["resume_token"] = evt.ResumeToken;
 
         WorkflowExecutionProjectionMutations.AddTimeline(
             report,

@@ -3,7 +3,7 @@
 //
 // 验证完整的工作流执行链路：
 // 1. YAML 解析 → WorkflowDefinition
-// 2. WorkflowGAgent 创建 RoleGAgent 子 Agent 树
+// 2. WorkflowRunGAgent 创建 RoleGAgent 子 Agent 树
 // 3. 层级关系正确建立（Link）
 // 4. RoleGAgent 从 YAML 配置装配（system prompt）
 // 5. 事件通过 Stream 在层级中正确传播
@@ -20,6 +20,7 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
@@ -189,10 +190,10 @@ public class WorkflowIntegrationTests
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  Scenario 2: WorkflowGAgent 创建 Agent 树
+    //  Scenario 2: WorkflowRunGAgent 创建 Agent 树
     // ═══════════════════════════════════════════════════════════
 
-    [Fact(DisplayName = "给定 WorkflowGAgent 加载了 YAML，当触发时应创建 3 个 RoleGAgent 子 Agent")]
+    [Fact(DisplayName = "给定 WorkflowRunGAgent 加载了 YAML，当触发时应创建 3 个 RoleGAgent 子 Agent")]
     [Trait("Feature", "AgentTree")]
     public async Task Scenario2_CreateAgentTree()
     {
@@ -200,8 +201,8 @@ public class WorkflowIntegrationTests
         var (sp, runtime, _) = BuildTestEnvironment();
         using var _ = sp;
 
-        // 创建 WorkflowGAgent 并通过配置事件注入 YAML
-        var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-1");
+        // 创建 WorkflowRunGAgent 并通过配置事件注入 YAML
+        var actor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-1");
         await actor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -216,7 +217,7 @@ public class WorkflowIntegrationTests
             CorrelationId = Guid.NewGuid().ToString("N"),
         });
 
-        // 触发一次 ChatRequest，驱动 WorkflowGAgent 创建子角色树
+        // 触发一次 ChatRequest，驱动 WorkflowRunGAgent 创建子角色树
         await actor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -447,46 +448,53 @@ public class WorkflowIntegrationTests
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  Scenario 7: WorkflowModuleFactory 创建所有模块
+    //  Scenario 7: WorkflowModuleFactory 仅创建 stateless runtime 模块
     // ═══════════════════════════════════════════════════════════
 
-    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有 13 种核心原语模块")]
+    [Fact(DisplayName = "WorkflowModuleFactory 应只创建 stateless runtime 模块")]
     [Trait("Feature", "ModuleFactory")]
     public void Scenario7_AllCoreModules()
     {
         var services = new ServiceCollection();
         services.AddAevatarWorkflow();
+        services.AddSingleton<InMemoryConnectorRegistry>();
+        services.AddSingleton<Aevatar.Foundation.Abstractions.Connectors.IConnectorRegistry>(sp =>
+            sp.GetRequiredService<InMemoryConnectorRegistry>());
         using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<IEventModuleFactory>();
 
-        // ─── 流程控制 ───
-        factory.TryCreate("workflow_loop", out var m).Should().BeTrue(); m!.Name.Should().Be("workflow_loop");
-        factory.TryCreate("conditional", out m).Should().BeTrue(); m!.Name.Should().Be("conditional");
-        factory.TryCreate("while", out m).Should().BeTrue(); m!.Name.Should().Be("while");
-        factory.TryCreate("workflow_call", out m).Should().BeTrue(); m!.Name.Should().Be("workflow_call");
+        factory.TryCreate("conditional", out var m).Should().BeTrue(); m!.Name.Should().Be("conditional");
+        factory.TryCreate("switch", out m).Should().BeTrue(); m!.Name.Should().Be("switch");
         factory.TryCreate("checkpoint", out m).Should().BeTrue(); m!.Name.Should().Be("checkpoint");
         factory.TryCreate("assign", out m).Should().BeTrue(); m!.Name.Should().Be("assign");
-
-        // ─── 并行 / 共识 ───
-        factory.TryCreate("parallel_fanout", out m).Should().BeTrue(); m!.Name.Should().Be("parallel_fanout");
         factory.TryCreate("vote_consensus", out m).Should().BeTrue(); m!.Name.Should().Be("vote_consensus");
-
-        // ─── 执行 ───
-        factory.TryCreate("llm_call", out m).Should().BeTrue(); m!.Name.Should().Be("llm_call");
         factory.TryCreate("tool_call", out m).Should().BeTrue(); m!.Name.Should().Be("tool_call");
         factory.TryCreate("connector_call", out m).Should().BeTrue(); m!.Name.Should().Be("connector_call");
-
-        // ─── 数据变换 ───
         factory.TryCreate("transform", out m).Should().BeTrue(); m!.Name.Should().Be("transform");
         factory.TryCreate("retrieve_facts", out m).Should().BeTrue(); m!.Name.Should().Be("retrieve_facts");
+        factory.TryCreate("guard", out m).Should().BeTrue(); m!.Name.Should().Be("guard");
+        factory.TryCreate("emit", out m).Should().BeTrue(); m!.Name.Should().Be("emit");
+        factory.TryCreate("workflow_yaml_validate", out m).Should().BeTrue(); m!.Name.Should().Be("workflow_yaml_validate");
+        factory.TryCreate("dynamic_workflow", out m).Should().BeTrue(); m!.Name.Should().Be("dynamic_workflow");
 
-        // ─── 别名 ───
-        factory.TryCreate("parallel", out m).Should().BeTrue(); // parallel = parallel_fanout
-        factory.TryCreate("vote", out m).Should().BeTrue(); // vote = vote_consensus
-        factory.TryCreate("fan_out", out m).Should().BeTrue(); // fan_out = parallel_fanout
-        factory.TryCreate("loop", out m).Should().BeTrue(); // loop = while
-        factory.TryCreate("sub_workflow", out m).Should().BeTrue(); // sub_workflow = workflow_call
-        factory.TryCreate("bridge_call", out m).Should().BeTrue(); // bridge_call = connector_call
+        factory.TryCreate("vote", out m).Should().BeTrue();
+        factory.TryCreate("bridge_call", out m).Should().BeTrue();
+        factory.TryCreate("publish", out m).Should().BeTrue();
+        factory.TryCreate("assert", out m).Should().BeTrue();
+
+        factory.TryCreate("workflow_loop", out m).Should().BeFalse();
+        factory.TryCreate("while", out m).Should().BeFalse();
+        factory.TryCreate("workflow_call", out m).Should().BeFalse();
+        factory.TryCreate("parallel", out m).Should().BeFalse();
+        factory.TryCreate("parallel_fanout", out m).Should().BeFalse();
+        factory.TryCreate("llm_call", out m).Should().BeFalse();
+        factory.TryCreate("wait_signal", out m).Should().BeFalse();
+        factory.TryCreate("evaluate", out m).Should().BeFalse();
+        factory.TryCreate("reflect", out m).Should().BeFalse();
+        factory.TryCreate("delay", out m).Should().BeFalse();
+        factory.TryCreate("cache", out m).Should().BeFalse();
+        factory.TryCreate("human_input", out m).Should().BeFalse();
+        factory.TryCreate("human_approval", out m).Should().BeFalse();
 
         // ─── 不存在的类型 ───
         factory.TryCreate("nonexistent", out m).Should().BeFalse();

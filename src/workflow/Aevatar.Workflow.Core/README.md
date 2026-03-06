@@ -1,179 +1,157 @@
 # Aevatar.Workflow.Core
 
-工作流引擎领域内核。持有 YAML DSL 解析、`WorkflowGAgent` 生命周期、全部内置步骤模块与 Connector 桥接。
+`Aevatar.Workflow.Core` 是 workflow 子系统的领域内核，当前模型已经收敛为：
 
-## 目录结构
+1. `WorkflowGAgent` 负责 definition/binding。
+2. `WorkflowRunGAgent` 负责单次 run 的持久事实与执行推进。
+3. `WorkflowModuleFactory` 只创建无状态原语模块。
 
-```
+## 1. 目录结构
+
+```text
 Aevatar.Workflow.Core/
-├── WorkflowGAgent.cs              # 工作流根 Actor
-├── WorkflowModuleFactory.cs       # 按名称创建步骤模块的工厂
-├── WorkflowModuleDescriptor.cs    # 模块描述器（名称 -> 创建函数）
-├── IWorkflowModuleDescriptor.cs   # 描述器接口
-├── ServiceCollectionExtensions.cs # DI 入口
+├── WorkflowGAgent.cs
+├── WorkflowRunGAgent.cs
+├── workflow_state.proto
+├── workflow_run_state.proto
+├── WorkflowModuleFactory.cs
+├── WorkflowCoreModulePack.cs
+├── IWorkflowModulePack.cs
 ├── Primitives/
-│   ├── WorkflowDefinition.cs      # WorkflowDefinition、RoleDefinition
-│   ├── StepDefinition.cs          # 单步定义：type、role、parameters、flow control
-│   ├── WorkflowParser.cs          # YAML 解析（snake_case）
-│   └── WorkflowVariables.cs       # 运行时变量：dot-path 读写 + {{var}} 插值
 ├── Validation/
-│   └── WorkflowValidator.cs       # 静态校验：名称、步骤存在性、角色引用、next 引用
-├── Modules/                       # 内置步骤模块（均实现 IEventModule）
-│   ├── WorkflowLoopModule.cs      # 引擎主循环，按顺序派发步骤
-│   ├── LLMCallModule.cs           # llm_call: 向 RoleGAgent 发 ChatRequestEvent
-│   ├── ToolCallModule.cs          # tool_call: 调用已注册的 Agent 工具
-│   ├── ConnectorCallModule.cs     # connector_call: 按名称调用 HTTP/CLI/MCP connector
-│   ├── ParallelFanOutModule.cs    # parallel: 多路扇出 + 结果聚合
-│   ├── VoteConsensusModule.cs     # vote: 投票选出最佳候选
-│   ├── ForEachModule.cs           # foreach: 按分隔符拆分迭代
-│   ├── ConditionalModule.cs       # conditional: 条件分支
-│   ├── WhileModule.cs             # while/loop: 循环执行
-│   ├── WorkflowCallModule.cs      # workflow_call: 调用子工作流
-│   ├── TransformModule.cs         # transform: 纯函数变换（count/take/join/split 等）
-│   ├── AssignModule.cs            # assign: 变量赋值
-│   ├── CheckpointModule.cs        # checkpoint: 检查点（简化实现）
-│   └── RetrieveFactsModule.cs     # retrieve_facts: 关键词检索事实片段
-├── Connectors/
-│   ├── InMemoryConnectorRegistry.cs # IConnectorRegistry 内存实现
-│   ├── HttpConnector.cs             # HTTP connector（白名单安全策略）
-│   └── CliConnector.cs              # CLI connector（白名单安全策略）
-└── Composition/                   # 模块装配策略
-    ├── IWorkflowModuleDependencyExpander.cs
-    ├── IWorkflowModuleConfigurator.cs
-    ├── WorkflowStepTypeModuleDependencyExpander.cs
-    ├── WorkflowImplicitModuleDependencyExpander.cs
-    ├── WorkflowLoopModuleDependencyExpander.cs
-    ├── WorkflowLoopModuleConfigurator.cs
-    └── WorkflowModuleConfiguratorBase.cs
+├── Expressions/
+├── Modules/
+└── Connectors/
 ```
 
-## 核心类型
+## 2. 两个 Actor 的职责
 
 ### WorkflowGAgent
 
-工作流根 Actor（`GAgentBase<WorkflowState>`）。职责：
+负责：
 
-1. 接收 YAML 字符串，调用 `WorkflowParser` 解析 + `WorkflowValidator` 校验。
-2. 首次激活时创建角色子 Agent 树（`RoleGAgent`），ID 由 role 定义映射。
-3. 通过 `IWorkflowModuleDependencyExpander` 推导所需模块，经 `WorkflowModuleFactory` 创建，再由 `IWorkflowModuleConfigurator` 配置后安装。
-4. 收到 `ChatRequestEvent` 后发布 `StartWorkflowEvent`，驱动 `WorkflowLoopModule` 开始执行。
-5. 收到 `WorkflowCompletedEvent` 后汇总输出。
+1. 绑定与校验 workflow YAML。
+2. 维护 `workflow_name/version/compiled`。
+3. 创建并绑定 `WorkflowRunGAgent`。
+4. 汇总 definition 级执行计数。
 
-### WorkflowLoopModule
+不负责：
 
-引擎主循环。收到 `StartWorkflowEvent` 后，按 `WorkflowDefinition.Steps` 顺序逐步派发 `StepRequestEvent`；收到 `StepCompletedEvent` 后推进到下一步或发布 `WorkflowCompletedEvent`。通过 `_activeRunIds` 跟踪并发 run。
+1. step 推进。
+2. run pending。
+3. signal / resume / callback 对账。
 
-### LLMCallModule
+### WorkflowRunGAgent
 
-将 `StepRequestEvent` 转换为 `ChatRequestEvent` 并点对点发给目标 `RoleGAgent`。维护 `_pending` 字典做请求/响应关联，收到完成事件后转换为 `StepCompletedEvent`。
+负责：
 
-### ParallelFanOutModule
+1. 持有 `WorkflowRunState`。
+2. 启动和推进单次 run。
+3. 持久化 timeout/retry/delay/wait/human gate/sub-workflow 等 pending facts。
+4. reactivation 后重建编译缓存、重装无状态 modules、重发 suspended facts。
+5. 统一处理 `WorkflowResumedEvent`、`SignalReceivedEvent`、callback fired、自身 domain events。
 
-Fan-Out/Fan-In 模式。将 `parallel` 步骤拆成 N 个子步骤（按 `children` 或 `workers` 数量），分别派发给不同 role。维护 `_expected`/`_collected` 计数器，全部完成后合并输出。可选触发 `vote` 步骤做共识选择。
+## 3. 状态模型
 
-### ConnectorCallModule
+### workflow_state.proto
 
-按名称从 `IConnectorRegistry` 查找 Connector 并执行。支持：
-- 角色级 connector 白名单校验
-- 重试逻辑（最多 5 次）
-- `on_missing: skip`、`on_error: continue` 等容错策略
-- 执行元数据记录（耗时、重试次数、超时）
+只保存 definition facts：
 
-### Connector 安全模型
+- `workflow_yaml`
+- `workflow_name`
+- `version`
+- `compiled`
+- `compilation_error`
+- execution counters
+- `inline_workflow_yamls`
 
-`HttpConnector` 和 `CliConnector` 均采用白名单策略：
-- HTTP：`allowedMethods`、`allowedPaths`、`allowedInputKeys` 限制请求范围
-- CLI：`allowedOperations`、`allowedInputKeys` 限制可执行命令
+### workflow_run_state.proto
 
-## 模块装配（OCP）
+保存 run facts：
 
-新增模块无需修改 `WorkflowGAgent`，只需：
+- `run_id`
+- `status`
+- `active_step_id`
+- `variables`
+- `step_executions`
+- `retry_attempts`
+- `pending_timeouts`
+- `pending_retry_backoffs`
+- `pending_delays`
+- `pending_signal_waits`
+- `pending_human_gates`
+- `pending_llm_calls`
+- `pending_evaluations`
+- `pending_reflections`
+- `pending_parallel_steps`
+- `pending_foreach_steps`
+- `pending_map_reduce_steps`
+- `pending_race_steps`
+- `pending_while_steps`
+- `pending_sub_workflows`
+- `pending_child_run_ids_by_parent_run_id`
+- `cache_entries`
+- `pending_cache_calls`
+
+## 4. 模块边界
+
+### 4.1 WorkflowCoreModulePack 当前只注册无状态模块
+
+- `conditional`
+- `switch`
+- `checkpoint`
+- `assign`
+- `vote`
+- `tool_call`
+- `connector_call`
+- `transform`
+- `retrieve_facts`
+- `guard`
+- `emit`
+- `workflow_yaml_validate`
+- `dynamic_workflow`
+
+### 4.2 以下原语仍由 WorkflowRunGAgent 直接拥有
+
+- `workflow_call`
+- `delay`
+- `wait_signal`
+- `human_input`
+- `human_approval`
+- `llm_call`
+- `evaluate`
+- `reflect`
+- `parallel`
+- `foreach`
+- `map_reduce`
+- `race`
+- `while`
+- `cache`
+
+这些原语要么存在跨事件 pending，要么存在恢复语义，因此不能回退为 module 私有状态机。
+
+## 5. 扩展规则
+
+若新增 step type 只做纯函数或事件转换：
 
 1. 实现 `IEventModule`
-2. DI 注册：`services.AddWorkflowModule<MyModule>("my_step_type", "alias")`
+2. 放入 `IWorkflowModulePack.Modules`
 
-装配流程：
+若新增 step type 需要以下任意能力，就必须扩展 `WorkflowRunState` 和 `WorkflowRunGAgent`：
 
-```
-WorkflowGAgent.InstallModulesAsync
-  -> IWorkflowModuleDependencyExpander[]: 推导模块名集合
-  -> WorkflowModuleFactory: 按名称创建实例
-  -> IWorkflowModuleConfigurator[]: 配置实例
-  -> 安装到 Agent 认知管线
-```
+1. callback / timeout / retry / delay
+2. 外部响应 correlation
+3. human gate / signal wait
+4. fanout / aggregation
+5. sub-workflow lifecycle
+6. 跨 reactivation 恢复
 
-## DI 入口
+## 6. 关键文件
 
-- `AddAevatarWorkflow()`：注册默认模块、工厂、connector registry、expander/configurator 组合。
-- `AddWorkflowModule<T>("name", "alias")`：扩展注册自定义模块。
-
-## 模块清单
-
-### 控制流
-
-| 模块 | 别名 | 说明 |
-|---|---|---|
-| `workflow_loop` | — | 串行调度步骤，统一处理 retry / on_error / timeout / branch |
-| `conditional` | — | 二元条件分支（keyword contains） |
-| `switch` | — | 多路分支，按 `on` 值匹配 `branches` |
-| `while` | `loop` | 循环直到条件不满足或达上限 |
-| `race` | `select` | N 路竞速，取首个成功结果 |
-
-### 执行
-
-| 模块 | 别名 | 说明 |
-|---|---|---|
-| `llm_call` | — | 发送 ChatRequestEvent 到目标角色 |
-| `tool_call` | — | 调用 Agent 注册工具 |
-| `connector_call` | `bridge_call` | 调用命名 connector（HTTP/CLI/MCP） |
-| `workflow_call` | `sub_workflow` | 递归调用子工作流 |
-| `wait_signal` | `wait` | 暂停等待外部信号（human-in-the-loop / webhook） |
-
-### 并行
-
-| 模块 | 别名 | 说明 |
-|---|---|---|
-| `parallel_fanout` | `parallel`, `fan_out` | 并行扇出 + 可选 vote 合并 |
-| `vote_consensus` | `vote` | 从多个候选中选出最佳 |
-| `foreach` | `for_each` | 遍历列表并行执行子步骤 |
-| `map_reduce` | `mapreduce` | map 阶段并行处理 + reduce 阶段汇总 |
-
-### AI 模式
-
-| 模块 | 别名 | 说明 |
-|---|---|---|
-| `evaluate` | `judge` | LLM-as-Judge 评估打分，支持阈值分支 |
-| `reflect` | — | 自我反思-修正循环（critique → improve → ...） |
-
-### 数据
-
-| 模块 | 别名 | 说明 |
-|---|---|---|
-| `assign` | — | 变量赋值 |
-| `transform` | — | 确定性文本变换（count、join、split 等） |
-| `retrieve_facts` | — | Top-K 事实检索 |
-| `checkpoint` | — | 变量快照 |
-| `guard` | `assert` | 数据校验（json_valid / regex / not_empty 等） |
-| `cache` | — | 结果缓存，避免重复执行 |
-
-### 其他
-
-| 模块 | 别名 | 说明 |
-|---|---|---|
-| `delay` | `sleep` | 定时等待 |
-| `emit` | `publish` | 发布自定义事件 |
-
-## 横切关注点（StepDefinition 属性）
-
-`WorkflowLoopModule` 统一处理以下 `StepDefinition` 属性，所有步骤类型自动获得：
-
-- **Retry**：失败重试，支持 `fixed` / `exponential` 退避。
-- **OnError**：错误处理策略（`fail` / `skip` / `fallback`）。
-- **TimeoutMs**：步骤级超时，超时后合成失败事件。
-
-## 依赖
-
-- `Aevatar.AI.Abstractions`、`Aevatar.Foundation.Abstractions`、`Aevatar.Foundation.Core`
-- `Google.Protobuf`、`Grpc.Tools`（事件序列化）
-- `YamlDotNet`（YAML 解析）
-- `Microsoft.Extensions.DependencyInjection.Abstractions`、`Microsoft.Extensions.Logging.Abstractions`
+1. `WorkflowGAgent.cs`
+2. `WorkflowRunGAgent.cs`
+3. `workflow_state.proto`
+4. `workflow_run_state.proto`
+5. `WorkflowCoreModulePack.cs`
+6. `ServiceCollectionExtensions.cs`
+7. `Modules/WorkflowCallModule.cs`

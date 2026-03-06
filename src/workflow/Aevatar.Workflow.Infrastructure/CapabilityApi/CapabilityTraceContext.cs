@@ -33,16 +33,20 @@ internal static class CapabilityTraceContext
     }
 
     public static WorkflowRunAcceptedPayload CreateAcceptedPayload(WorkflowChatRunStarted started) =>
-        CreateAcceptedPayload(started.CommandId, started.ActorId);
+        CreateAcceptedPayload(started.CommandId, started.RunActorId, started.DefinitionActorId);
 
-    public static WorkflowRunAcceptedPayload CreateAcceptedPayload(string commandId, string actorId)
+    public static WorkflowRunAcceptedPayload CreateAcceptedPayload(
+        string commandId,
+        string runActorId,
+        string? definitionActorId)
     {
         var context = CreateMessageContext(commandId);
         return new WorkflowRunAcceptedPayload
         {
             CommandId = commandId,
             CorrelationId = context.CorrelationId,
-            ActorId = actorId,
+            RunActorId = runActorId,
+            DefinitionActorId = definitionActorId,
         };
     }
 
@@ -58,5 +62,6 @@ internal sealed record WorkflowRunAcceptedPayload
 {
     public required string CommandId { get; init; }
     public required string CorrelationId { get; init; }
-    public required string ActorId { get; init; }
+    public required string RunActorId { get; init; }
+    public string? DefinitionActorId { get; init; }
 }

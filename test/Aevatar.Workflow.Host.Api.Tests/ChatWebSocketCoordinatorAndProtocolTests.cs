@@ -42,7 +42,6 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 Prompt = "hello",
                 Workflow = "direct",
                 WorkflowYamls = ["name: direct"],
-                AgentId = "actor-1",
             }, WebSocketMessageType.Text),
             service,
             CancellationToken.None);
@@ -102,14 +101,14 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenAgentIdProvidedWithoutWorkflow_ShouldKeepWorkflowUnset()
+    public async Task ExecuteAsync_WhenDefinitionActorIdProvidedWithoutWorkflow_ShouldKeepWorkflowUnset()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
         var service = new FakeCommandExecutionService
         {
             Handler = (_, _, _, _) => Task.FromResult(
                 new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
-                    WorkflowChatRunStartError.AgentNotFound,
+                    WorkflowChatRunStartError.DefinitionActorNotFound,
                     null,
                     null)),
         };
@@ -121,18 +120,18 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 new ChatInput
                 {
                     Prompt = "hello",
-                    AgentId = " actor-1 ",
+                    DefinitionActorId = " actor-1 ",
                 },
                 WebSocketMessageType.Text),
             service,
             CancellationToken.None);
 
         service.LastCommand.Should().NotBeNull();
-        service.LastCommand!.ActorId.Should().Be("actor-1");
+        service.LastCommand!.DefinitionActorId.Should().Be("actor-1");
         service.LastCommand.WorkflowName.Should().BeNull();
         socket.SentTexts.Should().ContainSingle();
         using var doc = JsonDocument.Parse(socket.SentTexts[0]);
-        doc.RootElement.GetProperty("code").GetString().Should().Be("AGENT_NOT_FOUND");
+        doc.RootElement.GetProperty("code").GetString().Should().Be("DEFINITION_ACTOR_NOT_FOUND");
     }
 
     [Fact]

@@ -239,6 +239,7 @@ public class WorkflowExecutionReadModelProjectorTests
             SuspensionType = "human_input",
             Prompt = "Need approval",
             TimeoutSeconds = 60,
+            ResumeToken = "resume-token-1",
         }));
         await coordinator.CompleteAsync(context, []);
 
@@ -248,10 +249,12 @@ public class WorkflowExecutionReadModelProjectorTests
         step.CompletionMetadata.Should().ContainKey("suspension_type").WhoseValue.Should().Be("human_input");
         step.CompletionMetadata.Should().ContainKey("suspension_prompt").WhoseValue.Should().Be("Need approval");
         step.CompletionMetadata.Should().ContainKey("suspension_timeout").WhoseValue.Should().Be("60");
+        step.CompletionMetadata.Should().ContainKey("resume_token").WhoseValue.Should().Be("resume-token-1");
         var suspendedEvent = report.Timeline.Should().ContainSingle(x => x.Stage == "workflow.suspended").Subject;
         suspendedEvent.Data.Should().ContainKey("suspension_type").WhoseValue.Should().Be("human_input");
         suspendedEvent.Data.Should().ContainKey("prompt").WhoseValue.Should().Be("Need approval");
         suspendedEvent.Data.Should().ContainKey("timeout_seconds").WhoseValue.Should().Be("60");
+        suspendedEvent.Data.Should().ContainKey("resume_token").WhoseValue.Should().Be("resume-token-1");
     }
 
     [Fact]

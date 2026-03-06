@@ -12,7 +12,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>
 /// Extracts a workflow YAML from step input, then publishes
 /// <see cref="ReplaceWorkflowDefinitionAndExecuteEvent"/> so the owning
-/// WorkflowGAgent replaces its bound workflow definition and restarts execution.
+/// <see cref="WorkflowRunGAgent"/> can replace the in-flight run binding and continue from the new definition.
 /// </summary>
 public sealed class DynamicWorkflowModule : IEventModule
 {
@@ -121,6 +121,7 @@ public sealed class DynamicWorkflowModule : IEventModule
             ctx.Services.GetServices<IWorkflowModulePack>()
                 .SelectMany(pack => pack.Modules)
                 .SelectMany(module => module.Names));
+        knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
 
         var moduleFactory = ctx.Services.GetService<IEventModuleFactory>();
         if (moduleFactory != null)

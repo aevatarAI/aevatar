@@ -119,7 +119,7 @@ roles:
 
 `WorkflowParser` 会把该字段解析到 `RoleDefinition.Connectors`。
 
-`WorkflowLoopModule` 在派发 `StepRequestEvent` 时：
+`WorkflowRunGAgent` 在构造 `StepRequestEvent` 时：
 
 - 如果步骤有 `target_role/role` 且该 role 的 `connectors` 非空；
 - 会注入 `allowed_connectors=...` 到步骤参数中。

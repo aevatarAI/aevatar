@@ -7,7 +7,9 @@ namespace Aevatar.Workflow.Application.Runs;
 
 public sealed class WorkflowRunContext
 {
-    public required IActor Actor { get; init; }
+    public required IActor RunActor { get; init; }
+
+    public string? DefinitionActorId { get; init; }
 
     public required string WorkflowName { get; init; }
 
@@ -19,9 +21,9 @@ public sealed class WorkflowRunContext
 
     public required IWorkflowExecutionProjectionLease ProjectionLease { get; init; }
 
-    public string ActorId => Actor.Id;
+    public string RunActorId => RunActor.Id;
 
-    public WorkflowChatRunStarted ToStarted() => new(ActorId, WorkflowName, CommandId);
+    public WorkflowChatRunStarted ToStarted() => new(RunActorId, WorkflowName, CommandId, DefinitionActorId);
 }
 
 public sealed record WorkflowRunContextCreateResult(

@@ -1,0 +1,234 @@
+syntax = "proto3";
+package aevatar.workflow;
+option csharp_namespace = "Aevatar.Workflow.Core";
+
+message WorkflowRunState
+{
+  string workflow_name = 1;
+  string workflow_yaml = 2;
+  map<string, string> inline_workflow_yamls = 3;
+  bool compiled = 4;
+  string compilation_error = 5;
+
+  string run_id = 10;
+  string status = 11;
+  string active_step_id = 12;
+  string final_output = 13;
+  string final_error = 14;
+
+  map<string, string> variables = 20;
+  map<string, WorkflowStepExecutionState> step_executions = 21;
+  map<string, int32> retry_attempts_by_step_id = 22;
+  map<string, WorkflowPendingTimeoutState> pending_timeouts = 23;
+  map<string, WorkflowPendingRetryBackoffState> pending_retry_backoffs = 24;
+  map<string, WorkflowPendingDelayState> pending_delays = 25;
+  map<string, WorkflowPendingSignalWaitState> pending_signal_waits = 26;
+  map<string, WorkflowPendingHumanGateState> pending_human_gates = 27;
+  map<string, WorkflowPendingLlmCallState> pending_llm_calls = 28;
+  map<string, WorkflowPendingEvaluateState> pending_evaluations = 29;
+  map<string, WorkflowPendingReflectState> pending_reflections = 30;
+  map<string, WorkflowParallelState> pending_parallel_steps = 31;
+  map<string, WorkflowForEachState> pending_foreach_steps = 32;
+  map<string, WorkflowMapReduceState> pending_map_reduce_steps = 33;
+  map<string, WorkflowRaceState> pending_race_steps = 34;
+  map<string, WorkflowWhileState> pending_while_steps = 35;
+  map<string, WorkflowPendingSubWorkflowState> pending_sub_workflows = 36;
+  map<string, WorkflowCacheEntry> cache_entries = 37;
+  map<string, WorkflowPendingCacheState> pending_cache_calls = 38;
+  repeated string child_actor_ids = 39;
+  map<string, WorkflowSubWorkflowBindingState> sub_workflow_bindings = 40;
+  map<string, WorkflowChildRunIdSet> pending_child_run_ids_by_parent_run_id = 41;
+}
+
+message WorkflowRunStateUpdatedEvent
+{
+  WorkflowRunState state = 1;
+}
+
+message WorkflowStepExecutionState
+{
+  string step_id = 1;
+  string step_type = 2;
+  string input = 3;
+  string target_role = 4;
+  int32 attempt = 5;
+  string parent_step_id = 6;
+  map<string, string> parameters = 7;
+}
+
+message WorkflowPendingTimeoutState
+{
+  string step_id = 1;
+  int32 timeout_ms = 2;
+  int32 semantic_generation = 3;
+}
+
+message WorkflowPendingRetryBackoffState
+{
+  string step_id = 1;
+  int32 delay_ms = 2;
+  int32 next_attempt = 3;
+  int32 semantic_generation = 4;
+}
+
+message WorkflowPendingDelayState
+{
+  string step_id = 1;
+  string input = 2;
+  int32 duration_ms = 3;
+  int32 semantic_generation = 4;
+}
+
+message WorkflowPendingSignalWaitState
+{
+  string step_id = 1;
+  string signal_name = 2;
+  string input = 3;
+  string prompt = 4;
+  int32 timeout_ms = 5;
+  int32 timeout_generation = 6;
+  string wait_token = 7;
+}
+
+message WorkflowPendingHumanGateState
+{
+  string step_id = 1;
+  string gate_type = 2;
+  string input = 3;
+  string prompt = 4;
+  string variable = 5;
+  int32 timeout_seconds = 6;
+  string on_timeout = 7;
+  string on_reject = 8;
+  string resume_token = 9;
+}
+
+message WorkflowPendingLlmCallState
+{
+  string session_id = 1;
+  string step_id = 2;
+  string original_input = 3;
+  string target_role = 4;
+  int32 timeout_ms = 5;
+  int32 watchdog_generation = 6;
+  int32 attempt = 7;
+}
+
+message WorkflowPendingEvaluateState
+{
+  string session_id = 1;
+  string step_id = 2;
+  string original_input = 3;
+  double threshold = 4;
+  string on_below = 5;
+  string target_role = 6;
+  int32 attempt = 7;
+}
+
+message WorkflowPendingReflectState
+{
+  string session_id = 1;
+  string step_id = 2;
+  string target_role = 3;
+  string current_draft = 4;
+  string criteria = 5;
+  int32 max_rounds = 6;
+  int32 round = 7;
+  string phase = 8;
+}
+
+message WorkflowRecordedStepResult
+{
+  string step_id = 1;
+  bool success = 2;
+  string output = 3;
+  string error = 4;
+  string worker_id = 5;
+  map<string, string> metadata = 6;
+}
+
+message WorkflowParallelState
+{
+  int32 expected_count = 1;
+  repeated WorkflowRecordedStepResult child_results = 2;
+  string vote_step_type = 3;
+  map<string, string> vote_parameters = 4;
+  string vote_step_id = 5;
+  bool workers_success = 6;
+}
+
+message WorkflowForEachState
+{
+  int32 expected_count = 1;
+  repeated WorkflowRecordedStepResult child_results = 2;
+}
+
+message WorkflowMapReduceState
+{
+  int32 map_count = 1;
+  repeated WorkflowRecordedStepResult child_results = 2;
+  string reduce_type = 3;
+  string reduce_role = 4;
+  string reduce_prompt_prefix = 5;
+  string reduce_step_id = 6;
+}
+
+message WorkflowRaceState
+{
+  int32 total = 1;
+  int32 received = 2;
+  bool resolved = 3;
+}
+
+message WorkflowWhileState
+{
+  string step_id = 1;
+  string sub_step_type = 2;
+  string sub_target_role = 3;
+  map<string, string> sub_parameters = 4;
+  int32 iteration = 5;
+  int32 max_iterations = 6;
+  string condition_expression = 7;
+}
+
+message WorkflowPendingSubWorkflowState
+{
+  string invocation_id = 1;
+  string parent_step_id = 2;
+  string workflow_name = 3;
+  string input = 4;
+  string lifecycle = 5;
+  string child_actor_id = 6;
+  string child_run_id = 7;
+  string parent_run_id = 8;
+}
+
+message WorkflowSubWorkflowBindingState
+{
+  string workflow_name = 1;
+  string child_actor_id = 2;
+  string lifecycle = 3;
+}
+
+message WorkflowChildRunIdSet
+{
+  repeated string child_run_ids = 1;
+}
+
+message WorkflowCacheEntry
+{
+  string value = 1;
+  int64 expires_at_unix_time_ms = 2;
+}
+
+message WorkflowCacheWaiter
+{
+  string parent_step_id = 1;
+}
+
+message WorkflowPendingCacheState
+{
+  string child_step_id = 1;
+  int32 ttl_seconds = 2;
+  repeated WorkflowCacheWaiter waiters = 3;
+}

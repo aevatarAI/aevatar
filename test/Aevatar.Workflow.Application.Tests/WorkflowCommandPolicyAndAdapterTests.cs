@@ -73,7 +73,7 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
         inner.ExecuteCalls.Should().Be(1);
         result.Error.Should().Be(WorkflowChatRunStartError.None);
         result.Started.Should().NotBeNull();
-        result.Started!.ActorId.Should().Be("actor-1");
+        result.Started!.RunActorId.Should().Be("actor-1");
         result.FinalizeResult!.ProjectionCompleted.Should().BeTrue();
     }
 

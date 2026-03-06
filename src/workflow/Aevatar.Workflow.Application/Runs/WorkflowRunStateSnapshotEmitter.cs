@@ -26,10 +26,11 @@ public sealed class WorkflowRunStateSnapshotEmitter : IWorkflowRunStateSnapshotE
         ArgumentNullException.ThrowIfNull(runContext);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
-        var snapshot = await TryGetSnapshotAsync(runContext.ActorId, ct);
+        var snapshot = await TryGetSnapshotAsync(runContext.RunActorId, ct);
         var snapshotPayload = new WorkflowStateSnapshotPayload
         {
-            ActorId = runContext.ActorId,
+            RunActorId = runContext.RunActorId,
+            DefinitionActorId = runContext.DefinitionActorId,
             WorkflowName = runContext.WorkflowName,
             CommandId = runContext.CommandId,
             ProjectionCompleted = projectionCompleted,

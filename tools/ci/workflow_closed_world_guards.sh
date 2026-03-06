@@ -23,13 +23,42 @@ if [ -n "${closed_world_files}" ]; then
   done <<< "${closed_world_files}"
 fi
 
-if ! rg -n "SubWorkflowInvokeRequestedEvent" test/Aevatar.Integration.Tests/WorkflowCoreModulesCoverageTests.cs >/dev/null; then
-  echo "Missing workflow_call request-path coverage assertion in WorkflowCoreModulesCoverageTests."
+workflow_run_state_proto="src/workflow/Aevatar.Workflow.Core/workflow_run_state.proto"
+workflow_run_agent_file="src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs"
+workflow_run_actor_port="src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs"
+
+if [ ! -f "${workflow_run_state_proto}" ]; then
+  echo "Workflow run actor architecture requires workflow_run_state.proto."
   exit 1
 fi
 
-if ! rg -n "workflow_call.child_run_id" test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs >/dev/null; then
-  echo "Missing workflow_call return-path coverage assertion in WorkflowGAgentCoverageTests."
+if ! rg -n "message WorkflowRunState" "${workflow_run_state_proto}" >/dev/null; then
+  echo "WorkflowRunState proto definition is missing."
+  exit 1
+fi
+
+if ! rg -n "pending_sub_workflows|pending_child_run_ids_by_parent_run_id" "${workflow_run_state_proto}" >/dev/null; then
+  echo "WorkflowRunState must persist sub-workflow child-run facts."
+  exit 1
+fi
+
+if [ ! -f "${workflow_run_agent_file}" ] || ! rg -n "class WorkflowRunGAgent : GAgentBase<WorkflowRunState>" "${workflow_run_agent_file}" >/dev/null; then
+  echo "WorkflowRunGAgent must remain the single-run persistent fact owner."
+  exit 1
+fi
+
+if ! rg -n "CreateAsync<WorkflowRunGAgent>" "${workflow_run_actor_port}" >/dev/null; then
+  echo "Workflow capability path must create WorkflowRunGAgent for accepted runs."
+  exit 1
+fi
+
+if ! rg -n "SubWorkflowInvokeRequestedEvent" test -g '*Tests.cs' >/dev/null; then
+  echo "Missing workflow_call request-path coverage assertion for sub-workflow invocation."
+  exit 1
+fi
+
+if ! rg -n "workflow_call.child_run_id" test -g '*Tests.cs' >/dev/null; then
+  echo "Missing workflow_call return-path coverage assertion for workflow run child-run tracking."
   exit 1
 fi
 

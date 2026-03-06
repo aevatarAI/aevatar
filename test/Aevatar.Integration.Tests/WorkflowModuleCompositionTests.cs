@@ -1,141 +1,16 @@
-using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Core.Composition;
-using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Extensions.Maker;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
 
-public class WorkflowModuleCompositionTests
+public sealed class WorkflowModuleCompositionTests
 {
-    [Theory]
-    [InlineData("parallel")]
-    [InlineData("parallel_fanout")]
-    [InlineData("fan_out")]
-    [InlineData("race")]
-    [InlineData("select")]
-    [InlineData("map_reduce")]
-    [InlineData("mapreduce")]
-    [InlineData("cache")]
-    [InlineData("evaluate")]
-    [InlineData("judge")]
-    [InlineData("reflect")]
-    public void WorkflowImplicitModuleDependencyExpander_ShouldAddLlmCall_ForImplicitModules(string moduleName)
-    {
-        var moduleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            moduleName,
-        };
-        var expander = new WorkflowImplicitModuleDependencyExpander();
-
-        expander.Expand(workflow: null, moduleNames);
-
-        moduleNames.Should().Contain("llm_call");
-    }
-
     [Fact]
-    public void WorkflowImplicitModuleDependencyExpander_WhenNoImplicitModules_ShouldNotAddLlmCall()
-    {
-        var moduleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "transform",
-            "assign",
-        };
-        var expander = new WorkflowImplicitModuleDependencyExpander();
-
-        expander.Expand(workflow: null, moduleNames);
-
-        moduleNames.Should().NotContain("llm_call");
-    }
-
-    [Fact]
-    public void ModuleDependencyExpanders_ShouldResolveDeclaredAndImplicitModules()
-    {
-        var workflow = new WorkflowDefinition
-        {
-            Name = "wf",
-            Roles = [],
-            Steps =
-            [
-                new StepDefinition
-                {
-                    Id = "s1",
-                    Type = "foreach",
-                    Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
-                    {
-                        ["items"] = "a,b,c",
-                    },
-                    Children =
-                    [
-                        new StepDefinition
-                        {
-                            Id = "s1-1",
-                            Type = "tool_call",
-                            TargetRole = "assistant",
-                        },
-                    ],
-                },
-            ],
-        };
-
-        var moduleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        IWorkflowModuleDependencyExpander[] expanders =
-        [
-            new WorkflowLoopModuleDependencyExpander(),
-            new WorkflowStepTypeModuleDependencyExpander(),
-            new WorkflowImplicitModuleDependencyExpander(),
-        ];
-
-        foreach (var expander in expanders.OrderBy(x => x.Order))
-            expander.Expand(workflow, moduleNames);
-
-        moduleNames.Should().Contain("workflow_loop");
-        moduleNames.Should().Contain("foreach");
-        moduleNames.Should().Contain("parallel");
-        moduleNames.Should().Contain("llm_call");
-        moduleNames.Should().Contain("tool_call");
-    }
-
-    [Fact]
-    public void ModuleDependencyExpanders_WhenWorkflowUsesCacheDefaultChild_ShouldIncludeLlmCall()
-    {
-        var workflow = new WorkflowDefinition
-        {
-            Name = "wf_cache",
-            Roles = [],
-            Steps =
-            [
-                new StepDefinition
-                {
-                    Id = "cache_1",
-                    Type = "cache",
-                    Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
-                    {
-                        ["cache_key"] = "k1",
-                    },
-                },
-            ],
-        };
-
-        var moduleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        IWorkflowModuleDependencyExpander[] expanders =
-        [
-            new WorkflowLoopModuleDependencyExpander(),
-            new WorkflowStepTypeModuleDependencyExpander(),
-            new WorkflowImplicitModuleDependencyExpander(),
-        ];
-
-        foreach (var expander in expanders.OrderBy(x => x.Order))
-            expander.Expand(workflow, moduleNames);
-
-        moduleNames.Should().Contain("workflow_loop");
-        moduleNames.Should().Contain("cache");
-        moduleNames.Should().Contain("llm_call");
-    }
-
-    [Fact]
-    public void AddAevatarWorkflow_ShouldRegisterDefaultCompositionModulePack()
+    public void AddAevatarWorkflow_ShouldRegisterCorePackWithStatelessModulesOnly()
     {
         var provider = new ServiceCollection()
             .AddAevatarWorkflow()
@@ -144,11 +19,54 @@ public class WorkflowModuleCompositionTests
         var packs = provider.GetServices<IWorkflowModulePack>().ToList();
         var moduleFactory = provider.GetRequiredService<IEventModuleFactory>();
         var corePack = packs.Should().ContainSingle(x => x.GetType() == typeof(WorkflowCoreModulePack)).Subject;
+        var names = corePack.Modules.SelectMany(x => x.Names).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         moduleFactory.Should().BeOfType<WorkflowModuleFactory>();
-        corePack.DependencyExpanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowLoopModuleDependencyExpander));
-        corePack.DependencyExpanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowStepTypeModuleDependencyExpander));
-        corePack.DependencyExpanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowImplicitModuleDependencyExpander));
-        corePack.Configurators.Should().ContainSingle(x => x.GetType() == typeof(WorkflowLoopModuleConfigurator));
+        names.Should().Contain(["conditional", "switch", "checkpoint", "assign", "vote", "tool_call", "connector_call", "transform", "retrieve_facts", "guard", "emit", "workflow_yaml_validate", "dynamic_workflow"]);
+        names.Should().NotContain(["workflow_loop", "while", "delay", "wait_signal", "human_input", "human_approval", "llm_call", "evaluate", "reflect", "parallel", "map_reduce", "foreach", "race"]);
+    }
+
+    [Fact]
+    public void WorkflowModuleFactory_ShouldFailFastOnDuplicateModuleNamesAcrossPacks()
+    {
+        var provider = new ServiceCollection().BuildServiceProvider();
+
+        Action act = () => new WorkflowModuleFactory(
+            provider,
+            [
+                new TestPack("pack-a", WorkflowModuleRegistration.Create<TestModule>("dup")),
+                new TestPack("pack-b", WorkflowModuleRegistration.Create<TestModule>("dup")),
+            ]);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Duplicate workflow module name 'dup'*");
+    }
+
+    [Fact]
+    public void MakerModulePack_ShouldExposeOnlyMakerSpecificStatelessModules()
+    {
+        var pack = new MakerModulePack();
+        var names = pack.Modules.SelectMany(x => x.Names).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        names.Should().Contain(["maker_vote", "maker_recursive", "maker_recursive_solve"]);
+        names.Should().NotContain("workflow_loop");
+    }
+
+    private sealed class TestPack(string name, params WorkflowModuleRegistration[] modules) : IWorkflowModulePack
+    {
+        public string Name { get; } = name;
+
+        public IReadOnlyList<WorkflowModuleRegistration> Modules { get; } = modules;
+    }
+
+    private sealed class TestModule : IEventModule
+    {
+        public string Name => "dup";
+
+        public int Priority => 5;
+
+        public bool CanHandle(EventEnvelope envelope) => false;
+
+        public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct) => Task.CompletedTask;
     }
 }

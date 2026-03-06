@@ -195,7 +195,7 @@ public static class WorkflowCapabilityEndpoints
                 TaskScheduler.Default);
 
             return Results.Accepted(
-                $"/api/actors/{started.ActorId}",
+                $"/api/actors/{started.RunActorId}",
                 CapabilityTraceContext.CreateAcceptedPayload(started));
         }
 
@@ -227,7 +227,7 @@ public static class WorkflowCapabilityEndpoints
         if (result.Started != null)
         {
             return Results.Accepted(
-                $"/api/actors/{result.Started.ActorId}",
+                $"/api/actors/{result.Started.RunActorId}",
                 CapabilityTraceContext.CreateAcceptedPayload(result.Started));
         }
 
@@ -242,29 +242,29 @@ public static class WorkflowCapabilityEndpoints
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(actorPort);
 
-        var actorId = (input.ActorId ?? string.Empty).Trim();
+        var runActorId = (input.RunActorId ?? string.Empty).Trim();
         var runId = (input.RunId ?? string.Empty).Trim();
-        var stepId = (input.StepId ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(actorId) ||
+        var resumeToken = (input.ResumeToken ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(runActorId) ||
             string.IsNullOrWhiteSpace(runId) ||
-            string.IsNullOrWhiteSpace(stepId))
+            string.IsNullOrWhiteSpace(resumeToken))
         {
-            return Results.BadRequest(new { error = "actorId, runId and stepId are required." });
+            return Results.BadRequest(new { error = "runActorId, runId and resumeToken are required." });
         }
 
-        var actor = await actorPort.GetAsync(actorId, ct);
+        var actor = await actorPort.GetRunActorAsync(runActorId, ct);
         if (actor == null)
-            return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
+            return Results.NotFound(new { error = $"Run actor '{runActorId}' not found." });
 
-        if (!await actorPort.IsWorkflowActorAsync(actor, ct))
-            return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow actor." });
+        if (!await actorPort.IsWorkflowRunActorAsync(actor, ct))
+            return Results.BadRequest(new { error = $"Actor '{runActorId}' is not a workflow run actor." });
 
         var resumed = new WorkflowResumedEvent
         {
             RunId = runId,
-            StepId = stepId,
             Approved = input.Approved,
             UserInput = input.UserInput ?? string.Empty,
+            ResumeToken = resumeToken,
         };
         if (input.Metadata is { Count: > 0 })
         {
@@ -290,9 +290,9 @@ public static class WorkflowCapabilityEndpoints
         return Results.Ok(new
         {
             accepted = true,
-            actorId,
+            runActorId,
             runId,
-            stepId,
+            resumeToken,
             commandId = correlationId,
         });
     }
@@ -305,22 +305,22 @@ public static class WorkflowCapabilityEndpoints
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(actorPort);
 
-        var actorId = (input.ActorId ?? string.Empty).Trim();
+        var runActorId = (input.RunActorId ?? string.Empty).Trim();
         var runId = (input.RunId ?? string.Empty).Trim();
-        var signalName = (input.SignalName ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(actorId) ||
+        var waitToken = (input.WaitToken ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(runActorId) ||
             string.IsNullOrWhiteSpace(runId) ||
-            string.IsNullOrWhiteSpace(signalName))
+            string.IsNullOrWhiteSpace(waitToken))
         {
-            return Results.BadRequest(new { error = "actorId, runId and signalName are required." });
+            return Results.BadRequest(new { error = "runActorId, runId and waitToken are required." });
         }
 
-        var actor = await actorPort.GetAsync(actorId, ct);
+        var actor = await actorPort.GetRunActorAsync(runActorId, ct);
         if (actor == null)
-            return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
+            return Results.NotFound(new { error = $"Run actor '{runActorId}' not found." });
 
-        if (!await actorPort.IsWorkflowActorAsync(actor, ct))
-            return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow actor." });
+        if (!await actorPort.IsWorkflowRunActorAsync(actor, ct))
+            return Results.BadRequest(new { error = $"Actor '{runActorId}' is not a workflow run actor." });
 
         var commandId = (input.CommandId ?? string.Empty).Trim();
         var correlationId = string.IsNullOrWhiteSpace(commandId)
@@ -334,8 +334,8 @@ public static class WorkflowCapabilityEndpoints
             Payload = Any.Pack(new SignalReceivedEvent
             {
                 RunId = runId,
-                SignalName = signalName,
                 Payload = input.Payload ?? string.Empty,
+                WaitToken = waitToken,
             }),
             PublisherId = "api.workflow.signal",
             Direction = EventDirection.Self,
@@ -346,9 +346,9 @@ public static class WorkflowCapabilityEndpoints
         return Results.Ok(new
         {
             accepted = true,
-            actorId,
+            runActorId,
             runId,
-            signalName,
+            waitToken,
             commandId = correlationId,
         });
     }
@@ -361,7 +361,8 @@ public static class WorkflowCapabilityEndpoints
             Name = "aevatar.run.context",
             Value = new
             {
-                started.ActorId,
+                started.RunActorId,
+                started.DefinitionActorId,
                 started.WorkflowName,
                 started.CommandId,
             },

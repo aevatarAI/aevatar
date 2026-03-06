@@ -276,6 +276,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             SuspensionType = "human_input",
             Prompt = "请提供补充信息",
             TimeoutSeconds = 1800,
+            ResumeToken = "resume-token-1",
             Metadata = { { "variable", "user_context" } },
         });
 
@@ -292,6 +293,7 @@ public class EventEnvelopeToAGUIEventMapperTests
         e.TimeoutSeconds.Should().Be(1800);
         e.Metadata.Should().NotBeNull();
         e.Metadata!["variable"].Should().Be("user_context");
+        e.Metadata["resume_token"].Should().Be("resume-token-1");
     }
 
     [Fact]
@@ -304,6 +306,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             SignalName = "ops_window_open",
             Prompt = "waiting for ops window",
             TimeoutMs = 30000,
+            WaitToken = "wait-token-1",
         });
         envelope.CorrelationId = "correlation-should-not-override-run-id";
 
@@ -314,6 +317,7 @@ public class EventEnvelopeToAGUIEventMapperTests
         custom.Name.Should().Be("aevatar.workflow.waiting_signal");
         var value = JsonSerializer.SerializeToElement(custom.Value);
         value.GetProperty("RunId").GetString().Should().Be("run-expected");
+        value.GetProperty("WaitToken").GetString().Should().Be("wait-token-1");
     }
 
     [Fact]

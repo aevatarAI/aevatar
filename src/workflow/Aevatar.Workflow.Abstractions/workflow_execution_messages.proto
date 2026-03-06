@@ -46,14 +46,46 @@ message SubWorkflowInvocationCompletedEvent
   string output = 4;
   string error = 5;
 }
-message WorkflowSuspendedEvent { string run_id = 1; string step_id = 2; string suspension_type = 3; string prompt = 4; int32 timeout_seconds = 5; map<string, string> metadata = 6; }
-message WorkflowResumedEvent   { string run_id = 1; string step_id = 2; bool approved = 3; string user_input = 4; map<string, string> metadata = 5; }
+message WorkflowSuspendedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string suspension_type = 3;
+  string prompt = 4;
+  int32 timeout_seconds = 5;
+  map<string, string> metadata = 6;
+  string resume_token = 7;
+}
+message WorkflowResumedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  bool approved = 3;
+  string user_input = 4;
+  map<string, string> metadata = 5;
+  string resume_token = 6;
+}
 
 // Replaces an existing workflow actor's definition using runtime-provided YAML and starts execution immediately.
 message ReplaceWorkflowDefinitionAndExecuteEvent { string workflow_yaml = 1; string input = 2; }
 
-message WaitingForSignalEvent { string step_id = 1; string signal_name = 2; string prompt = 3; int32 timeout_ms = 4; string run_id = 5; }
-message SignalReceivedEvent   { string signal_name = 1; string payload = 2; string run_id = 3; string step_id = 4; }
+message WaitingForSignalEvent
+{
+  string step_id = 1;
+  string signal_name = 2;
+  string prompt = 3;
+  int32 timeout_ms = 4;
+  string run_id = 5;
+  string wait_token = 6;
+}
+message SignalReceivedEvent
+{
+  string signal_name = 1;
+  string payload = 2;
+  string run_id = 3;
+  string step_id = 4;
+  string wait_token = 5;
+}
 message WaitSignalTimeoutFiredEvent { string run_id = 1; string step_id = 2; string signal_name = 3; int32 timeout_ms = 4; }
 message WorkflowStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 timeout_ms = 3; }
 message WorkflowStepRetryBackoffFiredEvent { string run_id = 1; string step_id = 2; int32 delay_ms = 3; int32 next_attempt = 4; }

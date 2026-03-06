@@ -261,7 +261,7 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleChat_WhenAgentIdProvidedWithoutWorkflow_ShouldKeepWorkflowUnset()
+    public async Task HandleChat_WhenDefinitionActorIdProvidedWithoutWorkflow_ShouldKeepWorkflowUnset()
     {
         var http = CreateHttpContext();
         WorkflowChatRunRequest? captured = null;
@@ -272,7 +272,7 @@ public class ChatEndpointsInternalTests
                 captured = request;
                 return Task.FromResult(ToCoreResult(
                     new WorkflowChatRunExecutionResult(
-                        WorkflowChatRunStartError.AgentNotFound,
+                        WorkflowChatRunStartError.DefinitionActorNotFound,
                         null,
                         null)));
             },
@@ -283,13 +283,13 @@ public class ChatEndpointsInternalTests
             new ChatInput
             {
                 Prompt = "hello",
-                AgentId = "  actor-1  ",
+                DefinitionActorId = "  actor-1  ",
             },
             service,
             CancellationToken.None);
 
         captured.Should().NotBeNull();
-        captured!.ActorId.Should().Be("actor-1");
+        captured!.DefinitionActorId.Should().Be("actor-1");
         captured.WorkflowName.Should().BeNull();
         captured.WorkflowYamls.Should().BeNull();
     }
@@ -385,15 +385,15 @@ public class ChatEndpointsInternalTests
         var actorPort = new FakeWorkflowRunActorPort
         {
             ActorToReturn = actor,
-            IsWorkflowActorValue = true,
+            IsWorkflowRunActorValue = true,
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleResume(
             new WorkflowResumeInput
             {
-                ActorId = "actor-1",
+                RunActorId = "actor-1",
                 RunId = "run-1",
-                StepId = "step-1",
+                ResumeToken = "resume-token-1",
                 CommandId = "cmd-1",
                 Approved = true,
                 UserInput = "approved",
@@ -415,7 +415,7 @@ public class ChatEndpointsInternalTests
         actor.LastHandledEnvelope.Payload!.Is(WorkflowResumedEvent.Descriptor).Should().BeTrue();
         var resumed = actor.LastHandledEnvelope.Payload.Unpack<WorkflowResumedEvent>();
         resumed.RunId.Should().Be("run-1");
-        resumed.StepId.Should().Be("step-1");
+        resumed.ResumeToken.Should().Be("resume-token-1");
         resumed.Approved.Should().BeTrue();
         resumed.UserInput.Should().Be("approved");
         resumed.Metadata["operator"].Should().Be("alice");
@@ -433,9 +433,9 @@ public class ChatEndpointsInternalTests
         var result = await WorkflowCapabilityEndpoints.HandleResume(
             new WorkflowResumeInput
             {
-                ActorId = "missing",
+                RunActorId = "missing",
                 RunId = "run-1",
-                StepId = "step-1",
+                ResumeToken = "resume-token-1",
             },
             actorPort,
             CancellationToken.None);
@@ -451,15 +451,15 @@ public class ChatEndpointsInternalTests
         var actorPort = new FakeWorkflowRunActorPort
         {
             ActorToReturn = actor,
-            IsWorkflowActorValue = true,
+            IsWorkflowRunActorValue = true,
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleSignal(
             new WorkflowSignalInput
             {
-                ActorId = "actor-1",
+                RunActorId = "actor-1",
                 RunId = "run-s1",
-                SignalName = "ops_window_open",
+                WaitToken = "wait-token-1",
                 CommandId = "cmd-s1",
                 Payload = "window=2026-02-26T10:00:00Z",
             },
@@ -476,7 +476,7 @@ public class ChatEndpointsInternalTests
         actor.LastHandledEnvelope.Payload!.Is(SignalReceivedEvent.Descriptor).Should().BeTrue();
         var signal = actor.LastHandledEnvelope.Payload.Unpack<SignalReceivedEvent>();
         signal.RunId.Should().Be("run-s1");
-        signal.SignalName.Should().Be("ops_window_open");
+        signal.WaitToken.Should().Be("wait-token-1");
         signal.Payload.Should().Be("window=2026-02-26T10:00:00Z");
         actor.LastHandledEnvelope.CorrelationId.Should().Be("cmd-s1");
     }
@@ -585,7 +585,7 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleCommand_WhenAgentIdProvidedWithoutWorkflow_ShouldKeepWorkflowUnset()
+    public async Task HandleCommand_WhenDefinitionActorIdProvidedWithoutWorkflow_ShouldKeepWorkflowUnset()
     {
         using var loggerFactory = LoggerFactory.Create(_ => { });
         WorkflowChatRunRequest? captured = null;
@@ -596,7 +596,7 @@ public class ChatEndpointsInternalTests
                 captured = request;
                 return Task.FromResult(ToCoreResult(
                     new WorkflowChatRunExecutionResult(
-                        WorkflowChatRunStartError.AgentNotFound,
+                        WorkflowChatRunStartError.DefinitionActorNotFound,
                         null,
                         null)));
             },
@@ -606,14 +606,14 @@ public class ChatEndpointsInternalTests
             new ChatInput
             {
                 Prompt = "hello",
-                AgentId = " actor-1 ",
+                DefinitionActorId = " actor-1 ",
             },
             service,
             loggerFactory,
             CancellationToken.None);
 
         captured.Should().NotBeNull();
-        captured!.ActorId.Should().Be("actor-1");
+        captured!.DefinitionActorId.Should().Be("actor-1");
         captured.WorkflowName.Should().BeNull();
         captured.WorkflowYamls.Should().BeNull();
     }
@@ -1032,21 +1032,30 @@ public class ChatEndpointsInternalTests
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
     {
         public IActor? ActorToReturn { get; set; }
-        public bool IsWorkflowActorValue { get; set; } = true;
+        public bool IsWorkflowDefinitionActorValue { get; set; } = true;
+        public bool IsWorkflowRunActorValue { get; set; } = true;
 
-        public Task<IActor?> GetAsync(string actorId, CancellationToken ct = default)
+        public Task<IActor?> GetDefinitionActorAsync(string definitionActorId, CancellationToken ct = default)
         {
-            _ = actorId;
+            _ = definitionActorId;
             _ = ct;
             return Task.FromResult(ActorToReturn);
         }
 
-        public Task<IActor> CreateAsync(CancellationToken ct = default) => throw new NotSupportedException();
-        public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<bool> IsWorkflowActorAsync(IActor actor, CancellationToken ct = default) => Task.FromResult(IsWorkflowActorValue);
-        public Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task<IActor?> GetRunActorAsync(string runActorId, CancellationToken ct = default)
+        {
+            _ = runActorId;
+            _ = ct;
+            return Task.FromResult(ActorToReturn);
+        }
+
+        public Task<IActor> CreateRunActorAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task DestroyRunActorAsync(string runActorId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<bool> IsWorkflowDefinitionActorAsync(IActor actor, CancellationToken ct = default) => Task.FromResult(IsWorkflowDefinitionActorValue);
+        public Task<bool> IsWorkflowRunActorAsync(IActor actor, CancellationToken ct = default) => Task.FromResult(IsWorkflowRunActorValue);
+        public Task<WorkflowDefinitionBindingSnapshot?> GetDefinitionBindingSnapshotAsync(IActor actor, CancellationToken ct = default) => Task.FromResult<WorkflowDefinitionBindingSnapshot?>(null);
         public Task BindWorkflowDefinitionAsync(
-            IActor actor,
+            IActor runActor,
             string workflowYaml,
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,

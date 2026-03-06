@@ -80,7 +80,7 @@ public class MakerRunReportVerificationTests
         string workflowYaml,
         string input)
     {
-        var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-maker-verification-" + Guid.NewGuid().ToString("N")[..8]);
+        var actor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-maker-verification-run-" + Guid.NewGuid().ToString("N")[..8]);
         var recorder = new MakerRunProjectionAccumulator(actor.Id);
 
         await actor.HandleEventAsync(new EventEnvelope

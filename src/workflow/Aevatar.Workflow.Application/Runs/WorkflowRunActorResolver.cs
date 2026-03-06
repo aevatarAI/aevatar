@@ -28,11 +28,21 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         var inlineWorkflowYamls = request.WorkflowYamls?.ToList() ?? [];
         var hasInlineWorkflowYamls = inlineWorkflowYamls.Count > 0;
         var hasRequestedWorkflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName);
+        var hasDefinitionActorId = !string.IsNullOrWhiteSpace(request.DefinitionActorId);
+        if (hasDefinitionActorId && hasInlineWorkflowYamls)
+        {
+            return new WorkflowActorResolutionResult(
+                null,
+                string.Empty,
+                null,
+                WorkflowChatRunStartError.DefinitionSourceConflict);
+        }
+
         var workflowNameForRun = hasInlineWorkflowYamls
             ? string.Empty
             : hasRequestedWorkflowName
-            ? requestedWorkflowName
-            : ResolveDefaultWorkflowName();
+                ? requestedWorkflowName
+                : ResolveDefaultWorkflowName();
         var workflowYamlForRun = string.Empty;
         IReadOnlyDictionary<string, string>? inlineWorkflowYamlMapForRun = null;
 
@@ -40,90 +50,96 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         {
             var inlineBundle = await BuildInlineWorkflowBundleAsync(inlineWorkflowYamls, ct);
             if (!inlineBundle.Succeeded)
-                return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.InvalidWorkflowYaml);
+            {
+                return new WorkflowActorResolutionResult(
+                    null,
+                    workflowNameForRun,
+                    null,
+                    WorkflowChatRunStartError.InvalidWorkflowYaml);
+            }
 
             workflowNameForRun = inlineBundle.EntryWorkflowName;
             workflowYamlForRun = inlineBundle.EntryWorkflowYaml;
             inlineWorkflowYamlMapForRun = inlineBundle.WorkflowYamlsByName;
         }
 
-        if (!string.IsNullOrWhiteSpace(request.ActorId))
+        if (hasDefinitionActorId)
         {
-            var existing = await _actorPort.GetAsync(request.ActorId, ct);
+            var definitionActorId = request.DefinitionActorId!;
+            var existing = await _actorPort.GetDefinitionActorAsync(definitionActorId, ct);
             if (existing == null)
-                return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentNotFound);
-
-            if (!await _actorPort.IsWorkflowActorAsync(existing, ct))
-                return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentTypeNotSupported);
-
-            var boundWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(await _actorPort.GetBoundWorkflowNameAsync(existing, ct));
-            if (string.IsNullOrWhiteSpace(boundWorkflowName))
-            {
-                if (!hasInlineWorkflowYamls)
-                {
-                    return new WorkflowActorResolutionResult(
-                        null,
-                        workflowNameForRun,
-                        WorkflowChatRunStartError.AgentWorkflowNotConfigured);
-                }
-
-                await BindWorkflowDefinitionForRunAsync(
-                    existing,
-                    workflowYamlForRun,
-                    workflowNameForRun,
-                    inlineWorkflowYamlMapForRun,
-                    ct);
-                return new WorkflowActorResolutionResult(existing, workflowNameForRun, WorkflowChatRunStartError.None);
-            }
-
-            if (hasInlineWorkflowYamls &&
-                !string.Equals(workflowNameForRun, boundWorkflowName, StringComparison.OrdinalIgnoreCase))
             {
                 return new WorkflowActorResolutionResult(
                     null,
-                    boundWorkflowName,
-                    WorkflowChatRunStartError.WorkflowBindingMismatch);
-            }
-
-            if (hasInlineWorkflowYamls)
-            {
-                // Never mutate an already bound actor in-place with inline yaml.
-                // Inline workflow execution must run on a fresh actor instance.
-                var isolatedActor = await _actorPort.CreateAsync(ct);
-                await BindWorkflowDefinitionForRunAsync(
-                    isolatedActor,
-                    workflowYamlForRun,
                     workflowNameForRun,
-                    inlineWorkflowYamlMapForRun,
-                    ct);
-                return new WorkflowActorResolutionResult(isolatedActor, workflowNameForRun, WorkflowChatRunStartError.None);
+                    definitionActorId,
+                    WorkflowChatRunStartError.DefinitionActorNotFound);
             }
 
-            if (!hasInlineWorkflowYamls &&
-                hasRequestedWorkflowName &&
+            if (!await _actorPort.IsWorkflowDefinitionActorAsync(existing, ct))
+            {
+                return new WorkflowActorResolutionResult(
+                    null,
+                    workflowNameForRun,
+                    definitionActorId,
+                    WorkflowChatRunStartError.DefinitionActorTypeNotSupported);
+            }
+
+            var bindingSnapshot = await _actorPort.GetDefinitionBindingSnapshotAsync(existing, ct);
+            var boundWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(bindingSnapshot?.WorkflowName);
+            if (string.IsNullOrWhiteSpace(boundWorkflowName) || bindingSnapshot == null || !bindingSnapshot.IsBound)
+            {
+                return new WorkflowActorResolutionResult(
+                    null,
+                    workflowNameForRun,
+                    definitionActorId,
+                    WorkflowChatRunStartError.DefinitionActorWorkflowNotConfigured);
+            }
+
+            if (hasRequestedWorkflowName &&
                 !string.Equals(requestedWorkflowName, boundWorkflowName, StringComparison.OrdinalIgnoreCase))
             {
                 return new WorkflowActorResolutionResult(
                     null,
                     boundWorkflowName,
-                    WorkflowChatRunStartError.WorkflowBindingMismatch);
+                    definitionActorId,
+                    WorkflowChatRunStartError.DefinitionBindingMismatch);
             }
-            return new WorkflowActorResolutionResult(existing, boundWorkflowName, WorkflowChatRunStartError.None);
+
+            var isolatedRunActor = await _actorPort.CreateRunActorAsync(ct);
+            await BindWorkflowDefinitionForRunWithFallbackWrapAsync(
+                isolatedRunActor,
+                bindingSnapshot.WorkflowYaml,
+                boundWorkflowName,
+                bindingSnapshot.InlineWorkflowYamls,
+                ct);
+            return new WorkflowActorResolutionResult(
+                isolatedRunActor,
+                boundWorkflowName,
+                definitionActorId,
+                WorkflowChatRunStartError.None);
         }
 
         if (!hasInlineWorkflowYamls)
         {
             var yaml = _workflowRegistry.GetYaml(workflowNameForRun);
             if (yaml == null)
-                return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.WorkflowNotFound);
+            {
+                return new WorkflowActorResolutionResult(
+                    null,
+                    workflowNameForRun,
+                    null,
+                    WorkflowChatRunStartError.WorkflowNotFound);
+            }
+
             workflowYamlForRun = yaml;
         }
 
-        var actor = await _actorPort.CreateAsync(ct);
+        var runActor = await _actorPort.CreateRunActorAsync(ct);
         if (hasInlineWorkflowYamls)
         {
             await BindWorkflowDefinitionForRunAsync(
-                actor,
+                runActor,
                 workflowYamlForRun,
                 workflowNameForRun,
                 inlineWorkflowYamlMapForRun,
@@ -132,25 +148,27 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         else
         {
             await BindWorkflowDefinitionForRunWithFallbackWrapAsync(
-                actor,
+                runActor,
                 workflowYamlForRun,
                 workflowNameForRun,
                 null,
                 ct);
         }
 
-        return new WorkflowActorResolutionResult(actor, workflowNameForRun, WorkflowChatRunStartError.None);
+        return new WorkflowActorResolutionResult(
+            runActor,
+            workflowNameForRun,
+            null,
+            WorkflowChatRunStartError.None);
     }
 
-    private async Task BindWorkflowDefinitionForRunAsync(
+    private Task BindWorkflowDefinitionForRunAsync(
         IActor actor,
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
-        CancellationToken ct)
-    {
-        await _actorPort.BindWorkflowDefinitionAsync(actor, workflowYaml, workflowName, inlineWorkflowYamls, ct);
-    }
+        CancellationToken ct) =>
+        _actorPort.BindWorkflowDefinitionAsync(actor, workflowYaml, workflowName, inlineWorkflowYamls, ct);
 
     private async Task BindWorkflowDefinitionForRunWithFallbackWrapAsync(
         IActor actor,

@@ -274,7 +274,61 @@ if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
 fi
 
 if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevatar.Workflow.Core/Modules/WorkflowCallModule.cs; then
-  echo "WorkflowCallModule must stay stateless; workflow_call fact state must live in WorkflowGAgent persisted state."
+  echo "WorkflowCallModule must stay stateless; workflow_call fact state must live in WorkflowRunGAgent persisted state."
+  exit 1
+fi
+
+workflow_run_actor_port="src/workflow/Aevatar.Workflow.Infrastructure/Runs/WorkflowRunActorPort.cs"
+workflow_run_resolver="src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs"
+workflow_chat_models="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatCapabilityModels.cs"
+workflow_run_models="src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowChatRunModels.cs"
+workflow_run_context="src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunContext.cs"
+workflow_chat_endpoints="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs"
+
+if ! rg -n "CreateAsync<WorkflowRunGAgent>" "${workflow_run_actor_port}" >/dev/null; then
+  echo "Workflow capability path must create WorkflowRunGAgent for accepted runs."
+  exit 1
+fi
+
+if rg -n "CreateAsync<WorkflowGAgent>" "${workflow_run_actor_port}" "${workflow_run_resolver}" >/dev/null; then
+  echo "Workflow capability path must not create WorkflowGAgent as the accepted run actor."
+  exit 1
+fi
+
+if ! rg -n "IsWorkflowDefinitionActorAsync" "${workflow_run_actor_port}" >/dev/null || \
+   ! rg -n "typeof\\(WorkflowGAgent\\)" "${workflow_run_actor_port}" >/dev/null; then
+  echo "Workflow definition actor guard expects WorkflowGAgent to remain the definition/binding source."
+  exit 1
+fi
+
+if ! rg -n "IsWorkflowRunActorAsync" "${workflow_run_actor_port}" >/dev/null || \
+   ! rg -n "typeof\\(WorkflowRunGAgent\\)" "${workflow_run_actor_port}" >/dev/null; then
+  echo "Workflow run actor guard expects WorkflowRunGAgent to remain the accepted run fact owner."
+  exit 1
+fi
+
+if ! rg -n "DefinitionSourceConflict" "${workflow_run_resolver}" >/dev/null; then
+  echo "Workflow run resolver must reject concurrent definitionActorId and workflowYamls sources."
+  exit 1
+fi
+
+if ! rg -n "DefinitionActorId" "${workflow_chat_models}" "${workflow_run_models}" "${workflow_run_context}" >/dev/null; then
+  echo "Workflow capability contracts must expose DefinitionActorId as the definition source handle."
+  exit 1
+fi
+
+if ! rg -n "RunActorId" "${workflow_chat_models}" "${workflow_run_models}" "${workflow_run_context}" >/dev/null; then
+  echo "Workflow capability contracts must expose RunActorId as the run control handle."
+  exit 1
+fi
+
+if rg -n "agentId" "${workflow_chat_models}" >/dev/null; then
+  echo "Workflow capability start contract must not expose legacy agentId semantics."
+  exit 1
+fi
+
+if ! rg -n "GetRunActorAsync" "${workflow_chat_endpoints}" >/dev/null; then
+  echo "Workflow resume/signal endpoints must resolve WorkflowRunGAgent explicitly."
   exit 1
 fi
 
@@ -357,6 +411,7 @@ if [ -n "${reducer_test_coverage_violations}" ]; then
 fi
 
 stateful_replay_contract_requirements=(
+  "WorkflowRunGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
   "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
   "ProjectionOwnershipCoordinatorGAgent:test/Aevatar.CQRS.Projection.Core.Tests/ProjectionOwnershipAndSessionHubTests.cs"
   "RoleGAgent:test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs"
@@ -752,5 +807,8 @@ check_orchestration_class_guard \
 
 echo "Running runtime callback guards..."
 bash tools/ci/runtime_callback_guards.sh
+
+echo "Running workflow runtime state guards..."
+bash tools/ci/workflow_runtime_state_guards.sh
 
 echo "Architecture guards passed."

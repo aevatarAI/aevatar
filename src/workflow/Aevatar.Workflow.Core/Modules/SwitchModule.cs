@@ -10,7 +10,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Matches the <c>on</c> parameter value against <c>StepDefinition.Branches</c>;
 /// falls back to <c>_default</c> when no key matches.
 /// Publishes <c>StepCompletedEvent</c> with <c>metadata["branch"]</c> indicating the chosen key.
-/// The <c>WorkflowLoopModule</c> uses the branch value to resolve the next step.
+/// <see cref="WorkflowRunGAgent"/> uses the branch value to resolve the next step.
 /// </summary>
 public sealed class SwitchModule : IEventModule
 {

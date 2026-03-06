@@ -1,6 +1,13 @@
+using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Callbacks;
+using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
@@ -8,8 +15,8 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
+using System.Reflection;
+using SystemType = System.Type;
 
 namespace Aevatar.Integration.Tests;
 
@@ -20,10 +27,10 @@ public sealed class WorkflowTuringCompletenessTests
     [Fact]
     public async Task IncDecJzProgram_ShouldTransferCounterValueInClosedWorldMode()
     {
-        var workflow = BuildCounterTransferWorkflow();
-        WorkflowValidator.Validate(workflow).Should().BeEmpty();
+        var yaml = BuildCounterTransferWorkflowYaml();
+        WorkflowValidator.Validate(new WorkflowParser().Parse(yaml)).Should().BeEmpty();
 
-        var completed = await ExecuteClosedWorldWorkflowAsync(workflow, maxTransitions: 256);
+        var completed = await ExecuteClosedWorldWorkflowAsync(yaml, maxSelfEvents: 256);
 
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("2");
@@ -32,10 +39,10 @@ public sealed class WorkflowTuringCompletenessTests
     [Fact]
     public async Task TwoCounterProgram_ShouldComputeAdditionInClosedWorldMode()
     {
-        var workflow = BuildCounterAdditionWorkflow();
-        WorkflowValidator.Validate(workflow).Should().BeEmpty();
+        var yaml = BuildCounterAdditionWorkflowYaml();
+        WorkflowValidator.Validate(new WorkflowParser().Parse(yaml)).Should().BeEmpty();
 
-        var completed = await ExecuteClosedWorldWorkflowAsync(workflow, maxTransitions: 512);
+        var completed = await ExecuteClosedWorldWorkflowAsync(yaml, maxSelfEvents: 512);
 
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("5");
@@ -44,297 +51,276 @@ public sealed class WorkflowTuringCompletenessTests
     [Fact]
     public async Task NonHaltingProgram_ShouldExceedTransitionBudget()
     {
-        var workflow = BuildNonHaltingWorkflow();
-        WorkflowValidator.Validate(workflow).Should().BeEmpty();
+        var yaml = BuildNonHaltingWorkflowYaml();
+        WorkflowValidator.Validate(new WorkflowParser().Parse(yaml)).Should().BeEmpty();
 
-        Func<Task> run = async () => await ExecuteClosedWorldWorkflowAsync(workflow, maxTransitions: 64);
+        Func<Task> run = async () => await ExecuteClosedWorldWorkflowAsync(yaml, maxSelfEvents: 64);
         await run.Should().ThrowAsync<TimeoutException>();
     }
 
-    private static WorkflowDefinition BuildCounterTransferWorkflow() =>
-        new()
-        {
-            Name = "counter_transfer",
-            Configuration = new WorkflowRuntimeConfiguration
-            {
-                ClosedWorldMode = true,
-            },
-            Roles = [],
-            Steps =
-            [
-                new StepDefinition
-                {
-                    Id = "init_c1",
-                    Type = "assign",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["target"] = "c1",
-                        ["value"] = "2",
-                    },
-                },
-                new StepDefinition
-                {
-                    Id = "init_c2",
-                    Type = "assign",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["target"] = "c2",
-                        ["value"] = "0",
-                    },
-                },
-                new StepDefinition
-                {
-                    Id = "check_c1",
-                    Type = "conditional",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["condition"] = "${eq(variables.c1, '0')}",
-                    },
-                    Branches = new Dictionary<string, string>
-                    {
-                        ["true"] = "halt",
-                        ["false"] = "dec_c1",
-                    },
-                },
-                new StepDefinition
-                {
-                    Id = "dec_c1",
-                    Type = "assign",
-                    Next = "inc_c2",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["target"] = "c1",
-                        ["value"] = "${sub(variables.c1, 1)}",
-                    },
-                },
-                new StepDefinition
-                {
-                    Id = "inc_c2",
-                    Type = "assign",
-                    Next = "check_c1",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["target"] = "c2",
-                        ["value"] = "${add(variables.c2, 1)}",
-                    },
-                },
-                new StepDefinition
-                {
-                    Id = "halt",
-                    Type = "assign",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["target"] = "result",
-                        ["value"] = "${variables.c2}",
-                    },
-                },
-            ],
-        };
+    private static string BuildCounterTransferWorkflowYaml() =>
+        """
+        name: counter_transfer
+        configuration:
+          closed_world_mode: true
+        roles: []
+        steps:
+          - id: init_c1
+            type: assign
+            parameters:
+              target: c1
+              value: "2"
+          - id: init_c2
+            type: assign
+            parameters:
+              target: c2
+              value: "0"
+          - id: check_c1
+            type: conditional
+            parameters:
+              condition: "${eq(variables.c1, '0')}"
+            branches:
+              - condition: "true"
+                next: halt
+              - condition: "false"
+                next: dec_c1
+          - id: dec_c1
+            type: assign
+            next: inc_c2
+            parameters:
+              target: c1
+              value: "${sub(variables.c1, 1)}"
+          - id: inc_c2
+            type: assign
+            next: check_c1
+            parameters:
+              target: c2
+              value: "${add(variables.c2, 1)}"
+          - id: halt
+            type: assign
+            parameters:
+              target: result
+              value: "${variables.c2}"
+        """;
 
-    private static WorkflowDefinition BuildCounterAdditionWorkflow() =>
-        new()
-        {
-            Name = "counter_addition",
-            Configuration = new WorkflowRuntimeConfiguration
-            {
-                ClosedWorldMode = true,
-            },
-            Roles = [],
-            Steps =
-            [
-                new StepDefinition
-                {
-                    Id = "init_a",
-                    Type = "assign",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["target"] = "a",
-                        ["value"] = "2",
-                    },
-                },
-                new StepDefinition
-                {
-                    Id = "init_b",
-                    Type = "assign",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["target"] = "b",
-                        ["value"] = "3",
-                    },
-                },
-                new StepDefinition
-                {
-                    Id = "check_b",
-                    Type = "conditional",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["condition"] = "${eq(variables.b, '0')}",
-                    },
-                    Branches = new Dictionary<string, string>
-                    {
-                        ["true"] = "halt",
-                        ["false"] = "inc_a",
-                    },
-                },
-                new StepDefinition
-                {
-                    Id = "inc_a",
-                    Type = "assign",
-                    Next = "dec_b",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["target"] = "a",
-                        ["value"] = "${add(variables.a, 1)}",
-                    },
-                },
-                new StepDefinition
-                {
-                    Id = "dec_b",
-                    Type = "assign",
-                    Next = "check_b",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["target"] = "b",
-                        ["value"] = "${sub(variables.b, 1)}",
-                    },
-                },
-                new StepDefinition
-                {
-                    Id = "halt",
-                    Type = "assign",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["target"] = "result",
-                        ["value"] = "${variables.a}",
-                    },
-                },
-            ],
-        };
+    private static string BuildCounterAdditionWorkflowYaml() =>
+        """
+        name: counter_addition
+        configuration:
+          closed_world_mode: true
+        roles: []
+        steps:
+          - id: init_a
+            type: assign
+            parameters:
+              target: a
+              value: "2"
+          - id: init_b
+            type: assign
+            parameters:
+              target: b
+              value: "3"
+          - id: check_b
+            type: conditional
+            parameters:
+              condition: "${eq(variables.b, '0')}"
+            branches:
+              - condition: "true"
+                next: halt
+              - condition: "false"
+                next: inc_a
+          - id: inc_a
+            type: assign
+            next: dec_b
+            parameters:
+              target: a
+              value: "${add(variables.a, 1)}"
+          - id: dec_b
+            type: assign
+            next: check_b
+            parameters:
+              target: b
+              value: "${sub(variables.b, 1)}"
+          - id: halt
+            type: assign
+            parameters:
+              target: result
+              value: "${variables.a}"
+        """;
 
-    private static WorkflowDefinition BuildNonHaltingWorkflow() =>
-        new()
-        {
-            Name = "non_halting",
-            Configuration = new WorkflowRuntimeConfiguration
-            {
-                ClosedWorldMode = true,
-            },
-            Roles = [],
-            Steps =
-            [
-                new StepDefinition
-                {
-                    Id = "loop",
-                    Type = "conditional",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["condition"] = "false",
-                    },
-                    Branches = new Dictionary<string, string>
-                    {
-                        ["true"] = "halt",
-                        ["false"] = "loop",
-                    },
-                },
-                new StepDefinition
-                {
-                    Id = "halt",
-                    Type = "assign",
-                    Parameters = new Dictionary<string, string>
-                    {
-                        ["target"] = "result",
-                        ["value"] = "done",
-                    },
-                },
-            ],
-        };
+    private static string BuildNonHaltingWorkflowYaml() =>
+        """
+        name: non_halting
+        configuration:
+          closed_world_mode: true
+        roles: []
+        steps:
+          - id: loop
+            type: conditional
+            parameters:
+              condition: "false"
+            branches:
+              - condition: "true"
+                next: halt
+              - condition: "false"
+                next: loop
+          - id: halt
+            type: assign
+            parameters:
+              target: result
+              value: "done"
+        """;
 
-    private static async Task<WorkflowCompletedEvent> ExecuteClosedWorldWorkflowAsync(
-        WorkflowDefinition workflow,
-        int maxTransitions)
+    private static async Task<WorkflowCompletedEvent> ExecuteClosedWorldWorkflowAsync(string workflowYaml, int maxSelfEvents)
     {
-        var loop = new WorkflowLoopModule();
-        loop.SetWorkflow(workflow);
+        var eventStore = new InMemoryEventStore();
+        var services = new ServiceCollection()
+            .AddSingleton<IEventStore>(eventStore)
+            .AddSingleton<IStreamProvider, InMemoryStreamProvider>()
+            .AddSingleton<InMemoryActorRuntimeCallbackScheduler>()
+            .AddSingleton<IActorRuntimeCallbackScheduler>(sp => sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .BuildServiceProvider();
 
-        var modules = new Dictionary<string, IEventModule>(StringComparer.OrdinalIgnoreCase)
+        var agent = new WorkflowRunGAgent(
+            new NullActorRuntime(),
+            new StaticRoleAgentTypeResolver(typeof(ClosedWorldRoleAgent)),
+            [new ClosedWorldModulePack()])
         {
-            ["assign"] = new AssignModule(),
-            ["conditional"] = new ConditionalModule(),
-            ["switch"] = new SwitchModule(),
-            ["transform"] = new TransformModule(),
-            ["while"] = new WhileModule(),
+            Services = services,
         };
+        AssignAgentId(agent, "workflow-turing-proof-agent");
+        agent.EventSourcingBehaviorFactory =
+            services.GetRequiredService<IEventSourcingBehaviorFactory<WorkflowRunState>>();
 
-        var queue = new Queue<IMessage>();
-        queue.Enqueue(new StartWorkflowEvent
+        var parsed = new WorkflowParser().Parse(workflowYaml);
+        await agent.BindWorkflowDefinitionAsync(workflowYaml, parsed.Name);
+
+        var publisher = new LoopbackEventPublisher(agent);
+        agent.EventPublisher = publisher;
+
+        await agent.HandleChatRequest(new ChatRequestEvent
         {
-            RunId = "proof-run",
-            Input = "seed",
+            Prompt = "seed",
+            SessionId = "proof-run",
         });
 
-        var transitions = 0;
-        while (queue.Count > 0 && transitions < maxTransitions)
-        {
-            transitions++;
-            var message = queue.Dequeue();
-            if (message is not StartWorkflowEvent && message is not StepCompletedEvent)
-                continue;
+        await publisher.DrainAsync(maxSelfEvents);
 
-            var loopCtx = CreateContext();
-            await loop.HandleAsync(Envelope(message), loopCtx, CancellationToken.None);
-            foreach (var (evt, _) in loopCtx.Published)
+        return publisher.ExternalPublished.OfType<WorkflowCompletedEvent>().Single();
+    }
+
+    private static void AssignAgentId(IAgent agent, string id)
+    {
+        var method = agent.GetType().BaseType?.GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        method!.Invoke(agent, [id]);
+    }
+
+    private sealed class ClosedWorldModulePack : IWorkflowModulePack
+    {
+        public string Name => "closed-world";
+
+        public IReadOnlyList<WorkflowModuleRegistration> Modules { get; } =
+        [
+            WorkflowModuleRegistration.Create<AssignModule>("assign"),
+            WorkflowModuleRegistration.Create<ConditionalModule>("conditional"),
+            WorkflowModuleRegistration.Create<SwitchModule>("switch"),
+            WorkflowModuleRegistration.Create<TransformModule>("transform"),
+        ];
+    }
+
+    private sealed class LoopbackEventPublisher(WorkflowRunGAgent agent) : IEventPublisher
+    {
+        private readonly Queue<IMessage> _selfQueue = new();
+
+        public List<IMessage> ExternalPublished { get; } = [];
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            EventDirection direction = EventDirection.Down,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null)
+            where TEvent : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            if (direction == EventDirection.Self)
             {
-                switch (evt)
-                {
-                    case WorkflowCompletedEvent completed:
-                        return completed;
-                    case StepCompletedEvent completedStep:
-                        queue.Enqueue(completedStep);
-                        break;
-                    case StepRequestEvent request:
-                    {
-                        var completedStep = await ExecuteStepAsync(request, modules);
-                        queue.Enqueue(completedStep);
-                        break;
-                    }
-                }
+                _selfQueue.Enqueue(evt);
+                return Task.CompletedTask;
             }
+
+            ExternalPublished.Add(evt);
+            return Task.CompletedTask;
         }
 
-        throw new TimeoutException($"Workflow did not complete within transition budget ({maxTransitions}).");
-    }
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null)
+            where TEvent : IMessage =>
+            throw new NotSupportedException($"Closed-world proof does not support SendToAsync ({targetActorId}).");
 
-    private static async Task<StepCompletedEvent> ExecuteStepAsync(
-        StepRequestEvent request,
-        IReadOnlyDictionary<string, IEventModule> modules)
-    {
-        if (!modules.TryGetValue(request.StepType, out var module))
-            throw new InvalidOperationException($"No closed-world executor for step type '{request.StepType}'.");
-
-        var ctx = CreateContext();
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
-
-        return ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-    }
-
-    private static EventEnvelope Envelope(IMessage evt)
-    {
-        return new EventEnvelope
+        public async Task DrainAsync(int maxSelfEvents)
         {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-            PublisherId = "workflow-turing-test",
-            Direction = EventDirection.Self,
-        };
+            var processed = 0;
+            while (_selfQueue.Count > 0)
+            {
+                if (processed++ >= maxSelfEvents)
+                    throw new TimeoutException($"Workflow did not complete within self-event budget ({maxSelfEvents}).");
+
+                var next = _selfQueue.Dequeue();
+                await agent.HandleEventAsync(new EventEnvelope
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Payload = Any.Pack(next),
+                    PublisherId = agent.Id,
+                    Direction = EventDirection.Self,
+                    CorrelationId = Guid.NewGuid().ToString("N"),
+                });
+            }
+        }
     }
 
-    private static TestEventHandlerContext CreateContext()
+    private sealed class NullActorRuntime : IActorRuntime
     {
-        return new TestEventHandlerContext(
-            new ServiceCollection().BuildServiceProvider(),
-            new TestAgent("workflow-turing-proof-agent"),
-            NullLogger.Instance);
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateAsync(SystemType agentType, string? id = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
+
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
+    private sealed class ClosedWorldRoleAgent : IRoleAgent
+    {
+        public string Id => "closed-world-role";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("closed-world-role");
+
+        public Task<IReadOnlyList<SystemType>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<SystemType>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class StaticRoleAgentTypeResolver(SystemType roleAgentType) : IRoleAgentTypeResolver
+    {
+        public SystemType ResolveRoleAgentType() => roleAgentType;
+    }
 }

@@ -93,8 +93,8 @@ public sealed class WorkflowRunExecutionEngine : IWorkflowRunExecutionEngine
         EventEnvelope requestEnvelope,
         CancellationToken ct) =>
         _requestExecutor.ExecuteAsync(
-            runContext.Actor,
-            runContext.ActorId,
+            runContext.RunActor,
+            runContext.RunActorId,
             requestEnvelope,
             runContext.Sink,
             ct);

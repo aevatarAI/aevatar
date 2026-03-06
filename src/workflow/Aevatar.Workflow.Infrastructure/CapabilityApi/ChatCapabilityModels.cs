@@ -16,7 +16,7 @@ public sealed record ChatInput
     /// </summary>
     public string? Workflow { get; init; }
 
-    public string? AgentId { get; init; }
+    public string? DefinitionActorId { get; init; }
 
     /// <summary>
     /// Inline workflow YAML bundle for this request.
@@ -28,9 +28,9 @@ public sealed record ChatInput
 
 public sealed record WorkflowResumeInput
 {
-    public required string ActorId { get; init; }
+    public required string RunActorId { get; init; }
     public required string RunId { get; init; }
-    public required string StepId { get; init; }
+    public required string ResumeToken { get; init; }
     public string? CommandId { get; init; }
     public bool Approved { get; init; }
     public string? UserInput { get; init; }
@@ -39,9 +39,9 @@ public sealed record WorkflowResumeInput
 
 public sealed record WorkflowSignalInput
 {
-    public required string ActorId { get; init; }
+    public required string RunActorId { get; init; }
     public required string RunId { get; init; }
-    public required string SignalName { get; init; }
+    public required string WaitToken { get; init; }
     public string? CommandId { get; init; }
     public string? Payload { get; init; }
 }

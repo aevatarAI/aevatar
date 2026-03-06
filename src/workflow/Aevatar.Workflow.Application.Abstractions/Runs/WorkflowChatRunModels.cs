@@ -3,21 +3,22 @@ namespace Aevatar.Workflow.Application.Abstractions.Runs;
 public sealed record WorkflowChatRunRequest(
     string Prompt,
     string? WorkflowName,
-    string? ActorId,
+    string? DefinitionActorId,
     // Inline workflow YAML bundle; first item is the entry workflow.
     IReadOnlyList<string>? WorkflowYamls = null);
 
 public enum WorkflowChatRunStartError
 {
     None = 0,
-    AgentNotFound = 1,
+    DefinitionActorNotFound = 1,
     WorkflowNotFound = 2,
-    AgentTypeNotSupported = 3,
+    DefinitionActorTypeNotSupported = 3,
     ProjectionDisabled = 4,
-    WorkflowBindingMismatch = 5,
-    AgentWorkflowNotConfigured = 6,
+    DefinitionBindingMismatch = 5,
+    DefinitionActorWorkflowNotConfigured = 6,
     InvalidWorkflowYaml = 7,
     WorkflowNameMismatch = 8,
+    DefinitionSourceConflict = 9,
 }
 
 public enum WorkflowProjectionCompletionStatus
@@ -32,9 +33,10 @@ public enum WorkflowProjectionCompletionStatus
 }
 
 public sealed record WorkflowChatRunStarted(
-    string ActorId,
+    string RunActorId,
     string WorkflowName,
-    string CommandId);
+    string CommandId,
+    string? DefinitionActorId = null);
 
 public sealed record WorkflowChatRunFinalizeResult(
     WorkflowProjectionCompletionStatus ProjectionCompletionStatus,
@@ -50,7 +52,8 @@ public sealed record WorkflowChatRunExecutionResult(
 
 public sealed record WorkflowStateSnapshotPayload
 {
-    public required string ActorId { get; init; }
+    public required string RunActorId { get; init; }
+    public string? DefinitionActorId { get; init; }
     public required string WorkflowName { get; init; }
     public required string CommandId { get; init; }
     public required string ProjectionCompletionStatus { get; init; }

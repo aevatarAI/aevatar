@@ -95,7 +95,7 @@ public class MakerRecursiveRegressionTests
         string workflowYaml,
         string input)
     {
-        var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-maker-" + Guid.NewGuid().ToString("N")[..8]);
+        var actor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-maker-run-" + Guid.NewGuid().ToString("N")[..8]);
         await actor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),

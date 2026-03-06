@@ -1,5 +1,4 @@
 using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Core.Composition;
 
 namespace Aevatar.Demos.Workflow.Web;
 
@@ -15,8 +14,4 @@ public sealed class DemoWorkflowModulePack : IWorkflowModulePack
     public string Name => "workflow.demo.web.modules";
 
     public IReadOnlyList<WorkflowModuleRegistration> Modules => ModuleRegistrations;
-
-    public IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanders => [];
-
-    public IReadOnlyList<IWorkflowModuleConfigurator> Configurators => [];
 }

@@ -143,6 +143,51 @@ public class WorkflowAbstractionsProtoCoverageTests
     }
 
     [Fact]
+    public void HumanGateAndSignalEvents_ShouldRoundtripTokens()
+    {
+        var suspended = new WorkflowSuspendedEvent
+        {
+            RunId = "run-1",
+            StepId = "step-1",
+            SuspensionType = "human_input",
+            Prompt = "need input",
+            TimeoutSeconds = 30,
+            ResumeToken = "resume-token-1",
+        };
+        suspended.Metadata["variable"] = "user_input";
+
+        var resumed = new WorkflowResumedEvent
+        {
+            RunId = "run-1",
+            ResumeToken = "resume-token-1",
+            Approved = true,
+            UserInput = "ok",
+        };
+
+        var waiting = new WaitingForSignalEvent
+        {
+            RunId = "run-1",
+            StepId = "step-2",
+            SignalName = "approval",
+            Prompt = "waiting",
+            TimeoutMs = 1000,
+            WaitToken = "wait-token-1",
+        };
+
+        var signal = new SignalReceivedEvent
+        {
+            RunId = "run-1",
+            WaitToken = "wait-token-1",
+            Payload = "approved",
+        };
+
+        WorkflowSuspendedEvent.Parser.ParseFrom(suspended.ToByteArray()).ResumeToken.Should().Be("resume-token-1");
+        WorkflowResumedEvent.Parser.ParseFrom(resumed.ToByteArray()).ResumeToken.Should().Be("resume-token-1");
+        WaitingForSignalEvent.Parser.ParseFrom(waiting.ToByteArray()).WaitToken.Should().Be("wait-token-1");
+        SignalReceivedEvent.Parser.ParseFrom(signal.ToByteArray()).WaitToken.Should().Be("wait-token-1");
+    }
+
+    [Fact]
     public void WorkflowEvents_ShouldValidateNullAssignments()
     {
         var start = new StartWorkflowEvent();

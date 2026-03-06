@@ -56,7 +56,7 @@ public static class WorkflowPrimitiveCatalog
     private static readonly string[] IdentityPrimitives =
     [
         "transform", "assign", "retrieve_facts", "cache",
-        "conditional", "switch", "checkpoint", "workflow_loop",
+        "conditional", "switch", "checkpoint",
         "workflow_yaml_validate",
     ];
 

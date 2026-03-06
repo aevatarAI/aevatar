@@ -6,8 +6,10 @@ using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -565,6 +567,10 @@ public class WorkflowExecutionProjectionServiceTests
         // Use a dedicated local actor runtime for projection coordinator actors.
         var runtimeServices = new ServiceCollection();
         runtimeServices.AddSingleton<IEventStore, InMemoryEventStore>();
+        runtimeServices.AddSingleton<IStreamProvider>(streams);
+        runtimeServices.AddSingleton<InMemoryActorRuntimeCallbackScheduler>();
+        runtimeServices.AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
+            sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>());
         runtimeServices.AddSingleton<EventSourcingRuntimeOptions>();
         runtimeServices.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         var runtimeProvider = runtimeServices.BuildServiceProvider();

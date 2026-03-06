@@ -52,6 +52,7 @@ public sealed class WorkflowDirectFallbackPolicy
         request with
         {
             WorkflowName = WorkflowRunBehaviorOptions.DirectWorkflowName,
+            DefinitionActorId = null,
             WorkflowYamls = null,
         };
 }

@@ -19,6 +19,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var projectionPort = new CapturingProjectionPort();
         var factory = new WorkflowRunContextFactory(
             new ComponentRunActorResolver(actor, "direct"),
+            new TestWorkflowRunActorPort(actor),
             projectionPort,
             new DeterministicCommandContextPolicy(
                 commandId: "cmd-1",
@@ -34,7 +35,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
         result.Context.Should().NotBeNull();
-        result.Context!.ActorId.Should().Be("actor-1");
+        result.Context!.RunActorId.Should().Be("actor-1");
         result.Context.CommandId.Should().Be("cmd-1");
         result.Context.CommandContext.CorrelationId.Should().Be("corr-1");
         result.Context.CommandContext.Metadata[WorkflowRunCommandMetadataKeys.SessionId].Should().Be("corr-1");
@@ -50,6 +51,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var projectionPort = new CapturingProjectionPort { ProjectionEnabled = false };
         var factory = new WorkflowRunContextFactory(
             new ComponentRunActorResolver(actor, "direct"),
+            new TestWorkflowRunActorPort(actor),
             projectionPort,
             new DeterministicCommandContextPolicy("cmd-2", "corr-2"));
 
@@ -68,6 +70,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var projectionPort = new CapturingProjectionPort { ThrowOnAttach = true };
         var factory = new WorkflowRunContextFactory(
             new ComponentRunActorResolver(actor, "direct"),
+            new TestWorkflowRunActorPort(actor),
             projectionPort,
             new DeterministicCommandContextPolicy("cmd-3", "corr-3"));
 
@@ -199,7 +202,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         emitted.Should().Contain(f => f.Type == WorkflowRunEventTypes.StateSnapshot);
         var snapshotFrame = emitted.First(f => f.Type == WorkflowRunEventTypes.StateSnapshot);
         var payload = snapshotFrame.Snapshot.Should().BeOfType<WorkflowStateSnapshotPayload>().Subject;
-        payload.ActorId.Should().Be("actor-7");
+        payload.RunActorId.Should().Be("actor-7");
         payload.CommandId.Should().Be("cmd-7");
         payload.ProjectionCompletionStatus.Should().Be(WorkflowProjectionCompletionStatus.Completed.ToString());
         payload.ProjectionCompleted.Should().BeTrue();
@@ -272,7 +275,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var resolvedSink = sink ?? new EventChannel<WorkflowRunEvent>();
         return new WorkflowRunContext
         {
-            Actor = new ComponentActor(actorId),
+            RunActor = new ComponentActor(actorId),
             WorkflowName = "direct",
             Sink = resolvedSink,
             CommandId = commandId,
@@ -302,8 +305,73 @@ public sealed class WorkflowRunOrchestrationComponentTests
         {
             _ = request;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new WorkflowActorResolutionResult(_actor, _workflowName, WorkflowChatRunStartError.None));
+            return Task.FromResult(new WorkflowActorResolutionResult(_actor, _workflowName, null, WorkflowChatRunStartError.None));
         }
+    }
+
+    private sealed class TestWorkflowRunActorPort : IWorkflowRunActorPort
+    {
+        private readonly Dictionary<string, IActor> _actorsById;
+
+        public TestWorkflowRunActorPort(params IActor[] actors)
+        {
+            _actorsById = actors.ToDictionary(x => x.Id, StringComparer.Ordinal);
+        }
+
+        public Task<IActor?> GetDefinitionActorAsync(string definitionActorId, CancellationToken ct = default)
+        {
+            _ = ct;
+            _actorsById.TryGetValue(definitionActorId, out var actor);
+            return Task.FromResult(actor);
+        }
+
+        public Task<IActor?> GetRunActorAsync(string runActorId, CancellationToken ct = default)
+        {
+            _ = ct;
+            _actorsById.TryGetValue(runActorId, out var actor);
+            return Task.FromResult(actor);
+        }
+
+        public Task<IActor> CreateRunActorAsync(CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyRunActorAsync(string runActorId, CancellationToken ct = default)
+        {
+            _ = ct;
+            _actorsById.Remove(runActorId);
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> IsWorkflowDefinitionActorAsync(IActor actor, CancellationToken ct = default)
+        {
+            _ = actor;
+            _ = ct;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> IsWorkflowRunActorAsync(IActor actor, CancellationToken ct = default)
+        {
+            _ = actor;
+            _ = ct;
+            return Task.FromResult(true);
+        }
+
+        public Task<WorkflowDefinitionBindingSnapshot?> GetDefinitionBindingSnapshotAsync(IActor actor, CancellationToken ct = default)
+        {
+            _ = actor;
+            _ = ct;
+            return Task.FromResult<WorkflowDefinitionBindingSnapshot?>(null);
+        }
+
+        public Task BindWorkflowDefinitionAsync(
+            IActor runActor,
+            string workflowYaml,
+            string workflowName,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
+            Task.FromResult(WorkflowYamlParseResult.Success("test"));
     }
 
     private sealed class DeterministicCommandContextPolicy : ICommandContextPolicy

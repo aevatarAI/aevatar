@@ -383,6 +383,8 @@ public sealed class WorkflowSuspendedAGUIEventEnvelopeMappingHandler : IAGUIEven
         var metadata = new Dictionary<string, string>();
         foreach (var (key, value) in evt.Metadata)
             metadata[key] = value;
+        if (!string.IsNullOrWhiteSpace(evt.ResumeToken))
+            metadata["resume_token"] = evt.ResumeToken;
 
         events =
         [
@@ -432,6 +434,7 @@ public sealed class WorkflowWaitingSignalAGUIEventEnvelopeMappingHandler : IAGUI
                     evt.SignalName,
                     evt.Prompt,
                     evt.TimeoutMs,
+                    evt.WaitToken,
                 },
             },
         ];

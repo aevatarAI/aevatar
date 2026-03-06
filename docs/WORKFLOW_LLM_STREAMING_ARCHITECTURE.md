@@ -5,7 +5,7 @@
 本文档描述 Workflow 能力中 LLM 文本流的完整技术链路，覆盖：
 
 1. `Host -> Application -> Domain -> Projection -> SSE/WS` 端到端执行路径。
-2. 会话语义（`actorId/commandId/sessionId/messageId`）与事实源落点。
+2. 会话语义（`runActorId/definitionActorId/commandId/sessionId/messageId`）与事实源落点。
 3. 统一投影链路中的分支协作（读模型分支 + AGUI 实时分支）。
 4. 当前支持的流类型与扩展到非文本流的演进路径。
 
@@ -34,7 +34,7 @@
 |---|---|---|
 | Host | `WorkflowCapabilityEndpoints`、`ChatSseResponseWriter`、`ChatWebSocketRunCoordinator` | 协议适配（HTTP/SSE/WS），不编排业务 |
 | Application | `WorkflowRunContextFactory`、`WorkflowRunExecutionEngine`、`WorkflowRunOutputStreamer` | 上下文构建、执行调度、输出帧流化 |
-| Domain/AI | `WorkflowGAgent`、`LLMCallModule`、`RoleGAgent`、`ChatRuntime` | 触发 LLM 调用、发布文本/工具事件 |
+| Domain/AI | `WorkflowGAgent`、`WorkflowRunGAgent`、`RoleGAgent`、`ChatRuntime` | definition 绑定、run 推进、触发 LLM 调用、发布文本/工具事件 |
 | Projection | `WorkflowExecutionReadModelProjector`、`WorkflowExecutionAGUIEventProjector` | 读模型更新 + 实时事件分发 |
 | Streaming | `ProjectionSessionEventHub<WorkflowRunEvent>`、`EventChannel<WorkflowRunEvent>` | 会话事件总线与 live sink 通道 |
 
@@ -64,13 +64,13 @@ flowchart TB
     APP --> ENG["WorkflowRunExecutionEngine"]
     ENG --> FAC["WorkflowChatRequestEnvelopeFactory"]
     ENG --> EXE["IWorkflowRunRequestExecutor"]
-    EXE --> ACT["WorkflowGAgent / RoleGAgent"]
+    EXE --> ACT["WorkflowRunGAgent / RoleGAgent"]
     ACT --> EVT["EventEnvelope Stream"]
     EVT --> COOR["ProjectionCoordinator"]
     COOR --> RM["WorkflowExecutionReadModelProjector"]
     COOR --> AGP["WorkflowExecutionAGUIEventProjector"]
     AGP --> MAP["EventEnvelopeToAGUIEventMapper"]
-    MAP --> HUB["ProjectionSessionEventHub\nworkflow-run:{actorId}:{commandId}"]
+    MAP --> HUB["ProjectionSessionEventHub\nworkflow-run:{runActorId}:{commandId}"]
     HUB --> FWD["EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>"]
     FWD --> CH["EventChannel<WorkflowRunEvent>"]
     CH --> STR["WorkflowRunOutputStreamer"]
@@ -190,19 +190,19 @@ sequenceDiagram
 
 该路径用于 `human_input` / `human_approval` / `wait_signal` 的外部回传，约束如下：
 
-1. 请求必须显式携带 `actorId + runId`（无中间层 `runId -> actorId` 内存映射）。
-2. `resume` 还需携带 `stepId`；`signal` 还需携带 `signalName`。
+1. 请求必须显式携带 `runActorId + runId`（无中间层 `runId -> actorId` 内存映射）。
+2. `resume` 还需携带 `resumeToken`；`signal` 还需携带 `waitToken`。
 3. Endpoint 通过 `IWorkflowRunActorPort` 定位 actor 后，分别投递 `WorkflowResumedEvent` / `SignalReceivedEvent`。
-4. `wait_signal` 的 runId 以 `WaitingForSignalEvent.run_id` 为准，不再通过 `CorrelationId` 推断。
+4. token 命中、晚到事件拒绝和状态对账都在 `WorkflowRunGAgent` 内完成。
 
 最小请求示例：
 
 ```json
 POST /api/workflows/resume
 {
-  "actorId": "wf-2f3f...",
+  "runActorId": "wf-run-2f3f...",
   "runId": "run-8b34...",
-  "stepId": "approval_gate",
+  "resumeToken": "resume-token",
   "approved": true,
   "userInput": "LGTM"
 }
@@ -211,9 +211,9 @@ POST /api/workflows/resume
 ```json
 POST /api/workflows/signal
 {
-  "actorId": "wf-2f3f...",
+  "runActorId": "wf-run-2f3f...",
   "runId": "run-8b34...",
-  "signalName": "ops_window_open",
+  "waitToken": "wait-token",
   "payload": "window=2026-02-25T21:00Z"
 }
 ```
@@ -250,11 +250,12 @@ flowchart LR
 
 | 标识 | 生成位置 | 语义范围 | 事实源 | 主要消费点 |
 |---|---|---|---|---|
-| `actorId` | `WorkflowRunActorResolver` | Workflow Actor 维度 | Actor Runtime | 投影上下文、查询接口 |
-| `commandId` | `WorkflowCommandContextPolicy` | 一次 run 命令维度 | Application CommandContext | `workflow-run:{actorId}:{commandId}` 会话流 |
+| `runActorId` | `WorkflowRunActorResolver` | Workflow run actor 维度 | Actor Runtime | 投影上下文、查询接口、resume/signal |
+| `definitionActorId` | `WorkflowRunActorResolver` | workflow definition 来源维度 | definition actor binding | 绑定来源追踪 |
+| `commandId` | `WorkflowCommandContextPolicy` | 一次 run 命令维度 | Application CommandContext | `workflow-run:{runActorId}:{commandId}` 会话流 |
 | `correlationId` | `WorkflowCommandContextPolicy` | 与 `commandId` 同步（默认同值） | Application CommandContext | `EventEnvelope.CorrelationId` |
 | `sessionId` | `WorkflowRunCommandMetadataKeys.SessionId` | 本次 chat 会话维度 | Command metadata | `ChatRequestEvent.SessionId` |
-| `chatSessionId` | `ChatSessionKeys.CreateWorkflowStepSessionId` | 单 workflow step 维度 | `scopeId:stepId` 规则 | `LLMCallModule` pending 匹配 |
+| `chatSessionId` | `ChatSessionKeys.CreateWorkflowStepSessionId` | 单 workflow step 尝试维度 | `scopeId:runId:stepId:attempt` 规则 | `WorkflowRunState.pending_llm_calls` 匹配 |
 | `messageId` | AGUI mapper | 单消息流维度 | `msg:{sessionId}` 或 `msg:{envelopeId}` | 文本增量拼装 |
 
 锚点：
@@ -263,13 +264,13 @@ flowchart LR
 2. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunContextFactory.cs:41`
 3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRequestEnvelopeFactory.cs:13`
 4. `src/Aevatar.AI.Abstractions/ChatSessionKeys.cs:8`
-5. `src/workflow/Aevatar.Workflow.Core/Modules/LLMCallModule.cs:58`
+5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`
 6. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/EventEnvelopeToAGUIEventMapper.cs:339`
 
 ### 7.2 运行态约束
 
 1. live sink 订阅通过 `lease + sink` 显式绑定，订阅对象保存在 `WorkflowExecutionRuntimeLease` 的运行态集合。
-2. 会话事件分发按 `scopeId=session actorId` 和 `sessionId=commandId` 二元键，不依赖中间层全局 `actorId->context` 映射。
+2. 会话事件分发按 `scopeId=session runActorId` 和 `sessionId=commandId` 二元键，不依赖中间层全局 `actorId->context` 映射。
 3. sink 写入失败会按策略 detach，并尝试发布 run error 遥测事件。
 
 锚点：
@@ -322,7 +323,7 @@ flowchart LR
 |---|---|---|
 | 文本增量流（delta text） | 已支持 | 主链路能力 |
 | 工具调用结果流 | 已支持 | 通过 AGUI ToolCall 映射进入统一输出 |
-| 状态快照流 | 已支持 | `STATE_SNAPSHOT` 统一携带 `actorId/commandId/projectionCompletion*` 与可选 projection snapshot |
+| 状态快照流 | 已支持 | `STATE_SNAPSHOT` 统一携带 `runActorId/commandId/projectionCompletion*` 与可选 projection snapshot |
 | 人工交互事件流 | 已支持 | `CUSTOM` 事件输出 `aevatar.step.request` / `aevatar.step.completed` / `aevatar.workflow.waiting_signal`（含显式 runId），用于 UI 渲染与回传 |
 | 流式 `DeltaToolCall` | 已支持 | Provider -> `ChatRuntime` -> `RoleGAgent` 贯通，转为 `ToolCallEvent` |
 | WS 二进制命令/事件帧 | 已支持 | `ChatWebSocketProtocol` + `ChatWebSocketMessageContracts` 统一 text/binary 与 `ack/event/error` 强类型出站 |

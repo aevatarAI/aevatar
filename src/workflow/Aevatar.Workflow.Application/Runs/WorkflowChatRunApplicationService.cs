@@ -35,7 +35,7 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowRunCommandServi
         catch (Exception ex) when (_fallbackPolicy.ShouldFallback(request, ex))
         {
             var fallbackRequest = _fallbackPolicy.ToFallbackRequest(request);
-            _logger.LogWarning(ex, "Workflow run failed and falls back to direct. workflow={WorkflowName}, actorId={ActorId}, hasInlineYamls={HasInlineYamls}", request.WorkflowName ?? "<null>", request.ActorId ?? "<null>", request.WorkflowYamls is { Count: > 0 });
+            _logger.LogWarning(ex, "Workflow run failed and falls back to direct. workflow={WorkflowName}, definitionActorId={DefinitionActorId}, hasInlineYamls={HasInlineYamls}", request.WorkflowName ?? "<null>", request.DefinitionActorId ?? "<null>", request.WorkflowYamls is { Count: > 0 });
             return await ExecuteWithoutFallbackAsync(fallbackRequest, emitAsync, onStartedAsync, ct);
         }
     }

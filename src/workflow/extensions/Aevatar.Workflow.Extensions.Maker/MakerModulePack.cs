@@ -1,5 +1,4 @@
 using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Extensions.Maker.Modules;
 
 namespace Aevatar.Workflow.Extensions.Maker;
@@ -18,8 +17,4 @@ public sealed class MakerModulePack : IWorkflowModulePack
     public string Name => "workflow.extensions.maker";
 
     public IReadOnlyList<WorkflowModuleRegistration> Modules => ModuleRegistrations;
-
-    public IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanders => [];
-
-    public IReadOnlyList<IWorkflowModuleConfigurator> Configurators => [];
 }

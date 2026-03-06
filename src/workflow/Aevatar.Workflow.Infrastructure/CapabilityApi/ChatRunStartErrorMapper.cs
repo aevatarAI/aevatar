@@ -9,14 +9,15 @@ internal static class ChatRunStartErrorMapper
     {
         return error switch
         {
-            WorkflowChatRunStartError.AgentNotFound => StatusCodes.Status404NotFound,
+            WorkflowChatRunStartError.DefinitionActorNotFound => StatusCodes.Status404NotFound,
             WorkflowChatRunStartError.WorkflowNotFound => StatusCodes.Status404NotFound,
-            WorkflowChatRunStartError.AgentTypeNotSupported => StatusCodes.Status400BadRequest,
+            WorkflowChatRunStartError.DefinitionActorTypeNotSupported => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.ProjectionDisabled => StatusCodes.Status503ServiceUnavailable,
-            WorkflowChatRunStartError.WorkflowBindingMismatch => StatusCodes.Status409Conflict,
-            WorkflowChatRunStartError.AgentWorkflowNotConfigured => StatusCodes.Status409Conflict,
+            WorkflowChatRunStartError.DefinitionBindingMismatch => StatusCodes.Status409Conflict,
+            WorkflowChatRunStartError.DefinitionActorWorkflowNotConfigured => StatusCodes.Status409Conflict,
             WorkflowChatRunStartError.InvalidWorkflowYaml => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.WorkflowNameMismatch => StatusCodes.Status400BadRequest,
+            WorkflowChatRunStartError.DefinitionSourceConflict => StatusCodes.Status400BadRequest,
             _ => StatusCodes.Status400BadRequest,
         };
     }
@@ -25,15 +26,16 @@ internal static class ChatRunStartErrorMapper
     {
         return error switch
         {
-            WorkflowChatRunStartError.AgentNotFound => ("AGENT_NOT_FOUND", "Agent not found."),
+            WorkflowChatRunStartError.DefinitionActorNotFound => ("DEFINITION_ACTOR_NOT_FOUND", "Definition actor not found."),
             WorkflowChatRunStartError.WorkflowNotFound => ("WORKFLOW_NOT_FOUND", "Workflow not found."),
-            WorkflowChatRunStartError.AgentTypeNotSupported => ("AGENT_TYPE_NOT_SUPPORTED", "Agent is not WorkflowGAgent."),
+            WorkflowChatRunStartError.DefinitionActorTypeNotSupported => ("DEFINITION_ACTOR_TYPE_NOT_SUPPORTED", "Definition actor is not workflow-bound."),
             WorkflowChatRunStartError.ProjectionDisabled => ("PROJECTION_DISABLED", "Projection pipeline is disabled."),
-            WorkflowChatRunStartError.WorkflowBindingMismatch => ("WORKFLOW_BINDING_MISMATCH", "Actor is bound to a different workflow."),
-            WorkflowChatRunStartError.AgentWorkflowNotConfigured => ("AGENT_WORKFLOW_NOT_CONFIGURED", "Actor has no bound workflow."),
+            WorkflowChatRunStartError.DefinitionBindingMismatch => ("DEFINITION_BINDING_MISMATCH", "Definition actor is bound to a different workflow."),
+            WorkflowChatRunStartError.DefinitionActorWorkflowNotConfigured => ("DEFINITION_ACTOR_WORKFLOW_NOT_CONFIGURED", "Definition actor has no bound workflow."),
             WorkflowChatRunStartError.InvalidWorkflowYaml => ("INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),
             WorkflowChatRunStartError.WorkflowNameMismatch => ("WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
-            _ => ("RUN_START_FAILED", "Failed to resolve actor."),
+            WorkflowChatRunStartError.DefinitionSourceConflict => ("DEFINITION_SOURCE_CONFLICT", "Provide either definitionActorId or workflowYamls, not both."),
+            _ => ("RUN_START_FAILED", "Failed to resolve workflow run."),
         };
     }
 }

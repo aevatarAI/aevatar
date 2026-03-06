@@ -57,7 +57,7 @@ public class ChatWebSocketCommandParserTests
     [Fact]
     public void TryParse_ValidCommand_ShouldReturnEnvelope()
     {
-        var frame = TextFrame("""{"type":"chat.command","requestId":"req-9","payload":{"prompt":"hello","workflow":"direct","workflowYamls":["name: direct"],"agentId":"a-1"}}""");
+        var frame = TextFrame("""{"type":"chat.command","requestId":"req-9","payload":{"prompt":"hello","workflow":"direct","workflowYamls":["name: direct"],"definitionActorId":"a-1"}}""");
 
         var ok = ChatWebSocketCommandParser.TryParse(frame, out var envelope, out _);
 
@@ -67,7 +67,7 @@ public class ChatWebSocketCommandParserTests
         envelope.Input.Workflow.Should().Be("direct");
         envelope.Input.WorkflowYamls.Should().NotBeNull();
         envelope.Input.WorkflowYamls![0].Should().Be("name: direct");
-        envelope.Input.AgentId.Should().Be("a-1");
+        envelope.Input.DefinitionActorId.Should().Be("a-1");
     }
 
     [Fact]

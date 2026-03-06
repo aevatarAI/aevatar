@@ -20,8 +20,11 @@ internal static class ChatRunRequestNormalizer
 {
     public static ChatRunRequestNormalizationResult Normalize(ChatInput input)
     {
-        var normalizedAgentId = NormalizeAgentId(input.AgentId);
+        var normalizedDefinitionActorId = NormalizeActorId(input.DefinitionActorId);
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
+        if (!string.IsNullOrWhiteSpace(normalizedDefinitionActorId) && inlineWorkflowYamls.Count > 0)
+            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.DefinitionSourceConflict);
+
         if (inlineWorkflowYamls.Count > 0)
         {
             // Inline YAML bundle has explicit precedence over workflow-name lookup.
@@ -29,7 +32,7 @@ internal static class ChatRunRequestNormalizer
                 new WorkflowChatRunRequest(
                     input.Prompt,
                     WorkflowName: null,
-                    normalizedAgentId,
+                    DefinitionActorId: null,
                     inlineWorkflowYamls));
         }
 
@@ -40,19 +43,19 @@ internal static class ChatRunRequestNormalizer
                 new WorkflowChatRunRequest(
                     input.Prompt,
                     requestedWorkflowName,
-                    normalizedAgentId,
+                    normalizedDefinitionActorId,
                     WorkflowYamls: null));
         }
 
         // Public default mode: only actor-creation requests route to auto.
-        var defaultWorkflowName = string.IsNullOrWhiteSpace(normalizedAgentId)
+        var defaultWorkflowName = string.IsNullOrWhiteSpace(normalizedDefinitionActorId)
             ? WorkflowRunBehaviorOptions.AutoWorkflowName
             : null;
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
                 input.Prompt,
                 defaultWorkflowName,
-                normalizedAgentId,
+                normalizedDefinitionActorId,
                 WorkflowYamls: null));
     }
 
@@ -70,6 +73,6 @@ internal static class ChatRunRequestNormalizer
     private static string NormalizeWorkflowName(string? workflowName) =>
         string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
 
-    private static string? NormalizeAgentId(string? agentId) =>
-        string.IsNullOrWhiteSpace(agentId) ? null : agentId.Trim();
+    private static string? NormalizeActorId(string? actorId) =>
+        string.IsNullOrWhiteSpace(actorId) ? null : actorId.Trim();
 }
