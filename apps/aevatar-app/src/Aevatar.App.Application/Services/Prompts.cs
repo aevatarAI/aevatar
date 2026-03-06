@@ -29,8 +29,8 @@ public static class Prompts
         """;
 
     public const string ImageStyle =
-        "Cute 3D render, soft smooth clay texture, floating in mid-air, completely isolated on a transparent background, NO SHADOW, NO DROP SHADOW, NO VIGNETTE, bright evenly lit, soft studio lighting, pastel colors, whimsical, clean distinct edges, 3D icon aesthetic, c4d render, hyper-realistic lighting, subtle matte and shiny texture mix on surfaces, highly detailed clean cutout.";
-
+        "SOLID MAGENTA #FF00FF BACKGROUND ONLY. Cute 3D render, soft smooth clay texture, floating in mid-air, completely isolated, NO SHADOW, NO DROP SHADOW, NO VIGNETTE, bright evenly lit, soft studio lighting, pastel colors, whimsical, clean distinct edges, 3D icon aesthetic, c4d render, hyper-realistic lighting, subtle matte and shiny texture mix on surfaces, highly detailed clean cutout. BACKGROUND MUST BE FLAT SOLID MAGENTA #FF00FF, NO GRADIENTS, NO VIGNETTE, NO SHADOWS ON BACKGROUND.";
+        
     public static string PlantImage(string plantName, string plantDescription, string stage) => stage switch
     {
         "seed" => $"A cute, single magical seed of a {plantName} floating. 3D clay render, minimalist, adorable, glowing details, no shadow. {ImageStyle}",

@@ -4,17 +4,22 @@ using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 
 namespace Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka;
 
-internal sealed class MassTransitKafkaEnvelopeTransport : IMassTransitEnvelopeTransport
+internal sealed class MassTransitKafkaEnvelopeTransport : IMassTransitEnvelopeTransport, IDisposable
 {
     private readonly Lazy<ITopicProducer<KafkaStreamEnvelopeMessage>> _producer;
     private readonly MassTransitKafkaEnvelopeDispatcher _dispatcher;
+    private IServiceScope? _producerScope;
 
     [ActivatorUtilitiesConstructor]
     public MassTransitKafkaEnvelopeTransport(
-        IServiceProvider serviceProvider,
+        IServiceScopeFactory scopeFactory,
         MassTransitKafkaEnvelopeDispatcher dispatcher)
         : this(
-            () => serviceProvider.GetRequiredService<ITopicProducer<KafkaStreamEnvelopeMessage>>(),
+            () =>
+            {
+                var scope = scopeFactory.CreateScope();
+                return (scope, scope.ServiceProvider.GetRequiredService<ITopicProducer<KafkaStreamEnvelopeMessage>>());
+            },
             dispatcher)
     {
     }
@@ -22,16 +27,26 @@ internal sealed class MassTransitKafkaEnvelopeTransport : IMassTransitEnvelopeTr
     internal MassTransitKafkaEnvelopeTransport(
         ITopicProducer<KafkaStreamEnvelopeMessage> producer,
         MassTransitKafkaEnvelopeDispatcher dispatcher)
-        : this(() => producer, dispatcher)
+        : this(() => (null, producer), dispatcher)
     {
     }
 
     private MassTransitKafkaEnvelopeTransport(
-        Func<ITopicProducer<KafkaStreamEnvelopeMessage>> resolveProducer,
+        Func<(IServiceScope? Scope, ITopicProducer<KafkaStreamEnvelopeMessage> Producer)> resolveProducer,
         MassTransitKafkaEnvelopeDispatcher dispatcher)
     {
-        _producer = new Lazy<ITopicProducer<KafkaStreamEnvelopeMessage>>(resolveProducer);
+        _producer = new Lazy<ITopicProducer<KafkaStreamEnvelopeMessage>>(() =>
+        {
+            var (scope, producer) = resolveProducer();
+            _producerScope = scope;
+            return producer;
+        });
         _dispatcher = dispatcher;
+    }
+
+    public void Dispose()
+    {
+        _producerScope?.Dispose();
     }
 
     public Task PublishAsync(
