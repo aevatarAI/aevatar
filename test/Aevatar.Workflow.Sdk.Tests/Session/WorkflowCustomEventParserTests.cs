@@ -67,6 +67,48 @@ public sealed class WorkflowCustomEventParserTests
         ok.Should().BeFalse();
     }
 
+    [Fact]
+    public void TryParseSignalBuffered_ShouldReturnTypedPayload()
+    {
+        var frame = new WorkflowOutputFrame
+        {
+            Type = WorkflowEventTypes.Custom,
+            Name = WorkflowCustomEventNames.SignalBuffered,
+            Value = ParseObject("""{"runId":"run-2","stepId":"wait-2","signalName":"continue","payload":"ok","receivedAtUnixTimeMs":1710000000000}"""),
+        };
+
+        var ok = WorkflowCustomEventParser.TryParseSignalBuffered(frame, out var data);
+
+        ok.Should().BeTrue();
+        data.RunId.Should().Be("run-2");
+        data.StepId.Should().Be("wait-2");
+        data.SignalName.Should().Be("continue");
+        data.Payload.Should().Be("ok");
+        data.ReceivedAtUnixTimeMs.Should().Be(1710000000000);
+    }
+
+    [Fact]
+    public void TryParseBridgeCallbackForwarded_ShouldReturnTypedPayload()
+    {
+        var frame = new WorkflowOutputFrame
+        {
+            Type = WorkflowEventTypes.Custom,
+            Name = WorkflowCustomEventNames.BridgeCallbackForwarded,
+            Value = ParseObject("""{"tokenId":"tok-1","actorId":"actor-1","runId":"run-1","stepId":"wait-1","signalName":"ready","late":true,"source":"telegram.openclaw"}"""),
+        };
+
+        var ok = WorkflowCustomEventParser.TryParseBridgeCallbackForwarded(frame, out var data);
+
+        ok.Should().BeTrue();
+        data.TokenId.Should().Be("tok-1");
+        data.ActorId.Should().Be("actor-1");
+        data.RunId.Should().Be("run-1");
+        data.StepId.Should().Be("wait-1");
+        data.SignalName.Should().Be("ready");
+        data.Late.Should().BeTrue();
+        data.Source.Should().Be("telegram.openclaw");
+    }
+
     private static JsonElement ParseObject(string json)
     {
         using var document = JsonDocument.Parse(json);

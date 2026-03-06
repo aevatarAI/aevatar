@@ -21,6 +21,14 @@ public interface IAevatarWorkflowClient
         WorkflowSignalRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<BridgeCallbackTokenIssueResponse> IssueBridgeCallbackTokenAsync(
+        BridgeCallbackTokenIssueRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<BridgeIngressResponse> PostBridgeCallbackAsync(
+        BridgeIngressRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<JsonElement>> GetWorkflowCatalogAsync(
         CancellationToken cancellationToken = default);
 

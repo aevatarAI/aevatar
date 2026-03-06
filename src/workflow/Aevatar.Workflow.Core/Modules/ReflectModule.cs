@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
+using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -12,7 +13,13 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class ReflectModule : IEventModule
 {
+    private readonly WorkflowStepTargetAgentResolver? _targetAgentResolver;
     private readonly Dictionary<string, ReflectState> _pendingLLM = [];
+
+    public ReflectModule(WorkflowStepTargetAgentResolver? targetAgentResolver = null)
+    {
+        _targetAgentResolver = targetAgentResolver;
+    }
 
     public string Name => "reflect";
     public int Priority => 5;
@@ -40,11 +47,41 @@ public sealed class ReflectModule : IEventModule
             var criteria = request.Parameters.GetValueOrDefault("criteria", "quality and correctness");
             maxRounds = Math.Clamp(maxRounds, 1, 10);
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
+            var chatMetadataParameters = request.Parameters.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value,
+                StringComparer.OrdinalIgnoreCase);
 
-            var state = new ReflectState(request.StepId, runId, request.TargetRole ?? "", request.Input ?? "",
-                criteria, maxRounds, 0, ReflectPhase.Critique);
+            WorkflowStepTargetAgentResolution target;
+            try
+            {
+                target = await ResolveTargetAgentResolver(ctx).ResolveAsync(request, ctx, ct);
+            }
+            catch (Exception ex)
+            {
+                await PublishFailedCompletionAsync(request.StepId, runId, $"reflect target resolution failed: {ex.Message}", ctx, ct);
+                return;
+            }
 
-            await SendCritiqueAsync(state, request.Input ?? "", ctx, ct);
+            var state = new ReflectState(
+                request.StepId,
+                runId,
+                target.UseSelf ? string.Empty : target.ActorId,
+                request.Input ?? "",
+                criteria,
+                maxRounds,
+                chatMetadataParameters,
+                0,
+                ReflectPhase.Critique);
+
+            try
+            {
+                await SendCritiqueAsync(state, request.Input ?? "", ctx, ct);
+            }
+            catch (Exception ex)
+            {
+                await PublishFailedCompletionAsync(request.StepId, runId, $"reflect dispatch failed: {ex.Message}", ctx, ct);
+            }
             return;
         }
 
@@ -85,12 +122,26 @@ public sealed class ReflectModule : IEventModule
             }
 
             var next = state2 with { Round = round, Phase = ReflectPhase.Improve };
-            await SendImproveAsync(next, content, ctx, ct);
+            try
+            {
+                await SendImproveAsync(next, content, ctx, ct);
+            }
+            catch (Exception ex)
+            {
+                await PublishFailedCompletionAsync(state2.StepId, state2.RunId, $"reflect improve dispatch failed: {ex.Message}", ctx, ct);
+            }
         }
         else
         {
             var next = state2 with { CurrentDraft = content, Phase = ReflectPhase.Critique };
-            await SendCritiqueAsync(next, content, ctx, ct);
+            try
+            {
+                await SendCritiqueAsync(next, content, ctx, ct);
+            }
+            catch (Exception ex)
+            {
+                await PublishFailedCompletionAsync(state2.StepId, state2.RunId, $"reflect critique dispatch failed: {ex.Message}", ctx, ct);
+            }
         }
     }
 
@@ -108,13 +159,15 @@ public sealed class ReflectModule : IEventModule
         var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, state.RunId, $"{state.StepId}_r{state.Round}_critique");
         _pendingLLM[sessionId] = state;
 
-        if (!string.IsNullOrEmpty(state.TargetRole))
+        var chatRequest = new ChatRequestEvent { Prompt = prompt, SessionId = sessionId };
+        CopyParametersToChatMetadata(state.ChatMetadataParameters, chatRequest.Metadata);
+
+        if (!string.IsNullOrEmpty(state.TargetActorId))
         {
-            var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, state.TargetRole);
-            await ctx.SendToAsync(targetActorId, new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, ct);
+            await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
         }
         else
-            await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, EventDirection.Self, ct);
+            await ctx.PublishAsync(chatRequest, EventDirection.Self, ct);
     }
 
     private async Task SendImproveAsync(ReflectState state, string critique, IEventHandlerContext ctx, CancellationToken ct)
@@ -132,18 +185,69 @@ public sealed class ReflectModule : IEventModule
         var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, state.RunId, $"{state.StepId}_r{state.Round}_improve");
         _pendingLLM[sessionId] = state;
 
-        if (!string.IsNullOrEmpty(state.TargetRole))
+        var chatRequest = new ChatRequestEvent { Prompt = prompt, SessionId = sessionId };
+        CopyParametersToChatMetadata(state.ChatMetadataParameters, chatRequest.Metadata);
+
+        if (!string.IsNullOrEmpty(state.TargetActorId))
         {
-            var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, state.TargetRole);
-            await ctx.SendToAsync(targetActorId, new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, ct);
+            await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
         }
         else
-            await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, EventDirection.Self, ct);
+            await ctx.PublishAsync(chatRequest, EventDirection.Self, ct);
     }
+
+    private static Task PublishFailedCompletionAsync(
+        string stepId,
+        string runId,
+        string error,
+        IEventHandlerContext ctx,
+        CancellationToken ct) =>
+        ctx.PublishAsync(
+            new StepCompletedEvent
+            {
+                StepId = stepId,
+                RunId = runId,
+                Success = false,
+                Error = error,
+                WorkerId = ctx.AgentId,
+            },
+            EventDirection.Self,
+            ct);
 
     private enum ReflectPhase { Critique, Improve }
 
+    private static void CopyParametersToChatMetadata(
+        IReadOnlyDictionary<string, string> parameters,
+        MapField<string, string> metadata)
+    {
+        foreach (var (key, value) in parameters)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+                continue;
+            if (string.Equals(key, "agent_type", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(key, "agent_id", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            metadata[key.Trim()] = value.Trim();
+        }
+    }
+
+    private WorkflowStepTargetAgentResolver ResolveTargetAgentResolver(IEventHandlerContext ctx)
+    {
+        if (_targetAgentResolver != null)
+            return _targetAgentResolver;
+
+        var resolver = ctx.Services.GetService(typeof(WorkflowStepTargetAgentResolver)) as WorkflowStepTargetAgentResolver;
+        if (resolver != null)
+            return resolver;
+
+        throw new InvalidOperationException(
+            $"{nameof(WorkflowStepTargetAgentResolver)} is not registered in DI and was not provided to {nameof(ReflectModule)}.");
+    }
+
     private sealed record ReflectState(
-        string StepId, string RunId, string TargetRole, string CurrentDraft,
-        string Criteria, int MaxRounds, int Round, ReflectPhase Phase);
+        string StepId, string RunId, string TargetActorId, string CurrentDraft,
+        string Criteria, int MaxRounds, IReadOnlyDictionary<string, string> ChatMetadataParameters, int Round, ReflectPhase Phase);
 }

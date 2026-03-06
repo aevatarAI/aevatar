@@ -55,8 +55,13 @@ public static class WorkflowValidator
         var roleIds = wf.Roles.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var step in allSteps)
         {
-            if (!string.IsNullOrWhiteSpace(step.TargetRole) && !roleIds.Contains(step.TargetRole))
+            var hasAgentTypeOverride = HasAgentTypeOverride(step);
+            if (!hasAgentTypeOverride &&
+                !string.IsNullOrWhiteSpace(step.TargetRole) &&
+                !roleIds.Contains(step.TargetRole))
+            {
                 errors.Add($"步骤 '{step.Id}' 引用不存在的角色 '{step.TargetRole}'");
+            }
 
             if (!string.IsNullOrWhiteSpace(step.Next) && !stepIds.Contains(step.Next))
                 errors.Add($"步骤 '{step.Id}' 的 next 引用不存在的步骤 '{step.Next}'");
@@ -122,6 +127,8 @@ public static class WorkflowValidator
                     $"步骤 '{step.Id}' 的参数 '{key}' 使用未知原语 '{value}'（canonical='{parameterStepType}'）");
             }
         }
+
+        ValidateAgentTypeParameters(step, errors);
 
         if (stepType == "conditional")
         {
@@ -220,6 +227,77 @@ public static class WorkflowValidator
                 errors.Add($"步骤 '{step.Id}' 的参数 '{key}' 引用了非闭包原语 '{value}'");
             }
         }
+    }
+
+    private static bool HasAgentTypeOverride(StepDefinition step) =>
+        TryGetParameter(step.Parameters, "agent_type", out var agentType) &&
+        !string.IsNullOrWhiteSpace(agentType);
+
+    private static void ValidateAgentTypeParameters(StepDefinition step, List<string> errors)
+    {
+        if (TryGetParameter(step.Parameters, "agent_type", out var agentTypeRaw))
+        {
+            var trimmed = (agentTypeRaw ?? string.Empty).Trim();
+            if (trimmed.Length == 0)
+            {
+                errors.Add($"步骤 '{step.Id}' 的参数 'agent_type' 不能为空");
+            }
+            else if (!IsLikelyAgentTypeString(trimmed))
+            {
+                errors.Add($"步骤 '{step.Id}' 的参数 'agent_type' 格式非法：'{trimmed}'");
+            }
+        }
+
+        if (TryGetParameter(step.Parameters, "agent_id", out var agentIdRaw) &&
+            string.IsNullOrWhiteSpace(agentIdRaw))
+        {
+            errors.Add($"步骤 '{step.Id}' 的参数 'agent_id' 不能为空字符串");
+        }
+    }
+
+    private static bool IsLikelyAgentTypeString(string value)
+    {
+        var commaIndex = value.IndexOf(',');
+        var typePart = commaIndex >= 0 ? value[..commaIndex].Trim() : value.Trim();
+        var assemblyPart = commaIndex >= 0 ? value[(commaIndex + 1)..].Trim() : string.Empty;
+        if (typePart.Length == 0)
+            return false;
+        if (commaIndex >= 0 && assemblyPart.Length == 0)
+            return false;
+
+        var first = typePart[0];
+        if (!(char.IsLetter(first) || first == '_'))
+            return false;
+
+        foreach (var ch in typePart)
+        {
+            if (char.IsLetterOrDigit(ch) || ch is '_' or '.' or '+' or '`')
+                continue;
+            return false;
+        }
+
+        return !typePart.Contains("..", StringComparison.Ordinal);
+    }
+
+    private static bool TryGetParameter(
+        IReadOnlyDictionary<string, string> parameters,
+        string key,
+        out string value)
+    {
+        if (parameters.TryGetValue(key, out value!))
+            return true;
+
+        foreach (var (existingKey, existingValue) in parameters)
+        {
+            if (string.Equals(existingKey, key, StringComparison.OrdinalIgnoreCase))
+            {
+                value = existingValue;
+                return true;
+            }
+        }
+
+        value = string.Empty;
+        return false;
     }
 
     public sealed class WorkflowValidationOptions

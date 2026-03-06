@@ -22,6 +22,7 @@
   let persistenceHooksBound = false;
   let workflowGroupCollapsed = {};
   let appSidebarCollapsed = false;
+  let workflowPlanCollapsed = false;
   const UI_STATE_STORAGE_KEY = "aevatar.workflow.web.ui.v1";
   const UI_STATE_STORAGE_VERSION = 1;
   const PG_MODAL_KEYS = new Set(["save", "log", "result", "interaction"]);
@@ -50,13 +51,6 @@
     "integration-workflows": "Integrations & Tools",
     "advanced-patterns": "Advanced Patterns",
   };
-  const WORKFLOW_GROUP_DESCRIPTIONS = {
-    "your-workflows": "Saved workflows in ~/.aevatar/workflows. These are the most relevant starting point for your own usage.",
-    "starter-workflows": "Representative built-in workflows that show the normal Aevatar structure and YAML layout.",
-    "ai-workflows": "Flows where LLM reasoning and human checkpoints work together inside the same orchestration.",
-    "integration-workflows": "Examples that call tools, connectors, or external systems and show how runtime actions are modeled.",
-    "advanced-patterns": "More advanced control-flow, composition, or system-level examples when you need deeper patterns.",
-  };
   const WORKFLOW_GROUP_DEFAULT_EXPANDED = new Set([
     "your-workflows",
     "starter-workflows",
@@ -79,15 +73,6 @@
     human: "Human in the Loop",
     integration: "Integrations",
     general: "Runtime",
-  };
-  const PRIMITIVE_CATEGORY_DESCRIPTIONS = {
-    data: "Primitives that read, transform, and store values inside the workflow state.",
-    control: "Branching and control-flow primitives that determine how the workflow advances.",
-    composition: "Primitives that assemble sub-workflows, parallelism, and reusable orchestration structure.",
-    ai: "LLM-centered primitives that produce reasoning or model-backed responses.",
-    human: "Manual checkpoints where a workflow pauses for input or approval.",
-    integration: "Primitives that call tools, connectors, or outside systems.",
-    general: "Runtime helpers and general orchestration support.",
   };
   const NAV_VIEWS = new Set(["overview", "workflows", "yaml", "primitives", "playground"]);
 
@@ -125,6 +110,7 @@
       setAppSidebarCollapsed(!appSidebarCollapsed);
     });
     setAppSidebarCollapsed(false, { force: true, skipPersist: true });
+    setupWorkflowPlanSectionToggle();
     $("#btn-run").addEventListener("click", runWorkflow);
     $("#btn-reset").addEventListener("click", resetExecution);
     $("#config-open")?.addEventListener("click", () => void openConfigUi());
@@ -264,9 +250,41 @@
     $("#app")?.classList.toggle("sidebar-collapsed", appSidebarCollapsed);
     const toggleBtn = $("#app-sidebar-toggle");
     if (toggleBtn) {
-      toggleBtn.textContent = appSidebarCollapsed ? "Sidebar" : "Hide Sidebar";
+      const collapsed = appSidebarCollapsed === true;
+      toggleBtn.textContent = collapsed ? "›" : "‹";
       toggleBtn.setAttribute("aria-expanded", String(!appSidebarCollapsed));
-      toggleBtn.classList.toggle("is-active", appSidebarCollapsed);
+      toggleBtn.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+      toggleBtn.title = collapsed ? "Expand sidebar" : "Collapse sidebar";
+      toggleBtn.classList.toggle("is-active", collapsed);
+    }
+
+    if (options.skipPersist !== true)
+      scheduleUiStatePersist();
+  }
+
+  function setupWorkflowPlanSectionToggle() {
+    const toggle = $("#wf-plan-toggle");
+    if (!toggle) return;
+    toggle.addEventListener("click", () => {
+      setWorkflowPlanCollapsed(!workflowPlanCollapsed);
+    });
+    setWorkflowPlanCollapsed(false, { force: true, skipPersist: true });
+  }
+
+  function setWorkflowPlanCollapsed(collapsed, options = {}) {
+    const force = options.force === true;
+    const next = collapsed === true;
+    if (!force && next === workflowPlanCollapsed) return;
+    workflowPlanCollapsed = next;
+
+    $("#plan-section")?.classList.toggle("is-collapsed", workflowPlanCollapsed);
+    $("#wf-plan-body")?.classList.toggle("hidden", workflowPlanCollapsed);
+    const toggle = $("#wf-plan-toggle");
+    if (toggle) {
+      const expanded = workflowPlanCollapsed !== true;
+      toggle.setAttribute("aria-expanded", String(expanded));
+      toggle.setAttribute("aria-label", expanded ? "Collapse workflow plan" : "Expand workflow plan");
+      toggle.title = expanded ? "Collapse workflow plan" : "Expand workflow plan";
     }
 
     if (options.skipPersist !== true)
@@ -513,13 +531,11 @@
         const li = document.createElement("li");
         li.dataset.name = wf.name;
         li.classList.toggle("active", selectedWorkflow === wf.name);
-        const summary = truncate(String(wf.description || "").replace(/\s+/g, " ").trim(), 88);
         li.innerHTML = `
           <div class="wf-title-row">
-            <span class="wf-name">${esc(wf.name)}</span>
+            <span class="wf-name" title="${esc(wf.name)}">${esc(wf.name)}</span>
             ${wf.sourceLabel ? `<span class="wf-badge">${esc(wf.sourceLabel)}</span>` : ""}
           </div>
-          ${summary ? `<div class="wf-summary">${esc(summary)}</div>` : ""}
           <div class="wf-primitives">
             ${wf.primitives.map((p) => `<span class="prim-dot" style="background:${TYPE_COLORS[p] || "#64748b"}" title="${p}"></span>`).join("")}
           </div>`;
@@ -589,7 +605,6 @@
       for (const p of items) {
         const li = document.createElement("li");
         li.classList.toggle("active", selectedPrimitive === p.name);
-        const summary = truncate(String(p.description || "").replace(/\s+/g, " ").trim(), 88);
         const exampleCount = Array.isArray(p.exampleWorkflows) ? p.exampleWorkflows.length : 0;
         li.innerHTML = `
           <span class="prim-color" style="background:${TYPE_COLORS[p.name] || "#64748b"}"></span>
@@ -599,7 +614,6 @@
               <div class="prim-count">${exampleCount > 0 ? `${exampleCount} example${exampleCount > 1 ? "s" : ""}` : "reference"}</div>
             </div>
             <div class="prim-cat">${esc(PRIMITIVE_CATEGORY_LABELS[p.category] || p.category)}</div>
-            ${summary ? `<div class="prim-summary">${esc(summary)}</div>` : ""}
           </span>`;
         li.addEventListener("click", () => showPrimitiveDetail(p));
         ul.appendChild(li);
@@ -620,16 +634,15 @@
     const primitiveGroups = groupPrimitives(visiblePrimitives);
 
     statsEl.innerHTML = [
-      renderStatCard(String(visibleWorkflows.length), "Workflows in library", "Existing workflow YAMLs you can inspect right now."),
-      renderStatCard(String(workflowGroups.length), "Workflow groups", "Curated buckets for browsing instead of one long list."),
-      renderStatCard(String(visiblePrimitives.length), "Primitives", "Building blocks with descriptions, parameters, aliases, and examples."),
-      renderStatCard(llmStatus.available ? "LLM ready" : "LLM needed", "Playground status", llmStatus.available ? "AI generation is available in playground." : "Configure an LLM provider to unlock AI-assisted drafting."),
+      renderStatCard(String(visibleWorkflows.length), "Workflows"),
+      renderStatCard(String(workflowGroups.length), "Workflow Groups"),
+      renderStatCard(String(visiblePrimitives.length), "Primitives"),
+      renderStatCard(llmStatus.available ? "LLM ready" : "LLM needed", "Playground"),
     ].join("");
 
     workflowGroupsEl.innerHTML = workflowGroups
       .map((group) => renderGroupCard(
         group.label,
-        WORKFLOW_GROUP_DESCRIPTIONS[group.key] || "Workflow group.",
         `${group.items.length} workflow${group.items.length === 1 ? "" : "s"}`,
         group.items.slice(0, 3).map((item) => item.name),
         "workflow",
@@ -639,7 +652,6 @@
     primitiveGroupsEl.innerHTML = primitiveGroups
       .map((group) => renderGroupCard(
         group.label,
-        PRIMITIVE_CATEGORY_DESCRIPTIONS[group.key] || "Primitive category.",
         `${group.items.length} primitive${group.items.length === 1 ? "" : "s"}`,
         group.items.slice(0, 3).map((item) => item.name),
         "primitive",
@@ -680,23 +692,21 @@
     bindDynamicActionButtons($("#view-primitives-home"));
   }
 
-  function renderStatCard(value, label, description) {
+  function renderStatCard(value, label) {
     return `
       <article class="stat-card">
         <div class="stat-value">${esc(value)}</div>
         <div class="stat-label">${esc(label)}</div>
-        <div class="stat-description">${esc(description)}</div>
       </article>`;
   }
 
-  function renderGroupCard(title, description, meta, highlights, actionType, actionValue) {
+  function renderGroupCard(title, meta, highlights, actionType, actionValue) {
     const actionAttr = actionType === "workflow"
       ? `data-open-workflow="${esc(actionValue)}"`
       : `data-open-primitive="${esc(actionValue)}"`;
     return `
       <article class="info-card">
         <div class="info-card-title">${esc(title)}</div>
-        <p>${esc(description)}</p>
         <div class="info-card-meta">${esc(meta)}</div>
         <div class="tag-list">${highlights.map((item) => `<span class="tag">${esc(item)}</span>`).join("")}</div>
         ${actionValue ? `<button type="button" class="btn btn-ghost info-card-action" ${actionAttr}>Open ${actionType === "workflow" ? "Workflow" : "Primitive"}</button>` : ""}
@@ -710,7 +720,6 @@
         <div class="library-card-head">
           <div>
             <div class="library-card-title">${esc(group.label)}</div>
-            <p class="library-card-copy">${esc(WORKFLOW_GROUP_DESCRIPTIONS[group.key] || "Workflow group.")}</p>
           </div>
           <div class="library-card-count">${group.items.length}</div>
         </div>
@@ -725,7 +734,6 @@
   }
 
   function renderWorkflowFeatureCard(workflow) {
-    const summary = truncate(String(workflow.description || "").replace(/\s+/g, " ").trim(), 180);
     return `
       <article class="feature-card">
         <div class="feature-card-head">
@@ -735,7 +743,6 @@
           </div>
           ${workflow.sourceLabel ? `<span class="wf-badge">${esc(workflow.sourceLabel)}</span>` : ""}
         </div>
-        ${summary ? `<p class="feature-card-copy">${esc(summary)}</p>` : `<p class="feature-card-copy">Representative workflow YAML in the Aevatar library.</p>`}
         <div class="tag-list">${(workflow.primitives || []).slice(0, 5).map((name) => `<span class="tag">${esc(name)}</span>`).join("")}</div>
         <div class="feature-card-actions">
           <button type="button" class="btn btn-ghost" data-open-workflow="${esc(workflow.name)}">Open Workflow</button>
@@ -751,7 +758,6 @@
         <div class="library-card-head">
           <div>
             <div class="library-card-title">${esc(group.label)}</div>
-            <p class="library-card-copy">${esc(PRIMITIVE_CATEGORY_DESCRIPTIONS[group.key] || "Primitive category.")}</p>
           </div>
           <div class="library-card-count">${group.items.length}</div>
         </div>
@@ -766,7 +772,6 @@
   }
 
   function renderPrimitiveFeatureCard(primitive) {
-    const summary = truncate(String(primitive.description || "").replace(/\s+/g, " ").trim(), 180);
     const categoryLabel = PRIMITIVE_CATEGORY_LABELS[primitive.category] || primitive.category || "Primitive";
     return `
       <article class="feature-card">
@@ -777,7 +782,6 @@
           </div>
           <span class="feature-card-chip">${Array.isArray(primitive.exampleWorkflows) ? `${primitive.exampleWorkflows.length} examples` : "Reference"}</span>
         </div>
-        <p class="feature-card-copy">${esc(summary || "Workflow building block used by the library.")}</p>
         <div class="tag-list">${(primitive.aliases || []).slice(0, 4).map((name) => `<span class="tag">${esc(name)}</span>`).join("")}</div>
         <div class="feature-card-actions">
           <button type="button" class="btn btn-ghost" data-open-primitive="${esc(primitive.name)}">Open Primitive</button>
@@ -818,6 +822,16 @@
     });
   }
 
+  function setWorkflowDescription(text) {
+    const description = String(text || "").trim();
+    const descriptionEl = $("#wf-description");
+    const descriptionWrapEl = $("#wf-description-wrap");
+    if (descriptionEl)
+      descriptionEl.textContent = description;
+    if (descriptionWrapEl)
+      descriptionWrapEl.classList.toggle("hidden", description.length === 0);
+  }
+
   // ── Select Workflow ──
   async function selectWorkflow(name, options = {}) {
     stopExecution();
@@ -838,7 +852,7 @@
       showView("workflow");
     $("#btn-run").disabled = true;
     $("#wf-name").textContent = name;
-    $("#wf-description").textContent = "Loading...";
+    setWorkflowDescription("");
 
     try {
       const res = await fetch(`/api/workflows/${name}`);
@@ -853,7 +867,7 @@
       }
       const def = workflowDef.definition;
 
-      $("#wf-description").textContent = def.description || "";
+      setWorkflowDescription(def.description || "");
 
       $("#wf-input").value = selectedWorkflowMeta?.defaultInput || "";
       renderTuringDemoPanel(selectedWorkflowMeta);
@@ -882,7 +896,7 @@
       scheduleUiStatePersist();
     } catch (e) {
       console.error("Failed to load workflow", e);
-      $("#wf-description").textContent = "Failed to load workflow definition.";
+      setWorkflowDescription("Failed to load workflow definition.");
       renderTuringDemoPanel(null);
       renderWorkflowPlan(null, null);
       renderYamlBrowser();
@@ -1243,14 +1257,14 @@
     const playgroundAvailable = Boolean(pgCurrentYaml && pgCurrentYaml.trim());
 
     if (!workflowAvailable && !playgroundAvailable) {
-      titleEl.textContent = "No YAML selected yet";
-      descriptionEl.textContent = "Open a workflow from the library, or generate a draft in the playground.";
+      titleEl.textContent = "No YAML selected";
+      descriptionEl.textContent = "";
       metaEl.innerHTML = "";
       actionsEl.innerHTML = `
         <button type="button" class="btn btn-secondary" data-yaml-nav="workflows">Browse Workflows</button>
         <button type="button" class="btn btn-secondary" data-yaml-nav="playground">Open Playground</button>`;
       sourceEl.textContent = "";
-      graphEl.innerHTML = `<p class="placeholder-copy">Pick a workflow or create a playground draft to render the graph here.</p>`;
+      graphEl.innerHTML = `<p class="placeholder-copy">No graph</p>`;
       bindYamlActions(actionsEl);
       if (workflowBtn) workflowBtn.disabled = true;
       if (playgroundBtn) playgroundBtn.disabled = true;
@@ -1271,9 +1285,7 @@
 
     if (yamlViewerSource === "playground" && playgroundAvailable) {
       titleEl.textContent = $("#pg-save-filename")?.value?.trim() || "Playground Draft";
-      descriptionEl.textContent = pgYamlValidated
-        ? "This is the current playground draft. It has passed validation and can be executed or saved."
-        : "This is the current playground draft. Review it here before you keep iterating.";
+      descriptionEl.textContent = "";
       metaEl.innerHTML = [
         `<span class="tag">${pgYamlValidated ? "Validated draft" : "Draft YAML"}</span>`,
         `<span class="tag">${pgYamlGeneratedByAi ? "AI generated" : "Manual or imported"}</span>`,
@@ -1285,14 +1297,14 @@
       if (pgParsedDef?.definition?.steps) {
         renderFlowInto(graphEl, pgParsedDef.definition.steps, pgParsedDef.edges || [], pgStepStates);
       } else {
-        graphEl.innerHTML = `<p class="placeholder-copy">The playground draft has not been parsed into a graph yet.</p>`;
+        graphEl.innerHTML = `<p class="placeholder-copy">No graph</p>`;
       }
       bindYamlActions(actionsEl);
       return;
     }
 
     titleEl.textContent = selectedWorkflowMeta?.name || selectedWorkflow || "Workflow YAML";
-    descriptionEl.textContent = selectedWorkflowMeta?.description || "Library workflow YAML.";
+    descriptionEl.textContent = "";
     metaEl.innerHTML = [
       selectedWorkflowMeta?.groupLabel ? `<span class="tag">${esc(selectedWorkflowMeta.groupLabel)}</span>` : "",
       selectedWorkflowMeta?.sourceLabel ? `<span class="tag">${esc(selectedWorkflowMeta.sourceLabel)}</span>` : "",
@@ -1307,7 +1319,7 @@
     if (workflowDef?.definition?.steps) {
       renderFlowInto(graphEl, workflowDef.definition.steps, workflowDef.edges || [], stepStates);
     } else {
-      graphEl.innerHTML = `<p class="placeholder-copy">Select a library workflow to render the graph here.</p>`;
+      graphEl.innerHTML = `<p class="placeholder-copy">No graph</p>`;
     }
     bindYamlActions(actionsEl);
   }
@@ -1419,9 +1431,10 @@
         updateTuringMachineState(data.metadata);
       }
       if (data.success) {
-        addLogEntry("completed", `\u2713 ${data.stepId}`, data.output);
+        appendStepCompletedExecutionLog(data, addLogEntry);
+        appendTelegramReplyExecutionLog(data, addLogEntry);
       } else {
-        addLogEntry("failed", `\u2717 ${data.stepId}`, data.error || "Failed");
+        appendStepCompletedExecutionLog(data, addLogEntry);
       }
     });
 
@@ -1947,15 +1960,19 @@
 
   function renderWorkflowPlan(workflowMeta, detail) {
     const section = $("#plan-section");
+    const bodyEl = $("#wf-plan-body");
     const summaryEl = $("#wf-plan-summary");
     const metaEl = $("#wf-plan-meta");
     const inputsEl = $("#wf-plan-inputs");
     const primitivesEl = $("#wf-plan-primitives");
     const stepsEl = $("#wf-plan-steps");
-    if (!section || !summaryEl || !metaEl || !inputsEl || !primitivesEl || !stepsEl) return;
+    if (!section || !bodyEl || !summaryEl || !metaEl || !inputsEl || !primitivesEl || !stepsEl) return;
 
     if (!workflowMeta || !detail?.definition) {
       section.classList.add("hidden");
+      section.classList.remove("is-collapsed");
+      bodyEl.classList.remove("hidden");
+      setWorkflowPlanCollapsed(false, { force: true, skipPersist: true });
       summaryEl.textContent = "";
       metaEl.innerHTML = "";
       inputsEl.textContent = "";
@@ -1998,6 +2015,7 @@
     }
 
     section.classList.remove("hidden");
+    setWorkflowPlanCollapsed(workflowPlanCollapsed, { force: true, skipPersist: true });
   }
 
   function buildWorkflowPlanSummary(steps, roles, interactiveCount, connectorSteps) {
@@ -2388,6 +2406,7 @@
       workflow: {
         input: $("#wf-input")?.value || "",
         autoResume: $("#wf-auto-resume")?.checked === true,
+        planCollapsed: workflowPlanCollapsed === true,
         logs: wfLogEntries.map((entry) => ({ ...entry })),
         stepStates: { ...(stepStates || {}) },
         result: {
@@ -2481,6 +2500,8 @@
       pre.textContent = String(snapshot.result.text || "");
       pre.className = String(snapshot.result.className || "result-pre");
     }
+
+    setWorkflowPlanCollapsed(snapshot.planCollapsed === true, { force: true, skipPersist: true });
 
     if (logs.length > 0 || snapshot.result?.visible)
       $("#btn-reset").classList.remove("hidden");
@@ -2661,7 +2682,15 @@
     $("#pg-sidebar-edge-toggle")?.addEventListener("click", () => {
       pgSetSidebarCollapsed(!pgSidebarCollapsed);
     });
-    $("#pg-chat-history-toggle")?.addEventListener("click", () => {
+    const historyToggle = $("#pg-chat-history-toggle");
+    historyToggle?.addEventListener("click", () => {
+      pgSetChatHistoryCollapsed(!pgChatHistoryCollapsed);
+    });
+    historyToggle?.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ")
+        return;
+
+      event.preventDefault();
       pgSetChatHistoryCollapsed(!pgChatHistoryCollapsed);
     });
     $("#pg-open-save-modal")?.addEventListener("click", () => pgOpenModal("save"));
@@ -2720,8 +2749,10 @@
     $("#pg-chat-dock")?.classList.toggle("pg-history-collapsed", pgChatHistoryCollapsed);
     const toggleBtn = $("#pg-chat-history-toggle");
     if (toggleBtn) {
-      toggleBtn.textContent = pgChatHistoryCollapsed ? "Show History" : "Hide History";
       toggleBtn.setAttribute("aria-expanded", String(!pgChatHistoryCollapsed));
+      toggleBtn.setAttribute("aria-label", pgChatHistoryCollapsed ? "Show prompt history" : "Hide prompt history");
+      toggleBtn.title = pgChatHistoryCollapsed ? "Show prompt history" : "Hide prompt history";
+      toggleBtn.classList.toggle("is-collapsed", pgChatHistoryCollapsed);
     }
 
     if (options.skipPersist !== true)
@@ -2878,38 +2909,38 @@
 
     let label = "Idle";
     let tone = "idle";
-    let note = "Send a prompt below to draft and execute a workflow automatically.";
+    let note = "Ready.";
     if (pgPendingInteraction) {
       const interactionType = String(pgPendingInteraction.type || "").toLowerCase();
       label = interactionType === "wait_signal" ? "Waiting Signal" : "Needs Input";
       tone = "warn";
       note = interactionType === "wait_signal"
-        ? "Workflow paused until an external signal arrives."
-        : "Workflow paused and waiting for your confirmation or input.";
+        ? "Waiting for signal."
+        : "Waiting for input.";
     } else if (pgRunning || (pgAutoRunning && pgAutoPhase === "executing")) {
       label = "Running";
       tone = "info";
-      note = pgAutoStatusMessage || "Executing workflow steps.";
+      note = pgAutoStatusMessage || "Running.";
     } else if (pgAutoRunning && pgAutoPhase === "approval") {
       label = "Review";
       tone = "warn";
-      note = pgAutoStatusMessage || "Review YAML/graph, then approve or refine.";
+      note = pgAutoStatusMessage || "Review draft.";
     } else if (pgAutoRunning) {
       label = "Planning";
       tone = "info";
-      note = pgAutoStatusMessage || "AI is drafting and validating the workflow.";
+      note = pgAutoStatusMessage || "Planning.";
     } else if (pgAutoStatusTone === "error") {
       label = "Failed";
       tone = "error";
-      note = pgAutoStatusMessage || "Last run failed. Refine and retry.";
+      note = pgAutoStatusMessage || "Run failed.";
     } else if (pgAutoStatusTone === "success") {
       label = "Completed";
       tone = "success";
-      note = pgAutoStatusMessage || "Latest run completed successfully.";
+      note = pgAutoStatusMessage || "Run completed.";
     } else if (hasRunnableDraft) {
       label = "Ready";
       tone = "ready";
-      note = "Draft is valid and ready to run.";
+      note = "Draft ready.";
     }
 
     stateChip.textContent = label;
@@ -3219,6 +3250,64 @@
     return value;
   }
 
+  function normalizeExecutionMetadata(value) {
+    return normalizePlainObject(value);
+  }
+
+  function isTelegramWaitReplyStep(data) {
+    const metadata = normalizeExecutionMetadata(data?.metadata || {});
+    const operation = String(
+      metadata["llm.operation"] ||
+      metadata.operation ||
+      "")
+      .trim()
+      .toLowerCase();
+    if (operation === "/waitreply" || operation === "wait_reply" || operation === "/wait_reply") {
+      return true;
+    }
+
+    // Backward-compatible fallback for built-in OpenClaw demo workflow.
+    const stepId = String(data?.stepId || "").trim().toLowerCase();
+    return stepId === "wait_openclaw_group_stream";
+  }
+
+  function appendStepCompletedExecutionLog(data, logFn) {
+    if (!data || typeof logFn !== "function") return;
+
+    const success = data.success === true;
+    const type = success ? "completed" : "failed";
+    const title = `${success ? "\u2713" : "\u2717"} ${data.stepId || ""}`.trim();
+    const detail = success
+      ? (data.output ?? "")
+      : (data.error || "Failed");
+
+    if (success && isTelegramWaitReplyStep(data)) {
+      logFn(type, title, detail, {
+        forceFold: true,
+        detailOpen: true,
+        toggleLabel: "Step output (full)",
+        skipToast: true,
+      });
+      return;
+    }
+
+    logFn(type, title, detail);
+  }
+
+  function appendTelegramReplyExecutionLog(data, logFn) {
+    if (!data || data.success !== true || !isTelegramWaitReplyStep(data)) return;
+    const replyText = data.output === null || data.output === undefined
+      ? ""
+      : String(data.output);
+    if (!replyText.trim()) return;
+    logFn("llm", "\uD83D\uDCAC Telegram stream reply", replyText, {
+      forceFold: true,
+      detailOpen: true,
+      toggleLabel: "Telegram full reply",
+      skipToast: true,
+    });
+  }
+
   function isSecureInteraction(interaction) {
     if (!interaction || typeof interaction !== "object") return false;
     if (String(interaction.type || "").toLowerCase() === "secure_input") return true;
@@ -3259,7 +3348,7 @@
           success: value.success === true,
           output: readCustomValue(value, "output", "Output"),
           error: value.error ?? value.Error ?? null,
-          metadata: value.metadata || {},
+          metadata: normalizeExecutionMetadata(value.metadata || value.Metadata || {}),
         },
       };
     }
@@ -3515,9 +3604,8 @@
       if (data.runId) pgAutoRunId = data.runId;
       pgStepStates[data.stepId] = data.success ? "completed" : "failed";
       pgUpdateGraphNode(data.stepId);
-      pgAddLog(data.success ? "completed" : "failed",
-        `${data.success ? "\u2713" : "\u2717"} ${data.stepId}`,
-        data.success ? data.output : (data.error || "Failed"));
+      appendStepCompletedExecutionLog(data, pgAddLog);
+      appendTelegramReplyExecutionLog(data, pgAddLog);
       if (data.stepId === "validate_yaml" && data.success && data.output) {
         pgApplyValidatedAutoYaml(data.output);
       }
@@ -3796,9 +3884,8 @@
       if (data.runId) pgRunRunId = data.runId;
       pgStepStates[data.stepId] = data.success ? "completed" : "failed";
       pgUpdateGraphNode(data.stepId);
-      pgAddLog(data.success ? "completed" : "failed",
-        `${data.success ? "\u2713" : "\u2717"} ${data.stepId}`,
-        data.success ? data.output : (data.error || "Failed"));
+      appendStepCompletedExecutionLog(data, pgAddLog);
+      appendTelegramReplyExecutionLog(data, pgAddLog);
     } else if (eventType === "llm.response") {
       const finalContent = absorbInlineThinking(pgThinkingBuffers, data.role, data.content);
       flushThinkingToLog(pgThinkingBuffers, data.role, pgAddLog);
@@ -3885,7 +3972,7 @@
     container.scrollTop = container.scrollHeight;
     if (!options.skipStore) {
       const showTypes = new Set(["request", "completed", "failed", "suspended", "waiting", "action", "done", "error"]);
-      if (showTypes.has(String(type || "").toLowerCase()))
+      if (!options.skipToast && showTypes.has(String(type || "").toLowerCase()))
         pgShowRecentLogToast(type, title, normalizedDetail);
     }
     pgRenderRunControlSummary();

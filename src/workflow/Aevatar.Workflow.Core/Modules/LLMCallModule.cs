@@ -13,6 +13,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
+using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
@@ -26,10 +27,16 @@ public sealed class LLMCallModule : IEventModule
     private const int DefaultLlmTimeoutMs = 1_800_000;
     private const string LlmTimeoutMetadataKey = "aevatar.llm_timeout_ms";
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
+    private readonly WorkflowStepTargetAgentResolver? _targetAgentResolver;
 
     private readonly ConcurrentDictionary<string, PendingLlmCall> _pending = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, int> _attemptsByRunStep = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _watchdogs = new(StringComparer.Ordinal);
+
+    public LLMCallModule(WorkflowStepTargetAgentResolver? targetAgentResolver = null)
+    {
+        _targetAgentResolver = targetAgentResolver;
+    }
 
     public string Name => "llm_call";
     public int Priority => 10;
@@ -93,32 +100,42 @@ public sealed class LLMCallModule : IEventModule
         // Use run/step/attempt-scoped session id to avoid collisions across concurrent runs and retries.
         var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
         var timeoutMs = ResolveLlmTimeoutMs(request);
-        _pending[chatSessionId] = new PendingLlmCall(request, stepRunKey);
-        StartWatchdog(chatSessionId, timeoutMs, ctx);
-
-        var targetRole = request.TargetRole;
         var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
         var chatEvt = new ChatRequestEvent { Prompt = prompt, SessionId = chatSessionId };
+        CopyParametersToChatMetadata(request.Parameters, chatEvt.Metadata);
         chatEvt.Metadata[LlmTimeoutMetadataKey] = timeoutMs.ToString(CultureInfo.InvariantCulture);
+
+        WorkflowStepTargetAgentResolution target;
+        try
+        {
+            target = await ResolveTargetAgentResolver(ctx).ResolveAsync(request, ctx, ct);
+        }
+        catch (Exception ex)
+        {
+            ctx.Logger.LogWarning(ex, "LLMCallModule: target resolution failed for step={StepId}", request.StepId);
+            await PublishFailedCompletionAsync(request, $"LLM target resolution failed: {ex.Message}", ctx.AgentId, ctx, ct);
+            return;
+        }
+
+        _pending[chatSessionId] = new PendingLlmCall(request, stepRunKey, target.WorkerId);
+        StartWatchdog(chatSessionId, timeoutMs, ctx);
 
         try
         {
-            if (!string.IsNullOrEmpty(targetRole))
+            if (!target.UseSelf)
             {
-                var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, targetRole);
-
                 // Point-to-point: send ChatRequestEvent directly to the target role actor by ID
                 ctx.Logger.LogInformation(
-                    "LLMCallModule: step={StepId} → SendTo role={Role} actor={ActorId} timeout={Timeout}ms prompt=({Len} chars) {Preview}",
-                    request.StepId, targetRole, targetActorId, timeoutMs, prompt.Length, promptPreview);
+                    "LLMCallModule: step={StepId} → SendTo mode={Mode} actor={ActorId} timeout={Timeout}ms prompt=({Len} chars) {Preview}",
+                    request.StepId, target.Mode, target.ActorId, timeoutMs, prompt.Length, promptPreview);
 
-                await ctx.SendToAsync(targetActorId, chatEvt, ct);
+                await ctx.SendToAsync(target.ActorId, chatEvt, ct);
             }
             else
             {
                 // No target role: publish Self for WorkflowGAgent's own LLM
                 ctx.Logger.LogInformation(
-                    "LLMCallModule: step={StepId} → Self (no role) timeout={Timeout}ms prompt=({Len} chars) {Preview}",
+                    "LLMCallModule: step={StepId} → Self timeout={Timeout}ms prompt=({Len} chars) {Preview}",
                     request.StepId, timeoutMs, prompt.Length, promptPreview);
 
                 await ctx.PublishAsync(chatEvt, EventDirection.Self, ct);
@@ -127,7 +144,7 @@ public sealed class LLMCallModule : IEventModule
         catch (Exception ex)
         {
             ctx.Logger.LogWarning(ex, "LLMCallModule: dispatch failed for step={StepId}", request.StepId);
-            await FailPendingAsync(chatSessionId, $"LLM dispatch failed: {ex.Message}", ctx.AgentId, ctx, ct);
+            await FailPendingAsync(chatSessionId, $"LLM dispatch failed: {ex.Message}", target.WorkerId, ctx, ct);
         }
     }
 
@@ -157,14 +174,17 @@ public sealed class LLMCallModule : IEventModule
             "LLMCallModule: step={StepId} completed ({Len} chars): {Preview}",
             pending.Request.StepId, evt.Content?.Length ?? 0, outputPreview);
 
-        await ctx.PublishAsync(new StepCompletedEvent
+        var completed = new StepCompletedEvent
         {
             StepId = pending.Request.StepId,
             RunId = pending.Request.RunId,
             Success = true,
             Output = evt.Content ?? string.Empty,
             WorkerId = envelope.PublisherId,
-        }, EventDirection.Self, ct);
+        };
+        CopyRequestMetadataToCompletionMetadata(pending.Request, completed.Metadata);
+
+        await ctx.PublishAsync(completed, EventDirection.Self, ct);
     }
 
     private async Task HandleChatResponseAsync(
@@ -192,14 +212,17 @@ public sealed class LLMCallModule : IEventModule
             "LLMCallModule: step={StepId} completed non-streaming ({Len} chars): {Preview}",
             pending.Request.StepId, evt.Content?.Length ?? 0, nsPreview);
 
-        await ctx.PublishAsync(new StepCompletedEvent
+        var completed = new StepCompletedEvent
         {
             StepId = pending.Request.StepId,
             RunId = pending.Request.RunId,
             Success = true,
             Output = evt.Content ?? string.Empty,
             WorkerId = ctx.AgentId,
-        }, EventDirection.Self, ct);
+        };
+        CopyRequestMetadataToCompletionMetadata(pending.Request, completed.Metadata);
+
+        await ctx.PublishAsync(completed, EventDirection.Self, ct);
     }
 
     private static int ResolveLlmTimeoutMs(StepRequestEvent request)
@@ -233,6 +256,58 @@ public sealed class LLMCallModule : IEventModule
         var extracted = content[LlmFailureContentPrefix.Length..].Trim();
         error = string.IsNullOrWhiteSpace(extracted) ? "LLM call failed." : extracted;
         return true;
+    }
+
+    private static void CopyParametersToChatMetadata(
+        MapField<string, string> parameters,
+        MapField<string, string> metadata)
+    {
+        foreach (var (key, value) in parameters)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+                continue;
+            if (string.Equals(key, "agent_type", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(key, "agent_id", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            metadata[key.Trim()] = value.Trim();
+        }
+    }
+
+    private static void CopyRequestMetadataToCompletionMetadata(
+        StepRequestEvent request,
+        MapField<string, string> metadata)
+    {
+        CopyParameterIfPresent(request.Parameters, metadata, "operation", "llm.operation");
+        CopyParameterIfPresent(request.Parameters, metadata, "connector", "llm.connector");
+        CopyParameterIfPresent(request.Parameters, metadata, "agent_type", "llm.agent_type");
+    }
+
+    private static void CopyParameterIfPresent(
+        MapField<string, string> parameters,
+        MapField<string, string> metadata,
+        string parameterKey,
+        string metadataKey)
+    {
+        if (!parameters.TryGetValue(parameterKey, out var value) || string.IsNullOrWhiteSpace(value))
+            return;
+
+        metadata[metadataKey] = value.Trim();
+    }
+
+    private WorkflowStepTargetAgentResolver ResolveTargetAgentResolver(IEventHandlerContext ctx)
+    {
+        if (_targetAgentResolver != null)
+            return _targetAgentResolver;
+
+        var resolver = ctx.Services.GetService(typeof(WorkflowStepTargetAgentResolver)) as WorkflowStepTargetAgentResolver;
+        if (resolver != null)
+            return resolver;
+
+        throw new InvalidOperationException(
+            $"{nameof(WorkflowStepTargetAgentResolver)} is not registered in DI and was not provided to {nameof(LLMCallModule)}.");
     }
 
     private void StartWatchdog(string sessionId, int timeoutMs, IEventHandlerContext ctx)
@@ -280,7 +355,7 @@ public sealed class LLMCallModule : IEventModule
             await PublishFailedCompletionAsync(
                 request,
                 $"LLM call timed out after {timeoutMs}ms",
-                request.TargetRole,
+                pending.WorkerId,
                 ctx,
                 CancellationToken.None);
         }
@@ -345,5 +420,5 @@ public sealed class LLMCallModule : IEventModule
             cts.Dispose();
         }
     }
-    private sealed record PendingLlmCall(StepRequestEvent Request, string StepRunKey);
+    private sealed record PendingLlmCall(StepRequestEvent Request, string StepRunKey, string WorkerId);
 }

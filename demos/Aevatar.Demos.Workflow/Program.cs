@@ -6,13 +6,13 @@
 //
 // Usage:
 //   dotnet run                          # list all demos
-//   dotnet run -- 01_transform          # run a specific demo
+//   dotnet run -- transform          # run a specific demo
 //   dotnet run -- --deterministic       # run all no-LLM demos
 //   dotnet run -- --all                 # run everything (needs LLM key)
 //
-//   # LLM key (for demos 08+):
+//   # LLM key (for LLM-powered demos):
 //   export DEEPSEEK_API_KEY="sk-..."
-//   dotnet run -- 08_llm_call
+//   dotnet run -- llm_call
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
@@ -41,7 +41,7 @@ using Aevatar.Workflow.Infrastructure.Workflows;
 
 var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 {
-    ["01_transform"] = """
+    ["transform"] = """
         Line one: hello world
         Line two: foo bar
         Line three: baz qux
@@ -49,15 +49,15 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
         Line five: jumps over the lazy dog
         """,
 
-    ["02_guard"] = """{"name": "Alice", "email": "alice@example.com", "age": 30}""",
+    ["guard"] = """{"name": "Alice", "email": "alice@example.com", "age": 30}""",
 
-    ["03_conditional"] = "URGENT: Server is down, all requests failing with 502 errors.",
+    ["conditional"] = "URGENT: Server is down, all requests failing with 502 errors.",
 
-    ["04_switch"] = "bug: Login button does not respond on mobile Safari",
+    ["switch"] = "bug: Login button does not respond on mobile Safari",
 
-    ["05_assign"] = "The answer to the ultimate question is 42.",
+    ["assign"] = "The answer to the ultimate question is 42.",
 
-    ["06_retrieve_facts"] = """
+    ["retrieve_facts"] = """
         Earth orbits the Sun at about 150 million km
         Water boils at 100 degrees Celsius at sea level
         The speed of light is approximately 300000 km per second
@@ -68,7 +68,7 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
         TCP uses a three-way handshake to establish connections
         """,
 
-    ["07_pipeline"] = """
+    ["pipeline"] = """
         Earth orbits the Sun at about 150 million km
         The speed of light is approximately 300000 km per second
         Water boils at 100 degrees Celsius at sea level
@@ -76,15 +76,15 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
         Light travels faster than sound
         """,
 
-    ["08_llm_call"] = "Explain the concept of event sourcing in 3 sentences.",
+    ["llm_call"] = "Explain the concept of event sourcing in 3 sentences.",
 
-    ["09_llm_chain"] = "Distributed systems face challenges in maintaining consistency across nodes.",
+    ["llm_chain"] = "Distributed systems face challenges in maintaining consistency across nodes.",
 
-    ["10_parallel"] = "What are the benefits of using microservices architecture?",
+    ["parallel"] = "What are the benefits of using microservices architecture?",
 
-    ["11_race"] = "Give a one-sentence definition of functional programming.",
+    ["race"] = "Give a one-sentence definition of functional programming.",
 
-    ["12_map_reduce"] = """
+    ["map_reduce"] = """
         Topic: Benefits of remote work
         ---
         Topic: Challenges of remote work
@@ -92,7 +92,7 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
         Topic: Future of remote work
         """,
 
-    ["13_foreach"] = """
+    ["foreach"] = """
         Kubernetes
         ---
         Docker
@@ -100,13 +100,13 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
         Terraform
         """,
 
-    ["14_evaluate"] = "Write a haiku about programming.",
+    ["evaluate"] = "Write a haiku about programming.",
 
-    ["15_reflect"] = "Write a concise explanation of the CAP theorem suitable for a junior developer.",
+    ["reflect"] = "Write a concise explanation of the CAP theorem suitable for a junior developer.",
 
-    ["16_cache"] = "What is the difference between SQL and NoSQL databases?",
+    ["cache"] = "What is the difference between SQL and NoSQL databases?",
 
-    ["49_workflow_call_multilevel"] = """
+    ["workflow_call_multilevel"] = """
           apple  
         banana
           apple
@@ -116,9 +116,9 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
 
 var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
-    "01_transform", "02_guard", "03_conditional", "04_switch",
-    "05_assign", "06_retrieve_facts", "07_pipeline",
-    "49_workflow_call_multilevel",
+    "transform", "guard", "conditional", "switch",
+    "assign", "retrieve_facts", "pipeline",
+    "workflow_call_multilevel",
 };
 
 // ─── Parse CLI ───

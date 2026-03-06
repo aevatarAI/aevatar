@@ -22,6 +22,8 @@ internal static class AppBridgeEndpoints
             app.MapPost("/api/chat", HandleChatStreamAsync);
             app.MapPost("/api/workflows/resume", HandleResumeAsync);
             app.MapPost("/api/workflows/signal", HandleSignalAsync);
+            app.MapPost("/api/bridge/callback-token", HandleBridgeCallbackTokenIssueAsync);
+            app.MapPost("/api/bridge/callbacks", HandleBridgeCallbackAsync);
         }
 
         if (options.MapAppAliases)
@@ -29,6 +31,62 @@ internal static class AppBridgeEndpoints
             app.MapPost("/api/app/chat", HandleChatStreamAsync);
             app.MapPost("/api/app/resume", HandleResumeAsync);
             app.MapPost("/api/app/signal", HandleSignalAsync);
+            app.MapPost("/api/app/bridge/callback-token", HandleBridgeCallbackTokenIssueAsync);
+            app.MapPost("/api/app/bridge/callbacks", HandleBridgeCallbackAsync);
+        }
+    }
+
+    private static async Task<IResult> HandleBridgeCallbackTokenIssueAsync(
+        BridgeCallbackTokenIssueRequest request,
+        IAevatarWorkflowClient client,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.ActorId) ||
+            string.IsNullOrWhiteSpace(request.RunId) ||
+            string.IsNullOrWhiteSpace(request.StepId) ||
+            string.IsNullOrWhiteSpace(request.SignalName))
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_REQUEST",
+                message = "actorId/runId/stepId/signalName are required.",
+            });
+        }
+
+        try
+        {
+            var response = await client.IssueBridgeCallbackTokenAsync(request, cancellationToken);
+            return Results.Json(response);
+        }
+        catch (AevatarWorkflowException ex)
+        {
+            return Results.BadRequest(new { code = ex.Kind.ToString(), message = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> HandleBridgeCallbackAsync(
+        BridgeIngressRequest request,
+        IAevatarWorkflowClient client,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.CallbackToken) ||
+            string.IsNullOrWhiteSpace(request.Source))
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_REQUEST",
+                message = "callbackToken/source are required.",
+            });
+        }
+
+        try
+        {
+            var response = await client.PostBridgeCallbackAsync(request, cancellationToken);
+            return Results.Json(response);
+        }
+        catch (AevatarWorkflowException ex)
+        {
+            return Results.BadRequest(new { code = ex.Kind.ToString(), message = ex.Message });
         }
     }
 

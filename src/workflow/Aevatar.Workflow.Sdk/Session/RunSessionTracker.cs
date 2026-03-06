@@ -156,6 +156,22 @@ public sealed class RunSessionTracker
             _runId = waitingSignal.RunId ?? _runId;
             _stepId = waitingSignal.StepId ?? _stepId;
             _lastSignalName = waitingSignal.SignalName ?? _lastSignalName;
+            return;
+        }
+
+        if (WorkflowCustomEventParser.TryParseSignalBuffered(customEventName, value, out var bufferedSignal))
+        {
+            _runId = bufferedSignal.RunId ?? _runId;
+            _stepId = bufferedSignal.StepId ?? _stepId;
+            _lastSignalName = bufferedSignal.SignalName ?? _lastSignalName;
+            return;
+        }
+
+        if (WorkflowCustomEventParser.TryParseBridgeCallbackForwarded(customEventName, value, out var forwarded))
+        {
+            _runId = forwarded.RunId ?? _runId;
+            _stepId = forwarded.StepId ?? _stepId;
+            _lastSignalName = forwarded.SignalName ?? _lastSignalName;
         }
     }
 

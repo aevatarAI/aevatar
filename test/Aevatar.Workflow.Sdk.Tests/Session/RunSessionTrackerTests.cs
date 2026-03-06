@@ -117,6 +117,39 @@ public sealed class RunSessionTrackerTests
         ex.Which.Kind.Should().Be(AevatarWorkflowErrorKind.InvalidRequest);
     }
 
+    [Fact]
+    public void Track_ShouldCaptureSignalContextFromBufferedAndBridgeForwardedEvents()
+    {
+        var tracker = new RunSessionTracker();
+        tracker.Track(new WorkflowOutputFrame
+        {
+            Type = WorkflowEventTypes.Custom,
+            Name = WorkflowCustomEventNames.RunContext,
+            Value = ParseObject("""{"actorId":"actor-1","workflowName":"auto","commandId":"cmd-1"}"""),
+        });
+        tracker.Track(new WorkflowOutputFrame
+        {
+            Type = WorkflowEventTypes.Custom,
+            Name = WorkflowCustomEventNames.SignalBuffered,
+            Value = ParseObject("""{"runId":"run-buf","stepId":"wait-buf","signalName":"buffered_ready"}"""),
+        });
+
+        tracker.Snapshot.RunId.Should().Be("run-buf");
+        tracker.Snapshot.StepId.Should().Be("wait-buf");
+        tracker.Snapshot.LastSignalName.Should().Be("buffered_ready");
+
+        tracker.Track(new WorkflowOutputFrame
+        {
+            Type = WorkflowEventTypes.Custom,
+            Name = WorkflowCustomEventNames.BridgeCallbackForwarded,
+            Value = ParseObject("""{"tokenId":"tok-1","runId":"run-forward","stepId":"wait-forward","signalName":"forwarded_ready"}"""),
+        });
+
+        tracker.Snapshot.RunId.Should().Be("run-forward");
+        tracker.Snapshot.StepId.Should().Be("wait-forward");
+        tracker.Snapshot.LastSignalName.Should().Be("forwarded_ready");
+    }
+
     private static JsonElement ParseObject(string json)
     {
         using var document = JsonDocument.Parse(json);

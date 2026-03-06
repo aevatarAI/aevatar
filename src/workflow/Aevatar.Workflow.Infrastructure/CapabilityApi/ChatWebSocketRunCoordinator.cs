@@ -12,14 +12,15 @@ internal static class ChatWebSocketRunCoordinator
         ChatWebSocketCommandEnvelope command,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
         CancellationToken ct = default,
-        WorkflowCapabilitiesDocument? capabilities = null)
+        WorkflowCapabilitiesDocument? capabilities = null,
+        IReadOnlyDictionary<string, string>? defaultMetadata = null)
     {
         var responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
         var correlationId = string.Empty;
         CapabilityMessageTraceContext ResolveContext() =>
             CapabilityTraceContext.CreateMessageContext(correlationId, command.RequestId);
 
-        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input, capabilities);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input, capabilities, defaultMetadata);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);

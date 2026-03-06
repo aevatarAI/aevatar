@@ -198,6 +198,31 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
         {
             var evt = payload.Unpack<Aevatar.AI.Abstractions.TextMessageEndEvent>();
             var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
+            if (string.IsNullOrWhiteSpace(evt.SessionId) && !string.IsNullOrWhiteSpace(evt.Content))
+            {
+                events =
+                [
+                    new Aevatar.Presentation.AGUI.TextMessageStartEvent
+                    {
+                        Timestamp = ts,
+                        MessageId = msgId,
+                        Role = "assistant",
+                    },
+                    new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                    {
+                        Timestamp = ts,
+                        MessageId = msgId,
+                        Delta = evt.Content,
+                    },
+                    new Aevatar.Presentation.AGUI.TextMessageEndEvent
+                    {
+                        Timestamp = ts,
+                        MessageId = msgId,
+                    },
+                ];
+                return true;
+            }
+
             events =
             [
                 new Aevatar.Presentation.AGUI.TextMessageEndEvent
@@ -436,6 +461,101 @@ public sealed class WorkflowWaitingSignalAGUIEventEnvelopeMappingHandler : IAGUI
             },
         ];
         return true;
+    }
+}
+
+public sealed class WorkflowSignalBufferedAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+{
+    public int Order => 47;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    {
+        if (envelope.Payload?.Is(WorkflowSignalBufferedEvent.Descriptor) != true)
+        {
+            events = [];
+            return false;
+        }
+
+        var evt = envelope.Payload.Unpack<WorkflowSignalBufferedEvent>();
+        events =
+        [
+            new CustomEvent
+            {
+                Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                Name = "aevatar.workflow.signal.buffered",
+                Value = new
+                {
+                    evt.RunId,
+                    evt.StepId,
+                    evt.SignalName,
+                    evt.Payload,
+                    evt.ReceivedAtUnixTimeMs,
+                },
+            },
+        ];
+        return true;
+    }
+}
+
+public sealed class BridgeCallbackAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+{
+    public int Order => 48;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    {
+        if (envelope.Payload?.Is(BridgeCallbackForwardedEvent.Descriptor) == true)
+        {
+            var evt = envelope.Payload.Unpack<BridgeCallbackForwardedEvent>();
+            events =
+            [
+                new CustomEvent
+                {
+                    Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                    Name = "aevatar.bridge.callback.forwarded",
+                    Value = new
+                    {
+                        evt.TokenId,
+                        evt.ActorId,
+                        evt.RunId,
+                        evt.StepId,
+                        evt.SignalName,
+                        evt.Late,
+                        evt.Source,
+                        evt.SourceMessageId,
+                        evt.SourceChatId,
+                        evt.SourceUserId,
+                        evt.ReceivedAtUnixTimeMs,
+                        evt.ForwardedAtUnixTimeMs,
+                    },
+                },
+            ];
+            return true;
+        }
+
+        if (envelope.Payload?.Is(BridgeCallbackRejectedEvent.Descriptor) == true)
+        {
+            var evt = envelope.Payload.Unpack<BridgeCallbackRejectedEvent>();
+            events =
+            [
+                new CustomEvent
+                {
+                    Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                    Name = "aevatar.bridge.callback.rejected",
+                    Value = new
+                    {
+                        evt.TokenId,
+                        evt.Reason,
+                        evt.Source,
+                        evt.SourceMessageId,
+                        evt.ReceivedAtUnixTimeMs,
+                    },
+                },
+            ];
+            return true;
+        }
+
+        events = [];
+        return false;
     }
 }
 

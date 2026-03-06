@@ -52,6 +52,53 @@ public sealed record WorkflowSignalResponse
     public string? CommandId { get; init; }
 }
 
+public sealed record BridgeCallbackTokenIssueRequest
+{
+    public required string ActorId { get; init; }
+    public required string RunId { get; init; }
+    public required string StepId { get; init; }
+    public required string SignalName { get; init; }
+    public int? TimeoutMs { get; init; }
+    public string? ChannelId { get; init; }
+    public string? SessionId { get; init; }
+    public IDictionary<string, string>? Metadata { get; init; }
+}
+
+public sealed record BridgeCallbackTokenIssueResponse
+{
+    public string? Token { get; init; }
+    public string? TokenId { get; init; }
+    public string? BridgeActorId { get; init; }
+    public string? ActorId { get; init; }
+    public string? RunId { get; init; }
+    public string? StepId { get; init; }
+    public string? SignalName { get; init; }
+    public long? IssuedAtUnixTimeMs { get; init; }
+    public long? ExpiresAtUnixTimeMs { get; init; }
+    public string? Nonce { get; init; }
+    public string? ChannelId { get; init; }
+    public string? SessionId { get; init; }
+}
+
+public sealed record BridgeIngressRequest
+{
+    public required string CallbackToken { get; init; }
+    public required string Source { get; init; }
+    public string? Payload { get; init; }
+    public string? SourceMessageId { get; init; }
+    public string? SourceChatId { get; init; }
+    public string? SourceUserId { get; init; }
+    public long? ReceivedAtUnixTimeMs { get; init; }
+    public string? CommandId { get; init; }
+}
+
+public sealed record BridgeIngressResponse
+{
+    public bool Accepted { get; init; }
+    public string? CommandId { get; init; }
+    public string? BridgeActorId { get; init; }
+}
+
 public sealed record WorkflowOutputFrame
 {
     public required string Type { get; init; }

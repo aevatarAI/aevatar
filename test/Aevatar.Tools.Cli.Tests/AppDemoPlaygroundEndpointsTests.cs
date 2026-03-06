@@ -78,7 +78,7 @@ public class AppDemoPlaygroundEndpointsTests
     public void ClassifyWorkflowForLibrary_WhenWorkflowIsPrimitiveMiniExample_ShouldHideFromLibrary()
     {
         var classification = AppDemoPlaygroundEndpoints.ClassifyWorkflowForLibrary(
-            workflowName: "01_transform",
+            workflowName: "transform",
             sourceKind: "demo",
             category: "deterministic");
 
@@ -115,10 +115,23 @@ public class AppDemoPlaygroundEndpointsTests
     }
 
     [Fact]
+    public void ClassifyWorkflowForLibrary_WhenWorkflowComesFromAppBundle_ShouldUseBundledSourceLabel()
+    {
+        var classification = AppDemoPlaygroundEndpoints.ClassifyWorkflowForLibrary(
+            workflowName: "telegram_openclaw_bridge_chat",
+            sourceKind: "app",
+            category: "llm");
+
+        classification.ShowInLibrary.Should().BeTrue();
+        classification.Group.Should().Be("starter-workflows");
+        classification.SourceLabel.Should().Be("Bundled");
+    }
+
+    [Fact]
     public void ClassifyWorkflowForLibrary_WhenWorkflowIsHumanInteractive_ShouldUseAiAndHumanGroup()
     {
         var classification = AppDemoPlaygroundEndpoints.ClassifyWorkflowForLibrary(
-            workflowName: "43_human_input_manual_triage",
+            workflowName: "human_input_manual_triage",
             sourceKind: "demo",
             category: "llm");
 
@@ -129,8 +142,8 @@ public class AppDemoPlaygroundEndpointsTests
     }
 
     [Theory]
-    [InlineData("01_transform", "demo", "deterministic")]
-    [InlineData("43_human_input_manual_triage", "demo", "llm")]
+    [InlineData("transform", "demo", "deterministic")]
+    [InlineData("human_input_manual_triage", "demo", "llm")]
     [InlineData("workspace_triage", "cwd", "deterministic")]
     [InlineData("incident_triage", "home", "llm")]
     [InlineData("repo_install", "repo", "deterministic")]
@@ -158,7 +171,7 @@ public class AppDemoPlaygroundEndpointsTests
             .Subject;
 
         curated.Should().ContainKey("transform");
-        curated["transform"].Should().Contain("01_transform");
+        curated["transform"].Should().Contain("transform");
     }
 
     [Fact]

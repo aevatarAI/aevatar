@@ -1,0 +1,18 @@
+name: role_event_module_route_dsl_csv
+description: |
+  Edge-case demo: role uses line-based DSL for event_routes
+  instead of YAML list format.
+
+roles:
+  - id: dsl_route_role
+    name: DSL Route Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by role event module.
+    event_modules: "demo_csv_markdown"
+    event_routes: |
+      event.type == ChatRequestEvent -> demo_csv_markdown
+
+steps:
+  - id: role_reply
+    type: llm_call
+    role: dsl_route_role

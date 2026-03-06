@@ -74,6 +74,71 @@ public sealed class WaitSignalModuleTests
         completion.Output.Should().Be("resolved-b");
     }
 
+    [Fact]
+    public async Task HandleAsync_WhenSignalArrivesBeforeWaitStep_ShouldBufferAndConsumeOnActivation()
+    {
+        var module = new WaitSignalModule();
+        var context = new RecordingEventHandlerContext(
+            new EmptyServiceProvider(),
+            new StubAgent("workflow-early"),
+            NullLogger.Instance);
+
+        await module.HandleAsync(
+            Envelope(new SignalReceivedEvent
+            {
+                RunId = "run-early",
+                StepId = "wait-approval",
+                SignalName = "approval",
+                Payload = "early-payload",
+            }),
+            context,
+            CancellationToken.None);
+
+        context.Published.Select(item => item.Event).OfType<WorkflowSignalBufferedEvent>().Should().ContainSingle();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-approval",
+                StepType = "wait_signal",
+                RunId = "run-early",
+                Input = "fallback",
+                Parameters = { ["signal_name"] = "approval" },
+            }),
+            context,
+            CancellationToken.None);
+
+        var completion = context.Published.Select(item => item.Event).OfType<StepCompletedEvent>().Last();
+        completion.Success.Should().BeTrue();
+        completion.RunId.Should().Be("run-early");
+        completion.StepId.Should().Be("wait-approval");
+        completion.Output.Should().Be("early-payload");
+
+        context.Published.Select(item => item.Event).OfType<WaitingForSignalEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenSignalMissingStepId_ShouldNotBuffer()
+    {
+        var module = new WaitSignalModule();
+        var context = new RecordingEventHandlerContext(
+            new EmptyServiceProvider(),
+            new StubAgent("workflow-early"),
+            NullLogger.Instance);
+
+        await module.HandleAsync(
+            Envelope(new SignalReceivedEvent
+            {
+                RunId = "run-no-step",
+                SignalName = "approval",
+                Payload = "payload",
+            }),
+            context,
+            CancellationToken.None);
+
+        context.Published.Should().BeEmpty();
+    }
+
     private static EventEnvelope Envelope(IMessage evt)
     {
         return new EventEnvelope

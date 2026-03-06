@@ -1522,6 +1522,127 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldDispatchViaAgentTypeAndForwardStepParametersAsMetadata()
+    {
+        var runtime = new RecordingActorRuntimeForAgentType();
+        var services = new ServiceCollection()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddAevatarWorkflow()
+            .BuildServiceProvider();
+        var module = new LLMCallModule();
+        var ctx = CreateContext(services);
+
+        var request = new StepRequestEvent
+        {
+            StepId = "llm-agent-type",
+            StepType = "llm_call",
+            RunId = "run-agent-type",
+            Input = "hello bridge",
+            TargetRole = "legacy-role",
+        };
+        request.Parameters["agent_type"] = typeof(AgentTypeDispatchTargetAgent).AssemblyQualifiedName!;
+        request.Parameters["agent_id"] = "bridge:telegram:prod";
+        request.Parameters["chat_id"] = "10001";
+        request.Parameters["llm_timeout_ms"] = "120000";
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        ctx.Sent.Should().ContainSingle();
+        ctx.Sent[0].targetActorId.Should().Be("bridge:telegram:prod");
+        var chatRequest = ctx.Sent[0].evt.Should().BeOfType<ChatRequestEvent>().Subject;
+        chatRequest.Metadata["chat_id"].Should().Be("10001");
+        runtime.Created.Should().ContainSingle(x => x.actorId == "bridge:telegram:prod");
+
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = chatRequest.SessionId,
+                Content = "telegram-ack",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("llm-agent-type");
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("telegram-ack");
+    }
+
+    [Fact]
+    public async Task EvaluateAndReflectModules_ShouldDispatchViaAgentType()
+    {
+        var runtime = new RecordingActorRuntimeForAgentType();
+        var services = new ServiceCollection()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddAevatarWorkflow()
+            .BuildServiceProvider();
+        var ctx = CreateContext(services);
+
+        var evaluate = new EvaluateModule();
+        var evaluateRequest = new StepRequestEvent
+        {
+            StepId = "eval-agent-type",
+            StepType = "evaluate",
+            RunId = "run-eval-agent-type",
+            Input = "draft",
+        };
+        evaluateRequest.Parameters["agent_type"] = typeof(AgentTypeDispatchTargetAgent).AssemblyQualifiedName!;
+        evaluateRequest.Parameters["agent_id"] = "agent:evaluate";
+        evaluateRequest.Parameters["chat_id"] = "chat-eval";
+        evaluateRequest.Parameters["threshold"] = "2";
+        await evaluate.HandleAsync(Envelope(evaluateRequest), ctx, CancellationToken.None);
+
+        ctx.Sent.Should().ContainSingle(x => x.targetActorId == "agent:evaluate");
+        var evaluateChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
+        evaluateChat.Metadata["chat_id"].Should().Be("chat-eval");
+        ctx.Published.Clear();
+
+        await evaluate.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = evaluateChat.SessionId,
+                Content = "3",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>()
+            .Single(x => x.StepId == "eval-agent-type")
+            .Success.Should().BeTrue();
+        ctx.Published.Clear();
+
+        var reflect = new ReflectModule();
+        var reflectRequest = new StepRequestEvent
+        {
+            StepId = "reflect-agent-type",
+            StepType = "reflect",
+            RunId = "run-reflect-agent-type",
+            Input = "draft-reflect",
+        };
+        reflectRequest.Parameters["agent_type"] = typeof(AgentTypeDispatchTargetAgent).AssemblyQualifiedName!;
+        reflectRequest.Parameters["agent_id"] = "agent:reflect";
+        reflectRequest.Parameters["chat_id"] = "chat-reflect";
+        reflectRequest.Parameters["max_rounds"] = "1";
+        await reflect.HandleAsync(Envelope(reflectRequest), ctx, CancellationToken.None);
+
+        ctx.Sent.Should().Contain(x => x.targetActorId == "agent:reflect");
+        var reflectChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
+        reflectChat.Metadata["chat_id"].Should().Be("chat-reflect");
+        ctx.Published.Clear();
+
+        await reflect.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = reflectChat.SessionId,
+                Content = "PASS",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>()
+            .Single(x => x.StepId == "reflect-agent-type")
+            .Success.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ReflectModule_ShouldHandlePassPathAndIterativeImprovementPath()
     {
         var module = new ReflectModule();
@@ -1985,6 +2106,65 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         completed.Error.Should().Contain("dynamic_workflow");
     }
 
+    private sealed class RecordingActorRuntimeForAgentType : IActorRuntime
+    {
+        private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
+        public List<(System.Type agentType, string actorId)> Created { get; } = [];
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            CreateAsync(typeof(TAgent), id, ct);
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id;
+            var agent = (IAgent)Activator.CreateInstance(agentType, actorId)!;
+            var actor = new RecordingRuntimeActor(actorId, agent);
+            _actors[actorId] = actor;
+            Created.Add((agentType, actorId));
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default)
+        {
+            _actors.Remove(id);
+            return Task.CompletedTask;
+        }
+
+        public Task<IActor?> GetAsync(string id)
+        {
+            _actors.TryGetValue(id, out var actor);
+            return Task.FromResult(actor);
+        }
+
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingRuntimeActor(string id, IAgent agent) : IActor
+    {
+        public string Id { get; } = id;
+        public IAgent Agent { get; } = agent;
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class AgentTypeDispatchTargetAgent(string id) : IAgent
+    {
+        public string Id { get; } = id;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult("agent-type-target");
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
     private static RecordingEventHandlerContext CreateContext(IServiceProvider? services = null)
     {
         return new RecordingEventHandlerContext(
@@ -2016,6 +2196,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         }
 
         public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+        public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
         public EventEnvelope InboundEnvelope { get; }
         public string AgentId => Agent.Id;
         public IAgent Agent { get; }
@@ -2029,6 +2210,16 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             where TEvent : IMessage
         {
             Published.Add((evt, direction));
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default)
+            where TEvent : IMessage
+        {
+            Sent.Add((targetActorId, evt));
             return Task.CompletedTask;
         }
     }

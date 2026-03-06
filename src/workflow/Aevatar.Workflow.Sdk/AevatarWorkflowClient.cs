@@ -104,6 +104,36 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
             cancellationToken);
     }
 
+    public async Task<BridgeCallbackTokenIssueResponse> IssueBridgeCallbackTokenAsync(
+        BridgeCallbackTokenIssueRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureNotBlank(request.ActorId, nameof(request.ActorId));
+        EnsureNotBlank(request.RunId, nameof(request.RunId));
+        EnsureNotBlank(request.StepId, nameof(request.StepId));
+        EnsureNotBlank(request.SignalName, nameof(request.SignalName));
+
+        return await PostJsonAsync<BridgeCallbackTokenIssueRequest, BridgeCallbackTokenIssueResponse>(
+            "/api/bridge/callback-token",
+            request,
+            cancellationToken);
+    }
+
+    public async Task<BridgeIngressResponse> PostBridgeCallbackAsync(
+        BridgeIngressRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureNotBlank(request.CallbackToken, nameof(request.CallbackToken));
+        EnsureNotBlank(request.Source, nameof(request.Source));
+
+        return await PostJsonAsync<BridgeIngressRequest, BridgeIngressResponse>(
+            "/api/bridge/callbacks",
+            request,
+            cancellationToken);
+    }
+
     public async Task<IReadOnlyList<JsonElement>> GetWorkflowCatalogAsync(
         CancellationToken cancellationToken = default)
     {

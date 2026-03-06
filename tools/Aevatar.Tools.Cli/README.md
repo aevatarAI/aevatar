@@ -88,6 +88,14 @@ aevatar app restart --port 6690
 - if not running, it auto-starts config UI and then jumps
 - LLM status badge is refreshed continuously to reflect provider updates
 
+Bundled Telegram/OpenClaw bridge demo workflow is available in app library:
+
+- `telegram_openclaw_bridge_chat`
+- uses `agent_type: TelegramUserBridgeGAgent` + `/sendMessage` and `/waitReply`
+- treats Telegram group itself as the conversation stream (no OpenClaw callback required)
+- supports `${telegram.chat_id}` / `${telegram.openclaw_bot_username}` from `WorkflowRuntimeDefaults` in `config.json`
+- supports two-phase login: trigger code first, then collect verification code via `human_input`
+
 ```bash
 # open app UI and auto-send chat prompt
 aevatar chat "summarize current workflow status"

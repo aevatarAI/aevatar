@@ -14,6 +14,9 @@ namespace Aevatar.Workflow.Core.Modules;
 public sealed class WaitSignalModule : IEventModule
 {
     private readonly Dictionary<PendingSignalKey, PendingSignal> _pending = [];
+    private readonly Dictionary<PendingSignalKey, BufferedSignal> _buffered = [];
+    private const int DefaultSignalBufferRetentionMs = 600_000;
+    private const int MaxSignalBufferRetentionMs = 3_600_000;
 
     public string Name => "wait_signal";
     public int Priority => 5;
@@ -60,6 +63,25 @@ public sealed class WaitSignalModule : IEventModule
                 timeoutMs = Math.Clamp(timeoutSeconds * 1000, 0, 3_600_000);
             }
             var pendingKey = new PendingSignalKey(runId, signalName, request.StepId);
+            var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            PruneExpiredBufferedSignals(nowMs);
+            if (TryConsumeBufferedSignal(pendingKey, nowMs, out var buffered))
+            {
+                ctx.Logger.LogInformation(
+                    "WaitSignal: step={StepId} run={RunId} signal={Signal} consumed from buffered callback",
+                    request.StepId,
+                    runId,
+                    signalName);
+                var bufferedOutput = string.IsNullOrEmpty(buffered.Payload) ? request.Input ?? string.Empty : buffered.Payload;
+                await ctx.PublishAsync(new StepCompletedEvent
+                {
+                    StepId = request.StepId,
+                    RunId = runId,
+                    Success = true,
+                    Output = bufferedOutput,
+                }, EventDirection.Self, ct);
+                return;
+            }
 
             _pending[pendingKey] = new PendingSignal(request.StepId, runId, request.Input ?? "", signalName);
 
@@ -130,11 +152,23 @@ public sealed class WaitSignalModule : IEventModule
             var signal = payload.Unpack<SignalReceivedEvent>();
             if (!TryResolvePending(signal, out var pendingKey, out var pending))
             {
-                ctx.Logger.LogWarning(
-                    "WaitSignal: signal={Signal} run={RunId} step={StepId} not matched to pending waiters",
-                    signal.SignalName,
-                    string.IsNullOrWhiteSpace(signal.RunId) ? "(missing)" : signal.RunId,
-                    string.IsNullOrWhiteSpace(signal.StepId) ? "(missing)" : signal.StepId);
+                if (TryBufferSignal(signal, out var bufferedEvent))
+                {
+                    await ctx.PublishAsync(bufferedEvent, EventDirection.Both, ct);
+                    ctx.Logger.LogInformation(
+                        "WaitSignal: signal={Signal} run={RunId} step={StepId} buffered for deferred waiter activation",
+                        bufferedEvent.SignalName,
+                        bufferedEvent.RunId,
+                        bufferedEvent.StepId);
+                }
+                else
+                {
+                    ctx.Logger.LogWarning(
+                        "WaitSignal: signal={Signal} run={RunId} step={StepId} not matched to pending waiters",
+                        signal.SignalName,
+                        string.IsNullOrWhiteSpace(signal.RunId) ? "(missing)" : signal.RunId,
+                        string.IsNullOrWhiteSpace(signal.StepId) ? "(missing)" : signal.StepId);
+                }
                 return;
             }
 
@@ -234,6 +268,75 @@ public sealed class WaitSignalModule : IEventModule
     private static string NormalizeStepId(string? stepId) =>
         string.IsNullOrWhiteSpace(stepId) ? string.Empty : stepId.Trim();
 
+    private void PruneExpiredBufferedSignals(long nowUnixTimeMs)
+    {
+        if (_buffered.Count == 0)
+            return;
+
+        List<PendingSignalKey>? expiredKeys = null;
+        foreach (var entry in _buffered)
+        {
+            if (entry.Value.ExpiresAtUnixTimeMs > nowUnixTimeMs)
+                continue;
+            expiredKeys ??= [];
+            expiredKeys.Add(entry.Key);
+        }
+
+        if (expiredKeys == null)
+            return;
+        foreach (var key in expiredKeys)
+            _buffered.Remove(key);
+    }
+
+    private bool TryConsumeBufferedSignal(
+        PendingSignalKey key,
+        long nowUnixTimeMs,
+        out BufferedSignal buffered)
+    {
+        if (!_buffered.TryGetValue(key, out buffered!))
+            return false;
+
+        if (buffered.ExpiresAtUnixTimeMs <= nowUnixTimeMs)
+        {
+            _buffered.Remove(key);
+            return false;
+        }
+
+        _buffered.Remove(key);
+        return true;
+    }
+
+    private bool TryBufferSignal(SignalReceivedEvent signal, out WorkflowSignalBufferedEvent bufferedEvent)
+    {
+        var runId = WorkflowRunIdNormalizer.Normalize(signal.RunId);
+        var stepId = NormalizeStepId(signal.StepId);
+        var signalName = NormalizeSignalName(signal.SignalName);
+        if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(stepId))
+        {
+            bufferedEvent = new WorkflowSignalBufferedEvent();
+            return false;
+        }
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        PruneExpiredBufferedSignals(nowMs);
+        var key = new PendingSignalKey(runId, signalName, stepId);
+        var payload = signal.Payload ?? string.Empty;
+        _buffered[key] = new BufferedSignal(
+            payload,
+            nowMs,
+            nowMs + Math.Clamp(DefaultSignalBufferRetentionMs, 1_000, MaxSignalBufferRetentionMs));
+        bufferedEvent = new WorkflowSignalBufferedEvent
+        {
+            RunId = runId,
+            StepId = stepId,
+            SignalName = signalName,
+            Payload = payload,
+            ReceivedAtUnixTimeMs = nowMs,
+        };
+        return true;
+    }
+
     private readonly record struct PendingSignalKey(string RunId, string SignalName, string StepId);
     private sealed record PendingSignal(string StepId, string RunId, string Input, string SignalName);
+    private sealed record BufferedSignal(string Payload, long ReceivedAtUnixTimeMs, long ExpiresAtUnixTimeMs);
 }

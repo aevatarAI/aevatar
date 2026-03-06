@@ -15,6 +15,7 @@ public sealed class ConnectorConfigEntry
     public HttpConnectorConfig Http { get; init; } = new();
     public CliConnectorConfig Cli { get; init; } = new();
     public MCPConnectorConfig MCP { get; init; } = new();
+    public TelegramUserConnectorConfig TelegramUser { get; init; } = new();
 }
 
 /// <summary>HTTP connector policy settings.</summary>
@@ -48,6 +49,23 @@ public sealed class MCPConnectorConfig
     public string DefaultTool { get; init; } = "";
     public string[] AllowedTools { get; init; } = [];
     public string[] AllowedInputKeys { get; init; } = [];
+}
+
+/// <summary>Telegram user-account connector settings (MTProto client).</summary>
+public sealed class TelegramUserConnectorConfig
+{
+    public string ApiId { get; init; } = "";
+    public string ApiHash { get; init; } = "";
+    public string PhoneNumber { get; init; } = "";
+    public string VerificationCode { get; init; } = "";
+    public string Password { get; init; } = "";
+    public string SessionPath { get; init; } = "";
+    public string DeviceModel { get; init; } = "";
+    public string SystemVersion { get; init; } = "";
+    public string AppVersion { get; init; } = "";
+    public string SystemLangCode { get; init; } = "";
+    public string LangCode { get; init; } = "";
+    public string[] AllowedOperations { get; init; } = ["/sendMessage", "/getUpdates"];
 }
 
 /// <summary>
@@ -142,6 +160,11 @@ public static class AevatarConnectorConfig
         var mcp = TryGetPropertyIgnoreCase(obj, "mcp", out var mcpNode)
             ? ParseMCP(mcpNode)
             : new MCPConnectorConfig();
+        var telegramUser = TryGetPropertyIgnoreCase(obj, "telegramUser", out var telegramUserNode)
+            ? ParseTelegramUser(telegramUserNode)
+            : TryGetPropertyIgnoreCase(obj, "telegram_user", out telegramUserNode)
+                ? ParseTelegramUser(telegramUserNode)
+                : new TelegramUserConnectorConfig();
 
         return new ConnectorConfigEntry
         {
@@ -153,6 +176,7 @@ public static class AevatarConnectorConfig
             Http = http,
             Cli = cli,
             MCP = mcp,
+            TelegramUser = telegramUser,
         };
     }
 
@@ -195,6 +219,32 @@ public static class AevatarConnectorConfig
             DefaultTool = ReadString(obj, "defaultTool"),
             AllowedTools = ReadStringArray(obj, "allowedTools"),
             AllowedInputKeys = ReadStringArray(obj, "allowedInputKeys"),
+        };
+    }
+
+    private static TelegramUserConnectorConfig ParseTelegramUser(JsonElement obj)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+            return new TelegramUserConnectorConfig();
+
+        var allowedOperations = ReadStringArray(obj, "allowedOperations");
+        if (allowedOperations.Length == 0)
+            allowedOperations = ["/sendMessage", "/getUpdates"];
+
+        return new TelegramUserConnectorConfig
+        {
+            ApiId = ReadString(obj, "apiId"),
+            ApiHash = ReadString(obj, "apiHash"),
+            PhoneNumber = ReadString(obj, "phoneNumber"),
+            VerificationCode = ReadString(obj, "verificationCode"),
+            Password = ReadString(obj, "password"),
+            SessionPath = ReadString(obj, "sessionPath"),
+            DeviceModel = ReadString(obj, "deviceModel"),
+            SystemVersion = ReadString(obj, "systemVersion"),
+            AppVersion = ReadString(obj, "appVersion"),
+            SystemLangCode = ReadString(obj, "systemLangCode"),
+            LangCode = ReadString(obj, "langCode"),
+            AllowedOperations = allowedOperations,
         };
     }
 

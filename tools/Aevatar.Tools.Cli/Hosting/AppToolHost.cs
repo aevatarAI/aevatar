@@ -4,6 +4,7 @@ using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Tools.Cli.Bridge;
+using Aevatar.Workflow.Extensions.Bridge;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
@@ -77,6 +78,7 @@ internal static class AppToolHost
             });
             builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
             builder.Services.AddWorkflowCapability(builder.Configuration);
+            builder.Services.AddWorkflowBridgeExtensions();
         }
 
         var app = builder.Build();

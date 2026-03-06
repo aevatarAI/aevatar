@@ -387,4 +387,91 @@ public class WorkflowValidatorCoverageTests
             e.Contains("未知原语") &&
             e.Contains("mystery_sub_step"));
     }
+
+    [Fact]
+    public void Validate_WhenAgentTypeIsEmptyOrInvalid_ShouldReportErrors()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "s-empty",
+                    Type = "llm_call",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["agent_type"] = "   ",
+                    },
+                },
+                new StepDefinition
+                {
+                    Id = "s-invalid",
+                    Type = "llm_call",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["agent_type"] = "bad type ???",
+                    },
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(wf);
+        errors.Should().Contain(e => e.Contains("s-empty") && e.Contains("agent_type"));
+        errors.Should().Contain(e => e.Contains("s-invalid") && e.Contains("格式非法"));
+    }
+
+    [Fact]
+    public void Validate_WhenAgentTypePresent_ShouldSkipMissingTargetRoleValidation()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "s-agent",
+                    Type = "llm_call",
+                    TargetRole = "missing-role",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["agent_type"] = "Aevatar.Workflow.Extensions.Bridge.TelegramBridgeGAgent, Aevatar.Workflow.Extensions.Bridge",
+                    },
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(wf);
+        errors.Should().NotContain(e => e.Contains("missing-role"));
+    }
+
+    [Fact]
+    public void Validate_WhenAgentIdIsBlankString_ShouldReportError()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "s-agent-id",
+                    Type = "llm_call",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["agent_type"] = "TelegramBridgeGAgent",
+                        ["agent_id"] = " ",
+                    },
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(wf);
+        errors.Should().Contain(e => e.Contains("s-agent-id") && e.Contains("agent_id"));
+    }
 }

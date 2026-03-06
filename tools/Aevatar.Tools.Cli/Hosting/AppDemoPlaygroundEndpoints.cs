@@ -22,7 +22,8 @@ internal static class AppDemoPlaygroundEndpoints
     private const int AutoResumeDelayMs = 50;
     internal const string AppConfigOpenRoute = "/api/app/config/open";
     private const int DefaultConfigUiPort = 6677;
-    private const string AppConfigOpenWorkflowFileName = "app_open_config.yaml";
+    private const string AppConfigOpenWorkflowName = "app_open_config";
+    private const string AppConfigOpenWorkflowFileName = AppConfigOpenWorkflowName + ".yaml";
     private const string ConfigUiPortToken = "__CONFIG_UI_PORT__";
     private static readonly UTF8Encoding Utf8NoBom = new(false);
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -50,29 +51,29 @@ internal static class AppDemoPlaygroundEndpoints
     private static readonly IReadOnlyDictionary<string, string[]> CuratedPrimitiveExamples =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
-            ["transform"] = ["01_transform", "07_pipeline"],
-            ["guard"] = ["02_guard", "07_pipeline"],
-            ["conditional"] = ["03_conditional"],
-            ["switch"] = ["04_switch"],
-            ["assign"] = ["05_assign", "07_pipeline"],
-            ["retrieve_facts"] = ["06_retrieve_facts", "07_pipeline"],
-            ["llm_call"] = ["08_llm_call", "09_llm_chain"],
-            ["parallel"] = ["10_parallel"],
-            ["race"] = ["11_race"],
-            ["map_reduce"] = ["12_map_reduce", "53_map_reduce_llm_alias"],
-            ["foreach"] = ["13_foreach"],
-            ["evaluate"] = ["14_evaluate"],
-            ["reflect"] = ["15_reflect"],
-            ["cache"] = ["16_cache"],
-            ["human_input"] = ["43_human_input_manual_triage", "39_human_input_basic_auto_resume"],
-            ["human_approval"] = ["46_human_approval_release_gate", "47_mixed_human_approval_wait_signal"],
-            ["wait_signal"] = ["44_wait_signal_manual_success", "47_mixed_human_approval_wait_signal"],
-            ["workflow_call"] = ["49_workflow_call_multilevel"],
-            ["connector_call"] = ["50_connector_cli_demo", "51_cli_call_alias"],
-            ["emit"] = ["54_emit_publish_demo"],
-            ["tool_call"] = ["55_tool_call_fallback_demo"],
-            ["checkpoint"] = ["56_delay_checkpoint_demo"],
-            ["delay"] = ["56_delay_checkpoint_demo"],
+            ["transform"] = ["transform", "pipeline"],
+            ["guard"] = ["guard", "pipeline"],
+            ["conditional"] = ["conditional"],
+            ["switch"] = ["switch"],
+            ["assign"] = ["assign", "pipeline"],
+            ["retrieve_facts"] = ["retrieve_facts", "pipeline"],
+            ["llm_call"] = ["llm_call", "llm_chain"],
+            ["parallel"] = ["parallel"],
+            ["race"] = ["race"],
+            ["map_reduce"] = ["map_reduce", "map_reduce_llm_alias"],
+            ["foreach"] = ["foreach"],
+            ["evaluate"] = ["evaluate"],
+            ["reflect"] = ["reflect"],
+            ["cache"] = ["cache"],
+            ["human_input"] = ["human_input_manual_triage", "human_input_basic_auto_resume"],
+            ["human_approval"] = ["human_approval_release_gate", "mixed_human_approval_wait_signal"],
+            ["wait_signal"] = ["wait_signal_manual_success", "mixed_human_approval_wait_signal"],
+            ["workflow_call"] = ["workflow_call_multilevel"],
+            ["connector_call"] = ["connector_cli_demo", "cli_call_alias"],
+            ["emit"] = ["emit_publish_demo"],
+            ["tool_call"] = ["tool_call_fallback_demo"],
+            ["checkpoint"] = ["delay_checkpoint_demo"],
+            ["delay"] = ["delay_checkpoint_demo"],
         };
 
     private static readonly IReadOnlyDictionary<string, string[]> PrimitiveAliases =
@@ -255,6 +256,11 @@ internal static class AppDemoPlaygroundEndpoints
                 "Internal orchestration primitive used by the workflow runtime to advance serialized loop execution.",
                 Array.Empty<PrimitiveParameter>()),
         };
+
+    private static readonly HashSet<string> HiddenWorkflowCatalogNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        AppConfigOpenWorkflowName,
+    };
 
     public static void Map(IEndpointRouteBuilder app, bool embeddedWorkflowMode)
     {
@@ -1640,7 +1646,9 @@ internal static class AppDemoPlaygroundEndpoints
             if (!Directory.Exists(source.DirectoryPath))
                 continue;
 
-            foreach (var file in Directory.GetFiles(source.DirectoryPath, "*.yaml")
+            foreach (var file in Directory.EnumerateFiles(source.DirectoryPath, "*.*")
+                         .Where(path => path.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
+                                     || path.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
                          .OrderBy(Path.GetFileNameWithoutExtension, StringComparer.OrdinalIgnoreCase))
             {
                 var name = Path.GetFileNameWithoutExtension(file);
@@ -1668,6 +1676,9 @@ internal static class AppDemoPlaygroundEndpoints
         foreach (var workflowFile in DiscoverWorkflowFiles().Values
                      .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
         {
+            if (HiddenWorkflowCatalogNames.Contains(workflowFile.Name))
+                continue;
+
             try
             {
                 var yaml = File.ReadAllText(workflowFile.FilePath);
@@ -1726,6 +1737,9 @@ internal static class AppDemoPlaygroundEndpoints
             sources.Add(new WorkflowYamlSource(kind, path));
         }
 
+        AddIfExists("app", Path.Combine(AppContext.BaseDirectory, "workflows"));
+        AddIfExists("app", Path.Combine(AevatarPaths.RepoRoot, "tools", "Aevatar.Tools.Cli", "workflows"));
+        AddIfExists("app", Path.Combine(Environment.CurrentDirectory, "tools", "Aevatar.Tools.Cli", "workflows"));
         AddIfExists("demo", Path.Combine(AevatarPaths.RepoRoot, "demos", "Aevatar.Demos.Workflow", "workflows"));
         AddIfExists("turing", Path.Combine(AevatarPaths.RepoRoot, "workflows", "turing-completeness"));
         AddIfExists("repo", AevatarPaths.RepoRootWorkflows);

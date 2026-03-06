@@ -175,6 +175,48 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenRuntimeDefaultMetadataProvided_ShouldMergeWithRequestMetadata()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var service = new FakeCommandExecutionService
+        {
+            Handler = (_, _, _, _) => Task.FromResult(
+                new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
+                    WorkflowChatRunStartError.AgentNotFound,
+                    null,
+                    null)),
+        };
+
+        await ChatWebSocketRunCoordinator.ExecuteAsync(
+            socket,
+            new ChatWebSocketCommandEnvelope(
+                "req-defaults",
+                new ChatInput
+                {
+                    Prompt = "hello",
+                    Metadata = new Dictionary<string, string>
+                    {
+                        ["telegram.chat_id"] = "-100-request",
+                    },
+                },
+                WebSocketMessageType.Text),
+            service,
+            CancellationToken.None,
+            defaultMetadata: new Dictionary<string, string>
+            {
+                ["telegram.chat_id"] = "-100-default",
+                ["telegram.openclaw_bot_username"] = "openclaw_bot",
+            });
+
+        var command = service.LastCommand;
+        command.Should().NotBeNull();
+        var capturedCommand = command ?? throw new InvalidOperationException("Expected command capture.");
+        var metadata = capturedCommand.Metadata ?? throw new InvalidOperationException("Expected metadata capture.");
+        metadata["telegram.chat_id"].Should().Be("-100-request");
+        metadata["telegram.openclaw_bot_username"].Should().Be("openclaw_bot");
+    }
+
+    [Fact]
     public async Task ReceiveAsync_ShouldAssembleTextChunks()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);

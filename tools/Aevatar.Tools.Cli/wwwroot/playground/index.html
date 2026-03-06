@@ -8,11 +8,17 @@
 </head>
 <body>
   <div id="app">
-    <button id="app-sidebar-toggle" class="btn btn-secondary app-sidebar-toggle" type="button" aria-expanded="true">Hide Sidebar</button>
+    <button
+      id="app-sidebar-toggle"
+      class="app-sidebar-toggle"
+      type="button"
+      aria-expanded="true"
+      aria-controls="sidebar"
+      aria-label="Collapse sidebar"
+      title="Collapse sidebar">‹</button>
     <aside id="sidebar">
       <div class="sidebar-header">
         <h1>Aevatar</h1>
-        <p class="subtitle">Workflow Studio for Library, YAML, Primitives, and Playground</p>
       </div>
 
       <nav class="sidebar-nav">
@@ -29,12 +35,12 @@
       </div>
 
       <div id="sidebar-workflows" class="sidebar-section">
-        <div class="section-label sidebar-hint">Workflow Library · Browse real workflows, inspect YAML, and try representative runs</div>
+        <div class="section-label">Workflow Library</div>
         <div id="workflow-groups"></div>
       </div>
 
       <div id="sidebar-primitives" class="sidebar-section hidden">
-        <div class="section-label sidebar-hint">Primitives Guide · Learn each building block and jump to curated examples</div>
+        <div class="section-label">Primitives</div>
         <ul id="primitives-list" class="primitives-list"></ul>
       </div>
     </aside>
@@ -43,24 +49,10 @@
       <div id="view-overview" class="view">
         <header class="main-header">
           <div class="header-info">
-            <h2>Understand Aevatar Before You Edit Anything</h2>
-            <p>This app should first explain what already exists, then let users inspect YAML, learn primitives, and experiment in the playground.</p>
+            <h2>Overview</h2>
           </div>
         </header>
         <div class="main-body">
-          <section class="hero-card">
-            <div class="hero-copy">
-              <div class="section-title">Workflow Studio</div>
-              <h3>Start from the library, drill into YAML, then iterate in the playground.</h3>
-              <p>Aevatar already ships with workflow examples and primitive references. Use the library to understand patterns, use the YAML page to inspect the exact definition, and use the playground when you want to generate or refine your own draft.</p>
-            </div>
-            <div class="hero-actions">
-              <button id="overview-go-workflows" class="btn btn-primary">Browse Workflows</button>
-              <button id="overview-go-primitives" class="btn btn-secondary">Learn Primitives</button>
-              <button id="overview-go-playground" class="btn btn-secondary">Open Playground</button>
-            </div>
-          </section>
-
           <section id="overview-stats" class="stats-grid"></section>
 
           <section class="library-grid">
@@ -85,22 +77,9 @@
         <header class="main-header">
           <div class="header-info">
             <h2>Workflow Library</h2>
-            <p>These are the workflows that already exist in Aevatar. Open one to understand what it does, inspect the exact YAML, and try a run with representative input.</p>
           </div>
         </header>
         <div class="main-body">
-          <section class="hero-card compact">
-            <div class="hero-copy">
-              <div class="section-title">How To Use This Library</div>
-              <h3>Pick a workflow, read the intent first, then open YAML when you need exact structure.</h3>
-              <p>The sidebar is the full workflow catalog. This page gives you the high-level map: which groups exist, what they are good for, and which workflows are the best entry points.</p>
-            </div>
-            <div class="hero-actions">
-              <button id="workflows-go-yaml" class="btn btn-secondary">Open YAML Browser</button>
-              <button id="workflows-go-playground" class="btn btn-secondary">Go To Playground</button>
-            </div>
-          </section>
-
           <section class="detail-block">
             <div class="detail-label">Library Map</div>
             <div id="workflows-home-groups" class="card-grid"></div>
@@ -116,8 +95,19 @@
       <div id="view-workflow" class="view hidden">
         <header class="main-header">
           <div class="header-info">
-            <h2 id="wf-name"></h2>
-            <p id="wf-description"></p>
+            <div class="header-title-row">
+              <h2 id="wf-name"></h2>
+              <span id="wf-description-wrap" class="wf-description-wrap hidden">
+                <span
+                  id="wf-description-trigger"
+                  class="wf-description-trigger"
+                  role="button"
+                  tabindex="0"
+                  aria-label="Workflow description"
+                  title="Workflow description">i</span>
+                <span id="wf-description" class="wf-description-tooltip" role="tooltip"></span>
+              </span>
+            </div>
           </div>
           <div class="header-actions">
             <button id="btn-open-yaml" class="btn btn-secondary">Open YAML</button>
@@ -139,18 +129,30 @@
           </section>
 
           <section id="plan-section" class="detail-block hidden">
-            <div class="detail-label">What This Workflow Does</div>
-            <div class="plan-summary-row">
-              <div class="plan-summary-copy">
-                <div id="wf-plan-summary" class="plan-summary-text"></div>
-                <div id="wf-plan-steps" class="plan-step-list"></div>
+            <button
+              id="wf-plan-toggle"
+              class="plan-section-toggle"
+              type="button"
+              aria-expanded="true"
+              aria-controls="wf-plan-body"
+              aria-label="Collapse workflow plan"
+              title="Collapse workflow plan">
+              <span class="detail-label">What This Workflow Does</span>
+              <span class="plan-section-chevron">▾</span>
+            </button>
+            <div id="wf-plan-body" class="plan-section-body">
+              <div class="plan-summary-row">
+                <div class="plan-summary-copy">
+                  <div id="wf-plan-summary" class="plan-summary-text"></div>
+                  <div id="wf-plan-steps" class="plan-step-list"></div>
+                </div>
+                <div class="plan-meta-card">
+                  <div id="wf-plan-meta" class="plan-meta-grid"></div>
+                  <div id="wf-plan-inputs" class="plan-input-hint"></div>
+                </div>
               </div>
-              <div class="plan-meta-card">
-                <div id="wf-plan-meta" class="plan-meta-grid"></div>
-                <div id="wf-plan-inputs" class="plan-input-hint"></div>
-              </div>
+              <div id="wf-plan-primitives" class="tag-list"></div>
             </div>
-            <div id="wf-plan-primitives" class="tag-list"></div>
           </section>
 
           <section class="details-section">
@@ -200,7 +202,6 @@
         <header class="main-header">
           <div class="header-info">
             <h2>Workflow YAML Browser</h2>
-            <p>Read the exact workflow definition here. You can switch between a library workflow and the current playground draft.</p>
           </div>
           <div class="header-actions">
             <button id="yaml-use-workflow" class="btn btn-secondary">Library Workflow</button>
@@ -212,7 +213,7 @@
             <div class="yaml-browser-head">
               <div>
                 <div id="yaml-browser-title" class="yaml-browser-title">No YAML selected yet</div>
-                <div id="yaml-browser-description" class="yaml-browser-description">Open a workflow from the library, or generate a draft in the playground.</div>
+                <div id="yaml-browser-description" class="yaml-browser-description"></div>
               </div>
               <div id="yaml-browser-meta" class="tag-list"></div>
             </div>
@@ -223,7 +224,7 @@
             <div class="flow-panel">
               <div class="section-title">Workflow Graph</div>
               <div id="yaml-browser-graph" class="flow-container">
-                <p class="placeholder-copy">Pick a workflow or create a playground draft to render the graph here.</p>
+                <p class="placeholder-copy">No graph</p>
               </div>
             </div>
             <div class="yaml-panel">
@@ -238,22 +239,9 @@
         <header class="main-header">
           <div class="header-info">
             <h2>Primitive Guide</h2>
-            <p>Primitives are the building blocks of every workflow. Start here to understand what each primitive means, then open curated example workflows to see it in context.</p>
           </div>
         </header>
         <div class="main-body">
-          <section class="hero-card compact">
-            <div class="hero-copy">
-              <div class="section-title">How To Read Primitives</div>
-              <h3>Use primitives as the vocabulary, and the workflow library as the sentences.</h3>
-              <p>Very simple demos now live conceptually under primitives. Each primitive page explains the behavior, key parameters, aliases, and the workflows that best demonstrate it.</p>
-            </div>
-            <div class="hero-actions">
-              <button id="primitives-go-workflows" class="btn btn-secondary">Browse Workflows</button>
-              <button id="primitives-go-playground" class="btn btn-secondary">Try In Playground</button>
-            </div>
-          </section>
-
           <section class="detail-block">
             <div class="detail-label">Primitive Categories</div>
             <div id="primitives-home-groups" class="card-grid"></div>
@@ -299,7 +287,6 @@
         <header class="main-header workspace-header">
           <div class="header-info">
             <h2>Workflow Workspace</h2>
-            <p>YAML and graph stay in the primary canvas. Run controls are collapsible on the left, and chat history plus composer are expanded in a full-width bottom chat panel.</p>
           </div>
           <div class="header-actions workspace-actions">
             <button id="playground-open-yaml" class="btn btn-secondary" type="button">Open Draft In YAML</button>
@@ -317,7 +304,7 @@
                   <div class="detail-label">Run Controls</div>
                   <span id="pg-run-state-chip" class="pg-run-state-chip tone-idle">Idle</span>
                 </div>
-                <p id="pg-run-state-note" class="pg-run-state-note">Send a prompt below to draft and execute a workflow automatically.</p>
+                <p id="pg-run-state-note" class="pg-run-state-note"></p>
                 <div class="pg-run-quick-actions">
                   <button id="pg-quick-open-log" class="btn btn-secondary pg-quick-btn" type="button">Logs</button>
                   <button id="pg-quick-open-result" class="btn btn-secondary pg-quick-btn" type="button">Result</button>
@@ -367,8 +354,14 @@
 
           <div id="pg-chat-dock" class="pg-chat-dock">
             <div class="pg-chat-history-header">
-              <div class="detail-label">Prompt History</div>
-              <button id="pg-chat-history-toggle" class="btn btn-secondary pg-chat-history-toggle" type="button" aria-expanded="true">Hide History</button>
+              <div
+                id="pg-chat-history-toggle"
+                class="detail-label pg-chat-history-toggle"
+                role="button"
+                tabindex="0"
+                aria-expanded="true"
+                aria-label="Hide prompt history"
+                title="Hide prompt history">Prompt History</div>
             </div>
             <div id="pg-messages-wrap" class="pg-messages-wrap">
               <div id="pg-messages" class="pg-messages"></div>

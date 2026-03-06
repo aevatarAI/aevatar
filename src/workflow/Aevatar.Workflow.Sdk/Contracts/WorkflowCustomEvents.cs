@@ -11,6 +11,9 @@ public static class WorkflowCustomEventNames
     public const string StepCompleted = "aevatar.step.completed";
     public const string HumanInputRequest = "aevatar.human_input.request";
     public const string WaitingSignal = "aevatar.workflow.waiting_signal";
+    public const string SignalBuffered = "aevatar.workflow.signal.buffered";
+    public const string BridgeCallbackForwarded = "aevatar.bridge.callback.forwarded";
+    public const string BridgeCallbackRejected = "aevatar.bridge.callback.rejected";
     public const string LlmReasoning = "aevatar.llm.reasoning";
 }
 
@@ -62,6 +65,40 @@ public sealed record WorkflowLlmReasoningEventData
 {
     public string? Role { get; init; }
     public string? Delta { get; init; }
+}
+
+public sealed record WorkflowSignalBufferedEventData
+{
+    public string? RunId { get; init; }
+    public string? StepId { get; init; }
+    public string? SignalName { get; init; }
+    public string? Payload { get; init; }
+    public long? ReceivedAtUnixTimeMs { get; init; }
+}
+
+public sealed record WorkflowBridgeCallbackForwardedEventData
+{
+    public string? TokenId { get; init; }
+    public string? ActorId { get; init; }
+    public string? RunId { get; init; }
+    public string? StepId { get; init; }
+    public string? SignalName { get; init; }
+    public bool? Late { get; init; }
+    public string? Source { get; init; }
+    public string? SourceMessageId { get; init; }
+    public string? SourceChatId { get; init; }
+    public string? SourceUserId { get; init; }
+    public long? ReceivedAtUnixTimeMs { get; init; }
+    public long? ForwardedAtUnixTimeMs { get; init; }
+}
+
+public sealed record WorkflowBridgeCallbackRejectedEventData
+{
+    public string? TokenId { get; init; }
+    public string? Reason { get; init; }
+    public string? Source { get; init; }
+    public string? SourceMessageId { get; init; }
+    public long? ReceivedAtUnixTimeMs { get; init; }
 }
 
 public static class WorkflowCustomEventParser
@@ -175,6 +212,89 @@ public static class WorkflowCustomEventParser
         return true;
     }
 
+    public static bool TryParseSignalBuffered(WorkflowOutputFrame frame, out WorkflowSignalBufferedEventData data) =>
+        TryParseSignalBuffered(frame.Name, frame.Value, out data);
+
+    public static bool TryParseSignalBuffered(string? customEventName, JsonElement? value, out WorkflowSignalBufferedEventData data)
+    {
+        if (!Is(customEventName, WorkflowCustomEventNames.SignalBuffered) || !TryGetObject(value, out var obj))
+        {
+            data = default!;
+            return false;
+        }
+
+        data = new WorkflowSignalBufferedEventData
+        {
+            RunId = WorkflowSdkJson.TryReadString(obj, "runId", "RunId"),
+            StepId = WorkflowSdkJson.TryReadString(obj, "stepId", "StepId"),
+            SignalName = WorkflowSdkJson.TryReadString(obj, "signalName", "SignalName"),
+            Payload = WorkflowSdkJson.TryReadString(obj, "payload", "Payload"),
+            ReceivedAtUnixTimeMs = TryReadLong(obj, "receivedAtUnixTimeMs", "ReceivedAtUnixTimeMs"),
+        };
+        return true;
+    }
+
+    public static bool TryParseBridgeCallbackForwarded(
+        WorkflowOutputFrame frame,
+        out WorkflowBridgeCallbackForwardedEventData data) =>
+        TryParseBridgeCallbackForwarded(frame.Name, frame.Value, out data);
+
+    public static bool TryParseBridgeCallbackForwarded(
+        string? customEventName,
+        JsonElement? value,
+        out WorkflowBridgeCallbackForwardedEventData data)
+    {
+        if (!Is(customEventName, WorkflowCustomEventNames.BridgeCallbackForwarded) || !TryGetObject(value, out var obj))
+        {
+            data = default!;
+            return false;
+        }
+
+        data = new WorkflowBridgeCallbackForwardedEventData
+        {
+            TokenId = WorkflowSdkJson.TryReadString(obj, "tokenId", "TokenId"),
+            ActorId = WorkflowSdkJson.TryReadString(obj, "actorId", "ActorId"),
+            RunId = WorkflowSdkJson.TryReadString(obj, "runId", "RunId"),
+            StepId = WorkflowSdkJson.TryReadString(obj, "stepId", "StepId"),
+            SignalName = WorkflowSdkJson.TryReadString(obj, "signalName", "SignalName"),
+            Late = TryReadBoolean(obj, "late", "Late"),
+            Source = WorkflowSdkJson.TryReadString(obj, "source", "Source"),
+            SourceMessageId = WorkflowSdkJson.TryReadString(obj, "sourceMessageId", "SourceMessageId"),
+            SourceChatId = WorkflowSdkJson.TryReadString(obj, "sourceChatId", "SourceChatId"),
+            SourceUserId = WorkflowSdkJson.TryReadString(obj, "sourceUserId", "SourceUserId"),
+            ReceivedAtUnixTimeMs = TryReadLong(obj, "receivedAtUnixTimeMs", "ReceivedAtUnixTimeMs"),
+            ForwardedAtUnixTimeMs = TryReadLong(obj, "forwardedAtUnixTimeMs", "ForwardedAtUnixTimeMs"),
+        };
+        return true;
+    }
+
+    public static bool TryParseBridgeCallbackRejected(
+        WorkflowOutputFrame frame,
+        out WorkflowBridgeCallbackRejectedEventData data) =>
+        TryParseBridgeCallbackRejected(frame.Name, frame.Value, out data);
+
+    public static bool TryParseBridgeCallbackRejected(
+        string? customEventName,
+        JsonElement? value,
+        out WorkflowBridgeCallbackRejectedEventData data)
+    {
+        if (!Is(customEventName, WorkflowCustomEventNames.BridgeCallbackRejected) || !TryGetObject(value, out var obj))
+        {
+            data = default!;
+            return false;
+        }
+
+        data = new WorkflowBridgeCallbackRejectedEventData
+        {
+            TokenId = WorkflowSdkJson.TryReadString(obj, "tokenId", "TokenId"),
+            Reason = WorkflowSdkJson.TryReadString(obj, "reason", "Reason"),
+            Source = WorkflowSdkJson.TryReadString(obj, "source", "Source"),
+            SourceMessageId = WorkflowSdkJson.TryReadString(obj, "sourceMessageId", "SourceMessageId"),
+            ReceivedAtUnixTimeMs = TryReadLong(obj, "receivedAtUnixTimeMs", "ReceivedAtUnixTimeMs"),
+        };
+        return true;
+    }
+
     public static bool TryParseLlmReasoning(WorkflowOutputFrame frame, out WorkflowLlmReasoningEventData data) =>
         TryParseLlmReasoning(frame.Name, frame.Value, out data);
 
@@ -262,6 +382,25 @@ public static class WorkflowCustomEventParser
                 return n;
             if (value.ValueKind == JsonValueKind.String &&
                 int.TryParse(value.GetString(), out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return null;
+    }
+
+    private static long? TryReadLong(JsonElement obj, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!obj.TryGetProperty(name, out var value))
+                continue;
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var n))
+                return n;
+            if (value.ValueKind == JsonValueKind.String &&
+                long.TryParse(value.GetString(), out var parsed))
             {
                 return parsed;
             }

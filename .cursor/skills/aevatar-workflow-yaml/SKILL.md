@@ -46,6 +46,8 @@ steps:                          # required in practice
     target_role: analyst        # optional, alias: role
     parameters:                 # optional, Dict<string,string>
       prompt_prefix: "Analyze:"
+      agent_type: TelegramBridgeGAgent  # optional: direct GAgent type dispatch (llm/evaluate/reflect)
+      agent_id: bridge:telegram:default # optional: explicit target actor id
     next: step2                 # optional
     children: []                # optional, recursive
     branches:                   # optional, Dict<string,string>
@@ -79,6 +81,10 @@ steps:                          # required in practice
    - `http_get/http_post/http_put/http_delete/mcp_call/cli_call` -> `connector_call`
    - `foreach_llm` -> `foreach`
    - `map_reduce_llm` -> `map_reduce`
+12. `parameters.agent_type` is supported for `llm_call` / `evaluate` / `reflect` and can directly target a GAgent type.
+13. When `parameters.agent_type` is present, `target_role` can be omitted and is not required for target resolution.
+14. `parameters.agent_id` is optional; if omitted, runtime generates a stable actor id from workflow actor + step + agent type.
+15. In agent-type dispatch mode, step `parameters` are forwarded as chat metadata except `agent_type` and `agent_id`.
 
 ## Validation Constraints
 
@@ -207,6 +213,83 @@ steps:
     type: llm_call
     role: advisor
 ```
+
+### Direct GAgent Type Dispatch (No YAML role)
+
+Use when a step should call a concrete GAgent directly:
+
+```yaml
+steps:
+  - id: send_to_telegram_bridge
+    type: llm_call
+    parameters:
+      agent_type: TelegramBridgeGAgent
+      agent_id: bridge:telegram:openclaw
+      connector: telegram
+      operation: /sendMessage
+      chat_id: "${telegram.chat_id}"
+      parse_mode: Markdown
+```
+
+The same `agent_type` pattern also works for `evaluate` and `reflect`.
+
+### Telegram Group Stream Pattern (No callback)
+
+```yaml
+steps:
+  - id: send_to_openclaw
+    type: llm_call
+    parameters:
+      agent_type: TelegramBridgeGAgent
+      connector: telegram
+      chat_id: "${telegram.chat_id}"
+      prompt_prefix: |
+        [AEVATAR -> OPENCLAW]
+        Reply in the same group and prefix response with [AEVATAR_STREAM_REPLY].
+    next: wait_openclaw_group_stream
+
+  - id: wait_openclaw_group_stream
+    type: llm_call
+    parameters:
+      agent_type: TelegramBridgeGAgent
+      connector: telegram
+      operation: /waitReply
+      chat_id: "${telegram.chat_id}"
+      expected_from_username: "${telegram.openclaw_bot_username}"
+      correlation_contains: "[AEVATAR_STREAM_REPLY]"
+      wait_timeout_ms: "120000"
+      poll_timeout_sec: "8"
+      start_from_latest: "true"
+    on_error:
+      strategy: fallback
+      fallback_step: timeout_fallback
+
+  - id: timeout_fallback
+    type: assign
+    parameters:
+      target: bridge_timeout
+      value: "OpenClaw reply timeout"
+```
+
+Recommended runtime flow:
+- Aevatar bot sends message to Telegram group via `/sendMessage`.
+- OpenClaw bot replies in the same group with a correlation marker.
+- Aevatar bot waits through `/waitReply` (internally polling `getUpdates`) and captures matched reply.
+
+### Runtime Defaults From config.json
+
+You can inject shared runtime values via `WorkflowRuntimeDefaults` in host `config.json`; they become run metadata variables and can be referenced as `${...}` in workflow YAML.
+
+```json
+{
+  "WorkflowRuntimeDefaults": {
+    "telegram.chat_id": "-1001234567890",
+    "telegram.openclaw_bot_username": "openclaw_bot"
+  }
+}
+```
+
+Request metadata with the same key overrides configured defaults.
 
 ### Switch Branching
 

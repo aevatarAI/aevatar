@@ -21,12 +21,13 @@ internal static class ChatRunRequestNormalizer
 {
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
-        WorkflowCapabilitiesDocument? capabilities = null)
+        WorkflowCapabilitiesDocument? capabilities = null,
+        IReadOnlyDictionary<string, string>? defaultMetadata = null)
     {
         ArgumentNullException.ThrowIfNull(input);
 
         var normalizedAgentId = NormalizeAgentId(input.AgentId);
-        var normalizedMetadata = NormalizeMetadata(input.Metadata);
+        var normalizedMetadata = NormalizeMetadata(input.Metadata, defaultMetadata);
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
         var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
         var normalizedPrompt = WorkflowAuthoringSkillPromptAugmentor.AugmentPrompt(
@@ -84,22 +85,37 @@ internal static class ChatRunRequestNormalizer
     private static string NormalizeWorkflowName(string? workflowName) =>
         string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
 
-    private static IReadOnlyDictionary<string, string> NormalizeMetadata(IDictionary<string, string>? metadata)
+    private static IReadOnlyDictionary<string, string> NormalizeMetadata(
+        IDictionary<string, string>? metadata,
+        IReadOnlyDictionary<string, string>? defaultMetadata)
     {
-        if (metadata == null || metadata.Count == 0)
-            return new Dictionary<string, string>(StringComparer.Ordinal);
-
         var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, value) in metadata)
+        if (defaultMetadata is { Count: > 0 })
         {
-            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
-            var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
-            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
-                continue;
-            normalized[normalizedKey] = normalizedValue;
+            foreach (var (key, value) in defaultMetadata)
+                AddNormalizedMetadataEntry(normalized, key, value);
+        }
+
+        if (metadata is { Count: > 0 })
+        {
+            foreach (var (key, value) in metadata)
+                AddNormalizedMetadataEntry(normalized, key, value);
         }
 
         return normalized;
+    }
+
+    private static void AddNormalizedMetadataEntry(
+        IDictionary<string, string> metadata,
+        string key,
+        string value)
+    {
+        var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+        var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+        if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+            return;
+
+        metadata[normalizedKey] = normalizedValue;
     }
 
     private static string? NormalizeAgentId(string? agentId) =>
