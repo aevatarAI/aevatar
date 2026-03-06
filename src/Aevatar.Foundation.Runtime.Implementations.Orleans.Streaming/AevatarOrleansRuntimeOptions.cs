@@ -7,9 +7,6 @@ public sealed class AevatarOrleansRuntimeOptions
     public const string PersistenceBackendInMemory = "InMemory";
     public const string PersistenceBackendGarnet = "Garnet";
     public const string DefaultGarnetConnectionString = "localhost:6379";
-    public const string RuntimeCallbackSchedulingModeAuto = "Auto";
-    public const string RuntimeCallbackSchedulingModeForceInline = "ForceInline";
-    public const string RuntimeCallbackSchedulingModeForceDedicated = "ForceDedicated";
     public const string RuntimeCallbackDedicatedDeliveryModeAuto = "Auto";
     public const string RuntimeCallbackDedicatedDeliveryModeTimer = "Timer";
     public const string RuntimeCallbackDedicatedDeliveryModeReminder = "Reminder";
@@ -29,12 +26,6 @@ public sealed class AevatarOrleansRuntimeOptions
     public int QueueCacheSize { get; set; } = 4096;
 
     /// <summary>
-    /// Scheduling strategy selection:
-    /// Auto | ForceInline | ForceDedicated
-    /// </summary>
-    public string RuntimeCallbackSchedulingMode { get; set; } = RuntimeCallbackSchedulingModeAuto;
-
-    /// <summary>
     /// Dedicated scheduling delivery mode:
     /// Auto | Timer | Reminder
     /// </summary>
@@ -46,9 +37,4 @@ public sealed class AevatarOrleansRuntimeOptions
     /// </summary>
     public int RuntimeCallbackReminderThresholdMs { get; set; } = 300_000;
 
-    /// <summary>
-    /// Auto mode threshold: inline path is used only when due_time <= threshold.
-    /// Set <= 0 to allow inline regardless of due_time.
-    /// </summary>
-    public int RuntimeCallbackInlineMaxDueTimeMs { get; set; } = 60_000;
 }

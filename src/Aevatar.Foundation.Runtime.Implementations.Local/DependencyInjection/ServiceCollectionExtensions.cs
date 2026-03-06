@@ -55,7 +55,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStreamForwardingRegistry>(sp =>
             sp.GetRequiredService<InMemoryStreamForwardingRegistry>());
         services.TryAddSingleton<IStreamRequestReplyClient, RuntimeStreamRequestReplyClient>();
-        services.TryAddSingleton<IActorRuntimeCallbackScheduler, InMemoryActorRuntimeCallbackScheduler>();
+        services.TryAddSingleton<InMemoryActorRuntimeCallbackScheduler>();
+        services.TryAddSingleton<IActorRuntimeCallbackScheduler>(sp =>
+            sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>());
 
         // Actor Runtime
         services.TryAddSingleton<IActorRuntime>(sp =>

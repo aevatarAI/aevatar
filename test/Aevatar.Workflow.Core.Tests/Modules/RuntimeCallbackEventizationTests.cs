@@ -309,7 +309,7 @@ public class RuntimeCallbackEventizationTests
             return Task.CompletedTask;
         }
 
-        public Task<RuntimeCallbackLease> ScheduleSelfTimeoutAsync(
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
             string callbackId,
             TimeSpan dueTime,
             IMessage evt,
@@ -325,7 +325,7 @@ public class RuntimeCallbackEventizationTests
             return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory));
         }
 
-        public Task<RuntimeCallbackLease> ScheduleSelfTimerAsync(
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
             string callbackId,
             TimeSpan dueTime,
             TimeSpan period,
@@ -343,7 +343,7 @@ public class RuntimeCallbackEventizationTests
             return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory));
         }
 
-        public Task CancelScheduledCallbackAsync(
+        public Task CancelDurableCallbackAsync(
             RuntimeCallbackLease lease,
             CancellationToken ct = default)
         {

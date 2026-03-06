@@ -1,5 +1,9 @@
 namespace Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 
+/// <summary>
+/// Public runtime callback scheduler contract.
+/// Semantics are durable-only: callbacks must remain schedulable outside the current actor/grain turn.
+/// </summary>
 public interface IActorRuntimeCallbackScheduler
 {
     Task<RuntimeCallbackLease> ScheduleTimeoutAsync(

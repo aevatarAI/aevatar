@@ -248,7 +248,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         {
             pending = pending with
             {
-                TimeoutLease = await ScheduleSelfTimeoutAsync(
+                TimeoutLease = await ScheduleSelfDurableTimeoutAsync(
                     BuildDefinitionQueryTimeoutCallbackId(requestId),
                     PendingRunTimeout,
                     new ScriptDefinitionQueryTimeoutFiredEvent
@@ -418,7 +418,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
 
         try
         {
-            await CancelScheduledCallbackAsync(pending.TimeoutLease, ct);
+            await CancelDurableCallbackAsync(pending.TimeoutLease, ct);
         }
         catch (Exception ex)
         {

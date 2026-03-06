@@ -112,7 +112,7 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             return Task.CompletedTask;
         }
 
-        public Task<RuntimeCallbackLease> ScheduleSelfTimeoutAsync(
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
             string callbackId,
             TimeSpan dueTime,
             IMessage evt,
@@ -127,7 +127,7 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             throw new NotSupportedException("This test context does not support scheduling.");
         }
 
-        public Task<RuntimeCallbackLease> ScheduleSelfTimerAsync(
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
             string callbackId,
             TimeSpan dueTime,
             TimeSpan period,
@@ -144,7 +144,7 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             throw new NotSupportedException("This test context does not support scheduling.");
         }
 
-        public Task CancelScheduledCallbackAsync(
+        public Task CancelDurableCallbackAsync(
             RuntimeCallbackLease lease,
             CancellationToken ct = default)
         {

@@ -43,14 +43,16 @@ public interface IEventHandlerContext
             $"{GetType().Name} does not support SendToAsync.");
     }
 
-    Task<RuntimeCallbackLease> ScheduleSelfTimeoutAsync(
+    /// <summary>Schedules a durable self timeout callback.</summary>
+    Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default);
 
-    Task<RuntimeCallbackLease> ScheduleSelfTimerAsync(
+    /// <summary>Schedules a durable self timer callback.</summary>
+    Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
         string callbackId,
         TimeSpan dueTime,
         TimeSpan period,
@@ -58,7 +60,8 @@ public interface IEventHandlerContext
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default);
 
-    Task CancelScheduledCallbackAsync(
+    /// <summary>Cancels a durable callback using lease/CAS semantics.</summary>
+    Task CancelDurableCallbackAsync(
         RuntimeCallbackLease lease,
         CancellationToken ct = default);
 }

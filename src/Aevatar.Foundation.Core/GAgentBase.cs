@@ -227,7 +227,7 @@ public abstract class GAgentBase : IAgent
         CancellationToken ct = default) where TEvent : Google.Protobuf.IMessage =>
         EventPublisher.SendToAsync(targetActorId, evt, ct, _activeInboundEnvelope);
 
-    protected Task<RuntimeCallbackLease> ScheduleSelfTimeoutAsync(
+    protected Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
@@ -250,7 +250,7 @@ public abstract class GAgentBase : IAgent
                 ct);
     }
 
-    protected Task<RuntimeCallbackLease> ScheduleSelfTimerAsync(
+    protected Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
         string callbackId,
         TimeSpan dueTime,
         TimeSpan period,
@@ -276,7 +276,7 @@ public abstract class GAgentBase : IAgent
                 ct);
     }
 
-    protected Task CancelScheduledCallbackAsync(
+    protected Task CancelDurableCallbackAsync(
         RuntimeCallbackLease lease,
         CancellationToken ct = default)
     {

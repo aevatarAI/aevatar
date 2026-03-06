@@ -4,7 +4,8 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 
 namespace Aevatar.Foundation.Runtime.Callbacks;
 
-public sealed class InMemoryActorRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+public sealed class InMemoryActorRuntimeCallbackScheduler :
+    IActorRuntimeCallbackScheduler
 {
     private readonly IStreamProvider _streams;
     private readonly ConcurrentDictionary<CallbackKey, ScheduledCallback> _callbacks = [];

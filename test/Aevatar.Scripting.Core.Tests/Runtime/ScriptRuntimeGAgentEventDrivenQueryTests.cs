@@ -644,7 +644,8 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
         }
     }
 
-    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    private sealed class RecordingCallbackScheduler :
+        IActorRuntimeCallbackScheduler
     {
         private readonly Dictionary<string, long> _generations = new(StringComparer.Ordinal);
 

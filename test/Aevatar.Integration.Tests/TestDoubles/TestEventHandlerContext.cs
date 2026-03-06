@@ -42,7 +42,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext
         return Task.CompletedTask;
     }
 
-    public Task<RuntimeCallbackLease> ScheduleSelfTimeoutAsync(
+    public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
@@ -53,7 +53,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext
         return Task.FromResult(lease);
     }
 
-    public Task<RuntimeCallbackLease> ScheduleSelfTimerAsync(
+    public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
         string callbackId,
         TimeSpan dueTime,
         TimeSpan period,
@@ -65,7 +65,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext
         return Task.FromResult(lease);
     }
 
-    public Task CancelScheduledCallbackAsync(
+    public Task CancelDurableCallbackAsync(
         RuntimeCallbackLease lease,
         CancellationToken ct = default)
     {

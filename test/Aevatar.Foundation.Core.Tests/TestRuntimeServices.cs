@@ -12,7 +12,9 @@ internal static class TestRuntimeServices
     public static IServiceCollection AddRuntimeScheduler(this IServiceCollection services)
     {
         services.AddSingleton<IStreamProvider, InMemoryStreamProvider>();
-        services.AddSingleton<IActorRuntimeCallbackScheduler, InMemoryActorRuntimeCallbackScheduler>();
+        services.AddSingleton<InMemoryActorRuntimeCallbackScheduler>();
+        services.AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
+            sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>());
         return services;
     }
 

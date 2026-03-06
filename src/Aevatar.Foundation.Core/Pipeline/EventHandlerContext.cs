@@ -16,21 +16,21 @@ namespace Aevatar.Foundation.Core.Pipeline;
 internal sealed class EventHandlerContext : IEventHandlerContext
 {
     private readonly IEventPublisher _publisher;
-    private readonly IActorRuntimeCallbackScheduler _callbackScheduler;
+    private readonly IActorRuntimeCallbackScheduler _durableCallbackScheduler;
     public EventEnvelope InboundEnvelope { get; }
 
     /// <summary>Builds context with agent, publisher, services, and logger.</summary>
     public EventHandlerContext(
         IAgent agent,
         IEventPublisher publisher,
-        IActorRuntimeCallbackScheduler callbackScheduler,
+        IActorRuntimeCallbackScheduler durableCallbackScheduler,
         IServiceProvider services,
         ILogger logger,
         EventEnvelope inboundEnvelope)
     {
         Agent = agent;
         _publisher = publisher;
-        _callbackScheduler = callbackScheduler ?? throw new ArgumentNullException(nameof(callbackScheduler));
+        _durableCallbackScheduler = durableCallbackScheduler ?? throw new ArgumentNullException(nameof(durableCallbackScheduler));
         Services = services;
         Logger = logger;
         InboundEnvelope = inboundEnvelope;
@@ -58,14 +58,14 @@ internal sealed class EventHandlerContext : IEventHandlerContext
         CancellationToken ct = default) where TEvent : IMessage =>
         _publisher.SendToAsync(targetActorId, evt, ct, InboundEnvelope);
 
-    public Task<RuntimeCallbackLease> ScheduleSelfTimeoutAsync(
+    public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default)
     {
-        return _callbackScheduler.ScheduleTimeoutAsync(
+        return _durableCallbackScheduler.ScheduleTimeoutAsync(
             new RuntimeCallbackTimeoutRequest
             {
                 ActorId = AgentId,
@@ -76,7 +76,7 @@ internal sealed class EventHandlerContext : IEventHandlerContext
             ct);
     }
 
-    public Task<RuntimeCallbackLease> ScheduleSelfTimerAsync(
+    public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
         string callbackId,
         TimeSpan dueTime,
         TimeSpan period,
@@ -84,7 +84,7 @@ internal sealed class EventHandlerContext : IEventHandlerContext
         IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken ct = default)
     {
-        return _callbackScheduler.ScheduleTimerAsync(
+        return _durableCallbackScheduler.ScheduleTimerAsync(
             new RuntimeCallbackTimerRequest
             {
                 ActorId = AgentId,
@@ -96,12 +96,12 @@ internal sealed class EventHandlerContext : IEventHandlerContext
             ct);
     }
 
-    public Task CancelScheduledCallbackAsync(
+    public Task CancelDurableCallbackAsync(
         RuntimeCallbackLease lease,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(lease);
-        return _callbackScheduler.CancelAsync(lease, ct);
+        return _durableCallbackScheduler.CancelAsync(lease, ct);
     }
 
     private EventEnvelope BuildSelfEnvelope(

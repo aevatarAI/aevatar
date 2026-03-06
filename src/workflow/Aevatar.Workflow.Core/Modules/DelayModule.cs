@@ -83,7 +83,7 @@ public sealed class DelayModule : IEventModule
             }
 
             var callbackId = BuildDelayCallbackId(runId, stepId);
-            var lease = await ctx.ScheduleSelfTimeoutAsync(
+            var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
                 callbackId,
                 TimeSpan.FromMilliseconds(durationMs),
                 new DelayStepTimeoutFiredEvent
@@ -140,7 +140,7 @@ public sealed class DelayModule : IEventModule
         if (!_pending.Remove(key, out var pending))
             return;
 
-        await ctx.CancelScheduledCallbackAsync(
+        await ctx.CancelDurableCallbackAsync(
             pending.Lease,
             ct);
     }

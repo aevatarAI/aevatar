@@ -1020,7 +1020,9 @@ public class WorkflowGAgentCoverageTests
         var serviceCollection = new ServiceCollection()
             .AddSingleton(eventStore)
             .AddSingleton<IStreamProvider, InMemoryStreamProvider>()
-            .AddSingleton<IActorRuntimeCallbackScheduler, InMemoryActorRuntimeCallbackScheduler>()
+            .AddSingleton<InMemoryActorRuntimeCallbackScheduler>()
+            .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
+                sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         if (workflowResolver != null)

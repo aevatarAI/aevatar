@@ -81,7 +81,7 @@ public sealed class WaitSignalModule : IEventModule
             if (_pending.Remove(pendingKey, out var existingPending) &&
                 existingPending.TimeoutLease != null)
             {
-                await ctx.CancelScheduledCallbackAsync(existingPending.TimeoutLease, CancellationToken.None);
+                await ctx.CancelDurableCallbackAsync(existingPending.TimeoutLease, CancellationToken.None);
             }
 
             if (timeoutMs > 0)
@@ -94,7 +94,7 @@ public sealed class WaitSignalModule : IEventModule
                     TimeoutMs = Math.Clamp(timeoutMs, 100, 3_600_000),
                 };
                 var callbackId = BuildTimeoutCallbackId(runId, signalName, stepId);
-                var lease = await ctx.ScheduleSelfTimeoutAsync(
+                var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
                     callbackId,
                     TimeSpan.FromMilliseconds(timeoutFiredEvent.TimeoutMs),
                     timeoutFiredEvent,
@@ -171,7 +171,7 @@ public sealed class WaitSignalModule : IEventModule
             _pending.Remove(pendingKey);
             if (pending.TimeoutLease != null)
             {
-                await ctx.CancelScheduledCallbackAsync(pending.TimeoutLease, CancellationToken.None);
+                await ctx.CancelDurableCallbackAsync(pending.TimeoutLease, CancellationToken.None);
             }
 
             ctx.Logger.LogInformation(

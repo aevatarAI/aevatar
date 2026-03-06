@@ -453,7 +453,7 @@ public sealed class WorkflowLoopModule : IEventModule
         await CancelRetryBackoffAsync(runId, stepId, ctx, CancellationToken.None);
 
         var callbackId = BuildStepRetryBackoffCallbackId(runId, stepId);
-        var lease = await ctx.ScheduleSelfTimeoutAsync(
+        var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
             callbackId,
             TimeSpan.FromMilliseconds(delayMs),
             new WorkflowStepRetryBackoffFiredEvent
@@ -612,7 +612,7 @@ public sealed class WorkflowLoopModule : IEventModule
 
         var stepId = step.Id;
         var timeoutMs = Math.Clamp(step.TimeoutMs.Value, 100, 600_000);
-        var lease = await ctx.ScheduleSelfTimeoutAsync(
+        var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
             BuildStepTimeoutCallbackId(runId, stepId),
             TimeSpan.FromMilliseconds(timeoutMs),
             new WorkflowStepTimeoutFiredEvent
@@ -635,7 +635,7 @@ public sealed class WorkflowLoopModule : IEventModule
         if (!_timeouts.Remove(stepRunKey, out var lease))
             return;
 
-        await ctx.CancelScheduledCallbackAsync(lease, ct);
+        await ctx.CancelDurableCallbackAsync(lease, ct);
     }
 
     private async Task CancelRetryBackoffAsync(
@@ -648,7 +648,7 @@ public sealed class WorkflowLoopModule : IEventModule
         if (!_retryBackoffs.Remove(stepRunKey, out var pending))
             return;
 
-        await ctx.CancelScheduledCallbackAsync(pending.Lease, ct);
+        await ctx.CancelDurableCallbackAsync(pending.Lease, ct);
     }
 
     private Dictionary<string, string> ResolveVariables(string runId)
@@ -692,7 +692,7 @@ public sealed class WorkflowLoopModule : IEventModule
             if (string.IsNullOrWhiteSpace(stepId))
                 continue;
 
-            await ctx.CancelScheduledCallbackAsync(lease, ct);
+            await ctx.CancelDurableCallbackAsync(lease, ct);
         }
 
         foreach (var key in _retryBackoffs.Keys.Where(k => string.Equals(k.RunId, runId, StringComparison.Ordinal)).ToList())
@@ -700,7 +700,7 @@ public sealed class WorkflowLoopModule : IEventModule
             if (!_retryBackoffs.Remove(key, out var pending))
                 continue;
 
-            await ctx.CancelScheduledCallbackAsync(pending.Lease, ct);
+            await ctx.CancelDurableCallbackAsync(pending.Lease, ct);
         }
 
     }

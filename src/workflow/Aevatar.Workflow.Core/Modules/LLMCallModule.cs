@@ -148,7 +148,7 @@ public sealed class LLMCallModule : IEventModule
                 await ctx.PublishAsync(chatEvt, EventDirection.Self, ct);
             }
 
-            var lease = await ctx.ScheduleSelfTimeoutAsync(
+            var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
                 watchdogCallbackId,
                 TimeSpan.FromMilliseconds(timeoutMs),
                 new LlmCallWatchdogTimeoutFiredEvent
@@ -368,7 +368,7 @@ public sealed class LLMCallModule : IEventModule
 
         try
         {
-            await ctx.CancelScheduledCallbackAsync(pending.WatchdogLease, ct);
+            await ctx.CancelDurableCallbackAsync(pending.WatchdogLease, ct);
         }
         catch (Exception ex)
         {

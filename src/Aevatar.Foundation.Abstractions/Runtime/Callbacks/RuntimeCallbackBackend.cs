@@ -3,6 +3,5 @@ namespace Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 public enum RuntimeCallbackBackend
 {
     InMemory = 0,
-    Inline = 1,
-    Dedicated = 2,
+    Dedicated = 1,
 }
