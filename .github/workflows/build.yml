@@ -1,0 +1,201 @@
+name: Sisyphus CI/CD
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - "apps/sisyphus/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+    inputs:
+      deploy_env:
+        description: "Deployment environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+
+concurrency:
+  group: sisyphus-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_INSTALL_DIR: "./.dotnet"
+
+jobs:
+  build-and-test-api:
+    runs-on: aismart-runner
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore dependencies
+        run: dotnet restore apps/sisyphus/src/Sisyphus.Host/Sisyphus.Host.csproj
+
+      - name: Build
+        run: dotnet build apps/sisyphus/src/Sisyphus.Host/Sisyphus.Host.csproj -c Release --no-restore
+
+      - name: Test
+        run: >-
+          dotnet test apps/sisyphus/test/Sisyphus.Application.Tests/Sisyphus.Application.Tests.csproj
+          -c Release
+          --logger "trx;LogFileName=results.trx"
+          --collect:"XPlat Code Coverage"
+
+  build-and-test-web:
+    runs-on: aismart-runner
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: apps/sisyphus/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/sisyphus/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+  build-and-push-api-image:
+    needs: build-and-test-api
+    runs-on: aismart-runner
+    permissions:
+      contents: read
+    outputs:
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set short git commit SHA
+        id: vars
+        run: |
+          calculatedSha=$(git rev-parse --short ${{ github.sha }})
+          echo "short_sha=$calculatedSha" >> "$GITHUB_OUTPUT"
+
+      - name: Generate image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.REPOSITORY_REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPOSITORY }}/sisyphus-api
+          tags: |
+            type=sha
+            type=raw,value=latest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/sisyphus/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ secrets.REPOSITORY_REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPOSITORY }}/sisyphus-api:buildcache
+          cache-to: type=registry,ref=${{ secrets.REPOSITORY_REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPOSITORY }}/sisyphus-api:buildcache,mode=max
+
+  build-and-push-web-image:
+    needs: build-and-test-web
+    runs-on: aismart-runner
+    permissions:
+      contents: read
+    outputs:
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set short git commit SHA
+        id: vars
+        run: |
+          calculatedSha=$(git rev-parse --short ${{ github.sha }})
+          echo "short_sha=$calculatedSha" >> "$GITHUB_OUTPUT"
+
+      - name: Generate image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.REPOSITORY_REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPOSITORY }}/sisyphus-web
+          tags: |
+            type=sha
+            type=raw,value=latest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/sisyphus/frontend
+          file: apps/sisyphus/frontend/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ secrets.REPOSITORY_REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPOSITORY }}/sisyphus-web:buildcache
+          cache-to: type=registry,ref=${{ secrets.REPOSITORY_REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPOSITORY }}/sisyphus-web:buildcache,mode=max
+
+  deploy-api:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: aismart-runner
+    needs: build-and-push-api-image
+    steps:
+      - name: Dispatch API deployment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TOK }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'AElfDevops',
+              repo: 'devops',
+              workflow_id: 'sisyphus-api-deploy.yaml',
+              ref: 'main',
+              inputs: {
+                env: '${{ inputs.deploy_env }}',
+                commit_sha: 'sha-${{ needs.build-and-push-api-image.outputs.short_sha }}',
+              }
+            })
+
+  deploy-web:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: aismart-runner
+    needs: build-and-push-web-image
+    steps:
+      - name: Dispatch Web deployment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TOK }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'AElfDevops',
+              repo: 'devops',
+              workflow_id: 'sisyphus-web-deploy.yaml',
+              ref: 'main',
+              inputs: {
+                env: '${{ inputs.deploy_env }}',
+                commit_sha: 'sha-${{ needs.build-and-push-web-image.outputs.short_sha }}',
+              }
+            })
