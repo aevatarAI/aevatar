@@ -286,10 +286,11 @@ public sealed class ResearchLoopService(
     }
 
     /// <summary>
-    /// Hard limit on prompt size in characters to prevent LLM context overflow
-    /// and Orleans message size errors. ~800K chars ≈ ~200K tokens.
+    /// Hard limit on prompt size in characters to prevent Orleans message size
+    /// errors (~1MB limit). 400K chars ≈ ~400KB UTF-8, leaving headroom for
+    /// serialization overhead and the WorkflowChatRunRequest wrapper.
     /// </summary>
-    private const int MaxPromptChars = 800_000;
+    private const int MaxPromptChars = 400_000;
 
     private static string BuildResearchPrompt(BlueGraphSnapshot snapshot, int nodesPerRound)
     {
