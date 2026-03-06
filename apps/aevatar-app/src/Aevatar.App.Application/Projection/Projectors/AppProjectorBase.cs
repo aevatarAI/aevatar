@@ -38,23 +38,29 @@ public abstract class AppProjectorBase<TReadModel> : IProjectionProjector<AppPro
         await _store.UpsertAsync(model, ct);
     }
 
-    public ValueTask ProjectAsync(AppProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
+    public async ValueTask ProjectAsync(AppProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
         if (!context.ActorId.StartsWith(ActorPrefix, StringComparison.Ordinal))
-            return ValueTask.CompletedTask;
+            return;
         var typeUrl = envelope.Payload?.TypeUrl;
-        if (string.IsNullOrWhiteSpace(typeUrl)) return ValueTask.CompletedTask;
-        if (!_reducersByType.TryGetValue(typeUrl, out var reducers)) return ValueTask.CompletedTask;
+        if (string.IsNullOrWhiteSpace(typeUrl)) return;
+        if (!_reducersByType.TryGetValue(typeUrl, out var reducers)) return;
         if (!string.IsNullOrWhiteSpace(envelope.Id) && !context.TryMarkProcessed(envelope.Id))
-            return ValueTask.CompletedTask;
+            return;
 
         var now = ResolveTimestamp(envelope);
-        return new ValueTask(_store.MutateAsync(context.ActorId, model =>
+        await _store.MutateAsync(context.ActorId, model =>
         {
             foreach (var reducer in reducers)
                 reducer.Reduce(model, context, envelope, now);
-        }, ct));
+        }, ct);
+
+        await OnProjectedAsync(context, envelope, ct);
     }
+
+    protected virtual ValueTask OnProjectedAsync(
+        AppProjectionContext context, EventEnvelope envelope, CancellationToken ct) =>
+        ValueTask.CompletedTask;
 
     public ValueTask CompleteAsync(AppProjectionContext context, object? topology, CancellationToken ct = default)
         => ValueTask.CompletedTask;

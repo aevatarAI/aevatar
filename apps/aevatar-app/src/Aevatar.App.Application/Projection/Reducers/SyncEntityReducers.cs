@@ -77,6 +77,49 @@ public sealed class EntityUpdatedEventReducer
     }
 }
 
+public sealed class EntitiesSyncedEventReducer
+    : AppEventReducerBase<AppSyncEntityReadModel, EntitiesSyncedEvent>
+{
+    protected override bool Reduce(
+        AppSyncEntityReadModel readModel,
+        AppProjectionContext context,
+        EventEnvelope envelope,
+        EntitiesSyncedEvent evt,
+        DateTimeOffset now)
+    {
+        readModel.ServerRevision = Math.Max(readModel.ServerRevision, evt.ServerRevision);
+
+        if (!string.IsNullOrEmpty(evt.SyncId))
+        {
+            readModel.SyncResults[evt.SyncId] = new SyncResultEntry
+            {
+                SyncId = evt.SyncId,
+                ClientRevision = evt.ClientRevision,
+                ServerRevision = evt.ServerRevision,
+                Accepted = [..evt.Accepted],
+                Rejected = evt.Rejected
+                    .Select(r => new RejectedEntityEntry
+                    {
+                        ClientId = r.ClientId,
+                        ServerRevision = r.ServerRevision,
+                        Reason = r.Reason,
+                    })
+                    .ToList(),
+            };
+            readModel.SyncResultOrder.Add(evt.SyncId);
+
+            while (readModel.SyncResultOrder.Count > AppSyncEntityReadModel.MaxSyncResults)
+            {
+                var oldest = readModel.SyncResultOrder[0];
+                readModel.SyncResultOrder.RemoveAt(0);
+                readModel.SyncResults.Remove(oldest);
+            }
+        }
+
+        return true;
+    }
+}
+
 public sealed class AccountDeletedEventSyncEntityReducer
     : AppEventReducerBase<AppSyncEntityReadModel, AccountDeletedEvent>
 {

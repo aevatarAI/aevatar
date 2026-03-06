@@ -93,6 +93,16 @@ builder.Services.AddSingleton<IFallbackContent, FallbackContent>();
 builder.Services.AddSingleton<IAIGenerationAppService, AIGenerationAppService>();
 builder.Services.AddSingleton<IAuthAppService, AuthAppService>();
 builder.Services.AddSingleton<IGenerationAppService, GenerationAppService>();
+builder.Services.Configure<Aevatar.App.Application.Completion.CompletionPortOptions>(
+    builder.Configuration.GetSection(Aevatar.App.Application.Completion.CompletionPortOptions.SectionName));
+if (string.Equals(
+        builder.Configuration["ActorRuntime:OrleansPersistenceBackend"], "Garnet",
+        StringComparison.OrdinalIgnoreCase))
+    builder.Services.AddSingleton<Aevatar.App.Application.Completion.ICompletionPort,
+        Aevatar.App.Host.Api.Completion.RedisCompletionPort>();
+else
+    builder.Services.AddSingleton<Aevatar.App.Application.Completion.ICompletionPort,
+        Aevatar.App.Application.Completion.InMemoryCompletionPort>();
 builder.Services.AddSingleton<ISyncAppService, SyncAppService>();
 builder.Services.AddSingleton<IUserAppService, UserAppService>();
 builder.Services.AddSingleton<IValidator<Aevatar.App.Application.Contracts.EntityDto>, Aevatar.App.Application.Validation.EntityValidator>();

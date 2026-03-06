@@ -17,6 +17,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using Aevatar.App.Application.Auth;
 using Aevatar.App.Application.Concurrency;
+using Aevatar.App.Application.Completion;
 using Aevatar.App.Application.Contracts;
 using Aevatar.App.Application.Errors;
 using Aevatar.App.Application.Projection.DependencyInjection;
@@ -101,6 +102,7 @@ public sealed class AppTestFixture : IAsyncLifetime
                 sp.GetRequiredService<IAppProjectionManager>()));
         services.AddSingleton<IAppProjectionManager, SyncingAppProjectionManager>();
         services.AddAppProjection();
+        services.AddSingleton<ICompletionPort, TestCompletionPort>();
         services.AddSingleton<IFallbackContent, FallbackContent>();
         services.AddSingleton<IAIGenerationAppService, AIGenerationAppService>();
         services.AddSingleton<IAuthAppService, AuthAppService>();
@@ -315,6 +317,28 @@ internal sealed class SyncingAppProjectionManager : IAppProjectionManager
                         kv => kv.Key,
                         kv => ProtoToEntry(kv.Value),
                         StringComparer.Ordinal);
+
+                    var last = syncAgent.State.LastSyncResult;
+                    if (last is not null && !string.IsNullOrEmpty(last.SyncId))
+                    {
+                        m.SyncResults[last.SyncId] = new SyncResultEntry
+                        {
+                            SyncId = last.SyncId,
+                            ClientRevision = last.ClientRevision,
+                            ServerRevision = last.ServerRevision,
+                            Accepted = [.. last.Accepted],
+                            Rejected = last.Rejected
+                                .Select(r => new RejectedEntityEntry
+                                {
+                                    ClientId = r.ClientId,
+                                    ServerRevision = r.ServerRevision,
+                                    Reason = r.Reason,
+                                })
+                                .ToList(),
+                        };
+                        if (!m.SyncResultOrder.Contains(last.SyncId))
+                            m.SyncResultOrder.Add(last.SyncId);
+                    }
                 }, ct);
                 break;
 
@@ -406,6 +430,12 @@ internal sealed class SyncingAppProjectionManager : IAppProjectionManager
         var json = Google.Protobuf.JsonFormatter.Default.Format(s);
         return System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
     }
+}
+
+internal sealed class TestCompletionPort : ICompletionPort
+{
+    public Task WaitAsync(string completionKey, CancellationToken ct = default) => Task.CompletedTask;
+    public void Complete(string completionKey) { }
 }
 
 internal sealed class NoOpStreamProvider : Aevatar.Foundation.Abstractions.IStreamProvider

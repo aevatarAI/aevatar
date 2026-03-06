@@ -1,26 +1,28 @@
-using System.Text.Json;
+using Aevatar.App.Application.Completion;
 using Aevatar.App.Application.Projection.ReadModels;
 using Aevatar.App.GAgents;
-using Aevatar.App.GAgents.Rules;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.App.Application.Services;
 
 public sealed class SyncAppService : ISyncAppService
 {
     private readonly IActorAccessAppService _actors;
+    private readonly ICompletionPort _completionPort;
     private readonly IProjectionDocumentStore<AppSyncEntityReadModel, string> _syncStore;
-    private readonly IProjectionDocumentStore<AppSyncEntityLastResultReadModel, string> _syncLastResultStore;
+    private readonly ILogger<SyncAppService> _logger;
 
     public SyncAppService(
         IActorAccessAppService actors,
+        ICompletionPort completionPort,
         IProjectionDocumentStore<AppSyncEntityReadModel, string> syncStore,
-        IProjectionDocumentStore<AppSyncEntityLastResultReadModel, string> syncLastResultStore)
+        ILogger<SyncAppService> logger)
     {
         _actors = actors;
+        _completionPort = completionPort;
         _syncStore = syncStore;
-        _syncLastResultStore = syncLastResultStore;
+        _logger = logger;
     }
 
     public async Task<SyncResult> SyncAsync(
@@ -29,72 +31,6 @@ public sealed class SyncAppService : ISyncAppService
         int clientRevision,
         IReadOnlyList<SyncEntity> incomingEntities)
     {
-        var syncKey = _actors.ResolveActorId<SyncEntityGAgent>(userId);
-        var currentModel = await _syncStore.GetAsync(syncKey);
-        var currentEntities = ToProtoMap(currentModel?.Entities);
-        var currentRevision = currentModel?.ServerRevision ?? 0;
-
-        var accepted = new List<string>();
-        var rejected = new List<RejectedEntity>();
-        var updatedEntities = new Dictionary<string, SyncEntity>(
-            currentEntities.Select(kv => KeyValuePair.Create(kv.Key, kv.Value.Clone())),
-            StringComparer.Ordinal);
-
-        foreach (var incoming in incomingEntities)
-        {
-            currentEntities.TryGetValue(incoming.ClientId, out var existing);
-            var rule = SyncRules.Evaluate(existing, incoming);
-
-            switch (rule)
-            {
-                case SyncRuleResult.Created:
-                    currentRevision++;
-                    var created = incoming.Clone();
-                    created.UserId = userId;
-                    created.Revision = currentRevision;
-                    if (created.DeletedAt is not null) created.BankEligible = false;
-                    updatedEntities[created.ClientId] = created;
-                    accepted.Add(created.ClientId);
-                    break;
-
-                case SyncRuleResult.Updated:
-                    currentRevision++;
-                    var updated = incoming.Clone();
-                    updated.UserId = userId;
-                    updated.Revision = currentRevision;
-                    if (existing!.Source == EntitySource.Ai
-                        && !string.IsNullOrEmpty(existing.BankHash)
-                        && incoming.BankHash != existing.BankHash)
-                    {
-                        updated.Source = EntitySource.Edited;
-                        updated.BankEligible = false;
-                    }
-                    if (updated.DeletedAt is not null) updated.BankEligible = false;
-
-                    if (incoming.DeletedAt is not null && existing!.DeletedAt is null)
-                        ApplyCascadeDeletes(userId, updated.ClientId, updatedEntities, ref currentRevision);
-
-                    updatedEntities[updated.ClientId] = updated;
-                    accepted.Add(updated.ClientId);
-                    break;
-
-                case SyncRuleResult.Stale:
-                    rejected.Add(new RejectedEntity
-                    {
-                        ClientId = incoming.ClientId,
-                        ServerRevision = existing?.Revision ?? 0,
-                        Reason = existing is not null
-                            ? $"Stale: client={incoming.Revision}, server={existing.Revision}"
-                            : "Unknown entity with revision > 0"
-                    });
-                    break;
-            }
-        }
-
-        var deltaEntities = updatedEntities
-            .Where(kv => kv.Value.Revision > clientRevision)
-            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
-
         var cmd = new EntitiesSyncRequestedEvent
         {
             SyncId = syncId,
@@ -103,9 +39,24 @@ public sealed class SyncAppService : ISyncAppService
         };
         cmd.IncomingEntities.AddRange(incomingEntities);
 
+        var waitTask = _completionPort.WaitAsync(syncId);
         await _actors.SendCommandAsync<SyncEntityGAgent>(userId, cmd);
+        await waitTask;
+        _logger.LogInformation("Sync projection completed. syncId={SyncId} userId={UserId}", syncId, userId);
 
-        return new SyncResult(syncId, currentRevision, deltaEntities, accepted, rejected);
+        var syncKey = _actors.ResolveActorId<SyncEntityGAgent>(userId);
+        var readModel = await _syncStore.GetAsync(syncKey);
+        if (readModel is null)
+            throw new InvalidOperationException($"ReadModel not found after sync completion: {syncKey}");
+
+        _logger.LogDebug(
+            "ReadModel loaded. syncKey={SyncKey} syncResultsCount={SyncResultsCount} syncResultOrderCount={OrderCount} revision={Revision}",
+            syncKey, readModel.SyncResults.Count, readModel.SyncResultOrder.Count, readModel.ServerRevision);
+
+        if (!readModel.SyncResults.TryGetValue(syncId, out var syncResult))
+            throw new InvalidOperationException($"SyncResult for syncId '{syncId}' not found in ReadModel");
+
+        return BuildSyncResult(readModel, syncResult);
     }
 
     public async Task<StateResult> GetStateAsync(string userId)
@@ -117,32 +68,30 @@ public sealed class SyncAppService : ISyncAppService
         return BuildStateResult(readModel);
     }
 
-    private static void ApplyCascadeDeletes(
-        string userId,
-        string parentClientId,
-        Dictionary<string, SyncEntity> entities,
-        ref int currentRevision,
-        int depth = 0)
+    private static SyncResult BuildSyncResult(AppSyncEntityReadModel model, SyncResultEntry result)
     {
-        if (depth > 5) return;
+        var deltaEntities = new Dictionary<string, SyncEntity>(StringComparer.Ordinal);
+        foreach (var (key, entry) in model.Entities)
+        {
+            if (entry.Revision <= result.ClientRevision) continue;
+            deltaEntities[key] = EntryToProto(entry);
+        }
 
-        var toDelete = entities
-            .Where(kv => kv.Value.DeletedAt is null
-                && kv.Value.Refs.Values.Contains(parentClientId))
-            .Select(kv => kv.Key)
+        var rejected = result.Rejected
+            .Select(r => new RejectedEntity
+            {
+                ClientId = r.ClientId,
+                ServerRevision = r.ServerRevision,
+                Reason = r.Reason,
+            })
             .ToList();
 
-        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        foreach (var clientId in toDelete)
-        {
-            currentRevision++;
-            var entity = entities[clientId].Clone();
-            entity.DeletedAt = now;
-            entity.Revision = currentRevision;
-            entity.BankEligible = false;
-            entities[clientId] = entity;
-            ApplyCascadeDeletes(userId, clientId, entities, ref currentRevision, depth + 1);
-        }
+        return new SyncResult(
+            result.SyncId,
+            result.ServerRevision,
+            deltaEntities,
+            [..result.Accepted],
+            rejected);
     }
 
     private static StateResult BuildStateResult(AppSyncEntityReadModel readModel)
@@ -161,37 +110,28 @@ public sealed class SyncAppService : ISyncAppService
         return new StateResult(grouped, readModel.ServerRevision);
     }
 
-    private static Dictionary<string, SyncEntity> ToProtoMap(
-        Dictionary<string, SyncEntityEntry>? entries)
+    private static SyncEntity EntryToProto(SyncEntityEntry e)
     {
-        if (entries is null || entries.Count == 0)
-            return new Dictionary<string, SyncEntity>(StringComparer.Ordinal);
-
-        var result = new Dictionary<string, SyncEntity>(entries.Count, StringComparer.Ordinal);
-        foreach (var (key, e) in entries)
+        var proto = new SyncEntity
         {
-            var proto = new SyncEntity
-            {
-                ClientId = e.ClientId,
-                EntityType = e.EntityType,
-                UserId = e.UserId,
-                Revision = e.Revision,
-                Position = e.Position,
-                Source = StringToSource(e.Source),
-                BankEligible = e.BankEligible,
-                BankHash = e.BankHash,
-                Inputs = JsonToStruct(e.Inputs),
-                Output = JsonToStruct(e.Output),
-                State = JsonToStruct(e.State),
-                DeletedAt = OffsetToTimestamp(e.DeletedAt),
-                CreatedAt = OffsetToTimestamp(e.CreatedAt),
-                UpdatedAt = OffsetToTimestamp(e.UpdatedAt),
-            };
-            foreach (var (rk, rv) in e.Refs)
-                proto.Refs[rk] = rv;
-            result[key] = proto;
-        }
-        return result;
+            ClientId = e.ClientId,
+            EntityType = e.EntityType,
+            UserId = e.UserId,
+            Revision = e.Revision,
+            Position = e.Position,
+            Source = StringToSource(e.Source),
+            BankEligible = e.BankEligible,
+            BankHash = e.BankHash,
+            Inputs = JsonToStruct(e.Inputs),
+            Output = JsonToStruct(e.Output),
+            State = JsonToStruct(e.State),
+            DeletedAt = OffsetToTimestamp(e.DeletedAt),
+            CreatedAt = OffsetToTimestamp(e.CreatedAt),
+            UpdatedAt = OffsetToTimestamp(e.UpdatedAt),
+        };
+        foreach (var (rk, rv) in e.Refs)
+            proto.Refs[rk] = rv;
+        return proto;
     }
 
     private static EntitySource StringToSource(string? source) => source switch
@@ -202,13 +142,13 @@ public sealed class SyncAppService : ISyncAppService
         _ => EntitySource.Ai
     };
 
-    private static Struct? JsonToStruct(JsonElement? element)
+    private static Google.Protobuf.WellKnownTypes.Struct? JsonToStruct(System.Text.Json.JsonElement? element)
     {
         if (element is null) return null;
         var json = element.Value.GetRawText();
-        return Google.Protobuf.JsonParser.Default.Parse<Struct>(json);
+        return Google.Protobuf.JsonParser.Default.Parse<Google.Protobuf.WellKnownTypes.Struct>(json);
     }
 
-    private static Timestamp? OffsetToTimestamp(DateTimeOffset? offset) =>
-        offset.HasValue ? Timestamp.FromDateTimeOffset(offset.Value) : null;
+    private static Google.Protobuf.WellKnownTypes.Timestamp? OffsetToTimestamp(DateTimeOffset? offset) =>
+        offset.HasValue ? Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(offset.Value) : null;
 }
