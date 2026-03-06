@@ -382,6 +382,7 @@ public class ChatEndpointsInternalTests
     [Fact]
     public async Task HandleResume_WhenValid_ShouldDispatchWorkflowResumedEvent()
     {
+        using var metricCapture = new ApiMetricCapture();
         var actor = new RecordingActor("actor-1");
         var actorPort = new FakeWorkflowRunActorPort
         {
@@ -421,11 +422,15 @@ public class ChatEndpointsInternalTests
         resumed.UserInput.Should().Be("approved");
         resumed.Metadata["operator"].Should().Be("alice");
         actor.LastHandledEnvelope.CorrelationId.Should().Be("cmd-1");
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }
 
     [Fact]
     public async Task HandleResume_WhenActorMissing_ShouldReturnNotFound()
     {
+        using var metricCapture = new ApiMetricCapture();
         var actorPort = new FakeWorkflowRunActorPort
         {
             ActorToReturn = null,
@@ -443,11 +448,14 @@ public class ChatEndpointsInternalTests
 
         var (statusCode, _) = await ExecuteResultAsync(result);
         statusCode.Should().Be(StatusCodes.Status404NotFound);
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }
 
     [Fact]
     public async Task HandleSignal_WhenValid_ShouldDispatchSignalReceivedEvent()
     {
+        using var metricCapture = new ApiMetricCapture();
         var actor = new RecordingActor("actor-1");
         var actorPort = new FakeWorkflowRunActorPort
         {
@@ -480,6 +488,9 @@ public class ChatEndpointsInternalTests
         signal.SignalName.Should().Be("ops_window_open");
         signal.Payload.Should().Be("window=2026-02-26T10:00:00Z");
         actor.LastHandledEnvelope.CorrelationId.Should().Be("cmd-s1");
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }
 
     [Fact]
@@ -676,6 +687,43 @@ public class ChatEndpointsInternalTests
         metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
         metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
 
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+    }
+
+    [Fact]
+    public async Task HandleChat_WhenOnlyRunContextIsWritten_ShouldRecordFirstResponseMetric()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        var http = CreateHttpContext();
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = async (_, _, onStartedAsync, ct) =>
+            {
+                var started = new WorkflowChatRunStarted("actor-1", "direct", "cmd-context-only");
+                if (onStartedAsync != null)
+                    await onStartedAsync(started, ct);
+
+                return ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.None,
+                        started,
+                        new WorkflowChatRunFinalizeResult(
+                            WorkflowProjectionCompletionStatus.Completed,
+                            true)));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        metricCapture.FirstResponseMeasurements.Should().ContainSingle();
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
         metricCapture.RequestMeasurements.Should().ContainSingle();
         metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }

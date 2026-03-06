@@ -35,7 +35,12 @@ Implemented:
   - removed high-cardinality labels (`agent_id`, `publisher_id`).
   - removed low-value instruments (`RouteTargets`, `StateLoads`, `StateSaves`, `HandlerDuration`).
 - Runtime metrics emitted from both Local and Orleans paths.
-- API metrics for request count and full duration (meter `Aevatar.Api`) on all endpoints (chat, command, websocket).
+- API metrics for request count and full duration (meter `Aevatar.Api`) on all interaction endpoints:
+  - `POST /api/chat`
+  - `POST /api/workflows/resume`
+  - `POST /api/workflows/signal`
+  - command-style HTTP request path
+  - `GET /api/ws/chat`
 - API first-response duration metric for streaming paths and WS parse error responses.
 - Unified instrumentation scopes that compose tracing + logging + metrics:
   - `EventHandleScope` (runtime): single scope drives Activity span, log scope, and metrics recording.
@@ -43,6 +48,7 @@ Implemented:
   - Eliminates duplicate Stopwatch and independent error-tracking across tracing/metrics.
 - `OperationCanceledException` consistently classified as `result=ok` across HTTP and WebSocket paths.
 - `ChatWebSocketRunCoordinator` decoupled from metrics (no metrics return value; scope passed from caller).
+- Histogram views are configured explicitly for AI-oriented request latency and runtime event latency buckets.
 - Grafana dashboard panels for:
   - health/error ratio
   - runtime/API throughput and latency
@@ -52,8 +58,8 @@ Implemented:
 Pending:
 
 - Add explicit SLO panel with thresholds and status coloring.
-- Add alert rule examples (Prometheus/Grafana alerting).
-- Configure custom histogram bucket boundaries for AI-workload latency profiles.
+- Tune alert thresholds with production baselines after traffic observation.
+- Tune histogram bucket boundaries with production latency samples if workload profile changes.
 
 ## 5. Metric Contract (Current)
 
@@ -82,7 +88,9 @@ Pending:
 `aevatar_api_first_response_duration_ms` is defined as "time from request accepted to first response frame/ack/error sent to client".
 
 - `http` path:
-  - recorded on first streamed output frame (`emitAsync`) with `result=ok`.
+  - recorded on the first response signal sent to the client:
+    - run-context bootstrap frame (`aevatar.run.context`), or
+    - first streamed output frame (`emitAsync`) if no bootstrap frame was written first.
   - not recorded for prompt validation early return (400) because no response stream frame is produced.
 - `ws` path:
   - recorded on first outbound message among `command ack`, `agui event`, or `command error`.
@@ -90,7 +98,17 @@ Pending:
 
 This contract intentionally tracks "first observable response signal" rather than "request finished".
 
-### 5.4 Cancellation Semantics
+### 5.4 Request-Duration Tagging Trade-Off
+
+`aevatar_api_request_duration_ms` intentionally omits the `result` label. This is a deliberate cardinality and dashboard-simplicity trade-off:
+
+- error ratio is derived from `aevatar_api_requests_total{result=...}`.
+- latency panels focus on user wait time split by `transport`.
+- adding `result` to the histogram would double API latency series without materially improving the primary SLO view.
+
+If per-result latency distributions become operationally necessary later, introduce them as a separate histogram with an explicit need, rather than retrofitting the core baseline.
+
+### 5.5 Cancellation Semantics
 
 `OperationCanceledException` is treated as `result=ok` in the request metric. Client-initiated cancellation is not a service error; it reflects normal connection lifecycle behavior (e.g., user navigates away, timeout). This keeps the error ratio focused on genuine service-side failures.
 
@@ -150,6 +168,7 @@ Local stack:
 - `docker-compose.observability.yml`
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3000`
+- Prometheus alert examples: `tools/observability/prometheus/alerts.yml`
 
 ## 8. Verification Checklist
 
@@ -161,6 +180,7 @@ Local stack:
 - No `pipeline` label in runtime metrics.
 - Prometheus target `aevatar-workflow-host` is `UP`.
 - Dashboard shows first-response vs full-response latency.
+- `alerts.yml` loads successfully in Prometheus rule status page.
 
 ## 9. Metric Quick Reference (Runbook)
 
@@ -187,18 +207,41 @@ Error-ratio panel implementation note: dashboard queries use "empty-as-zero" (`o
 
 ## 10. Next Plan Items
 
-1. Add SLO panel group:
-   - API error ratio (5m)
-   - Runtime event error ratio (5m)
-   - API first-response p95
-2. Add alert threshold defaults:
-   - API error ratio > 1%
-   - Runtime event error ratio > 1%
-   - First response p95 > threshold
+1. Add dashboard status coloring for core SLO panels.
+2. Re-baseline alert thresholds after collecting production traffic.
 3. Add tests:
    - WebSocket path first-response integration tests (requires WebSocket mock infrastructure)
+4. Re-evaluate `IMeterFactory` only if host lifecycle isolation or meter injection becomes a proven need.
 
-## 11. Related Documents
+## 11. Default Histogram Buckets and Alerts
+
+### 11.1 Default Histogram Buckets
+
+Configured in `ObservabilityExtensions`:
+
+- API latency histograms (`aevatar_api_request_duration_ms`, `aevatar_api_first_response_duration_ms`):
+  - `25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000, 30000, 45000, 60000, 90000, 120000` ms
+- Runtime event latency histogram (`aevatar_runtime_event_handle_duration_ms`):
+  - `1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000` ms
+
+Configuration overrides:
+
+- `Observability:Metrics:ApiLatencyBucketsMs`
+- `Observability:Metrics:RuntimeLatencyBucketsMs`
+
+Both settings accept comma-separated millisecond boundaries in ascending order.
+
+### 11.2 Default Alert Examples
+
+The repository now includes Prometheus alert examples in `tools/observability/prometheus/alerts.yml`:
+
+- API error ratio above 1% for 10 minutes
+- Runtime event error ratio above 1% for 10 minutes
+- API first-response p95 above 5000 ms for 10 minutes
+
+These are default guardrails for local and pre-production validation. They should be tuned after collecting real workload baselines.
+
+## 12. Related Documents
 
 - `docs/architecture/stream-first-tracing-design.md`
 - `docs/architecture/workflow-jaeger-observability-guide.md`

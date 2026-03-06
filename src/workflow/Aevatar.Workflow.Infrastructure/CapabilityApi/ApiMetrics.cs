@@ -24,6 +24,11 @@ internal static class ApiMetrics
         "aevatar.api.first_response_duration_ms",
         description: "API first-response duration in milliseconds.");
 
+    public static string ResolveResult(int statusCode)
+    {
+        return statusCode >= 500 ? ResultError : ResultOk;
+    }
+
     public static void RecordRequest(string transport, string result, double durationMs)
     {
         RequestsTotal.Add(1,
@@ -44,10 +49,5 @@ internal static class ApiMetrics
             new(TransportTag, transport),
             new(ResultTag, result),
         ]);
-    }
-
-    public static string ResolveResult(int statusCode)
-    {
-        return statusCode >= 500 ? ResultError : ResultOk;
     }
 }

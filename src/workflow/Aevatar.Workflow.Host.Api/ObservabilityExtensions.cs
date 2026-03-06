@@ -21,6 +21,12 @@ internal static class ObservabilityExtensions
         var serviceName = builder.Configuration["OTEL_SERVICE_NAME"] ?? defaultServiceName;
         var defaultSamplingRatio = builder.Environment.IsDevelopment() ? 1.0 : 0.1;
         var samplingRatio = ResolveSamplingRatio(builder, defaultSamplingRatio);
+        var apiLatencyBucketsMs = ResolveHistogramBuckets(
+            builder.Configuration["Observability:Metrics:ApiLatencyBucketsMs"],
+            [25d, 50d, 100d, 250d, 500d, 1000d, 2500d, 5000d, 10000d, 20000d, 30000d, 45000d, 60000d, 90000d, 120000d]);
+        var runtimeLatencyBucketsMs = ResolveHistogramBuckets(
+            builder.Configuration["Observability:Metrics:RuntimeLatencyBucketsMs"],
+            [1d, 5d, 10d, 25d, 50d, 100d, 250d, 500d, 1000d, 2500d, 5000d, 10000d]);
 
         builder.Services
             .AddOpenTelemetry()
@@ -47,6 +53,15 @@ internal static class ObservabilityExtensions
                     .AddRuntimeInstrumentation()
                     .AddMeter("Aevatar.Agents")
                     .AddMeter("Aevatar.Api")
+                    .AddView(
+                        instrumentName: "aevatar.api.request_duration_ms",
+                        new ExplicitBucketHistogramConfiguration { Boundaries = apiLatencyBucketsMs })
+                    .AddView(
+                        instrumentName: "aevatar.api.first_response_duration_ms",
+                        new ExplicitBucketHistogramConfiguration { Boundaries = apiLatencyBucketsMs })
+                    .AddView(
+                        instrumentName: "aevatar.runtime.event_handle_duration_ms",
+                        new ExplicitBucketHistogramConfiguration { Boundaries = runtimeLatencyBucketsMs })
                     .AddPrometheusExporter();
             });
 
@@ -79,5 +94,34 @@ internal static class ObservabilityExtensions
                 "Expected a finite number between 0 and 1.");
 
         return ratio;
+    }
+
+    private static double[] ResolveHistogramBuckets(string? configuredValue, double[] defaultBuckets)
+    {
+        if (string.IsNullOrWhiteSpace(configuredValue))
+            return defaultBuckets;
+
+        var values = configuredValue
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(value =>
+            {
+                if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ||
+                    !double.IsFinite(parsed) ||
+                    parsed <= 0d)
+                {
+                    throw new InvalidOperationException(
+                        $"Invalid histogram bucket '{value}' in '{configuredValue}'. Expected positive finite numbers.");
+                }
+
+                return parsed;
+            })
+            .Distinct()
+            .OrderBy(value => value)
+            .ToArray();
+
+        if (values.Length == 0)
+            throw new InvalidOperationException("Histogram bucket configuration must contain at least one value.");
+
+        return values;
     }
 }

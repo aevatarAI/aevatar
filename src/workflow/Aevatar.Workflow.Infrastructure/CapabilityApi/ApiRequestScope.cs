@@ -25,6 +25,7 @@ internal sealed class ApiRequestScope : IDisposable
     }
 
     public static ApiRequestScope BeginHttp() => new(ApiMetrics.TransportHttp);
+
     public static ApiRequestScope BeginWebSocket() => new(ApiMetrics.TransportWebSocket);
 
     public double ElapsedMs => _sw.Elapsed.TotalMilliseconds;
