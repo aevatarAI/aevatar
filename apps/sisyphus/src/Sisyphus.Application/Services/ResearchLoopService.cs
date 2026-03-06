@@ -285,19 +285,43 @@ public sealed class ResearchLoopService(
         }
     }
 
+    /// <summary>
+    /// Hard limit on prompt size in characters to prevent LLM context overflow
+    /// and Orleans message size errors. ~800K chars ≈ ~200K tokens.
+    /// </summary>
+    private const int MaxPromptChars = 800_000;
+
     private static string BuildResearchPrompt(BlueGraphSnapshot snapshot, int nodesPerRound)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"## Current Graph State ({snapshot.Nodes.Count} blue nodes)");
         sb.AppendLine();
 
+        var includedCount = 0;
+        var truncated = false;
         foreach (var node in snapshot.Nodes)
         {
             var nodeAbstract = "";
             if (node.Properties.TryGetValue("abstract", out var abstractEl) && abstractEl.ValueKind == JsonValueKind.String)
                 nodeAbstract = abstractEl.GetString() ?? "";
 
-            sb.AppendLine($"- [{node.Type}] {node.Id}: {nodeAbstract}");
+            var line = $"- [{node.Type}] {node.Id}: {nodeAbstract}\n";
+
+            // Hard cutoff: stop adding nodes if we'd exceed the limit
+            if (sb.Length + line.Length > MaxPromptChars - 500) // reserve 500 chars for task section
+            {
+                truncated = true;
+                break;
+            }
+
+            sb.Append(line);
+            includedCount++;
+        }
+
+        if (truncated)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"... ({snapshot.Nodes.Count - includedCount} more nodes omitted due to context limit)");
         }
 
         sb.AppendLine();
