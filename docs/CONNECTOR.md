@@ -215,7 +215,7 @@ Ergonomic 别名（解析期归一化到 `connector_call`）：
 
 当前代码现状（很重要）：
 
-- 独立 `role/agent yaml` 中即使写了 `connectors`，`RoleGAgentFactory.RoleYamlConfig` 目前没有该字段，`ConfigureRoleAgentEvent` 也没有对应字段；
+- 独立 `role/agent yaml` 中即使写了 `connectors`，`RoleGAgentFactory.RoleYamlConfig` 目前没有该字段，`InitializeRoleAgentEvent` 也没有对应字段；
 - 所以“角色 connector 授权”当前真正生效路径是 **workflow roles + connector_call**。
 
 ---
@@ -373,4 +373,3 @@ steps:
 - `connector_call` 步骤 `Success=true`
 - 输出包含 .NET 版本号
 - 元数据里有 `connector.name=demo_cli_dotnet`
-

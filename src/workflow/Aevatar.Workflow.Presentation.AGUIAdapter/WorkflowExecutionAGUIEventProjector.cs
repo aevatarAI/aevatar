@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -12,28 +13,22 @@ namespace Aevatar.Workflow.Presentation.AGUIAdapter;
 /// Projects workflow execution envelopes to AG-UI live events as a workflow projector branch.
 /// </summary>
 public sealed class WorkflowExecutionAGUIEventProjector
-    : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
+    : ProjectionSessionEventProjectorBase<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>, WorkflowRunEvent>
 {
     private readonly IEventEnvelopeToAGUIEventMapper _mapper;
-    private readonly IProjectionSessionEventHub<WorkflowRunEvent> _runEventStreamHub;
 
     public WorkflowExecutionAGUIEventProjector(
         IEventEnvelopeToAGUIEventMapper mapper,
         IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub)
+        : base(runEventStreamHub)
     {
         _mapper = mapper;
-        _runEventStreamHub = runEventStreamHub;
     }
 
-    public ValueTask InitializeAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
+    protected override IReadOnlyList<ProjectionSessionEventEntry<WorkflowRunEvent>> ResolveSessionEventEntries(
+        WorkflowExecutionProjectionContext context,
+        EventEnvelope envelope)
     {
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
-    }
-
-    public async ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
         // Keep streaming pinned to the projection session command id.
         // Resume/signal events may arrive without (or with a different) correlation id,
         // but they still belong to the same live run session.
@@ -41,25 +36,22 @@ public sealed class WorkflowExecutionAGUIEventProjector
             ? envelope.CorrelationId
             : context.CommandId;
         if (string.IsNullOrWhiteSpace(commandId))
-            return;
+            return EmptyEntries;
 
         IReadOnlyList<AGUIEvent> aguiEvents = _mapper.Map(envelope);
         if (aguiEvents.Count == 0)
-            return;
+            return EmptyEntries;
 
+        var entries = new List<ProjectionSessionEventEntry<WorkflowRunEvent>>(aguiEvents.Count);
         foreach (var aguiEvent in aguiEvents)
         {
             var runEvent = AGUIEventToWorkflowRunEventMapper.Map(aguiEvent);
-            await _runEventStreamHub.PublishAsync(context.RootActorId, commandId, runEvent, ct);
+            entries.Add(new ProjectionSessionEventEntry<WorkflowRunEvent>(
+                context.RootActorId,
+                commandId,
+                runEvent));
         }
-    }
 
-    public ValueTask CompleteAsync(
-        WorkflowExecutionProjectionContext context,
-        IReadOnlyList<WorkflowExecutionTopologyEdge> topology,
-        CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
+        return entries;
     }
 }

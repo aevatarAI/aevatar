@@ -63,7 +63,7 @@ public sealed class EvaluateModule : IEventModule
             var targetRole = request.TargetRole;
             if (!string.IsNullOrEmpty(targetRole))
             {
-                var targetActorId = ResolveTargetActorId(ctx.AgentId, targetRole);
+                var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, targetRole);
                 ctx.Logger.LogInformation(
                     "EvaluateModule: step={StepId} → SendTo role={Role} actor={ActorId}",
                     request.StepId, targetRole, targetActorId);
@@ -131,14 +131,6 @@ public sealed class EvaluateModule : IEventModule
             if (double.TryParse(word, out var n)) return n;
         }
         return 0;
-    }
-
-    private static string ResolveTargetActorId(string workflowActorId, string targetRole)
-    {
-        if (string.IsNullOrWhiteSpace(targetRole)) return targetRole;
-        return targetRole.Contains(':', StringComparison.Ordinal)
-            ? targetRole
-            : $"{workflowActorId}:{targetRole}";
     }
 
     private sealed record EvalContext(string StepId, string RunId, string OriginalInput, double Threshold, string OnBelow);

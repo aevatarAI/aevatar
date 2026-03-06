@@ -358,7 +358,7 @@ internal sealed class SubWorkflowOrchestrator
         var childActorId = BuildSubWorkflowActorId(workflowName, lifecycle);
         var childActor = await ResolveOrCreateWorkflowActorByIdAsync(childActorId);
         await _runtime.LinkAsync(_ownerActorIdAccessor(), childActor.Id);
-        await childActor.HandleEventAsync(CreateWorkflowConfigureEnvelope(workflowYaml, workflowName, state));
+        await childActor.HandleEventAsync(CreateWorkflowDefinitionBindEnvelope(workflowYaml, workflowName, state));
 
         if (persistBinding)
         {
@@ -487,13 +487,13 @@ internal sealed class SubWorkflowOrchestrator
         }
     }
 
-    private EventEnvelope CreateWorkflowConfigureEnvelope(string workflowYaml, string workflowName, WorkflowState state)
+    private EventEnvelope CreateWorkflowDefinitionBindEnvelope(string workflowYaml, string workflowName, WorkflowState state)
     {
         var inlineWorkflowYamls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, value) in state.InlineWorkflowYamls)
             inlineWorkflowYamls[key] = value;
 
-        var configure = new ConfigureWorkflowEvent
+        var bindDefinition = new BindWorkflowDefinitionEvent
         {
             WorkflowYaml = workflowYaml ?? string.Empty,
             WorkflowName = workflowName ?? string.Empty,
@@ -504,7 +504,7 @@ internal sealed class SubWorkflowOrchestrator
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(configure),
+            Payload = Any.Pack(bindDefinition),
             PublisherId = _ownerActorIdAccessor(),
             Direction = EventDirection.Self,
             CorrelationId = Guid.NewGuid().ToString("N"),

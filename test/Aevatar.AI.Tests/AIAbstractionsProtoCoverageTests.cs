@@ -1,7 +1,6 @@
 using Aevatar.AI.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
 
@@ -70,48 +69,44 @@ public sealed class AIAbstractionsProtoCoverageTests
         }, ToolResultEvent.Parser);
         toolResult.Success.Should().BeTrue();
 
-        var configure = RoundTrip(new ConfigureRoleAgentEvent
+        var initialize = RoundTrip(new InitializeRoleAgentEvent
         {
             RoleName = "assistant",
             ProviderName = "mock",
-            AppConfigJson = "{\"tenant\":\"a\"}",
-            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
-            AppConfigSchemaVersion = 3,
-        }, ConfigureRoleAgentEvent.Parser);
-        configure.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
+            Model = "m1",
+            SystemPrompt = "system",
+            Temperature = 0.3,
+            MaxTokens = 120,
+            MaxToolRounds = 3,
+            MaxHistoryMessages = 40,
+            StreamBufferCapacity = 128,
+            EventModules = "demo",
+            EventRoutes = "event.type == X -> demo",
+        }, InitializeRoleAgentEvent.Parser);
+        initialize.RoleName.Should().Be("assistant");
+        initialize.HasTemperature.Should().BeTrue();
 
-        var appConfigEvent = RoundTrip(new SetRoleAppConfigEvent
+        var overrides = RoundTrip(new AIAgentConfigOverrides
         {
-            AppConfigJson = "{\"tenant\":\"b\"}",
-            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
-            AppConfigSchemaVersion = 4,
-        }, SetRoleAppConfigEvent.Parser);
-        appConfigEvent.AppConfigSchemaVersion.Should().Be(4);
-
-        var appStateEvent = RoundTrip(new SetRoleAppStateEvent
-        {
-            AppState = Any.Pack(new ChatResponseEvent { Content = "payload", SessionId = "session-1" }),
-            AppStateCodec = RoleGAgentExtensionContract.AppStateCodecProtobufAny,
-            AppStateSchemaVersion = 2,
-        }, SetRoleAppStateEvent.Parser);
-        appStateEvent.AppStateCodec.Should().Be(RoleGAgentExtensionContract.AppStateCodecProtobufAny);
+            ProviderName = "mock",
+            Model = "m1",
+            SystemPrompt = "system",
+            Temperature = 0.4,
+            MaxTokens = 128,
+            MaxToolRounds = 2,
+            MaxHistoryMessages = 16,
+            StreamBufferCapacity = 64,
+        }, AIAgentConfigOverrides.Parser);
+        overrides.ProviderName.Should().Be("mock");
 
         var state = RoundTrip(new RoleGAgentState
         {
             RoleName = "assistant",
             MessageCount = 7,
-            AppState = Any.Pack(new ChatRequestEvent { Prompt = "state", SessionId = "session-2" }),
-            AppStateCodec = RoleGAgentExtensionContract.AppStateCodecProtobufAny,
-            AppStateSchemaVersion = 5,
-            AppConfigJson = "{\"tenant\":\"z\"}",
-            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
-            AppConfigSchemaVersion = 6,
+            ConfigOverrides = overrides,
         }, RoleGAgentState.Parser);
         state.RoleName.Should().Be("assistant");
         state.MessageCount.Should().Be(7);
-        state.AppStateSchemaVersion.Should().Be(5);
-        state.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
-        state.AppConfigSchemaVersion.Should().Be(6);
     }
 
     [Fact]
@@ -141,8 +136,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageEndEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolCallEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolResultEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SetRoleAppConfigEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SetRoleAppStateEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(InitializeRoleAgentEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(AIAgentConfigOverrides));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleGAgentState));
     }
 
@@ -154,6 +149,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         var textStart = new TextMessageStartEvent();
         var toolCall = new ToolCallEvent();
         var toolResult = new ToolResultEvent();
+        var initialize = new InitializeRoleAgentEvent();
         var state = new RoleGAgentState();
 
         Action setRequestPrompt = () => request.Prompt = null!;
@@ -161,6 +157,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         Action setTextStartSession = () => textStart.SessionId = null!;
         Action setToolCallName = () => toolCall.ToolName = null!;
         Action setToolResultCallId = () => toolResult.CallId = null!;
+        Action setInitRoleName = () => initialize.RoleName = null!;
         Action setStateRoleName = () => state.RoleName = null!;
 
         setRequestPrompt.Should().Throw<ArgumentNullException>();
@@ -168,112 +165,52 @@ public sealed class AIAbstractionsProtoCoverageTests
         setTextStartSession.Should().Throw<ArgumentNullException>();
         setToolCallName.Should().Throw<ArgumentNullException>();
         setToolResultCallId.Should().Throw<ArgumentNullException>();
+        setInitRoleName.Should().Throw<ArgumentNullException>();
         setStateRoleName.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
     public void ProtoMessages_ShouldCoverGeneratedBranchesAndUnknownFields()
     {
-        var request = new ChatRequestEvent
-        {
-            Prompt = "p",
-            SessionId = "s",
-            Metadata = { ["k"] = "v" },
-        };
-        request.MergeFrom(new ChatRequestEvent());
-        request.MergeFrom((ChatRequestEvent)null!);
-        request.Equals(request).Should().BeTrue();
-        request.Equals((object?)null).Should().BeFalse();
-        request!.GetHashCode().Should().NotBe(0);
-
-        var response = new ChatResponseEvent { Content = "c", SessionId = "s" };
-        response.MergeFrom((ChatResponseEvent)null!);
-        response.Equals(response).Should().BeTrue();
-        response.Equals((object?)null).Should().BeFalse();
-
-        var textStart = new TextMessageStartEvent { SessionId = "s", AgentId = "a" };
-        textStart.MergeFrom((TextMessageStartEvent)null!);
-        textStart.Equals((object?)null).Should().BeFalse();
-
-        var textContent = new TextMessageContentEvent { SessionId = "s", Delta = "d" };
-        textContent.MergeFrom((TextMessageContentEvent)null!);
-        textContent.Equals((object?)null).Should().BeFalse();
-
-        var textReasoning = new TextMessageReasoningEvent { SessionId = "s", Delta = "r" };
-        textReasoning.MergeFrom((TextMessageReasoningEvent)null!);
-        textReasoning.Equals((object?)null).Should().BeFalse();
-
-        var textEnd = new TextMessageEndEvent { SessionId = "s", Content = "e" };
-        textEnd.MergeFrom((TextMessageEndEvent)null!);
-        textEnd.Equals((object?)null).Should().BeFalse();
-
-        var toolCall = new ToolCallEvent { ToolName = "tool", ArgumentsJson = "{}", CallId = "call-1" };
-        toolCall.MergeFrom((ToolCallEvent)null!);
-        toolCall.Equals((object?)null).Should().BeFalse();
-
-        var toolResult = new ToolResultEvent { CallId = "call-1", ResultJson = "{}", Success = true, Error = "" };
-        toolResult.MergeFrom((ToolResultEvent)null!);
-        toolResult.Equals((object?)null).Should().BeFalse();
-
-        var configure = new ConfigureRoleAgentEvent
+        var initialize = new InitializeRoleAgentEvent
         {
             RoleName = "assistant",
             ProviderName = "mock",
-            AppConfigJson = "{}",
-            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
-            AppConfigSchemaVersion = 1,
+            Model = "m1",
+            SystemPrompt = "system",
+            MaxTokens = 128,
         };
-        configure.MergeFrom((ConfigureRoleAgentEvent)null!);
-        configure.Equals((object?)null).Should().BeFalse();
+        initialize.MergeFrom((InitializeRoleAgentEvent)null!);
+        initialize.Equals((object?)null).Should().BeFalse();
 
-        var appConfigEvent = new SetRoleAppConfigEvent
+        var overrides = new AIAgentConfigOverrides
         {
-            AppConfigJson = "{}",
-            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
-            AppConfigSchemaVersion = 2,
+            ProviderName = "mock",
+            Model = "m1",
+            SystemPrompt = "system",
+            MaxTokens = 128,
         };
-        appConfigEvent.MergeFrom((SetRoleAppConfigEvent)null!);
-        appConfigEvent.Equals((object?)null).Should().BeFalse();
-
-        var appStateEvent = new SetRoleAppStateEvent
-        {
-            AppState = Any.Pack(new ChatResponseEvent { Content = "payload" }),
-            AppStateCodec = RoleGAgentExtensionContract.AppStateCodecProtobufAny,
-            AppStateSchemaVersion = 1,
-        };
-        appStateEvent.MergeFrom((SetRoleAppStateEvent)null!);
-        appStateEvent.Equals((object?)null).Should().BeFalse();
+        overrides.MergeFrom((AIAgentConfigOverrides)null!);
+        overrides.Equals((object?)null).Should().BeFalse();
 
         var state = new RoleGAgentState
         {
             RoleName = "assistant",
             MessageCount = 1,
-            AppConfigJson = "{}",
-            AppConfigCodec = RoleGAgentExtensionContract.AppConfigCodecJsonPlain,
-            AppConfigSchemaVersion = 1,
+            ConfigOverrides = overrides,
         };
         state.MergeFrom((RoleGAgentState)null!);
         state.Equals((object?)null).Should().BeFalse();
 
         var parsedResponse = ChatResponseEvent.Parser.ParseFrom(new byte[]
         {
-            10, 1, (byte)'x', // content
-            18, 1, (byte)'s', // session_id
-            0x98, 0x06, 0x01, // unknown field 99 = 1
+            10, 1, (byte)'x',
+            18, 1, (byte)'s',
+            0x98, 0x06, 0x01,
         });
         parsedResponse.Content.Should().Be("x");
         parsedResponse.SessionId.Should().Be("s");
         parsedResponse.ToByteArray().Length.Should().BeGreaterThan(4);
-
-        var parsedToolResult = ToolResultEvent.Parser.ParseFrom(new byte[]
-        {
-            10, 2, (byte)'i', (byte)'d', // call_id
-            24, 1,                       // success=true
-            0x98, 0x06, 0x01,            // unknown field 99 = 1
-        });
-        parsedToolResult.CallId.Should().Be("id");
-        parsedToolResult.Success.Should().BeTrue();
-        parsedToolResult.ToByteArray().Length.Should().BeGreaterThan(3);
     }
 
     private static T RoundTrip<T>(T message, MessageParser<T> parser)

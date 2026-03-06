@@ -11,8 +11,8 @@ namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>
 /// Extracts a workflow YAML from step input, then publishes
-/// <see cref="ReconfigureAndExecuteWorkflowEvent"/> so the owning
-/// WorkflowGAgent reconfigures itself and restarts execution.
+/// <see cref="ReplaceWorkflowDefinitionAndExecuteEvent"/> so the owning
+/// WorkflowGAgent replaces its bound workflow definition and restarts execution.
 /// </summary>
 public sealed class DynamicWorkflowModule : IEventModule
 {
@@ -83,7 +83,7 @@ public sealed class DynamicWorkflowModule : IEventModule
             "DynamicWorkflow: run={RunId} step={StepId} — reconfiguring with extracted YAML ({Len} chars)",
             request.RunId, request.StepId, yaml.Length);
 
-        await ctx.PublishAsync(new ReconfigureAndExecuteWorkflowEvent
+        await ctx.PublishAsync(new ReplaceWorkflowDefinitionAndExecuteEvent
         {
             WorkflowYaml = yaml,
             Input = originalInput,

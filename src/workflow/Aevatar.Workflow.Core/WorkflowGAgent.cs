@@ -18,7 +18,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
@@ -108,16 +107,16 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     }
 
     /// <summary>
-    /// 配置工作流 YAML 并立即编译、重装模块。
+    /// 绑定工作流定义（YAML）并立即编译、重装模块。
     /// </summary>
-    public async Task ConfigureWorkflowAsync(
+    public async Task BindWorkflowDefinitionAsync(
         string workflowYaml,
         string? workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         CancellationToken ct = default)
     {
         EnsureWorkflowNameCanBind(workflowName);
-        var configureWorkflowEvent = new ConfigureWorkflowEvent
+        var bindDefinitionEvent = new BindWorkflowDefinitionEvent
         {
             WorkflowName = workflowName ?? string.Empty,
             WorkflowYaml = workflowYaml ?? string.Empty,
@@ -125,23 +124,22 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         if (inlineWorkflowYamls != null)
         {
             foreach (var (key, value) in inlineWorkflowYamls)
-                configureWorkflowEvent.InlineWorkflowYamls[key] = value;
+                bindDefinitionEvent.InlineWorkflowYamls[key] = value;
         }
 
-        await PersistDomainEventAsync(configureWorkflowEvent, ct);
+        await PersistDomainEventAsync(bindDefinitionEvent, ct);
         RebuildCompiledWorkflowCache();
         _childAgentIds.Clear();
 
         InstallCognitiveModules();
-        await PersistWorkflowBindingAsync(workflowName ?? string.Empty, ct);
     }
 
     /// <summary>
-    /// Reconfigures workflow YAML without the workflow-name binding check.
-    /// Used by <see cref="HandleReconfigureAndExecute"/> for dynamic reconfiguration.
+    /// Replaces workflow definition YAML without the workflow-name binding check.
+    /// Used by <see cref="HandleReplaceWorkflowDefinitionAndExecute"/> for dynamic definition replacement.
     /// Validation must pass before any state mutation is persisted.
     /// </summary>
-    private async Task<WorkflowCompilationResult> ReconfigureWorkflowBypassingBindingAsync(string workflowYaml, CancellationToken ct = default)
+    private async Task<WorkflowCompilationResult> ReplaceWorkflowDefinitionBypassingBindingAsync(string workflowYaml, CancellationToken ct = default)
     {
         WorkflowDefinition parsed;
         try
@@ -150,7 +148,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "ReconfigureWorkflowBypassingBinding: parse failed.");
+            Logger.LogWarning(ex, "ReplaceWorkflowDefinitionBypassingBinding: parse failed.");
             return WorkflowCompilationResult.Invalid(ex.Message);
         }
 
@@ -160,7 +158,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
 
         var workflowName = parsed.Name ?? string.Empty;
 
-        await PersistDomainEventAsync(new ConfigureWorkflowEvent
+        await PersistDomainEventAsync(new BindWorkflowDefinitionEvent
         {
             WorkflowName = workflowName,
             WorkflowYaml = workflowYaml,
@@ -169,7 +167,6 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         _childAgentIds.Clear();
 
         InstallCognitiveModules();
-        await PersistWorkflowBindingAsync(workflowName, ct);
         return WorkflowCompilationResult.Success(parsed);
     }
 
@@ -190,7 +187,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         {
             await PublishAsync(new ChatResponseEvent
             {
-                Content = "Workflow is not compiled or configured.", SessionId = request.SessionId,
+                Content = "Workflow is not compiled or definition-bound.", SessionId = request.SessionId,
             }, EventDirection.Up);
             return;
         }
@@ -209,34 +206,34 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     }
 
     [EventHandler]
-    public async Task HandleConfigureWorkflow(ConfigureWorkflowEvent request)
+    public async Task HandleBindWorkflowDefinition(BindWorkflowDefinitionEvent request)
     {
-        await ConfigureWorkflowAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls);
+        await BindWorkflowDefinitionAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls);
     }
 
     /// <summary>
-    /// Dynamically reconfigures this actor with new workflow YAML and starts execution.
+    /// Dynamically replaces this actor's workflow definition YAML and starts execution.
     /// Bypasses the workflow name binding check because this is an intentional
-    /// reconfiguration triggered by the <c>dynamic_workflow</c> primitive.
+    /// replacement triggered by the <c>dynamic_workflow</c> primitive.
     /// </summary>
     [EventHandler]
-    public async Task HandleReconfigureAndExecute(ReconfigureAndExecuteWorkflowEvent request)
+    public async Task HandleReplaceWorkflowDefinitionAndExecute(ReplaceWorkflowDefinitionAndExecuteEvent request)
     {
         var yaml = request.WorkflowYaml ?? string.Empty;
         if (string.IsNullOrWhiteSpace(yaml))
         {
-            Logger.LogWarning("ReconfigureAndExecute: empty workflow YAML, ignoring.");
+            Logger.LogWarning("ReplaceWorkflowDefinitionAndExecute: empty workflow YAML, ignoring.");
             await PublishAsync(new ChatResponseEvent { Content = "Dynamic workflow YAML is empty." }, EventDirection.Up);
             return;
         }
 
-        var reconfigureResult = await ReconfigureWorkflowBypassingBindingAsync(yaml);
-        if (!reconfigureResult.Compiled || _compiledWorkflow == null)
+        var replaceResult = await ReplaceWorkflowDefinitionBypassingBindingAsync(yaml);
+        if (!replaceResult.Compiled || _compiledWorkflow == null)
         {
-            var reason = string.IsNullOrWhiteSpace(reconfigureResult.CompilationError)
+            var reason = string.IsNullOrWhiteSpace(replaceResult.CompilationError)
                 ? "Dynamic workflow YAML compilation failed."
-                : $"Dynamic workflow YAML compilation failed: {reconfigureResult.CompilationError}";
-            Logger.LogWarning("ReconfigureAndExecute: YAML compilation failed. Error={Error}", reconfigureResult.CompilationError);
+                : $"Dynamic workflow YAML compilation failed: {replaceResult.CompilationError}";
+            Logger.LogWarning("ReplaceWorkflowDefinitionAndExecute: YAML compilation failed. Error={Error}", replaceResult.CompilationError);
             await PublishAsync(new ChatResponseEvent { Content = reason }, EventDirection.Up);
             return;
         }
@@ -336,7 +333,7 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
                         ?? await _runtime.CreateAsync(roleAgentType, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
 
-            await actor.HandleEventAsync(CreateRoleAgentConfigureEnvelope(role));
+            await actor.HandleEventAsync(CreateRoleAgentInitializeEnvelope(role));
 
             _childAgentIds.Add(actor.Id);
         }
@@ -399,14 +396,14 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     protected override WorkflowState TransitionState(WorkflowState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
-            .On<ConfigureWorkflowEvent>(ApplyConfigureWorkflow)
+            .On<BindWorkflowDefinitionEvent>(ApplyBindWorkflowDefinition)
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
             .On<SubWorkflowBindingUpsertedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted)
             .On<SubWorkflowInvocationRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered)
             .On<SubWorkflowInvocationCompletedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationCompleted)
             .OrCurrent();
 
-    private WorkflowState ApplyConfigureWorkflow(WorkflowState current, ConfigureWorkflowEvent evt)
+    private WorkflowState ApplyBindWorkflowDefinition(WorkflowState current, BindWorkflowDefinitionEvent evt)
     {
         var next = current.Clone();
         next.WorkflowYaml = evt.WorkflowYaml ?? string.Empty;
@@ -571,24 +568,9 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         }
     }
 
-    private async Task PersistWorkflowBindingAsync(string workflowName, CancellationToken ct = default)
+    private EventEnvelope CreateRoleAgentInitializeEnvelope(RoleDefinition role)
     {
-        if (ManifestStore == null || string.IsNullOrWhiteSpace(Id))
-            return;
-
-        var manifest = await ManifestStore.LoadAsync(Id, ct) ?? new AgentManifest { AgentId = Id };
-        var agentTypeName = GetType().AssemblyQualifiedName ?? GetType().FullName ?? GetType().Name;
-        manifest.AgentTypeName = agentTypeName;
-
-        if (!string.IsNullOrWhiteSpace(workflowName))
-            manifest.Metadata[WorkflowManifestMetadataKeys.WorkflowName] = workflowName.Trim();
-
-        await ManifestStore.SaveAsync(Id, manifest, ct);
-    }
-
-    private EventEnvelope CreateRoleAgentConfigureEnvelope(RoleDefinition role)
-    {
-        var configure = new ConfigureRoleAgentEvent
+        var initialize = new InitializeRoleAgentEvent
         {
             RoleName = role.Name ?? string.Empty,
             // Keep provider/model empty when workflow does not specify them,
@@ -605,13 +587,13 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
         };
 
         if (role.Temperature.HasValue)
-            configure.Temperature = role.Temperature.Value;
+            initialize.Temperature = role.Temperature.Value;
 
         return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(configure),
+            Payload = Any.Pack(initialize),
             PublisherId = Id,
             Direction = EventDirection.Self,
             CorrelationId = Guid.NewGuid().ToString("N"),

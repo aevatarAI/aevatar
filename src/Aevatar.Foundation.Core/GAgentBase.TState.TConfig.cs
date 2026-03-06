@@ -1,16 +1,16 @@
 // ─────────────────────────────────────────────────────────────
 // GAgentBase<TState, TConfig> - configurable GAgent base class.
-// Config is persisted to ManifestStore.
+// Runtime class defaults + state overrides => effective config.
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core.Configurations;
 using Google.Protobuf;
-using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Foundation.Core;
 
 /// <summary>
-/// Configurable GAgent base class. Config is persisted as JSON in ManifestStore and restored on activation.
+/// Configurable GAgent base class.
 /// </summary>
 /// <typeparam name="TState">Protobuf-generated state type.</typeparam>
 /// <typeparam name="TConfig">Configuration type with a parameterless constructor.</typeparam>
@@ -18,42 +18,94 @@ public abstract class GAgentBase<TState, TConfig> : GAgentBase<TState>
     where TState : class, IMessage<TState>, new()
     where TConfig : class, new()
 {
-    /// <summary>Agent config, set via ConfigureAsync or ActivateAsync.</summary>
-    public TConfig Config { get; private set; } = new();
+    private IAgentClassDefaultsProvider<TConfig>? _classDefaultsProvider;
+    private long _appliedClassDefaultsVersion = long.MinValue;
 
-    /// <summary>Updates and persists config, then calls OnConfigChangedAsync.</summary>
-    public async Task ConfigureAsync(TConfig config, CancellationToken ct = default)
-    {
-        Config = config;
-        await PersistConfigAsync(ct);
-        await OnConfigChangedAsync(config, ct);
-    }
+    /// <summary>Current effective config (class defaults merged with state overrides).</summary>
+    public TConfig EffectiveConfig { get; private set; } = new();
+
+    /// <summary>Current class defaults version that produced <see cref="EffectiveConfig"/>.</summary>
+    protected long AppliedClassDefaultsVersion => _appliedClassDefaultsVersion;
 
     /// <summary>Hook triggered after config changes. Subclasses may override.</summary>
-    protected virtual Task OnConfigChangedAsync(TConfig config, CancellationToken ct) =>
+    protected virtual Task OnEffectiveConfigChangedAsync(TConfig config, CancellationToken ct) =>
         Task.CompletedTask;
 
-    /// <summary>Activates agent after restoring config from manifest.</summary>
-    public override async Task ActivateAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Hook executed after config recompute for state-change path.
+    /// </summary>
+    protected virtual Task OnStateChangedAfterConfigAppliedAsync(TState state, CancellationToken ct) =>
+        Task.CompletedTask;
+
+    /// <summary>
+    /// Merges class defaults and state into effective config.
+    /// </summary>
+    protected abstract TConfig MergeEffectiveConfig(TConfig classDefaults, TState state);
+
+    /// <summary>
+    /// Recomputes effective config from current state and latest class defaults.
+    /// </summary>
+    protected Task RecomputeEffectiveConfigAsync(CancellationToken ct = default) =>
+        RecomputeEffectiveConfigAsync(State, ct);
+
+    protected sealed override async Task OnStateChangedAsync(TState state, CancellationToken ct)
     {
-        // Restore config from manifest
-        if (ManifestStore != null)
-        {
-            var manifest = await ManifestStore.LoadAsync(Id, ct);
-            if (manifest?.ConfigJson != null)
-            {
-                try { Config = JsonSerializer.Deserialize<TConfig>(manifest.ConfigJson) ?? new(); }
-                catch { /* Fallback to default config when deserialization fails */ }
-            }
-        }
-        await base.ActivateAsync(ct);
+        await RecomputeEffectiveConfigAsync(state, ct);
+        await OnStateChangedAfterConfigAppliedAsync(state, ct);
     }
 
-    private async Task PersistConfigAsync(CancellationToken ct)
+    protected override async Task OnEventHandlerStartAsync(
+        EventEnvelope envelope,
+        string handlerName,
+        object? payload,
+        CancellationToken ct)
     {
-        if (ManifestStore == null) return;
-        var manifest = await ManifestStore.LoadAsync(Id, ct) ?? new AgentManifest { AgentId = Id };
-        manifest.ConfigJson = JsonSerializer.Serialize(Config);
-        await ManifestStore.SaveAsync(Id, manifest, ct);
+        await EnsureClassDefaultsVersionCurrentAsync(ct);
+        await base.OnEventHandlerStartAsync(envelope, handlerName, payload, ct);
+    }
+
+    private async Task EnsureClassDefaultsVersionCurrentAsync(CancellationToken ct)
+    {
+        var classDefaults = await ResolveClassDefaultsAsync(ct);
+        if (classDefaults.Version == _appliedClassDefaultsVersion)
+            return;
+
+        await RecomputeEffectiveConfigAsync(State, ct, classDefaults);
+    }
+
+    private async Task RecomputeEffectiveConfigAsync(
+        TState state,
+        CancellationToken ct,
+        AgentClassDefaultsSnapshot<TConfig>? classDefaultsSnapshot = null)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        var classDefaults = classDefaultsSnapshot ?? await ResolveClassDefaultsAsync(ct);
+        var merged = MergeEffectiveConfig(classDefaults.Defaults, state);
+        if (merged == null)
+        {
+            throw new InvalidOperationException(
+                $"{GetType().FullName} merge returned null config. " +
+                $"MergeEffectiveConfig must return a non-null effective config.");
+        }
+
+        await ApplyEffectiveConfigAsync(merged, classDefaults.Version, ct);
+    }
+
+    private async Task ApplyEffectiveConfigAsync(
+        TConfig config,
+        long classDefaultsVersion,
+        CancellationToken ct)
+    {
+        EffectiveConfig = config;
+        _appliedClassDefaultsVersion = classDefaultsVersion;
+        await OnEffectiveConfigChangedAsync(config, ct);
+    }
+
+    private ValueTask<AgentClassDefaultsSnapshot<TConfig>> ResolveClassDefaultsAsync(CancellationToken ct)
+    {
+        _classDefaultsProvider ??= Services.GetService<IAgentClassDefaultsProvider<TConfig>>()
+            ?? NullAgentClassDefaultsProvider<TConfig>.Instance;
+        return _classDefaultsProvider.GetSnapshotAsync(GetType(), ct);
     }
 }

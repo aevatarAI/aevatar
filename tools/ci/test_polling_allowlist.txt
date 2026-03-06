@@ -1,2 +1,5 @@
 # Approved polling waits for external/distributed eventual-consistency probes.
 test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedClusterConsistencyIntegrationTests.cs
+test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.cs
+test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedMixedVersionClusterIntegrationTests.cs
+test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansMassTransitRuntimeIntegrationTests.cs

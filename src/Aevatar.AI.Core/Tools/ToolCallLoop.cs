@@ -51,32 +51,9 @@ public sealed class ToolCallLoop
                 MaxTokens = baseRequest.MaxTokens,
             };
 
-            // ─── Hook: LLM Request Start ───
-            var llmCtx = new AIGAgentExecutionHookContext { LLMRequest = request };
-            if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmCtx, ct);
+            var (response, terminated) = await InvokeLlmAsync(provider, request, ct);
 
-            var llmCallContext = new LLMCallContext
-            {
-                Request = request,
-                Provider = provider,
-                CancellationToken = ct,
-                IsStreaming = false,
-            };
-
-            await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
-            {
-                if (llmCallContext.Terminate) return;
-                llmCallContext.Response = await provider.ChatAsync(llmCallContext.Request, ct);
-            });
-
-            var response = llmCallContext.Response
-                ?? new LLMResponse { Content = null, ToolCalls = null };
-            llmCtx.LLMResponse = response;
-
-            // ─── Hook: LLM Request End ───
-            if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);
-
-            if (llmCallContext.Terminate || !response.HasToolCalls)
+            if (terminated || !response.HasToolCalls)
             {
                 if (response.Content != null)
                     messages.Add(ChatMessage.Assistant(response.Content));
@@ -133,7 +110,52 @@ public sealed class ToolCallLoop
             }
         }
 
-        return messages.LastOrDefault(m => m.Role == "assistant")?.Content;
+        // maxRounds exhausted — tool results from the last round are already in messages.
+        // Make one final LLM call WITHOUT tools so the model must produce a text response.
+        var finalRequest = new LLMRequest
+        {
+            Messages = [..messages], Tools = null,
+            Model = baseRequest.Model, Temperature = baseRequest.Temperature,
+            MaxTokens = baseRequest.MaxTokens,
+        };
+        var (finalResponse, _) = await InvokeLlmAsync(provider, finalRequest, ct);
+        var finalContent = finalResponse?.Content;
+        if (finalContent != null)
+            messages.Add(ChatMessage.Assistant(finalContent));
+        return finalContent;
+    }
+
+    private async Task<(LLMResponse Response, bool Terminated)> InvokeLlmAsync(
+        ILLMProvider provider,
+        LLMRequest request,
+        CancellationToken ct)
+    {
+        // ─── Hook: LLM Request Start ───
+        var llmCtx = new AIGAgentExecutionHookContext { LLMRequest = request };
+        if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmCtx, ct);
+
+        var llmCallContext = new LLMCallContext
+        {
+            Request = request,
+            Provider = provider,
+            CancellationToken = ct,
+            IsStreaming = false,
+        };
+
+        await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
+        {
+            if (llmCallContext.Terminate) return;
+            llmCallContext.Response = await provider.ChatAsync(llmCallContext.Request, ct);
+        });
+
+        var response = llmCallContext.Response
+            ?? new LLMResponse { Content = null, ToolCalls = null };
+        llmCtx.LLMResponse = response;
+
+        // ─── Hook: LLM Request End ───
+        if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);
+
+        return (response, llmCallContext.Terminate);
     }
 
     private static ChatMessage BuildToolResultMessage(string callId, string toolResult)

@@ -9,7 +9,7 @@ public sealed class WorkflowRunOutputStreamer
       IEventFrameMapper<WorkflowRunEvent, WorkflowOutputFrame>
 {
     public async Task StreamAsync(
-        IWorkflowRunEventSink sink,
+        IEventSink<WorkflowRunEvent> sink,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default)
     {

@@ -27,7 +27,7 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Workflow.Core;
 using Aevatar.Configuration;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
@@ -329,7 +329,7 @@ foreach (var workflowName in workflowsToRun)
     {
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Payload = Any.Pack(new ConfigureWorkflowEvent
+        Payload = Any.Pack(new BindWorkflowDefinitionEvent
         {
             WorkflowYaml = yaml,
             WorkflowName = workflowName,

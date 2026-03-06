@@ -9,6 +9,6 @@ public interface IWorkflowRunRequestExecutor
         IActor actor,
         string actorId,
         EventEnvelope requestEnvelope,
-        IWorkflowRunEventSink sink,
+        IEventSink<WorkflowRunEvent> sink,
         CancellationToken ct = default);
 }

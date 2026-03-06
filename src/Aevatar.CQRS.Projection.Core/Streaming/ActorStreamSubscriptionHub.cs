@@ -7,7 +7,7 @@ namespace Aevatar.CQRS.Projection.Core.Streaming;
 /// Default generic actor-stream hub implementation.
 /// Creates direct actor stream subscriptions and returns disposable leases.
 /// </summary>
-public sealed class ActorStreamSubscriptionHub<TMessage> : IActorStreamSubscriptionHub<TMessage>, IAsyncDisposable
+public sealed class ActorStreamSubscriptionHub<TMessage> : IActorStreamSubscriptionHub<TMessage>, IAsyncDisposable, IDisposable
     where TMessage : class, IMessage, new()
 {
     private readonly IStreamProvider _streams;
@@ -52,11 +52,15 @@ public sealed class ActorStreamSubscriptionHub<TMessage> : IActorStreamSubscript
         }
     }
 
-    public ValueTask DisposeAsync()
+    public void Dispose()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
-            return ValueTask.CompletedTask;
+            return;
+    }
 
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
         return ValueTask.CompletedTask;
     }
 

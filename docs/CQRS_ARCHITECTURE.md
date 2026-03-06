@@ -64,8 +64,8 @@ flowchart LR
    `WorkflowProjectionActivationService`（激活） +  
    `WorkflowProjectionReleaseService`（释放） +  
    `IProjectionOwnershipCoordinator`（ownership） +  
-   `WorkflowProjectionSinkSubscriptionManager`（订阅生命周期） +  
-   `WorkflowProjectionLiveSinkForwarder`（sink 转发） +  
+   `EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>`（订阅生命周期） +  
+   `EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>`（sink 转发） +  
    `WorkflowProjectionSinkFailurePolicy`（异常策略） +  
    `WorkflowProjectionReadModelUpdater`（读模型元信息） +  
    `WorkflowProjectionQueryReader`（查询映射）。

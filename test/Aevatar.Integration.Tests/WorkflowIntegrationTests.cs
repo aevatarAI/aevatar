@@ -22,7 +22,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -206,7 +206,7 @@ public class WorkflowIntegrationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new ConfigureWorkflowEvent
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new BindWorkflowDefinitionEvent
             {
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
@@ -275,13 +275,13 @@ public class WorkflowIntegrationTests
             """;
 
         // When
-        await RoleGAgentFactory.ConfigureFromYaml(agent, yaml, sp);
+        await RoleGAgentFactory.InitializeFromYaml(agent, yaml, sp);
 
         // Then
         agent.RoleName.Should().Be("Expert Analyst");
-        agent.Config.SystemPrompt.Should().Contain("金融分析专家");
-        agent.Config.ProviderName.Should().Be("mock");
-        agent.Config.Model.Should().Be("gpt-4");
+        agent.EffectiveConfig.SystemPrompt.Should().Contain("金融分析专家");
+        agent.EffectiveConfig.ProviderName.Should().Be("mock");
+        agent.EffectiveConfig.Model.Should().Be("gpt-4");
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -298,8 +298,9 @@ public class WorkflowIntegrationTests
 
         var actor = await runtime.CreateAsync<RoleGAgent>("llm-test-1");
         var agent = (RoleGAgent)actor.Agent;
-        await agent.ConfigureAsync(new AIAgentConfig
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
+            RoleName = "Researcher",
             SystemPrompt = "你是一个 researcher",
             ProviderName = "mock",
         });
@@ -357,10 +358,18 @@ public class WorkflowIntegrationTests
         var r1 = await runtime.CreateAsync<RoleGAgent>("r1");
         var r2 = await runtime.CreateAsync<RoleGAgent>("r2");
 
-        ((RoleGAgent)r1.Agent).SetRoleName("Agent-R1");
-        ((RoleGAgent)r2.Agent).SetRoleName("Agent-R2");
-        await ((RoleGAgent)r1.Agent).ConfigureAsync(new AIAgentConfig { ProviderName = "mock", SystemPrompt = "r1" });
-        await ((RoleGAgent)r2.Agent).ConfigureAsync(new AIAgentConfig { ProviderName = "mock", SystemPrompt = "r2" });
+        await ((RoleGAgent)r1.Agent).HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "Agent-R1",
+            ProviderName = "mock",
+            SystemPrompt = "r1",
+        });
+        await ((RoleGAgent)r2.Agent).HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "Agent-R2",
+            ProviderName = "mock",
+            SystemPrompt = "r2",
+        });
 
         await runtime.LinkAsync("root", "r1");
         await runtime.LinkAsync("root", "r2");

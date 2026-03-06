@@ -42,14 +42,6 @@ public sealed class AIAgentConfig
     /// <summary>流式输出缓冲区容量（用于背压控制）。</summary>
     public int StreamBufferCapacity { get; set; } = 256;
 
-    /// <summary>业务应用配置 JSON（由业务层自行解释）。</summary>
-    public string AppConfigJson { get; set; } = string.Empty;
-
-    /// <summary>业务应用配置编解码标识（例如 json/plain）。</summary>
-    public string AppConfigCodec { get; set; } = string.Empty;
-
-    /// <summary>业务应用配置 schema 版本。</summary>
-    public int AppConfigSchemaVersion { get; set; }
 }
 
 /// <summary>AI GAgent 基类。组合 ChatRuntime、ToolManager、ChatHistory、HookPipeline、Middleware。</summary>
@@ -98,17 +90,84 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     /// <summary>激活时初始化历史上限并重建 Runtime。</summary>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
-        History.MaxMessages = Config.MaxHistoryMessages;
+        History.MaxMessages = EffectiveConfig.MaxHistoryMessages;
         await RegisterToolsFromSourcesAsync(ct);
         RebuildRuntime();
     }
 
     /// <summary>配置变更时更新历史上限并重建 Runtime。</summary>
-    protected override async Task OnConfigChangedAsync(AIAgentConfig config, CancellationToken ct)
+    protected override async Task OnEffectiveConfigChangedAsync(AIAgentConfig config, CancellationToken ct)
     {
         History.MaxMessages = config.MaxHistoryMessages;
         await RegisterToolsFromSourcesAsync(ct);
         RebuildRuntime();
+    }
+
+    protected sealed class AIAgentConfigStateOverrides
+    {
+        public bool HasProviderName { get; init; }
+        public string? ProviderName { get; init; }
+
+        public bool HasModel { get; init; }
+        public string? Model { get; init; }
+
+        public bool HasSystemPrompt { get; init; }
+        public string? SystemPrompt { get; init; }
+
+        public bool HasTemperature { get; init; }
+        public double? Temperature { get; init; }
+
+        public bool HasMaxTokens { get; init; }
+        public int? MaxTokens { get; init; }
+
+        public bool HasMaxToolRounds { get; init; }
+        public int? MaxToolRounds { get; init; }
+
+        public bool HasMaxHistoryMessages { get; init; }
+        public int? MaxHistoryMessages { get; init; }
+
+        public bool HasStreamBufferCapacity { get; init; }
+        public int? StreamBufferCapacity { get; init; }
+    }
+
+    /// <summary>Extracts config overrides from protobuf state.</summary>
+    protected abstract AIAgentConfigStateOverrides ExtractStateConfigOverrides(TState state);
+
+    protected sealed override AIAgentConfig MergeEffectiveConfig(AIAgentConfig classDefaults, TState state)
+    {
+        ArgumentNullException.ThrowIfNull(classDefaults);
+        ArgumentNullException.ThrowIfNull(state);
+
+        var merged = CloneConfig(classDefaults);
+        var overrides = ExtractStateConfigOverrides(state);
+        ArgumentNullException.ThrowIfNull(overrides);
+
+        if (overrides.HasProviderName)
+            merged.ProviderName = (overrides.ProviderName ?? string.Empty).Trim();
+
+        if (overrides.HasModel)
+            merged.Model = string.IsNullOrWhiteSpace(overrides.Model) ? null : overrides.Model.Trim();
+
+        if (overrides.HasSystemPrompt)
+            merged.SystemPrompt = overrides.SystemPrompt ?? string.Empty;
+
+        if (overrides.HasTemperature)
+            merged.Temperature = overrides.Temperature;
+
+        if (overrides.HasMaxTokens)
+            merged.MaxTokens = (overrides.MaxTokens ?? 0) > 0 ? overrides.MaxTokens : null;
+
+        if (overrides.HasMaxToolRounds && (overrides.MaxToolRounds ?? 0) > 0)
+            merged.MaxToolRounds = overrides.MaxToolRounds!.Value;
+
+        if (overrides.HasMaxHistoryMessages && (overrides.MaxHistoryMessages ?? 0) > 0)
+            merged.MaxHistoryMessages = overrides.MaxHistoryMessages!.Value;
+
+        if (overrides.HasStreamBufferCapacity && (overrides.StreamBufferCapacity ?? 0) > 0)
+            merged.StreamBufferCapacity = overrides.StreamBufferCapacity!.Value;
+
+        NormalizeEffectiveConfig(merged);
+        return merged;
     }
 
     // ─── Chat 快捷方法 ───
@@ -117,7 +176,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     protected Task<string?> ChatAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatAsync(userMessage, Config.MaxToolRounds, ct);
+        return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, ct);
     }
 
     /// <summary>流式 Chat。</summary>
@@ -167,15 +226,15 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             llmMiddlewares: _llmMiddlewares,
             agentId: Id,
             agentName: GetType().Name,
-            streamBufferCapacity: Config.StreamBufferCapacity);
+            streamBufferCapacity: EffectiveConfig.StreamBufferCapacity);
     }
 
     private ILLMProvider GetLLMProvider()
     {
-        if (string.IsNullOrWhiteSpace(Config.ProviderName))
+        if (string.IsNullOrWhiteSpace(EffectiveConfig.ProviderName))
             return _llmProviderFactory.GetDefault();
 
-        var configuredProvider = Config.ProviderName.Trim();
+        var configuredProvider = EffectiveConfig.ProviderName.Trim();
         var availableProviders = _llmProviderFactory.GetAvailableProviders();
         if (availableProviders.Any(name => string.Equals(name, configuredProvider, StringComparison.OrdinalIgnoreCase)))
             return _llmProviderFactory.GetProvider(configuredProvider);
@@ -192,11 +251,11 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
     private LLMRequest BuildRequest() => new()
     {
-        Messages = History.BuildMessages(Config.SystemPrompt),
+        Messages = History.BuildMessages(EffectiveConfig.SystemPrompt),
         Tools = Tools.HasTools ? Tools.GetAll() : null,
-        Model = Config.Model,
-        Temperature = Config.Temperature,
-        MaxTokens = Config.MaxTokens,
+        Model = EffectiveConfig.Model,
+        Temperature = EffectiveConfig.Temperature,
+        MaxTokens = EffectiveConfig.MaxTokens,
     };
 
     private void EnsureRuntime()
@@ -243,6 +302,31 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             Tools.Register(tool);
             _sourceToolNames.Add(tool.Name);
         }
+    }
+
+    private static AIAgentConfig CloneConfig(AIAgentConfig source) => new()
+    {
+        ProviderName = source.ProviderName ?? string.Empty,
+        Model = source.Model,
+        SystemPrompt = source.SystemPrompt ?? string.Empty,
+        Temperature = source.Temperature,
+        MaxTokens = source.MaxTokens,
+        MaxToolRounds = source.MaxToolRounds,
+        MaxHistoryMessages = source.MaxHistoryMessages,
+        StreamBufferCapacity = source.StreamBufferCapacity,
+    };
+
+    private static void NormalizeEffectiveConfig(AIAgentConfig config)
+    {
+        config.ProviderName = config.ProviderName?.Trim() ?? string.Empty;
+        config.Model = string.IsNullOrWhiteSpace(config.Model) ? null : config.Model.Trim();
+        config.SystemPrompt ??= string.Empty;
+        if (config.MaxToolRounds <= 0)
+            config.MaxToolRounds = 10;
+        if (config.MaxHistoryMessages <= 0)
+            config.MaxHistoryMessages = 100;
+        if (config.StreamBufferCapacity <= 0)
+            config.StreamBufferCapacity = 256;
     }
 
     private sealed class NullLLMProviderFactory : ILLMProviderFactory

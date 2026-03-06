@@ -56,34 +56,21 @@ extensions:
       to: tool_handler
 ```
 
-## RoleGAgent 零派生扩展约定
+## RoleGAgent 初始化与配置边界
 
-`RoleGAgent` 支持“业务不写派生 GAgent 类”的扩展模式：  
-业务模块通过标准事件更新 app state / app config，而不是直接写 `State` 或旁路持久化。
+`RoleGAgent` 现在只保留一条强类型初始化链路，不再提供通用 `app_config_* / app_state_*` 字符串扩展槽位。
 
-### 标准事件
+### 标准初始化事件
 
-- `ConfigureRoleAgentEvent`
-  - 承载全量 AI 配置快照（provider/model/system_prompt/limits/role_name...）
-- `SetRoleAppConfigEvent`
-  - 承载 app config 补丁：`app_config_json` / `app_config_codec` / `app_config_schema_version`
-- `SetRoleAppStateEvent`
-  - 承载 app state：`app_state` / `app_state_codec` / `app_state_schema_version`
+- `InitializeRoleAgentEvent`
+  - 承载角色启动参数：`role_name`、`provider/model/system_prompt`、温度与各类 limits、`event_modules/event_routes`
+  - 事件持久化后可回放恢复 `RoleGAgentState`
 
-### 推荐调用入口（给 EventModule 使用）
+### 配置与参数语义
 
-- 使用 `Aevatar.AI.Abstractions.RoleGAgentExtensionContract`
-  - `CreateAppConfigPatch(...)`（返回 `SetRoleAppConfigEvent`）
-  - `CreateAppStateUpdate(...)`
-
-### codec 与版本约定
-
-- `app_state_codec` 当前支持：`protobuf-any`
-- `app_config_codec` 当前支持：`json/plain`
-- codec 留空会按默认值归一化；未知 codec 会 fail-fast（抛异常，避免 silent corruption）
-- `*_schema_version` 由业务定义并递增，用于后续迁移逻辑
-- app config 会写入 `RoleGAgentState`，可在无 Manifest 场景下通过事件回放恢复
-- Manifest `ConfigJson` 仍作为完整配置快照（provider/model/system_prompt 等）
+- `InitializeRoleAgentEvent` 表示“启动/重初始化参数”（init input），不是通用业务配置总线
+- 业务配置请定义在业务 GAgent 自己的强类型 `State` / 领域事件中，不走框架通用 `Any`/JSON payload
+- 是否把 init 参数持久化为长期业务状态，由对应 GAgent 在自己的状态模型内决定
 
 ## 设计特点
 

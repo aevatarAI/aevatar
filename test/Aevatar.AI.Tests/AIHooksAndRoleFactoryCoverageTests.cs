@@ -13,7 +13,6 @@ using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -95,30 +94,35 @@ public class AIHooksAndRoleFactoryCoverageTests
     }
 
     [Fact]
-    public void RoleGAgentExtensionContract_ShouldBuildStandardPatchEvents()
+    public async Task RoleAgentInitializeEvent_ShouldApplyEffectiveConfig()
     {
-        var configPatch = RoleGAgentExtensionContract.CreateAppConfigPatch(
-            "{\"tenant\":\"a\"}",
-            appConfigSchemaVersion: 4,
-            appConfigCodec: "");
+        var services = new ServiceCollection();
+        services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
+        services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+        await using var provider = services.BuildServiceProvider();
 
-        configPatch.Should().BeOfType<SetRoleAppConfigEvent>();
-        configPatch.AppConfigJson.Should().Be("{\"tenant\":\"a\"}");
-        configPatch.AppConfigCodec.Should().Be(RoleGAgentExtensionContract.AppConfigCodecJsonPlain);
-        configPatch.AppConfigSchemaVersion.Should().Be(4);
+        var agent = CreateRoleAgent(provider);
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "tester",
+            ProviderName = "stub",
+            Model = "model-z",
+            SystemPrompt = "system",
+            Temperature = 0.1,
+            MaxTokens = 100,
+        });
 
-        var statePatch = RoleGAgentExtensionContract.CreateAppStateUpdate(
-            new ChatResponseEvent { Content = "state" },
-            appStateSchemaVersion: 2,
-            appStateCodec: "");
-
-        statePatch.AppStateCodec.Should().Be(RoleGAgentExtensionContract.AppStateCodecProtobufAny);
-        statePatch.AppStateSchemaVersion.Should().Be(2);
-        statePatch.AppState.Unpack<ChatResponseEvent>().Content.Should().Be("state");
+        agent.EffectiveConfig.ProviderName.Should().Be("stub");
+        agent.EffectiveConfig.Model.Should().Be("model-z");
+        agent.EffectiveConfig.SystemPrompt.Should().Be("system");
+        agent.EffectiveConfig.Temperature.Should().Be(0.1);
+        agent.EffectiveConfig.MaxTokens.Should().Be(100);
     }
 
     [Fact]
-    public async Task RoleGAgentFactory_ShouldConfigureFromYamlAndWrapRoutableModules()
+    public async Task RoleGAgentFactory_ShouldInitializeFromYamlAndWrapRoutableModules()
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
@@ -141,7 +145,7 @@ public class AIHooksAndRoleFactoryCoverageTests
                        event.type == DemoEvent -> routable
                    """;
 
-        await RoleGAgentFactory.ConfigureFromYaml(agent, yaml, provider);
+        await RoleGAgentFactory.InitializeFromYaml(agent, yaml, provider);
 
         agent.RoleName.Should().Be("planner");
         var modules = agent.GetModules();
@@ -151,7 +155,7 @@ public class AIHooksAndRoleFactoryCoverageTests
     }
 
     [Fact]
-    public async Task RoleGAgentFactory_ShouldSupportDirectConfigWithoutExtensions()
+    public async Task RoleGAgentFactory_ShouldSupportDirectInitializationWithoutExtensions()
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
@@ -175,14 +179,14 @@ public class AIHooksAndRoleFactoryCoverageTests
         };
 
         var agent = CreateRoleAgent(provider);
-        await RoleGAgentFactory.ApplyConfig(agent, cfg, provider);
+        await RoleGAgentFactory.ApplyInitialization(agent, cfg, provider);
 
         agent.RoleName.Should().Be("worker");
         agent.GetModules().Should().BeEmpty();
     }
 
     [Fact]
-    public void RoleConfigurationNormalizer_ShouldPreferTopLevelEventFieldsOverExtensions()
+    public void RoleConfigurationNormalizer_ShouldBindTopLevelEventFields()
     {
         var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
         {
@@ -190,11 +194,6 @@ public class AIHooksAndRoleFactoryCoverageTests
             Name = "Planner",
             EventModules = "top_module",
             EventRoutes = "event.type == DemoEvent -> top_module",
-            Extensions = new RoleExtensionsInput
-            {
-                EventModules = "ext_module",
-                EventRoutes = "event.type == DemoEvent -> ext_module",
-            },
             Connectors = ["a", "A", "  ", "b"],
         });
 
@@ -237,14 +236,14 @@ public class AIHooksAndRoleFactoryCoverageTests
         };
 
         var agent = CreateRoleAgent(provider);
-        await RoleGAgentFactory.ApplyConfig(agent, cfg, provider);
+        await RoleGAgentFactory.ApplyInitialization(agent, cfg, provider);
 
         agent.RoleName.Should().Be("worker");
-        agent.Config.Temperature.Should().Be(0.4);
-        agent.Config.MaxTokens.Should().Be(128);
-        agent.Config.MaxToolRounds.Should().Be(2);
-        agent.Config.MaxHistoryMessages.Should().Be(8);
-        agent.Config.StreamBufferCapacity.Should().Be(32);
+        agent.EffectiveConfig.Temperature.Should().Be(0.4);
+        agent.EffectiveConfig.MaxTokens.Should().Be(128);
+        agent.EffectiveConfig.MaxToolRounds.Should().Be(2);
+        agent.EffectiveConfig.MaxHistoryMessages.Should().Be(8);
+        agent.EffectiveConfig.StreamBufferCapacity.Should().Be(32);
 
         var modules = agent.GetModules();
         modules.Should().HaveCount(1);

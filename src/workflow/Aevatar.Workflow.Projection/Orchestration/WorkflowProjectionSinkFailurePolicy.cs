@@ -1,63 +1,59 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowProjectionSinkFailurePolicy : IWorkflowProjectionSinkFailurePolicy
+public sealed class WorkflowProjectionSinkFailurePolicy
+    : EventSinkProjectionFailurePolicyBase<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
 {
     public const string SinkBackpressureErrorCode = "RUN_SINK_BACKPRESSURE";
     public const string SinkWriteErrorCode = "RUN_SINK_WRITE_FAILED";
 
-    private readonly IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent> _sinkSubscriptionManager;
     private readonly IProjectionSessionEventHub<WorkflowRunEvent> _runEventStreamHub;
     private readonly IProjectionClock _clock;
 
     public WorkflowProjectionSinkFailurePolicy(
-        IProjectionPortSinkSubscriptionManager<WorkflowExecutionRuntimeLease, IWorkflowRunEventSink, WorkflowRunEvent> sinkSubscriptionManager,
+        IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent> sinkSubscriptionManager,
         IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
         IProjectionClock clock)
+        : base(sinkSubscriptionManager)
     {
-        _sinkSubscriptionManager = sinkSubscriptionManager;
         _runEventStreamHub = runEventStreamHub;
         _clock = clock;
     }
 
-    public async ValueTask<bool> TryHandleAsync(
+    protected override async ValueTask OnBackpressureAsync(
         WorkflowExecutionRuntimeLease runtimeLease,
-        IWorkflowRunEventSink sink,
+        IEventSink<WorkflowRunEvent> sink,
         WorkflowRunEvent sourceEvent,
-        Exception exception,
-        CancellationToken ct = default)
+        EventSinkBackpressureException exception,
+        CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(runtimeLease);
-        ArgumentNullException.ThrowIfNull(sink);
-        ArgumentNullException.ThrowIfNull(sourceEvent);
-        ArgumentNullException.ThrowIfNull(exception);
-        ct.ThrowIfCancellationRequested();
+        _ = sink;
+        _ = ct;
+        await PublishSinkFailureAsync(
+            runtimeLease,
+            SinkBackpressureErrorCode,
+            exception.Message,
+            sourceEvent);
+    }
 
-        switch (exception)
-        {
-            case WorkflowRunEventSinkBackpressureException backpressureException:
-                await _sinkSubscriptionManager.DetachAsync(runtimeLease, sink, CancellationToken.None);
-                await PublishSinkFailureAsync(
-                    runtimeLease,
-                    SinkBackpressureErrorCode,
-                    backpressureException.Message,
-                    sourceEvent);
-                return true;
-            case WorkflowRunEventSinkCompletedException:
-                await _sinkSubscriptionManager.DetachAsync(runtimeLease, sink, CancellationToken.None);
-                return true;
-            case InvalidOperationException invalidOperationException:
-                await _sinkSubscriptionManager.DetachAsync(runtimeLease, sink, CancellationToken.None);
-                await PublishSinkFailureAsync(
-                    runtimeLease,
-                    SinkWriteErrorCode,
-                    invalidOperationException.Message,
-                    sourceEvent);
-                return true;
-            default:
-                return false;
-        }
+    protected override async ValueTask OnInvalidOperationAsync(
+        WorkflowExecutionRuntimeLease runtimeLease,
+        IEventSink<WorkflowRunEvent> sink,
+        WorkflowRunEvent sourceEvent,
+        InvalidOperationException exception,
+        CancellationToken ct)
+    {
+        _ = sink;
+        _ = ct;
+        await PublishSinkFailureAsync(
+            runtimeLease,
+            SinkWriteErrorCode,
+            exception.Message,
+            sourceEvent);
     }
 
     private async Task PublishSinkFailureAsync(

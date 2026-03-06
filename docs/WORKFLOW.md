@@ -38,7 +38,7 @@
 5. 收到 `ChatRequestEvent` 后发布 `StartWorkflowEvent`，驱动执行
 
 ```
-ConfigureWorkflow(yaml)
+BindWorkflowDefinition(yaml)
   -> WorkflowParser.Parse (YAML -> WorkflowDefinition)
   -> WorkflowValidator.Validate (结构校验)
   -> InstallCognitiveModules:
@@ -74,7 +74,7 @@ YAML 里 `type: parallel` 会经工厂解析到 `ParallelFanOutModule`。
 
 ### Workflow Roles（正式 schema）
 
-`workflow yaml` 里的 `roles` 现在是 `RoleGAgent` 的正式配置入口，运行时会完整透传到 `ConfigureRoleAgentEvent`：
+`workflow yaml` 里的 `roles` 现在是 `RoleGAgent` 的正式初始化入口，运行时会完整透传到 `InitializeRoleAgentEvent`：
 
 ```yaml
 roles:

@@ -1813,7 +1813,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var reconfigure = ctx.Published.Select(x => x.evt).OfType<ReconfigureAndExecuteWorkflowEvent>().Single();
+        var reconfigure = ctx.Published.Select(x => x.evt).OfType<ReplaceWorkflowDefinitionAndExecuteEvent>().Single();
         reconfigure.WorkflowYaml.Should().Contain("name: analysis");
         reconfigure.WorkflowYaml.Should().Contain("analyst");
         reconfigure.Input.Should().Be("analyze my data");
@@ -1880,7 +1880,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var reconfigure = ctx.Published.Select(x => x.evt).OfType<ReconfigureAndExecuteWorkflowEvent>().Single();
+        var reconfigure = ctx.Published.Select(x => x.evt).OfType<ReplaceWorkflowDefinitionAndExecuteEvent>().Single();
         reconfigure.WorkflowYaml.Should().Contain("name: test2");
         reconfigure.Input.Should().Be("hello");
     }
@@ -1910,7 +1910,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        ctx.Published.Select(x => x.evt).OfType<ReconfigureAndExecuteWorkflowEvent>().Should().BeEmpty();
+        ctx.Published.Select(x => x.evt).OfType<ReplaceWorkflowDefinitionAndExecuteEvent>().Should().BeEmpty();
         var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("Invalid workflow YAML");

@@ -56,11 +56,13 @@ public class AIFeatureBootstrapCoverageTests
         {
             options.ApiKey = "demo-key";
             options.DefaultProvider = "deepseek";
+            options.SecretsStore = new InMemorySecretsStore();
             options.EnableMEAIProviders = true;
             options.SecretsStore = new InMemorySecretsStore();
             options.EnableSkills = true;
             options.SkillDirectories.Add("./skills-a");
             options.EnableMCPTools = false;
+            options.SecretsStore = new InMemorySecretsStore();
         });
 
         using var provider = services.BuildServiceProvider();

@@ -3,9 +3,9 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowProjectionActivationService : IProjectionPortActivationService<WorkflowExecutionRuntimeLease>
+public sealed class WorkflowProjectionActivationService
+    : ProjectionActivationServiceBase<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
 {
-    private readonly IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> _lifecycle;
     private readonly IProjectionClock _clock;
     private readonly IWorkflowExecutionProjectionContextFactory _contextFactory;
     private readonly IProjectionOwnershipCoordinator _ownershipCoordinator;
@@ -17,44 +17,62 @@ public sealed class WorkflowProjectionActivationService : IProjectionPortActivat
         IWorkflowExecutionProjectionContextFactory contextFactory,
         IProjectionOwnershipCoordinator ownershipCoordinator,
         IWorkflowProjectionReadModelUpdater readModelUpdater)
+        : base(lifecycle)
     {
-        _lifecycle = lifecycle;
         _clock = clock;
         _contextFactory = contextFactory;
         _ownershipCoordinator = ownershipCoordinator;
         _readModelUpdater = readModelUpdater;
     }
 
-    public async Task<WorkflowExecutionRuntimeLease> EnsureAsync(
-        string rootActorId,
+    protected override async Task AcquireBeforeStartAsync(
+        string rootEntityId,
+        string projectionName,
+        string input,
+        string commandId,
+        CancellationToken ct)
+    {
+        _ = projectionName;
+        _ = input;
+        await _ownershipCoordinator.AcquireAsync(rootEntityId, commandId, ct);
+    }
+
+    protected override WorkflowExecutionProjectionContext CreateContext(
+        string rootEntityId,
         string workflowName,
         string input,
         string commandId,
-        CancellationToken ct = default)
+        CancellationToken ct)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(rootActorId);
+        _ = ct;
+        var startedAt = _clock.UtcNow;
+        return _contextFactory.Create(
+            rootEntityId,
+            commandId,
+            rootEntityId,
+            workflowName,
+            input,
+            startedAt);
+    }
 
-        await _ownershipCoordinator.AcquireAsync(rootActorId, commandId, ct);
-        try
-        {
-            var startedAt = _clock.UtcNow;
-            var context = _contextFactory.Create(
-                rootActorId,
-                commandId,
-                rootActorId,
-                workflowName,
-                input,
-                startedAt);
+    protected override async Task OnStartedAsync(
+        string rootEntityId,
+        string commandId,
+        WorkflowExecutionProjectionContext context,
+        CancellationToken ct)
+    {
+        _ = commandId;
+        await _readModelUpdater.RefreshMetadataAsync(rootEntityId, context, ct);
+    }
 
-            await _lifecycle.StartAsync(context, ct);
-            await _readModelUpdater.RefreshMetadataAsync(rootActorId, context, ct);
-            return new WorkflowExecutionRuntimeLease(context);
-        }
-        catch
-        {
-            await TryReleaseProjectionOwnershipAsync(rootActorId, commandId);
-            throw;
-        }
+    protected override WorkflowExecutionRuntimeLease CreateRuntimeLease(WorkflowExecutionProjectionContext context) =>
+        new(context);
+
+    protected override async Task CleanupOnStartFailureAsync(
+        string rootEntityId,
+        string commandId)
+    {
+        await TryReleaseProjectionOwnershipAsync(rootEntityId, commandId);
     }
 
     private async Task TryReleaseProjectionOwnershipAsync(

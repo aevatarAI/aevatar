@@ -224,7 +224,7 @@ sequenceDiagram
     API->>AppSvc: 路由到 WorkflowChatRunApplicationService
     AppSvc->>AppSvc: 解析 workflow_yaml + agent_profile（可兼容 workflow_name）
     AppSvc->>WFAgent: 创建 / 激活 WorkflowGAgent
-    WFAgent->>WFAgent: ConfigureWorkflow(workflow_yaml) → 编译/校验
+    WFAgent->>WFAgent: BindWorkflowDefinition(workflow_yaml) → 编译/校验
     WFAgent->>Role1: 创建子 Actor (analyst)
     WFAgent->>Role2: 创建子 Actor (reviewer)
     WFAgent->>WFAgent: 发布 StartWorkflowEvent
@@ -266,7 +266,7 @@ flowchart TB
 生命周期要点：
 
 1. **创建**：Application Service 通过 `IActorRuntime.CreateAsync` 创建 `WorkflowGAgent`（可结合 `run_id` / `workflow_hash` 做复用策略）
-2. **配置**：优先使用请求内 `workflow_yaml` 调用 `WorkflowGAgent.ConfigureWorkflow(yaml)`；兼容按 `workflow_name` 从注册表加载 YAML
+2. **定义绑定**：优先使用请求内 `workflow_yaml` 调用 `WorkflowGAgent.BindWorkflowDefinition(yaml)`；兼容按 `workflow_name` 从注册表加载 YAML
 3. **Profile 注入**：Mainnet 解析请求内 `agent_profile`（role agent + connector 配置），并与平台默认配置合并后做策略校验，生成 run 级执行上下文
 4. **执行**：事件驱动的步骤循环（`WorkflowLoopModule`），每个步骤由对应的 `IEventModule` 处理
 5. **完成**：发布 `WorkflowCompletedEvent`，清理运行态变量和超时计时器
@@ -578,7 +578,7 @@ flowchart LR
 
     subgraph realtime ["实时推送"]
         Mapper["EventEnvelopeToAGUIEventMapper"]
-        Sink["IWorkflowRunEventSink"]
+        Sink["IEventSink<WorkflowRunEvent>"]
         SSE["SSE Endpoint (/api/chat)"]
         WS["WebSocket (/api/ws/chat)"]
     end
@@ -605,7 +605,7 @@ flowchart LR
 | `WorkflowExecutionReadModelProjector` | 将事件归约为 `WorkflowExecutionReport` 读模型 |
 | `WorkflowExecutionAGUIEventProjector` | 将事件转换为 AGUI 协议事件 |
 | `EventEnvelopeToAGUIEventMapper` | 事件映射器链，域事件 → AGUI 事件 |
-| `IWorkflowRunEventSink` | 实时事件通道，对接 SSE / WebSocket 端点 |
+| `IEventSink<WorkflowRunEvent>` | 实时事件通道，对接 SSE / WebSocket 端点 |
 
 读模型 Reducer 按事件类型精确路由（基于 `TypeUrl`）：
 - Workflow 核心 Reducer：`StartWorkflowEventReducer`、`StepRequestEventReducer`、`StepCompletedEventReducer`、`WorkflowSuspendedEventReducer`、`WorkflowCompletedEventReducer`
@@ -1098,7 +1098,7 @@ flowchart LR
     Dispatch --> RM["ReadModelProjector"]
     Dispatch --> AGUI["AGUIEventProjector"]
     RM --> RMStore["ReadModel Store"]
-    AGUI --> Sink["IWorkflowRunEventSink"]
+    AGUI --> Sink["IEventSink<WorkflowRunEvent>"]
     Sink --> WS["SSE / WebSocket"]
 
     Dispatch --> Obs["Metrics / Tracing / Audit"]
@@ -1542,7 +1542,7 @@ sequenceDiagram
     AppService->>AppService: ValidateYaml + ValidateAgentProfile
     AppService->>AppService: ComputeWorkflowHash + ResolveAgentProfile
     AppService->>Resolver: ResolveOrCreateActor(workflow_hash)
-    Resolver->>WfAgent: ConfigureWorkflow(workflow_yaml) + StartRun
+    Resolver->>WfAgent: BindWorkflowDefinition(workflow_yaml) + StartRun
     WfAgent->>Chrono: connector_call (storage/notification/...)
     Chrono-->>WfAgent: capability response
     WfAgent->>Projection: EmitDomainEvents

@@ -78,7 +78,7 @@ sequenceDiagram
   participant Resolver as "WorkflowRunActorResolver"
   participant Port as "IWorkflowExecutionProjectionLifecyclePort"
   participant WFAgent as "WorkflowGAgent"
-  participant Sink as "WorkflowRunEventChannel"
+  participant Sink as "EventChannel<WorkflowRunEvent>"
 
   Client->>Api: "POST /api/chat 或 WS command"
   Api->>CmdSvc: "ExecuteAsync(WorkflowChatRunRequest)"
@@ -100,7 +100,7 @@ sequenceDiagram
 请求解析与回退规则：
 
 - `WorkflowRunActorResolver` 解析优先级为：`workflowYamls`（inline bundle，首项入口） > `workflow`（名称） > 默认 workflow（应用层选项，默认 `direct`）。
-- 外部 API 边界会在 `workflow/workflowYamls` 都为空时显式归一到 `auto`，并且将 `workflow` 解释为 file-backed 名称查找。
+- 外部 API 边界仅在“新建 Actor 且 `workflow/workflowYamls` 都为空”时显式归一到 `auto`；当仅提供 `agentId` 时保持 workflow 未指定以复用绑定关系。`workflow` 解释为注册表名称查找（内建 + 文件加载）。
 - `WorkflowChatRunApplicationService` 对所有请求类型执行“一次性 direct 回退”：首次异常（含运行期）会重试 `direct`，`direct` 不再二次回退。
 
 ## 3. 统一 Projection Pipeline（读侧 + AGUI）
@@ -122,13 +122,13 @@ flowchart LR
   AGP["WorkflowExecutionAGUIEventProjector"]
   MAP["EventEnvelopeToAGUIEventMapper + Handlers"]
   BUS["ProjectionSessionEventHub<WorkflowRunEvent>\nworkflow-run:{actorId}:{commandId}"]
-  CH["WorkflowRunEventChannel"]
+  CH["EventChannel<WorkflowRunEvent>"]
 
   QP["Projection Ports(Lifecycle/Query)"]
   ACT["WorkflowProjectionActivationService"]
   REL["WorkflowProjectionReleaseService"]
-  SUB["WorkflowProjectionSinkSubscriptionManager"]
-  FWD["WorkflowProjectionLiveSinkForwarder"]
+  SUB["EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>"]
+  FWD["EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>"]
   QRYR["WorkflowProjectionQueryReader"]
   QS["WorkflowExecutionQueryApplicationService"]
   APIQ["/api/actors/* Query Endpoints"]

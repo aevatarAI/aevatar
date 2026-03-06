@@ -18,7 +18,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
@@ -437,7 +437,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
     {
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Payload = Any.Pack(new ConfigureWorkflowEvent
+        Payload = Any.Pack(new BindWorkflowDefinitionEvent
         {
             WorkflowYaml = yaml,
             WorkflowName = name,

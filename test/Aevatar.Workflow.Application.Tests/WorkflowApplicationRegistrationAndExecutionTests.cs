@@ -354,7 +354,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.FromException(_exception);
     }
 
-    private sealed class RecordingSink : IWorkflowRunEventSink
+    private sealed class RecordingSink : IEventSink<WorkflowRunEvent>
     {
         public List<WorkflowRunEvent> Events { get; } = [];
         public int CompleteCalls { get; private set; }
@@ -380,7 +380,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class ThrowingPushSink : IWorkflowRunEventSink
+    private sealed class ThrowingPushSink : IEventSink<WorkflowRunEvent>
     {
         public int CompleteCalls { get; private set; }
 

@@ -11,6 +11,7 @@
 
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Host.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,6 +22,7 @@ builder.AddAevatarDefaultHost(
         options.EnableWebSockets = true;
     });
 builder.AddWorkflowCapabilityWithAIDefaults();
+builder.AddAevatarWorkflowObservability();
 
 var app = builder.Build();
 

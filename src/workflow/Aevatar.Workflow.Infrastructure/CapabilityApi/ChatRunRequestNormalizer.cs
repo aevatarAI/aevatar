@@ -1,7 +1,6 @@
-using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
-using Aevatar.Workflow.Infrastructure.Workflows;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -22,9 +21,11 @@ internal static class ChatRunRequestNormalizer
 {
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
-        IFileBackedWorkflowNameCatalog fileBackedWorkflowNames,
         WorkflowCapabilitiesDocument? capabilities = null)
     {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var normalizedAgentId = NormalizeAgentId(input.AgentId);
         var normalizedMetadata = NormalizeMetadata(input.Metadata);
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
         var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
@@ -37,38 +38,36 @@ internal static class ChatRunRequestNormalizer
 
         if (inlineWorkflowYamls.Count > 0)
         {
-            // Inline YAML bundle has explicit precedence over workflow-name lookup.
             return ChatRunRequestNormalizationResult.Success(
                 new WorkflowChatRunRequest(
-                    normalizedPrompt,
+                    Prompt: normalizedPrompt,
                     WorkflowName: null,
-                    input.AgentId,
-                    inlineWorkflowYamls,
-                    normalizedMetadata));
+                    ActorId: normalizedAgentId,
+                    WorkflowYamls: inlineWorkflowYamls,
+                    Metadata: normalizedMetadata));
         }
 
         if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
         {
-            if (!fileBackedWorkflowNames.Contains(requestedWorkflowName))
-                return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.WorkflowNotFound);
-
             return ChatRunRequestNormalizationResult.Success(
                 new WorkflowChatRunRequest(
-                    normalizedPrompt,
-                    requestedWorkflowName,
-                    input.AgentId,
+                    Prompt: normalizedPrompt,
+                    WorkflowName: requestedWorkflowName,
+                    ActorId: normalizedAgentId,
                     WorkflowYamls: null,
-                    normalizedMetadata));
+                    Metadata: normalizedMetadata));
         }
 
-        // Public default mode: prompt-only requests route to auto.
+        var defaultWorkflowName = string.IsNullOrWhiteSpace(normalizedAgentId)
+            ? WorkflowRunBehaviorOptions.AutoWorkflowName
+            : null;
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
-                normalizedPrompt,
-                WorkflowRunBehaviorOptions.AutoWorkflowName,
-                input.AgentId,
+                Prompt: normalizedPrompt,
+                WorkflowName: defaultWorkflowName,
+                ActorId: normalizedAgentId,
                 WorkflowYamls: null,
-                normalizedMetadata));
+                Metadata: normalizedMetadata));
     }
 
     private static IReadOnlyList<string> NormalizeInlineWorkflowYamls(IReadOnlyList<string>? workflowYamls)
@@ -102,4 +101,7 @@ internal static class ChatRunRequestNormalizer
 
         return normalized;
     }
+
+    private static string? NormalizeAgentId(string? agentId) =>
+        string.IsNullOrWhiteSpace(agentId) ? null : agentId.Trim();
 }
