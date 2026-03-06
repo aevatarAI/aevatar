@@ -120,7 +120,7 @@ public class PaperGeneratorService(
         sb.AppendLine(@"\documentclass[11pt,a4paper]{article}");
         sb.AppendLine(@"\usepackage[utf8]{inputenc}");
         sb.AppendLine(@"\usepackage{amsmath,amssymb,amsthm}");
-        sb.AppendLine(@"\usepackage{mathtools,mathrsfs,bm}");
+        sb.AppendLine(@"\usepackage{mathtools,mathrsfs,bm,amscd}");
         sb.AppendLine(@"\usepackage{hyperref}");
         sb.AppendLine(@"\usepackage{xcolor}");
         // Gracefully handle undefined commands from LLM-generated body content
@@ -150,6 +150,25 @@ public class PaperGeneratorService(
         sb.AppendLine(@"\providecommand{\sgn}{\operatorname{sgn}}");
         sb.AppendLine(@"\providecommand{\supp}{\operatorname{supp}}");
         sb.AppendLine(@"\providecommand{\id}{\mathrm{id}}");
+        // Additional shorthand macros commonly used by LLMs
+        sb.AppendLine(@"\providecommand{\ZZ}{\mathbb{Z}}");
+        sb.AppendLine(@"\providecommand{\QQ}{\mathbb{Q}}");
+        sb.AppendLine(@"\providecommand{\RR}{\mathbb{R}}");
+        sb.AppendLine(@"\providecommand{\CC}{\mathbb{C}}");
+        sb.AppendLine(@"\providecommand{\NN}{\mathbb{N}}");
+        sb.AppendLine(@"\providecommand{\FF}{\mathbb{F}}");
+        sb.AppendLine(@"\providecommand{\PP}{\mathbb{P}}");
+        sb.AppendLine(@"\providecommand{\Tr}{\operatorname{Tr}}");
+        sb.AppendLine(@"\providecommand{\card}[1]{\lvert #1 \rvert}");
+        sb.AppendLine(@"\providecommand{\Fold}{\operatorname{Fold}}");
+        sb.AppendLine(@"\providecommand{\Res}{\operatorname{Res}}");
+        sb.AppendLine(@"\providecommand{\ord}{\operatorname{ord}}");
+        sb.AppendLine(@"\providecommand{\lcm}{\operatorname{lcm}}");
+        sb.AppendLine(@"\providecommand{\im}{\operatorname{im}}");
+        sb.AppendLine(@"\providecommand{\coker}{\operatorname{coker}}");
+        sb.AppendLine(@"\providecommand{\Gal}{\operatorname{Gal}}");
+        sb.AppendLine(@"\providecommand{\Cl}{\operatorname{Cl}}");
+        sb.AppendLine(@"\providecommand{\vol}{\operatorname{vol}}");
         sb.AppendLine();
 
         // Declare amsthm environments with shared counter and correct styles (proof is built-in)
@@ -174,15 +193,21 @@ public class PaperGeneratorService(
         sb.AppendLine(@"\newtheorem{note}[theorem]{Note}");
         sb.AppendLine(@"\newtheorem{conclusion}[theorem]{Conclusion}");
 
-        // Pre-sanitize all bodies and collect unknown commands
+        // Pre-sanitize all bodies and abstracts, collect unknown commands
         var sanitizedBodies = new Dictionary<string, string>();
+        var sanitizedAbstracts = new Dictionary<string, string>();
         foreach (var node in sortedNodes)
         {
             sanitizedBodies[node.Id] = SanitizeBody(GetStringProperty(node.Properties, "body"));
+            // Abstracts go inside \textit{...} (text mode) — sanitize then escape
+            // if they contain any math-mode content to prevent cascading errors
+            var rawAbstract = GetStringProperty(node.Properties, "abstract");
+            var sanAbstract = SanitizeBody(rawAbstract);
+            sanitizedAbstracts[node.Id] = IsBodyBroken(sanAbstract) ? StripToPlainText(rawAbstract) : sanAbstract;
         }
 
-        // Scan all sanitized bodies for \commandname patterns and auto-define unknown ones
-        var allBodyText = string.Join("\n", sanitizedBodies.Values);
+        // Scan all sanitized content for \commandname patterns and auto-define unknown ones
+        var allBodyText = string.Join("\n", sanitizedBodies.Values.Concat(sanitizedAbstracts.Values));
         var unknownCommands = FindUnknownCommands(allBodyText);
         foreach (var cmd in unknownCommands)
         {
@@ -212,18 +237,17 @@ public class PaperGeneratorService(
         {
             var node = sortedNodes[i];
             var label = $"node:{node.Id}";
-            var nodeAbstract = GetStringProperty(node.Properties, "abstract");
+            var abstractText = sanitizedAbstracts[node.Id];
             var body = sanitizedBodies[node.Id];
 
             if (node.Type == "proof")
             {
-                // proof uses built-in LaTeX proof environment
                 sb.AppendLine(@"\begin{proof}");
                 sb.AppendLine($@"\label{{{label}}}");
-                if (!string.IsNullOrWhiteSpace(nodeAbstract))
-                    sb.AppendLine($@"\textit{{{EscapeLatex(nodeAbstract)}}}");
+                if (!string.IsNullOrWhiteSpace(abstractText))
+                    sb.AppendLine($@"\textit{{{abstractText}}}");
                 sb.AppendLine();
-                sb.AppendLine(body);
+                EmitBodyContained(sb, body);
                 EmitCrossRefs(sb, node.Id, referencedBy);
                 sb.AppendLine(@"\end{proof}");
             }
@@ -231,22 +255,21 @@ public class PaperGeneratorService(
             {
                 sb.AppendLine($@"\begin{{{envName}}}");
                 sb.AppendLine($@"\label{{{label}}}");
-                if (!string.IsNullOrWhiteSpace(nodeAbstract))
-                    sb.AppendLine($@"\textit{{{EscapeLatex(nodeAbstract)}}}");
+                if (!string.IsNullOrWhiteSpace(abstractText))
+                    sb.AppendLine($@"\textit{{{abstractText}}}");
                 sb.AppendLine();
-                sb.AppendLine(body);
+                EmitBodyContained(sb, body);
                 EmitCrossRefs(sb, node.Id, referencedBy);
                 sb.AppendLine($@"\end{{{envName}}}");
             }
             else
             {
-                // Unknown type — emit as paragraph
                 sb.AppendLine($@"\paragraph{{{EscapeLatex(node.Type)}}}");
                 sb.AppendLine($@"\label{{{label}}}");
-                if (!string.IsNullOrWhiteSpace(nodeAbstract))
-                    sb.AppendLine($@"\textit{{{EscapeLatex(nodeAbstract)}}}");
+                if (!string.IsNullOrWhiteSpace(abstractText))
+                    sb.AppendLine($@"\textit{{{abstractText}}}");
                 sb.AppendLine();
-                sb.AppendLine(body);
+                EmitBodyContained(sb, body);
                 EmitCrossRefs(sb, node.Id, referencedBy);
             }
 
@@ -255,6 +278,18 @@ public class PaperGeneratorService(
 
         sb.AppendLine(@"\end{document}");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Emits body content with math-mode cleanup after it to prevent
+    /// unclosed math mode from cascading into subsequent nodes.
+    /// </summary>
+    private static void EmitBodyContained(StringBuilder sb, string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return;
+        sb.AppendLine(body);
+        // Force-close any unclosed math mode to prevent cascading
+        sb.AppendLine(@"\ifmmode\)\fi");
     }
 
     private static void EmitCrossRefs(
@@ -366,14 +401,60 @@ public class PaperGeneratorService(
     /// brace depth, and environment nesting. Returns true if the body would cause
     /// cascading errors.
     /// </summary>
+    /// <summary>
+    /// Math environments that put their content in math mode.
+    /// </summary>
+    private static readonly HashSet<string> MathEnvironments = new(StringComparer.Ordinal)
+    {
+        "equation", "equation*", "align", "align*", "gather", "gather*",
+        "multline", "multline*", "flalign", "flalign*", "split",
+        "aligned", "gathered", "cases", "array", "matrix", "pmatrix",
+        "bmatrix", "vmatrix", "Vmatrix", "Bmatrix", "smallmatrix",
+        "eqnarray", "eqnarray*", "math", "displaymath", "CD",
+    };
+
+    /// <summary>
+    /// Commands that ONLY work in math mode. Using them in text mode causes
+    /// "Missing $ inserted" errors that cascade fatally.
+    /// </summary>
+    private static readonly HashSet<string> MathOnlyCommands = new(StringComparer.Ordinal)
+    {
+        // Greek letters
+        "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta",
+        "theta", "vartheta", "iota", "kappa", "lambda", "mu", "nu", "xi", "pi",
+        "rho", "sigma", "tau", "upsilon", "phi", "varphi", "chi", "psi", "omega",
+        "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Phi", "Psi", "Omega",
+        // Arrows
+        "to", "rightarrow", "leftarrow", "leftrightarrow", "Rightarrow", "Leftarrow",
+        "Leftrightarrow", "implies", "iff", "mapsto", "longmapsto", "longrightarrow",
+        "Longrightarrow", "Longleftrightarrow", "hookrightarrow", "hookleftarrow",
+        // Relations
+        "leq", "geq", "neq", "approx", "equiv", "sim", "simeq", "cong", "propto",
+        "subset", "supset", "subseteq", "supseteq", "in", "notin", "ni", "preceq",
+        "prec", "gg", "ll",
+        // Operators
+        "frac", "dfrac", "tfrac", "sqrt", "sum", "prod", "int", "oint", "iint",
+        "bigcup", "bigcap", "bigoplus", "bigotimes", "bigsqcup",
+        "cdot", "cdots", "ldots", "times", "otimes", "oplus", "circ",
+        "cup", "cap", "setminus", "wedge", "vee",
+        "lim", "limsup", "liminf", "sup", "inf", "infty", "partial", "nabla",
+        // Delimiters (math mode only)
+        "langle", "rangle", "lfloor", "rfloor", "lceil", "rceil",
+        "bigl", "bigr", "Bigl", "Bigr", "biggl", "biggr", "Biggl", "Biggr",
+        // Formatting
+        "overline", "underline", "widehat", "widetilde", "hat", "tilde", "bar",
+        "vec", "dot", "ddot", "boldsymbol", "mathbb", "mathcal", "mathfrak",
+        "mathrm", "mathscr", "binom", "boxed", "substack",
+        // Logic
+        "forall", "exists", "neg", "lnot",
+    };
+
     internal static bool IsBodyBroken(string body)
     {
         if (string.IsNullOrWhiteSpace(body)) return false;
 
-        // State machine walk
         var braceDepth = 0;
-        var inMath = false;  // inside $...$
-        var inDisplayMath = false; // inside $$...$$
+        var mathDepth = 0; // nesting depth of math mode ($ / \( / \[ / math envs)
         var negBraceHits = 0;
         var mathErrors = 0;
 
@@ -381,22 +462,56 @@ public class PaperGeneratorService(
         {
             var c = body[i];
 
-            // Skip escaped characters
             if (c == '\\' && i + 1 < body.Length)
             {
                 var next = body[i + 1];
-                if (next == '$' || next == '{' || next == '}' || next == '\\')
+
+                // \$ \{ \} \\ — escaped special chars, skip
+                if (next == '$' || next == '{' || next == '}' || next == '\\' || next == '_' || next == '^')
                 {
                     i++;
                     continue;
                 }
-                // Skip \command sequences
+
+                // \( and \) — inline math delimiters
+                if (next == '(') { mathDepth++; i++; continue; }
+                if (next == ')') { mathDepth = Math.Max(0, mathDepth - 1); i++; continue; }
+
+                // \[ and \] — display math delimiters
+                if (next == '[') { mathDepth++; i++; continue; }
+                if (next == ']') { mathDepth = Math.Max(0, mathDepth - 1); i++; continue; }
+
+                // \begin{...} / \end{...} — check for math environments
                 if (char.IsLetter(next))
                 {
-                    i++;
-                    while (i + 1 < body.Length && char.IsLetter(body[i + 1])) i++;
+                    var cmdStart = i + 1;
+                    var j = cmdStart;
+                    while (j < body.Length && char.IsLetter(body[j])) j++;
+                    var cmd = body[cmdStart..j];
+
+                    if ((cmd == "begin" || cmd == "end") && j < body.Length && body[j] == '{')
+                    {
+                        var envStart = j + 1;
+                        var envEnd = body.IndexOf('}', envStart);
+                        if (envEnd > envStart)
+                        {
+                            var envName = body[envStart..envEnd];
+                            if (MathEnvironments.Contains(envName))
+                            {
+                                if (cmd == "begin") mathDepth++;
+                                else mathDepth = Math.Max(0, mathDepth - 1);
+                            }
+                        }
+                    }
+
+                    // Math-only commands outside math mode = "Missing $ inserted"
+                    if (mathDepth == 0 && MathOnlyCommands.Contains(cmd))
+                        mathErrors++;
+
+                    i = j - 1;
                     continue;
                 }
+
                 i++;
                 continue;
             }
@@ -411,32 +526,31 @@ public class PaperGeneratorService(
                     if (braceDepth < 0) negBraceHits++;
                     break;
                 case '$':
-                    // Check for $$
                     if (i + 1 < body.Length && body[i + 1] == '$')
                     {
-                        if (inMath) mathErrors++; // $$ inside $
-                        inDisplayMath = !inDisplayMath;
-                        i++; // skip second $
+                        // $$
+                        if (mathDepth > 0) mathDepth--;
+                        else mathDepth++;
+                        i++;
                     }
                     else
                     {
-                        if (inDisplayMath) mathErrors++; // $ inside $$
-                        inMath = !inMath;
+                        if (mathDepth > 0) mathDepth--;
+                        else mathDepth++;
                     }
                     break;
                 case '_':
                 case '^':
-                    // Subscript/superscript outside math mode = guaranteed error
-                    if (!inMath && !inDisplayMath) mathErrors++;
+                    if (mathDepth == 0) mathErrors++;
                     break;
             }
         }
 
-        // Any structural issue = broken
         if (negBraceHits > 0) return true;
-        if (braceDepth != 0) return true; // shouldn't happen after our balancer, but check
-        if (inMath || inDisplayMath) return true; // unclosed math mode
+        if (braceDepth != 0) return true;
         if (mathErrors > 0) return true;
+        // Don't fail on unclosed math mode — it's common in LLM output and
+        // tectonic handles it with a warning rather than a fatal error
 
         // Check for unmatched environments
         var envStack = new Stack<string>();
@@ -449,9 +563,14 @@ public class PaperGeneratorService(
             else if (envStack.Count > 0 && envStack.Peek() == env)
                 envStack.Pop();
             else
-                return true; // mismatched \end
+                return true;
         }
         if (envStack.Count > 0) return true;
+
+        // \\[ or \\] used as display math delimiters (not linebreaks) cause
+        // "Misplaced alignment tab" and other fatal errors. Detect standalone \\[
+        // not followed by a dimension argument.
+        if (Regex.IsMatch(body, @"\\\\[\[\]]\s*(\n|$)")) return true;
 
         return false;
     }
@@ -502,6 +621,7 @@ public class PaperGeneratorService(
         ["ℂ"] = @"$\mathbb{C}$", ["ℚ"] = @"$\mathbb{Q}$",
         ["⟨"] = @"$\langle$", ["⟩"] = @"$\rangle$",
         ["‖"] = @"$\|$", ["′"] = @"$'$",
+        ["ℓ"] = @"$\ell$", ["¹"] = @"$^1$", ["²"] = @"$^2$", ["³"] = @"$^3$",
     };
 
     internal static string SanitizeBody(string body)
@@ -509,14 +629,33 @@ public class PaperGeneratorService(
         if (string.IsNullOrWhiteSpace(body))
             return body;
 
-        // LLM-generated body often has double-escaped LaTeX commands (\\frac, \\( etc.)
-        // from JSON serialization. Normalize \\<command> to \<command> but preserve
-        // standalone \\ (LaTeX line break).
+        // Strip control characters (backspace, form feed, etc.) that sneak in
+        // from JSON encoding of \b, \f, \t etc. inside LaTeX commands
+        body = Regex.Replace(body, @"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "");
+
+        // LLM-generated body often has double-escaped LaTeX from JSON serialization.
+        // Normalize \\X → \X for commands, math delimiters, and special chars.
         body = body.Replace(@"\textbackslash{}", @"\");
-        // \\<letter> → \<letter> (double-escaped commands like \\frac, \\le, \\sum)
+        // \\<letter> → \<letter> (double-escaped commands like \\frac, \\le)
         body = Regex.Replace(body, @"\\\\([a-zA-Z])", @"\$1");
-        // \\( → \(  and \\[ → \[  and \\) → \)  and \\] → \]  (math delimiters)
-        body = Regex.Replace(body, @"\\\\([\(\)\[\]])", @"\$1");
+        // \\( \\) — inline math delimiters (NOT \\[ \\] which is linebreak + optional arg)
+        body = Regex.Replace(body, @"\\\\([\(\)])", @"\$1");
+        // \\^ \\_ \\{ \\} — double-escaped special chars
+        body = body.Replace(@"\\^", "^");
+        body = body.Replace(@"\\_", "_");
+        body = body.Replace(@"\\{", @"\{");
+        body = body.Replace(@"\\}", @"\}");
+        // \\; \\, \\! \\: — double-escaped spacing commands
+        body = body.Replace(@"\\;", @"\;");
+        body = body.Replace(@"\\,", @"\,");
+        body = body.Replace(@"\\!", @"\!");
+        body = body.Replace(@"\\:", @"\:");
+        // NOTE: \\[ and \\] are NOT converted — inside math environments,
+        // \\[2pt] is a linebreak with spacing, not display math.
+        // Bodies with standalone \\[ display math will be caught by IsBodyBroken.
+
+        // Escape bare # (parameter char) — causes fatal "macro parameter" errors
+        body = Regex.Replace(body, @"(?<!\\)#", @"\#");
 
         // Strip dangerous commands that can cause fatal errors
         body = Regex.Replace(body, @"\\(input|include|usepackage|documentclass|bibliography|bibliographystyle)\b[^\\]*?(\n|$)", "\n");
@@ -551,12 +690,71 @@ public class PaperGeneratorService(
         // Remove backtick references that cause "failed to open input file" errors
         body = body.Replace("`", "'");
 
-        // Validate structural integrity BEFORE attempting fixes.
-        // If broken, escape as plain text — don't try to patch it.
+        // Escape _ and ^ inside \texttt{...}, \text{...}, etc. — bare underscores/carets
+        // in text-mode commands cause "Missing $ inserted" errors that cascade badly.
+        body = Regex.Replace(body, @"\\text(tt|rm|bf|it|sf|sc)?\{([^}]*)\}", m =>
+        {
+            var cmd = m.Groups[0].Value;
+            var prefix = cmd[..^(m.Groups[2].Length + 1)]; // everything up to and including {
+            var inner = m.Groups[2].Value;
+            inner = inner.Replace("_", @"\_").Replace("^", @"\^{}");
+            // Undo double-escaping if already escaped
+            inner = inner.Replace(@"\\_", @"\_").Replace(@"\\^{}", @"\^{}");
+            return prefix + inner + "}";
+        });
+
+        // Balance braces
+        body = BalanceBraces(body);
+
+        // If body still has structural issues (bare _/^ outside math, unclosed envs),
+        // strip to plain text to prevent cascading tectonic errors.
+        // StripToPlainText is used instead of EscapeLatex because EscapeLatex produces
+        // \textbackslash{} sequences that still cause cascading TeX errors in large docs.
         if (IsBodyBroken(body))
-            return EscapeLatex(body);
+            return StripToPlainText(body);
 
         return body;
+    }
+
+    /// <summary>
+    /// Ensures braces are balanced: removes excess closing braces and
+    /// appends missing closing braces at the end.
+    /// </summary>
+    internal static string BalanceBraces(string body)
+    {
+        // First pass: remove excess } (where depth would go negative)
+        var sb = new StringBuilder(body.Length);
+        var depth = 0;
+        foreach (var c in body)
+        {
+            if (c == '{')
+            {
+                depth++;
+                sb.Append(c);
+            }
+            else if (c == '}')
+            {
+                if (depth > 0)
+                {
+                    depth--;
+                    sb.Append(c);
+                }
+                // else: skip excess closing brace
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+
+        // Append missing closing braces
+        while (depth > 0)
+        {
+            sb.Append('}');
+            depth--;
+        }
+
+        return sb.ToString();
     }
 
     private static string EscapeLatex(string text)
@@ -576,6 +774,43 @@ public class PaperGeneratorService(
             .Replace("~", @"\textasciitilde{}")
             .Replace("^", @"\textasciicircum{}")
             .Replace(placeholder, @"\textbackslash{}");
+    }
+
+    /// <summary>
+    /// Strips all LaTeX commands and math delimiters, producing safe plain text.
+    /// Used as fallback for broken bodies instead of EscapeLatex, which produces
+    /// \textbackslash{} sequences that still cause cascading TeX errors.
+    /// </summary>
+    private static string StripToPlainText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+
+        // Remove \begin{...} and \end{...}
+        var result = Regex.Replace(text, @"\\(begin|end)\{[^}]*\}", " ");
+        // Remove \command[opt]{arg} patterns — keep the arg content
+        result = Regex.Replace(result, @"\\[a-zA-Z]+\[[^\]]*\]\{([^}]*)\}", "$1");
+        // Remove \command{arg} — keep the arg content
+        result = Regex.Replace(result, @"\\[a-zA-Z]+\{([^}]*)\}", "$1");
+        // Remove remaining \commands
+        result = Regex.Replace(result, @"\\[a-zA-Z]+", " ");
+        // Remove display math delimiters \[ \] $$ and inline \( \) $
+        result = Regex.Replace(result, @"\\\[|\\\]|\$\$?|\\\(|\\\)", " ");
+        // Remove remaining backslash-escapes
+        result = Regex.Replace(result, @"\\.", "");
+        // Remove braces
+        result = result.Replace("{", "").Replace("}", "");
+        // Collapse whitespace
+        result = Regex.Replace(result, @"\s+", " ").Trim();
+        // Escape the remaining special chars for safe LaTeX text output
+        // Avoid \textasciicircum{} and \textasciitilde{} as they introduce braces
+        result = result
+            .Replace("&", @"\&")
+            .Replace("%", @"\%")
+            .Replace("#", @"\#")
+            .Replace("_", @"\_")
+            .Replace("~", " ")
+            .Replace("^", " ");
+        return result;
     }
 
     private async Task<byte[]> CompilePdfAsync(string latex, CancellationToken ct)
