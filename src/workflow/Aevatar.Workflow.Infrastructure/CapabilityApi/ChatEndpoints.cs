@@ -1,6 +1,4 @@
 using System.Net.WebSockets;
-using System.Diagnostics;
-using System.Threading;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -58,14 +56,10 @@ public static class WorkflowCapabilityEndpoints
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
         CancellationToken ct = default)
     {
-        var requestStopwatch = Stopwatch.StartNew();
-        var requestResult = ApiMetrics.ResultOk;
-        var firstResponseRecorded = 0;
+        using var scope = ApiRequestScope.BeginHttp();
         if (string.IsNullOrWhiteSpace(input.Prompt))
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
-            requestStopwatch.Stop();
-            ApiMetrics.RecordRequest(ApiMetrics.TransportHttp, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
             return;
         }
 
@@ -81,19 +75,18 @@ public static class WorkflowCapabilityEndpoints
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
                 var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(normalizedRequest.Error);
-                requestResult = ApiMetrics.ResolveResult(statusCode);
-                await WriteJsonErrorResponseAsync(
-                    http,
-                    statusCode,
-                    code,
-                    message,
-                    ct);
+                scope.MarkResult(statusCode);
+                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
                 return;
             }
 
             var result = await chatRunService.ExecuteAsync(
                 normalizedRequest.Request!,
-                (frame, token) => WriteFrameAndRecordFirstResponseOnceAsync(frame, token),
+                async (frame, token) =>
+                {
+                    await writer.WriteAsync(frame, token);
+                    scope.RecordFirstResponse();
+                },
                 onStartedAsync: async (started, token) =>
                 {
                     CapabilityTraceContext.ApplyCorrelationHeader(http.Response, started.CommandId);
@@ -106,13 +99,8 @@ public static class WorkflowCapabilityEndpoints
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(result.Error);
                 var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
-                requestResult = ApiMetrics.ResolveResult(statusCode);
-                await WriteJsonErrorResponseAsync(
-                    http,
-                    statusCode,
-                    code,
-                    message,
-                    ct);
+                scope.MarkResult(statusCode);
+                await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
             }
         }
         catch (OperationCanceledException)
@@ -120,7 +108,7 @@ public static class WorkflowCapabilityEndpoints
         }
         catch (Exception ex)
         {
-            requestResult = ApiMetrics.ResultError;
+            scope.MarkError();
             logger?.LogError(ex, "Workflow chat execution failed.");
             if (!writer.Started)
             {
@@ -135,18 +123,6 @@ public static class WorkflowCapabilityEndpoints
 
             await WriteStreamErrorFrameAsync(writer, ex, logger, CancellationToken.None);
         }
-        finally
-        {
-            requestStopwatch.Stop();
-            ApiMetrics.RecordRequest(ApiMetrics.TransportHttp, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
-        }
-
-        async ValueTask WriteFrameAndRecordFirstResponseOnceAsync(WorkflowOutputFrame frame, CancellationToken token)
-        {
-            await writer.WriteAsync(frame, token);
-            if (Interlocked.CompareExchange(ref firstResponseRecorded, 1, 0) == 0)
-                ApiMetrics.RecordFirstResponse(ApiMetrics.TransportHttp, ApiMetrics.ResultOk, requestStopwatch.Elapsed.TotalMilliseconds);
-        }
     }
 
     internal static async Task<IResult> HandleCommand(
@@ -155,123 +131,113 @@ public static class WorkflowCapabilityEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
-        var requestStopwatch = Stopwatch.StartNew();
-        var requestResult = ApiMetrics.ResultOk;
+        using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
         var startSignal = new TaskCompletionSource<WorkflowChatRunStarted>(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>> executionTask;
+
+        if (string.IsNullOrWhiteSpace(input.Prompt))
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_PROMPT",
+                message = "Prompt is required.",
+            });
+        }
+
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(input);
+        if (!normalizedRequest.Succeeded)
+        {
+            var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
+            var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(normalizedRequest.Error);
+            scope.MarkResult(statusCode);
+            return Results.Json(new { code, message }, statusCode: statusCode);
+        }
+
         try
         {
-            if (string.IsNullOrWhiteSpace(input.Prompt))
-            {
-                return Results.BadRequest(new
+            executionTask = chatRunService.ExecuteAsync(
+                normalizedRequest.Request!,
+                static (_, _) => ValueTask.CompletedTask,
+                onStartedAsync: (started, _) =>
                 {
-                    code = "INVALID_PROMPT",
-                    message = "Prompt is required.",
-                });
-            }
-
-            var normalizedRequest = ChatRunRequestNormalizer.Normalize(input);
-            if (!normalizedRequest.Succeeded)
-            {
-                var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
-                var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(normalizedRequest.Error);
-                requestResult = ApiMetrics.ResolveResult(statusCode);
-                return Results.Json(
-                    new
-                    {
-                        code,
-                        message,
-                    },
-                    statusCode: statusCode);
-            }
-
-            try
-            {
-                executionTask = chatRunService.ExecuteAsync(
-                    normalizedRequest.Request!,
-                    static (_, _) => ValueTask.CompletedTask,
-                    onStartedAsync: (started, _) =>
-                    {
-                        startSignal.TrySetResult(started);
-                        return ValueTask.CompletedTask;
-                    },
-                    ct);
-            }
-            catch (Exception ex)
-            {
-                requestResult = ApiMetrics.ResultError;
-                logger.LogError(ex, "Workflow command execution failed before start signal");
-                return Results.Json(
-                    new { code = "EXECUTION_FAILED", message = "Command execution failed." },
-                    statusCode: StatusCodes.Status500InternalServerError);
-            }
-
-            var completed = await Task.WhenAny(startSignal.Task, executionTask);
-
-            if (completed == startSignal.Task)
-            {
-                var started = await startSignal.Task;
-                _ = executionTask.ContinueWith(
-                    t =>
-                    {
-                        if (t.IsFaulted && t.Exception != null)
-                        {
-                            logger.LogWarning(t.Exception, "Background workflow command failed. commandId={CommandId}", started.CommandId);
-                        }
-                    },
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-
-                return Results.Accepted(
-                    $"/api/actors/{started.ActorId}",
-                    CapabilityTraceContext.CreateAcceptedPayload(started));
-            }
-
-            CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> result;
-            try
-            {
-                result = await executionTask;
-            }
-            catch (Exception ex)
-            {
-                requestResult = ApiMetrics.ResultError;
-                logger.LogError(ex, "Workflow command execution failed before start signal");
-                return Results.Json(
-                    new { code = "EXECUTION_FAILED", message = "Command execution failed." },
-                    statusCode: StatusCodes.Status500InternalServerError);
-            }
-
-            if (result.Error != WorkflowChatRunStartError.None)
-            {
-                var mappedError = ChatRunStartErrorMapper.ToCommandError(result.Error);
-                var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
-                requestResult = ApiMetrics.ResolveResult(statusCode);
-                return Results.Json(
-                    new
-                    {
-                        code = mappedError.Code,
-                        message = mappedError.Message,
-                    },
-                    statusCode: statusCode);
-            }
-
-            if (result.Started != null)
-            {
-                return Results.Accepted(
-                    $"/api/actors/{result.Started.ActorId}",
-                    CapabilityTraceContext.CreateAcceptedPayload(result.Started));
-            }
-
-            requestResult = ApiMetrics.ResultError;
-            return Results.StatusCode(StatusCodes.Status500InternalServerError);
+                    startSignal.TrySetResult(started);
+                    return ValueTask.CompletedTask;
+                },
+                ct);
         }
-        finally
+        catch (OperationCanceledException)
         {
-            requestStopwatch.Stop();
-            ApiMetrics.RecordRequest(ApiMetrics.TransportHttp, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
+            return Results.StatusCode(499);
         }
+        catch (Exception ex)
+        {
+            scope.MarkError();
+            logger.LogError(ex, "Workflow command execution failed before start signal");
+            return Results.Json(
+                new { code = "EXECUTION_FAILED", message = "Command execution failed." },
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
+
+        var completed = await Task.WhenAny(startSignal.Task, executionTask);
+
+        if (completed == startSignal.Task)
+        {
+            var started = await startSignal.Task;
+            _ = executionTask.ContinueWith(
+                t =>
+                {
+                    if (t.IsFaulted && t.Exception != null)
+                    {
+                        logger.LogWarning(t.Exception, "Background workflow command failed. commandId={CommandId}", started.CommandId);
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            return Results.Accepted(
+                $"/api/actors/{started.ActorId}",
+                CapabilityTraceContext.CreateAcceptedPayload(started));
+        }
+
+        CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> result;
+        try
+        {
+            result = await executionTask;
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.StatusCode(499);
+        }
+        catch (Exception ex)
+        {
+            scope.MarkError();
+            logger.LogError(ex, "Workflow command execution failed before start signal");
+            return Results.Json(
+                new { code = "EXECUTION_FAILED", message = "Command execution failed." },
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
+
+        if (result.Error != WorkflowChatRunStartError.None)
+        {
+            var mappedError = ChatRunStartErrorMapper.ToCommandError(result.Error);
+            var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
+            scope.MarkResult(statusCode);
+            return Results.Json(
+                new { code = mappedError.Code, message = mappedError.Message },
+                statusCode: statusCode);
+        }
+
+        if (result.Started != null)
+        {
+            return Results.Accepted(
+                $"/api/actors/{result.Started.ActorId}",
+                CapabilityTraceContext.CreateAcceptedPayload(result.Started));
+        }
+
+        scope.MarkError();
+        return Results.StatusCode(StatusCodes.Status500InternalServerError);
     }
 
     internal static async Task<IResult> HandleResume(
@@ -466,14 +432,11 @@ public static class WorkflowCapabilityEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
-        var requestStopwatch = Stopwatch.StartNew();
-        var requestResult = ApiMetrics.ResultOk;
+        using var scope = ApiRequestScope.BeginWebSocket();
         if (!http.WebSockets.IsWebSocketRequest)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             await http.Response.WriteAsync("Expected websocket request.", ct);
-            requestStopwatch.Stop();
-            ApiMetrics.RecordRequest(ApiMetrics.TransportWebSocket, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
             return;
         }
 
@@ -500,21 +463,19 @@ public static class WorkflowCapabilityEndpoints
                         parseContext.CorrelationId),
                     ct,
                     parseError.ResponseMessageType);
-                ApiMetrics.RecordFirstResponse(ApiMetrics.TransportWebSocket, ApiMetrics.ResultOk, requestStopwatch.Elapsed.TotalMilliseconds);
+                scope.RecordFirstResponse();
                 return;
             }
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-            var firstResponseDurationMs = await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, ct);
-            if (firstResponseDurationMs.HasValue)
-                ApiMetrics.RecordFirstResponse(ApiMetrics.TransportWebSocket, ApiMetrics.ResultOk, firstResponseDurationMs.Value);
+            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, scope, ct);
         }
         catch (OperationCanceledException)
         {
         }
         catch (Exception ex)
         {
-            requestResult = ApiMetrics.ResultError;
+            scope.MarkError();
             logger?.LogWarning(ex, "Failed to execute websocket chat command");
             if (socket.State == System.Net.WebSockets.WebSocketState.Open)
             {
@@ -533,8 +494,6 @@ public static class WorkflowCapabilityEndpoints
         finally
         {
             await ChatWebSocketProtocol.CloseAsync(socket, ct);
-            requestStopwatch.Stop();
-            ApiMetrics.RecordRequest(ApiMetrics.TransportWebSocket, requestResult, requestStopwatch.Elapsed.TotalMilliseconds);
         }
     }
 

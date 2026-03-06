@@ -1,5 +1,4 @@
 using System.Net.WebSockets;
-using System.Diagnostics;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
@@ -7,21 +6,13 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 internal static class ChatWebSocketRunCoordinator
 {
-    public static async Task<double?> ExecuteAsync(
+    public static async Task ExecuteAsync(
         WebSocket socket,
         ChatWebSocketCommandEnvelope command,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        ApiRequestScope scope,
         CancellationToken ct = default)
     {
-        var stopwatch = Stopwatch.StartNew();
-        var firstResponseDurationMs = (double?)null;
-        void RecordFirstResponseIfNeeded()
-        {
-            if (firstResponseDurationMs.HasValue)
-                return;
-            firstResponseDurationMs = stopwatch.Elapsed.TotalMilliseconds;
-        }
-
         var responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
         var correlationId = string.Empty;
         CapabilityMessageTraceContext ResolveContext() =>
@@ -31,66 +22,66 @@ internal static class ChatWebSocketRunCoordinator
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
-            RecordFirstResponseIfNeeded();
+            var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(normalizedRequest.Error);
+            scope.MarkResult(statusCode);
             var context = ResolveContext();
             await ChatWebSocketProtocol.SendAsync(
                 socket,
                 ChatWebSocketEnvelopeFactory.CreateCommandError(
-                    command.RequestId,
-                    code,
-                    message,
-                    context.CorrelationId),
+                    command.RequestId, code, message, context.CorrelationId),
                 ct,
                 responseMessageType);
-            return firstResponseDurationMs;
+            scope.RecordFirstResponse();
+            return;
         }
 
         var executionResult = await chatRunService.ExecuteAsync(
             normalizedRequest.Request!,
-            (frame, token) =>
-            {
-                RecordFirstResponseIfNeeded();
-                var context = ResolveContext();
-                return new ValueTask(ChatWebSocketProtocol.SendAsync(
-                    socket,
-                    ChatWebSocketEnvelopeFactory.CreateAguiEvent(
-                        command.RequestId,
-                        frame,
-                        context.CorrelationId),
-                    token,
-                    responseMessageType));
-            },
-            onStartedAsync: (started, token) =>
-            {
-                correlationId = started.CommandId;
-                RecordFirstResponseIfNeeded();
-                return new ValueTask(ChatWebSocketProtocol.SendAsync(
-                    socket,
-                    ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, started),
-                    token,
-                    responseMessageType));
-            },
+            SendAguiEventAndRecordAsync,
+            onStartedAsync: SendAckAndRecordAsync,
             ct);
 
         if (executionResult.Error != WorkflowChatRunStartError.None)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(executionResult.Error);
-            RecordFirstResponseIfNeeded();
+            var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(executionResult.Error);
+            scope.MarkResult(statusCode);
             var context = ResolveContext();
             await ChatWebSocketProtocol.SendAsync(
                 socket,
                 ChatWebSocketEnvelopeFactory.CreateCommandError(
-                    command.RequestId,
-                    code,
-                    message,
-                    context.CorrelationId),
+                    command.RequestId, code, message, context.CorrelationId),
                 ct,
                 responseMessageType);
-            return firstResponseDurationMs;
+            scope.RecordFirstResponse();
+            return;
         }
 
         if (executionResult.Started != null)
             correlationId = executionResult.Started.CommandId;
-        return firstResponseDurationMs;
+        return;
+
+        async ValueTask SendAguiEventAndRecordAsync(WorkflowOutputFrame frame, CancellationToken token)
+        {
+            var context = ResolveContext();
+            await ChatWebSocketProtocol.SendAsync(
+                socket,
+                ChatWebSocketEnvelopeFactory.CreateAguiEvent(
+                    command.RequestId, frame, context.CorrelationId),
+                token,
+                responseMessageType);
+            scope.RecordFirstResponse();
+        }
+
+        async ValueTask SendAckAndRecordAsync(WorkflowChatRunStarted started, CancellationToken token)
+        {
+            correlationId = started.CommandId;
+            await ChatWebSocketProtocol.SendAsync(
+                socket,
+                ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, started),
+                token,
+                responseMessageType);
+            scope.RecordFirstResponse();
+        }
     }
 }

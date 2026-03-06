@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
@@ -124,10 +123,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
-        using var instrumentation = TracingContextHelpers.BeginHandleEnvelopeInstrumentation(
-            _logger,
-            this.GetPrimaryKeyString(),
-            envelope);
         if (await TryHandleCompatibilityRetryAsync(envelope))
             return;
 
@@ -166,8 +161,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 return;
         }
 
-        var handleResult = AgentMetrics.ResultOk;
-        var stopwatch = Stopwatch.StartNew();
+        using var scope = EventHandleScope.Begin(_logger, this.GetPrimaryKeyString(), envelope);
         try
         {
             using var stateBinding = _stateBindingAccessor?.Bind(_state);
@@ -175,7 +169,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
         catch (Exception ex)
         {
-            handleResult = AgentMetrics.ResultError;
+            scope.MarkError(ex);
             if (await TryScheduleRetryAsync(envelope, ex))
                 return;
 
@@ -185,11 +179,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 this.GetPrimaryKeyString(),
                 envelope.Id,
                 envelope.Payload?.TypeUrl ?? "(none)");
-        }
-        finally
-        {
-            stopwatch.Stop();
-            AgentMetrics.RecordEventHandled(envelope.Direction.ToString(), handleResult, stopwatch.Elapsed.TotalMilliseconds);
         }
     }
 

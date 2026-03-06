@@ -1,7 +1,3 @@
-// LocalActor - IActor implementation.
-// Focuses on two responsibilities: mailbox serialization and stream subscription management.
-
-using System.Diagnostics;
 using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
@@ -115,11 +111,7 @@ public sealed class LocalActor : IActor
 
     private async Task EnqueueAsync(EventEnvelope envelope, bool propagateFailure = false)
     {
-        using var instrumentation = TracingContextHelpers.BeginHandleEnvelopeInstrumentation(_logger, Id, envelope);
-        var activity = instrumentation.Activity;
-
-        var sw = Stopwatch.StartNew();
-        var status = AgentMetrics.ResultOk;
+        using var scope = EventHandleScope.Begin(_logger, Id, envelope);
         await _mailbox.WaitAsync();
         try
         {
@@ -127,9 +119,7 @@ public sealed class LocalActor : IActor
         }
         catch (Exception ex)
         {
-            status = AgentMetrics.ResultError;
-            activity?.SetTag("aevatar.error", true);
-            activity?.SetTag("aevatar.error.message", ex.Message);
+            scope.MarkError(ex);
             _logger.LogError(ex, "LocalActor {Id} failed to handle event", Id);
             if (propagateFailure)
                 throw;
@@ -137,8 +127,6 @@ public sealed class LocalActor : IActor
         finally
         {
             _mailbox.Release();
-            sw.Stop();
-            AgentMetrics.RecordEventHandled(envelope.Direction.ToString(), status, sw.Elapsed.TotalMilliseconds);
         }
     }
 

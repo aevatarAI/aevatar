@@ -1,12 +1,12 @@
 using System.Text.Json;
 using System.Diagnostics;
-using System.Diagnostics.Metrics;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Host.Api.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -760,6 +760,28 @@ public class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleCommand_WhenExecutionCanceled_ShouldRecordRequestMetricAsOk()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) => throw new OperationCanceledException(),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, _) = await ExecuteResultAsync(result);
+        statusCode.Should().Be(499);
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+    }
+
+    [Fact]
     public async Task HandleCommand_WhenProjectionDisabled_ShouldClassify503AsResultError()
     {
         using var metricCapture = new ApiMetricCapture();
@@ -1251,44 +1273,4 @@ public class ChatEndpointsInternalTests
         WorkflowChatRunExecutionResult source) =>
         new(source.Error, source.Started, source.FinalizeResult);
 
-    private sealed class ApiMetricCapture : IDisposable
-    {
-        private const string ApiMeterName = "Aevatar.Api";
-        private const string FirstResponseMetricName = "aevatar.api.first_response_duration_ms";
-        private const string RequestsTotalMetricName = "aevatar.api.requests_total";
-        private readonly MeterListener _listener = new();
-
-        public ApiMetricCapture()
-        {
-            _listener.InstrumentPublished = (instrument, listener) =>
-            {
-                if (instrument.Meter.Name == ApiMeterName)
-                    listener.EnableMeasurementEvents(instrument);
-            };
-
-            _listener.SetMeasurementEventCallback<double>((instrument, measurement, tags, _) =>
-            {
-                if (instrument.Name == FirstResponseMetricName)
-                    FirstResponseMeasurements.Add(new MetricMeasurement(measurement, tags.ToArray()));
-            });
-
-            _listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
-            {
-                if (instrument.Name == RequestsTotalMetricName)
-                    RequestMeasurements.Add(new MetricMeasurement(measurement, tags.ToArray()));
-            });
-
-            _listener.Start();
-        }
-
-        public List<MetricMeasurement> FirstResponseMeasurements { get; } = [];
-        public List<MetricMeasurement> RequestMeasurements { get; } = [];
-
-        public void Dispose()
-        {
-            _listener.Dispose();
-        }
-    }
-
-    private sealed record MetricMeasurement(double Value, KeyValuePair<string, object?>[] Tags);
 }

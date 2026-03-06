@@ -37,6 +37,12 @@ Implemented:
 - Runtime metrics emitted from both Local and Orleans paths.
 - API metrics for request count and full duration (meter `Aevatar.Api`) on all endpoints (chat, command, websocket).
 - API first-response duration metric for streaming paths and WS parse error responses.
+- Unified instrumentation scopes that compose tracing + logging + metrics:
+  - `EventHandleScope` (runtime): single scope drives Activity span, log scope, and metrics recording.
+  - `ApiRequestScope` (API): single scope drives stopwatch, result classification, and first-response tracking.
+  - Eliminates duplicate Stopwatch and independent error-tracking across tracing/metrics.
+- `OperationCanceledException` consistently classified as `result=ok` across HTTP and WebSocket paths.
+- `ChatWebSocketRunCoordinator` decoupled from metrics (no metrics return value; scope passed from caller).
 - Grafana dashboard panels for:
   - health/error ratio
   - runtime/API throughput and latency
@@ -47,7 +53,7 @@ Pending:
 
 - Add explicit SLO panel with thresholds and status coloring.
 - Add alert rule examples (Prometheus/Grafana alerting).
-- Add WebSocket path first-response integration tests (requires WebSocket mock infrastructure).
+- Configure custom histogram bucket boundaries for AI-workload latency profiles.
 
 ## 5. Metric Contract (Current)
 

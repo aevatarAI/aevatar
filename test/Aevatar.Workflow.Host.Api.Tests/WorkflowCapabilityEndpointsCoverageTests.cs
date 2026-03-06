@@ -1,10 +1,10 @@
 using System.Net.WebSockets;
-using System.Diagnostics.Metrics;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Host.Api.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
@@ -310,6 +310,44 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }
 
+    [Fact]
+    public async Task HandleChatWebSocket_WhenProjectionDisabled_ShouldRecordRequestAndFirstResponseAsError()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Text,
+            Encoding.UTF8.GetBytes("""{"type":"chat.command","requestId":"req-proj-off","payload":{"prompt":"hello","workflow":"direct"}}"""),
+            true);
+
+        var http = new DefaultHttpContext();
+        http.Features.Set<IHttpWebSocketFeature>(new FakeWebSocketFeature(socket));
+
+        var service = new FakeCommandExecutionService
+        {
+            Handler = (_, _, _, _) => Task.FromResult(
+                new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
+                    WorkflowChatRunStartError.ProjectionDisabled,
+                    null,
+                    null)),
+        };
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+
+        await WorkflowCapabilityEndpoints.HandleChatWebSocket(
+            http,
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        metricCapture.FirstResponseMeasurements.Should().ContainSingle();
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "ws"));
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "error"));
+
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "ws"));
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "error"));
+    }
+
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
     {
         var http = new DefaultHttpContext
@@ -434,44 +472,4 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         }
     }
 
-    private sealed class ApiMetricCapture : IDisposable
-    {
-        private const string ApiMeterName = "Aevatar.Api";
-        private const string FirstResponseMetricName = "aevatar.api.first_response_duration_ms";
-        private const string RequestsTotalMetricName = "aevatar.api.requests_total";
-        private readonly MeterListener _listener = new();
-
-        public ApiMetricCapture()
-        {
-            _listener.InstrumentPublished = (instrument, listener) =>
-            {
-                if (instrument.Meter.Name == ApiMeterName)
-                    listener.EnableMeasurementEvents(instrument);
-            };
-
-            _listener.SetMeasurementEventCallback<double>((instrument, measurement, tags, _) =>
-            {
-                if (instrument.Name == FirstResponseMetricName)
-                    FirstResponseMeasurements.Add(new MetricMeasurement(measurement, tags.ToArray()));
-            });
-
-            _listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
-            {
-                if (instrument.Name == RequestsTotalMetricName)
-                    RequestMeasurements.Add(new MetricMeasurement(measurement, tags.ToArray()));
-            });
-
-            _listener.Start();
-        }
-
-        public List<MetricMeasurement> FirstResponseMeasurements { get; } = [];
-        public List<MetricMeasurement> RequestMeasurements { get; } = [];
-
-        public void Dispose()
-        {
-            _listener.Dispose();
-        }
-    }
-
-    private sealed record MetricMeasurement(double Value, KeyValuePair<string, object?>[] Tags);
 }
