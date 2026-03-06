@@ -16,6 +16,7 @@
 2. 本轮目标：
    - 在前一版复审基础上，验证剩余问题是否已通过“破坏性重构”关闭。
    - 判断当前分层、回调语义、workflow replay correctness 与交互契约是否已闭环。
+   - 本文档为基于当前工作区代码状态重新分析后重生成的版本。
 3. 客观验证输入：
    - `dotnet build aevatar.slnx --nologo`
    - `dotnet test test/Aevatar.Workflow.Core.Tests/Aevatar.Workflow.Core.Tests.csproj --nologo`
@@ -133,7 +134,7 @@
 2. `WorkflowLoopModule` 把 timeout / retry-backoff / step dispatch 改成了可重放、可回滚、成功后提交的 Actor 内事务式路径。
 3. `wait_signal` / `human_input` / `human_approval` 去掉了模糊兼容回退，显式要求 `run_id`，文档与测试同步更新。
 
-因此，本轮复审结论是：**95 / 100（A）**，**建议合并**。
+因此，本轮重新分析后的复审结论是：**95 / 100（A）**，**建议合并**。
 
 保留说明：
 
