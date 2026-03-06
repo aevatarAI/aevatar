@@ -122,7 +122,6 @@ public sealed class DelayModule : IEventModule
             return;
         }
 
-        _pending.Remove(firedKey);
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = stepIdFired,
@@ -130,6 +129,7 @@ public sealed class DelayModule : IEventModule
             Success = true,
             Output = pending.Input,
         }, EventDirection.Self, ct);
+        _pending.Remove(firedKey);
     }
 
     private async Task CancelPendingAsync(

@@ -140,7 +140,6 @@ public sealed class WaitSignalModule : IEventModule
                 return;
             }
 
-            _pending.Remove(pendingKey);
             ctx.Logger.LogWarning(
                 "WaitSignal: step={StepId} run={RunId} signal={Signal} timed out",
                 stepId,
@@ -154,6 +153,7 @@ public sealed class WaitSignalModule : IEventModule
                 Success = false,
                 Error = $"signal '{signalName}' timed out after {timeout.TimeoutMs}ms",
             }, EventDirection.Self, ct);
+            _pending.Remove(pendingKey);
         }
         else if (payload.Is(SignalReceivedEvent.Descriptor))
         {
@@ -166,12 +166,6 @@ public sealed class WaitSignalModule : IEventModule
                     string.IsNullOrWhiteSpace(signal.RunId) ? "(missing)" : signal.RunId,
                     string.IsNullOrWhiteSpace(signal.StepId) ? "(missing)" : signal.StepId);
                 return;
-            }
-
-            _pending.Remove(pendingKey);
-            if (pending.TimeoutLease != null)
-            {
-                await ctx.CancelDurableCallbackAsync(pending.TimeoutLease, CancellationToken.None);
             }
 
             ctx.Logger.LogInformation(
@@ -188,6 +182,24 @@ public sealed class WaitSignalModule : IEventModule
                 Success = true,
                 Output = output,
             }, EventDirection.Self, ct);
+            _pending.Remove(pendingKey);
+
+            if (pending.TimeoutLease != null)
+            {
+                try
+                {
+                    await ctx.CancelDurableCallbackAsync(pending.TimeoutLease, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    ctx.Logger.LogDebug(
+                        ex,
+                        "WaitSignal: failed to cancel timeout after signal completion run={RunId} step={StepId} signal={Signal}",
+                        pending.RunId,
+                        pending.StepId,
+                        pending.SignalName);
+                }
+            }
         }
     }
 

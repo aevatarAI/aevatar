@@ -151,6 +151,70 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task WorkflowLoop_ShouldReplayTimeoutCompletion_WhenPublishFailsTransiently()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "llm_call",
+                    TimeoutMs = 800,
+                },
+            ],
+        });
+        var ctx = new SchedulingContext
+        {
+            FailPublishOnce = evt => evt is StepCompletedEvent completed &&
+                                     string.Equals(completed.StepId, "step-1", StringComparison.Ordinal) &&
+                                     completed.Error.Contains("TIMEOUT", StringComparison.OrdinalIgnoreCase),
+        };
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf",
+                RunId = "run-timeout-replay",
+                Input = "input-v1",
+            }),
+            ctx,
+            CancellationToken.None);
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WorkflowStepTimeoutFiredEvent);
+        ctx.Published.Clear();
+
+        var timeoutEnvelope = Wrap(
+            new WorkflowStepTimeoutFiredEvent
+            {
+                RunId = "run-timeout-replay",
+                StepId = "step-1",
+                TimeoutMs = 800,
+            },
+            MetadataFor(scheduled));
+
+        await FluentActions
+            .Invoking(() => module.HandleAsync(timeoutEnvelope, ctx, CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("transient publish failure");
+
+        ctx.Published.Should().BeEmpty();
+
+        await module.HandleAsync(timeoutEnvelope, ctx, CancellationToken.None);
+
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().Contain("TIMEOUT");
+    }
+
+    [Fact]
     public async Task WorkflowLoop_ShouldScheduleRetryBackoffAndDispatchOnMatchingGeneration()
     {
         var module = new WorkflowLoopModule();
@@ -239,6 +303,93 @@ public class RuntimeCallbackEventizationTests
         retryStepRequest.Input.Should().Be("input-v1");
     }
 
+    [Fact]
+    public async Task WorkflowLoop_ShouldReplayRetryBackoff_WhenRedispatchFailsTransiently()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                    TimeoutMs = 1500,
+                    Retry = new StepRetryPolicy
+                    {
+                        MaxAttempts = 3,
+                        Backoff = "fixed",
+                        DelayMs = 800,
+                    },
+                },
+            ],
+        });
+        var ctx = new SchedulingContext();
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf",
+                RunId = "run-retry-replay",
+                Input = "input-v1",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-retry-replay",
+                Success = false,
+                Error = "boom",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WorkflowStepRetryBackoffFiredEvent);
+        ctx.Published.Clear();
+        ctx.Canceled.Clear();
+        ctx.FailPublishOnce = evt => evt is StepRequestEvent request &&
+                                     string.Equals(request.StepId, "step-1", StringComparison.Ordinal);
+
+        var backoffEnvelope = Wrap(
+            new WorkflowStepRetryBackoffFiredEvent
+            {
+                RunId = "run-retry-replay",
+                StepId = "step-1",
+                DelayMs = 800,
+                NextAttempt = 2,
+            },
+            MetadataFor(scheduled));
+
+        await FluentActions
+            .Invoking(() => module.HandleAsync(backoffEnvelope, ctx, CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("transient publish failure");
+
+        ctx.Published.Should().BeEmpty();
+        ctx.Canceled.Should().ContainSingle(x =>
+            x.CallbackId == "workflow-step-timeout:run-retry-replay:step-1" &&
+            x.ExpectedGeneration == 2);
+
+        await module.HandleAsync(backoffEnvelope, ctx, CancellationToken.None);
+
+        var retryStepRequest = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepRequestEvent>()
+            .Single();
+        retryStepRequest.RunId.Should().Be("run-retry-replay");
+        retryStepRequest.StepId.Should().Be("step-1");
+        retryStepRequest.Input.Should().Be("input-v1");
+    }
+
     private static EventEnvelope Wrap(
         IMessage evt,
         IReadOnlyDictionary<string, string>? metadata = null)
@@ -278,6 +429,7 @@ public class RuntimeCallbackEventizationTests
     private sealed class SchedulingContext : IEventHandlerContext
     {
         private readonly Dictionary<string, long> _generations = new(StringComparer.Ordinal);
+        private bool _publishFailureConsumed;
 
         public EventEnvelope InboundEnvelope { get; } = new()
         {
@@ -299,12 +451,21 @@ public class RuntimeCallbackEventizationTests
 
         public List<CanceledCallback> Canceled { get; } = [];
 
+        public Func<IMessage, bool>? FailPublishOnce { get; set; }
+
         public Task PublishAsync<TEvent>(
             TEvent evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default)
             where TEvent : IMessage
         {
+            _ = ct;
+            if (!_publishFailureConsumed && FailPublishOnce?.Invoke(evt) == true)
+            {
+                _publishFailureConsumed = true;
+                throw new InvalidOperationException("transient publish failure");
+            }
+
             Published.Add((evt, direction));
             return Task.CompletedTask;
         }

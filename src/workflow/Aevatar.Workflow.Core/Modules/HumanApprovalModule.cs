@@ -75,7 +75,6 @@ public sealed class HumanApprovalModule : IEventModule
             var resumed = payload.Unpack<WorkflowResumedEvent>();
             if (!TryResolvePending(resumed, out var pendingKey, out var pending))
                 return;
-            _pending.Remove(pendingKey);
 
             var onReject = pending.Parameters.GetValueOrDefault("on_reject", "fail");
 
@@ -94,6 +93,7 @@ public sealed class HumanApprovalModule : IEventModule
                 };
                 approved.Metadata["branch"] = "true";
                 await ctx.PublishAsync(approved, EventDirection.Self, ct);
+                _pending.Remove(pendingKey);
             }
             else
             {
@@ -117,6 +117,7 @@ public sealed class HumanApprovalModule : IEventModule
                 };
                 rejected.Metadata["branch"] = "false";
                 await ctx.PublishAsync(rejected, EventDirection.Self, ct);
+                _pending.Remove(pendingKey);
             }
         }
     }
@@ -126,30 +127,13 @@ public sealed class HumanApprovalModule : IEventModule
         out (string RunId, string StepId) pendingKey,
         out StepRequestEvent pending)
     {
-        if (!string.IsNullOrWhiteSpace(resumed.RunId))
-        {
-            pendingKey = (WorkflowRunIdNormalizer.Normalize(resumed.RunId), resumed.StepId);
-            return _pending.TryGetValue(pendingKey, out pending!);
-        }
-
-        // Backward compatibility: old clients may omit run_id.
-        var matchCount = 0;
         pendingKey = default;
         pending = default!;
-        foreach (var entry in _pending)
-        {
-            if (!entry.Key.StepId.Equals(resumed.StepId, StringComparison.Ordinal))
-                continue;
+        if (string.IsNullOrWhiteSpace(resumed.RunId))
+            return false;
 
-            matchCount++;
-            if (matchCount > 1)
-                return false;
-
-            pendingKey = entry.Key;
-            pending = entry.Value;
-        }
-
-        return matchCount == 1;
+        pendingKey = (WorkflowRunIdNormalizer.Normalize(resumed.RunId), resumed.StepId);
+        return _pending.TryGetValue(pendingKey, out pending!);
     }
 
 }

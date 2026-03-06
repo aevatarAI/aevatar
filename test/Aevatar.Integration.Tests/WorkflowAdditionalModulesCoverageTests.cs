@@ -208,6 +208,37 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task WaitSignalModule_WhenSignalRunIdMissingEvenWithSingleWaiter_ShouldNotResume()
+    {
+        var module = new WaitSignalModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "wait-single",
+                StepType = "wait_signal",
+                RunId = "run-single",
+                Input = "input-single",
+                Parameters = { ["signal_name"] = "approval" },
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new SignalReceivedEvent
+            {
+                SignalName = "approval",
+                Payload = "ignored-without-run-id",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task WaitSignalModule_WhenSignalRunIdMissingAndAmbiguous_ShouldNotResumeAnyRun()
     {
         var module = new WaitSignalModule();
@@ -353,20 +384,19 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 StepType = "wait_signal",
                 RunId = "run-timeout",
                 Input = "fallback-timeout",
-                Parameters = { ["signal_name"] = "approval" },
+                Parameters =
+                {
+                    ["signal_name"] = "approval",
+                    ["timeout_ms"] = "250",
+                },
             }),
             ctx,
             CancellationToken.None);
         ctx.Published.Clear();
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WaitSignalTimeoutFiredEvent);
 
         await module.HandleAsync(
-            Envelope(new WaitSignalTimeoutFiredEvent
-            {
-                RunId = "run-timeout",
-                StepId = "wait-timeout",
-                SignalName = "approval",
-                TimeoutMs = 250,
-            }),
+            ctx.CreateScheduledEnvelope(scheduled),
             ctx,
             CancellationToken.None);
 
@@ -723,6 +753,37 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task HumanApprovalModule_WhenResumeRunIdMissing_ShouldIgnoreSinglePendingApproval()
+    {
+        var module = new HumanApprovalModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "approval-missing-run",
+                StepType = "human_approval",
+                RunId = "run-approval",
+                Input = "payload",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                StepId = "approval-missing-run",
+                Approved = true,
+                UserInput = "approved",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HumanInputModule_ShouldSuspendThenHandleInputAndTimeoutStrategies()
     {
         var module = new HumanInputModule();
@@ -880,6 +941,37 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var resumedA = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         resumedA.RunId.Should().Be("run-a");
         resumedA.Output.Should().Be("input-from-a");
+    }
+
+    [Fact]
+    public async Task HumanInputModule_WhenResumeRunIdMissing_ShouldIgnoreSinglePendingInput()
+    {
+        var module = new HumanInputModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "input-missing-run",
+                StepType = "human_input",
+                RunId = "run-input",
+                Input = "payload",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                StepId = "input-missing-run",
+                Approved = true,
+                UserInput = "provided",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
     }
 
     [Fact]
