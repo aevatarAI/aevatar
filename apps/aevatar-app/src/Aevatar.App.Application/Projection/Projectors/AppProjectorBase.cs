@@ -27,12 +27,15 @@ public abstract class AppProjectorBase<TReadModel> : IProjectionProjector<AppPro
 
     protected abstract TReadModel CreateInitialReadModel(string actorId);
 
-    public ValueTask InitializeAsync(AppProjectionContext context, CancellationToken ct = default)
+    public async ValueTask InitializeAsync(AppProjectionContext context, CancellationToken ct = default)
     {
         if (!context.ActorId.StartsWith(ActorPrefix, StringComparison.Ordinal))
-            return ValueTask.CompletedTask;
+            return;
+        var existing = await _store.GetAsync(context.ActorId, ct);
+        if (existing is not null)
+            return;
         var model = CreateInitialReadModel(context.ActorId);
-        return new ValueTask(_store.UpsertAsync(model, ct));
+        await _store.UpsertAsync(model, ct);
     }
 
     public ValueTask ProjectAsync(AppProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
