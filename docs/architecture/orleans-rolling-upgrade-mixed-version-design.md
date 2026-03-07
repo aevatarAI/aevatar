@@ -2,6 +2,10 @@
 
 ## 1. Background and Goal
 
+This is a production runtime feature, not a test-only compatibility shim.
+Its purpose is to allow hot rollout / rolling upgrade of new versions while old and new binaries
+coexist in the same Orleans cluster.
+
 The runtime must support mixed-version processing during platform-managed rolling upgrade (for example, Kubernetes rolling update):
 
 - Run old/new versions in one Orleans cluster during migration.
@@ -29,6 +33,17 @@ Out of scope:
 - Strict event-version routing by explicit version gate.
 - Full compatibility guarantee for intentionally breaking schema changes.
 - Node orchestration actions (scale out/in, pod replacement, rollout strategy), which are handled by platform layer.
+
+### 2.1 Production Feature vs Test Validation
+
+- Production feature:
+  - mixed-version old/new nodes run concurrently in one cluster during release rollout
+  - runtime retry + dedup + replay semantics keep service available and drive convergence
+- Test/staging validation helper:
+  - `AEVATAR_TEST_NODE_VERSION_TAG`
+  - `AEVATAR_TEST_FAIL_EVENT_TYPE_URLS`
+  - these switches only inject synthetic old-node compatibility failures so the production feature can be verified deterministically
+  - they are not the production mixed-version feature flag
 
 ## 3. Design Constraints (Repository Rules Alignment)
 
@@ -159,6 +174,7 @@ Planned config additions:
 - Compatibility-failure injection env (test only):
   - `AEVATAR_TEST_NODE_VERSION_TAG`
   - `AEVATAR_TEST_FAIL_EVENT_TYPE_URLS`
+  - Purpose: validate the production rolling-upgrade feature by forcing selected event types to fail on designated old nodes.
 
 ## 6.5 Transport Adapter Simplification
 

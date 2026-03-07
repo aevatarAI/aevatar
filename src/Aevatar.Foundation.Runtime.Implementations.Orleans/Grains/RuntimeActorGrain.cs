@@ -16,6 +16,12 @@ using Orleans.Streams;
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
 [ImplicitStreamSubscription(OrleansRuntimeConstants.ActorEventStreamNamespace)]
+/// <summary>
+/// Orleans runtime grain. One of its production responsibilities is to keep mixed-version
+/// rolling upgrade safe: old/new binaries may coexist in one cluster during hot rollout, and
+/// retry/dedup logic here must converge processing without message loss. The compatibility
+/// failure injection path below is only a validation aid for that production feature.
+/// </summary>
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
     private const string RetryAttemptMetadataKey = "aevatar.retry.attempt";
@@ -439,6 +445,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private async Task<bool> TryHandleCompatibilityRetryAsync(EventEnvelope envelope)
     {
+        // Production behavior is "mixed-version rollout stays available and converges via retry".
+        // This branch does not implement that feature toggle; it only injects synthetic old-node
+        // failures in tests/staging so the production rolling-upgrade path can be exercised on demand.
         if (!_compatibilityFailureInjectionPolicy.ShouldInject(envelope.Payload?.TypeUrl))
             return false;
 

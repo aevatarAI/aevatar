@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# Validates the production mixed-version rolling-upgrade feature.
+# This script intentionally turns on test-only compatibility failure injection on old nodes so
+# runtime retry / replay convergence can be verified before real hot rollout.
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
