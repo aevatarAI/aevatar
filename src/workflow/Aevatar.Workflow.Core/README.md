@@ -16,8 +16,14 @@ Aevatar.Workflow.Core/
 ├── WorkflowRunGAgent.ExternalInteractions.cs
 ├── WorkflowRunReducer.cs
 ├── WorkflowCompilationService.cs
+├── WorkflowRunRuntimeSuite.cs
 ├── WorkflowPrimitiveExecutionPlanner.cs
 ├── WorkflowAsyncOperationReconciler.cs
+├── WorkflowStepFamilyDispatchTable.cs
+├── WorkflowStatefulCompletionHandlerRegistry.cs
+├── WorkflowInternalSignalRegistry.cs
+├── WorkflowResponseHandlerRegistry.cs
+├── WorkflowChildRunCompletionRegistry.cs
 ├── WorkflowRunEffectDispatcher.cs
 ├── WorkflowRunRuntimeContext.cs
 ├── WorkflowRunStepRequestFactory.cs
@@ -81,8 +87,10 @@ Aevatar.Workflow.Core/
 7. `WorkflowRunGAgent` 主文件只保留 owner shell；binding/finalization 在 `Lifecycle`，外部恢复/信号/回包入口在 `ExternalInteractions`。
 8. DSL compile/validate 已从 actor shell 抽成 `WorkflowCompilationService + Validation/*`。
 9. 所有 runtime 现在共享 `WorkflowRunRuntimeContext` 访问 `State/CompiledWorkflow/persist/publish/send/effect`，不再各自持有一组零散 `Func<>` delegate。
-10. step-family 运行逻辑已经按 `WorkflowRunControlFlowRuntime + WorkflowRunLlmRuntime + WorkflowRunEvaluationRuntime + WorkflowRunReflectRuntime + WorkflowRunCacheRuntime + WorkflowRunAIResponseRuntime + WorkflowRunFanOutRuntime + WorkflowRunSubWorkflowRuntime + WorkflowRunTimeoutCallbackRuntime + WorkflowRunAggregationCompletionRuntime + WorkflowRunProgressionCompletionRuntime` 分拆；owner 只保留 ingress/reducer/effect boundary。
-11. step request 构建、while 条件求值、callback key / parent-step 推导等纯 helper 逻辑继续下沉到 `WorkflowRunStepRequestFactory + WorkflowRunSupport`，避免 owner 切片继续膨胀。
+10. `WorkflowRunRuntimeSuite` 现在是唯一运行时组合根；owner 不再直接持有一长串具体 runtime 字段。
+11. `WorkflowPrimitiveExecutionPlanner` 已切到 `WorkflowStepFamilyDispatchTable`；`WorkflowAsyncOperationReconciler` 已切到 completion / internal-signal / response registries。
+12. step-family 运行逻辑已经按 `WorkflowRunControlFlowRuntime + WorkflowRunLlmRuntime + WorkflowRunEvaluationRuntime + WorkflowRunReflectRuntime + WorkflowRunCacheRuntime + WorkflowRunAIResponseRuntime + WorkflowRunFanOutRuntime + WorkflowRunSubWorkflowRuntime + WorkflowRunTimeoutCallbackRuntime + WorkflowRunAggregationCompletionRuntime + WorkflowRunProgressionCompletionRuntime` 分拆；owner 只保留 ingress/reducer/effect boundary。
+13. step request 构建、while 条件求值、callback key / parent-step 推导等纯 helper 逻辑继续下沉到 `WorkflowRunStepRequestFactory + WorkflowRunSupport`，避免 owner 切片继续膨胀。
 
 ## 3. 状态模型
 

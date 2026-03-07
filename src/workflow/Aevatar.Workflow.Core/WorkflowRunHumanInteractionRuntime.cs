@@ -4,13 +4,26 @@ using Aevatar.Workflow.Core.Primitives;
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunHumanInteractionRuntime
+    : IWorkflowStepFamilyHandler
 {
+    private static readonly string[] SupportedTypes = ["human_input", "human_approval"];
+
     private readonly WorkflowRunRuntimeContext _context;
 
     public WorkflowRunHumanInteractionRuntime(WorkflowRunRuntimeContext context)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
     }
+
+    public IReadOnlyCollection<string> SupportedStepTypes => SupportedTypes;
+
+    public Task HandleStepRequestAsync(StepRequestEvent request, CancellationToken ct) =>
+        WorkflowPrimitiveCatalog.ToCanonicalType(request.StepType) switch
+        {
+            "human_input" => HandleHumanGateStepRequestAsync(request, "human_input", ct),
+            "human_approval" => HandleHumanGateStepRequestAsync(request, "human_approval", ct),
+            _ => Task.CompletedTask,
+        };
 
     public async Task HandleHumanGateStepRequestAsync(StepRequestEvent request, string gateType, CancellationToken ct)
     {

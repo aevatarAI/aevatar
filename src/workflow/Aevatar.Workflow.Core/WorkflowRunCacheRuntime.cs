@@ -4,7 +4,10 @@ using Aevatar.Workflow.Core.Primitives;
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunCacheRuntime
+    : IWorkflowStepFamilyHandler
 {
+    private static readonly string[] SupportedTypes = ["cache"];
+
     private readonly WorkflowRunRuntimeContext _context;
     private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
 
@@ -15,6 +18,11 @@ internal sealed class WorkflowRunCacheRuntime
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _dispatchRuntime = dispatchRuntime ?? throw new ArgumentNullException(nameof(dispatchRuntime));
     }
+
+    public IReadOnlyCollection<string> SupportedStepTypes => SupportedTypes;
+
+    public Task HandleStepRequestAsync(StepRequestEvent request, CancellationToken ct) =>
+        HandleCacheStepRequestAsync(request, ct);
 
     public async Task HandleCacheStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {

@@ -4,13 +4,24 @@ using Aevatar.Workflow.Core.Primitives;
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunSubWorkflowRuntime
+    : IWorkflowStepFamilyHandler, IWorkflowChildRunCompletionHandler
 {
+    private static readonly string[] SupportedTypes = ["workflow_call"];
+
     private readonly WorkflowRunRuntimeContext _context;
 
     public WorkflowRunSubWorkflowRuntime(WorkflowRunRuntimeContext context)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
     }
+
+    public IReadOnlyCollection<string> SupportedStepTypes => SupportedTypes;
+
+    public Task HandleStepRequestAsync(StepRequestEvent request, CancellationToken ct) =>
+        HandleWorkflowCallStepRequestAsync(request, ct);
+
+    public Task<bool> TryHandleAsync(WorkflowCompletedEvent evt, string? publisherActorId, CancellationToken ct) =>
+        TryHandleSubWorkflowCompletionAsync(evt, publisherActorId, ct);
 
     public async Task HandleWorkflowCallStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {

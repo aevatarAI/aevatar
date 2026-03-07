@@ -4,7 +4,10 @@ using Aevatar.Workflow.Core.Primitives;
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunFanOutRuntime
+    : IWorkflowStepFamilyHandler
 {
+    private static readonly string[] SupportedTypes = ["parallel", "foreach", "map_reduce"];
+
     private readonly WorkflowRunRuntimeContext _context;
     private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
 
@@ -15,6 +18,17 @@ internal sealed class WorkflowRunFanOutRuntime
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _dispatchRuntime = dispatchRuntime ?? throw new ArgumentNullException(nameof(dispatchRuntime));
     }
+
+    public IReadOnlyCollection<string> SupportedStepTypes => SupportedTypes;
+
+    public Task HandleStepRequestAsync(StepRequestEvent request, CancellationToken ct) =>
+        WorkflowPrimitiveCatalog.ToCanonicalType(request.StepType) switch
+        {
+            "parallel" => HandleParallelStepRequestAsync(request, ct),
+            "foreach" => HandleForEachStepRequestAsync(request, ct),
+            "map_reduce" => HandleMapReduceStepRequestAsync(request, ct),
+            _ => Task.CompletedTask,
+        };
 
     public async Task HandleParallelStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {

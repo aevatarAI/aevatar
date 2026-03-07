@@ -23,27 +23,11 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IWorkflowDefinitionResolver? _workflowDefinitionResolver;
     private readonly WorkflowPrimitiveExecutorRegistry _primitiveRegistry;
-    private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
-    private readonly WorkflowRunStepRequestFactory _stepRequestFactory;
     private readonly ISet<string> _knownStepTypes;
     private readonly WorkflowCompilationService _workflowCompilationService;
-    private readonly WorkflowRunEffectDispatcher _effectDispatcher;
     private readonly WorkflowRunRuntimeContext _runtimeContext;
-    private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
-    private readonly WorkflowRunControlFlowRuntime _controlFlowRuntime;
-    private readonly WorkflowRunHumanInteractionRuntime _humanInteractionRuntime;
-    private readonly WorkflowRunLlmRuntime _llmRuntime;
-    private readonly WorkflowRunEvaluationRuntime _evaluationRuntime;
-    private readonly WorkflowRunReflectRuntime _reflectRuntime;
-    private readonly WorkflowRunCacheRuntime _cacheRuntime;
-    private readonly WorkflowRunFanOutRuntime _fanOutRuntime;
-    private readonly WorkflowRunSubWorkflowRuntime _subWorkflowRuntime;
+    private readonly WorkflowRunRuntimeSuite _runtimeSuite;
     private readonly WorkflowPrimitiveExecutionPlanner _primitiveExecutionPlanner;
-    private readonly WorkflowRunTimeoutCallbackRuntime _timeoutCallbackRuntime;
-    private readonly WorkflowRunAIResponseRuntime _aiResponseRuntime;
-    private readonly WorkflowRunAggregationCompletionRuntime _aggregationCompletionRuntime;
-    private readonly WorkflowRunProgressionCompletionRuntime _progressionCompletionRuntime;
-    private readonly WorkflowRunAsyncPolicyRuntime _asyncPolicyRuntime;
     private readonly WorkflowAsyncOperationReconciler _asyncOperationReconciler;
 
     private WorkflowDefinition? _compiledWorkflow;
@@ -57,7 +41,8 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
         _workflowDefinitionResolver = workflowDefinitionResolver;
-        _stepRequestFactory = new WorkflowRunStepRequestFactory(_expressionEvaluator);
+        var expressionEvaluator = new WorkflowExpressionEvaluator();
+        var stepRequestFactory = new WorkflowRunStepRequestFactory(expressionEvaluator);
 
         var packs = (primitivePacks ?? throw new ArgumentNullException(nameof(primitivePacks))).ToList();
         if (packs.Count == 0)
@@ -68,7 +53,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         _knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
         _workflowCompilationService = new WorkflowCompilationService(
             new HashSet<string>(_knownStepTypes, StringComparer.OrdinalIgnoreCase));
-        _effectDispatcher = new WorkflowRunEffectDispatcher(
+        var effectDispatcher = new WorkflowRunEffectDispatcher(
             actorIdAccessor: () => Id,
             runIdAccessor: () => State.RunId,
             compiledWorkflowAccessor: () => _compiledWorkflow,
@@ -90,62 +75,19 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
             sendToAsync: (targetActorId, evt, ct) => SendToAsync(targetActorId, evt, ct),
             logWarningAsync: LogWarningAsync,
-            effectDispatcher: _effectDispatcher);
-        _dispatchRuntime = new WorkflowRunDispatchRuntime(
+            effectDispatcher: effectDispatcher);
+        _runtimeSuite = new WorkflowRunRuntimeSuite(
             _runtimeContext,
-            _stepRequestFactory,
-            _expressionEvaluator);
-        _controlFlowRuntime = new WorkflowRunControlFlowRuntime(_runtimeContext, _dispatchRuntime);
-        _humanInteractionRuntime = new WorkflowRunHumanInteractionRuntime(_runtimeContext);
-        _llmRuntime = new WorkflowRunLlmRuntime(_runtimeContext);
-        _evaluationRuntime = new WorkflowRunEvaluationRuntime(_runtimeContext);
-        _reflectRuntime = new WorkflowRunReflectRuntime(_runtimeContext);
-        _cacheRuntime = new WorkflowRunCacheRuntime(_runtimeContext, _dispatchRuntime);
-        _fanOutRuntime = new WorkflowRunFanOutRuntime(_runtimeContext, _dispatchRuntime);
-        _subWorkflowRuntime = new WorkflowRunSubWorkflowRuntime(_runtimeContext);
-        _timeoutCallbackRuntime = new WorkflowRunTimeoutCallbackRuntime(_runtimeContext, _dispatchRuntime);
-        _aiResponseRuntime = new WorkflowRunAIResponseRuntime(_llmRuntime, _evaluationRuntime, _reflectRuntime);
-        _aggregationCompletionRuntime = new WorkflowRunAggregationCompletionRuntime(_runtimeContext, _dispatchRuntime);
-        _progressionCompletionRuntime = new WorkflowRunProgressionCompletionRuntime(_runtimeContext, _dispatchRuntime, _stepRequestFactory);
-        _asyncPolicyRuntime = new WorkflowRunAsyncPolicyRuntime(_runtimeContext, _dispatchRuntime, FinalizeRunAsync);
+            stepRequestFactory,
+            expressionEvaluator,
+            FinalizeRunAsync);
         _primitiveExecutionPlanner = new WorkflowPrimitiveExecutionPlanner(
             TryHandleRegisteredPrimitiveAsync,
-            [
-                new WorkflowControlFlowPlanner(
-                    _controlFlowRuntime.HandleDelayStepRequestAsync,
-                    _controlFlowRuntime.HandleWaitSignalStepRequestAsync,
-                    _controlFlowRuntime.HandleRaceStepRequestAsync,
-                    _controlFlowRuntime.HandleWhileStepRequestAsync),
-                new WorkflowHumanInteractionPlanner(
-                    (request, ct) => _humanInteractionRuntime.HandleHumanGateStepRequestAsync(request, "human_input", ct),
-                    (request, ct) => _humanInteractionRuntime.HandleHumanGateStepRequestAsync(request, "human_approval", ct)),
-                new WorkflowAIPlanner(
-                    _llmRuntime.HandleLlmCallStepRequestAsync,
-                    _evaluationRuntime.HandleEvaluateStepRequestAsync,
-                    _reflectRuntime.HandleReflectStepRequestAsync,
-                    _cacheRuntime.HandleCacheStepRequestAsync),
-                new WorkflowFanOutPlanner(
-                    _fanOutRuntime.HandleParallelStepRequestAsync,
-                    _fanOutRuntime.HandleForEachStepRequestAsync,
-                    _fanOutRuntime.HandleMapReduceStepRequestAsync),
-                new WorkflowSubWorkflowPlanner(
-                    _subWorkflowRuntime.HandleWorkflowCallStepRequestAsync),
-            ]);
+            _runtimeSuite.StepFamilyDispatchTable);
         _asyncOperationReconciler = new WorkflowAsyncOperationReconciler(
-            [
-                _aggregationCompletionRuntime.TryHandleParallelCompletionAsync,
-                _aggregationCompletionRuntime.TryHandleForEachCompletionAsync,
-                _aggregationCompletionRuntime.TryHandleMapReduceCompletionAsync,
-                _progressionCompletionRuntime.TryHandleRaceCompletionAsync,
-                _progressionCompletionRuntime.TryHandleWhileCompletionAsync,
-                _progressionCompletionRuntime.TryHandleCacheCompletionAsync,
-            ],
-            _timeoutCallbackRuntime.HandleWorkflowStepTimeoutFiredAsync,
-            _timeoutCallbackRuntime.HandleWorkflowStepRetryBackoffFiredAsync,
-            _timeoutCallbackRuntime.HandleDelayStepTimeoutFiredAsync,
-            _timeoutCallbackRuntime.HandleWaitSignalTimeoutFiredAsync,
-            _llmRuntime.HandleLlmCallWatchdogTimeoutFiredAsync,
-            _aiResponseRuntime.HandleLlmLikeResponseAsync);
+            _runtimeSuite.StatefulCompletionHandlers,
+            _runtimeSuite.InternalSignalHandlers,
+            _runtimeSuite.ResponseHandlers);
     }
 
     public override Task<string> GetDescriptionAsync()
@@ -233,7 +175,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             return;
         }
 
-        await _dispatchRuntime.DispatchWorkflowStepAsync(entry, input, runId, CancellationToken.None);
+        await _runtimeSuite.DispatchWorkflowStepAsync(entry, input, runId, CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true, Priority = 1)]
@@ -296,10 +238,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
 
         if (!evt.Success)
         {
-            if (await _asyncPolicyRuntime.TryScheduleRetryAsync(currentStep, evt, next, CancellationToken.None))
-                return;
-
-            if (await _asyncPolicyRuntime.TryHandleOnErrorAsync(currentStep, evt, next, CancellationToken.None))
+            if (await _runtimeSuite.TryHandleFailureAsync(currentStep, evt, next, CancellationToken.None))
                 return;
 
             next.StepExecutions.Remove(evt.StepId);
@@ -347,7 +286,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         }
 
         await PersistStateAsync(next, CancellationToken.None);
-        await _dispatchRuntime.DispatchWorkflowStepAsync(nextStep, evt.Output ?? string.Empty, runId, CancellationToken.None);
+        await _runtimeSuite.DispatchWorkflowStepAsync(nextStep, evt.Output ?? string.Empty, runId, CancellationToken.None);
     }
 
 }

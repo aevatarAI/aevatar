@@ -4,7 +4,10 @@ using Aevatar.Workflow.Core.Primitives;
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunControlFlowRuntime
+    : IWorkflowStepFamilyHandler
 {
+    private static readonly string[] SupportedTypes = ["delay", "wait_signal", "race", "while"];
+
     private readonly WorkflowRunRuntimeContext _context;
     private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
 
@@ -15,6 +18,18 @@ internal sealed class WorkflowRunControlFlowRuntime
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _dispatchRuntime = dispatchRuntime ?? throw new ArgumentNullException(nameof(dispatchRuntime));
     }
+
+    public IReadOnlyCollection<string> SupportedStepTypes => SupportedTypes;
+
+    public Task HandleStepRequestAsync(StepRequestEvent request, CancellationToken ct) =>
+        WorkflowPrimitiveCatalog.ToCanonicalType(request.StepType) switch
+        {
+            "delay" => HandleDelayStepRequestAsync(request, ct),
+            "wait_signal" => HandleWaitSignalStepRequestAsync(request, ct),
+            "race" => HandleRaceStepRequestAsync(request, ct),
+            "while" => HandleWhileStepRequestAsync(request, ct),
+            _ => Task.CompletedTask,
+        };
 
     public async Task HandleDelayStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {

@@ -14,7 +14,7 @@ namespace Aevatar.Workflow.Core;
 public sealed partial class WorkflowRunGAgent
 {
     private Task EnsureAgentTreeAsync(CancellationToken ct) =>
-        _effectDispatcher.EnsureAgentTreeAsync(ct);
+        _runtimeContext.EnsureAgentTreeAsync(ct);
 
     private Task ScheduleWorkflowCallbackAsync(
         string callbackId,
@@ -25,7 +25,7 @@ public sealed partial class WorkflowRunGAgent
         string? sessionId,
         string kind,
         CancellationToken ct) =>
-        _effectDispatcher.ScheduleWorkflowCallbackAsync(
+        _runtimeContext.ScheduleWorkflowCallbackAsync(
             callbackId,
             dueTime,
             evt,
@@ -36,16 +36,16 @@ public sealed partial class WorkflowRunGAgent
             ct);
 
     private Task<IActor> ResolveOrCreateSubWorkflowRunActorAsync(string actorId, CancellationToken ct) =>
-        _effectDispatcher.ResolveOrCreateSubWorkflowRunActorAsync(actorId, ct);
+        _runtimeContext.ResolveOrCreateSubWorkflowRunActorAsync(actorId, ct);
 
     private Task<string> ResolveWorkflowYamlAsync(string workflowName, CancellationToken ct) =>
-        _effectDispatcher.ResolveWorkflowYamlAsync(workflowName, ct);
+        _runtimeContext.ResolveWorkflowYamlAsync(workflowName, ct);
 
     private EventEnvelope CreateWorkflowDefinitionBindEnvelope(string workflowYaml, string workflowName) =>
-        _effectDispatcher.CreateWorkflowDefinitionBindEnvelope(workflowYaml, workflowName);
+        _runtimeContext.CreateWorkflowDefinitionBindEnvelope(workflowYaml, workflowName);
 
     private EventEnvelope CreateRoleAgentInitializeEnvelope(RoleDefinition role) =>
-        _effectDispatcher.CreateRoleAgentInitializeEnvelope(role);
+        _runtimeContext.CreateRoleAgentInitializeEnvelope(role);
 
     private Task LogWarningAsync(Exception? ex, string message, object?[] args)
     {
@@ -121,25 +121,6 @@ public sealed partial class WorkflowRunGAgent
             Direction = EventDirection.Self,
             CorrelationId = Guid.NewGuid().ToString("N"),
         };
-    }
-
-    private async Task RemovePendingLlmCallAndPublishFailureAsync(
-        string sessionId,
-        string stepId,
-        string runId,
-        string error,
-        CancellationToken ct)
-    {
-        var next = State.Clone();
-        next.PendingLlmCalls.Remove(sessionId);
-        await PersistStateAsync(next, ct);
-        await PublishAsync(new StepCompletedEvent
-        {
-            StepId = stepId,
-            RunId = runId,
-            Success = false,
-            Error = error,
-        }, EventDirection.Self, ct);
     }
 
     private async Task<bool> TryHandleRegisteredPrimitiveAsync(StepRequestEvent request, CancellationToken ct)

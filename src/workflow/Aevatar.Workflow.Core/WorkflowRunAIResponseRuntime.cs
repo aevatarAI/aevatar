@@ -1,6 +1,9 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions;
+
 namespace Aevatar.Workflow.Core;
 
-internal sealed class WorkflowRunAIResponseRuntime
+internal sealed class WorkflowRunAIResponseRuntime : IWorkflowResponseHandler
 {
     private readonly WorkflowRunLlmRuntime _llmRuntime;
     private readonly WorkflowRunEvaluationRuntime _evaluationRuntime;
@@ -14,6 +17,37 @@ internal sealed class WorkflowRunAIResponseRuntime
         _llmRuntime = llmRuntime ?? throw new ArgumentNullException(nameof(llmRuntime));
         _evaluationRuntime = evaluationRuntime ?? throw new ArgumentNullException(nameof(evaluationRuntime));
         _reflectRuntime = reflectRuntime ?? throw new ArgumentNullException(nameof(reflectRuntime));
+    }
+
+    public async Task<bool> TryHandleAsync(EventEnvelope envelope, string defaultPublisherId, CancellationToken ct)
+    {
+        var payload = envelope.Payload;
+        if (payload == null)
+            return false;
+
+        if (payload.Is(TextMessageEndEvent.Descriptor))
+        {
+            var evt = payload.Unpack<TextMessageEndEvent>();
+            await HandleLlmLikeResponseAsync(
+                evt.SessionId,
+                evt.Content ?? string.Empty,
+                envelope.PublisherId,
+                ct);
+            return true;
+        }
+
+        if (payload.Is(ChatResponseEvent.Descriptor))
+        {
+            var evt = payload.Unpack<ChatResponseEvent>();
+            await HandleLlmLikeResponseAsync(
+                evt.SessionId,
+                evt.Content ?? string.Empty,
+                string.IsNullOrWhiteSpace(envelope.PublisherId) ? defaultPublisherId : envelope.PublisherId,
+                ct);
+            return true;
+        }
+
+        return false;
     }
 
     public async Task HandleLlmLikeResponseAsync(

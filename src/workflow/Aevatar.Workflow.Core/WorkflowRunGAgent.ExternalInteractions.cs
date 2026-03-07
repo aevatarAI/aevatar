@@ -105,7 +105,7 @@ public sealed partial class WorkflowRunGAgent
             return;
 
         var completed = envelope.Payload.Unpack<WorkflowCompletedEvent>();
-        await _subWorkflowRuntime.TryHandleSubWorkflowCompletionAsync(completed, envelope.PublisherId, CancellationToken.None);
+        await _runtimeSuite.TryHandleChildRunCompletionAsync(completed, envelope.PublisherId, CancellationToken.None);
     }
 
     [AllEventHandler(Priority = 30, AllowSelfHandling = true)]

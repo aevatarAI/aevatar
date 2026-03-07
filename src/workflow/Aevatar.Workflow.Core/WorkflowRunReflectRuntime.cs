@@ -5,13 +5,21 @@ using Aevatar.Workflow.Core.Primitives;
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunReflectRuntime
+    : IWorkflowStepFamilyHandler
 {
+    private static readonly string[] SupportedTypes = ["reflect"];
+
     private readonly WorkflowRunRuntimeContext _context;
 
     public WorkflowRunReflectRuntime(WorkflowRunRuntimeContext context)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
     }
+
+    public IReadOnlyCollection<string> SupportedStepTypes => SupportedTypes;
+
+    public Task HandleStepRequestAsync(StepRequestEvent request, CancellationToken ct) =>
+        HandleReflectStepRequestAsync(request, ct);
 
     public async Task HandleReflectStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {

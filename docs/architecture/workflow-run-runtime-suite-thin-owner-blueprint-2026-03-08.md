@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 
-1. 状态：`Proposed`
+1. 状态：`Delivered`
 2. 版本：`v1`
 3. 日期：`2026-03-08`
 4. 决策级别：`Architecture Breaking Change`
@@ -17,7 +17,7 @@
    - 已删除 `runtime-phase6-final-authority-hardening-and-shell-thinning-blueprint-2026-03-07.md`
    - 已删除 `runtime-phase7-thin-owner-and-event-module-retirement-blueprint-2026-03-07.md`
 7. 本文定位：
-   - 作为 `WorkflowRunGAgent` 后续终局重构的唯一权威蓝图
+   - 作为 `WorkflowRunGAgent` thin-owner 重构的唯一权威文档
    - 不再拆成 phase-6 / phase-7 两份重叠文档
 
 ## 2. 背景与关键决策
@@ -28,7 +28,7 @@
 2. 一组共享 `WorkflowRunRuntimeContext` 的 runtime 协作者。
 3. `WorkflowPrimitiveExecutionPlanner + WorkflowAsyncOperationReconciler` 两条主调度链。
 
-这一步是对的，但还没达到最佳实践终局。当前剩余问题不是“文件名不优雅”，而是 actor owner 仍然自己持有过多 runtime 字段，并在构造函数内亲自完成大部分 family wiring。
+交付前的核心问题不是“文件名不优雅”，而是 actor owner 自己持有过多 runtime 字段，并在构造函数内亲自完成大部分 family wiring；该问题现已按本文方案收口。
 
 本蓝图明确 4 个关键决策：
 
@@ -86,51 +86,55 @@
 
 ## 6. 当前基线（代码事实）
 
-截至 `2026-03-08`，当前热点如下：
+截至 `2026-03-08`，交付后的核心文件如下：
 
-1. [WorkflowRunGAgent.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs) `358` 行。
+1. [WorkflowRunGAgent.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs) `297` 行。
 2. [WorkflowRunGAgent.Lifecycle.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Lifecycle.cs) `233` 行。
 3. [WorkflowRunGAgent.Infrastructure.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs) `187` 行。
-4. [WorkflowRunDispatchRuntime.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs) `178` 行。
-5. [WorkflowRunControlFlowRuntime.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunControlFlowRuntime.cs) `230` 行。
-6. [WorkflowRunLlmRuntime.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunLlmRuntime.cs) `192` 行。
-7. [WorkflowRunFanOutRuntime.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunFanOutRuntime.cs) `196` 行。
-8. [WorkflowRunAggregationCompletionRuntime.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunAggregationCompletionRuntime.cs) `207` 行。
+4. [WorkflowRunRuntimeSuite.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunRuntimeSuite.cs) `98` 行。
+5. [WorkflowPrimitiveExecutionPlanner.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs) `33` 行。
+6. [WorkflowAsyncOperationReconciler.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs) `39` 行。
+7. [WorkflowStepFamilyDispatchTable.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowStepFamilyDispatchTable.cs)
+8. [WorkflowStatefulCompletionHandlerRegistry.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowStatefulCompletionHandlerRegistry.cs)
+9. [WorkflowInternalSignalRegistry.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowInternalSignalRegistry.cs)
+10. [WorkflowResponseHandlerRegistry.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowResponseHandlerRegistry.cs)
+11. [WorkflowChildRunCompletionRegistry.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowChildRunCompletionRegistry.cs)
 
 更关键的结构事实：
 
-1. [WorkflowRunGAgent.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs) 仍持有十余个 runtime 协作者字段。
-2. `WorkflowRunRuntimeContext` 已存在并收敛了 `State / CompiledWorkflow / Persist / Publish / Send / Effect`。
-3. [WorkflowPrimitiveExecutionPlanner.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs) 仍由 owner 显式拼装各 family planner。
-4. [WorkflowAsyncOperationReconciler.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs) 仍由 owner 显式传入 completion/signal handler。
+1. [WorkflowRunGAgent.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs) 已不再直接持有具体 runtime family 字段。
+2. `WorkflowRunRuntimeContext` 已收敛 `State / CompiledWorkflow / Persist / Publish / Send / Effect`。
+3. [WorkflowRunRuntimeSuite.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunRuntimeSuite.cs) 作为唯一组合根，承接 dispatch/completion/signal/response wiring。
+4. [WorkflowPrimitiveExecutionPlanner.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs) 已切到 `WorkflowStepFamilyDispatchTable`。
+5. [WorkflowAsyncOperationReconciler.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs) 已切到 completion/signal/response registries。
 
 结论：
 
-1. 当前已经从“owner 直接写业务分支”升级到“owner 装配大量协作者”。
-2. 下一步该削的是“装配复杂度”和“直接依赖具体 runtime 类型”，不是再发明更多 helper。
+1. 当前已经从“owner 装配大量协作者”进一步收口成“owner 依赖 suite + planner + reconciler”。
+2. 后续若继续演进，应在 suite/registry 层扩展，而不是把具体 runtime 类型重新挂回 owner。
 
 ## 7. 需求分解与状态矩阵
 
 | ID | 需求 | 验收标准 | 当前状态 | 证据 | 差距 |
 |---|---|---|---|---|---|
-| R1 | owner 不再持有成串 runtime 字段 | `WorkflowRunGAgent` 只保留 `Context + Suite + Planner + Reconciler + Lifecycle helpers` | 未完成 | [WorkflowRunGAgent.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs) | owner 仍直接依赖具体 runtime 类 |
-| R2 | family 行为通过接口分组 | 存在 `step family / completion / internal signal` 三类接口 | 未完成 | [WorkflowPrimitiveExecutionPlanner.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs) | 仍是显式 concrete wiring |
-| R3 | 使用组合根统一装配 | 新增 `WorkflowRunRuntimeSuite` 并成为 owner 唯一运行时组合入口 | 未完成 | 当前无该文件 | 当前装配分散在 owner 构造器 |
-| R4 | 明确禁止继承式 runtime 复用 | 新文档、README、代码中不存在 `RuntimeBase/HandlerBase` 设计 | 部分完成 | 当前代码无基类，但缺少明确架构约束 | 需要在蓝图和活跃文档写死 |
-| R5 | planner / reconciler 依赖 registry | owner 不再手工把每个 runtime 委托一一传入 | 未完成 | [WorkflowRunGAgent.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs) | 仍是手工 wiring |
-| R6 | 文档只有一份权威蓝图 | phase-6/7 文档删除，新文档成为唯一来源 | 本次交付 | 本文件 | 需删除旧文档并切换引用 |
+| R1 | owner 不再持有成串 runtime 字段 | `WorkflowRunGAgent` 只保留 `Context + Suite + Planner + Reconciler + Lifecycle helpers` | 已完成 | [WorkflowRunGAgent.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs) | 无 |
+| R2 | family 行为通过接口分组 | 存在 `step family / completion / internal signal / response / child-run completion` 接口 | 已完成 | `IWorkflow*Handler.cs` | 无 |
+| R3 | 使用组合根统一装配 | 新增 `WorkflowRunRuntimeSuite` 并成为 owner 唯一运行时组合入口 | 已完成 | [WorkflowRunRuntimeSuite.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunRuntimeSuite.cs) | 无 |
+| R4 | 明确禁止继承式 runtime 复用 | 新文档、README、代码中不存在 `RuntimeBase/HandlerBase` 设计 | 已完成 | 本文件、活跃 README | 无 |
+| R5 | planner / reconciler 依赖 registry | owner 不再手工把每个 runtime 委托一一传入 | 已完成 | [WorkflowPrimitiveExecutionPlanner.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs)、[WorkflowAsyncOperationReconciler.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs) | 无 |
+| R6 | 文档只有一份权威蓝图 | phase-6/7 文档删除，新文档成为唯一来源 | 已完成 | 本文件 | 无 |
 
 ## 8. 差距详解
 
 ### 8.1 当前为什么还不够好
 
-当前实现已经做对了三件事：
+交付前，这条线已经做对了三件事：
 
 1. 把 state/effect 访问收进 `WorkflowRunRuntimeContext`。
 2. 把大部分 family 逻辑从 owner 主文件移走。
 3. 把 callback/completion 从直接业务分支变成 reconcile 主链。
 
-但还有三个结构问题：
+当时剩余的三个结构问题是：
 
 1. owner 仍知道太多具体 family 类型。
 2. owner 构造器仍是唯一运行时装配中心。
@@ -210,7 +214,7 @@ WorkflowRunRuntimeSuite
 1. `IWorkflowStepFamilyHandler`
    - 声明自己处理哪些 canonical step types
    - 处理 `StepRequestEvent`
-2. `IWorkflowCompletionHandler`
+2. `IWorkflowStatefulCompletionHandler`
    - 处理 `StepCompletedEvent` 的 stateful completion 对账
 3. `IWorkflowInternalSignalHandler`
    - 处理 timeout / retry backoff / watchdog / internal fired signals
@@ -225,8 +229,8 @@ WorkflowRunRuntimeSuite
 
 1. `WorkflowStepFamilyDispatchTable`
    - `canonical step type -> IWorkflowStepFamilyHandler`
-2. `WorkflowCompletionHandlerRegistry`
-   - 一组 `IWorkflowCompletionHandler`
+2. `WorkflowStatefulCompletionHandlerRegistry`
+   - 一组 `IWorkflowStatefulCompletionHandler`
 3. `WorkflowInternalSignalRegistry`
    - 一组 `IWorkflowInternalSignalHandler`
 4. `WorkflowResponseHandlerRegistry`
@@ -250,12 +254,12 @@ WorkflowRunRuntimeSuite
 产物：
 
 1. `WorkflowRunRuntimeSuite.cs`
-2. `WorkflowRunRuntimeSuiteBuilder.cs` 或等价构造入口
+2. owner 内唯一的 suite 构造入口
 
 DoD：
 
 1. owner 构造器不再逐个 `new WorkflowRun*Runtime`
-2. 运行时对象装配集中到 suite builder
+2. 运行时对象装配集中到 suite
 
 ### WP2. 定义 handler interfaces
 
@@ -267,9 +271,10 @@ DoD：
 产物：
 
 1. `IWorkflowStepFamilyHandler.cs`
-2. `IWorkflowCompletionHandler.cs`
+2. `IWorkflowStatefulCompletionHandler.cs`
 3. `IWorkflowInternalSignalHandler.cs`
 4. `IWorkflowResponseHandler.cs`
+5. `IWorkflowChildRunCompletionHandler.cs`
 
 DoD：
 
@@ -284,9 +289,10 @@ DoD：
 产物：
 
 1. `WorkflowStepFamilyDispatchTable.cs`
-2. `WorkflowCompletionHandlerRegistry.cs`
+2. `WorkflowStatefulCompletionHandlerRegistry.cs`
 3. `WorkflowInternalSignalRegistry.cs`
 4. `WorkflowResponseHandlerRegistry.cs`
+5. `WorkflowChildRunCompletionRegistry.cs`
 
 DoD：
 
@@ -394,11 +400,11 @@ DoD：
 - [x] 删除旧 phase-6 蓝图
 - [x] 删除旧 phase-7 蓝图
 - [x] 生成新的单一权威蓝图
-- [ ] 引入 `WorkflowRunRuntimeSuite`
-- [ ] 引入 handler interfaces
-- [ ] 引入 dispatch table / registries
-- [ ] 收薄 owner 字段与构造器
-- [ ] 增加 suite/registry 单测
+- [x] 引入 `WorkflowRunRuntimeSuite`
+- [x] 引入 handler interfaces
+- [x] 引入 dispatch table / registries
+- [x] 收薄 owner 字段与构造器
+- [x] 增加 suite/registry 单测
 - [ ] 跑完 build/test/guards
 
 ## 16. 当前执行快照（2026-03-08）
@@ -406,13 +412,13 @@ DoD：
 已完成：
 
 1. 删除了旧的 phase-6 / phase-7 重构文档。
-2. 生成了新的统一蓝图。
-3. 活跃说明文档将切换为引用本蓝图。
+2. `RuntimeSuite + handler interface + registry` 已落地。
+3. owner 已切到 `Context + Suite + Planner + Reconciler`。
+4. 活跃说明文档和测试已同步。
 
-未完成：
+待完成：
 
-1. `RuntimeSuite + handler interface + registry` 代码尚未落地。
-2. owner 仍然直接装配 runtime。
+1. 跑完全仓 build/test/guards 并更新验证结果。
 
 ## 17. 变更纪律
 

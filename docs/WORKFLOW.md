@@ -75,8 +75,10 @@ flowchart LR
    - `WorkflowRunGAgent.Lifecycle.cs`：binding/finalization/dynamic child-run/suspended fact republish
    - `WorkflowRunGAgent.ExternalInteractions.cs`：resume/signal/callback/response envelope ingress
    - `WorkflowRunReducer.cs`：state reducer 入口
-   - `WorkflowPrimitiveExecutionPlanner.cs`：step type routing 与 primitive planning
-   - `WorkflowAsyncOperationReconciler.cs`：callback / LLM response / stateful completion 对账入口
+   - `WorkflowRunRuntimeSuite.cs`：唯一运行时组合根，统一装配 step-family/completion/internal-signal/response/child-run completion handlers
+   - `WorkflowPrimitiveExecutionPlanner.cs`：通过 `WorkflowStepFamilyDispatchTable` 做 step type routing
+   - `WorkflowAsyncOperationReconciler.cs`：通过 completion / internal-signal / response registries 做统一对账
+   - `WorkflowStepFamilyDispatchTable.cs` / `WorkflowStatefulCompletionHandlerRegistry.cs` / `WorkflowInternalSignalRegistry.cs` / `WorkflowResponseHandlerRegistry.cs` / `WorkflowChildRunCompletionRegistry.cs`：把 planner/reconciler 从具体 runtime wiring 中解耦
    - `WorkflowRunEffectDispatcher.cs`：actor tree、durable callback、sub-workflow effect
    - `WorkflowRunRuntimeContext.cs`：actor-thread 内共享的 run state/effect facade，统一暴露 `State/CompiledWorkflow/persist/publish/send/effect`
    - `WorkflowRunStepRequestFactory.cs`：step request / while iteration 变量构建
@@ -239,25 +241,31 @@ Definition catalog 装配规则：
 1. `src/workflow/Aevatar.Workflow.Core/WorkflowGAgent.cs`
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`
 3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunReducer.cs`
-4. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
-5. `src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs`
-6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunEffectDispatcher.cs`
-7. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Lifecycle.cs`
-8. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.ExternalInteractions.cs`
-9. `src/workflow/Aevatar.Workflow.Core/WorkflowRunControlFlowRuntime.cs`
-10. `src/workflow/Aevatar.Workflow.Core/WorkflowRunLlmRuntime.cs`
-11. `src/workflow/Aevatar.Workflow.Core/WorkflowRunEvaluationRuntime.cs`
-12. `src/workflow/Aevatar.Workflow.Core/WorkflowRunReflectRuntime.cs`
-13. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCacheRuntime.cs`
-14. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAIResponseRuntime.cs`
-15. `src/workflow/Aevatar.Workflow.Core/WorkflowRunFanOutRuntime.cs`
-16. `src/workflow/Aevatar.Workflow.Core/WorkflowRunSubWorkflowRuntime.cs`
-17. `src/workflow/Aevatar.Workflow.Core/WorkflowRunTimeoutCallbackRuntime.cs`
-18. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAggregationCompletionRuntime.cs`
-19. `src/workflow/Aevatar.Workflow.Core/WorkflowRunProgressionCompletionRuntime.cs`
-20. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAsyncPolicyRuntime.cs`
-21. `src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs`
-22. `src/workflow/Aevatar.Workflow.Core/WorkflowRunHumanInteractionRuntime.cs`
+4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunRuntimeSuite.cs`
+5. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
+6. `src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs`
+7. `src/workflow/Aevatar.Workflow.Core/WorkflowStepFamilyDispatchTable.cs`
+8. `src/workflow/Aevatar.Workflow.Core/WorkflowStatefulCompletionHandlerRegistry.cs`
+9. `src/workflow/Aevatar.Workflow.Core/WorkflowInternalSignalRegistry.cs`
+10. `src/workflow/Aevatar.Workflow.Core/WorkflowResponseHandlerRegistry.cs`
+11. `src/workflow/Aevatar.Workflow.Core/WorkflowChildRunCompletionRegistry.cs`
+12. `src/workflow/Aevatar.Workflow.Core/WorkflowRunEffectDispatcher.cs`
+13. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Lifecycle.cs`
+14. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.ExternalInteractions.cs`
+15. `src/workflow/Aevatar.Workflow.Core/WorkflowRunControlFlowRuntime.cs`
+16. `src/workflow/Aevatar.Workflow.Core/WorkflowRunLlmRuntime.cs`
+17. `src/workflow/Aevatar.Workflow.Core/WorkflowRunEvaluationRuntime.cs`
+18. `src/workflow/Aevatar.Workflow.Core/WorkflowRunReflectRuntime.cs`
+19. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCacheRuntime.cs`
+20. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAIResponseRuntime.cs`
+21. `src/workflow/Aevatar.Workflow.Core/WorkflowRunFanOutRuntime.cs`
+22. `src/workflow/Aevatar.Workflow.Core/WorkflowRunSubWorkflowRuntime.cs`
+23. `src/workflow/Aevatar.Workflow.Core/WorkflowRunTimeoutCallbackRuntime.cs`
+24. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAggregationCompletionRuntime.cs`
+25. `src/workflow/Aevatar.Workflow.Core/WorkflowRunProgressionCompletionRuntime.cs`
+26. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAsyncPolicyRuntime.cs`
+27. `src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs`
+28. `src/workflow/Aevatar.Workflow.Core/WorkflowRunHumanInteractionRuntime.cs`
 23. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
 24. `src/workflow/Aevatar.Workflow.Core/WorkflowCompilationService.cs`
 25. `src/workflow/Aevatar.Workflow.Core/workflow_state.proto`

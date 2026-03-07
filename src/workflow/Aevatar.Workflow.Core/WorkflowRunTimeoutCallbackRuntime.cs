@@ -5,6 +5,7 @@ using Aevatar.Workflow.Core.Primitives;
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunTimeoutCallbackRuntime
+    : IWorkflowInternalSignalHandler
 {
     private readonly WorkflowRunRuntimeContext _context;
     private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
@@ -15,6 +16,57 @@ internal sealed class WorkflowRunTimeoutCallbackRuntime
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _dispatchRuntime = dispatchRuntime ?? throw new ArgumentNullException(nameof(dispatchRuntime));
+    }
+
+    public bool CanHandle(EventEnvelope envelope)
+    {
+        var payload = envelope.Payload;
+        return payload != null &&
+               (payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor) ||
+                payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor) ||
+                payload.Is(DelayStepTimeoutFiredEvent.Descriptor) ||
+                payload.Is(WaitSignalTimeoutFiredEvent.Descriptor));
+    }
+
+    public Task HandleAsync(EventEnvelope envelope, CancellationToken ct)
+    {
+        var payload = envelope.Payload;
+        if (payload == null)
+            return Task.CompletedTask;
+
+        if (payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor))
+        {
+            return HandleWorkflowStepTimeoutFiredAsync(
+                payload.Unpack<WorkflowStepTimeoutFiredEvent>(),
+                envelope,
+                ct);
+        }
+
+        if (payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor))
+        {
+            return HandleWorkflowStepRetryBackoffFiredAsync(
+                payload.Unpack<WorkflowStepRetryBackoffFiredEvent>(),
+                envelope,
+                ct);
+        }
+
+        if (payload.Is(DelayStepTimeoutFiredEvent.Descriptor))
+        {
+            return HandleDelayStepTimeoutFiredAsync(
+                payload.Unpack<DelayStepTimeoutFiredEvent>(),
+                envelope,
+                ct);
+        }
+
+        if (payload.Is(WaitSignalTimeoutFiredEvent.Descriptor))
+        {
+            return HandleWaitSignalTimeoutFiredAsync(
+                payload.Unpack<WaitSignalTimeoutFiredEvent>(),
+                envelope,
+                ct);
+        }
+
+        return Task.CompletedTask;
     }
 
     public async Task HandleWorkflowStepTimeoutFiredAsync(

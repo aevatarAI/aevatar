@@ -6,12 +6,35 @@ using Aevatar.Workflow.Core.Primitives;
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunLlmRuntime
+    : IWorkflowStepFamilyHandler, IWorkflowInternalSignalHandler
 {
+    private static readonly string[] SupportedTypes = ["llm_call"];
+
     private readonly WorkflowRunRuntimeContext _context;
 
     public WorkflowRunLlmRuntime(WorkflowRunRuntimeContext context)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
+    }
+
+    public IReadOnlyCollection<string> SupportedStepTypes => SupportedTypes;
+
+    public Task HandleStepRequestAsync(StepRequestEvent request, CancellationToken ct) =>
+        HandleLlmCallStepRequestAsync(request, ct);
+
+    public bool CanHandle(EventEnvelope envelope) =>
+        envelope.Payload?.Is(LlmCallWatchdogTimeoutFiredEvent.Descriptor) == true;
+
+    public Task HandleAsync(EventEnvelope envelope, CancellationToken ct)
+    {
+        var payload = envelope.Payload;
+        if (payload?.Is(LlmCallWatchdogTimeoutFiredEvent.Descriptor) != true)
+            return Task.CompletedTask;
+
+        return HandleLlmCallWatchdogTimeoutFiredAsync(
+            payload.Unpack<LlmCallWatchdogTimeoutFiredEvent>(),
+            envelope,
+            ct);
     }
 
     public async Task HandleLlmCallStepRequestAsync(StepRequestEvent request, CancellationToken ct)

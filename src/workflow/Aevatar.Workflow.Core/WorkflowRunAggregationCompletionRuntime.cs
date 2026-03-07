@@ -1,6 +1,7 @@
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunAggregationCompletionRuntime
+    : IWorkflowStatefulCompletionHandler
 {
     private readonly WorkflowRunRuntimeContext _context;
     private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
@@ -11,6 +12,16 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _dispatchRuntime = dispatchRuntime ?? throw new ArgumentNullException(nameof(dispatchRuntime));
+    }
+
+    public async Task<bool> TryHandleCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
+    {
+        if (await TryHandleParallelCompletionAsync(evt, ct))
+            return true;
+        if (await TryHandleForEachCompletionAsync(evt, ct))
+            return true;
+
+        return await TryHandleMapReduceCompletionAsync(evt, ct);
     }
 
     public async Task<bool> TryHandleParallelCompletionAsync(StepCompletedEvent evt, CancellationToken ct)

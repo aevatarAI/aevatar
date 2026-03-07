@@ -3,6 +3,7 @@ using System.Globalization;
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunProgressionCompletionRuntime
+    : IWorkflowStatefulCompletionHandler
 {
     private readonly WorkflowRunRuntimeContext _context;
     private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
@@ -16,6 +17,16 @@ internal sealed class WorkflowRunProgressionCompletionRuntime
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _dispatchRuntime = dispatchRuntime ?? throw new ArgumentNullException(nameof(dispatchRuntime));
         _stepRequestFactory = stepRequestFactory ?? throw new ArgumentNullException(nameof(stepRequestFactory));
+    }
+
+    public async Task<bool> TryHandleCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
+    {
+        if (await TryHandleRaceCompletionAsync(evt, ct))
+            return true;
+        if (await TryHandleWhileCompletionAsync(evt, ct))
+            return true;
+
+        return await TryHandleCacheCompletionAsync(evt, ct);
     }
 
     public async Task<bool> TryHandleRaceCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
