@@ -20,7 +20,7 @@
 
 强约束：
 
-1. 事实源在 Actor 持久状态（`ScriptDefinitionState`/`ScriptRuntimeState`/`ScriptEvolutionManagerState`/`ScriptCatalogState`）。
+1. 事实源在 Actor 持久状态（`ScriptDefinitionState`/`ScriptRuntimeState`/`ScriptEvolutionSessionState`/`ScriptCatalogState`）。
 2. 禁止中间层以进程内字典维护跨请求事实态。
 3. 查询返回走事件响应，不走跨层强转接口。
 
@@ -29,7 +29,7 @@
 | 分层 | 项目 | 核心职责 |
 |---|---|---|
 | Abstractions | `Aevatar.Scripting.Abstractions` | Proto 状态/事件契约、脚本运行抽象 |
-| Core | `Aevatar.Scripting.Core` | 5 个主 Actor（Definition/Runtime/EvolutionManager/EvolutionSession/Catalog）与状态机 |
+| Core | `Aevatar.Scripting.Core` | 4 个主 Actor（Definition/Runtime/EvolutionSession/Catalog）与状态机 |
 | Application | `Aevatar.Scripting.Application` | 命令/查询适配器，运行编排器 |
 | Infrastructure | `Aevatar.Scripting.Infrastructure` | Roslyn 编译执行、运行时端口实现、查询超时与运行模式策略 |
 | Hosting | `Aevatar.Scripting.Hosting` | DI 组装、Host API 接入 |
@@ -72,20 +72,16 @@ flowchart LR
 - 职责：接收运行请求、恢复 definition-query pending、执行脚本并提交 `ScriptRunDomainEventCommitted`。
 - 结构上已按 `Ingress / DefinitionQuery / Completion / StateTransitions` partial slices 拆分，root 文件只保留构造、activate/deactivate 与共享 helper。
 - Orleans 路径下使用“事件化 definition 查询 + `pending_definition_queries` 持久事实状态 + activation 恢复”避免同步阻塞与 reactivation 丢 run。
+- `pending_definition_queries` 当前只持久化最小恢复事实：`request_id / run_event / queued_at_unix_time_ms`；timeout callback id 由 `request_id` 纯函数推导。
 
-### 4.3 ScriptEvolutionManagerGAgent
-
-- 文件：`src/Aevatar.Scripting.Core/ScriptEvolutionManagerGAgent.cs`
-- 状态：`ScriptEvolutionManagerState`
-- 职责：维护 `proposal_id -> session_actor_id` / `script_id -> latest_proposal_id` 索引，并负责 rollback stamped event。
-
-### 4.4 ScriptEvolutionSessionGAgent
+### 4.3 ScriptEvolutionSessionGAgent
 
 - 文件：`src/Aevatar.Scripting.Core/ScriptEvolutionSessionGAgent.cs`
 - 状态：`ScriptEvolutionSessionState`
 - 职责：单 proposal 生命周期 owner，执行 validation/promotion/rejection 流程，并响应 `QueryScriptEvolutionDecisionRequestedEvent`。
+- `proposal_id -> session_actor_id` 不再落额外索引 actor；session actor id 由 proposal id 纯函数推导，并由 lifecycle/application 层直接解析。
 
-### 4.5 ScriptCatalogGAgent
+### 4.4 ScriptCatalogGAgent
 
 - 文件：`src/Aevatar.Scripting.Core/ScriptCatalogGAgent.cs`
 - 状态：`ScriptCatalogState`
@@ -139,7 +135,7 @@ Core 响应处理要点：
 2. 脚本入口：`IScriptRuntimeCapabilities.ProposeScriptEvolutionAsync`
 3. 外部入口等待终态时走 `RuntimeScriptLifecyclePort` 的 `ensure projection -> attach sink -> dispatch -> wait -> detach/release` 链路。
 
-4. `ScriptEvolutionManagerGAgent` 只负责 proposal 索引与 rollback stamped event，session actor 才是 proposal lifecycle owner。
+4. proposal 生命周期与 decision query 已全部收敛到 `ScriptEvolutionSessionGAgent`；不再保留 manager/index actor。
 
 两条入口在 session actor 生命周期与 Catalog 事实层合流，保证策略、验证、发布、回滚语义一致。
 
@@ -187,9 +183,8 @@ sequenceDiagram
    `test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionComprehensiveE2ETests.cs`
 2. Orleans 3 Silo 一致性场景（外部提案 + 脚本编排 + 跨节点读写验证）：
    `test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.cs`
-3. Runtime 回放契约与演化 manager/session 单元测试：
+3. Runtime 回放契约与演化 session 单元测试：
    `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptRuntimeGAgentReplayContractTests.cs`
-   `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptEvolutionManagerGAgentTests.cs`
    `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptEvolutionSessionGAgentTests.cs`
 4. YAML/Script 等价与迁移回归：
    `test/Aevatar.Integration.Tests/WorkflowYamlScriptParityTests.cs`

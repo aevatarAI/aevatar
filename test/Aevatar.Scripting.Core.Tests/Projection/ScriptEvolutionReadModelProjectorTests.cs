@@ -89,7 +89,7 @@ public class ScriptEvolutionReadModelProjectorTests
     }
 
     [Fact]
-    public async Task Should_Project_Rejected_And_RolledBack_Statuses()
+    public async Task Should_Project_Rejected_Status()
     {
         var dispatcher = new InMemoryEvolutionProjectionStoreDispatcher();
         var projector = new ScriptEvolutionReadModelProjector(
@@ -98,7 +98,6 @@ public class ScriptEvolutionReadModelProjectorTests
             [
                 new ScriptEvolutionProposedEventReducer(),
                 new ScriptEvolutionRejectedEventReducer(),
-                new ScriptEvolutionRolledBackEventReducer(),
             ]);
 
         var context = new ScriptEvolutionProjectionContext
@@ -136,26 +135,12 @@ public class ScriptEvolutionReadModelProjectorTests
                 })),
             CancellationToken.None);
 
-        await projector.ProjectAsync(
-            context,
-            BuildEnvelope(
-                "evt-rolled-back-2",
-                Any.Pack(new ScriptEvolutionRolledBackEvent
-                {
-                    ProposalId = "proposal-2",
-                    ScriptId = "script-2",
-                    TargetRevision = "rev-1",
-                    PreviousRevision = "rev-2",
-                    CatalogActorId = "catalog-2",
-                })),
-            CancellationToken.None);
-
         var readModel = await dispatcher.GetAsync("proposal-2", CancellationToken.None);
         readModel.Should().NotBeNull();
         readModel!.ProposalId.Should().Be("proposal-2");
-        readModel.PromotionStatus.Should().Be("rolled_back");
-        readModel.RollbackStatus.Should().Be("rolled_back");
-        readModel.CandidateRevision.Should().Be("rev-1");
+        readModel.PromotionStatus.Should().Be("rejected");
+        readModel.RollbackStatus.Should().BeEmpty();
+        readModel.CandidateRevision.Should().Be("rev-2");
         readModel.FailureReason.Should().Be("policy-denied");
     }
 

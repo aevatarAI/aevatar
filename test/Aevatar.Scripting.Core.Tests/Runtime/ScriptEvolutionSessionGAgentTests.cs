@@ -12,7 +12,7 @@ namespace Aevatar.Scripting.Core.Tests.Runtime;
 public class ScriptEvolutionSessionGAgentTests
 {
     [Fact]
-    public async Task Start_ShouldPersistPromotedDecision_AndIndexManager()
+    public async Task Start_ShouldPersistPromotedDecision_WithoutManagerSideChannel()
     {
         var publisher = new RecordingEventPublisher();
         var agent = CreateAgent(
@@ -36,9 +36,7 @@ public class ScriptEvolutionSessionGAgentTests
             Reason = "rollout",
         });
 
-        publisher.Sent.Should().ContainSingle();
-        publisher.Sent[0].TargetActorId.Should().Be("script-evolution-manager");
-        publisher.Sent[0].Payload.Should().BeOfType<ScriptEvolutionProposalIndexedEvent>();
+        publisher.Sent.Should().BeEmpty();
 
         agent.State.ProposalId.Should().Be("proposal-1");
         agent.State.Completed.Should().BeTrue();
@@ -108,7 +106,7 @@ public class ScriptEvolutionSessionGAgentTests
         await agent.HandleStartScriptEvolutionSessionRequested(request);
         await agent.HandleStartScriptEvolutionSessionRequested(request);
 
-        publisher.Sent.Should().ContainSingle();
+        publisher.Sent.Should().BeEmpty();
         agent.State.ProposalId.Should().Be("proposal-duplicate");
     }
 
@@ -198,8 +196,6 @@ public class ScriptEvolutionSessionGAgentTests
         public string GetCatalogActorId() => "script-catalog";
 
         public string GetDefinitionActorId(string scriptId) => "script-definition:" + scriptId;
-
-        public string GetEvolutionManagerActorId() => "script-evolution-manager";
 
         public string GetEvolutionSessionActorId(string proposalId) => "script-evolution-session:" + proposalId;
 

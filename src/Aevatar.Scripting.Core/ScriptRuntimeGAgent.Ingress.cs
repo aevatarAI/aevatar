@@ -58,7 +58,6 @@ public sealed partial class ScriptRuntimeGAgent
         var requestId = Guid.NewGuid().ToString("N");
         var runEvent = evt.Clone();
         var queuedAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var timeoutCallbackId = BuildDefinitionQueryTimeoutCallbackId(requestId);
 
         await PersistDomainEventAsync(
             new ScriptDefinitionQueryQueuedEvent
@@ -66,7 +65,6 @@ public sealed partial class ScriptRuntimeGAgent
                 RequestId = requestId,
                 RunEvent = runEvent,
                 QueuedAtUnixTimeMs = queuedAtUnixTimeMs,
-                TimeoutCallbackId = timeoutCallbackId,
             },
             ct);
 

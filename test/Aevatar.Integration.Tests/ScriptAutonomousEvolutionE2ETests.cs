@@ -88,9 +88,6 @@ public class ScriptAutonomousEvolutionE2ETests
         (await runtime.ExistsAsync(evolvedRuntimeId)).Should().BeTrue();
         (await runtime.ExistsAsync(newDefinitionActorId)).Should().BeTrue();
 
-        var manager = ((ScriptEvolutionManagerGAgent)(await runtime.GetAsync("script-evolution-manager"))!.Agent);
-        manager.State.ProposalSessionActorIds.Should().ContainKey("proposal-run-autonomy-1");
-
         var session = (ScriptEvolutionSessionGAgent)(await runtime.GetAsync("script-evolution-session:proposal-run-autonomy-1"))!.Agent;
         session.State.Status.Should().Be("promoted");
         session.State.Accepted.Should().BeTrue();

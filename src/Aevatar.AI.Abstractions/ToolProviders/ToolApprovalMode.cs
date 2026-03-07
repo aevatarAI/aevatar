@@ -6,7 +6,7 @@ namespace Aevatar.AI.Abstractions.ToolProviders;
 /// </summary>
 public enum ToolApprovalMode
 {
-    /// <summary>Execute immediately without approval (default, backward compatible).</summary>
+    /// <summary>Execute immediately without approval.</summary>
     NeverRequire = 0,
 
     /// <summary>Always pause for human approval before execution.</summary>

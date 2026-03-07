@@ -22,8 +22,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         if (services.Any(x => x.ServiceType == typeof(WorkflowProjectionProviderRegistrationsMarker)))
             return services;
 
-        EnsureLegacyProviderOptionsNotUsed(configuration);
-
         services.AddSingleton<WorkflowProjectionProviderRegistrationsMarker>();
 
         var enableElasticsearchDocument = ResolveElasticsearchDocumentEnabled(configuration);
@@ -84,19 +82,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         }
 
         return services;
-    }
-
-    private static void EnsureLegacyProviderOptionsNotUsed(IConfiguration configuration)
-    {
-        var legacyDocumentProvider = configuration["Projection:Document:Provider"]?.Trim();
-        var legacyGraphProvider = configuration["Projection:Graph:Provider"]?.Trim();
-
-        if (legacyDocumentProvider?.Length > 0 || legacyGraphProvider?.Length > 0)
-        {
-            throw new InvalidOperationException(
-                "Legacy provider single-selection options are no longer supported. " +
-                "Use Projection:Document:Providers:*:Enabled and Projection:Graph:Providers:*:Enabled with exactly one provider enabled per store type.");
-        }
     }
 
     private static bool ResolveElasticsearchDocumentEnabled(IConfiguration configuration)

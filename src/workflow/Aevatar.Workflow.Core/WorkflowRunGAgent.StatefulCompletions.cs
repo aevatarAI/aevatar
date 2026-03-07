@@ -5,23 +5,6 @@ namespace Aevatar.Workflow.Core;
 
 public sealed partial class WorkflowRunGAgent
 {
-    private async Task<bool> TryHandleStatefulChildCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
-    {
-        if (await TryHandleParallelCompletionAsync(evt, ct))
-            return true;
-        if (await TryHandleForEachCompletionAsync(evt, ct))
-            return true;
-        if (await TryHandleMapReduceCompletionAsync(evt, ct))
-            return true;
-        if (await TryHandleRaceCompletionAsync(evt, ct))
-            return true;
-        if (await TryHandleWhileCompletionAsync(evt, ct))
-            return true;
-        if (await TryHandleCacheCompletionAsync(evt, ct))
-            return true;
-        return false;
-    }
-
     private async Task<bool> TryHandleParallelCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
     {
         foreach (var (parentStepId, pending) in State.PendingParallelSteps)

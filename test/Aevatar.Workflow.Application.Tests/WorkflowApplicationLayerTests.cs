@@ -144,12 +144,12 @@ public class WorkflowChatRunApplicationServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenContextFactoryThrowsForPrimaryRequest_ShouldFallbackToDirect()
+    public async Task ExecuteAsync_WhenContextFactoryThrows_ShouldPropagateFailure()
     {
         var contextFactory = new RecordingRunContextFactory(request =>
         {
             if (string.Equals(request.WorkflowName, "analysis", StringComparison.OrdinalIgnoreCase))
-                throw new WorkflowDirectFallbackTriggerException("startup failed");
+                throw new InvalidOperationException("startup failed");
 
             return new WorkflowRunContextCreateResult(
                 WorkflowChatRunStartError.None,
@@ -160,25 +160,19 @@ public class WorkflowChatRunApplicationServiceTests
                 WorkflowChatRunStartError.None,
                 new WorkflowChatRunStarted("actor-1", request.WorkflowName ?? "inline", "cmd-1"),
                 null)));
-        var behaviorOptions = new WorkflowRunBehaviorOptions();
-        behaviorOptions.DirectFallbackWorkflowWhitelist.Add("analysis");
         var service = new WorkflowChatRunApplicationService(
             contextFactory,
-            executionEngine,
-            new WorkflowDirectFallbackPolicy(behaviorOptions));
+            executionEngine);
 
-        var result = await service.ExecuteAsync(
+        var act = () => service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "analysis", null),
             (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
-        result.Error.Should().Be(WorkflowChatRunStartError.None);
-        contextFactory.Requests.Should().HaveCount(2);
-        contextFactory.Requests[0].WorkflowName.Should().Be("analysis");
-        contextFactory.Requests[1].WorkflowName.Should().Be("direct");
-        contextFactory.Requests[1].WorkflowYamls.Should().BeNull();
-        executionEngine.Requests.Should().ContainSingle();
-        executionEngine.Requests[0].WorkflowName.Should().Be("direct");
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*startup failed*");
+        contextFactory.Requests.Should().ContainSingle();
+        executionEngine.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -197,12 +191,9 @@ public class WorkflowChatRunApplicationServiceTests
                 new WorkflowChatRunStarted("actor-1", request.WorkflowName ?? "inline", "cmd-2"),
                 null));
         });
-        var behaviorOptions = new WorkflowRunBehaviorOptions();
-        behaviorOptions.DirectFallbackWorkflowWhitelist.Add("inline_test");
         var service = new WorkflowChatRunApplicationService(
             contextFactory,
-            executionEngine,
-            new WorkflowDirectFallbackPolicy(behaviorOptions));
+            executionEngine);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExecuteAsync(
             new WorkflowChatRunRequest(
@@ -239,8 +230,7 @@ public class WorkflowChatRunApplicationServiceTests
             throw new InvalidOperationException("direct failed"));
         var service = new WorkflowChatRunApplicationService(
             contextFactory,
-            executionEngine,
-            new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
+            executionEngine);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "direct", null),
@@ -336,100 +326,7 @@ public class WorkflowChatRunApplicationServiceTests
             snapshotEmitter);
         return new WorkflowChatRunApplicationService(
             runContextFactory,
-            executionEngine,
-            new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
-    }
-}
-
-public class WorkflowDirectFallbackPolicyTests
-{
-    [Fact]
-    public void ShouldFallback_WhenDirectWorkflowWithoutInlineYaml_ShouldReturnFalse()
-    {
-        var policy = new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions());
-        var request = new WorkflowChatRunRequest("hello", "direct", null, null);
-
-        var shouldFallback = policy.ShouldFallback(
-            request,
-            new WorkflowDirectFallbackTriggerException("boom"));
-
-        shouldFallback.Should().BeFalse();
-    }
-
-    [Fact]
-    public void ShouldFallback_WhenOperationCanceled_ShouldReturnFalse()
-    {
-        var options = new WorkflowRunBehaviorOptions();
-        options.DirectFallbackWorkflowWhitelist.Add("analysis");
-        var policy = new WorkflowDirectFallbackPolicy(options);
-        var request = new WorkflowChatRunRequest("hello", "analysis", null, null);
-
-        var shouldFallback = policy.ShouldFallback(
-            request,
-            new OperationCanceledException("cancelled"));
-
-        shouldFallback.Should().BeFalse();
-    }
-
-    [Fact]
-    public void ShouldFallback_WhenWorkflowIsNotWhitelisted_ShouldReturnFalse()
-    {
-        var policy = new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions());
-        var request = new WorkflowChatRunRequest("hello", "analysis", null, null);
-
-        var shouldFallback = policy.ShouldFallback(
-            request,
-            new WorkflowDirectFallbackTriggerException("boom"));
-
-        shouldFallback.Should().BeFalse();
-    }
-
-    [Fact]
-    public void ShouldFallback_WhenWorkflowAndExceptionAreWhitelisted_ShouldReturnTrue()
-    {
-        var options = new WorkflowRunBehaviorOptions();
-        options.DirectFallbackWorkflowWhitelist.Add("analysis");
-        var policy = new WorkflowDirectFallbackPolicy(options);
-        var request = new WorkflowChatRunRequest("hello", "analysis", null, null);
-
-        var shouldFallback = policy.ShouldFallback(
-            request,
-            new WorkflowDirectFallbackTriggerException("boom"));
-
-        shouldFallback.Should().BeTrue();
-    }
-
-    [Fact]
-    public void ShouldFallback_WhenInlineYamlProvided_ShouldReturnFalse()
-    {
-        var options = new WorkflowRunBehaviorOptions();
-        options.DirectFallbackWorkflowWhitelist.Add("analysis");
-        var policy = new WorkflowDirectFallbackPolicy(options);
-        var request = new WorkflowChatRunRequest("hello", "analysis", null, ["name: inline"]);
-
-        var shouldFallback = policy.ShouldFallback(
-            request,
-            new WorkflowDirectFallbackTriggerException("boom"));
-
-        shouldFallback.Should().BeFalse();
-    }
-
-    [Fact]
-    public void ToFallbackRequest_ShouldForceDirectAndClearInlineYaml()
-    {
-        var policy = new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions());
-        var request = new WorkflowChatRunRequest(
-            Prompt: "hello",
-            WorkflowName: "analysis",
-            DefinitionActorId: "actor-1",
-            WorkflowYamls: ["name: inline"]);
-
-        var fallback = policy.ToFallbackRequest(request);
-
-        fallback.WorkflowName.Should().Be("direct");
-        fallback.WorkflowYamls.Should().BeNull();
-        fallback.DefinitionActorId.Should().BeNull();
-        fallback.Prompt.Should().Be("hello");
+            executionEngine);
     }
 }
 
@@ -721,7 +618,7 @@ public class WorkflowRunActorResolverTests
     }
 
     [Fact]
-    public async Task ResolveOrCreateAsync_WhenRegistryWorkflowConfigureThrows_ShouldWrapAsFallbackTriggerException()
+    public async Task ResolveOrCreateAsync_WhenRegistryWorkflowConfigureThrows_ShouldPropagateOriginalException()
     {
         var createdActor = new FakeActor("created-actor", null, new FakeWorkflowAgent("wf-agent-auto"));
         var actorPort = new FakeWorkflowRunActorPort([], () => createdActor)
@@ -736,9 +633,8 @@ public class WorkflowRunActorResolverTests
             new WorkflowChatRunRequest("hello", "auto", null),
             CancellationToken.None);
 
-        var exception = await act.Should().ThrowAsync<WorkflowDirectFallbackTriggerException>();
-        exception.Which.InnerException.Should().BeOfType<InvalidOperationException>();
-        exception.Which.Message.Should().Contain("auto");
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*bind failed*");
     }
 
     [Fact]

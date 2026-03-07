@@ -1,8 +1,8 @@
-# Runtime Phase-4 Core Decomposition And Final Cleanup 重构蓝图（Proposed, Breaking Change）
+# Runtime Phase-4 Core Decomposition And Final Cleanup 重构蓝图（Delivered, Breaking Change）
 
 ## 1. 文档元信息
 
-1. 状态：`Proposed`
+1. 状态：`Delivered`
 2. 版本：`v1`
 3. 日期：`2026-03-07`
 4. 决策级别：`Architecture Breaking Change`
@@ -21,9 +21,9 @@
    - Orleans reminder-only durable callback 主策略
    - 已完成的 phase-1 / phase-2 / phase-3 重构内容
 7. 本版结论：
-   - 当前仓库已经没有 phase-1/2/3 级别的 correctness blocker。
-   - 剩余问题主要是“主 actor 仍然过大”“历史索引/兼容壳仍在”“少量 Core/Infrastructure 边界还可继续收紧”。
-   - 本阶段目标不是补 bug，而是把已经正确的系统继续压缩成更稳、更小、更难回流的终态。
+   - 本阶段工作已完成，phase-4 文档中列出的结构性问题已在主干实现中收口。
+   - `WorkflowRunGAgent` 已继续拆成显式协作者，`ScriptEvolutionManagerGAgent` 已删除，`pending_definition_queries` 已收窄到最小事实集。
+   - `InMemoryConnectorRegistry` 已下沉到 Infrastructure，Hosting/demo 的兼容命名与配置壳也已删除。
 
 ## 2. 背景
 
@@ -42,17 +42,17 @@
 2. `docs/architecture/workflow-runtime-phase2-full-decoupling-refactor-blueprint-2026-03-07.md`
 3. `docs/architecture/runtime-phase3-final-architecture-debt-elimination-blueprint-2026-03-07.md`
 
-本蓝图解决的是这些重构后的“剩余大块头和冗余壳”：
+本蓝图记录的是已交付的 phase-4 收口内容：
 
-1. `WorkflowRunGAgent` 仍是大型 orchestrator。
-2. `ScriptEvolutionManagerGAgent` 仍以“索引 actor”形式残留。
-3. `ScriptRuntimeState.pending_definition_queries` 还存在可继续瘦身的冗余字段。
-4. `InMemoryConnectorRegistry` 还在 Core。
-5. Hosting/demo 还保留少量 `legacy`/兼容语义名。
+1. `WorkflowRunGAgent` 已继续拆成显式协作者，不再把新增原语逻辑堆回 actor shell。
+2. `ScriptEvolutionManagerGAgent` 已删除，proposal 生命周期由 `ScriptEvolutionSessionGAgent` 单独持有。
+3. `ScriptRuntimeState.pending_definition_queries` 已收窄到最小恢复事实集。
+4. `InMemoryConnectorRegistry` 已从 Core 下沉到 Infrastructure。
+5. Hosting/demo 中的兼容命名与旧配置别名已清理。
 
-## 3. 剩余结构性问题
+## 3. 交付前问题快照（已解决）
 
-### P1. `WorkflowRunGAgent` 仍然过大
+### P1. `WorkflowRunGAgent` 过大（交付前）
 
 当前非生成代码中，Workflow runtime 最大热点仍是：
 
@@ -68,16 +68,16 @@
 2. `step dispatch / callback reconcile / effect assembly / primitive-specialized logic` 仍混杂。
 3. 一旦继续加原语或扩展，这个点最容易再次膨胀。
 
-### P2. `ScriptEvolutionManagerGAgent` 仍是可删的索引壳
+### P2. `ScriptEvolutionManagerGAgent` 是可删的索引壳（交付前）
 
-当前生产链上：
+交付前生产链上：
 
 1. `ScriptEvolutionSessionGAgent` 已经是 proposal 生命周期 owner。
 2. `ScriptEvolutionManagerState` 只剩：
    - `proposal_session_actor_ids`
    - `latest_proposal_by_script`
-3. `IScriptingActorAddressResolver` 仍暴露 `GetEvolutionManagerActorId()`。
-4. `RuntimeScriptEvolutionLifecycleService` 与 `ScriptEvolutionSessionGAgent` 仍会 best-effort 调 manager actor。
+3. `IScriptingActorAddressResolver` 当时仍暴露 `GetEvolutionManagerActorId()`。
+4. `RuntimeScriptEvolutionLifecycleService` 与 `ScriptEvolutionSessionGAgent` 当时仍会 best-effort 调 manager actor。
 
 问题本质：
 
@@ -85,9 +85,9 @@
 2. 当前索引 map 没有形成强业务事实源，只是“还没删掉的中间壳”。
 3. 继续保留会让 Scripting 侧维持“session actor + index actor”双心智。
 
-### P3. `ScriptRuntimeState.pending_definition_queries` 还不是最小事实集
+### P3. `ScriptRuntimeState.pending_definition_queries` 不是最小事实集（交付前）
 
-当前 `PendingScriptDefinitionQueryState` 仍持久化：
+交付前 `PendingScriptDefinitionQueryState` 持久化：
 
 1. `request_id`
 2. `run_event`
@@ -104,9 +104,9 @@
 1. 正确性已经足够，但 persisted fact 还不够瘦。
 2. 如果不继续收口，后续很容易又把“方便字段”加回 business state。
 
-### P4. `InMemoryConnectorRegistry` 仍在 Core
+### P4. `InMemoryConnectorRegistry` 在 Core（交付前）
 
-当前：
+交付前：
 
 1. `src/workflow/Aevatar.Workflow.Core/Connectors/InMemoryConnectorRegistry.cs` 是默认 `IConnectorRegistry` 实现。
 2. `src/workflow/Aevatar.Workflow.Core/ServiceCollectionExtensions.cs` 直接注册这个 in-memory 实现。
@@ -117,12 +117,12 @@
 2. 把它留在 Core 会继续模糊 `Domain/Core` 与 `Infrastructure` 的边界。
 3. 即使它不构成 correctness 风险，也不符合“开发期实现显式下沉”的架构要求。
 
-### P5. Hosting/demo 还残留少量兼容语义名
+### P5. Hosting/demo 残留少量兼容语义名（交付前）
 
-当前仍存在：
+交付前仍存在：
 
-1. `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowProjectionProviderServiceCollectionExtensions.cs` 中的 `legacyDocumentProvider` / `legacyGraphProvider`。
-2. `demos/Aevatar.Demos.Workflow.Web/Program.cs` 中的 `human-interaction-legacy` 分组键。
+1. `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowProjectionProviderServiceCollectionExtensions.cs` 中的旧 provider 别名配置面。
+2. `demos/Aevatar.Demos.Workflow.Web/Program.cs` 中的旧 demo 分组命名。
 
 问题本质：
 
@@ -233,7 +233,7 @@ flowchart LR
 #### 6.2.3 新模型
 
 1. session actor id 由 proposal id 纯函数推导，或由 application/lifecycle service 直接确定。
-2. decision fallback 直接查 session actor。
+2. decision 查询直接以 session actor 为准，不再保留额外 fallback 端口。
 3. rollback 直接走 session/callback 或 catalog port，不再经 manager。
 
 #### 6.2.4 主要影响文件
@@ -244,10 +244,9 @@ flowchart LR
 4. `src/Aevatar.Scripting.Core/Ports/IScriptingActorAddressResolver.cs`
 5. `src/Aevatar.Scripting.Infrastructure/Ports/DefaultScriptingActorAddressResolver.cs`
 6. `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionLifecycleService.cs`
-7. `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionDecisionFallbackPort.cs`
-8. `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptEvolutionManagerGAgentTests.cs`
-9. `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptEvolutionSessionGAgentTests.cs`
-10. `test/Aevatar.Integration.Tests/*ScriptAutonomousEvolution*`
+7. `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptEvolutionManagerGAgentTests.cs`
+8. `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptEvolutionSessionGAgentTests.cs`
+9. `test/Aevatar.Integration.Tests/*ScriptAutonomousEvolution*`
 
 #### 6.2.5 验收标准
 
@@ -355,16 +354,16 @@ flowchart LR
 4. `src/workflow/*/README.md`
 5. `docs/architecture/*.md` 中当前有效蓝图
 
-## 7. 实施顺序
+## 7. 实施结果
 
-推荐顺序如下：
+已按下列顺序完成交付：
 
-1. `WP3`：先删 `ScriptRuntime` 冗余字段，风险最低，收益明确。
-2. `WP2`：再删 `ScriptEvolutionManagerGAgent`，收掉双 actor 心智。
-3. `WP4`：把 connector registry 下沉到 Infrastructure。
+1. `WP3`：删除 `PendingScriptDefinitionQueryState.TimeoutCallbackId`，timeout callback id 改为纯函数构造。
+2. `WP2`：删除 `ScriptEvolutionManagerGAgent`、地址解析与相关 proto/tests。
+3. `WP4`：把 `InMemoryConnectorRegistry` 从 Core 下沉到 Infrastructure。
 4. `WP5`：删除 Hosting/demo 兼容壳与旧命名。
-5. `WP1`：最后做 `WorkflowRunGAgent` 深拆，因为影响面最大。
-6. `WP6`：每个 WP 结束后同步门禁与文档，而不是最后一次性补。
+5. `WP1`：为 `WorkflowRunGAgent` 增加 `WorkflowRunReducer / WorkflowPrimitiveExecutionPlanner / WorkflowAsyncOperationReconciler / WorkflowRunEffectDispatcher`，继续压薄 actor shell。
+6. `WP6`：同步完成 active docs、README、CI guards 与覆盖测试。
 
 ## 8. 影响分析
 
@@ -379,7 +378,7 @@ flowchart LR
 
 ### 8.2 最大风险
 
-1. 删除 manager actor 时，若 session actor 定位策略不统一，可能打断 rollback / decision fallback。
+1. 删除 manager actor 时，若 session actor 定位策略不统一，可能打断 rollback / decision query。
 2. `WorkflowRunGAgent` 深拆时，若 reducer/effect 边界不清，会引入隐藏行为漂移。
 3. 删除 `TimeoutCallbackId` 后，若运行时构造函数与旧 tests 不一致，会造成 replay 契约断裂。
 
@@ -422,12 +421,6 @@ flowchart LR
 7. `dotnet build aevatar.slnx --nologo` 通过。
 8. `dotnet test aevatar.slnx --nologo` 通过。
 
-## 11. 最终建议
+## 11. 交付结论
 
-如果只选择一个工作包立刻开始，优先做 `WP2 + WP3`：
-
-1. 这两项最能继续压缩 Scripting 的概念面。
-2. 改动比 `WorkflowRunGAgent` 深拆小得多。
-3. 但能直接删掉一层 actor 与一批冗余 proto 字段。
-
-如果要做真正的“最终架构瘦身”，则应按 `WP3 -> WP2 -> WP4 -> WP5 -> WP1` 顺序执行。这样可以先把低风险、高清晰度的删除项收掉，再进入 `WorkflowRunGAgent` 的大拆分。
+phase-4 文档中定义的 `WP1` 到 `WP6` 已全部完成，当前仓库不再保留本蓝图所列的兼容壳、冗余索引 actor、冗余 pending callback 字段和 Core 层 in-memory connector 实现。后续若继续重构，应进入新的 phase 文档，而不是继续沿用本蓝图追加未交付事项。

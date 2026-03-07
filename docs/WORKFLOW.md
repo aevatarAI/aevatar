@@ -71,12 +71,12 @@ flowchart LR
 7. 持有 `pending_sub_workflows/pending_child_run_ids_by_parent_run_id`。
 8. reactivation 后重建编译缓存、重放 `WorkflowRunStatePatchedEvent`、重发 suspended facts。
 9. 内部实现已按职责拆分为：
-   - `WorkflowRunGAgent.cs`：run core reducer 与入口事件处理
-   - `WorkflowRunGAgent.StepRequests.cs`：stateful step request handlers
-   - `WorkflowRunGAgent.StatefulCompletions.cs`：fanout/loop/cache 聚合收敛
-   - `WorkflowRunGAgent.Callbacks.cs`：timeout/retry/LLM response 对账
-   - `WorkflowRunGAgent.Dispatch.cs`：step dispatch 与 sub-workflow completion
-   - `WorkflowRunGAgent.Infrastructure.cs`：helper 与 `WorkflowRunEffectDispatcher`
+   - `WorkflowRunGAgent.cs`：actor shell 与 ingress event handlers
+   - `WorkflowRunReducer.cs`：state reducer 入口
+   - `WorkflowPrimitiveExecutionPlanner.cs`：step type routing 与 primitive planning
+   - `WorkflowAsyncOperationReconciler.cs`：callback / LLM response / stateful completion 对账入口
+   - `WorkflowRunEffectDispatcher.cs`：actor tree、durable callback、sub-workflow effect
+   - `WorkflowRunGAgent.StepRequests.cs` / `StatefulCompletions.cs` / `Callbacks.cs` / `Dispatch.cs` / `Infrastructure.cs`：剩余 stateful primitive 与 helper 实现，继续只作为过渡切片，不再视为最终边界。
 
 ## 4. 原语归属
 
@@ -226,16 +226,20 @@ public sealed class MyWorkflowModulePack : IWorkflowModulePack
 
 1. `src/workflow/Aevatar.Workflow.Core/WorkflowGAgent.cs`
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`
-3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StepRequests.cs`
-4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StatefulCompletions.cs`
-5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Callbacks.cs`
-6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Dispatch.cs`
-7. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
-8. `src/workflow/Aevatar.Workflow.Core/workflow_state.proto`
-9. `src/workflow/Aevatar.Workflow.Core/workflow_run_state.proto`
-10. `src/workflow/Aevatar.Workflow.Core/WorkflowCoreModulePack.cs`
-11. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs`
-12. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowCapabilityEndpoints*.cs`
+3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunReducer.cs`
+4. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
+5. `src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs`
+6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunEffectDispatcher.cs`
+7. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StepRequests.cs`
+8. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StatefulCompletions.cs`
+9. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Callbacks.cs`
+10. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Dispatch.cs`
+11. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
+12. `src/workflow/Aevatar.Workflow.Core/workflow_state.proto`
+13. `src/workflow/Aevatar.Workflow.Core/workflow_run_state.proto`
+14. `src/workflow/Aevatar.Workflow.Core/WorkflowCoreModulePack.cs`
+15. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs`
+16. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowCapabilityEndpoints*.cs`
 
 更完整的系统说明见：
 

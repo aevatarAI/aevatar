@@ -51,9 +51,6 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionProjectionContext>,
             ScriptEvolutionPromotedEventReducer>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionProjectionContext>,
-            ScriptEvolutionRolledBackEventReducer>());
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<ScriptProjectionContext, IReadOnlyList<string>>,

@@ -23,7 +23,6 @@ public sealed partial class ScriptRuntimeGAgent
             RequestId = queued.RequestId ?? string.Empty,
             RunEvent = queued.RunEvent?.Clone() ?? new RunScriptRequestedEvent(),
             QueuedAtUnixTimeMs = queued.QueuedAtUnixTimeMs,
-            TimeoutCallbackId = queued.TimeoutCallbackId ?? string.Empty,
         };
         return next;
     }

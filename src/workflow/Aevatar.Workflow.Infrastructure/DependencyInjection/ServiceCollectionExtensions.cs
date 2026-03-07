@@ -2,9 +2,11 @@ using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Infrastructure.Connectors;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Infrastructure.Workflows;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -25,8 +27,9 @@ public static class ServiceCollectionExtensions
         // Application registers NoopWorkflowExecutionReportArtifactSink via TryAddSingleton;
         // Infrastructure must use Replace to override it.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>());
+        services.TryAddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
         services.TryAddSingleton<IWorkflowRunActorPort, WorkflowRunActorPort>();
-        services.TryAddSingleton<IWorkflowDefinitionLookupService>(sp => sp.GetRequiredService<IWorkflowDefinitionCatalog>());
+        services.TryAddSingleton<IWorkflowDefinitionLookupService>(sp => sp.GetService<IWorkflowDefinitionCatalog>()!);
         services.TryAddSingleton<IWorkflowDefinitionResolver, CatalogWorkflowDefinitionResolver>();
         return services;
     }

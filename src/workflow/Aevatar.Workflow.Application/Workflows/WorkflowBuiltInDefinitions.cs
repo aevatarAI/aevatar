@@ -4,7 +4,7 @@ public static class WorkflowBuiltInDefinitions
 {
     public static string DirectYaml { get; } = """
         name: direct
-        description: Direct chat workflow for explicit direct runs and fallback recovery.
+        description: Direct chat workflow for explicit direct runs.
         roles:
           - id: assistant
             name: Assistant

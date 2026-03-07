@@ -51,7 +51,6 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             CandidateRevision = proposal.CandidateRevision,
         });
 
-        await TryIndexProposalAsync(proposal, CancellationToken.None);
         await ExecuteProposalAsync(proposal, CancellationToken.None);
     }
 
@@ -281,30 +280,6 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             definitionActorId,
             catalogActorId,
             diagnostics), ct);
-    }
-
-    private async Task TryIndexProposalAsync(
-        ScriptEvolutionProposal proposal,
-        CancellationToken ct)
-    {
-        var managerActorId = _addressResolver.GetEvolutionManagerActorId();
-        try
-        {
-            await SendToAsync(managerActorId, new ScriptEvolutionProposalIndexedEvent
-            {
-                ProposalId = proposal.ProposalId,
-                ScriptId = proposal.ScriptId,
-                SessionActorId = Id,
-            }, ct);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(
-                ex,
-                "Failed to index script evolution proposal. session_actor_id={SessionActorId} proposal_id={ProposalId}",
-                Id,
-                proposal.ProposalId);
-        }
     }
 
     private Task SendQueryResponseAsync(

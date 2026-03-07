@@ -1,4 +1,3 @@
-using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -11,13 +10,11 @@ namespace Aevatar.Workflow.Core;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers Cognitive defaults:
-    /// - <see cref="IConnectorRegistry"/> (in-memory)
+    /// Registers workflow core module packs and primitive handlers.
     /// </summary>
     public static IServiceCollection AddAevatarWorkflow(this IServiceCollection services)
     {
         services.AddWorkflowModulePack<WorkflowCoreModulePack>();
-        services.TryAddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
         return services;
     }
 

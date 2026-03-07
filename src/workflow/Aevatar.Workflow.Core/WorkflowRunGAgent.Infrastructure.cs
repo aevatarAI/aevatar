@@ -47,6 +47,74 @@ public sealed partial class WorkflowRunGAgent
     private EventEnvelope CreateRoleAgentInitializeEnvelope(RoleDefinition role) =>
         _effectDispatcher.CreateRoleAgentInitializeEnvelope(role);
 
+    private async Task<string> ResolveWorkflowYamlCoreAsync(string workflowName, CancellationToken ct)
+    {
+        foreach (var (registeredName, yaml) in State.InlineWorkflowYamls)
+        {
+            if (string.Equals(registeredName, workflowName, StringComparison.OrdinalIgnoreCase))
+                return yaml;
+        }
+
+        var resolver = _workflowDefinitionResolver ?? Services?.GetService<IWorkflowDefinitionResolver>();
+        if (resolver == null)
+            throw new InvalidOperationException("workflow_call requires IWorkflowDefinitionResolver service registration.");
+
+        var yamlFromResolver = await resolver.GetWorkflowYamlAsync(workflowName, ct);
+        if (string.IsNullOrWhiteSpace(yamlFromResolver))
+            throw new InvalidOperationException($"workflow_call references unregistered workflow '{workflowName}'");
+        return yamlFromResolver;
+    }
+
+    private EventEnvelope CreateWorkflowDefinitionBindEnvelopeCore(string workflowYaml, string workflowName)
+    {
+        var bind = new BindWorkflowDefinitionEvent
+        {
+            WorkflowYaml = workflowYaml ?? string.Empty,
+            WorkflowName = workflowName ?? string.Empty,
+        };
+        foreach (var (name, yaml) in State.InlineWorkflowYamls)
+            bind.InlineWorkflowYamls[name] = yaml;
+
+        return new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(bind),
+            PublisherId = Id,
+            Direction = EventDirection.Self,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        };
+    }
+
+    private EventEnvelope CreateRoleAgentInitializeEnvelopeCore(RoleDefinition role)
+    {
+        var initialize = new InitializeRoleAgentEvent
+        {
+            RoleName = role.Name ?? string.Empty,
+            ProviderName = string.IsNullOrWhiteSpace(role.Provider) ? string.Empty : role.Provider,
+            Model = string.IsNullOrWhiteSpace(role.Model) ? string.Empty : role.Model,
+            SystemPrompt = role.SystemPrompt ?? string.Empty,
+            MaxTokens = role.MaxTokens ?? 0,
+            MaxToolRounds = role.MaxToolRounds ?? 0,
+            MaxHistoryMessages = role.MaxHistoryMessages ?? 0,
+            StreamBufferCapacity = role.StreamBufferCapacity ?? 0,
+            EventModules = role.EventModules ?? string.Empty,
+            EventRoutes = role.EventRoutes ?? string.Empty,
+        };
+        if (role.Temperature.HasValue)
+            initialize.Temperature = role.Temperature.Value;
+
+        return new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(initialize),
+            PublisherId = Id,
+            Direction = EventDirection.Self,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        };
+    }
+
     private StepRequestEvent BuildStepRequest(StepDefinition step, string input, string runId)
     {
         var request = new StepRequestEvent
@@ -456,127 +524,6 @@ public sealed partial class WorkflowRunGAgent
         public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction, CancellationToken ct)
             where TEvent : IMessage =>
             owner.PublishAsync(evt, direction, ct);
-    }
-
-    private sealed class WorkflowRunEffectDispatcher(WorkflowRunGAgent owner)
-    {
-        public async Task EnsureAgentTreeAsync(CancellationToken ct)
-        {
-            if (owner._compiledWorkflow == null)
-                return;
-
-            var roleAgentType = owner._roleAgentTypeResolver.ResolveRoleAgentType();
-            if (!typeof(IRoleAgent).IsAssignableFrom(roleAgentType))
-                throw new InvalidOperationException($"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
-
-            foreach (var role in owner._compiledWorkflow.Roles)
-            {
-                var childActorId = owner.BuildChildActorId(role.Id);
-                var actor = await owner._runtime.GetAsync(childActorId) ?? await owner._runtime.CreateAsync(roleAgentType, childActorId, ct);
-                await owner._runtime.LinkAsync(owner.Id, actor.Id, ct);
-                await actor.HandleEventAsync(CreateRoleAgentInitializeEnvelope(role), ct);
-            }
-        }
-
-        public async Task ScheduleWorkflowCallbackAsync(
-            string callbackId,
-            TimeSpan dueTime,
-            IMessage evt,
-            int semanticGeneration,
-            string stepId,
-            string? sessionId,
-            string kind,
-            CancellationToken ct)
-        {
-            var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [CallbackSemanticGenerationMetadataKey] = semanticGeneration.ToString(CultureInfo.InvariantCulture),
-                [CallbackRunIdMetadataKey] = owner.State.RunId,
-                [CallbackStepIdMetadataKey] = stepId,
-                [CallbackKindMetadataKey] = kind,
-            };
-            if (!string.IsNullOrWhiteSpace(sessionId))
-                metadata[CallbackSessionIdMetadataKey] = sessionId;
-
-            await owner.ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, metadata, ct);
-        }
-
-        public async Task<IActor> ResolveOrCreateSubWorkflowRunActorAsync(string actorId, CancellationToken ct)
-        {
-            var existing = await owner._runtime.GetAsync(actorId);
-            if (existing != null)
-                return existing;
-
-            return await owner._runtime.CreateAsync<WorkflowRunGAgent>(actorId, ct);
-        }
-
-        public async Task<string> ResolveWorkflowYamlAsync(string workflowName, CancellationToken ct)
-        {
-            foreach (var (registeredName, yaml) in owner.State.InlineWorkflowYamls)
-            {
-                if (string.Equals(registeredName, workflowName, StringComparison.OrdinalIgnoreCase))
-                    return yaml;
-            }
-
-            var resolver = owner._workflowDefinitionResolver ?? owner.Services.GetService<IWorkflowDefinitionResolver>();
-            if (resolver == null)
-                throw new InvalidOperationException("workflow_call requires IWorkflowDefinitionResolver service registration.");
-
-            var yamlFromResolver = await resolver.GetWorkflowYamlAsync(workflowName, ct);
-            if (string.IsNullOrWhiteSpace(yamlFromResolver))
-                throw new InvalidOperationException($"workflow_call references unregistered workflow '{workflowName}'");
-            return yamlFromResolver;
-        }
-
-        public EventEnvelope CreateWorkflowDefinitionBindEnvelope(string workflowYaml, string workflowName)
-        {
-            var bind = new BindWorkflowDefinitionEvent
-            {
-                WorkflowYaml = workflowYaml ?? string.Empty,
-                WorkflowName = workflowName ?? string.Empty,
-            };
-            foreach (var (name, yaml) in owner.State.InlineWorkflowYamls)
-                bind.InlineWorkflowYamls[name] = yaml;
-
-            return new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                Payload = Any.Pack(bind),
-                PublisherId = owner.Id,
-                Direction = EventDirection.Self,
-                CorrelationId = Guid.NewGuid().ToString("N"),
-            };
-        }
-
-        public EventEnvelope CreateRoleAgentInitializeEnvelope(RoleDefinition role)
-        {
-            var initialize = new InitializeRoleAgentEvent
-            {
-                RoleName = role.Name ?? string.Empty,
-                ProviderName = string.IsNullOrWhiteSpace(role.Provider) ? string.Empty : role.Provider,
-                Model = string.IsNullOrWhiteSpace(role.Model) ? string.Empty : role.Model,
-                SystemPrompt = role.SystemPrompt ?? string.Empty,
-                MaxTokens = role.MaxTokens ?? 0,
-                MaxToolRounds = role.MaxToolRounds ?? 0,
-                MaxHistoryMessages = role.MaxHistoryMessages ?? 0,
-                StreamBufferCapacity = role.StreamBufferCapacity ?? 0,
-                EventModules = role.EventModules ?? string.Empty,
-                EventRoutes = role.EventRoutes ?? string.Empty,
-            };
-            if (role.Temperature.HasValue)
-                initialize.Temperature = role.Temperature.Value;
-
-            return new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                Payload = Any.Pack(initialize),
-                PublisherId = owner.Id,
-                Direction = EventDirection.Self,
-                CorrelationId = Guid.NewGuid().ToString("N"),
-            };
-        }
     }
 
     private string BuildChildActorId(string roleId)

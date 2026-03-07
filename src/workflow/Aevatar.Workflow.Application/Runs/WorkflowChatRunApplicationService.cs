@@ -8,19 +8,15 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowRunCommandServi
 {
     private readonly IWorkflowRunContextFactory _runContextFactory;
     private readonly IWorkflowRunExecutionEngine _runExecutionEngine;
-    private readonly WorkflowDirectFallbackPolicy _fallbackPolicy;
-    private readonly ILogger<WorkflowChatRunApplicationService> _logger;
 
     public WorkflowChatRunApplicationService(
         IWorkflowRunContextFactory runContextFactory,
         IWorkflowRunExecutionEngine runExecutionEngine,
-        WorkflowDirectFallbackPolicy fallbackPolicy,
         ILogger<WorkflowChatRunApplicationService>? logger = null)
     {
         _runContextFactory = runContextFactory;
         _runExecutionEngine = runExecutionEngine;
-        _fallbackPolicy = fallbackPolicy;
-        _logger = logger ?? NullLogger<WorkflowChatRunApplicationService>.Instance;
+        _ = logger ?? NullLogger<WorkflowChatRunApplicationService>.Instance;
     }
 
     public async Task<WorkflowChatRunExecutionResult> ExecuteAsync(WorkflowChatRunRequest request, Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync, Func<WorkflowChatRunStarted, CancellationToken, ValueTask>? onStartedAsync = null, CancellationToken ct = default)
@@ -28,16 +24,7 @@ public sealed class WorkflowChatRunApplicationService : IWorkflowRunCommandServi
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
-        try
-        {
-            return await ExecuteWithoutFallbackAsync(request, emitAsync, onStartedAsync, ct);
-        }
-        catch (Exception ex) when (_fallbackPolicy.ShouldFallback(request, ex))
-        {
-            var fallbackRequest = _fallbackPolicy.ToFallbackRequest(request);
-            _logger.LogWarning(ex, "Workflow run failed and falls back to direct. workflow={WorkflowName}, definitionActorId={DefinitionActorId}, hasInlineYamls={HasInlineYamls}", request.WorkflowName ?? "<null>", request.DefinitionActorId ?? "<null>", request.WorkflowYamls is { Count: > 0 });
-            return await ExecuteWithoutFallbackAsync(fallbackRequest, emitAsync, onStartedAsync, ct);
-        }
+        return await ExecuteWithoutFallbackAsync(request, emitAsync, onStartedAsync, ct);
     }
 
     private async Task<WorkflowChatRunExecutionResult> ExecuteWithoutFallbackAsync(WorkflowChatRunRequest request, Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync, Func<WorkflowChatRunStarted, CancellationToken, ValueTask>? onStartedAsync, CancellationToken ct)

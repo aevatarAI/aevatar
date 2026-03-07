@@ -107,7 +107,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             }
 
             var isolatedRunActor = await _actorPort.CreateRunActorAsync(ct);
-            await BindWorkflowDefinitionForRunWithFallbackWrapAsync(
+            await BindWorkflowDefinitionForRunAsync(
                 isolatedRunActor,
                 bindingSnapshot.WorkflowYaml,
                 boundWorkflowName,
@@ -147,7 +147,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         }
         else
         {
-            await BindWorkflowDefinitionForRunWithFallbackWrapAsync(
+            await BindWorkflowDefinitionForRunAsync(
                 runActor,
                 workflowYamlForRun,
                 workflowNameForRun,
@@ -169,25 +169,6 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         CancellationToken ct) =>
         _actorPort.BindWorkflowDefinitionAsync(actor, workflowYaml, workflowName, inlineWorkflowYamls, ct);
-
-    private async Task BindWorkflowDefinitionForRunWithFallbackWrapAsync(
-        IActor actor,
-        string workflowYaml,
-        string workflowName,
-        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
-        CancellationToken ct)
-    {
-        try
-        {
-            await _actorPort.BindWorkflowDefinitionAsync(actor, workflowYaml, workflowName, inlineWorkflowYamls, ct);
-        }
-        catch (Exception ex) when (ex is not WorkflowDirectFallbackTriggerException)
-        {
-            throw new WorkflowDirectFallbackTriggerException(
-                $"Failed to bind workflow definition '{workflowName}' for actor '{actor.Id}'.",
-                ex);
-        }
-    }
 
     private string ResolveDefaultWorkflowName()
     {

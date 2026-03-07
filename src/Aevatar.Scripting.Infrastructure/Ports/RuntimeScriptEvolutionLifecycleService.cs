@@ -12,7 +12,6 @@ public sealed class RuntimeScriptEvolutionLifecycleService
 {
     private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly IScriptEvolutionProjectionLifecyclePort _projectionLifecyclePort;
-    private readonly IScriptEvolutionDecisionFallbackPort _decisionFallbackPort;
     private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly TimeSpan _decisionTimeout;
     private readonly StartScriptEvolutionSessionActorRequestAdapter _startSessionAdapter = new();
@@ -20,13 +19,11 @@ public sealed class RuntimeScriptEvolutionLifecycleService
     public RuntimeScriptEvolutionLifecycleService(
         RuntimeScriptActorAccessor actorAccessor,
         IScriptEvolutionProjectionLifecyclePort projectionLifecyclePort,
-        IScriptEvolutionDecisionFallbackPort decisionFallbackPort,
         IScriptingActorAddressResolver addressResolver,
         IScriptingPortTimeouts timeouts)
     {
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _projectionLifecyclePort = projectionLifecyclePort ?? throw new ArgumentNullException(nameof(projectionLifecyclePort));
-        _decisionFallbackPort = decisionFallbackPort ?? throw new ArgumentNullException(nameof(decisionFallbackPort));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
         _decisionTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
             .GetEvolutionDecisionTimeout();
@@ -38,16 +35,11 @@ public sealed class RuntimeScriptEvolutionLifecycleService
     {
         ArgumentNullException.ThrowIfNull(proposal);
 
-        var managerActorId = _addressResolver.GetEvolutionManagerActorId();
         var normalizedProposalId = string.IsNullOrWhiteSpace(proposal.ProposalId)
             ? Guid.NewGuid().ToString("N")
             : proposal.ProposalId;
         var normalizedProposal = proposal with { ProposalId = normalizedProposalId };
 
-        _ = await _actorAccessor.GetOrCreateAsync<ScriptEvolutionManagerGAgent>(
-            managerActorId,
-            "Script evolution manager actor not found",
-            ct);
         var sessionActorId = _addressResolver.GetEvolutionSessionActorId(normalizedProposalId);
         var sessionActor = await _actorAccessor.GetOrCreateAsync<ScriptEvolutionSessionGAgent>(
             sessionActorId,
@@ -85,14 +77,6 @@ public sealed class RuntimeScriptEvolutionLifecycleService
                 ct);
 
             return MapDecision(normalizedProposal, completed);
-        }
-        catch (TimeoutException)
-        {
-            var fallback = await _decisionFallbackPort.TryResolveAsync(normalizedProposalId, ct);
-            if (fallback != null)
-                return fallback;
-
-            throw;
         }
         finally
         {

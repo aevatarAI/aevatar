@@ -89,8 +89,6 @@ public sealed class ScriptEvolutionReadModelProjector
             return payload.Unpack<ScriptEvolutionRejectedEvent>().ProposalId ?? string.Empty;
         if (payload.Is(ScriptEvolutionPromotedEvent.Descriptor))
             return payload.Unpack<ScriptEvolutionPromotedEvent>().ProposalId ?? string.Empty;
-        if (payload.Is(ScriptEvolutionRolledBackEvent.Descriptor))
-            return payload.Unpack<ScriptEvolutionRolledBackEvent>().ProposalId ?? string.Empty;
 
         return string.Empty;
     }

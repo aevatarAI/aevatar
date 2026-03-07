@@ -44,7 +44,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IWorkflowDefinitionCatalog>(sp => sp.GetRequiredService<InMemoryWorkflowDefinitionCatalog>());
         services.AddSingleton<IWorkflowDefinitionLookupService>(sp => sp.GetRequiredService<InMemoryWorkflowDefinitionCatalog>());
 
-        services.AddSingleton<WorkflowDirectFallbackPolicy>();
         services.AddSingleton<IWorkflowRunActorResolver>(sp =>
             new WorkflowRunActorResolver(
                 sp.GetRequiredService<IWorkflowRunActorPort>(),

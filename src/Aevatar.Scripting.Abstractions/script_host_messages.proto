@@ -68,7 +68,6 @@ message PendingScriptDefinitionQueryState {
   string request_id = 1;
   RunScriptRequestedEvent run_event = 2;
   int64 queued_at_unix_time_ms = 3;
-  string timeout_callback_id = 4;
 }
 
 message ScriptCatalogEntryState {
@@ -102,13 +101,6 @@ message ScriptEvolutionProposalState {
   string promoted_revision = 12;
   string reason = 13;
   string promoted_catalog_actor_id = 14;
-}
-
-message ScriptEvolutionManagerState {
-  map<string, string> proposal_session_actor_ids = 1;
-  map<string, string> latest_proposal_by_script = 2;
-  int64 last_applied_event_version = 3;
-  string last_event_id = 4;
 }
 
 message ScriptEvolutionSessionState {
@@ -248,7 +240,6 @@ message ScriptDefinitionQueryQueuedEvent {
   string request_id = 1;
   RunScriptRequestedEvent run_event = 2;
   int64 queued_at_unix_time_ms = 3;
-  string timeout_callback_id = 4;
 }
 
 message ScriptDefinitionQueryClearedEvent {
@@ -317,12 +308,6 @@ message ScriptEvolutionSessionCompletedEvent {
   repeated string diagnostics = 7;
 }
 
-message ScriptEvolutionProposalIndexedEvent {
-  string proposal_id = 1;
-  string script_id = 2;
-  string session_actor_id = 3;
-}
-
 message ScriptEvolutionProposedEvent {
   string proposal_id = 1;
   string script_id = 2;
@@ -358,22 +343,6 @@ message ScriptEvolutionPromotedEvent {
   string script_id = 2;
   string candidate_revision = 3;
   string definition_actor_id = 4;
-  string catalog_actor_id = 5;
-}
-
-message ScriptEvolutionRollbackRequestedEvent {
-  string proposal_id = 1;
-  string script_id = 2;
-  string target_revision = 3;
-  string reason = 4;
-  string catalog_actor_id = 5;
-}
-
-message ScriptEvolutionRolledBackEvent {
-  string proposal_id = 1;
-  string script_id = 2;
-  string target_revision = 3;
-  string previous_revision = 4;
   string catalog_actor_id = 5;
 }
 

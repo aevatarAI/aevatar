@@ -457,7 +457,6 @@ public class RuntimeScriptEvolutionFlowPortTests
 
     private sealed class StaticAddressResolver : IScriptingActorAddressResolver
     {
-        public string GetEvolutionManagerActorId() => "script-evolution-manager";
         public string GetEvolutionSessionActorId(string proposalId) => "script-evolution-session:" + proposalId;
         public string GetCatalogActorId() => "script-catalog";
         public string GetDefinitionActorId(string scriptId) => "script-definition:" + scriptId;

@@ -1,15 +1,16 @@
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Infrastructure.Workflows;
 
 public sealed class CatalogWorkflowDefinitionResolver : IWorkflowDefinitionResolver
 {
-    private readonly IWorkflowDefinitionLookupService _lookup;
+    private readonly IServiceProvider _services;
 
-    public CatalogWorkflowDefinitionResolver(IWorkflowDefinitionLookupService lookup)
+    public CatalogWorkflowDefinitionResolver(IServiceProvider services)
     {
-        _lookup = lookup;
+        _services = services ?? throw new ArgumentNullException(nameof(services));
     }
 
     public Task<string?> GetWorkflowYamlAsync(string workflowName, CancellationToken ct = default)
@@ -18,6 +19,7 @@ public sealed class CatalogWorkflowDefinitionResolver : IWorkflowDefinitionResol
         if (string.IsNullOrWhiteSpace(workflowName))
             return Task.FromResult<string?>(null);
 
-        return Task.FromResult(_lookup.GetYaml(workflowName.Trim()));
+        var lookup = _services.GetService<IWorkflowDefinitionLookupService>();
+        return Task.FromResult(lookup?.GetYaml(workflowName.Trim()));
     }
 }

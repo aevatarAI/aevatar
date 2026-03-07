@@ -214,7 +214,7 @@ public sealed partial class ScriptRuntimeGAgent
         CancellationToken ct)
     {
         var timeoutLease = await ScheduleSelfDurableTimeoutAsync(
-            pending.TimeoutCallbackId,
+            BuildDefinitionQueryTimeoutCallbackId(pending.RequestId),
             PendingRunTimeout,
             new ScriptDefinitionQueryTimeoutFiredEvent
             {

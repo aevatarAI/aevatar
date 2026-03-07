@@ -180,7 +180,7 @@ public class WorkflowHostingExtensionsCoverageTests
     }
 
     [Fact]
-    public void AddWorkflowProjectionReadModelProviders_WhenLegacyProviderConfigured_ShouldThrow()
+    public void AddWorkflowProjectionReadModelProviders_WhenRemovedSingleSelectionOptionConfigured_ShouldIgnoreLegacyKey()
     {
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder()
@@ -190,10 +190,9 @@ public class WorkflowHostingExtensionsCoverageTests
             })
             .Build();
 
-        Action act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+        services.AddWorkflowProjectionReadModelProviders(configuration);
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Legacy provider single-selection options are no longer supported*");
+        services.Should().Contain(x => x.ServiceType.Name.Contains("WorkflowProjectionProviderRegistrationsMarker", StringComparison.Ordinal));
     }
 
     [Fact]

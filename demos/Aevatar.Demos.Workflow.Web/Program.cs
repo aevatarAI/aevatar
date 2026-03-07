@@ -1301,8 +1301,8 @@ static WorkflowListClassification ClassifyWorkflowForList(
     {
         return new WorkflowListClassification(
             Category: "deterministic",
-            Group: "human-interaction-legacy",
-            GroupLabel: "Human Interaction (Legacy Auto)",
+            Group: "human-interaction-auto",
+            GroupLabel: "Human Interaction (Auto)",
             SortOrder: index.Value);
     }
 

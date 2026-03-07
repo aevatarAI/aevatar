@@ -1,9 +1,9 @@
 using Aevatar.Foundation.Abstractions.Connectors;
 
-namespace Aevatar.Workflow.Core.Connectors;
+namespace Aevatar.Workflow.Infrastructure.Connectors;
 
 /// <summary>
-/// Default in-memory connector registry.
+/// Development/test in-memory connector registry.
 /// Connector names are case-insensitive and later registrations replace earlier ones.
 /// </summary>
 public sealed class InMemoryConnectorRegistry : IConnectorRegistry
@@ -11,14 +11,12 @@ public sealed class InMemoryConnectorRegistry : IConnectorRegistry
     private readonly Dictionary<string, IConnector> _connectors = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _sync = new();
 
-    /// <inheritdoc />
     public void Register(IConnector connector)
     {
         lock (_sync)
             _connectors[connector.Name] = connector;
     }
 
-    /// <inheritdoc />
     public bool TryGet(string name, out IConnector? connector)
     {
         lock (_sync)
@@ -29,7 +27,6 @@ public sealed class InMemoryConnectorRegistry : IConnectorRegistry
         }
     }
 
-    /// <inheritdoc />
     public IReadOnlyList<string> ListNames()
     {
         lock (_sync)

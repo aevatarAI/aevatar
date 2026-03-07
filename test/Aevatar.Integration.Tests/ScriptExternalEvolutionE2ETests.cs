@@ -11,7 +11,7 @@ namespace Aevatar.Integration.Tests;
 public class ScriptExternalEvolutionE2ETests
 {
     [Fact]
-    public async Task ExternalEvolutionFlow_ShouldPromoteRevisionThroughUnifiedManagerChain()
+    public async Task ExternalEvolutionFlow_ShouldPromoteRevisionThroughSessionOwnedEvolutionChain()
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
@@ -37,9 +37,6 @@ public class ScriptExternalEvolutionE2ETests
         decision.CandidateRevision.Should().Be("rev-1");
         decision.DefinitionActorId.Should().Be("script-definition:external-script");
         decision.CatalogActorId.Should().Be("script-catalog");
-
-        var manager = (ScriptEvolutionManagerGAgent)(await runtime.GetAsync("script-evolution-manager"))!.Agent;
-        manager.State.ProposalSessionActorIds.Should().ContainKey("external-proposal-1");
 
         var session = (ScriptEvolutionSessionGAgent)(await runtime.GetAsync("script-evolution-session:external-proposal-1"))!.Agent;
         session.State.Status.Should().Be("promoted");

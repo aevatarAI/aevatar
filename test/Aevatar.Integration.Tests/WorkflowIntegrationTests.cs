@@ -20,7 +20,7 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Core.Connectors;
+using Aevatar.Workflow.Infrastructure.Connectors;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;

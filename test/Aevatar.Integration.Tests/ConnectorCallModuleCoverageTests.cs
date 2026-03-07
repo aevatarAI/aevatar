@@ -3,7 +3,7 @@ using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
-using Aevatar.Workflow.Core.Connectors;
+using Aevatar.Workflow.Infrastructure.Connectors;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;

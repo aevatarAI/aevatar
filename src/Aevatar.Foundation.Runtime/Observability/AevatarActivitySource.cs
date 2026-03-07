@@ -23,7 +23,7 @@ public static class AevatarActivitySource
     /// <summary>ActivitySource instance.</summary>
     public static readonly ActivitySource Source = new("Aevatar.Agents", "1.0.0");
 
-    /// <summary>Starts a HandleEvent activity (legacy, used by LocalActor).</summary>
+    /// <summary>Starts a HandleEvent activity.</summary>
     public static Activity? StartHandleEvent(string agentId, string eventId, string? eventTypeUrl = null)
     {
         var eventTypeName = ResolveEventTypeName(eventTypeUrl);

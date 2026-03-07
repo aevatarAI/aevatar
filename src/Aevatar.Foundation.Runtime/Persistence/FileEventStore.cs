@@ -220,32 +220,8 @@ public sealed class FileEventStore : IEventStore
             return result;
         }
 
-        // Legacy format fallback: [length][event][length][event]...
-        stream.Position = 0;
-        reader.BaseStream.Position = 0;
-
-        while (stream.Position < stream.Length)
-        {
-            ct.ThrowIfCancellationRequested();
-            var payloadLength = reader.ReadInt32();
-            if (payloadLength <= 0)
-            {
-                throw new InvalidOperationException(
-                    $"Corrupted event stream for agent '{agentId}': invalid payload length {payloadLength}.");
-            }
-
-            var payload = reader.ReadBytes(payloadLength);
-            if (payload.Length != payloadLength)
-            {
-                throw new InvalidOperationException(
-                    $"Corrupted event stream for agent '{agentId}': truncated payload.");
-            }
-
-            result.Events.Add(StateEvent.Parser.ParseFrom(payload));
-        }
-
-        result.CurrentVersion = result.Events.Count == 0 ? 0 : result.Events[^1].Version;
-        return result;
+        throw new InvalidOperationException(
+            $"Unsupported event stream header for agent '{agentId}'.");
     }
 
     private void WriteStream(string agentId, EventStreamState stream, CancellationToken ct)

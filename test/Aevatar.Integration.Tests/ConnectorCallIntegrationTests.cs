@@ -5,12 +5,13 @@ using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Core.Connectors;
+using Aevatar.Workflow.Infrastructure.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Aevatar.Workflow.Infrastructure.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
 
@@ -173,6 +174,7 @@ public class ConnectorCallIntegrationTests
         services.AddSingleton(registry);
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
+        services.AddWorkflowInfrastructure();
         services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
         var provider = services.BuildServiceProvider();

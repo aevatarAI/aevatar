@@ -113,14 +113,10 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
 
         options.DefaultWorkflowName.Should().Be("direct");
         options.UseAutoAsDefaultWhenWorkflowUnspecified.Should().BeFalse();
-        options.EnableDirectFallback.Should().BeTrue();
-        options.DirectFallbackWorkflowWhitelist.Should().Contain("auto");
-        options.DirectFallbackWorkflowWhitelist.Should().Contain("auto_review");
-        options.DirectFallbackExceptionWhitelist.Should().Contain(typeof(WorkflowDirectFallbackTriggerException));
     }
 
     [Fact]
-    public void AddWorkflowApplication_WhenConfigured_ShouldApplyRunBehaviorOptionsToFallbackPolicy()
+    public void AddWorkflowApplication_WhenConfigured_ShouldApplyRunBehaviorOptions()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication(
@@ -128,29 +124,13 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             {
                 options.DefaultWorkflowName = "direct";
                 options.UseAutoAsDefaultWhenWorkflowUnspecified = true;
-                options.EnableDirectFallback = true;
-                options.DirectFallbackWorkflowWhitelist.Clear();
-                options.DirectFallbackWorkflowWhitelist.Add("analysis");
-                options.DirectFallbackExceptionWhitelist.Clear();
-                options.DirectFallbackExceptionWhitelist.Add(typeof(TimeoutException));
             });
 
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<WorkflowRunBehaviorOptions>();
-        var policy = provider.GetRequiredService<WorkflowDirectFallbackPolicy>();
 
         options.UseAutoAsDefaultWhenWorkflowUnspecified.Should().BeTrue();
-        options.DirectFallbackWorkflowWhitelist.Should().ContainSingle().Which.Should().Be("analysis");
-        options.DirectFallbackExceptionWhitelist.Should().ContainSingle().Which.Should().Be(typeof(TimeoutException));
-
-        policy.ShouldFallback(new WorkflowChatRunRequest("hello", "analysis", null), new TimeoutException("timeout"))
-            .Should().BeTrue();
-        policy.ShouldFallback(
-                new WorkflowChatRunRequest("hello", "analysis", null),
-                new WorkflowDirectFallbackTriggerException("boom"))
-            .Should().BeFalse();
-        policy.ShouldFallback(new WorkflowChatRunRequest("hello", "analysis", null), new InvalidOperationException("boom"))
-            .Should().BeFalse();
+        options.DefaultWorkflowName.Should().Be("direct");
     }
 
     [Fact]

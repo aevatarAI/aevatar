@@ -34,6 +34,8 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
     private readonly ISet<string> _knownStepTypes;
     private readonly WorkflowRunEffectDispatcher _effectDispatcher;
+    private readonly WorkflowPrimitiveExecutionPlanner _primitiveExecutionPlanner;
+    private readonly WorkflowAsyncOperationReconciler _asyncOperationReconciler;
 
     private WorkflowDefinition? _compiledWorkflow;
 
@@ -54,7 +56,54 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         _primitiveRegistry = new WorkflowPrimitiveRegistry(packs);
         _knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(_primitiveRegistry.RegisteredNames);
         _knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
-        _effectDispatcher = new WorkflowRunEffectDispatcher(this);
+        _effectDispatcher = new WorkflowRunEffectDispatcher(
+            actorIdAccessor: () => Id,
+            runIdAccessor: () => State.RunId,
+            compiledWorkflowAccessor: () => _compiledWorkflow,
+            runtime: _runtime,
+            resolveRoleAgentType: _roleAgentTypeResolver.ResolveRoleAgentType,
+            buildChildActorId: BuildChildActorId,
+            createRoleAgentInitializeEnvelope: CreateRoleAgentInitializeEnvelopeCore,
+            scheduleSelfDurableTimeoutAsync: async (callbackId, dueTime, evt, metadata, ct) =>
+            {
+                await ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, metadata, ct);
+            },
+            resolveWorkflowYamlAsync: ResolveWorkflowYamlCoreAsync,
+            createWorkflowDefinitionBindEnvelope: CreateWorkflowDefinitionBindEnvelopeCore);
+        _primitiveExecutionPlanner = new WorkflowPrimitiveExecutionPlanner(
+            TryHandleRegisteredPrimitiveAsync,
+            new Dictionary<string, WorkflowStepRequestHandler>(StringComparer.Ordinal)
+            {
+                ["delay"] = HandleDelayStepRequestAsync,
+                ["wait_signal"] = HandleWaitSignalStepRequestAsync,
+                ["human_input"] = (request, ct) => HandleHumanGateStepRequestAsync(request, "human_input", ct),
+                ["human_approval"] = (request, ct) => HandleHumanGateStepRequestAsync(request, "human_approval", ct),
+                ["llm_call"] = HandleLlmCallStepRequestAsync,
+                ["evaluate"] = HandleEvaluateStepRequestAsync,
+                ["reflect"] = HandleReflectStepRequestAsync,
+                ["parallel"] = HandleParallelStepRequestAsync,
+                ["foreach"] = HandleForEachStepRequestAsync,
+                ["map_reduce"] = HandleMapReduceStepRequestAsync,
+                ["race"] = HandleRaceStepRequestAsync,
+                ["while"] = HandleWhileStepRequestAsync,
+                ["cache"] = HandleCacheStepRequestAsync,
+                ["workflow_call"] = HandleWorkflowCallStepRequestAsync,
+            });
+        _asyncOperationReconciler = new WorkflowAsyncOperationReconciler(
+            [
+                TryHandleParallelCompletionAsync,
+                TryHandleForEachCompletionAsync,
+                TryHandleMapReduceCompletionAsync,
+                TryHandleRaceCompletionAsync,
+                TryHandleWhileCompletionAsync,
+                TryHandleCacheCompletionAsync,
+            ],
+            HandleWorkflowStepTimeoutFiredAsync,
+            HandleWorkflowStepRetryBackoffFiredAsync,
+            HandleDelayStepTimeoutFiredAsync,
+            HandleWaitSignalTimeoutFiredAsync,
+            HandleLlmCallWatchdogTimeoutFiredAsync,
+            HandleLlmLikeResponseAsync);
     }
 
     public override Task<string> GetDescriptionAsync()
@@ -87,7 +136,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     protected override WorkflowRunState TransitionState(WorkflowRunState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
-            .On<WorkflowRunStatePatchedEvent>((state, updated) => WorkflowRunStatePatchSupport.ApplyPatch(state, updated))
+            .On<WorkflowRunStatePatchedEvent>(WorkflowRunReducer.ApplyPatchedEvent)
             .OrCurrent();
 
     public WorkflowRunBindingSnapshot GetBindingSnapshot() =>
@@ -195,54 +244,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true, Priority = 1)]
     public async Task HandleStepRequest(StepRequestEvent request)
     {
-        var stepType = WorkflowPrimitiveCatalog.ToCanonicalType(request.StepType);
-        switch (stepType)
-        {
-            case "delay":
-                await HandleDelayStepRequestAsync(request, CancellationToken.None);
-                return;
-            case "wait_signal":
-                await HandleWaitSignalStepRequestAsync(request, CancellationToken.None);
-                return;
-            case "human_input":
-            case "human_approval":
-                await HandleHumanGateStepRequestAsync(request, stepType, CancellationToken.None);
-                return;
-            case "llm_call":
-                await HandleLlmCallStepRequestAsync(request, CancellationToken.None);
-                return;
-            case "evaluate":
-                await HandleEvaluateStepRequestAsync(request, CancellationToken.None);
-                return;
-            case "reflect":
-                await HandleReflectStepRequestAsync(request, CancellationToken.None);
-                return;
-            case "parallel":
-                await HandleParallelStepRequestAsync(request, CancellationToken.None);
-                return;
-            case "foreach":
-                await HandleForEachStepRequestAsync(request, CancellationToken.None);
-                return;
-            case "map_reduce":
-                await HandleMapReduceStepRequestAsync(request, CancellationToken.None);
-                return;
-            case "race":
-                await HandleRaceStepRequestAsync(request, CancellationToken.None);
-                return;
-            case "while":
-                await HandleWhileStepRequestAsync(request, CancellationToken.None);
-                return;
-            case "cache":
-                await HandleCacheStepRequestAsync(request, CancellationToken.None);
-                return;
-            case "workflow_call":
-                await HandleWorkflowCallStepRequestAsync(request, CancellationToken.None);
-                return;
-            default:
-                if (await TryHandleRegisteredPrimitiveAsync(request, CancellationToken.None))
-                    return;
-                return;
-        }
+        await _primitiveExecutionPlanner.DispatchAsync(request, CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true, Priority = 2)]
@@ -252,7 +254,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         if (!string.Equals(runId, State.RunId, StringComparison.Ordinal))
             return;
 
-        if (await TryHandleStatefulChildCompletionAsync(evt, CancellationToken.None))
+        if (await _asyncOperationReconciler.TryHandleStatefulCompletionAsync(evt, CancellationToken.None))
             return;
 
         if (!string.Equals(State.ActiveStepId, evt.StepId, StringComparison.Ordinal))
@@ -440,53 +442,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     [AllEventHandler(Priority = 5, AllowSelfHandling = true)]
     public async Task HandleRuntimeCallbackEnvelope(EventEnvelope envelope)
     {
-        var payload = envelope.Payload;
-        if (payload == null)
-            return;
-
-        if (payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor))
-        {
-            await HandleWorkflowStepTimeoutFiredAsync(
-                payload.Unpack<WorkflowStepTimeoutFiredEvent>(),
-                envelope,
-                CancellationToken.None);
-            return;
-        }
-
-        if (payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor))
-        {
-            await HandleWorkflowStepRetryBackoffFiredAsync(
-                payload.Unpack<WorkflowStepRetryBackoffFiredEvent>(),
-                envelope,
-                CancellationToken.None);
-            return;
-        }
-
-        if (payload.Is(DelayStepTimeoutFiredEvent.Descriptor))
-        {
-            await HandleDelayStepTimeoutFiredAsync(
-                payload.Unpack<DelayStepTimeoutFiredEvent>(),
-                envelope,
-                CancellationToken.None);
-            return;
-        }
-
-        if (payload.Is(WaitSignalTimeoutFiredEvent.Descriptor))
-        {
-            await HandleWaitSignalTimeoutFiredAsync(
-                payload.Unpack<WaitSignalTimeoutFiredEvent>(),
-                envelope,
-                CancellationToken.None);
-            return;
-        }
-
-        if (payload.Is(LlmCallWatchdogTimeoutFiredEvent.Descriptor))
-        {
-            await HandleLlmCallWatchdogTimeoutFiredAsync(
-                payload.Unpack<LlmCallWatchdogTimeoutFiredEvent>(),
-                envelope,
-                CancellationToken.None);
-        }
+        await _asyncOperationReconciler.HandleRuntimeCallbackEnvelopeAsync(envelope, CancellationToken.None);
     }
 
     [AllEventHandler(Priority = 40, AllowSelfHandling = true)]
@@ -505,30 +461,10 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     [AllEventHandler(Priority = 30, AllowSelfHandling = true)]
     public async Task HandleRoleAndPromptResponseEnvelope(EventEnvelope envelope)
     {
-        var payload = envelope.Payload;
-        if (payload == null)
-            return;
-
-        if (payload.Is(TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageEndEvent>();
-            await HandleLlmLikeResponseAsync(
-                evt.SessionId,
-                evt.Content ?? string.Empty,
-                envelope.PublisherId,
-                CancellationToken.None);
-            return;
-        }
-
-        if (payload.Is(ChatResponseEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ChatResponseEvent>();
-            await HandleLlmLikeResponseAsync(
-                evt.SessionId,
-                evt.Content ?? string.Empty,
-                string.IsNullOrWhiteSpace(envelope.PublisherId) ? Id : envelope.PublisherId,
-                CancellationToken.None);
-        }
+        await _asyncOperationReconciler.HandleRoleAndPromptResponseEnvelopeAsync(
+            envelope,
+            defaultPublisherId: Id,
+            CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]

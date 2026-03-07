@@ -41,8 +41,6 @@ Aevatar.Workflow.Application/
 
 - `WorkflowChatRunApplicationService`
   - `ExecuteAsync` 单入口：参数校验 + 获取 run context + 委托执行引擎。
-  - `direct` 回退由 `WorkflowDirectFallbackPolicy` 控制：仅白名单 workflow + 白名单异常触发一次回退。
-  - inline `workflowYamls` 请求默认不参与自动回退，避免掩盖编排配置错误。
 - `WorkflowRunContextFactory`
   - 负责 actor 解析、command context 构造、projection lease 初始化与 live sink attach。
 - `WorkflowRunExecutionEngine`
@@ -82,7 +80,6 @@ services.AddWorkflowApplication(
     configureRunBehavior: opt =>
     {
         opt.UseAutoAsDefaultWhenWorkflowUnspecified = false; // default
-        opt.DirectFallbackWorkflowWhitelist.Add("auto");
     });
 ```
 
@@ -90,7 +87,7 @@ services.AddWorkflowApplication(
 - `IWorkflowChatRunApplicationService`
 - `IWorkflowExecutionQueryApplicationService`
 - `IWorkflowDefinitionCatalog`
-- `WorkflowRunBehaviorOptions` + `WorkflowDirectFallbackPolicy`
+- `WorkflowRunBehaviorOptions`
 - `IWorkflowExecutionRunOrchestrator` + `IWorkflowExecutionTopologyResolver`
 - `IWorkflowRunActorResolver`、`IWorkflowRunRequestExecutor`、`IWorkflowRunOutputStreamer`
 - `IWorkflowChatRequestEnvelopeFactory`
