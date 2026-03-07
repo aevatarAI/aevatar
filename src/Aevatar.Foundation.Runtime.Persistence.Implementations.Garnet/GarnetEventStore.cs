@@ -22,7 +22,7 @@ public sealed class GarnetEventStore : IEventStore
 
                                       local expected = tonumber(ARGV[1])
                                       if current ~= expected then
-                                        return {0, current, expected}
+                                        return {0, current, tostring(ARGV[1] or 'NIL'), type(ARGV[1]), tostring(expected or 'NIL')}
                                       end
 
                                       local count = tonumber(ARGV[2])
@@ -112,19 +112,20 @@ public sealed class GarnetEventStore : IEventStore
         ct.ThrowIfCancellationRequested();
 
         var result = (RedisResult[])rawResult!;
-        if (result.Length < 2 || result.Length > 3)
+        if (result.Length < 2 || result.Length > 5)
             throw new InvalidOperationException("Unexpected Garnet append script result.");
 
         var status = (long)result[0];
         var actualVersion = (long)result[1];
         if (status == 0)
         {
-            var luaExpected = result.Length > 2 ? (long)result[2] : -1;
             var rawParts = string.Join(", ", result.Select(
                 (r, i) => $"result[{i}]={{raw={r}, type={r.Resp2Type}}}"));
+            var ev = (RedisValue)expectedVersion.ToString();
             throw new InvalidOperationException(
                 $"Optimistic concurrency conflict: expected {expectedVersion}, actual {actualVersion}, " +
-                $"luaExpected {luaExpected}, " +
+                $"redisValue={{raw={scriptArgs[0]}, hasValue={scriptArgs[0].HasValue}, isInteger={scriptArgs[0].IsInteger}, isNull={scriptArgs[0].IsNull}}}, " +
+                $"redisValueStr={{raw={ev}, hasValue={ev.HasValue}, isInteger={ev.IsInteger}, isNull={ev.IsNull}}}, " +
                 $"rawResult=[{rawParts}]");
         }
 

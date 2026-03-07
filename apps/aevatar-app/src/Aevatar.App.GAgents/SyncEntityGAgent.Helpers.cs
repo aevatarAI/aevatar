@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -88,109 +89,111 @@ public sealed partial class SyncEntityGAgent
         DeletedAt = entity.DeletedAt
     };
 
-    protected override SyncEntityState TransitionState(SyncEntityState current, IMessage evt)
+    protected override SyncEntityState TransitionState(SyncEntityState current, IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<EntityCreatedEvent>(ApplyCreated)
+            .On<EntityUpdatedEvent>(ApplyUpdated)
+            .On<EntitiesSyncedEvent>(ApplySynced)
+            .On<AccountDeletedEvent>(ApplyDeleted)
+            .OrCurrent();
+
+    private static SyncEntityState ApplyCreated(SyncEntityState current, EntityCreatedEvent created)
     {
-        switch (evt)
+        var entity = new SyncEntity
         {
-            case EntityCreatedEvent created:
-            {
-                var entity = new SyncEntity
-                {
-                    UserId = created.UserId,
-                    ClientId = created.ClientId,
-                    EntityType = created.EntityType,
-                    Revision = created.Revision,
-                    Source = created.Source,
-                    Inputs = created.Inputs,
-                    Output = created.Output,
-                    State = created.State,
-                    Position = created.Position,
-                    BankEligible = created.BankEligible,
-                    BankHash = created.BankHash,
-                    CreatedAt = created.CreatedAt,
-                    DeletedAt = created.DeletedAt
-                };
-                entity.Refs.Add(created.Refs);
-                current.Entities[entity.ClientId] = entity;
-                current.Meta ??= new SyncMeta();
-                current.Meta.UserId = created.UserId;
-                current.Meta.Revision = Math.Max(current.Meta.Revision, created.Revision);
-                return current;
-            }
-            case EntityUpdatedEvent updated:
-            {
-                current.Entities.TryGetValue(updated.ClientId, out var existing);
-                var entity = new SyncEntity
-                {
-                    UserId = updated.UserId,
-                    ClientId = updated.ClientId,
-                    EntityType = updated.EntityType,
-                    Revision = updated.Revision,
-                    Source = updated.Source,
-                    Inputs = updated.Inputs,
-                    Output = updated.Output,
-                    State = updated.State,
-                    Position = updated.Position,
-                    BankEligible = updated.BankEligible,
-                    BankHash = updated.BankHash,
-                    CreatedAt = existing?.CreatedAt,
-                    UpdatedAt = updated.UpdatedAt,
-                    DeletedAt = updated.DeletedAt
-                };
-                entity.Refs.Add(updated.Refs);
-                current.Entities[entity.ClientId] = entity;
-                current.Meta ??= new SyncMeta();
-                current.Meta.UserId = updated.UserId;
-                current.Meta.Revision = Math.Max(current.Meta.Revision, updated.Revision);
-                return current;
-            }
-            case EntitiesSyncedEvent synced:
-            {
-                current.Meta ??= new SyncMeta();
-                current.Meta.UserId = synced.UserId;
-                current.Meta.Revision = Math.Max(current.Meta.Revision, synced.ServerRevision);
-                current.LastSyncResult = new LastSyncResult
-                {
-                    SyncId = synced.SyncId,
-                    ClientRevision = synced.ClientRevision,
-                    ServerRevision = synced.ServerRevision,
-                };
-                current.LastSyncResult.Accepted.AddRange(synced.Accepted);
-                current.LastSyncResult.Rejected.AddRange(synced.Rejected);
+            UserId = created.UserId,
+            ClientId = created.ClientId,
+            EntityType = created.EntityType,
+            Revision = created.Revision,
+            Source = created.Source,
+            Inputs = created.Inputs,
+            Output = created.Output,
+            State = created.State,
+            Position = created.Position,
+            BankEligible = created.BankEligible,
+            BankHash = created.BankHash,
+            CreatedAt = created.CreatedAt,
+            DeletedAt = created.DeletedAt
+        };
+        entity.Refs.Add(created.Refs);
+        current.Entities[entity.ClientId] = entity;
+        current.Meta ??= new SyncMeta();
+        current.Meta.UserId = created.UserId;
+        current.Meta.Revision = Math.Max(current.Meta.Revision, created.Revision);
+        return current;
+    }
 
-                if (!string.IsNullOrEmpty(synced.SyncId))
-                {
-                    current.ProcessedSyncIds.Add(synced.SyncId);
-                    while (current.ProcessedSyncIds.Count > IdempotencyWindowSize)
-                        current.ProcessedSyncIds.RemoveAt(0);
-                }
+    private static SyncEntityState ApplyUpdated(SyncEntityState current, EntityUpdatedEvent updated)
+    {
+        current.Entities.TryGetValue(updated.ClientId, out var existing);
+        var entity = new SyncEntity
+        {
+            UserId = updated.UserId,
+            ClientId = updated.ClientId,
+            EntityType = updated.EntityType,
+            Revision = updated.Revision,
+            Source = updated.Source,
+            Inputs = updated.Inputs,
+            Output = updated.Output,
+            State = updated.State,
+            Position = updated.Position,
+            BankEligible = updated.BankEligible,
+            BankHash = updated.BankHash,
+            CreatedAt = existing?.CreatedAt,
+            UpdatedAt = updated.UpdatedAt,
+            DeletedAt = updated.DeletedAt
+        };
+        entity.Refs.Add(updated.Refs);
+        current.Entities[entity.ClientId] = entity;
+        current.Meta ??= new SyncMeta();
+        current.Meta.UserId = updated.UserId;
+        current.Meta.Revision = Math.Max(current.Meta.Revision, updated.Revision);
+        return current;
+    }
 
-                return current;
-            }
-            case AccountDeletedEvent deleted:
-            {
-                if (string.Equals(deleted.Mode, "hard", StringComparison.OrdinalIgnoreCase))
-                {
-                    current.Entities.Clear();
-                    current.Meta = null;
-                    return current;
-                }
+    private SyncEntityState ApplySynced(SyncEntityState current, EntitiesSyncedEvent synced)
+    {
+        current.Meta ??= new SyncMeta();
+        current.Meta.UserId = synced.UserId;
+        current.Meta.Revision = Math.Max(current.Meta.Revision, synced.ServerRevision);
+        current.LastSyncResult = new LastSyncResult
+        {
+            SyncId = synced.SyncId,
+            ClientRevision = synced.ClientRevision,
+            ServerRevision = synced.ServerRevision,
+        };
+        current.LastSyncResult.Accepted.AddRange(synced.Accepted);
+        current.LastSyncResult.Rejected.AddRange(synced.Rejected);
 
-                if (string.Equals(deleted.Mode, "soft", StringComparison.OrdinalIgnoreCase))
-                {
-                    var deletedUserId = $"deleted_{deleted.UserId}";
-                    foreach (var kv in current.Entities)
-                    {
-                        AnonymizeEntity(kv.Value, deletedUserId, deleted.DeletedAt);
-                    }
-
-                    if (current.Meta is not null)
-                        current.Meta.UserId = deletedUserId;
-                }
-                return current;
-            }
+        if (!string.IsNullOrEmpty(synced.SyncId))
+        {
+            current.ProcessedSyncIds.Add(synced.SyncId);
+            while (current.ProcessedSyncIds.Count > IdempotencyWindowSize)
+                current.ProcessedSyncIds.RemoveAt(0);
         }
 
+        return current;
+    }
+
+    private static SyncEntityState ApplyDeleted(SyncEntityState current, AccountDeletedEvent deleted)
+    {
+        if (string.Equals(deleted.Mode, "hard", StringComparison.OrdinalIgnoreCase))
+        {
+            current.Entities.Clear();
+            current.Meta = null;
+            return current;
+        }
+
+        if (string.Equals(deleted.Mode, "soft", StringComparison.OrdinalIgnoreCase))
+        {
+            var deletedUserId = $"deleted_{deleted.UserId}";
+            foreach (var kv in current.Entities)
+                AnonymizeEntity(kv.Value, deletedUserId, deleted.DeletedAt);
+
+            if (current.Meta is not null)
+                current.Meta.UserId = deletedUserId;
+        }
         return current;
     }
 
