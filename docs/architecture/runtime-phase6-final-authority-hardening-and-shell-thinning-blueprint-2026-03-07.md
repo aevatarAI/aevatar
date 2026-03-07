@@ -25,7 +25,7 @@
    - CQRS projection 主协议重写
    - AI provider failover 产品语义调整
 7. 本版结论：
-   - phase-6 已交付：`WorkflowRunGAgent` shell 当前为 `389` 行，step family 细节已继续下沉到 runtime 协作者；`ScriptEvolutionSessionGAgent` 主文件压到 `74` 行并由 `ScriptEvolutionExecutionCoordinator` 承担执行编排。
+   - phase-6 已交付：`WorkflowRunGAgent` shell 当前为 `350` 行，并通过 `WorkflowRunRuntimeContext` 把 runtime 的 state/effect 访问统一收口；`ScriptEvolutionSessionGAgent` 主文件压到 `74` 行并由 `ScriptEvolutionExecutionCoordinator` 承担执行编排。
    - formal host 已切到 actor-backed workflow definition catalog；connector 已从 mutable registry 改成 `IConnectorCatalog + StaticConnectorCatalog + AddConfiguredConnectorCatalog()`；活跃文档已同步到当前边界。
 
 ## 2. 背景
@@ -58,21 +58,21 @@ phase-6 不是继续开新主链，而是把剩余“结构热点”和“语义
 当前核心切片行数大致为：
 
 1. `WorkflowRunGAgent.cs`：`389`
-2. `WorkflowRunGAgent.Infrastructure.cs`：`177`
-3. `WorkflowRunCallbackRuntime.cs`：`263`
+2. `WorkflowRunGAgent.Infrastructure.cs`：`187`
+3. `WorkflowRunCallbackRuntime.cs`：`250`
 4. `WorkflowRunAggregationCompletionRuntime.cs`：`216`
-5. `WorkflowRunProgressionCompletionRuntime.cs`：`170`
-6. `WorkflowRunAIRuntime.cs`：`347`
-7. `WorkflowRunControlFlowRuntime.cs`：`244`
-8. `WorkflowRunDispatchRuntime.cs`：`192`
-9. `WorkflowRunHumanInteractionRuntime.cs`：`73`
-10. `WorkflowRunAsyncPolicyRuntime.cs`：`154`
-11. `WorkflowRunFanOutRuntime.cs`：`207`
-12. `WorkflowRunSubWorkflowRuntime.cs`：`177`
+5. `WorkflowRunProgressionCompletionRuntime.cs`：`162`
+6. `WorkflowRunAIRuntime.cs`：`330`
+7. `WorkflowRunControlFlowRuntime.cs`：`230`
+8. `WorkflowRunDispatchRuntime.cs`：`178`
+9. `WorkflowRunHumanInteractionRuntime.cs`：`64`
+10. `WorkflowRunAsyncPolicyRuntime.cs`：`145`
+11. `WorkflowRunFanOutRuntime.cs`：`196`
+12. `WorkflowRunSubWorkflowRuntime.cs`：`158`
 
 问题本质：
 
-1. shell 已经不再是单文件，但仍同时掌握 run validation、primitive dispatch、callback reconcile、stateful completion、变量解析和 effect 组装。
+1. shell 已经不再是单文件，但 runtime 仍然是一个共享 logical aggregate；这轮通过 `WorkflowRunRuntimeContext` 先统一了 state/effect 访问协议。
 2. 新原语虽然不再走 `StepRequests.cs`，但仍可能继续向 run owner 扩散 helper 和 branch logic。
 3. `WorkflowRunGAgent` 还没有彻底退回到“owner + reducer + orchestration boundary”。
 

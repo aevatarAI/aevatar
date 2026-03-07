@@ -1,35 +1,24 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
-using Google.Protobuf;
 
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunFanOutRuntime
 {
-    private readonly Func<WorkflowRunState> _stateAccessor;
-    private readonly Func<WorkflowRunState, CancellationToken, Task> _persistStateAsync;
-    private readonly Func<IMessage, EventDirection, CancellationToken, Task> _publishAsync;
-    private readonly WorkflowRunEffectDispatcher _effectDispatcher;
-    private readonly WorkflowInternalStepDispatchHandler _dispatchInternalStepAsync;
+    private readonly WorkflowRunRuntimeContext _context;
+    private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
 
     public WorkflowRunFanOutRuntime(
-        Func<WorkflowRunState> stateAccessor,
-        Func<WorkflowRunState, CancellationToken, Task> persistStateAsync,
-        Func<IMessage, EventDirection, CancellationToken, Task> publishAsync,
-        WorkflowRunEffectDispatcher effectDispatcher,
-        WorkflowInternalStepDispatchHandler dispatchInternalStepAsync)
+        WorkflowRunRuntimeContext context,
+        WorkflowRunDispatchRuntime dispatchRuntime)
     {
-        _stateAccessor = stateAccessor ?? throw new ArgumentNullException(nameof(stateAccessor));
-        _persistStateAsync = persistStateAsync ?? throw new ArgumentNullException(nameof(persistStateAsync));
-        _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
-        _effectDispatcher = effectDispatcher ?? throw new ArgumentNullException(nameof(effectDispatcher));
-        _dispatchInternalStepAsync = dispatchInternalStepAsync ?? throw new ArgumentNullException(nameof(dispatchInternalStepAsync));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _dispatchRuntime = dispatchRuntime ?? throw new ArgumentNullException(nameof(dispatchRuntime));
     }
 
     public async Task HandleParallelStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {
-        await _effectDispatcher.EnsureAgentTreeAsync(ct);
+        await _context.EnsureAgentTreeAsync(ct);
 
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var workerRoles = new List<string>();
@@ -42,7 +31,7 @@ internal sealed class WorkflowRunFanOutRuntime
 
         if (workerRoles.Count == 0 && string.IsNullOrWhiteSpace(request.TargetRole))
         {
-            await _publishAsync(new StepCompletedEvent
+            await _context.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
                 RunId = runId,
@@ -54,7 +43,7 @@ internal sealed class WorkflowRunFanOutRuntime
 
         var voteStepType = WorkflowPrimitiveCatalog.ToCanonicalType(
             request.Parameters.TryGetValue("vote_step_type", out var voteType) ? voteType : string.Empty);
-        var next = _stateAccessor().Clone();
+        var next = _context.State.Clone();
         var parallelState = new WorkflowParallelState
         {
             ExpectedCount = count,
@@ -65,12 +54,12 @@ internal sealed class WorkflowRunFanOutRuntime
         foreach (var (key, value) in request.Parameters.Where(x => x.Key.StartsWith("vote_param_", StringComparison.OrdinalIgnoreCase)))
             parallelState.VoteParameters[key["vote_param_".Length..]] = value;
         next.PendingParallelSteps[request.StepId] = parallelState;
-        await _persistStateAsync(next, ct);
+        await _context.PersistStateAsync(next, ct);
 
         for (var i = 0; i < count; i++)
         {
             var role = i < workerRoles.Count ? workerRoles[i] : request.TargetRole;
-            await _dispatchInternalStepAsync(
+            await _dispatchRuntime.DispatchInternalStepAsync(
                 runId,
                 request.StepId,
                 $"{request.StepId}_sub_{i}",
@@ -94,7 +83,7 @@ internal sealed class WorkflowRunFanOutRuntime
 
         if (items.Length == 0)
         {
-            await _publishAsync(new StepCompletedEvent
+            await _context.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
                 RunId = runId,
@@ -112,19 +101,19 @@ internal sealed class WorkflowRunFanOutRuntime
             "sub_target_role",
             "sub_role");
 
-        var next = _stateAccessor().Clone();
+        var next = _context.State.Clone();
         next.PendingForeachSteps[request.StepId] = new WorkflowForEachState
         {
             ExpectedCount = items.Length,
         };
-        await _persistStateAsync(next, ct);
+        await _context.PersistStateAsync(next, ct);
 
         for (var i = 0; i < items.Length; i++)
         {
             var subParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var (key, value) in request.Parameters.Where(x => x.Key.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase)))
                 subParameters[key["sub_param_".Length..]] = value;
-            await _dispatchInternalStepAsync(
+            await _dispatchRuntime.DispatchInternalStepAsync(
                 runId,
                 request.StepId,
                 $"{request.StepId}_item_{i}",
@@ -148,7 +137,7 @@ internal sealed class WorkflowRunFanOutRuntime
 
         if (items.Length == 0)
         {
-            await _publishAsync(new StepCompletedEvent
+            await _context.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
                 RunId = runId,
@@ -180,7 +169,7 @@ internal sealed class WorkflowRunFanOutRuntime
             "reduce_prompt_prefix",
             "reduce_prefix");
 
-        var next = _stateAccessor().Clone();
+        var next = _context.State.Clone();
         next.PendingMapReduceSteps[request.StepId] = new WorkflowMapReduceState
         {
             MapCount = items.Length,
@@ -189,11 +178,11 @@ internal sealed class WorkflowRunFanOutRuntime
             ReducePromptPrefix = reducePrefix,
             ReduceStepId = string.Empty,
         };
-        await _persistStateAsync(next, ct);
+        await _context.PersistStateAsync(next, ct);
 
         for (var i = 0; i < items.Length; i++)
         {
-            await _dispatchInternalStepAsync(
+            await _dispatchRuntime.DispatchInternalStepAsync(
                 runId,
                 request.StepId,
                 $"{request.StepId}_map_{i}",

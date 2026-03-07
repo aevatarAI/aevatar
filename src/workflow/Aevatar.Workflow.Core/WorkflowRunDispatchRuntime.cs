@@ -1,37 +1,23 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
-using Google.Protobuf;
 
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunDispatchRuntime
 {
-    private readonly Func<WorkflowRunState> _stateAccessor;
-    private readonly Func<WorkflowDefinition?> _compiledWorkflowAccessor;
+    private readonly WorkflowRunRuntimeContext _context;
     private readonly WorkflowRunStepRequestFactory _stepRequestFactory;
     private readonly WorkflowExpressionEvaluator _expressionEvaluator;
-    private readonly Func<WorkflowRunState, CancellationToken, Task> _persistStateAsync;
-    private readonly Func<IMessage, EventDirection, CancellationToken, Task> _publishAsync;
-    private readonly WorkflowRunEffectDispatcher _effectDispatcher;
 
     public WorkflowRunDispatchRuntime(
-        Func<WorkflowRunState> stateAccessor,
-        Func<WorkflowDefinition?> compiledWorkflowAccessor,
+        WorkflowRunRuntimeContext context,
         WorkflowRunStepRequestFactory stepRequestFactory,
-        WorkflowExpressionEvaluator expressionEvaluator,
-        Func<WorkflowRunState, CancellationToken, Task> persistStateAsync,
-        Func<IMessage, EventDirection, CancellationToken, Task> publishAsync,
-        WorkflowRunEffectDispatcher effectDispatcher)
+        WorkflowExpressionEvaluator expressionEvaluator)
     {
-        _stateAccessor = stateAccessor ?? throw new ArgumentNullException(nameof(stateAccessor));
-        _compiledWorkflowAccessor = compiledWorkflowAccessor ?? throw new ArgumentNullException(nameof(compiledWorkflowAccessor));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
         _stepRequestFactory = stepRequestFactory ?? throw new ArgumentNullException(nameof(stepRequestFactory));
         _expressionEvaluator = expressionEvaluator ?? throw new ArgumentNullException(nameof(expressionEvaluator));
-        _persistStateAsync = persistStateAsync ?? throw new ArgumentNullException(nameof(persistStateAsync));
-        _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
-        _effectDispatcher = effectDispatcher ?? throw new ArgumentNullException(nameof(effectDispatcher));
     }
 
     public async Task DispatchWorkflowStepAsync(
@@ -40,12 +26,12 @@ internal sealed class WorkflowRunDispatchRuntime
         string runId,
         CancellationToken ct)
     {
-        var state = _stateAccessor();
+        var state = _context.State;
         var canonicalType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
-        if (_compiledWorkflowAccessor()?.Configuration.ClosedWorldMode == true &&
+        if (_context.CompiledWorkflow?.Configuration.ClosedWorldMode == true &&
             WorkflowPrimitiveCatalog.IsClosedWorldBlocked(canonicalType))
         {
-            await _publishAsync(new StepCompletedEvent
+            await _context.PublishAsync(new StepCompletedEvent
             {
                 StepId = step.Id,
                 RunId = runId,
@@ -55,7 +41,7 @@ internal sealed class WorkflowRunDispatchRuntime
             return;
         }
 
-        var request = _stepRequestFactory.BuildStepRequest(step, input, runId, state, _compiledWorkflowAccessor());
+        var request = _stepRequestFactory.BuildStepRequest(step, input, runId, state, _context.CompiledWorkflow);
         var next = state.Clone();
         next.ActiveStepId = step.Id;
         next.Status = "active";
@@ -84,11 +70,11 @@ internal sealed class WorkflowRunDispatchRuntime
             next.PendingTimeouts.Remove(step.Id);
         }
 
-        await _persistStateAsync(next, ct);
+        await _context.PersistStateAsync(next, ct);
 
         if (step.TimeoutMs is > 0)
         {
-            await _effectDispatcher.ScheduleWorkflowCallbackAsync(
+            await _context.ScheduleWorkflowCallbackAsync(
                 WorkflowRunSupport.BuildStepTimeoutCallbackId(runId, step.Id),
                 TimeSpan.FromMilliseconds(next.PendingTimeouts[step.Id].TimeoutMs),
                 new WorkflowStepTimeoutFiredEvent
@@ -106,7 +92,7 @@ internal sealed class WorkflowRunDispatchRuntime
 
         try
         {
-            await _publishAsync(request, EventDirection.Self, ct);
+            await _context.PublishAsync(request, EventDirection.Self, ct);
         }
         catch (Exception ex)
         {
@@ -135,7 +121,7 @@ internal sealed class WorkflowRunDispatchRuntime
         foreach (var (key, value) in parameters)
             request.Parameters[key] = value;
 
-        var next = _stateAccessor().Clone();
+        var next = _context.State.Clone();
         next.StepExecutions[stepId] = _stepRequestFactory.BuildExecutionState(
             stepId,
             request.StepType,
@@ -144,11 +130,11 @@ internal sealed class WorkflowRunDispatchRuntime
             attempt: 1,
             parentStepId,
             request.Parameters);
-        await _persistStateAsync(next, ct);
+        await _context.PersistStateAsync(next, ct);
 
         try
         {
-            await _publishAsync(request, EventDirection.Self, ct);
+            await _context.PublishAsync(request, EventDirection.Self, ct);
         }
         catch (Exception ex)
         {
@@ -167,7 +153,7 @@ internal sealed class WorkflowRunDispatchRuntime
             parameters[key] = _expressionEvaluator.Evaluate(value, vars);
 
         return DispatchInternalStepAsync(
-            _stateAccessor().RunId,
+            _context.RunId,
             state.StepId,
             $"{state.StepId}_iter_{state.Iteration}",
             state.SubStepType,
@@ -182,7 +168,7 @@ internal sealed class WorkflowRunDispatchRuntime
         string runId,
         string error,
         CancellationToken ct) =>
-        _publishAsync(new StepCompletedEvent
+        _context.PublishAsync(new StepCompletedEvent
         {
             StepId = stepId,
             RunId = runId,

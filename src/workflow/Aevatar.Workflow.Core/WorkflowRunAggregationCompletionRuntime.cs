@@ -1,30 +1,21 @@
-using Aevatar.Foundation.Abstractions;
-using Google.Protobuf;
-
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunAggregationCompletionRuntime
 {
-    private readonly Func<WorkflowRunState> _stateAccessor;
-    private readonly Func<WorkflowRunState, CancellationToken, Task> _persistStateAsync;
-    private readonly Func<IMessage, EventDirection, CancellationToken, Task> _publishAsync;
-    private readonly WorkflowInternalStepDispatchHandler _dispatchInternalStepAsync;
+    private readonly WorkflowRunRuntimeContext _context;
+    private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
 
     public WorkflowRunAggregationCompletionRuntime(
-        Func<WorkflowRunState> stateAccessor,
-        Func<WorkflowRunState, CancellationToken, Task> persistStateAsync,
-        Func<IMessage, EventDirection, CancellationToken, Task> publishAsync,
-        WorkflowInternalStepDispatchHandler dispatchInternalStepAsync)
+        WorkflowRunRuntimeContext context,
+        WorkflowRunDispatchRuntime dispatchRuntime)
     {
-        _stateAccessor = stateAccessor ?? throw new ArgumentNullException(nameof(stateAccessor));
-        _persistStateAsync = persistStateAsync ?? throw new ArgumentNullException(nameof(persistStateAsync));
-        _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
-        _dispatchInternalStepAsync = dispatchInternalStepAsync ?? throw new ArgumentNullException(nameof(dispatchInternalStepAsync));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _dispatchRuntime = dispatchRuntime ?? throw new ArgumentNullException(nameof(dispatchRuntime));
     }
 
     public async Task<bool> TryHandleParallelCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
     {
-        var state = _stateAccessor();
+        var state = _context.State;
         foreach (var (parentStepId, pending) in state.PendingParallelSteps)
         {
             if (!string.IsNullOrWhiteSpace(pending.VoteStepId) &&
@@ -33,7 +24,7 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
                 var voteNextState = state.Clone();
                 voteNextState.PendingParallelSteps.Remove(parentStepId);
                 voteNextState.StepExecutions.Remove(evt.StepId);
-                await _persistStateAsync(voteNextState, ct);
+                await _context.PersistStateAsync(voteNextState, ct);
 
                 var voteCompleted = new StepCompletedEvent
                 {
@@ -49,7 +40,7 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
                 voteCompleted.Metadata["parallel.used_vote"] = "true";
                 voteCompleted.Metadata["parallel.vote_step_id"] = evt.StepId;
                 voteCompleted.Metadata["parallel.workers_success"] = pending.WorkersSuccess.ToString();
-                await _publishAsync(voteCompleted, EventDirection.Self, ct);
+                await _context.PublishAsync(voteCompleted, EventDirection.Self, ct);
                 return true;
             }
 
@@ -65,7 +56,7 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
             var collected = next.PendingParallelSteps[parentStepId].ChildResults.Count;
             if (collected < next.PendingParallelSteps[parentStepId].ExpectedCount)
             {
-                await _persistStateAsync(next, ct);
+                await _context.PersistStateAsync(next, ct);
                 return true;
             }
 
@@ -77,8 +68,8 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
                 var voteStepId = $"{parentStepId}_vote";
                 next.PendingParallelSteps[parentStepId].VoteStepId = voteStepId;
                 next.PendingParallelSteps[parentStepId].WorkersSuccess = allSuccess;
-                await _persistStateAsync(next, ct);
-                await _dispatchInternalStepAsync(
+                await _context.PersistStateAsync(next, ct);
+                await _dispatchRuntime.DispatchInternalStepAsync(
                     state.RunId,
                     parentStepId,
                     voteStepId,
@@ -91,7 +82,7 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
             }
 
             next.PendingParallelSteps.Remove(parentStepId);
-            await _persistStateAsync(next, ct);
+            await _context.PersistStateAsync(next, ct);
             var completed = new StepCompletedEvent
             {
                 StepId = parentStepId,
@@ -100,7 +91,7 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
                 Output = merged,
             };
             completed.Metadata["parallel.used_vote"] = "false";
-            await _publishAsync(completed, EventDirection.Self, ct);
+            await _context.PublishAsync(completed, EventDirection.Self, ct);
             return true;
         }
 
@@ -109,7 +100,7 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
 
     public async Task<bool> TryHandleForEachCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
     {
-        var state = _stateAccessor();
+        var state = _context.State;
         var parentStepId = WorkflowRunSupport.TryGetForEachParent(evt.StepId);
         if (parentStepId == null || !state.PendingForeachSteps.TryGetValue(parentStepId, out _))
             return false;
@@ -119,14 +110,14 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
         next.PendingForeachSteps[parentStepId].ChildResults.Add(WorkflowRunSupport.ToRecordedResult(evt));
         if (next.PendingForeachSteps[parentStepId].ChildResults.Count < next.PendingForeachSteps[parentStepId].ExpectedCount)
         {
-            await _persistStateAsync(next, ct);
+            await _context.PersistStateAsync(next, ct);
             return true;
         }
 
         var results = next.PendingForeachSteps[parentStepId].ChildResults.ToList();
         next.PendingForeachSteps.Remove(parentStepId);
-        await _persistStateAsync(next, ct);
-        await _publishAsync(new StepCompletedEvent
+        await _context.PersistStateAsync(next, ct);
+        await _context.PublishAsync(new StepCompletedEvent
         {
             StepId = parentStepId,
             RunId = state.RunId,
@@ -138,7 +129,7 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
 
     public async Task<bool> TryHandleMapReduceCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
     {
-        var state = _stateAccessor();
+        var state = _context.State;
         foreach (var (parentStepId, pending) in state.PendingMapReduceSteps)
         {
             if (!string.IsNullOrWhiteSpace(pending.ReduceStepId) &&
@@ -147,7 +138,7 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
                 var reduceNextState = state.Clone();
                 reduceNextState.PendingMapReduceSteps.Remove(parentStepId);
                 reduceNextState.StepExecutions.Remove(evt.StepId);
-                await _persistStateAsync(reduceNextState, ct);
+                await _context.PersistStateAsync(reduceNextState, ct);
 
                 var reduceCompleted = new StepCompletedEvent
                 {
@@ -158,7 +149,7 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
                     Error = evt.Error,
                 };
                 reduceCompleted.Metadata["map_reduce.phase"] = "reduce";
-                await _publishAsync(reduceCompleted, EventDirection.Self, ct);
+                await _context.PublishAsync(reduceCompleted, EventDirection.Self, ct);
                 return true;
             }
 
@@ -171,7 +162,7 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
             next.PendingMapReduceSteps[parentStepId].ChildResults.Add(WorkflowRunSupport.ToRecordedResult(evt));
             if (next.PendingMapReduceSteps[parentStepId].ChildResults.Count < next.PendingMapReduceSteps[parentStepId].MapCount)
             {
-                await _persistStateAsync(next, ct);
+                await _context.PersistStateAsync(next, ct);
                 return true;
             }
 
@@ -181,8 +172,8 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
             if (!allSuccess || string.IsNullOrWhiteSpace(next.PendingMapReduceSteps[parentStepId].ReduceType))
             {
                 next.PendingMapReduceSteps.Remove(parentStepId);
-                await _persistStateAsync(next, ct);
-                await _publishAsync(new StepCompletedEvent
+                await _context.PersistStateAsync(next, ct);
+                await _context.PublishAsync(new StepCompletedEvent
                 {
                     StepId = parentStepId,
                     RunId = state.RunId,
@@ -198,8 +189,8 @@ internal sealed class WorkflowRunAggregationCompletionRuntime
                 : next.PendingMapReduceSteps[parentStepId].ReducePromptPrefix.TrimEnd() + "\n\n" + merged;
             var reduceStepId = $"{parentStepId}_reduce";
             next.PendingMapReduceSteps[parentStepId].ReduceStepId = reduceStepId;
-            await _persistStateAsync(next, ct);
-            await _dispatchInternalStepAsync(
+            await _context.PersistStateAsync(next, ct);
+            await _dispatchRuntime.DispatchInternalStepAsync(
                 state.RunId,
                 parentStepId,
                 reduceStepId,

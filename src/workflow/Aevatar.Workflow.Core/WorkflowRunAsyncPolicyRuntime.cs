@@ -5,27 +5,18 @@ namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunAsyncPolicyRuntime
 {
-    private readonly Func<WorkflowRunState> _stateAccessor;
-    private readonly Func<WorkflowDefinition?> _compiledWorkflowAccessor;
-    private readonly Func<WorkflowRunState, CancellationToken, Task> _persistStateAsync;
-    private readonly WorkflowStepDispatchHandler _dispatchWorkflowStepAsync;
-    private readonly WorkflowFinalizeRunHandler _finalizeRunAsync;
-    private readonly WorkflowRunEffectDispatcher _effectDispatcher;
+    private readonly WorkflowRunRuntimeContext _context;
+    private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
+    private readonly Func<bool, string, string, CancellationToken, Task> _finalizeRunAsync;
 
     public WorkflowRunAsyncPolicyRuntime(
-        Func<WorkflowRunState> stateAccessor,
-        Func<WorkflowDefinition?> compiledWorkflowAccessor,
-        Func<WorkflowRunState, CancellationToken, Task> persistStateAsync,
-        WorkflowStepDispatchHandler dispatchWorkflowStepAsync,
-        WorkflowFinalizeRunHandler finalizeRunAsync,
-        WorkflowRunEffectDispatcher effectDispatcher)
+        WorkflowRunRuntimeContext context,
+        WorkflowRunDispatchRuntime dispatchRuntime,
+        Func<bool, string, string, CancellationToken, Task> finalizeRunAsync)
     {
-        _stateAccessor = stateAccessor ?? throw new ArgumentNullException(nameof(stateAccessor));
-        _compiledWorkflowAccessor = compiledWorkflowAccessor ?? throw new ArgumentNullException(nameof(compiledWorkflowAccessor));
-        _persistStateAsync = persistStateAsync ?? throw new ArgumentNullException(nameof(persistStateAsync));
-        _dispatchWorkflowStepAsync = dispatchWorkflowStepAsync ?? throw new ArgumentNullException(nameof(dispatchWorkflowStepAsync));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _dispatchRuntime = dispatchRuntime ?? throw new ArgumentNullException(nameof(dispatchRuntime));
         _finalizeRunAsync = finalizeRunAsync ?? throw new ArgumentNullException(nameof(finalizeRunAsync));
-        _effectDispatcher = effectDispatcher ?? throw new ArgumentNullException(nameof(effectDispatcher));
     }
 
     public async Task<bool> TryScheduleRetryAsync(
@@ -45,7 +36,7 @@ internal sealed class WorkflowRunAsyncPolicyRuntime
         if (WorkflowRunSupport.IsTimeoutError(evt.Error))
             return false;
 
-        var state = _stateAccessor();
+        var state = _context.State;
         var scheduledRetryCount = state.RetryAttemptsByStepId.TryGetValue(step.Id, out var existingRetryCount)
             ? existingRetryCount
             : 0;
@@ -65,8 +56,8 @@ internal sealed class WorkflowRunAsyncPolicyRuntime
 
         if (delayMs <= 0)
         {
-            await _persistStateAsync(next, ct);
-            await _dispatchWorkflowStepAsync(step, execution.Input ?? string.Empty, state.RunId, ct);
+            await _context.PersistStateAsync(next, ct);
+            await _dispatchRuntime.DispatchWorkflowStepAsync(step, execution.Input ?? string.Empty, state.RunId, ct);
             return true;
         }
 
@@ -80,8 +71,8 @@ internal sealed class WorkflowRunAsyncPolicyRuntime
                     ? existingBackoff.SemanticGeneration
                     : 0),
         };
-        await _persistStateAsync(next, ct);
-        await _effectDispatcher.ScheduleWorkflowCallbackAsync(
+        await _context.PersistStateAsync(next, ct);
+        await _context.ScheduleWorkflowCallbackAsync(
             WorkflowRunSupport.BuildRetryBackoffCallbackId(state.RunId, step.Id),
             TimeSpan.FromMilliseconds(delayMs),
             new WorkflowStepRetryBackoffFiredEvent
@@ -113,7 +104,7 @@ internal sealed class WorkflowRunAsyncPolicyRuntime
         if (policy == null)
             return false;
 
-        var workflow = _compiledWorkflowAccessor();
+        var workflow = _context.CompiledWorkflow;
         if (workflow == null)
             return false;
 
@@ -125,14 +116,14 @@ internal sealed class WorkflowRunAsyncPolicyRuntime
                 next.StepExecutions.Remove(step.Id);
                 next.RetryAttemptsByStepId.Remove(step.Id);
                 var nextStep = workflow.GetNextStep(step.Id);
-                await _persistStateAsync(next, ct);
+                await _context.PersistStateAsync(next, ct);
                 if (nextStep == null)
                 {
                     await _finalizeRunAsync(true, output, string.Empty, ct);
                     return true;
                 }
 
-                await _dispatchWorkflowStepAsync(nextStep, output, _stateAccessor().RunId, ct);
+                await _dispatchRuntime.DispatchWorkflowStepAsync(nextStep, output, _context.RunId, ct);
                 return true;
             }
             case "fallback" when !string.IsNullOrWhiteSpace(policy.FallbackStep):
@@ -143,8 +134,8 @@ internal sealed class WorkflowRunAsyncPolicyRuntime
 
                 next.StepExecutions.Remove(step.Id);
                 next.RetryAttemptsByStepId.Remove(step.Id);
-                await _persistStateAsync(next, ct);
-                await _dispatchWorkflowStepAsync(fallback, evt.Output ?? string.Empty, _stateAccessor().RunId, ct);
+                await _context.PersistStateAsync(next, ct);
+                await _dispatchRuntime.DispatchWorkflowStepAsync(fallback, evt.Output ?? string.Empty, _context.RunId, ct);
                 return true;
             }
             default:

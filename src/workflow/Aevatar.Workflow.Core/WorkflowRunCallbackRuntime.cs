@@ -2,36 +2,23 @@ using System.Globalization;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
-using Google.Protobuf;
 
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunCallbackRuntime
 {
-    private readonly Func<string> _actorIdAccessor;
-    private readonly Func<WorkflowRunState> _stateAccessor;
-    private readonly Func<WorkflowDefinition?> _compiledWorkflowAccessor;
-    private readonly Func<WorkflowRunState, CancellationToken, Task> _persistStateAsync;
-    private readonly Func<IMessage, EventDirection, CancellationToken, Task> _publishAsync;
-    private readonly Func<StepDefinition, string, string, CancellationToken, Task> _dispatchWorkflowStepAsync;
-    private readonly Func<string, WorkflowPendingReflectState, string, CancellationToken, Task> _dispatchReflectPhaseAsync;
+    private readonly WorkflowRunRuntimeContext _context;
+    private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
+    private readonly WorkflowRunAIRuntime _aiRuntime;
 
     public WorkflowRunCallbackRuntime(
-        Func<string> actorIdAccessor,
-        Func<WorkflowRunState> stateAccessor,
-        Func<WorkflowDefinition?> compiledWorkflowAccessor,
-        Func<WorkflowRunState, CancellationToken, Task> persistStateAsync,
-        Func<IMessage, EventDirection, CancellationToken, Task> publishAsync,
-        Func<StepDefinition, string, string, CancellationToken, Task> dispatchWorkflowStepAsync,
-        Func<string, WorkflowPendingReflectState, string, CancellationToken, Task> dispatchReflectPhaseAsync)
+        WorkflowRunRuntimeContext context,
+        WorkflowRunDispatchRuntime dispatchRuntime,
+        WorkflowRunAIRuntime aiRuntime)
     {
-        _actorIdAccessor = actorIdAccessor ?? throw new ArgumentNullException(nameof(actorIdAccessor));
-        _stateAccessor = stateAccessor ?? throw new ArgumentNullException(nameof(stateAccessor));
-        _compiledWorkflowAccessor = compiledWorkflowAccessor ?? throw new ArgumentNullException(nameof(compiledWorkflowAccessor));
-        _persistStateAsync = persistStateAsync ?? throw new ArgumentNullException(nameof(persistStateAsync));
-        _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
-        _dispatchWorkflowStepAsync = dispatchWorkflowStepAsync ?? throw new ArgumentNullException(nameof(dispatchWorkflowStepAsync));
-        _dispatchReflectPhaseAsync = dispatchReflectPhaseAsync ?? throw new ArgumentNullException(nameof(dispatchReflectPhaseAsync));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _dispatchRuntime = dispatchRuntime ?? throw new ArgumentNullException(nameof(dispatchRuntime));
+        _aiRuntime = aiRuntime ?? throw new ArgumentNullException(nameof(aiRuntime));
     }
 
     public async Task HandleWorkflowStepTimeoutFiredAsync(
@@ -39,7 +26,7 @@ internal sealed class WorkflowRunCallbackRuntime
         EventEnvelope envelope,
         CancellationToken ct)
     {
-        var state = _stateAccessor();
+        var state = _context.State;
         if (!WorkflowRunSupport.TryMatchRunAndStep(state.RunId, evt.RunId, evt.StepId))
             return;
         if (!state.PendingTimeouts.TryGetValue(evt.StepId, out var pending))
@@ -49,8 +36,8 @@ internal sealed class WorkflowRunCallbackRuntime
 
         var next = state.Clone();
         next.PendingTimeouts.Remove(evt.StepId);
-        await _persistStateAsync(next, ct);
-        await _publishAsync(new StepCompletedEvent
+        await _context.PersistStateAsync(next, ct);
+        await _context.PublishAsync(new StepCompletedEvent
         {
             StepId = evt.StepId,
             RunId = state.RunId,
@@ -64,7 +51,7 @@ internal sealed class WorkflowRunCallbackRuntime
         EventEnvelope envelope,
         CancellationToken ct)
     {
-        var state = _stateAccessor();
+        var state = _context.State;
         if (!WorkflowRunSupport.TryMatchRunAndStep(state.RunId, evt.RunId, evt.StepId))
             return;
         if (!state.PendingRetryBackoffs.TryGetValue(evt.StepId, out var pending))
@@ -72,14 +59,14 @@ internal sealed class WorkflowRunCallbackRuntime
         if (!WorkflowRunSupport.MatchesSemanticGeneration(envelope, pending.SemanticGeneration))
             return;
 
-        var step = _compiledWorkflowAccessor()?.GetStep(evt.StepId);
+        var step = _context.CompiledWorkflow?.GetStep(evt.StepId);
         if (step == null || !state.StepExecutions.TryGetValue(evt.StepId, out var execution))
             return;
 
         var next = state.Clone();
         next.PendingRetryBackoffs.Remove(evt.StepId);
-        await _persistStateAsync(next, ct);
-        await _dispatchWorkflowStepAsync(step, execution.Input ?? string.Empty, state.RunId, ct);
+        await _context.PersistStateAsync(next, ct);
+        await _dispatchRuntime.DispatchWorkflowStepAsync(step, execution.Input ?? string.Empty, state.RunId, ct);
     }
 
     public async Task HandleDelayStepTimeoutFiredAsync(
@@ -87,7 +74,7 @@ internal sealed class WorkflowRunCallbackRuntime
         EventEnvelope envelope,
         CancellationToken ct)
     {
-        var state = _stateAccessor();
+        var state = _context.State;
         if (!WorkflowRunSupport.TryMatchRunAndStep(state.RunId, evt.RunId, evt.StepId))
             return;
         if (!state.PendingDelays.TryGetValue(evt.StepId, out var pending))
@@ -97,8 +84,8 @@ internal sealed class WorkflowRunCallbackRuntime
 
         var next = state.Clone();
         next.PendingDelays.Remove(evt.StepId);
-        await _persistStateAsync(next, ct);
-        await _publishAsync(new StepCompletedEvent
+        await _context.PersistStateAsync(next, ct);
+        await _context.PublishAsync(new StepCompletedEvent
         {
             StepId = evt.StepId,
             RunId = state.RunId,
@@ -112,7 +99,7 @@ internal sealed class WorkflowRunCallbackRuntime
         EventEnvelope envelope,
         CancellationToken ct)
     {
-        var state = _stateAccessor();
+        var state = _context.State;
         if (!WorkflowRunSupport.TryMatchRunAndStep(state.RunId, evt.RunId, evt.StepId))
             return;
         if (!state.PendingSignalWaits.TryGetValue(evt.StepId, out var pending))
@@ -123,8 +110,8 @@ internal sealed class WorkflowRunCallbackRuntime
         var next = state.Clone();
         next.PendingSignalWaits.Remove(evt.StepId);
         next.Status = "active";
-        await _persistStateAsync(next, ct);
-        await _publishAsync(new StepCompletedEvent
+        await _context.PersistStateAsync(next, ct);
+        await _context.PublishAsync(new StepCompletedEvent
         {
             StepId = evt.StepId,
             RunId = state.RunId,
@@ -138,7 +125,7 @@ internal sealed class WorkflowRunCallbackRuntime
         EventEnvelope envelope,
         CancellationToken ct)
     {
-        var state = _stateAccessor();
+        var state = _context.State;
         if (!string.Equals(WorkflowRunIdNormalizer.Normalize(evt.RunId), state.RunId, StringComparison.Ordinal))
             return;
         if (string.IsNullOrWhiteSpace(evt.SessionId) || !state.PendingLlmCalls.TryGetValue(evt.SessionId, out var pending))
@@ -148,14 +135,14 @@ internal sealed class WorkflowRunCallbackRuntime
 
         var next = state.Clone();
         next.PendingLlmCalls.Remove(evt.SessionId);
-        await _persistStateAsync(next, ct);
-        await _publishAsync(new StepCompletedEvent
+        await _context.PersistStateAsync(next, ct);
+        await _context.PublishAsync(new StepCompletedEvent
         {
             StepId = pending.StepId,
             RunId = state.RunId,
             Success = false,
             Error = $"LLM call timed out after {evt.TimeoutMs}ms",
-            WorkerId = string.IsNullOrWhiteSpace(pending.TargetRole) ? _actorIdAccessor() : pending.TargetRole,
+            WorkerId = string.IsNullOrWhiteSpace(pending.TargetRole) ? _context.ActorId : pending.TargetRole,
         }, EventDirection.Self, ct);
     }
 
@@ -168,33 +155,33 @@ internal sealed class WorkflowRunCallbackRuntime
         if (string.IsNullOrWhiteSpace(sessionId))
             return;
 
-        var state = _stateAccessor();
+        var state = _context.State;
         if (state.PendingLlmCalls.TryGetValue(sessionId, out var llmPending))
         {
             var next = state.Clone();
             next.PendingLlmCalls.Remove(sessionId);
-            await _persistStateAsync(next, ct);
+            await _context.PersistStateAsync(next, ct);
 
             if (WorkflowRunSupport.TryExtractLlmFailure(content, out var llmError))
             {
-                await _publishAsync(new StepCompletedEvent
+                await _context.PublishAsync(new StepCompletedEvent
                 {
                     StepId = llmPending.StepId,
                     RunId = state.RunId,
                     Success = false,
                     Error = llmError,
-                    WorkerId = string.IsNullOrWhiteSpace(publisherId) ? _actorIdAccessor() : publisherId,
+                    WorkerId = string.IsNullOrWhiteSpace(publisherId) ? _context.ActorId : publisherId,
                 }, EventDirection.Self, ct);
                 return;
             }
 
-            await _publishAsync(new StepCompletedEvent
+            await _context.PublishAsync(new StepCompletedEvent
             {
                 StepId = llmPending.StepId,
                 RunId = state.RunId,
                 Success = true,
                 Output = content,
-                WorkerId = string.IsNullOrWhiteSpace(publisherId) ? _actorIdAccessor() : publisherId,
+                WorkerId = string.IsNullOrWhiteSpace(publisherId) ? _context.ActorId : publisherId,
             }, EventDirection.Self, ct);
             return;
         }
@@ -205,7 +192,7 @@ internal sealed class WorkflowRunCallbackRuntime
             var passed = score >= evalPending.Threshold;
             var next = state.Clone();
             next.PendingEvaluations.Remove(sessionId);
-            await _persistStateAsync(next, ct);
+            await _context.PersistStateAsync(next, ct);
 
             var completed = new StepCompletedEvent
             {
@@ -218,7 +205,7 @@ internal sealed class WorkflowRunCallbackRuntime
             completed.Metadata["evaluate.passed"] = passed.ToString();
             if (!passed && !string.IsNullOrWhiteSpace(evalPending.OnBelow))
                 completed.Metadata["branch"] = evalPending.OnBelow;
-            await _publishAsync(completed, EventDirection.Self, ct);
+            await _context.PublishAsync(completed, EventDirection.Self, ct);
             return;
         }
 
@@ -227,7 +214,7 @@ internal sealed class WorkflowRunCallbackRuntime
 
         var reflectNext = state.Clone();
         reflectNext.PendingReflections.Remove(sessionId);
-        await _persistStateAsync(reflectNext, ct);
+        await _context.PersistStateAsync(reflectNext, ct);
 
         if (string.Equals(reflectPending.Phase, "critique", StringComparison.OrdinalIgnoreCase))
         {
@@ -244,20 +231,20 @@ internal sealed class WorkflowRunCallbackRuntime
                 };
                 completed.Metadata["reflect.rounds"] = round.ToString(CultureInfo.InvariantCulture);
                 completed.Metadata["reflect.passed"] = passed.ToString();
-                await _publishAsync(completed, EventDirection.Self, ct);
+                await _context.PublishAsync(completed, EventDirection.Self, ct);
                 return;
             }
 
             var nextPending = reflectPending.Clone();
             nextPending.Round = round;
             nextPending.Phase = "improve";
-            await _dispatchReflectPhaseAsync(state.RunId, nextPending, content, ct);
+            await _aiRuntime.DispatchReflectPhaseAsync(state.RunId, nextPending, content, ct);
             return;
         }
 
         var critiquePending = reflectPending.Clone();
         critiquePending.CurrentDraft = content;
         critiquePending.Phase = "critique";
-        await _dispatchReflectPhaseAsync(state.RunId, critiquePending, content, ct);
+        await _aiRuntime.DispatchReflectPhaseAsync(state.RunId, critiquePending, content, ct);
     }
 }

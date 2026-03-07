@@ -28,6 +28,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     private readonly ISet<string> _knownStepTypes;
     private readonly WorkflowCompilationService _workflowCompilationService;
     private readonly WorkflowRunEffectDispatcher _effectDispatcher;
+    private readonly WorkflowRunRuntimeContext _runtimeContext;
     private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
     private readonly WorkflowRunControlFlowRuntime _controlFlowRuntime;
     private readonly WorkflowRunHumanInteractionRuntime _humanInteractionRuntime;
@@ -77,73 +78,28 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             },
             resolveWorkflowYamlAsync: ResolveWorkflowYamlCoreAsync,
             createWorkflowDefinitionBindEnvelope: CreateWorkflowDefinitionBindEnvelopeCore);
-        _dispatchRuntime = new WorkflowRunDispatchRuntime(
+        _runtimeContext = new WorkflowRunRuntimeContext(
+            actorIdAccessor: () => Id,
             stateAccessor: () => State,
             compiledWorkflowAccessor: () => _compiledWorkflow,
-            stepRequestFactory: _stepRequestFactory,
-            expressionEvaluator: _expressionEvaluator,
-            persistStateAsync: PersistStateAsync,
-            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
-            effectDispatcher: _effectDispatcher);
-        _controlFlowRuntime = new WorkflowRunControlFlowRuntime(
-            stateAccessor: () => State,
-            persistStateAsync: PersistStateAsync,
-            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
-            effectDispatcher: _effectDispatcher,
-            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync,
-            dispatchWhileIterationAsync: _dispatchRuntime.DispatchWhileIterationAsync);
-        _humanInteractionRuntime = new WorkflowRunHumanInteractionRuntime(
-            stateAccessor: () => State,
-            persistStateAsync: PersistStateAsync,
-            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct));
-        _aiRuntime = new WorkflowRunAIRuntime(
-            actorIdAccessor: () => Id,
-            stateAccessor: () => State,
-            persistStateAsync: PersistStateAsync,
-            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
-            sendToAsync: (targetActorId, evt, ct) => SendToAsync(targetActorId, evt, ct),
-            effectDispatcher: _effectDispatcher,
-            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync);
-        _fanOutRuntime = new WorkflowRunFanOutRuntime(
-            stateAccessor: () => State,
-            persistStateAsync: PersistStateAsync,
-            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
-            effectDispatcher: _effectDispatcher,
-            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync);
-        _subWorkflowRuntime = new WorkflowRunSubWorkflowRuntime(
-            actorIdAccessor: () => Id,
-            stateAccessor: () => State,
             persistStateAsync: PersistStateAsync,
             publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
             sendToAsync: (targetActorId, evt, ct) => SendToAsync(targetActorId, evt, ct),
             logWarningAsync: LogWarningAsync,
             effectDispatcher: _effectDispatcher);
-        _callbackRuntime = new WorkflowRunCallbackRuntime(
-            actorIdAccessor: () => Id,
-            stateAccessor: () => State,
-            compiledWorkflowAccessor: () => _compiledWorkflow,
-            persistStateAsync: PersistStateAsync,
-            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
-            dispatchWorkflowStepAsync: _dispatchRuntime.DispatchWorkflowStepAsync,
-            dispatchReflectPhaseAsync: _aiRuntime.DispatchReflectPhaseAsync);
-        _aggregationCompletionRuntime = new WorkflowRunAggregationCompletionRuntime(
-            stateAccessor: () => State,
-            persistStateAsync: PersistStateAsync,
-            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
-            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync);
-        _progressionCompletionRuntime = new WorkflowRunProgressionCompletionRuntime(
-            stateAccessor: () => State,
-            persistStateAsync: PersistStateAsync,
-            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
-            dispatchWhileIterationAsync: _dispatchRuntime.DispatchWhileIterationAsync,
-            evaluateWhileCondition: (state, output, nextIteration) => _stepRequestFactory.EvaluateWhileCondition(state, output, nextIteration));
-        _asyncPolicyRuntime = new WorkflowRunAsyncPolicyRuntime(
-            stateAccessor: () => State,
-            compiledWorkflowAccessor: () => _compiledWorkflow,
-            persistStateAsync: PersistStateAsync,
-            dispatchWorkflowStepAsync: _dispatchRuntime.DispatchWorkflowStepAsync,
-            finalizeRunAsync: FinalizeRunAsync,
-            effectDispatcher: _effectDispatcher);
+        _dispatchRuntime = new WorkflowRunDispatchRuntime(
+            _runtimeContext,
+            _stepRequestFactory,
+            _expressionEvaluator);
+        _controlFlowRuntime = new WorkflowRunControlFlowRuntime(_runtimeContext, _dispatchRuntime);
+        _humanInteractionRuntime = new WorkflowRunHumanInteractionRuntime(_runtimeContext);
+        _aiRuntime = new WorkflowRunAIRuntime(_runtimeContext, _dispatchRuntime);
+        _fanOutRuntime = new WorkflowRunFanOutRuntime(_runtimeContext, _dispatchRuntime);
+        _subWorkflowRuntime = new WorkflowRunSubWorkflowRuntime(_runtimeContext);
+        _callbackRuntime = new WorkflowRunCallbackRuntime(_runtimeContext, _dispatchRuntime, _aiRuntime);
+        _aggregationCompletionRuntime = new WorkflowRunAggregationCompletionRuntime(_runtimeContext, _dispatchRuntime);
+        _progressionCompletionRuntime = new WorkflowRunProgressionCompletionRuntime(_runtimeContext, _dispatchRuntime, _stepRequestFactory);
+        _asyncPolicyRuntime = new WorkflowRunAsyncPolicyRuntime(_runtimeContext, _dispatchRuntime, FinalizeRunAsync);
         _primitiveExecutionPlanner = new WorkflowPrimitiveExecutionPlanner(
             TryHandleRegisteredPrimitiveAsync,
             [

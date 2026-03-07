@@ -78,10 +78,11 @@ flowchart LR
    - `WorkflowPrimitiveExecutionPlanner.cs`：step type routing 与 primitive planning
    - `WorkflowAsyncOperationReconciler.cs`：callback / LLM response / stateful completion 对账入口
    - `WorkflowRunEffectDispatcher.cs`：actor tree、durable callback、sub-workflow effect
+   - `WorkflowRunRuntimeContext.cs`：actor-thread 内共享的 run state/effect facade，统一暴露 `State/CompiledWorkflow/persist/publish/send/effect`
    - `WorkflowRunStepRequestFactory.cs`：step request / while iteration 变量构建
    - `WorkflowRunSupport.cs`：callback key、pending token lookup、parent-step 推导等纯 helper
    - `WorkflowCompilationService.cs` + `Validation/*`：DSL compile/validate 服务边界
-   - `WorkflowRunDispatchRuntime.cs` / `WorkflowRunHumanInteractionRuntime.cs` / `WorkflowRunControlFlowRuntime.cs` / `WorkflowRunAIRuntime.cs` / `WorkflowRunFanOutRuntime.cs` / `WorkflowRunSubWorkflowRuntime.cs` / `WorkflowRunCallbackRuntime.cs` / `WorkflowRunAggregationCompletionRuntime.cs` / `WorkflowRunProgressionCompletionRuntime.cs` / `WorkflowRunAsyncPolicyRuntime.cs` / `Infrastructure.cs`：stateful primitive、callback/completion runtime 与 helper 实现切片，不再把主 shell 当成规则实现容器。
+   - `WorkflowRunDispatchRuntime.cs` / `WorkflowRunHumanInteractionRuntime.cs` / `WorkflowRunControlFlowRuntime.cs` / `WorkflowRunAIRuntime.cs` / `WorkflowRunFanOutRuntime.cs` / `WorkflowRunSubWorkflowRuntime.cs` / `WorkflowRunCallbackRuntime.cs` / `WorkflowRunAggregationCompletionRuntime.cs` / `WorkflowRunProgressionCompletionRuntime.cs` / `WorkflowRunAsyncPolicyRuntime.cs` / `Infrastructure.cs`：基于共享 runtime context 的 stateful primitive、callback/completion runtime 与 helper 实现切片，不再把主 shell 当成规则实现容器。
 
 ## 4. 原语归属
 

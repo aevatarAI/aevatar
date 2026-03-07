@@ -1,37 +1,20 @@
 using System.Globalization;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
-using Google.Protobuf;
 
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunAIRuntime
 {
-    private readonly Func<string> _actorIdAccessor;
-    private readonly Func<WorkflowRunState> _stateAccessor;
-    private readonly Func<WorkflowRunState, CancellationToken, Task> _persistStateAsync;
-    private readonly Func<IMessage, EventDirection, CancellationToken, Task> _publishAsync;
-    private readonly Func<string, IMessage, CancellationToken, Task> _sendToAsync;
-    private readonly WorkflowRunEffectDispatcher _effectDispatcher;
-    private readonly WorkflowInternalStepDispatchHandler _dispatchInternalStepAsync;
+    private readonly WorkflowRunRuntimeContext _context;
+    private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
 
     public WorkflowRunAIRuntime(
-        Func<string> actorIdAccessor,
-        Func<WorkflowRunState> stateAccessor,
-        Func<WorkflowRunState, CancellationToken, Task> persistStateAsync,
-        Func<IMessage, EventDirection, CancellationToken, Task> publishAsync,
-        Func<string, IMessage, CancellationToken, Task> sendToAsync,
-        WorkflowRunEffectDispatcher effectDispatcher,
-        WorkflowInternalStepDispatchHandler dispatchInternalStepAsync)
+        WorkflowRunRuntimeContext context,
+        WorkflowRunDispatchRuntime dispatchRuntime)
     {
-        _actorIdAccessor = actorIdAccessor ?? throw new ArgumentNullException(nameof(actorIdAccessor));
-        _stateAccessor = stateAccessor ?? throw new ArgumentNullException(nameof(stateAccessor));
-        _persistStateAsync = persistStateAsync ?? throw new ArgumentNullException(nameof(persistStateAsync));
-        _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
-        _sendToAsync = sendToAsync ?? throw new ArgumentNullException(nameof(sendToAsync));
-        _effectDispatcher = effectDispatcher ?? throw new ArgumentNullException(nameof(effectDispatcher));
-        _dispatchInternalStepAsync = dispatchInternalStepAsync ?? throw new ArgumentNullException(nameof(dispatchInternalStepAsync));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _dispatchRuntime = dispatchRuntime ?? throw new ArgumentNullException(nameof(dispatchRuntime));
     }
 
     public async Task HandleLlmCallStepRequestAsync(StepRequestEvent request, CancellationToken ct)
@@ -40,7 +23,7 @@ internal sealed class WorkflowRunAIRuntime
         var stepId = request.StepId?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(stepId))
         {
-            await _publishAsync(new StepCompletedEvent
+            await _context.PublishAsync(new StepCompletedEvent
             {
                 StepId = stepId,
                 RunId = runId,
@@ -50,18 +33,18 @@ internal sealed class WorkflowRunAIRuntime
             return;
         }
 
-        await _effectDispatcher.EnsureAgentTreeAsync(ct);
+        await _context.EnsureAgentTreeAsync(ct);
 
         var prompt = request.Input ?? string.Empty;
         if (request.Parameters.TryGetValue("prompt_prefix", out var prefix) && !string.IsNullOrWhiteSpace(prefix))
             prompt = prefix.TrimEnd() + "\n\n" + prompt;
 
-        var state = _stateAccessor();
+        var state = _context.State;
         var attempt = state.StepExecutions.TryGetValue(stepId, out var execution) && execution.Attempt > 0
             ? execution.Attempt
             : 1;
         var timeoutMs = WorkflowRunSupport.ResolveLlmTimeoutMs(request.Parameters);
-        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(_actorIdAccessor(), runId, stepId, attempt);
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(_context.ActorId, runId, stepId, attempt);
         var next = state.Clone();
         next.PendingLlmCalls[sessionId] = new WorkflowPendingLlmCallState
         {
@@ -74,7 +57,7 @@ internal sealed class WorkflowRunAIRuntime
                 state.PendingLlmCalls.TryGetValue(sessionId, out var existing) ? existing.WatchdogGeneration : 0),
             Attempt = attempt,
         };
-        await _persistStateAsync(next, ct);
+        await _context.PersistStateAsync(next, ct);
 
         var chatRequest = new ChatRequestEvent
         {
@@ -87,14 +70,14 @@ internal sealed class WorkflowRunAIRuntime
         {
             if (!string.IsNullOrWhiteSpace(request.TargetRole))
             {
-                await _sendToAsync(
-                    WorkflowRoleActorIdResolver.ResolveTargetActorId(_actorIdAccessor(), request.TargetRole),
+                await _context.SendToAsync(
+                    WorkflowRoleActorIdResolver.ResolveTargetActorId(_context.ActorId, request.TargetRole),
                     chatRequest,
                     ct);
             }
             else
             {
-                await _publishAsync(chatRequest, EventDirection.Self, ct);
+                await _context.PublishAsync(chatRequest, EventDirection.Self, ct);
             }
         }
         catch (Exception ex)
@@ -105,7 +88,7 @@ internal sealed class WorkflowRunAIRuntime
 
         try
         {
-            await _effectDispatcher.ScheduleWorkflowCallbackAsync(
+            await _context.ScheduleWorkflowCallbackAsync(
                 WorkflowRunSupport.BuildLlmWatchdogCallbackId(sessionId),
                 TimeSpan.FromMilliseconds(timeoutMs),
                 new LlmCallWatchdogTimeoutFiredEvent
@@ -129,7 +112,7 @@ internal sealed class WorkflowRunAIRuntime
 
     public async Task HandleEvaluateStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {
-        await _effectDispatcher.EnsureAgentTreeAsync(ct);
+        await _context.EnsureAgentTreeAsync(ct);
 
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var criteria = request.Parameters.GetValueOrDefault("criteria", "quality");
@@ -139,11 +122,11 @@ internal sealed class WorkflowRunAIRuntime
             : 3.0;
         var onBelow = request.Parameters.GetValueOrDefault("on_below", string.Empty);
 
-        var state = _stateAccessor();
+        var state = _context.State;
         var attempt = state.StepExecutions.TryGetValue(request.StepId, out var execution) && execution.Attempt > 0
             ? execution.Attempt
             : 1;
-        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(_actorIdAccessor(), runId, request.StepId, attempt);
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(_context.ActorId, runId, request.StepId, attempt);
         var prompt = $"""
             Evaluate the following content on these criteria: {criteria}
             Use a numeric scale of {scale}. Respond with ONLY a single number (the score).
@@ -163,7 +146,7 @@ internal sealed class WorkflowRunAIRuntime
             TargetRole = request.TargetRole ?? string.Empty,
             Attempt = attempt,
         };
-        await _persistStateAsync(next, ct);
+        await _context.PersistStateAsync(next, ct);
 
         var chatRequest = new ChatRequestEvent
         {
@@ -172,14 +155,14 @@ internal sealed class WorkflowRunAIRuntime
         };
         if (!string.IsNullOrWhiteSpace(request.TargetRole))
         {
-            await _sendToAsync(
-                WorkflowRoleActorIdResolver.ResolveTargetActorId(_actorIdAccessor(), request.TargetRole),
+            await _context.SendToAsync(
+                WorkflowRoleActorIdResolver.ResolveTargetActorId(_context.ActorId, request.TargetRole),
                 chatRequest,
                 ct);
             return;
         }
 
-        await _publishAsync(chatRequest, EventDirection.Self, ct);
+        await _context.PublishAsync(chatRequest, EventDirection.Self, ct);
     }
 
     public async Task HandleReflectStepRequestAsync(StepRequestEvent request, CancellationToken ct)
@@ -209,7 +192,7 @@ internal sealed class WorkflowRunAIRuntime
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var cacheKey = request.Parameters.GetValueOrDefault("cache_key", request.Input ?? string.Empty);
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var state = _stateAccessor();
+        var state = _context.State;
         if (state.CacheEntries.TryGetValue(cacheKey, out var existing) &&
             existing.ExpiresAtUnixTimeMs > nowMs)
         {
@@ -222,7 +205,7 @@ internal sealed class WorkflowRunAIRuntime
             };
             hit.Metadata["cache.hit"] = "true";
             hit.Metadata["cache.key"] = WorkflowRunSupport.ShortenKey(cacheKey);
-            await _publishAsync(hit, EventDirection.Self, ct);
+            await _context.PublishAsync(hit, EventDirection.Self, ct);
             return;
         }
 
@@ -235,7 +218,7 @@ internal sealed class WorkflowRunAIRuntime
             });
             var next = state.Clone();
             next.PendingCacheCalls[cacheKey] = nextPending;
-            await _persistStateAsync(next, ct);
+            await _context.PersistStateAsync(next, ct);
             return;
         }
 
@@ -258,9 +241,9 @@ internal sealed class WorkflowRunAIRuntime
             ParentStepId = request.StepId,
         });
         nextState.PendingCacheCalls[cacheKey] = pendingState;
-        await _persistStateAsync(nextState, ct);
+        await _context.PersistStateAsync(nextState, ct);
 
-        await _dispatchInternalStepAsync(
+        await _dispatchRuntime.DispatchInternalStepAsync(
             runId,
             request.StepId,
             childStepId,
@@ -271,32 +254,13 @@ internal sealed class WorkflowRunAIRuntime
             ct);
     }
 
-    private async Task RemovePendingLlmCallAndPublishFailureAsync(
-        string sessionId,
-        string stepId,
-        string runId,
-        string error,
-        CancellationToken ct)
-    {
-        var next = _stateAccessor().Clone();
-        next.PendingLlmCalls.Remove(sessionId);
-        await _persistStateAsync(next, ct);
-        await _publishAsync(new StepCompletedEvent
-        {
-            StepId = stepId,
-            RunId = runId,
-            Success = false,
-            Error = error,
-        }, EventDirection.Self, ct);
-    }
-
     public async Task DispatchReflectPhaseAsync(
         string runId,
         WorkflowPendingReflectState pending,
         string content,
         CancellationToken ct)
     {
-        await _effectDispatcher.EnsureAgentTreeAsync(ct);
+        await _context.EnsureAgentTreeAsync(ct);
 
         var prompt = string.Equals(pending.Phase, "critique", StringComparison.OrdinalIgnoreCase)
             ? $"""
@@ -318,15 +282,15 @@ internal sealed class WorkflowRunAIRuntime
                 """;
 
         var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(
-            _actorIdAccessor(),
+            _context.ActorId,
             runId,
             $"{pending.StepId}_r{pending.Round}_{pending.Phase}");
         var nextPending = pending.Clone();
         nextPending.SessionId = sessionId;
 
-        var next = _stateAccessor().Clone();
+        var next = _context.State.Clone();
         next.PendingReflections[sessionId] = nextPending;
-        await _persistStateAsync(next, ct);
+        await _context.PersistStateAsync(next, ct);
 
         var request = new ChatRequestEvent
         {
@@ -335,13 +299,32 @@ internal sealed class WorkflowRunAIRuntime
         };
         if (!string.IsNullOrWhiteSpace(nextPending.TargetRole))
         {
-            await _sendToAsync(
-                WorkflowRoleActorIdResolver.ResolveTargetActorId(_actorIdAccessor(), nextPending.TargetRole),
+            await _context.SendToAsync(
+                WorkflowRoleActorIdResolver.ResolveTargetActorId(_context.ActorId, nextPending.TargetRole),
                 request,
                 ct);
             return;
         }
 
-        await _publishAsync(request, EventDirection.Self, ct);
+        await _context.PublishAsync(request, EventDirection.Self, ct);
+    }
+
+    private async Task RemovePendingLlmCallAndPublishFailureAsync(
+        string sessionId,
+        string stepId,
+        string runId,
+        string error,
+        CancellationToken ct)
+    {
+        var next = _context.State.Clone();
+        next.PendingLlmCalls.Remove(sessionId);
+        await _context.PersistStateAsync(next, ct);
+        await _context.PublishAsync(new StepCompletedEvent
+        {
+            StepId = stepId,
+            RunId = runId,
+            Success = false,
+            Error = error,
+        }, EventDirection.Self, ct);
     }
 }

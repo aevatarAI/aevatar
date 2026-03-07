@@ -1,36 +1,15 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
-using Google.Protobuf;
 
 namespace Aevatar.Workflow.Core;
 
 internal sealed class WorkflowRunSubWorkflowRuntime
 {
-    private readonly Func<string> _actorIdAccessor;
-    private readonly Func<WorkflowRunState> _stateAccessor;
-    private readonly Func<WorkflowRunState, CancellationToken, Task> _persistStateAsync;
-    private readonly Func<IMessage, EventDirection, CancellationToken, Task> _publishAsync;
-    private readonly Func<string, IMessage, CancellationToken, Task> _sendToAsync;
-    private readonly Func<Exception?, string, object?[], Task> _logWarningAsync;
-    private readonly WorkflowRunEffectDispatcher _effectDispatcher;
+    private readonly WorkflowRunRuntimeContext _context;
 
-    public WorkflowRunSubWorkflowRuntime(
-        Func<string> actorIdAccessor,
-        Func<WorkflowRunState> stateAccessor,
-        Func<WorkflowRunState, CancellationToken, Task> persistStateAsync,
-        Func<IMessage, EventDirection, CancellationToken, Task> publishAsync,
-        Func<string, IMessage, CancellationToken, Task> sendToAsync,
-        Func<Exception?, string, object?[], Task> logWarningAsync,
-        WorkflowRunEffectDispatcher effectDispatcher)
+    public WorkflowRunSubWorkflowRuntime(WorkflowRunRuntimeContext context)
     {
-        _actorIdAccessor = actorIdAccessor ?? throw new ArgumentNullException(nameof(actorIdAccessor));
-        _stateAccessor = stateAccessor ?? throw new ArgumentNullException(nameof(stateAccessor));
-        _persistStateAsync = persistStateAsync ?? throw new ArgumentNullException(nameof(persistStateAsync));
-        _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
-        _sendToAsync = sendToAsync ?? throw new ArgumentNullException(nameof(sendToAsync));
-        _logWarningAsync = logWarningAsync ?? throw new ArgumentNullException(nameof(logWarningAsync));
-        _effectDispatcher = effectDispatcher ?? throw new ArgumentNullException(nameof(effectDispatcher));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
     }
 
     public async Task HandleWorkflowCallStepRequestAsync(StepRequestEvent request, CancellationToken ct)
@@ -42,7 +21,7 @@ internal sealed class WorkflowRunSubWorkflowRuntime
 
         if (string.IsNullOrWhiteSpace(parentStepId))
         {
-            await _publishAsync(new StepCompletedEvent
+            await _context.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId ?? string.Empty,
                 RunId = parentRunId,
@@ -54,7 +33,7 @@ internal sealed class WorkflowRunSubWorkflowRuntime
 
         if (string.IsNullOrWhiteSpace(workflowName))
         {
-            await _publishAsync(new StepCompletedEvent
+            await _context.PublishAsync(new StepCompletedEvent
             {
                 StepId = parentStepId,
                 RunId = parentRunId,
@@ -66,7 +45,7 @@ internal sealed class WorkflowRunSubWorkflowRuntime
 
         if (!WorkflowCallLifecycle.IsSupported(lifecycle))
         {
-            await _publishAsync(new StepCompletedEvent
+            await _context.PublishAsync(new StepCompletedEvent
             {
                 StepId = parentStepId,
                 RunId = parentRunId,
@@ -78,8 +57,8 @@ internal sealed class WorkflowRunSubWorkflowRuntime
 
         var invocationId = WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId);
         var childRunId = invocationId;
-        var childActorId = WorkflowRunSupport.BuildSubWorkflowRunActorId(_actorIdAccessor(), workflowName, lifecycle, invocationId);
-        var next = _stateAccessor().Clone();
+        var childActorId = WorkflowRunSupport.BuildSubWorkflowRunActorId(_context.ActorId, workflowName, lifecycle, invocationId);
+        var next = _context.State.Clone();
         next.PendingSubWorkflows[childRunId] = new WorkflowPendingSubWorkflowState
         {
             InvocationId = invocationId,
@@ -90,16 +69,16 @@ internal sealed class WorkflowRunSubWorkflowRuntime
             ChildActorId = childActorId,
             ChildRunId = childRunId,
         };
-        await _persistStateAsync(next, ct);
+        await _context.PersistStateAsync(next, ct);
 
         try
         {
-            var childActor = await _effectDispatcher.ResolveOrCreateSubWorkflowRunActorAsync(childActorId, ct);
-            await _effectDispatcher.LinkChildAsync(childActor.Id, ct);
-            await childActor.HandleEventAsync(_effectDispatcher.CreateWorkflowDefinitionBindEnvelope(
-                await _effectDispatcher.ResolveWorkflowYamlAsync(workflowName, ct),
+            var childActor = await _context.ResolveOrCreateSubWorkflowRunActorAsync(childActorId, ct);
+            await _context.LinkChildAsync(childActor.Id, ct);
+            await childActor.HandleEventAsync(_context.CreateWorkflowDefinitionBindEnvelope(
+                await _context.ResolveWorkflowYamlAsync(workflowName, ct),
                 workflowName), ct);
-            await _sendToAsync(childActor.Id, new ChatRequestEvent
+            await _context.SendToAsync(childActor.Id, new ChatRequestEvent
             {
                 Prompt = request.Input ?? string.Empty,
                 SessionId = childRunId,
@@ -107,10 +86,10 @@ internal sealed class WorkflowRunSubWorkflowRuntime
         }
         catch (Exception ex)
         {
-            var rollback = _stateAccessor().Clone();
+            var rollback = _context.State.Clone();
             rollback.PendingSubWorkflows.Remove(childRunId);
-            await _persistStateAsync(rollback, ct);
-            await _publishAsync(new StepCompletedEvent
+            await _context.PersistStateAsync(rollback, ct);
+            await _context.PublishAsync(new StepCompletedEvent
             {
                 StepId = parentStepId,
                 RunId = parentRunId,
@@ -125,7 +104,7 @@ internal sealed class WorkflowRunSubWorkflowRuntime
         string? publisherActorId,
         CancellationToken ct)
     {
-        var state = _stateAccessor();
+        var state = _context.State;
         var childRunId = completed.RunId?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(childRunId) || !state.PendingSubWorkflows.TryGetValue(childRunId, out var pending))
             return false;
@@ -133,16 +112,18 @@ internal sealed class WorkflowRunSubWorkflowRuntime
         if (!string.IsNullOrWhiteSpace(pending.ChildActorId) &&
             !string.Equals(pending.ChildActorId, publisherActorId, StringComparison.Ordinal))
         {
-            await _logWarningAsync(
+            await _context.LogWarningAsync(
                 null,
                 "Ignore workflow_call completion due to publisher mismatch childRun={ChildRunId} expected={Expected} actual={Actual}",
-                [childRunId, pending.ChildActorId, publisherActorId ?? "(none)"]);
+                childRunId,
+                pending.ChildActorId,
+                publisherActorId ?? "(none)");
             return true;
         }
 
         var next = state.Clone();
         next.PendingSubWorkflows.Remove(childRunId);
-        await _persistStateAsync(next, ct);
+        await _context.PersistStateAsync(next, ct);
 
         var parentCompleted = new StepCompletedEvent
         {
@@ -157,18 +138,18 @@ internal sealed class WorkflowRunSubWorkflowRuntime
         parentCompleted.Metadata["workflow_call.lifecycle"] = WorkflowCallLifecycle.Normalize(pending.Lifecycle);
         parentCompleted.Metadata["workflow_call.child_actor_id"] = pending.ChildActorId;
         parentCompleted.Metadata["workflow_call.child_run_id"] = childRunId;
-        await _publishAsync(parentCompleted, EventDirection.Self, ct);
+        await _context.PublishAsync(parentCompleted, EventDirection.Self, ct);
 
         if (!string.Equals(WorkflowCallLifecycle.Normalize(pending.Lifecycle), WorkflowCallLifecycle.Singleton, StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(pending.ChildActorId))
         {
             try
             {
-                await _effectDispatcher.CleanupChildWorkflowAsync(pending.ChildActorId, ct);
+                await _context.CleanupChildWorkflowAsync(pending.ChildActorId, ct);
             }
             catch (Exception ex)
             {
-                await _logWarningAsync(ex, "Failed to clean up child workflow actor {ChildActorId}", [pending.ChildActorId]);
+                await _context.LogWarningAsync(ex, "Failed to clean up child workflow actor {ChildActorId}", pending.ChildActorId);
             }
         }
 

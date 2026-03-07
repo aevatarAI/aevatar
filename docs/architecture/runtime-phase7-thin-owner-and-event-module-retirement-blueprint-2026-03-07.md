@@ -58,26 +58,26 @@
 
 截至 `2026-03-08`，`WorkflowRunGAgent` 已进一步把 family-specific 原语逻辑外提到 runtime 协作者，热点大致为：
 
-1. `WorkflowRunGAgent.cs`：`389`
-2. `WorkflowRunFanOutRuntime.cs`：`207`
-3. `WorkflowRunSubWorkflowRuntime.cs`：`177`
-4. `WorkflowRunAIRuntime.cs`：`347`
-5. `WorkflowRunCallbackRuntime.cs`：`263`
-6. `WorkflowRunControlFlowRuntime.cs`：`244`
-7. `WorkflowRunDispatchRuntime.cs`：`192`
-8. `WorkflowRunHumanInteractionRuntime.cs`：`73`
-9. `WorkflowRunGAgent.Infrastructure.cs`：`177`
+1. `WorkflowRunGAgent.cs`：`350`
+2. `WorkflowRunFanOutRuntime.cs`：`196`
+3. `WorkflowRunSubWorkflowRuntime.cs`：`158`
+4. `WorkflowRunAIRuntime.cs`：`330`
+5. `WorkflowRunCallbackRuntime.cs`：`250`
+6. `WorkflowRunControlFlowRuntime.cs`：`230`
+7. `WorkflowRunDispatchRuntime.cs`：`178`
+8. `WorkflowRunHumanInteractionRuntime.cs`：`64`
+9. `WorkflowRunGAgent.Infrastructure.cs`：`187`
 10. `WorkflowRunGAgent.Lifecycle.cs`：`233`
 11. `WorkflowRunGAgent.ExternalInteractions.cs`：`119`
-12. `WorkflowRunAsyncPolicyRuntime.cs`：`154`
+12. `WorkflowRunAsyncPolicyRuntime.cs`：`145`
 13. `WorkflowRunAggregationCompletionRuntime.cs`：`216`
-14. `WorkflowRunProgressionCompletionRuntime.cs`：`170`
+14. `WorkflowRunProgressionCompletionRuntime.cs`：`162`
 
 当前问题已经从“owner 直接持有 primitive family 方法”收窄成“runtime 协作者总体仍偏大”。
 
 问题本质：
 
-1. shell 已经变薄，但 owner 仍直接掌握大量 family-specific helper 与 branch logic。
+1. shell 已经变薄，且 runtime 已共享 `WorkflowRunRuntimeContext` 统一 state/effect 访问；剩余问题主要是少数 runtime family 仍偏大。
 2. partial file 拆分更多是“文件拆开”，还不是“职责彻底拆开”。
 3. `WorkflowRunGAgent` 仍然同时承担：
    - run ingress
