@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package aevatar.workflow;
+
+option csharp_namespace = "Aevatar.Workflow.Core";
+
+message WorkflowDefinitionCatalogEntryState
+{
+  string workflow_name = 1;
+  string workflow_yaml = 2;
+  int32 version = 3;
+}
+
+message WorkflowDefinitionCatalogState
+{
+  map<string, WorkflowDefinitionCatalogEntryState> entries = 1;
+  int64 last_applied_event_version = 2;
+  string last_event_id = 3;
+}
+
+message UpsertWorkflowDefinitionRequestedEvent
+{
+  string workflow_name = 1;
+  string workflow_yaml = 2;
+}
+
+message WorkflowDefinitionCatalogEntryUpsertedEvent
+{
+  string workflow_name = 1;
+  string workflow_yaml = 2;
+}
+
+message QueryWorkflowDefinitionRequestedEvent
+{
+  string request_id = 1;
+  string reply_stream_id = 2;
+  string workflow_name = 3;
+}
+
+message WorkflowDefinitionRespondedEvent
+{
+  string request_id = 1;
+  bool found = 2;
+  string workflow_name = 3;
+  string workflow_yaml = 4;
+  string failure_reason = 5;
+}
+
+message QueryWorkflowDefinitionNamesRequestedEvent
+{
+  string request_id = 1;
+  string reply_stream_id = 2;
+}
+
+message WorkflowDefinitionNamesRespondedEvent
+{
+  string request_id = 1;
+  repeated string workflow_names = 2;
+}

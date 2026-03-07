@@ -54,6 +54,7 @@ builder.Services.Configure<JsonOptions>(o =>
 
 var primaryYamlDir = ResolveYamlDir();
 var turingYamlDir = ResolveTuringYamlDir();
+var localConnectorConfigPath = ResolveLocalConnectorConfigPath();
 var workflowSources = BuildWorkflowSources(primaryYamlDir, turingYamlDir);
 
 builder.Services.AddAevatarRuntime();
@@ -70,6 +71,11 @@ builder.Services.AddWorkflowDefinitionFileSource(options =>
 });
 builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, HttpConnectorBuilder>());
 builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, CliConnectorBuilder>());
+builder.Services.AddConfiguredConnectorCatalog(options =>
+{
+    if (!string.IsNullOrWhiteSpace(localConnectorConfigPath))
+        options.AdditionalConfigPaths.Add(localConnectorConfigPath);
+});
 builder.Services.AddSingleton<IWorkflowModulePack, DemoWorkflowModulePack>();
 builder.Services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
@@ -1331,7 +1337,7 @@ static List<string> ValidateWorkflowDefinitionForRuntime(WorkflowDefinition defi
 
     return WorkflowValidator.Validate(
         definition,
-        new WorkflowValidator.WorkflowValidationOptions
+        new WorkflowValidationOptions
         {
             RequireKnownStepTypes = true,
             KnownStepTypes = knownStepTypes,
@@ -1482,34 +1488,10 @@ static IReadOnlyList<string> LoadNamedConnectors(IServiceProvider services)
     using var scope = services.CreateScope();
     var scoped = scope.ServiceProvider;
     var logger = scoped.GetRequiredService<ILoggerFactory>().CreateLogger("Workflow.Web.Connectors");
-    var registry = scoped.GetService<IConnectorRegistry>();
-    if (registry == null)
-    {
-        logger.LogWarning("IConnectorRegistry is not registered. Skip connector loading.");
-        return [];
-    }
-
-    var connectorBuilders = scoped.GetServices<IConnectorBuilder>().ToList();
-    if (connectorBuilders.Count == 0)
-    {
-        logger.LogWarning("No IConnectorBuilder registered. Skip connector loading.");
-        return registry.ListNames();
-    }
-
-    var loadedCount = ConnectorRegistration.RegisterConnectors(registry, connectorBuilders, logger);
-    if (loadedCount == 0)
-    {
-        var localConnectorPath = ResolveLocalConnectorConfigPath();
-        if (!string.IsNullOrWhiteSpace(localConnectorPath) && File.Exists(localConnectorPath))
-        {
-            logger.LogInformation("Loading demo connectors from {Path}", localConnectorPath);
-            ConnectorRegistration.RegisterConnectors(registry, connectorBuilders, logger, localConnectorPath);
-        }
-    }
-
-    var names = registry.ListNames();
+    var catalog = scoped.GetService<IConnectorCatalog>() ?? StaticConnectorCatalog.Empty;
+    var names = catalog.ListNames();
     logger.LogInformation(
-        "Connector registry loaded: {Count} connector(s) [{Names}]",
+        "Connector catalog loaded: {Count} connector(s) [{Names}]",
         names.Count,
         names.Count == 0 ? "-" : string.Join(", ", names));
     return names;

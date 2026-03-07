@@ -145,7 +145,7 @@ public class ScriptEvolutionSessionGAgentTests
     private static ScriptEvolutionSessionGAgent CreateAgent(
         IScriptEvolutionFlowPort flowPort,
         RecordingEventPublisher publisher) =>
-        new(flowPort, new StaticAddressResolver())
+        new(new ScriptEvolutionExecutionCoordinator(flowPort, new StaticAddressResolver()), new StaticAddressResolver())
         {
             EventPublisher = publisher,
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptEvolutionSessionState>(

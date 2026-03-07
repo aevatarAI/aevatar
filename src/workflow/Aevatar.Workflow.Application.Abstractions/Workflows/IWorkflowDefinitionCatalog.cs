@@ -2,12 +2,12 @@ namespace Aevatar.Workflow.Application.Abstractions.Workflows;
 
 public interface IWorkflowDefinitionLookupService
 {
-    string? GetYaml(string name);
+    Task<string?> GetYamlAsync(string name, CancellationToken ct = default);
 
-    IReadOnlyList<string> GetNames();
+    Task<IReadOnlyList<string>> GetNamesAsync(CancellationToken ct = default);
 }
 
 public interface IWorkflowDefinitionCatalog : IWorkflowDefinitionLookupService
 {
-    void Upsert(string name, string yaml);
+    Task UpsertAsync(string name, string yaml, CancellationToken ct = default);
 }

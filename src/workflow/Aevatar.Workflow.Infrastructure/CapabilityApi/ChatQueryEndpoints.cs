@@ -41,8 +41,10 @@ public static class ChatQueryEndpoints
         return Results.Ok(agents);
     }
 
-    internal static IResult ListWorkflows(IWorkflowExecutionQueryApplicationService queryService) =>
-        Results.Ok(queryService.ListWorkflows());
+    internal static async Task<IResult> ListWorkflows(
+        IWorkflowExecutionQueryApplicationService queryService,
+        CancellationToken ct) =>
+        Results.Ok(await queryService.ListWorkflowsAsync(ct));
 
     internal static async Task<IResult> GetActorSnapshot(
         string actorId,

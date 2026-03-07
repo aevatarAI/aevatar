@@ -21,7 +21,7 @@ internal static class WorkflowYamlValidationSupport
 
         return WorkflowValidator.Validate(
             parsed,
-            new WorkflowValidator.WorkflowValidationOptions
+            new WorkflowValidationOptions
             {
                 RequireKnownStepTypes = true,
                 KnownStepTypes = new HashSet<string>(knownStepTypes, StringComparer.OrdinalIgnoreCase),

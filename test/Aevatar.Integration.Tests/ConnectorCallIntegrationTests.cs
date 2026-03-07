@@ -5,7 +5,6 @@ using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Infrastructure.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using FluentAssertions;
@@ -20,9 +19,9 @@ public class ConnectorCallIntegrationTests
     [Fact]
     public async Task ConnectorCall_ShouldInvokeRegisteredConnector_AndPublishMetadata()
     {
-        var registry = new InMemoryConnectorRegistry();
-        registry.Register(new FakeConnector("fake_connector", "echo://done"));
-        await using var env = BuildEnvironment(registry);
+        await using var env = BuildEnvironment(new StaticConnectorCatalog([
+            new FakeConnector("fake_connector", "echo://done"),
+        ]));
 
         const string yaml = """
             name: connector_flow
@@ -53,7 +52,7 @@ public class ConnectorCallIntegrationTests
     [Fact]
     public async Task ConnectorCall_WhenMissingAndSkip_ShouldKeepInput()
     {
-        await using var env = BuildEnvironment(new InMemoryConnectorRegistry());
+        await using var env = BuildEnvironment(StaticConnectorCatalog.Empty);
 
         const string yaml = """
             name: connector_flow_skip
@@ -80,9 +79,9 @@ public class ConnectorCallIntegrationTests
     [Fact]
     public async Task ConnectorCall_WhenConnectorFailsAndContinue_ShouldKeepInput()
     {
-        var registry = new InMemoryConnectorRegistry();
-        registry.Register(new FakeFailConnector("unstable_connector"));
-        await using var env = BuildEnvironment(registry);
+        await using var env = BuildEnvironment(new StaticConnectorCatalog([
+            new FakeFailConnector("unstable_connector"),
+        ]));
 
         const string yaml = """
             name: connector_flow_continue
@@ -109,9 +108,9 @@ public class ConnectorCallIntegrationTests
     [Fact]
     public async Task ConnectorCall_WhenRoleHasConnectorsAllowlist_AndConnectorInList_ShouldSucceed()
     {
-        var registry = new InMemoryConnectorRegistry();
-        registry.Register(new FakeConnector("allowed_connector", "ok"));
-        await using var env = BuildEnvironment(registry);
+        await using var env = BuildEnvironment(new StaticConnectorCatalog([
+            new FakeConnector("allowed_connector", "ok"),
+        ]));
 
         const string yaml = """
             name: role_connector_flow
@@ -140,9 +139,9 @@ public class ConnectorCallIntegrationTests
     [Fact]
     public async Task ConnectorCall_WhenRoleHasConnectorsAllowlist_AndConnectorNotInList_ShouldFailStep()
     {
-        var registry = new InMemoryConnectorRegistry();
-        registry.Register(new FakeConnector("other_connector", "ok"));
-        await using var env = BuildEnvironment(registry);
+        await using var env = BuildEnvironment(new StaticConnectorCatalog([
+            new FakeConnector("other_connector", "ok"),
+        ]));
 
         const string yaml = """
             name: role_connector_flow
@@ -168,10 +167,10 @@ public class ConnectorCallIntegrationTests
         result.WorkflowCompleted!.Success.Should().BeFalse();
     }
 
-    private static TestEnvironment BuildEnvironment(IConnectorRegistry registry)
+    private static TestEnvironment BuildEnvironment(IConnectorCatalog catalog)
     {
         var services = new ServiceCollection();
-        services.AddSingleton(registry);
+        services.AddSingleton(catalog);
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
         services.AddWorkflowInfrastructure();

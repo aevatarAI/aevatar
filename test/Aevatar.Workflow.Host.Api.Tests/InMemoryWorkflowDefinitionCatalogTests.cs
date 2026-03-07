@@ -10,32 +10,32 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public class InMemoryWorkflowDefinitionCatalogTests
 {
     [Fact]
-    public void Register_And_GetYaml()
+    public async Task Register_And_GetYaml()
     {
         var registry = new InMemoryWorkflowDefinitionCatalog();
         registry.Upsert("test", "name: test\nsteps: []");
 
-        registry.GetYaml("test").Should().Contain("name: test");
-        registry.GetYaml("TEST").Should().NotBeNull(); // 不区分大小写
-        registry.GetYaml("nonexistent").Should().BeNull();
+        (await registry.GetYamlAsync("test")).Should().Contain("name: test");
+        (await registry.GetYamlAsync("TEST")).Should().NotBeNull(); // 不区分大小写
+        (await registry.GetYamlAsync("nonexistent")).Should().BeNull();
     }
 
     [Fact]
-    public void GetNames_ReturnsAll()
+    public async Task GetNames_ReturnsAll()
     {
         var registry = new InMemoryWorkflowDefinitionCatalog();
         registry.Upsert("alpha", "a");
         registry.Upsert("beta", "b");
 
-        registry.GetNames().Should().HaveCount(2);
+        (await registry.GetNamesAsync()).Should().HaveCount(2);
     }
 
     [Fact]
-    public void FileLoader_NonExistentDirectory_ReturnsZero()
+    public async Task FileLoader_NonExistentDirectory_ReturnsZero()
     {
         var registry = new InMemoryWorkflowDefinitionCatalog();
         var loader = new WorkflowDefinitionFileLoader();
-        var loaded = loader.LoadInto(
+        var loaded = await loader.LoadIntoAsync(
             registry,
             ["/nonexistent/path/12345"],
             NullLogger.Instance);
@@ -44,7 +44,7 @@ public class InMemoryWorkflowDefinitionCatalogTests
     }
 
     [Fact]
-    public void FileLoader_LoadsYamlFiles()
+    public async Task FileLoader_LoadsYamlFiles()
     {
         // 创建临时目录
         var tmpDir = Path.Combine(Path.GetTempPath(), $"wf_test_{Guid.NewGuid():N}");
@@ -58,11 +58,11 @@ public class InMemoryWorkflowDefinitionCatalogTests
 
             var registry = new InMemoryWorkflowDefinitionCatalog();
             var loader = new WorkflowDefinitionFileLoader();
-            var count = loader.LoadInto(registry, [tmpDir], NullLogger.Instance);
+            var count = await loader.LoadIntoAsync(registry, [tmpDir], NullLogger.Instance);
 
             count.Should().Be(2);
-            registry.GetYaml("review").Should().Contain("review");
-            registry.GetYaml("chat").Should().Contain("chat");
+            (await registry.GetYamlAsync("review")).Should().Contain("review");
+            (await registry.GetYamlAsync("chat")).Should().Contain("chat");
         }
         finally
         {
@@ -71,7 +71,7 @@ public class InMemoryWorkflowDefinitionCatalogTests
     }
 
     [Fact]
-    public void FileLoader_DuplicateWorkflowName_ShouldThrow()
+    public async Task FileLoader_DuplicateWorkflowName_ShouldThrow()
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), $"wf_test_dup_{Guid.NewGuid():N}");
         Directory.CreateDirectory(tmpDir);
@@ -84,8 +84,8 @@ public class InMemoryWorkflowDefinitionCatalogTests
             var registry = new InMemoryWorkflowDefinitionCatalog();
             var loader = new WorkflowDefinitionFileLoader();
 
-            Action act = () => loader.LoadInto(registry, [tmpDir], NullLogger.Instance);
-            act.Should().Throw<InvalidOperationException>()
+            var act = () => loader.LoadIntoAsync(registry, [tmpDir], NullLogger.Instance);
+            await act.Should().ThrowAsync<InvalidOperationException>()
                 .WithMessage("*Duplicate workflow definition name*");
         }
         finally
@@ -95,7 +95,7 @@ public class InMemoryWorkflowDefinitionCatalogTests
     }
 
     [Fact]
-    public void FileLoader_DuplicateWorkflowName_WithOverridePolicy_ShouldUseFileVersion()
+    public async Task FileLoader_DuplicateWorkflowName_WithOverridePolicy_ShouldUseFileVersion()
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), $"wf_test_dup_override_{Guid.NewGuid():N}");
         Directory.CreateDirectory(tmpDir);
@@ -108,15 +108,16 @@ public class InMemoryWorkflowDefinitionCatalogTests
             registry.Upsert("direct", "name: direct\nsteps:\n  - id: built_in\n");
             var loader = new WorkflowDefinitionFileLoader();
 
-            var count = loader.LoadInto(
+            var count = await loader.LoadIntoAsync(
                 registry,
                 [tmpDir],
                 NullLogger.Instance,
-                WorkflowDefinitionDuplicatePolicy.Override);
+                seedSources: null,
+                duplicatePolicy: WorkflowDefinitionDuplicatePolicy.Override);
 
             count.Should().Be(1);
-            registry.GetYaml("direct").Should().Contain("from_file");
-            registry.GetYaml("direct").Should().NotContain("built_in");
+            (await registry.GetYamlAsync("direct")).Should().Contain("from_file");
+            (await registry.GetYamlAsync("direct")).Should().NotContain("built_in");
         }
         finally
         {
@@ -125,7 +126,7 @@ public class InMemoryWorkflowDefinitionCatalogTests
     }
 
     [Fact]
-    public void FileLoader_DuplicateDirectoryEntries_ShouldLoadOnlyOnce()
+    public async Task FileLoader_DuplicateDirectoryEntries_ShouldLoadOnlyOnce()
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), $"wf_test_dup_dir_{Guid.NewGuid():N}");
         Directory.CreateDirectory(tmpDir);
@@ -138,10 +139,10 @@ public class InMemoryWorkflowDefinitionCatalogTests
             var registry = new InMemoryWorkflowDefinitionCatalog();
             var loader = new WorkflowDefinitionFileLoader();
 
-            var count = loader.LoadInto(registry, [tmpDir, equivalentPath], NullLogger.Instance);
+            var count = await loader.LoadIntoAsync(registry, [tmpDir, equivalentPath], NullLogger.Instance);
 
             count.Should().Be(1);
-            registry.GetNames().Should().ContainSingle().Which.Should().Be("brainstorm");
+            (await registry.GetNamesAsync()).Should().ContainSingle().Which.Should().Be("brainstorm");
         }
         finally
         {

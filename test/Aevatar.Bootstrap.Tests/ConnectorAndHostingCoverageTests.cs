@@ -3,13 +3,10 @@ using System.Net.Http;
 using System.Text;
 using Aevatar.Bootstrap;
 using Aevatar.Bootstrap.Connectors;
-using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.Workflow.Infrastructure.Connectors;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -295,7 +292,7 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
-    public void ConnectorRegistration_ShouldBuildSupportedConnectorsOnly()
+    public void ConnectorCatalogFactory_ShouldBuildSupportedConnectorsOnly()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"connector-reg-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
@@ -320,14 +317,12 @@ public class ConnectorAndHostingCoverageTests
 
         try
         {
-            var registry = new InMemoryConnectorRegistry();
             var logger = NullLogger.Instance;
             var builders = new IConnectorBuilder[] { new HttpConnectorBuilder() };
 
-            var added = ConnectorRegistration.RegisterConnectors(registry, builders, logger, filePath);
+            var catalog = ConnectorCatalogFactory.Build(builders, logger, [filePath]);
 
-            added.Should().Be(1);
-            registry.ListNames().Should().ContainSingle().Which.Should().Be("valid_http");
+            catalog.ListNames().Should().ContainSingle().Which.Should().Be("valid_http");
         }
         finally
         {
@@ -336,18 +331,8 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
-    public async Task ConnectorBootstrapHostedService_ShouldSkipWithoutRegistryAndLoadWithRegistry()
+    public void AddConfiguredConnectorCatalog_ShouldLoadConfiguredConnectors()
     {
-        var servicesWithoutRegistry = new ServiceCollection();
-        servicesWithoutRegistry.AddLogging();
-        using var providerWithoutRegistry = servicesWithoutRegistry.BuildServiceProvider();
-
-        var serviceWithoutRegistry = new ConnectorBootstrapHostedService(
-            providerWithoutRegistry,
-            NullLogger<ConnectorBootstrapHostedService>.Instance);
-        await serviceWithoutRegistry.StartAsync(CancellationToken.None);
-        await serviceWithoutRegistry.StopAsync(CancellationToken.None);
-
         var tempHome = Path.Combine(Path.GetTempPath(), $"connector-host-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempHome);
         var previousHome = Environment.GetEnvironmentVariable(AevatarPaths.HomeEnv);
@@ -370,18 +355,12 @@ public class ConnectorAndHostingCoverageTests
 
             var services = new ServiceCollection();
             services.AddLogging();
-            services.AddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
             services.AddSingleton<IConnectorBuilder, HttpConnectorBuilder>();
+            services.AddConfiguredConnectorCatalog();
 
             using var provider = services.BuildServiceProvider();
-            var service = new ConnectorBootstrapHostedService(
-                provider,
-                NullLogger<ConnectorBootstrapHostedService>.Instance);
-
-            await service.StartAsync(CancellationToken.None);
-
-            var registry = provider.GetRequiredService<IConnectorRegistry>();
-            registry.ListNames().Should().Contain("h1");
+            var catalog = provider.GetRequiredService<IConnectorCatalog>();
+            catalog.ListNames().Should().Contain("h1");
         }
         finally
         {
@@ -501,21 +480,4 @@ public class ConnectorAndHostingCoverageTests
             throw _exception;
         }
     }
-
-    private sealed class InMemoryConnectorRegistry : IConnectorRegistry
-    {
-        private readonly Dictionary<string, IConnector> _connectors = new(StringComparer.OrdinalIgnoreCase);
-
-        public void Register(IConnector connector) => _connectors[connector.Name] = connector;
-
-        public bool TryGet(string name, out IConnector? connector)
-        {
-            var found = _connectors.TryGetValue(name, out var value);
-            connector = value;
-            return found;
-        }
-
-        public IReadOnlyList<string> ListNames() => _connectors.Keys.OrderBy(x => x, StringComparer.Ordinal).ToList();
-    }
-
 }

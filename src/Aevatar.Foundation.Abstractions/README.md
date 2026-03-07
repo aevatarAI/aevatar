@@ -6,7 +6,7 @@
 
 - 定义 Agent/Actor/Runtime 的核心接口
 - 定义事件发布、流、模块与持久化接口
-- 定义框架级 connector 契约（`IConnector` / `IConnectorRegistry`）
+- 定义框架级 connector 契约（`IConnector` / `IConnectorCatalog`）
 - 提供跨项目共享的 Proto 消息
 - 提供少量基础工具类型（如 `AgentId`、时间工具、属性标记）
 
@@ -41,7 +41,7 @@ Aevatar.Foundation.Abstractions/
 - `IEventPublisher`：按方向发布或点对点发送事件
 - `IEnvelopePropagationPolicy` / `ICorrelationLinkPolicy`：基于 Raw `EventEnvelope` 的关联字段传播策略
 - `IEventModule`：可插拔事件处理模块（含优先级）
-- `IConnector` / `IConnectorRegistry`：命名 connector 调用契约与注册表
+- `IConnector` / `IConnectorCatalog`：命名 connector 调用契约与只读目录
 - `IStateStore<TState>` / `IEventStore`：状态与事件持久化契约
 
 ## Proto 说明

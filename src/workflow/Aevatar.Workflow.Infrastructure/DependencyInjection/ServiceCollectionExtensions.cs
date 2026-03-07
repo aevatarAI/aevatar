@@ -3,7 +3,6 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Infrastructure.Connectors;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Infrastructure.Workflows;
@@ -28,7 +27,7 @@ public static class ServiceCollectionExtensions
         // Application registers NoopWorkflowExecutionReportArtifactSink via TryAddSingleton;
         // Infrastructure must use Replace to override it.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>());
-        services.TryAddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
+        services.TryAddSingleton<IConnectorCatalog>(StaticConnectorCatalog.Empty);
         services.TryAddSingleton<IWorkflowRunActorPort, WorkflowRunActorPort>();
         services.TryAddSingleton<IWorkflowDefinitionResolver, CatalogWorkflowDefinitionResolver>();
         return services;
@@ -60,6 +59,17 @@ public static class ServiceCollectionExtensions
         });
         services.TryAddSingleton<IWorkflowDefinitionCatalog>(sp => sp.GetRequiredService<InMemoryWorkflowDefinitionCatalog>());
         services.TryAddSingleton<IWorkflowDefinitionLookupService>(sp => sp.GetRequiredService<InMemoryWorkflowDefinitionCatalog>());
+        return services;
+    }
+
+    public static IServiceCollection AddActorBackedWorkflowDefinitionCatalog(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.TryAddSingleton<RuntimeWorkflowQueryClient>();
+        services.TryAddSingleton<ActorWorkflowDefinitionCatalog>();
+        services.TryAddSingleton<IWorkflowDefinitionCatalog>(sp => sp.GetRequiredService<ActorWorkflowDefinitionCatalog>());
+        services.TryAddSingleton<IWorkflowDefinitionLookupService>(sp => sp.GetRequiredService<ActorWorkflowDefinitionCatalog>());
         return services;
     }
 

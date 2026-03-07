@@ -20,8 +20,8 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
     private const string DefinitionPublisherId = "workflow.definition.actor";
 
     private readonly IActorRuntime _runtime;
-    private readonly WorkflowParser _parser = new();
     private readonly ISet<string> _knownStepTypes;
+    private readonly WorkflowCompilationService _workflowCompilationService;
 
     public WorkflowGAgent(
         IActorRuntime runtime,
@@ -36,6 +36,8 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         _knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
             packs.SelectMany(x => x.Modules).SelectMany(x => x.Names));
         _knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
+        _workflowCompilationService = new WorkflowCompilationService(
+            new HashSet<string>(_knownStepTypes, StringComparer.OrdinalIgnoreCase));
     }
 
     public override Task<string> GetDescriptionAsync()
@@ -187,34 +189,12 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)
     {
-        if (string.IsNullOrWhiteSpace(yaml))
-            return WorkflowCompilationResult.Invalid("workflow yaml is empty");
+        var result = _workflowCompilationService.Compile(yaml);
+        if (!result.Compiled && !string.IsNullOrWhiteSpace(result.CompilationError))
+            Logger.LogWarning("WorkflowGAgent compile failed: {Error}", result.CompilationError);
 
-        try
-        {
-            var workflow = _parser.Parse(yaml);
-            var errors = ValidateWorkflowDefinition(workflow);
-            if (errors.Count > 0)
-                return WorkflowCompilationResult.Invalid(string.Join("; ", errors));
-
-            return WorkflowCompilationResult.Success(workflow);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "WorkflowGAgent compile failed.");
-            return WorkflowCompilationResult.Invalid(ex.Message);
-        }
+        return result;
     }
-
-    private List<string> ValidateWorkflowDefinition(WorkflowDefinition workflow) =>
-        WorkflowValidator.Validate(
-            workflow,
-            new WorkflowValidator.WorkflowValidationOptions
-            {
-                RequireKnownStepTypes = true,
-                KnownStepTypes = _knownStepTypes,
-            },
-            availableWorkflowNames: null);
 
     private void EnsureWorkflowNameCanBind(string? workflowName)
     {
@@ -227,14 +207,5 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             throw new InvalidOperationException(
                 $"WorkflowGAgent '{Id}' is already bound to workflow '{State.WorkflowName}' and cannot switch to '{workflowName}'.");
         }
-    }
-
-    private readonly record struct WorkflowCompilationResult(bool Compiled, string CompilationError, WorkflowDefinition? Workflow)
-    {
-        public static WorkflowCompilationResult Success(WorkflowDefinition workflow) =>
-            new(true, string.Empty, workflow);
-
-        public static WorkflowCompilationResult Invalid(string error) =>
-            new(false, error, null);
     }
 }

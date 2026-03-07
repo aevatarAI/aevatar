@@ -200,7 +200,7 @@ public class WorkflowValidatorCoverageTests
         var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "another_flow" };
         var errors = WorkflowValidator.Validate(
             wf,
-            options: new WorkflowValidator.WorkflowValidationOptions
+            options: new WorkflowValidationOptions
             {
                 RequireResolvableWorkflowCallTargets = true,
             },
@@ -234,7 +234,7 @@ public class WorkflowValidatorCoverageTests
         var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "sub_flow" };
         var errors = WorkflowValidator.Validate(
             wf,
-            options: new WorkflowValidator.WorkflowValidationOptions
+            options: new WorkflowValidationOptions
             {
                 RequireResolvableWorkflowCallTargets = true,
             },
@@ -276,7 +276,7 @@ public class WorkflowValidatorCoverageTests
         var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "sub_flow" };
         var errors = WorkflowValidator.Validate(
             wf,
-            options: new WorkflowValidator.WorkflowValidationOptions
+            options: new WorkflowValidationOptions
             {
                 RequireResolvableWorkflowCallTargets = true,
             },
@@ -304,7 +304,7 @@ public class WorkflowValidatorCoverageTests
 
         var errors = WorkflowValidator.Validate(
             wf,
-            options: new WorkflowValidator.WorkflowValidationOptions
+            options: new WorkflowValidationOptions
             {
                 RequireKnownStepTypes = true,
                 KnownStepTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -343,7 +343,7 @@ public class WorkflowValidatorCoverageTests
 
         var errors = WorkflowValidator.Validate(
             wf,
-            options: new WorkflowValidator.WorkflowValidationOptions
+            options: new WorkflowValidationOptions
             {
                 RequireKnownStepTypes = true,
                 KnownStepTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

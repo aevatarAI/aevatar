@@ -1,14 +1,16 @@
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Application.Workflows;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Infrastructure.Workflows;
 
 public sealed class WorkflowDefinitionFileLoader
 {
-    public int LoadInto(
+    public async Task<int> LoadIntoAsync(
         IWorkflowDefinitionCatalog catalog,
         IEnumerable<string> directories,
         ILogger logger,
+        IEnumerable<IWorkflowDefinitionSeedSource>? seedSources = null,
         WorkflowDefinitionDuplicatePolicy duplicatePolicy = WorkflowDefinitionDuplicatePolicy.Throw)
     {
         ArgumentNullException.ThrowIfNull(catalog);
@@ -16,7 +18,19 @@ public sealed class WorkflowDefinitionFileLoader
         ArgumentNullException.ThrowIfNull(logger);
 
         var loaded = 0;
-        var registeredNames = new HashSet<string>(catalog.GetNames(), StringComparer.OrdinalIgnoreCase);
+        var registeredNames = new HashSet<string>(
+            await catalog.GetNamesAsync(CancellationToken.None),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var seedSource in seedSources ?? [])
+        {
+            foreach (var (name, yaml) in seedSource.GetSeedDefinitions())
+            {
+                await catalog.UpsertAsync(name, yaml, CancellationToken.None);
+                registeredNames.Add(name);
+            }
+        }
+
         var normalizedDirectories = directories
             .Where(static directory => !string.IsNullOrWhiteSpace(directory))
             .Select(static directory => Path.GetFullPath(directory))
@@ -56,7 +70,7 @@ public sealed class WorkflowDefinitionFileLoader
                 }
 
                 var yaml = File.ReadAllText(file);
-                catalog.Upsert(name, yaml);
+                await catalog.UpsertAsync(name, yaml, CancellationToken.None);
                 loaded++;
             }
         }

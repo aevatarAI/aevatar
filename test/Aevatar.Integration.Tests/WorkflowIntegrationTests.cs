@@ -18,9 +18,9 @@ using Aevatar.AI.Core;
 using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Infrastructure.Connectors;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
@@ -457,9 +457,8 @@ public class WorkflowIntegrationTests
     {
         var services = new ServiceCollection();
         services.AddAevatarWorkflow();
-        services.AddSingleton<InMemoryConnectorRegistry>();
-        services.AddSingleton<Aevatar.Foundation.Abstractions.Connectors.IConnectorRegistry>(sp =>
-            sp.GetRequiredService<InMemoryConnectorRegistry>());
+        services.AddSingleton<Aevatar.Foundation.Abstractions.Connectors.IConnectorCatalog>(
+            StaticConnectorCatalog.Empty);
         using var provider = services.BuildServiceProvider();
         var registry = new WorkflowPrimitiveRegistry(provider.GetServices<IWorkflowModulePack>());
 

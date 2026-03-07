@@ -6,7 +6,7 @@ public interface IWorkflowExecutionQueryApplicationService
 
     Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default);
 
-    IReadOnlyList<string> ListWorkflows();
+    Task<IReadOnlyList<string>> ListWorkflowsAsync(CancellationToken ct = default);
 
     Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default);
 

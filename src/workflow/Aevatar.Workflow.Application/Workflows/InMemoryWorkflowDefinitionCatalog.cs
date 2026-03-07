@@ -17,4 +17,23 @@ public sealed class InMemoryWorkflowDefinitionCatalog : IWorkflowDefinitionCatal
         _workflows.GetValueOrDefault(name);
 
     public IReadOnlyList<string> GetNames() => _workflows.Keys.ToList();
+
+    public Task UpsertAsync(string name, string yaml, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        Upsert(name, yaml);
+        return Task.CompletedTask;
+    }
+
+    public Task<string?> GetYamlAsync(string name, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(GetYaml(name));
+    }
+
+    public Task<IReadOnlyList<string>> GetNamesAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(GetNames());
+    }
 }

@@ -18,8 +18,6 @@ public sealed class AevatarDefaultHostOptions
 
     public bool EnableWebSockets { get; set; }
 
-    public bool EnableConnectorBootstrap { get; set; } = true;
-
     public bool AutoMapCapabilities { get; set; } = true;
 }
 
@@ -37,9 +35,6 @@ public static class WebApplicationBuilderExtensions
         builder.Configuration.AddAevatarConfig();
         builder.Services.AddAevatarBootstrap(builder.Configuration);
         builder.Services.AddSingleton(hostOptions);
-
-        if (hostOptions.EnableConnectorBootstrap)
-            builder.Services.AddHostedService<ConnectorBootstrapHostedService>();
 
         if (hostOptions.EnableCors)
             AddDefaultCorsPolicy(builder, hostOptions.CorsPolicyName);

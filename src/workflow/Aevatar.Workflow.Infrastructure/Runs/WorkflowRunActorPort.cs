@@ -17,8 +17,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
     private const string WorkflowRunActorPortPublisherId = "workflow.run.actor.port";
     private readonly IActorRuntime _runtime;
     private readonly IAgentTypeVerifier _agentTypeVerifier;
-    private readonly ISet<string> _knownStepTypes;
-    private readonly WorkflowParser _workflowParser = new();
+    private readonly WorkflowCompilationService _workflowCompilationService;
 
     public WorkflowRunActorPort(
         IActorRuntime runtime,
@@ -31,8 +30,10 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             ?? throw new ArgumentNullException(nameof(modulePacks));
         if (packs.Count == 0)
             packs.Add(new WorkflowCoreModulePack());
-        _knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
+        var knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
             packs.SelectMany(x => x.Modules).SelectMany(x => x.Names));
+        _workflowCompilationService = new WorkflowCompilationService(
+            new HashSet<string>(knownStepTypes, StringComparer.OrdinalIgnoreCase));
     }
 
     public Task<IActor?> GetDefinitionActorAsync(string definitionActorId, CancellationToken ct = default)
@@ -97,21 +98,13 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
 
         try
         {
-            var workflow = _workflowParser.Parse(workflowYaml);
-            var errors = WorkflowValidator.Validate(
-                workflow,
-                new WorkflowValidator.WorkflowValidationOptions
-                {
-                    RequireKnownStepTypes = true,
-                    KnownStepTypes = _knownStepTypes,
-                },
-                availableWorkflowNames: null);
-            if (errors.Count > 0)
-                return Task.FromResult(WorkflowYamlParseResult.Invalid(string.Join("; ", errors)));
+            var compileResult = _workflowCompilationService.Compile(workflowYaml);
+            if (!compileResult.Compiled || compileResult.Workflow == null)
+                return Task.FromResult(WorkflowYamlParseResult.Invalid(compileResult.CompilationError));
 
-            var workflowName = string.IsNullOrWhiteSpace(workflow.Name)
+            var workflowName = string.IsNullOrWhiteSpace(compileResult.Workflow.Name)
                 ? string.Empty
-                : workflow.Name.Trim();
+                : compileResult.Workflow.Name.Trim();
             if (string.IsNullOrWhiteSpace(workflowName))
                 return Task.FromResult(WorkflowYamlParseResult.Invalid("Workflow name is required."));
 

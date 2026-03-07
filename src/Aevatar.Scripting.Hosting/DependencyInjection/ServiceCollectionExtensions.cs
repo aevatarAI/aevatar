@@ -1,6 +1,7 @@
 using Aevatar.Scripting.Application.AI;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Runtime;
+using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
@@ -37,6 +38,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptEvolutionApplicationService, ScriptEvolutionApplicationService>();
         services.TryAddSingleton<IScriptRuntimeCapabilityComposer, ScriptRuntimeCapabilityComposer>();
         services.TryAddSingleton<IScriptRuntimeExecutionOrchestrator, ScriptRuntimeExecutionOrchestrator>();
+        services.TryAddSingleton<ScriptEvolutionExecutionCoordinator>();
         services.TryAddSingleton<IScriptingPortTimeouts, DefaultScriptingPortTimeouts>();
         services.TryAddSingleton<IScriptingRuntimeQueryModes, DefaultScriptingRuntimeQueryModes>();
         services.TryAddSingleton<RuntimeScriptActorAccessor>();

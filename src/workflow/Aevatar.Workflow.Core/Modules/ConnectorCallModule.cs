@@ -13,11 +13,11 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class ConnectorCallModule : IWorkflowPrimitiveHandler
 {
-    private readonly IConnectorRegistry _registry;
+    private readonly IConnectorCatalog _catalog;
 
-    public ConnectorCallModule(IConnectorRegistry registry)
+    public ConnectorCallModule(IConnectorCatalog catalog)
     {
-        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
     }
 
     public string Name => "connector_call";
@@ -44,7 +44,7 @@ public sealed class ConnectorCallModule : IWorkflowPrimitiveHandler
             return;
         }
 
-        if (!_registry.TryGet(connectorName, out var connector) || connector == null)
+        if (!_catalog.TryGet(connectorName, out var connector) || connector == null)
         {
             if (optional || string.Equals(onMissing, "skip", StringComparison.OrdinalIgnoreCase))
             {

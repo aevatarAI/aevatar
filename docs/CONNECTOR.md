@@ -9,7 +9,7 @@
 
 ## 1. 总览：Connector 在系统里的位置
 
-- `IConnector` / `IConnectorRegistry` 是统一外部调用契约，定义在 `Aevatar.Foundation.Abstractions`。
+- `IConnector` / `IConnectorCatalog` 是统一外部调用契约，定义在 `Aevatar.Foundation.Abstractions`。
 - Connector 的定义是中心化配置（`~/.aevatar/connectors.json`）。
 - Workflow 里通过 `type: connector_call` + `parameters.connector` 使用命名 Connector。
 - 角色（role）里的 `connectors` 是授权白名单，不是连接定义本身。
@@ -18,7 +18,7 @@
 
 1. 启动时读取 `connectors.json`；
 2. 按 `type` 用 Builder 构造具体 Connector（`http/cli/mcp`）；
-3. 注册到 `IConnectorRegistry`；
+3. 组装成只读 `IConnectorCatalog`；
 4. 运行 `connector_call` 步骤时按名称解析并调用。
 
 ---
@@ -85,11 +85,11 @@
 
 加载注册链路：
 
-1. Host 启动时 `ConnectorBootstrapHostedService.StartAsync()` 执行；
-2. 调用 `ConnectorRegistration.RegisterConnectors(...)`；
-3. 从 `AevatarConnectorConfig.LoadConnectors()` 读取配置；
-4. 根据 `type` 找到 `IConnectorBuilder`；
-5. 成功构建后注册到 `IConnectorRegistry`（默认开发/测试实现位于 `Aevatar.Workflow.Infrastructure.Connectors.InMemoryConnectorRegistry`）。
+1. Host 组合阶段调用 `AddConfiguredConnectorCatalog()`；
+2. `ConnectorCatalogFactory.Build(...)` 从 `AevatarConnectorConfig.LoadConnectors()` 读取配置；
+3. 根据 `type` 找到 `IConnectorBuilder`；
+4. 成功构建后生成只读 `StaticConnectorCatalog` 并注册为 `IConnectorCatalog`；
+5. 运行期不再通过 hosted service 或 mutable registry 补注册 connector。
 
 Builder 当前行为：
 
@@ -134,7 +134,7 @@ roles:
    - `connector`（或 `connector_name`）必填
    - `operation`（或 `action`）
    - `retry`、`timeout_ms`、`optional`、`on_missing`、`on_error`
-2. 从 `IConnectorRegistry` 解析 connector 名称；
+2. 从 `IConnectorCatalog` 解析 connector 名称；
 3. 若有 `allowed_connectors`，校验当前 connector 是否在白名单；
 4. 构造 `ConnectorRequest` 并调用 `IConnector.ExecuteAsync()`；
 5. 根据结果发布 `StepCompletedEvent`。
@@ -281,11 +281,11 @@ steps:
 1) 确认宿主会加载 Connector
 
 - 需要具备：
-  - `IConnectorRegistry`（通常由 `AddAevatarWorkflow()` 注册）；
+  - `IConnectorCatalog`（通常由 `AddAevatarBootstrap()` 或显式 `AddConfiguredConnectorCatalog()` 注册）；
   - 至少一个 `IConnectorBuilder`（`http/cli` 或 `mcp`）。
 - 推荐路径：
-  - 使用 `AddAevatarDefaultHost()`（内含 `ConnectorBootstrapHostedService`）；
-  - 或者在自定义宿主里手动调用 `ConnectorRegistration.RegisterConnectors(...)`。
+  - 使用 `AddAevatarDefaultHost()`；
+  - 或者在自定义宿主里显式调用 `AddConfiguredConnectorCatalog(...)`。
 
 2) 准备 `~/.aevatar/connectors.json`
 

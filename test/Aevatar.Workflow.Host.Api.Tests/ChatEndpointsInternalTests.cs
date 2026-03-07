@@ -957,7 +957,8 @@ public class ChatEndpointsInternalTests
         public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
             Task.FromResult(Agents);
 
-        public IReadOnlyList<string> ListWorkflows() => Workflows;
+        public Task<IReadOnlyList<string>> ListWorkflowsAsync(CancellationToken ct = default) =>
+            Task.FromResult(Workflows);
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
         {

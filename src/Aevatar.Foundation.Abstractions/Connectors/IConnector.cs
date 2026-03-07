@@ -65,16 +65,59 @@ public sealed class ConnectorResponse
 }
 
 /// <summary>
-/// Registry for named connectors.
+/// Read-only catalog for named connectors.
 /// </summary>
-public interface IConnectorRegistry
+public interface IConnectorCatalog
 {
-    /// <summary>Registers or replaces a connector by name.</summary>
-    void Register(IConnector connector);
-
     /// <summary>Resolves a connector by name.</summary>
     bool TryGet(string name, out IConnector? connector);
 
     /// <summary>Returns all registered connector names.</summary>
     IReadOnlyList<string> ListNames();
+}
+
+/// <summary>
+/// Immutable connector catalog used by host/bootstrap and tests.
+/// </summary>
+public sealed class StaticConnectorCatalog : IConnectorCatalog
+{
+    private readonly IReadOnlyDictionary<string, IConnector> _connectors;
+    private readonly IReadOnlyList<string> _names;
+
+    public StaticConnectorCatalog(IEnumerable<IConnector> connectors)
+    {
+        ArgumentNullException.ThrowIfNull(connectors);
+
+        var items = new Dictionary<string, IConnector>(StringComparer.OrdinalIgnoreCase);
+        foreach (var connector in connectors)
+        {
+            ArgumentNullException.ThrowIfNull(connector);
+            if (string.IsNullOrWhiteSpace(connector.Name))
+                throw new ArgumentException("Connector name is required.", nameof(connectors));
+
+            items[connector.Name.Trim()] = connector;
+        }
+
+        _connectors = items;
+        _names = items.Keys
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public static StaticConnectorCatalog Empty { get; } = new(Array.Empty<IConnector>());
+
+    public bool TryGet(string name, out IConnector? connector)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            connector = null;
+            return false;
+        }
+
+        var found = _connectors.TryGetValue(name.Trim(), out var value);
+        connector = value;
+        return found;
+    }
+
+    public IReadOnlyList<string> ListNames() => _names;
 }

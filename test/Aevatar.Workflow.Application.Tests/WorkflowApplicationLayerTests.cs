@@ -932,7 +932,7 @@ public class WorkflowExecutionQueryApplicationServiceTests
     }
 
     [Fact]
-    public void ListWorkflows_ShouldReturnRegisteredWorkflowNames()
+    public async Task ListWorkflows_ShouldReturnRegisteredWorkflowNames()
     {
         var registry = new InMemoryWorkflowDefinitionCatalog();
         registry.Upsert("workflow-a", WorkflowBuiltInDefinitions.DirectYaml);
@@ -942,7 +942,7 @@ public class WorkflowExecutionQueryApplicationServiceTests
             registry,
             new FakeProjectionService());
 
-        var workflows = queryService.ListWorkflows();
+        var workflows = await queryService.ListWorkflowsAsync();
 
         workflows.Should().BeEquivalentTo(["workflow-a", "workflow-b"]);
     }

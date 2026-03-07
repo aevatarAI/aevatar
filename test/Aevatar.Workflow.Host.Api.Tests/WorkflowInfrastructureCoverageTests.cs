@@ -100,12 +100,13 @@ public sealed class WorkflowInfrastructureCoverageTests
                 registry,
                 new WorkflowDefinitionFileLoader(),
                 Options.Create(options),
+                Array.Empty<IWorkflowDefinitionSeedSource>(),
                 NullLogger<WorkflowDefinitionBootstrapHostedService>.Instance);
 
             await service.StartAsync(CancellationToken.None);
             await service.StopAsync(CancellationToken.None);
 
-            registry.GetYaml("demo").Should().Contain("name: demo");
+            (await registry.GetYamlAsync("demo")).Should().Contain("name: demo");
         }
         finally
         {
@@ -123,6 +124,7 @@ public sealed class WorkflowInfrastructureCoverageTests
             registry,
             new WorkflowDefinitionFileLoader(),
             Options.Create(options),
+            Array.Empty<IWorkflowDefinitionSeedSource>(),
             NullLogger<WorkflowDefinitionBootstrapHostedService>.Instance);
 
         var act = async () => await service.StartAsync(new CancellationToken(canceled: true));
@@ -362,40 +364,40 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void AddInMemoryWorkflowDefinitionCatalog_Default_ShouldRegisterBuiltInDirectWorkflow()
+    public async Task AddInMemoryWorkflowDefinitionCatalog_Default_ShouldRegisterBuiltInDirectWorkflow()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
         services.AddInMemoryWorkflowDefinitionCatalog();
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<IWorkflowDefinitionCatalog>()
-            .GetYaml("direct")
+        (await provider.GetRequiredService<IWorkflowDefinitionLookupService>()
+            .GetYamlAsync("direct"))
             .Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
-    public void AddInMemoryWorkflowDefinitionCatalog_WhenConfigured_ShouldAllowDisablingBuiltInDirectWorkflow()
+    public async Task AddInMemoryWorkflowDefinitionCatalog_WhenConfigured_ShouldAllowDisablingBuiltInDirectWorkflow()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
         services.AddInMemoryWorkflowDefinitionCatalog(options => options.RegisterBuiltInDirectWorkflow = false);
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<IWorkflowDefinitionCatalog>()
-            .GetYaml("direct")
+        (await provider.GetRequiredService<IWorkflowDefinitionLookupService>()
+            .GetYamlAsync("direct"))
             .Should().BeNull();
     }
 
     [Fact]
-    public void AddInMemoryWorkflowDefinitionCatalog_Default_ShouldRegisterBuiltInAutoWorkflow()
+    public async Task AddInMemoryWorkflowDefinitionCatalog_Default_ShouldRegisterBuiltInAutoWorkflow()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
         services.AddInMemoryWorkflowDefinitionCatalog();
 
         using var provider = services.BuildServiceProvider();
-        var yaml = provider.GetRequiredService<IWorkflowDefinitionCatalog>().GetYaml("auto");
+        var yaml = await provider.GetRequiredService<IWorkflowDefinitionLookupService>().GetYamlAsync("auto");
         yaml.Should().NotBeNullOrWhiteSpace();
         yaml.Should().Contain("name: auto");
         yaml.Should().Contain("dynamic_workflow");
@@ -404,27 +406,27 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void AddInMemoryWorkflowDefinitionCatalog_WhenConfigured_ShouldAllowDisablingBuiltInAutoWorkflow()
+    public async Task AddInMemoryWorkflowDefinitionCatalog_WhenConfigured_ShouldAllowDisablingBuiltInAutoWorkflow()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
         services.AddInMemoryWorkflowDefinitionCatalog(options => options.RegisterBuiltInAutoWorkflow = false);
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<IWorkflowDefinitionCatalog>()
-            .GetYaml("auto")
+        (await provider.GetRequiredService<IWorkflowDefinitionLookupService>()
+            .GetYamlAsync("auto"))
             .Should().BeNull();
     }
 
     [Fact]
-    public void AddInMemoryWorkflowDefinitionCatalog_Default_ShouldRegisterBuiltInAutoReviewWorkflow()
+    public async Task AddInMemoryWorkflowDefinitionCatalog_Default_ShouldRegisterBuiltInAutoReviewWorkflow()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
         services.AddInMemoryWorkflowDefinitionCatalog();
 
         using var provider = services.BuildServiceProvider();
-        var yaml = provider.GetRequiredService<IWorkflowDefinitionCatalog>().GetYaml("auto_review");
+        var yaml = await provider.GetRequiredService<IWorkflowDefinitionLookupService>().GetYamlAsync("auto_review");
         yaml.Should().NotBeNullOrWhiteSpace();
         yaml.Should().Contain("name: auto_review");
         yaml.Should().Contain("\"true\": done");
@@ -434,15 +436,15 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void AddInMemoryWorkflowDefinitionCatalog_WhenConfigured_ShouldAllowDisablingBuiltInAutoReviewWorkflow()
+    public async Task AddInMemoryWorkflowDefinitionCatalog_WhenConfigured_ShouldAllowDisablingBuiltInAutoReviewWorkflow()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
         services.AddInMemoryWorkflowDefinitionCatalog(options => options.RegisterBuiltInAutoReviewWorkflow = false);
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<IWorkflowDefinitionCatalog>()
-            .GetYaml("auto_review")
+        (await provider.GetRequiredService<IWorkflowDefinitionLookupService>()
+            .GetYamlAsync("auto_review"))
             .Should().BeNull();
     }
 

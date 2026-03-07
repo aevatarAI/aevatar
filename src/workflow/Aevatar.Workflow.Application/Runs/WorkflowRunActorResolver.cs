@@ -122,7 +122,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
         if (!hasInlineWorkflowYamls)
         {
-            var yaml = _workflowLookup.GetYaml(workflowNameForRun);
+            var yaml = await _workflowLookup.GetYamlAsync(workflowNameForRun, ct);
             if (yaml == null)
             {
                 return new WorkflowActorResolutionResult(

@@ -12,11 +12,13 @@
 Aevatar.Workflow.Core/
 ├── WorkflowGAgent.cs
 ├── WorkflowRunGAgent.cs
+├── WorkflowRunGAgent.Lifecycle.cs
+├── WorkflowRunGAgent.ExternalInteractions.cs
 ├── WorkflowRunReducer.cs
+├── WorkflowCompilationService.cs
 ├── WorkflowPrimitiveExecutionPlanner.cs
 ├── WorkflowAsyncOperationReconciler.cs
 ├── WorkflowRunEffectDispatcher.cs
-├── WorkflowRunGAgent.StepRequests.cs
 ├── WorkflowRunGAgent.StatefulCompletions.cs
 ├── WorkflowRunGAgent.Callbacks.cs
 ├── WorkflowRunGAgent.Dispatch.cs
@@ -62,6 +64,8 @@ Aevatar.Workflow.Core/
 4. reactivation 后重建编译缓存、恢复 slice-level state patch 结果、重发 suspended facts。
 5. 统一处理 `WorkflowResumedEvent`、`SignalReceivedEvent`、callback fired、自身 domain events。
 6. 通过 `WorkflowRunReducer / WorkflowPrimitiveExecutionPlanner / WorkflowAsyncOperationReconciler / WorkflowRunEffectDispatcher` 把 reducer、planning、对账和 effect 组装从 actor shell 里显式抽出。
+7. `WorkflowRunGAgent` 主文件只保留 owner shell；binding/finalization 在 `Lifecycle`，外部恢复/信号/回包入口在 `ExternalInteractions`。
+8. DSL compile/validate 已从 actor shell 抽成 `WorkflowCompilationService + Validation/*`。
 
 ## 3. 状态模型
 
@@ -166,12 +170,12 @@ Aevatar.Workflow.Core/
 4. `WorkflowPrimitiveExecutionPlanner.cs`
 5. `WorkflowAsyncOperationReconciler.cs`
 6. `WorkflowRunEffectDispatcher.cs`
-7. `WorkflowRunGAgent.StepRequests.cs`
-8. `WorkflowRunGAgent.StatefulCompletions.cs`
-9. `WorkflowRunGAgent.Callbacks.cs`
-10. `WorkflowRunGAgent.Dispatch.cs`
-11. `WorkflowRunGAgent.Infrastructure.cs`
-12. `workflow_state.proto`
-13. `workflow_run_state.proto`
-14. `WorkflowCoreModulePack.cs`
-15. `ServiceCollectionExtensions.cs`
+7. `WorkflowRunGAgent.Lifecycle.cs`
+8. `WorkflowRunGAgent.ExternalInteractions.cs`
+9. `WorkflowRunGAgent.StatefulCompletions.cs`
+10. `WorkflowRunGAgent.Callbacks.cs`
+11. `WorkflowRunGAgent.Dispatch.cs`
+12. `WorkflowRunGAgent.Infrastructure.cs`
+13. `WorkflowCompilationService.cs`
+14. `workflow_state.proto`
+15. `workflow_run_state.proto`

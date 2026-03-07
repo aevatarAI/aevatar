@@ -13,14 +13,16 @@ public sealed class CatalogWorkflowDefinitionResolver : IWorkflowDefinitionResol
         _services = services ?? throw new ArgumentNullException(nameof(services));
     }
 
-    public Task<string?> GetWorkflowYamlAsync(string workflowName, CancellationToken ct = default)
+    public async Task<string?> GetWorkflowYamlAsync(string workflowName, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(workflowName))
-            return Task.FromResult<string?>(null);
+            return null;
 
         var lookup = _services.GetService<IWorkflowDefinitionLookupService>()
                      ?? _services.GetService<IWorkflowDefinitionCatalog>();
-        return Task.FromResult(lookup?.GetYaml(workflowName.Trim()));
+        return lookup == null
+            ? null
+            : await lookup.GetYamlAsync(workflowName.Trim(), ct);
     }
 }

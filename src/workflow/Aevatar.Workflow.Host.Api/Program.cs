@@ -23,7 +23,7 @@ builder.AddAevatarDefaultHost(
         options.EnableWebSockets = true;
     });
 builder.AddWorkflowCapabilityWithAIDefaults();
-builder.Services.AddInMemoryWorkflowDefinitionCatalog();
+builder.Services.AddActorBackedWorkflowDefinitionCatalog();
 builder.AddAevatarWorkflowObservability();
 
 var app = builder.Build();

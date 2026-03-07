@@ -76,9 +76,10 @@ flowchart LR
 
 ### 4.3 ScriptEvolutionSessionGAgent
 
-- 文件：`src/Aevatar.Scripting.Core/ScriptEvolutionSessionGAgent.cs`
+- 文件：`src/Aevatar.Scripting.Core/ScriptEvolutionSessionGAgent*.cs`
 - 状态：`ScriptEvolutionSessionState`
-- 职责：单 proposal 生命周期 owner，执行 validation/promotion/rejection 流程，并响应 `QueryScriptEvolutionDecisionRequestedEvent`。
+- 职责：单 proposal 生命周期 owner，持久化终态并响应 `QueryScriptEvolutionDecisionRequestedEvent`。
+- `ScriptEvolutionSessionGAgent` 已拆成 thin owner partials；真正的 validation/promotion/rejection 编排下沉到 `ScriptEvolutionExecutionCoordinator`。
 - `proposal_id -> session_actor_id` 不再落额外索引 actor；session actor id 由 proposal id 纯函数推导，并由 lifecycle/application 层直接解析。
 
 ### 4.4 ScriptCatalogGAgent
@@ -127,7 +128,7 @@ Core 响应处理要点：
 
 ### 6.2 演化链（Evolution）
 
-`ProposeScriptEvolutionRequestedEvent -> ScriptEvolutionSessionGAgent -> IScriptEvolutionFlowPort -> ScriptCatalog/Definition`
+`ProposeScriptEvolutionRequestedEvent -> ScriptEvolutionSessionGAgent -> ScriptEvolutionExecutionCoordinator -> IScriptEvolutionFlowPort -> ScriptCatalog/Definition`
 
 双入口合流：
 

@@ -1,4 +1,5 @@
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.Foundation.Abstractions.Connectors;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,31 +10,25 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class AevatarDefaultHostOptionsTests
 {
     [Fact]
-    public void AddAevatarDefaultHost_Default_ShouldRegisterConnectorBootstrapHostedService()
+    public void AddAevatarDefaultHost_Default_ShouldRegisterConnectorCatalog()
     {
         var builder = WebApplication.CreateBuilder();
 
         builder.AddAevatarDefaultHost();
+        using var provider = builder.Services.BuildServiceProvider();
 
-        var hostedServices = builder.Services
-            .Where(x => x.ServiceType == typeof(IHostedService))
-            .ToList();
-
-        hostedServices.Should().Contain(x => x.ImplementationType == typeof(ConnectorBootstrapHostedService));
+        provider.GetRequiredService<IConnectorCatalog>().Should().NotBeNull();
     }
 
     [Fact]
-    public void AddAevatarDefaultHost_WhenConnectorBootstrapDisabled_ShouldNotRegisterConnectorBootstrapHostedService()
+    public void AddAevatarDefaultHost_ShouldPreserveConfiguredOptions()
     {
         var builder = WebApplication.CreateBuilder();
 
         builder.AddAevatarDefaultHost(
-            configureHost: options => options.EnableConnectorBootstrap = false);
+            configureHost: options => options.EnableWebSockets = true);
 
-        var hostedServices = builder.Services
-            .Where(x => x.ServiceType == typeof(IHostedService))
-            .ToList();
-
-        hostedServices.Should().NotContain(x => x.ImplementationType == typeof(ConnectorBootstrapHostedService));
+        using var provider = builder.Services.BuildServiceProvider();
+        provider.GetRequiredService<AevatarDefaultHostOptions>().EnableWebSockets.Should().BeTrue();
     }
 }

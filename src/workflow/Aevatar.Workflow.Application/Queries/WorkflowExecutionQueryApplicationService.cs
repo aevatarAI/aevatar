@@ -34,7 +34,8 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
             .ToList();
     }
 
-    public IReadOnlyList<string> ListWorkflows() => _workflowLookup.GetNames();
+    public Task<IReadOnlyList<string>> ListWorkflowsAsync(CancellationToken ct = default) =>
+        _workflowLookup.GetNamesAsync(ct);
 
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
     {

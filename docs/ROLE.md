@@ -188,7 +188,7 @@ Connector 是**按名称调用的外部能力**：在 `~/.aevatar/connectors.jso
 
 - 通过 `allowedTools` 限制可调用的 MCP 工具名，避免越权调用。
 
-应用启动时会从该文件加载并注册到 `IConnectorRegistry`；工作流里只需写 `connector_call` + `connector: name`。
+应用启动时会从该文件加载并组装成 `IConnectorCatalog`；工作流里只需写 `connector_call` + `connector: name`。
 
 ---
 

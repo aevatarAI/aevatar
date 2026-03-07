@@ -3,6 +3,7 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Hosting;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
@@ -52,19 +53,15 @@ public class BootstrapServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddAevatarDefaultHost_ByDefault_ShouldRegisterBootstrapHostedServices()
+    public void AddAevatarDefaultHost_ShouldRegisterConfiguredConnectorCatalog()
     {
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
 
         builder.AddAevatarDefaultHost();
+        using var provider = builder.Services.BuildServiceProvider();
 
-        var hostedServices = builder.Services
-            .Where(x => x.ServiceType == typeof(IHostedService))
-            .Select(x => x.ImplementationType)
-            .ToList();
-
-        hostedServices.Should().Contain(typeof(ConnectorBootstrapHostedService));
+        provider.GetRequiredService<IConnectorCatalog>().Should().NotBeNull();
     }
 
     [Fact]
@@ -79,7 +76,6 @@ public class BootstrapServiceCollectionExtensionsTests
         builder.AddAevatarDefaultHost(options =>
         {
             options.AutoMapCapabilities = false;
-            options.EnableConnectorBootstrap = false;
             options.EnableCors = false;
         });
 

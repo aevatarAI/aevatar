@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
-using Aevatar.Workflow.Infrastructure.Connectors;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,7 +16,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenNonConnectorStep_ShouldNoop()
     {
-        var module = new ConnectorCallModule(new InMemoryConnectorRegistry());
+        var module = new ConnectorCallModule(StaticConnectorCatalog.Empty);
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -34,7 +33,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenMissingConnectorParameter_ShouldFail()
     {
-        var module = new ConnectorCallModule(new InMemoryConnectorRegistry());
+        var module = new ConnectorCallModule(StaticConnectorCatalog.Empty);
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -53,7 +52,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenConnectorMissingAndOptionalYes_ShouldSkip()
     {
-        var module = new ConnectorCallModule(new InMemoryConnectorRegistry());
+        var module = new ConnectorCallModule(StaticConnectorCatalog.Empty);
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -79,11 +78,8 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenFirstAttemptThrowsAndRetrySucceeds_ShouldPublishSuccess()
     {
-        var registry = new InMemoryConnectorRegistry();
         var connector = new ThrowThenSuccessConnector("retryable");
-        registry.Register(connector);
-
-        var module = new ConnectorCallModule(registry);
+        var module = new ConnectorCallModule(new StaticConnectorCatalog([connector]));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -116,9 +112,9 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenTimeoutAndContinue_ShouldKeepInput()
     {
-        var registry = new InMemoryConnectorRegistry();
-        registry.Register(new DelayConnector("slow"));
-        var module = new ConnectorCallModule(registry);
+        var module = new ConnectorCallModule(new StaticConnectorCatalog([
+            new DelayConnector("slow"),
+        ]));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {

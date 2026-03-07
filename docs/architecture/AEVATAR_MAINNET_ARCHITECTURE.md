@@ -422,7 +422,7 @@ flowchart TB
         IC["IConnector"]
         Req["ConnectorRequest"]
         Resp["ConnectorResponse"]
-        Reg["IConnectorRegistry"]
+        Reg["IConnectorCatalog"]
     end
 
     subgraph impls ["实现"]
@@ -436,7 +436,7 @@ flowchart TB
         APROFILE["SDK agent_profile (run-scoped)"]
         MERGE["AgentProfileResolver + ConnectorConfigResolver"]
         Builder["IConnectorBuilder"]
-        Bootstrap["ConnectorBootstrapHostedService"]
+        Bootstrap["AddConfiguredConnectorCatalog()"]
     end
 
     subgraph workflow_int ["工作流集成"]
@@ -477,7 +477,7 @@ Agent 通过 Connector 调用 Chrono 能力服务的典型场景：
 sequenceDiagram
     participant Agent as "RoleGAgent"
     participant Module as "ConnectorCallModule"
-    participant Registry as "IConnectorRegistry"
+    participant Registry as "IConnectorCatalog"
     participant HTTP as "HttpConnector"
     participant Chrono as "Chrono Gateway"
     participant Orchestrator as "Chrono Service Orchestrator"
@@ -1146,7 +1146,7 @@ flowchart LR
 
 **6) Connector 外部依赖治理（P1）**
 
-- 以 Connector 为粒度设置并发预算（Bulkhead）和熔断策略。推荐实现：使用 `System.Threading.RateLimiter.ConcurrencyLimiter` 包装每个 `IConnector` 实例，可在 `IConnectorRegistry` 层作为装饰器注入，无需修改 Connector 本身。
+- 以 Connector 为粒度设置并发预算（Bulkhead）和熔断策略。推荐实现：使用 `System.Threading.RateLimiter.ConcurrencyLimiter` 包装每个 `IConnector` 实例，可在 `IConnectorCatalog` 组合层作为装饰器注入，无需修改 Connector 本身。
 - 重试采用指数退避 + 抖动，禁止零间隔重试风暴。
 - 为 `connector_call` 设置 payload 上限与超时预算，超限快速失败。
 
