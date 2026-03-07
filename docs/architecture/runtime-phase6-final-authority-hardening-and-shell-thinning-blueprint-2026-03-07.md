@@ -25,7 +25,7 @@
    - CQRS projection 主协议重写
    - AI provider failover 产品语义调整
 7. 本版结论：
-   - phase-6 已交付：`WorkflowRunGAgent` shell 继续压薄到 `367` 行，`ScriptEvolutionSessionGAgent` 主文件压到 `74` 行并由 `ScriptEvolutionExecutionCoordinator` 承担执行编排。
+   - phase-6 已交付：`WorkflowRunGAgent` shell 当前为 `389` 行，step family 细节已继续下沉到 runtime 协作者；`ScriptEvolutionSessionGAgent` 主文件压到 `74` 行并由 `ScriptEvolutionExecutionCoordinator` 承担执行编排。
    - formal host 已切到 actor-backed workflow definition catalog；connector 已从 mutable registry 改成 `IConnectorCatalog + StaticConnectorCatalog + AddConfiguredConnectorCatalog()`；活跃文档已同步到当前边界。
 
 ## 2. 背景
@@ -57,14 +57,16 @@ phase-6 不是继续开新主链，而是把剩余“结构热点”和“语义
 
 当前核心切片行数大致为：
 
-1. `WorkflowRunGAgent.cs`：`686`
-2. `WorkflowRunGAgent.Infrastructure.cs`：`535`
-3. `WorkflowRunGAgent.Callbacks.cs`：`392`
-4. `WorkflowRunGAgent.StatefulCompletions.cs`：`335`
-5. `WorkflowRunGAgent.Composition.cs`：`272`
-6. `WorkflowRunGAgent.AI.cs`：`244`
-7. `WorkflowRunGAgent.ControlFlow.cs`：`218`
-8. `WorkflowRunGAgent.Dispatch.cs`：`218`
+1. `WorkflowRunGAgent.cs`：`389`
+2. `WorkflowRunGAgent.Infrastructure.cs`：`177`
+3. `WorkflowRunCallbackRuntime.cs`：`263`
+4. `WorkflowRunStatefulCompletionRuntime.cs`：`366`
+5. `WorkflowRunCompositionRuntime.cs`：`358`
+6. `WorkflowRunAIRuntime.cs`：`347`
+7. `WorkflowRunControlFlowRuntime.cs`：`244`
+8. `WorkflowRunDispatchRuntime.cs`：`192`
+9. `WorkflowRunHumanInteractionRuntime.cs`：`73`
+10. `WorkflowRunAsyncPolicyRuntime.cs`：`154`
 
 问题本质：
 
@@ -247,12 +249,13 @@ phase-6 完成后，系统应满足下面 6 条终局约束：
 
 1. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
-3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Callbacks.cs`
-4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StatefulCompletions.cs`
-5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Dispatch.cs`
-6. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
-7. `test/Aevatar.Workflow.Core.Tests/*`
-8. `test/Aevatar.Integration.Tests/*Workflow*`
+3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCallbackRuntime.cs`
+4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunStatefulCompletionRuntime.cs`
+5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs`
+6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunHumanInteractionRuntime.cs`
+7. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
+8. `test/Aevatar.Workflow.Core.Tests/*`
+9. `test/Aevatar.Integration.Tests/*Workflow*`
 
 #### 6.1.5 验收标准
 

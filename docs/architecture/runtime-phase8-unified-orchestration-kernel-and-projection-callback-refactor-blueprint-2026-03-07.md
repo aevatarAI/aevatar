@@ -111,7 +111,7 @@
 直接证据：
 
 1. [workflow_run_state.proto](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/workflow_run_state.proto#L22) 显式持久化了大量 orchestration facts
-2. [WorkflowRunGAgent.Dispatch.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Dispatch.cs#L9) 直接承担 step dispatch + timeout registration
+2. [WorkflowRunDispatchRuntime.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs#L37) 直接承担 step dispatch + timeout registration
 3. [WorkflowAsyncOperationReconciler.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs#L9) 统一承担 callback / timeout / response 对账
 
 因此终局上：
@@ -159,7 +159,7 @@
    - `pending_parallel_steps`
    - `pending_map_reduce_steps`
    - `pending_sub_workflows`
-2. [WorkflowRunGAgent.Dispatch.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Dispatch.cs#L9) 负责 dispatch 与 callback registration
+2. [WorkflowRunDispatchRuntime.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs#L37) 负责 dispatch，与 [WorkflowRunCallbackRuntime.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowRunCallbackRuntime.cs#L35) 共同完成 callback registration / fired-event 对账
 3. [WorkflowAsyncOperationReconciler.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs#L9) 负责 timeout / callback / completion 对账
 
 第二套是 `scripting` 的动态 capability runtime + specialized orchestration：

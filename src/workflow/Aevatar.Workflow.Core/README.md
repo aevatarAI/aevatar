@@ -19,11 +19,17 @@ Aevatar.Workflow.Core/
 ├── WorkflowPrimitiveExecutionPlanner.cs
 ├── WorkflowAsyncOperationReconciler.cs
 ├── WorkflowRunEffectDispatcher.cs
+├── WorkflowRunRuntimeDelegates.cs
 ├── WorkflowRunStepRequestFactory.cs
 ├── WorkflowRunSupport.cs
-├── WorkflowRunGAgent.StatefulCompletions.cs
-├── WorkflowRunGAgent.Callbacks.cs
-├── WorkflowRunGAgent.Dispatch.cs
+├── WorkflowRunControlFlowRuntime.cs
+├── WorkflowRunAIRuntime.cs
+├── WorkflowRunCompositionRuntime.cs
+├── WorkflowRunCallbackRuntime.cs
+├── WorkflowRunStatefulCompletionRuntime.cs
+├── WorkflowRunAsyncPolicyRuntime.cs
+├── WorkflowRunDispatchRuntime.cs
+├── WorkflowRunHumanInteractionRuntime.cs
 ├── WorkflowRunGAgent.Infrastructure.cs
 ├── workflow_state.proto
 ├── workflow_run_state.proto
@@ -68,7 +74,8 @@ Aevatar.Workflow.Core/
 6. 通过 `WorkflowRunReducer / WorkflowPrimitiveExecutionPlanner / WorkflowAsyncOperationReconciler / WorkflowRunEffectDispatcher` 把 reducer、planning、对账和 effect 组装从 actor shell 里显式抽出。
 7. `WorkflowRunGAgent` 主文件只保留 owner shell；binding/finalization 在 `Lifecycle`，外部恢复/信号/回包入口在 `ExternalInteractions`。
 8. DSL compile/validate 已从 actor shell 抽成 `WorkflowCompilationService + Validation/*`。
-9. step request 构建、while 条件求值、callback key / parent-step 推导等纯 helper 逻辑继续下沉到 `WorkflowRunStepRequestFactory + WorkflowRunSupport`，避免 owner 切片继续膨胀。
+9. step-family 运行逻辑已经按 `WorkflowRunControlFlowRuntime + WorkflowRunAIRuntime + WorkflowRunCompositionRuntime + WorkflowRunCallbackRuntime + WorkflowRunStatefulCompletionRuntime` 分拆；owner 只保留 ingress/reducer/effect boundary。
+10. step request 构建、while 条件求值、callback key / parent-step 推导等纯 helper 逻辑继续下沉到 `WorkflowRunStepRequestFactory + WorkflowRunSupport`，避免 owner 切片继续膨胀。
 
 ## 3. 状态模型
 
@@ -175,10 +182,15 @@ Aevatar.Workflow.Core/
 6. `WorkflowRunEffectDispatcher.cs`
 7. `WorkflowRunGAgent.Lifecycle.cs`
 8. `WorkflowRunGAgent.ExternalInteractions.cs`
-9. `WorkflowRunGAgent.StatefulCompletions.cs`
-10. `WorkflowRunGAgent.Callbacks.cs`
-11. `WorkflowRunGAgent.Dispatch.cs`
-12. `WorkflowRunGAgent.Infrastructure.cs`
-13. `WorkflowCompilationService.cs`
-14. `workflow_state.proto`
-15. `workflow_run_state.proto`
+9. `WorkflowRunControlFlowRuntime.cs`
+10. `WorkflowRunAIRuntime.cs`
+11. `WorkflowRunCompositionRuntime.cs`
+12. `WorkflowRunCallbackRuntime.cs`
+13. `WorkflowRunStatefulCompletionRuntime.cs`
+14. `WorkflowRunAsyncPolicyRuntime.cs`
+15. `WorkflowRunDispatchRuntime.cs`
+16. `WorkflowRunHumanInteractionRuntime.cs`
+17. `WorkflowRunGAgent.Infrastructure.cs`
+18. `WorkflowCompilationService.cs`
+19. `workflow_state.proto`
+20. `workflow_run_state.proto`

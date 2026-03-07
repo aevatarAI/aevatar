@@ -28,7 +28,15 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     private readonly ISet<string> _knownStepTypes;
     private readonly WorkflowCompilationService _workflowCompilationService;
     private readonly WorkflowRunEffectDispatcher _effectDispatcher;
+    private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
+    private readonly WorkflowRunControlFlowRuntime _controlFlowRuntime;
+    private readonly WorkflowRunHumanInteractionRuntime _humanInteractionRuntime;
+    private readonly WorkflowRunAIRuntime _aiRuntime;
+    private readonly WorkflowRunCompositionRuntime _compositionRuntime;
     private readonly WorkflowPrimitiveExecutionPlanner _primitiveExecutionPlanner;
+    private readonly WorkflowRunCallbackRuntime _callbackRuntime;
+    private readonly WorkflowRunStatefulCompletionRuntime _statefulCompletionRuntime;
+    private readonly WorkflowRunAsyncPolicyRuntime _asyncPolicyRuntime;
     private readonly WorkflowAsyncOperationReconciler _asyncOperationReconciler;
 
     private WorkflowDefinition? _compiledWorkflow;
@@ -67,43 +75,108 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             },
             resolveWorkflowYamlAsync: ResolveWorkflowYamlCoreAsync,
             createWorkflowDefinitionBindEnvelope: CreateWorkflowDefinitionBindEnvelopeCore);
+        _dispatchRuntime = new WorkflowRunDispatchRuntime(
+            stateAccessor: () => State,
+            compiledWorkflowAccessor: () => _compiledWorkflow,
+            stepRequestFactory: _stepRequestFactory,
+            expressionEvaluator: _expressionEvaluator,
+            persistStateAsync: PersistStateAsync,
+            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
+            effectDispatcher: _effectDispatcher);
+        _controlFlowRuntime = new WorkflowRunControlFlowRuntime(
+            stateAccessor: () => State,
+            persistStateAsync: PersistStateAsync,
+            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
+            effectDispatcher: _effectDispatcher,
+            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync,
+            dispatchWhileIterationAsync: _dispatchRuntime.DispatchWhileIterationAsync);
+        _humanInteractionRuntime = new WorkflowRunHumanInteractionRuntime(
+            stateAccessor: () => State,
+            persistStateAsync: PersistStateAsync,
+            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct));
+        _aiRuntime = new WorkflowRunAIRuntime(
+            actorIdAccessor: () => Id,
+            stateAccessor: () => State,
+            persistStateAsync: PersistStateAsync,
+            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
+            sendToAsync: (targetActorId, evt, ct) => SendToAsync(targetActorId, evt, ct),
+            effectDispatcher: _effectDispatcher,
+            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync);
+        _compositionRuntime = new WorkflowRunCompositionRuntime(
+            actorIdAccessor: () => Id,
+            stateAccessor: () => State,
+            persistStateAsync: PersistStateAsync,
+            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
+            sendToAsync: (targetActorId, evt, ct) => SendToAsync(targetActorId, evt, ct),
+            logWarningAsync: (ex, message, args) =>
+            {
+                if (ex == null)
+                    Logger.LogWarning(message, args);
+                else
+                    Logger.LogWarning(ex, message, args);
+                return Task.CompletedTask;
+            },
+            effectDispatcher: _effectDispatcher,
+            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync);
+        _callbackRuntime = new WorkflowRunCallbackRuntime(
+            actorIdAccessor: () => Id,
+            stateAccessor: () => State,
+            compiledWorkflowAccessor: () => _compiledWorkflow,
+            persistStateAsync: PersistStateAsync,
+            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
+            dispatchWorkflowStepAsync: _dispatchRuntime.DispatchWorkflowStepAsync,
+            dispatchReflectPhaseAsync: _aiRuntime.DispatchReflectPhaseAsync);
+        _statefulCompletionRuntime = new WorkflowRunStatefulCompletionRuntime(
+            stateAccessor: () => State,
+            persistStateAsync: PersistStateAsync,
+            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
+            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync,
+            dispatchWhileIterationAsync: _dispatchRuntime.DispatchWhileIterationAsync,
+            evaluateWhileCondition: (state, output, nextIteration) => _stepRequestFactory.EvaluateWhileCondition(state, output, nextIteration));
+        _asyncPolicyRuntime = new WorkflowRunAsyncPolicyRuntime(
+            stateAccessor: () => State,
+            compiledWorkflowAccessor: () => _compiledWorkflow,
+            persistStateAsync: PersistStateAsync,
+            dispatchWorkflowStepAsync: _dispatchRuntime.DispatchWorkflowStepAsync,
+            finalizeRunAsync: FinalizeRunAsync,
+            effectDispatcher: _effectDispatcher);
         _primitiveExecutionPlanner = new WorkflowPrimitiveExecutionPlanner(
             TryHandleRegisteredPrimitiveAsync,
             [
                 new WorkflowControlFlowPlanner(
-                    HandleDelayStepRequestAsync,
-                    HandleWaitSignalStepRequestAsync,
-                    HandleRaceStepRequestAsync,
-                    HandleWhileStepRequestAsync),
+                    _controlFlowRuntime.HandleDelayStepRequestAsync,
+                    _controlFlowRuntime.HandleWaitSignalStepRequestAsync,
+                    _controlFlowRuntime.HandleRaceStepRequestAsync,
+                    _controlFlowRuntime.HandleWhileStepRequestAsync),
                 new WorkflowHumanInteractionPlanner(
-                    (request, ct) => HandleHumanGateStepRequestAsync(request, "human_input", ct),
-                    (request, ct) => HandleHumanGateStepRequestAsync(request, "human_approval", ct)),
+                    (request, ct) => _humanInteractionRuntime.HandleHumanGateStepRequestAsync(request, "human_input", ct),
+                    (request, ct) => _humanInteractionRuntime.HandleHumanGateStepRequestAsync(request, "human_approval", ct)),
                 new WorkflowAIPlanner(
-                    HandleLlmCallStepRequestAsync,
-                    HandleEvaluateStepRequestAsync,
-                    HandleReflectStepRequestAsync,
-                    HandleCacheStepRequestAsync),
+                    _aiRuntime.HandleLlmCallStepRequestAsync,
+                    _aiRuntime.HandleEvaluateStepRequestAsync,
+                    _aiRuntime.HandleReflectStepRequestAsync,
+                    _aiRuntime.HandleCacheStepRequestAsync),
                 new WorkflowCompositionPlanner(
-                    HandleParallelStepRequestAsync,
-                    HandleForEachStepRequestAsync,
-                    HandleMapReduceStepRequestAsync,
-                    HandleWorkflowCallStepRequestAsync),
+                    _compositionRuntime.HandleParallelStepRequestAsync,
+                    _compositionRuntime.HandleForEachStepRequestAsync,
+                    _compositionRuntime.HandleMapReduceStepRequestAsync,
+                    _compositionRuntime.HandleWorkflowCallStepRequestAsync),
             ]);
         _asyncOperationReconciler = new WorkflowAsyncOperationReconciler(
             [
-                TryHandleParallelCompletionAsync,
-                TryHandleForEachCompletionAsync,
-                TryHandleMapReduceCompletionAsync,
-                TryHandleRaceCompletionAsync,
-                TryHandleWhileCompletionAsync,
-                TryHandleCacheCompletionAsync,
+                _statefulCompletionRuntime.TryHandleParallelCompletionAsync,
+                _statefulCompletionRuntime.TryHandleForEachCompletionAsync,
+                _statefulCompletionRuntime.TryHandleMapReduceCompletionAsync,
+                _statefulCompletionRuntime.TryHandleRaceCompletionAsync,
+                _statefulCompletionRuntime.TryHandleWhileCompletionAsync,
+                _statefulCompletionRuntime.TryHandleCacheCompletionAsync,
             ],
-            HandleWorkflowStepTimeoutFiredAsync,
-            HandleWorkflowStepRetryBackoffFiredAsync,
-            HandleDelayStepTimeoutFiredAsync,
-            HandleWaitSignalTimeoutFiredAsync,
-            HandleLlmCallWatchdogTimeoutFiredAsync,
-            HandleLlmLikeResponseAsync);
+            _callbackRuntime.HandleWorkflowStepTimeoutFiredAsync,
+            _callbackRuntime.HandleWorkflowStepRetryBackoffFiredAsync,
+            _callbackRuntime.HandleDelayStepTimeoutFiredAsync,
+            _callbackRuntime.HandleWaitSignalTimeoutFiredAsync,
+            _callbackRuntime.HandleLlmCallWatchdogTimeoutFiredAsync,
+            _callbackRuntime.HandleLlmLikeResponseAsync);
     }
 
     public override Task<string> GetDescriptionAsync()
@@ -138,53 +211,6 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             .Match(current, evt)
             .On<WorkflowRunStatePatchedEvent>(WorkflowRunReducer.ApplyPatchedEvent)
             .OrCurrent();
-
-    public WorkflowRunBindingSnapshot GetBindingSnapshot() =>
-        new(
-            string.IsNullOrWhiteSpace(State.WorkflowName) ? string.Empty : State.WorkflowName.Trim(),
-            State.WorkflowYaml ?? string.Empty,
-            State.InlineWorkflowYamls.ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase));
-
-    public async Task BindWorkflowDefinitionAsync(
-        string workflowYaml,
-        string? workflowName,
-        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
-        CancellationToken ct = default)
-    {
-        EnsureWorkflowNameCanBind(workflowName);
-
-        var next = State.Clone();
-        next.WorkflowYaml = workflowYaml ?? string.Empty;
-        next.WorkflowName = string.IsNullOrWhiteSpace(workflowName)
-            ? next.WorkflowName
-            : workflowName.Trim();
-        next.InlineWorkflowYamls.Clear();
-        if (inlineWorkflowYamls != null)
-        {
-            foreach (var (name, yaml) in inlineWorkflowYamls)
-            {
-                var normalizedName = WorkflowRunIdNormalizer.NormalizeWorkflowName(name);
-                if (string.IsNullOrWhiteSpace(normalizedName) || string.IsNullOrWhiteSpace(yaml))
-                    continue;
-
-                next.InlineWorkflowYamls[normalizedName] = yaml;
-            }
-        }
-
-        WorkflowRunSupport.ResetRuntimeState(next, clearChildActors: true);
-
-        var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
-        next.Compiled = compileResult.Compiled;
-        next.CompilationError = compileResult.CompilationError;
-        if (compileResult.Compiled && compileResult.Workflow != null && string.IsNullOrWhiteSpace(next.WorkflowName))
-            next.WorkflowName = compileResult.Workflow.Name;
-
-        await PersistStateAsync(next, ct);
-    }
-
-    [EventHandler]
-    public Task HandleBindWorkflowDefinition(BindWorkflowDefinitionEvent request) =>
-        BindWorkflowDefinitionAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls);
 
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
@@ -238,7 +264,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             return;
         }
 
-        await DispatchWorkflowStepAsync(entry, input, runId, CancellationToken.None);
+        await _dispatchRuntime.DispatchWorkflowStepAsync(entry, input, runId, CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true, Priority = 1)]
@@ -301,10 +327,10 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
 
         if (!evt.Success)
         {
-            if (await TryScheduleRetryAsync(currentStep, evt, next, CancellationToken.None))
+            if (await _asyncPolicyRuntime.TryScheduleRetryAsync(currentStep, evt, next, CancellationToken.None))
                 return;
 
-            if (await TryHandleOnErrorAsync(currentStep, evt, next, CancellationToken.None))
+            if (await _asyncPolicyRuntime.TryHandleOnErrorAsync(currentStep, evt, next, CancellationToken.None))
                 return;
 
             next.StepExecutions.Remove(evt.StepId);
@@ -352,7 +378,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         }
 
         await PersistStateAsync(next, CancellationToken.None);
-        await DispatchWorkflowStepAsync(nextStep, evt.Output ?? string.Empty, runId, CancellationToken.None);
+        await _dispatchRuntime.DispatchWorkflowStepAsync(nextStep, evt.Output ?? string.Empty, runId, CancellationToken.None);
     }
 
 }

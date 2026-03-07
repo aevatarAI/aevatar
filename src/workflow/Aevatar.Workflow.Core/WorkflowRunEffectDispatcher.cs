@@ -94,6 +94,15 @@ internal sealed class WorkflowRunEffectDispatcher
         return await _runtime.CreateAsync<WorkflowRunGAgent>(actorId, ct);
     }
 
+    public Task LinkChildAsync(string childActorId, CancellationToken ct) =>
+        _runtime.LinkAsync(_actorIdAccessor(), childActorId, ct);
+
+    public async Task CleanupChildWorkflowAsync(string childActorId, CancellationToken ct)
+    {
+        await _runtime.UnlinkAsync(childActorId, ct);
+        await _runtime.DestroyAsync(childActorId, ct);
+    }
+
     public Task<string> ResolveWorkflowYamlAsync(string workflowName, CancellationToken ct) =>
         _resolveWorkflowYamlAsync(workflowName, ct);
 

@@ -1,18 +1,42 @@
-using System.Globalization;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
+using Google.Protobuf;
 
 namespace Aevatar.Workflow.Core;
 
-public sealed partial class WorkflowRunGAgent
+internal sealed class WorkflowRunControlFlowRuntime
 {
-    private async Task HandleDelayStepRequestAsync(StepRequestEvent request, CancellationToken ct)
+    private readonly Func<WorkflowRunState> _stateAccessor;
+    private readonly Func<WorkflowRunState, CancellationToken, Task> _persistStateAsync;
+    private readonly Func<IMessage, EventDirection, CancellationToken, Task> _publishAsync;
+    private readonly WorkflowRunEffectDispatcher _effectDispatcher;
+    private readonly WorkflowInternalStepDispatchHandler _dispatchInternalStepAsync;
+    private readonly Func<WorkflowWhileState, string, CancellationToken, Task> _dispatchWhileIterationAsync;
+
+    public WorkflowRunControlFlowRuntime(
+        Func<WorkflowRunState> stateAccessor,
+        Func<WorkflowRunState, CancellationToken, Task> persistStateAsync,
+        Func<IMessage, EventDirection, CancellationToken, Task> publishAsync,
+        WorkflowRunEffectDispatcher effectDispatcher,
+        WorkflowInternalStepDispatchHandler dispatchInternalStepAsync,
+        Func<WorkflowWhileState, string, CancellationToken, Task> dispatchWhileIterationAsync)
+    {
+        _stateAccessor = stateAccessor ?? throw new ArgumentNullException(nameof(stateAccessor));
+        _persistStateAsync = persistStateAsync ?? throw new ArgumentNullException(nameof(persistStateAsync));
+        _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
+        _effectDispatcher = effectDispatcher ?? throw new ArgumentNullException(nameof(effectDispatcher));
+        _dispatchInternalStepAsync = dispatchInternalStepAsync ?? throw new ArgumentNullException(nameof(dispatchInternalStepAsync));
+        _dispatchWhileIterationAsync = dispatchWhileIterationAsync ?? throw new ArgumentNullException(nameof(dispatchWhileIterationAsync));
+    }
+
+    public async Task HandleDelayStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var stepId = request.StepId?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(stepId))
         {
-            await PublishAsync(new StepCompletedEvent
+            await _publishAsync(new StepCompletedEvent
             {
                 StepId = stepId,
                 RunId = runId,
@@ -32,7 +56,7 @@ public sealed partial class WorkflowRunGAgent
             "delay_ms");
         if (durationMs <= 0)
         {
-            await PublishAsync(new StepCompletedEvent
+            await _publishAsync(new StepCompletedEvent
             {
                 StepId = stepId,
                 RunId = runId,
@@ -42,18 +66,19 @@ public sealed partial class WorkflowRunGAgent
             return;
         }
 
-        var next = State.Clone();
+        var state = _stateAccessor();
+        var next = state.Clone();
         next.PendingDelays[stepId] = new WorkflowPendingDelayState
         {
             StepId = stepId,
             Input = request.Input ?? string.Empty,
             DurationMs = durationMs,
             SemanticGeneration = WorkflowRunSupport.NextSemanticGeneration(
-                State.PendingDelays.TryGetValue(stepId, out var existing) ? existing.SemanticGeneration : 0),
+                state.PendingDelays.TryGetValue(stepId, out var existing) ? existing.SemanticGeneration : 0),
         };
-        await PersistStateAsync(next, ct);
+        await _persistStateAsync(next, ct);
 
-        await ScheduleWorkflowCallbackAsync(
+        await _effectDispatcher.ScheduleWorkflowCallbackAsync(
             WorkflowRunSupport.BuildDelayCallbackId(runId, stepId),
             TimeSpan.FromMilliseconds(durationMs),
             new DelayStepTimeoutFiredEvent
@@ -69,7 +94,7 @@ public sealed partial class WorkflowRunGAgent
             ct);
     }
 
-    private async Task HandleWaitSignalStepRequestAsync(StepRequestEvent request, CancellationToken ct)
+    public async Task HandleWaitSignalStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var stepId = request.StepId?.Trim() ?? string.Empty;
@@ -95,8 +120,9 @@ public sealed partial class WorkflowRunGAgent
             timeoutMs = Math.Clamp(timeoutSeconds * 1000, 0, 3_600_000);
         }
 
-        var next = State.Clone();
-        next.Status = StatusSuspended;
+        var state = _stateAccessor();
+        var next = state.Clone();
+        next.Status = "suspended";
         next.PendingSignalWaits[stepId] = new WorkflowPendingSignalWaitState
         {
             StepId = stepId,
@@ -106,13 +132,13 @@ public sealed partial class WorkflowRunGAgent
             TimeoutMs = timeoutMs,
             TimeoutGeneration = timeoutMs > 0
                 ? WorkflowRunSupport.NextSemanticGeneration(
-                    State.PendingSignalWaits.TryGetValue(stepId, out var existing) ? existing.TimeoutGeneration : 0)
+                    state.PendingSignalWaits.TryGetValue(stepId, out var existing) ? existing.TimeoutGeneration : 0)
                 : 0,
             WaitToken = Guid.NewGuid().ToString("N"),
         };
-        await PersistStateAsync(next, ct);
+        await _persistStateAsync(next, ct);
 
-        await PublishAsync(new WaitingForSignalEvent
+        await _publishAsync(new WaitingForSignalEvent
         {
             StepId = stepId,
             SignalName = signalName,
@@ -125,7 +151,7 @@ public sealed partial class WorkflowRunGAgent
         if (timeoutMs <= 0)
             return;
 
-        await ScheduleWorkflowCallbackAsync(
+        await _effectDispatcher.ScheduleWorkflowCallbackAsync(
             WorkflowRunSupport.BuildWaitSignalCallbackId(runId, signalName, stepId),
             TimeSpan.FromMilliseconds(timeoutMs),
             new WaitSignalTimeoutFiredEvent
@@ -142,9 +168,9 @@ public sealed partial class WorkflowRunGAgent
             ct);
     }
 
-    private async Task HandleRaceStepRequestAsync(StepRequestEvent request, CancellationToken ct)
+    public async Task HandleRaceStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {
-        await EnsureAgentTreeAsync(ct);
+        await _effectDispatcher.EnsureAgentTreeAsync(ct);
 
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var workers = WorkflowParameterValueParser.GetStringList(request.Parameters, "workers", "worker_roles");
@@ -154,7 +180,7 @@ public sealed partial class WorkflowRunGAgent
 
         if (workers.Count == 0 && string.IsNullOrWhiteSpace(request.TargetRole))
         {
-            await PublishAsync(new StepCompletedEvent
+            await _publishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
                 RunId = runId,
@@ -164,19 +190,19 @@ public sealed partial class WorkflowRunGAgent
             return;
         }
 
-        var next = State.Clone();
+        var next = _stateAccessor().Clone();
         next.PendingRaceSteps[request.StepId] = new WorkflowRaceState
         {
             Total = count,
             Received = 0,
             Resolved = false,
         };
-        await PersistStateAsync(next, ct);
+        await _persistStateAsync(next, ct);
 
         for (var i = 0; i < count; i++)
         {
             var role = i < workers.Count ? workers[i] : request.TargetRole;
-            await DispatchInternalStepAsync(
+            await _dispatchInternalStepAsync(
                 runId,
                 request.StepId,
                 $"{request.StepId}_race_{i}",
@@ -188,7 +214,7 @@ public sealed partial class WorkflowRunGAgent
         }
     }
 
-    private async Task HandleWhileStepRequestAsync(StepRequestEvent request, CancellationToken ct)
+    public async Task HandleWhileStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {
         var maxIterations = int.TryParse(request.Parameters.GetValueOrDefault("max_iterations", "10"), out var max)
             ? Math.Clamp(max, 1, 1_000_000)
@@ -197,7 +223,7 @@ public sealed partial class WorkflowRunGAgent
         foreach (var (key, value) in request.Parameters.Where(x => x.Key.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase)))
             subParameters[key["sub_param_".Length..]] = value;
 
-        var next = State.Clone();
+        var next = _stateAccessor().Clone();
         next.PendingWhileSteps[request.StepId] = new WorkflowWhileState
         {
             StepId = request.StepId,
@@ -211,8 +237,8 @@ public sealed partial class WorkflowRunGAgent
         };
         foreach (var (key, value) in subParameters)
             next.PendingWhileSteps[request.StepId].SubParameters[key] = value;
-        await PersistStateAsync(next, ct);
+        await _persistStateAsync(next, ct);
 
-        await DispatchWhileIterationAsync(next.PendingWhileSteps[request.StepId], request.Input ?? string.Empty, ct);
+        await _dispatchWhileIterationAsync(next.PendingWhileSteps[request.StepId], request.Input ?? string.Empty, ct);
     }
 }

@@ -59,8 +59,8 @@ phase-5 解决的是“剩余结构性热点”，不是再开第二条架构主
 1. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StepRequests.cs`
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`
 3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
-4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Callbacks.cs`
-5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StatefulCompletions.cs`
+4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCallbackRuntime.cs`
+5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunStatefulCompletionRuntime.cs`
 
 问题本质：
 
@@ -335,7 +335,7 @@ flowchart LR
 
 1. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StepRequests.cs`
-3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Callbacks.cs`
+3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCallbackRuntime.cs`
 4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
 5. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
 6. `src/workflow/Aevatar.Workflow.Core/*Planner*.cs`

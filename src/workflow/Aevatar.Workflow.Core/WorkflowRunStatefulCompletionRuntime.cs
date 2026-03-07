@@ -1,26 +1,52 @@
 using System.Globalization;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Google.Protobuf;
 
 namespace Aevatar.Workflow.Core;
 
-public sealed partial class WorkflowRunGAgent
+internal sealed class WorkflowRunStatefulCompletionRuntime
 {
-    private async Task<bool> TryHandleParallelCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
+    private readonly Func<WorkflowRunState> _stateAccessor;
+    private readonly Func<WorkflowRunState, CancellationToken, Task> _persistStateAsync;
+    private readonly Func<IMessage, EventDirection, CancellationToken, Task> _publishAsync;
+    private readonly WorkflowInternalStepDispatchHandler _dispatchInternalStepAsync;
+    private readonly Func<WorkflowWhileState, string, CancellationToken, Task> _dispatchWhileIterationAsync;
+    private readonly Func<WorkflowWhileState, string, int, bool> _evaluateWhileCondition;
+
+    public WorkflowRunStatefulCompletionRuntime(
+        Func<WorkflowRunState> stateAccessor,
+        Func<WorkflowRunState, CancellationToken, Task> persistStateAsync,
+        Func<IMessage, EventDirection, CancellationToken, Task> publishAsync,
+        WorkflowInternalStepDispatchHandler dispatchInternalStepAsync,
+        Func<WorkflowWhileState, string, CancellationToken, Task> dispatchWhileIterationAsync,
+        Func<WorkflowWhileState, string, int, bool> evaluateWhileCondition)
     {
-        foreach (var (parentStepId, pending) in State.PendingParallelSteps)
+        _stateAccessor = stateAccessor ?? throw new ArgumentNullException(nameof(stateAccessor));
+        _persistStateAsync = persistStateAsync ?? throw new ArgumentNullException(nameof(persistStateAsync));
+        _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
+        _dispatchInternalStepAsync = dispatchInternalStepAsync ?? throw new ArgumentNullException(nameof(dispatchInternalStepAsync));
+        _dispatchWhileIterationAsync = dispatchWhileIterationAsync ?? throw new ArgumentNullException(nameof(dispatchWhileIterationAsync));
+        _evaluateWhileCondition = evaluateWhileCondition ?? throw new ArgumentNullException(nameof(evaluateWhileCondition));
+    }
+
+    public async Task<bool> TryHandleParallelCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
+    {
+        var state = _stateAccessor();
+        foreach (var (parentStepId, pending) in state.PendingParallelSteps)
         {
             if (!string.IsNullOrWhiteSpace(pending.VoteStepId) &&
                 string.Equals(pending.VoteStepId, evt.StepId, StringComparison.Ordinal))
             {
-                var voteNextState = State.Clone();
+                var voteNextState = state.Clone();
                 voteNextState.PendingParallelSteps.Remove(parentStepId);
                 voteNextState.StepExecutions.Remove(evt.StepId);
-                await PersistStateAsync(voteNextState, ct);
+                await _persistStateAsync(voteNextState, ct);
 
                 var voteCompleted = new StepCompletedEvent
                 {
                     StepId = parentStepId,
-                    RunId = State.RunId,
+                    RunId = state.RunId,
                     Success = pending.WorkersSuccess && evt.Success,
                     Output = evt.Output,
                     Error = evt.Error,
@@ -31,7 +57,7 @@ public sealed partial class WorkflowRunGAgent
                 voteCompleted.Metadata["parallel.used_vote"] = "true";
                 voteCompleted.Metadata["parallel.vote_step_id"] = evt.StepId;
                 voteCompleted.Metadata["parallel.workers_success"] = pending.WorkersSuccess.ToString();
-                await PublishAsync(voteCompleted, EventDirection.Self, ct);
+                await _publishAsync(voteCompleted, EventDirection.Self, ct);
                 return true;
             }
 
@@ -41,13 +67,13 @@ public sealed partial class WorkflowRunGAgent
                 continue;
             }
 
-            var next = State.Clone();
+            var next = state.Clone();
             next.StepExecutions.Remove(evt.StepId);
             next.PendingParallelSteps[parentStepId].ChildResults.Add(WorkflowRunSupport.ToRecordedResult(evt));
             var collected = next.PendingParallelSteps[parentStepId].ChildResults.Count;
             if (collected < next.PendingParallelSteps[parentStepId].ExpectedCount)
             {
-                await PersistStateAsync(next, ct);
+                await _persistStateAsync(next, ct);
                 return true;
             }
 
@@ -59,9 +85,9 @@ public sealed partial class WorkflowRunGAgent
                 var voteStepId = $"{parentStepId}_vote";
                 next.PendingParallelSteps[parentStepId].VoteStepId = voteStepId;
                 next.PendingParallelSteps[parentStepId].WorkersSuccess = allSuccess;
-                await PersistStateAsync(next, ct);
-                await DispatchInternalStepAsync(
-                    State.RunId,
+                await _persistStateAsync(next, ct);
+                await _dispatchInternalStepAsync(
+                    state.RunId,
                     parentStepId,
                     voteStepId,
                     next.PendingParallelSteps[parentStepId].VoteStepType,
@@ -73,72 +99,74 @@ public sealed partial class WorkflowRunGAgent
             }
 
             next.PendingParallelSteps.Remove(parentStepId);
-            await PersistStateAsync(next, ct);
+            await _persistStateAsync(next, ct);
             var completed = new StepCompletedEvent
             {
                 StepId = parentStepId,
-                RunId = State.RunId,
+                RunId = state.RunId,
                 Success = allSuccess,
                 Output = merged,
             };
             completed.Metadata["parallel.used_vote"] = "false";
-            await PublishAsync(completed, EventDirection.Self, ct);
+            await _publishAsync(completed, EventDirection.Self, ct);
             return true;
         }
 
         return false;
     }
 
-    private async Task<bool> TryHandleForEachCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
+    public async Task<bool> TryHandleForEachCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
     {
+        var state = _stateAccessor();
         var parentStepId = WorkflowRunSupport.TryGetForEachParent(evt.StepId);
-        if (parentStepId == null || !State.PendingForeachSteps.TryGetValue(parentStepId, out _))
+        if (parentStepId == null || !state.PendingForeachSteps.TryGetValue(parentStepId, out _))
             return false;
 
-        var next = State.Clone();
+        var next = state.Clone();
         next.StepExecutions.Remove(evt.StepId);
         next.PendingForeachSteps[parentStepId].ChildResults.Add(WorkflowRunSupport.ToRecordedResult(evt));
         if (next.PendingForeachSteps[parentStepId].ChildResults.Count < next.PendingForeachSteps[parentStepId].ExpectedCount)
         {
-            await PersistStateAsync(next, ct);
+            await _persistStateAsync(next, ct);
             return true;
         }
 
         var results = next.PendingForeachSteps[parentStepId].ChildResults.ToList();
         next.PendingForeachSteps.Remove(parentStepId);
-        await PersistStateAsync(next, ct);
-        await PublishAsync(new StepCompletedEvent
+        await _persistStateAsync(next, ct);
+        await _publishAsync(new StepCompletedEvent
         {
             StepId = parentStepId,
-            RunId = State.RunId,
+            RunId = state.RunId,
             Success = results.All(x => x.Success),
             Output = string.Join("\n---\n", results.Select(x => x.Output)),
         }, EventDirection.Self, ct);
         return true;
     }
 
-    private async Task<bool> TryHandleMapReduceCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
+    public async Task<bool> TryHandleMapReduceCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
     {
-        foreach (var (parentStepId, pending) in State.PendingMapReduceSteps)
+        var state = _stateAccessor();
+        foreach (var (parentStepId, pending) in state.PendingMapReduceSteps)
         {
             if (!string.IsNullOrWhiteSpace(pending.ReduceStepId) &&
                 string.Equals(pending.ReduceStepId, evt.StepId, StringComparison.Ordinal))
             {
-                var reduceNextState = State.Clone();
+                var reduceNextState = state.Clone();
                 reduceNextState.PendingMapReduceSteps.Remove(parentStepId);
                 reduceNextState.StepExecutions.Remove(evt.StepId);
-                await PersistStateAsync(reduceNextState, ct);
+                await _persistStateAsync(reduceNextState, ct);
 
                 var reduceCompleted = new StepCompletedEvent
                 {
                     StepId = parentStepId,
-                    RunId = State.RunId,
+                    RunId = state.RunId,
                     Success = evt.Success,
                     Output = evt.Output,
                     Error = evt.Error,
                 };
                 reduceCompleted.Metadata["map_reduce.phase"] = "reduce";
-                await PublishAsync(reduceCompleted, EventDirection.Self, ct);
+                await _publishAsync(reduceCompleted, EventDirection.Self, ct);
                 return true;
             }
 
@@ -146,12 +174,12 @@ public sealed partial class WorkflowRunGAgent
             if (!string.Equals(mapParent, parentStepId, StringComparison.Ordinal))
                 continue;
 
-            var next = State.Clone();
+            var next = state.Clone();
             next.StepExecutions.Remove(evt.StepId);
             next.PendingMapReduceSteps[parentStepId].ChildResults.Add(WorkflowRunSupport.ToRecordedResult(evt));
             if (next.PendingMapReduceSteps[parentStepId].ChildResults.Count < next.PendingMapReduceSteps[parentStepId].MapCount)
             {
-                await PersistStateAsync(next, ct);
+                await _persistStateAsync(next, ct);
                 return true;
             }
 
@@ -161,11 +189,11 @@ public sealed partial class WorkflowRunGAgent
             if (!allSuccess || string.IsNullOrWhiteSpace(next.PendingMapReduceSteps[parentStepId].ReduceType))
             {
                 next.PendingMapReduceSteps.Remove(parentStepId);
-                await PersistStateAsync(next, ct);
-                await PublishAsync(new StepCompletedEvent
+                await _persistStateAsync(next, ct);
+                await _publishAsync(new StepCompletedEvent
                 {
                     StepId = parentStepId,
-                    RunId = State.RunId,
+                    RunId = state.RunId,
                     Success = allSuccess,
                     Output = merged,
                     Error = allSuccess ? string.Empty : "one or more map steps failed",
@@ -178,9 +206,9 @@ public sealed partial class WorkflowRunGAgent
                 : next.PendingMapReduceSteps[parentStepId].ReducePromptPrefix.TrimEnd() + "\n\n" + merged;
             var reduceStepId = $"{parentStepId}_reduce";
             next.PendingMapReduceSteps[parentStepId].ReduceStepId = reduceStepId;
-            await PersistStateAsync(next, ct);
-            await DispatchInternalStepAsync(
-                State.RunId,
+            await _persistStateAsync(next, ct);
+            await _dispatchInternalStepAsync(
+                state.RunId,
                 parentStepId,
                 reduceStepId,
                 next.PendingMapReduceSteps[parentStepId].ReduceType,
@@ -194,42 +222,43 @@ public sealed partial class WorkflowRunGAgent
         return false;
     }
 
-    private async Task<bool> TryHandleRaceCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
+    public async Task<bool> TryHandleRaceCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
     {
+        var state = _stateAccessor();
         var parentStepId = WorkflowRunSupport.TryGetRaceParent(evt.StepId);
-        if (parentStepId == null || !State.PendingRaceSteps.TryGetValue(parentStepId, out var pending))
+        if (parentStepId == null || !state.PendingRaceSteps.TryGetValue(parentStepId, out var pending))
             return false;
 
-        var next = State.Clone();
+        var next = state.Clone();
         next.StepExecutions.Remove(evt.StepId);
         next.PendingRaceSteps[parentStepId].Received = pending.Received + 1;
         if (evt.Success && !pending.Resolved)
         {
             next.PendingRaceSteps.Remove(parentStepId);
-            await PersistStateAsync(next, ct);
+            await _persistStateAsync(next, ct);
             var completed = new StepCompletedEvent
             {
                 StepId = parentStepId,
-                RunId = State.RunId,
+                RunId = state.RunId,
                 Success = true,
                 Output = evt.Output,
                 WorkerId = evt.WorkerId,
             };
             completed.Metadata["race.winner"] = evt.StepId;
-            await PublishAsync(completed, EventDirection.Self, ct);
+            await _publishAsync(completed, EventDirection.Self, ct);
             return true;
         }
 
         if (next.PendingRaceSteps[parentStepId].Received >= pending.Total)
         {
             next.PendingRaceSteps.Remove(parentStepId);
-            await PersistStateAsync(next, ct);
+            await _persistStateAsync(next, ct);
             if (!pending.Resolved)
             {
-                await PublishAsync(new StepCompletedEvent
+                await _publishAsync(new StepCompletedEvent
                 {
                     StepId = parentStepId,
-                    RunId = State.RunId,
+                    RunId = state.RunId,
                     Success = false,
                     Error = "all race branches failed",
                 }, EventDirection.Self, ct);
@@ -239,26 +268,27 @@ public sealed partial class WorkflowRunGAgent
         }
 
         next.PendingRaceSteps[parentStepId].Resolved = pending.Resolved || evt.Success;
-        await PersistStateAsync(next, ct);
+        await _persistStateAsync(next, ct);
         return true;
     }
 
-    private async Task<bool> TryHandleWhileCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
+    public async Task<bool> TryHandleWhileCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
     {
+        var state = _stateAccessor();
         var parentStepId = WorkflowRunSupport.TryGetWhileParent(evt.StepId);
-        if (parentStepId == null || !State.PendingWhileSteps.TryGetValue(parentStepId, out var pending))
+        if (parentStepId == null || !state.PendingWhileSteps.TryGetValue(parentStepId, out var pending))
             return false;
 
-        var next = State.Clone();
+        var next = state.Clone();
         next.StepExecutions.Remove(evt.StepId);
         if (!evt.Success)
         {
             next.PendingWhileSteps.Remove(parentStepId);
-            await PersistStateAsync(next, ct);
-            await PublishAsync(new StepCompletedEvent
+            await _persistStateAsync(next, ct);
+            await _publishAsync(new StepCompletedEvent
             {
                 StepId = parentStepId,
-                RunId = State.RunId,
+                RunId = state.RunId,
                 Success = false,
                 Output = evt.Output,
                 Error = evt.Error,
@@ -268,38 +298,39 @@ public sealed partial class WorkflowRunGAgent
 
         var nextIteration = pending.Iteration + 1;
         if (nextIteration < pending.MaxIterations &&
-            _stepRequestFactory.EvaluateWhileCondition(pending, evt.Output ?? string.Empty, nextIteration))
+            _evaluateWhileCondition(pending, evt.Output ?? string.Empty, nextIteration))
         {
             next.PendingWhileSteps[parentStepId].Iteration = nextIteration;
-            await PersistStateAsync(next, ct);
-            await DispatchWhileIterationAsync(next.PendingWhileSteps[parentStepId], evt.Output ?? string.Empty, ct);
+            await _persistStateAsync(next, ct);
+            await _dispatchWhileIterationAsync(next.PendingWhileSteps[parentStepId], evt.Output ?? string.Empty, ct);
             return true;
         }
 
         next.PendingWhileSteps.Remove(parentStepId);
-        await PersistStateAsync(next, ct);
+        await _persistStateAsync(next, ct);
         var completed = new StepCompletedEvent
         {
             StepId = parentStepId,
-            RunId = State.RunId,
+            RunId = state.RunId,
             Success = true,
             Output = evt.Output,
         };
         completed.Metadata["while.iterations"] = nextIteration.ToString(CultureInfo.InvariantCulture);
         completed.Metadata["while.max_iterations"] = pending.MaxIterations.ToString(CultureInfo.InvariantCulture);
         completed.Metadata["while.condition"] = pending.ConditionExpression;
-        await PublishAsync(completed, EventDirection.Self, ct);
+        await _publishAsync(completed, EventDirection.Self, ct);
         return true;
     }
 
-    private async Task<bool> TryHandleCacheCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
+    public async Task<bool> TryHandleCacheCompletionAsync(StepCompletedEvent evt, CancellationToken ct)
     {
-        foreach (var (cacheKey, pending) in State.PendingCacheCalls)
+        var state = _stateAccessor();
+        foreach (var (cacheKey, pending) in state.PendingCacheCalls)
         {
             if (!string.Equals(pending.ChildStepId, evt.StepId, StringComparison.Ordinal))
                 continue;
 
-            var next = State.Clone();
+            var next = state.Clone();
             next.PendingCacheCalls.Remove(cacheKey);
             next.StepExecutions.Remove(evt.StepId);
             if (evt.Success)
@@ -310,21 +341,21 @@ public sealed partial class WorkflowRunGAgent
                     ExpiresAtUnixTimeMs = DateTimeOffset.UtcNow.AddSeconds(pending.TtlSeconds).ToUnixTimeMilliseconds(),
                 };
             }
-            await PersistStateAsync(next, ct);
+            await _persistStateAsync(next, ct);
 
             foreach (var waiter in pending.Waiters)
             {
                 var completed = new StepCompletedEvent
                 {
                     StepId = waiter.ParentStepId,
-                    RunId = State.RunId,
+                    RunId = state.RunId,
                     Success = evt.Success,
                     Output = evt.Output,
                     Error = evt.Error,
                 };
                 completed.Metadata["cache.hit"] = "false";
                 completed.Metadata["cache.key"] = WorkflowRunSupport.ShortenKey(cacheKey);
-                await PublishAsync(completed, EventDirection.Self, ct);
+                await _publishAsync(completed, EventDirection.Self, ct);
             }
 
             return true;

@@ -1,13 +1,44 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
+using Google.Protobuf;
 
 namespace Aevatar.Workflow.Core;
 
-public sealed partial class WorkflowRunGAgent
+internal sealed class WorkflowRunCompositionRuntime
 {
-    private async Task HandleParallelStepRequestAsync(StepRequestEvent request, CancellationToken ct)
+    private readonly Func<string> _actorIdAccessor;
+    private readonly Func<WorkflowRunState> _stateAccessor;
+    private readonly Func<WorkflowRunState, CancellationToken, Task> _persistStateAsync;
+    private readonly Func<IMessage, EventDirection, CancellationToken, Task> _publishAsync;
+    private readonly Func<string, IMessage, CancellationToken, Task> _sendToAsync;
+    private readonly Func<Exception?, string, object?[], Task> _logWarningAsync;
+    private readonly WorkflowRunEffectDispatcher _effectDispatcher;
+    private readonly WorkflowInternalStepDispatchHandler _dispatchInternalStepAsync;
+
+    public WorkflowRunCompositionRuntime(
+        Func<string> actorIdAccessor,
+        Func<WorkflowRunState> stateAccessor,
+        Func<WorkflowRunState, CancellationToken, Task> persistStateAsync,
+        Func<IMessage, EventDirection, CancellationToken, Task> publishAsync,
+        Func<string, IMessage, CancellationToken, Task> sendToAsync,
+        Func<Exception?, string, object?[], Task> logWarningAsync,
+        WorkflowRunEffectDispatcher effectDispatcher,
+        WorkflowInternalStepDispatchHandler dispatchInternalStepAsync)
     {
-        await EnsureAgentTreeAsync(ct);
+        _actorIdAccessor = actorIdAccessor ?? throw new ArgumentNullException(nameof(actorIdAccessor));
+        _stateAccessor = stateAccessor ?? throw new ArgumentNullException(nameof(stateAccessor));
+        _persistStateAsync = persistStateAsync ?? throw new ArgumentNullException(nameof(persistStateAsync));
+        _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
+        _sendToAsync = sendToAsync ?? throw new ArgumentNullException(nameof(sendToAsync));
+        _logWarningAsync = logWarningAsync ?? throw new ArgumentNullException(nameof(logWarningAsync));
+        _effectDispatcher = effectDispatcher ?? throw new ArgumentNullException(nameof(effectDispatcher));
+        _dispatchInternalStepAsync = dispatchInternalStepAsync ?? throw new ArgumentNullException(nameof(dispatchInternalStepAsync));
+    }
+
+    public async Task HandleParallelStepRequestAsync(StepRequestEvent request, CancellationToken ct)
+    {
+        await _effectDispatcher.EnsureAgentTreeAsync(ct);
 
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var workerRoles = new List<string>();
@@ -20,7 +51,7 @@ public sealed partial class WorkflowRunGAgent
 
         if (workerRoles.Count == 0 && string.IsNullOrWhiteSpace(request.TargetRole))
         {
-            await PublishAsync(new StepCompletedEvent
+            await _publishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
                 RunId = runId,
@@ -32,7 +63,7 @@ public sealed partial class WorkflowRunGAgent
 
         var voteStepType = WorkflowPrimitiveCatalog.ToCanonicalType(
             request.Parameters.TryGetValue("vote_step_type", out var voteType) ? voteType : string.Empty);
-        var next = State.Clone();
+        var next = _stateAccessor().Clone();
         var parallelState = new WorkflowParallelState
         {
             ExpectedCount = count,
@@ -43,12 +74,12 @@ public sealed partial class WorkflowRunGAgent
         foreach (var (key, value) in request.Parameters.Where(x => x.Key.StartsWith("vote_param_", StringComparison.OrdinalIgnoreCase)))
             parallelState.VoteParameters[key["vote_param_".Length..]] = value;
         next.PendingParallelSteps[request.StepId] = parallelState;
-        await PersistStateAsync(next, ct);
+        await _persistStateAsync(next, ct);
 
         for (var i = 0; i < count; i++)
         {
             var role = i < workerRoles.Count ? workerRoles[i] : request.TargetRole;
-            await DispatchInternalStepAsync(
+            await _dispatchInternalStepAsync(
                 runId,
                 request.StepId,
                 $"{request.StepId}_sub_{i}",
@@ -60,7 +91,7 @@ public sealed partial class WorkflowRunGAgent
         }
     }
 
-    private async Task HandleForEachStepRequestAsync(StepRequestEvent request, CancellationToken ct)
+    public async Task HandleForEachStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var delimiter = WorkflowParameterValueParser.NormalizeEscapedText(
@@ -72,7 +103,7 @@ public sealed partial class WorkflowRunGAgent
 
         if (items.Length == 0)
         {
-            await PublishAsync(new StepCompletedEvent
+            await _publishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
                 RunId = runId,
@@ -90,19 +121,19 @@ public sealed partial class WorkflowRunGAgent
             "sub_target_role",
             "sub_role");
 
-        var next = State.Clone();
+        var next = _stateAccessor().Clone();
         next.PendingForeachSteps[request.StepId] = new WorkflowForEachState
         {
             ExpectedCount = items.Length,
         };
-        await PersistStateAsync(next, ct);
+        await _persistStateAsync(next, ct);
 
         for (var i = 0; i < items.Length; i++)
         {
             var subParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var (key, value) in request.Parameters.Where(x => x.Key.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase)))
                 subParameters[key["sub_param_".Length..]] = value;
-            await DispatchInternalStepAsync(
+            await _dispatchInternalStepAsync(
                 runId,
                 request.StepId,
                 $"{request.StepId}_item_{i}",
@@ -114,7 +145,7 @@ public sealed partial class WorkflowRunGAgent
         }
     }
 
-    private async Task HandleMapReduceStepRequestAsync(StepRequestEvent request, CancellationToken ct)
+    public async Task HandleMapReduceStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var delimiter = WorkflowParameterValueParser.NormalizeEscapedText(
@@ -126,7 +157,7 @@ public sealed partial class WorkflowRunGAgent
 
         if (items.Length == 0)
         {
-            await PublishAsync(new StepCompletedEvent
+            await _publishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
                 RunId = runId,
@@ -158,7 +189,7 @@ public sealed partial class WorkflowRunGAgent
             "reduce_prompt_prefix",
             "reduce_prefix");
 
-        var next = State.Clone();
+        var next = _stateAccessor().Clone();
         next.PendingMapReduceSteps[request.StepId] = new WorkflowMapReduceState
         {
             MapCount = items.Length,
@@ -167,11 +198,11 @@ public sealed partial class WorkflowRunGAgent
             ReducePromptPrefix = reducePrefix,
             ReduceStepId = string.Empty,
         };
-        await PersistStateAsync(next, ct);
+        await _persistStateAsync(next, ct);
 
         for (var i = 0; i < items.Length; i++)
         {
-            await DispatchInternalStepAsync(
+            await _dispatchInternalStepAsync(
                 runId,
                 request.StepId,
                 $"{request.StepId}_map_{i}",
@@ -183,7 +214,7 @@ public sealed partial class WorkflowRunGAgent
         }
     }
 
-    private async Task HandleWorkflowCallStepRequestAsync(StepRequestEvent request, CancellationToken ct)
+    public async Task HandleWorkflowCallStepRequestAsync(StepRequestEvent request, CancellationToken ct)
     {
         var parentRunId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var parentStepId = request.StepId?.Trim() ?? string.Empty;
@@ -192,7 +223,7 @@ public sealed partial class WorkflowRunGAgent
 
         if (string.IsNullOrWhiteSpace(parentStepId))
         {
-            await PublishAsync(new StepCompletedEvent
+            await _publishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId ?? string.Empty,
                 RunId = parentRunId,
@@ -204,7 +235,7 @@ public sealed partial class WorkflowRunGAgent
 
         if (string.IsNullOrWhiteSpace(workflowName))
         {
-            await PublishAsync(new StepCompletedEvent
+            await _publishAsync(new StepCompletedEvent
             {
                 StepId = parentStepId,
                 RunId = parentRunId,
@@ -216,7 +247,7 @@ public sealed partial class WorkflowRunGAgent
 
         if (!WorkflowCallLifecycle.IsSupported(lifecycle))
         {
-            await PublishAsync(new StepCompletedEvent
+            await _publishAsync(new StepCompletedEvent
             {
                 StepId = parentStepId,
                 RunId = parentRunId,
@@ -228,8 +259,8 @@ public sealed partial class WorkflowRunGAgent
 
         var invocationId = WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId);
         var childRunId = invocationId;
-        var childActorId = WorkflowRunSupport.BuildSubWorkflowRunActorId(Id, workflowName, lifecycle, invocationId);
-        var next = State.Clone();
+        var childActorId = WorkflowRunSupport.BuildSubWorkflowRunActorId(_actorIdAccessor(), workflowName, lifecycle, invocationId);
+        var next = _stateAccessor().Clone();
         next.PendingSubWorkflows[childRunId] = new WorkflowPendingSubWorkflowState
         {
             InvocationId = invocationId,
@@ -240,16 +271,16 @@ public sealed partial class WorkflowRunGAgent
             ChildActorId = childActorId,
             ChildRunId = childRunId,
         };
-        await PersistStateAsync(next, ct);
+        await _persistStateAsync(next, ct);
 
         try
         {
-            var childActor = await ResolveOrCreateSubWorkflowRunActorAsync(childActorId, ct);
-            await _runtime.LinkAsync(Id, childActor.Id, ct);
-            await childActor.HandleEventAsync(CreateWorkflowDefinitionBindEnvelope(
-                await ResolveWorkflowYamlAsync(workflowName, ct),
+            var childActor = await _effectDispatcher.ResolveOrCreateSubWorkflowRunActorAsync(childActorId, ct);
+            await _effectDispatcher.LinkChildAsync(childActor.Id, ct);
+            await childActor.HandleEventAsync(_effectDispatcher.CreateWorkflowDefinitionBindEnvelope(
+                await _effectDispatcher.ResolveWorkflowYamlAsync(workflowName, ct),
                 workflowName), ct);
-            await SendToAsync(childActor.Id, new ChatRequestEvent
+            await _sendToAsync(childActor.Id, new ChatRequestEvent
             {
                 Prompt = request.Input ?? string.Empty,
                 SessionId = childRunId,
@@ -257,10 +288,10 @@ public sealed partial class WorkflowRunGAgent
         }
         catch (Exception ex)
         {
-            var rollback = State.Clone();
+            var rollback = _stateAccessor().Clone();
             rollback.PendingSubWorkflows.Remove(childRunId);
-            await PersistStateAsync(rollback, ct);
-            await PublishAsync(new StepCompletedEvent
+            await _persistStateAsync(rollback, ct);
+            await _publishAsync(new StepCompletedEvent
             {
                 StepId = parentStepId,
                 RunId = parentRunId,
@@ -268,5 +299,60 @@ public sealed partial class WorkflowRunGAgent
                 Error = $"workflow_call invocation failed: {ex.Message}",
             }, EventDirection.Self, ct);
         }
+    }
+
+    public async Task<bool> TryHandleSubWorkflowCompletionAsync(
+        WorkflowCompletedEvent completed,
+        string? publisherActorId,
+        CancellationToken ct)
+    {
+        var state = _stateAccessor();
+        var childRunId = completed.RunId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(childRunId) || !state.PendingSubWorkflows.TryGetValue(childRunId, out var pending))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(pending.ChildActorId) &&
+            !string.Equals(pending.ChildActorId, publisherActorId, StringComparison.Ordinal))
+        {
+            await _logWarningAsync(
+                null,
+                "Ignore workflow_call completion due to publisher mismatch childRun={ChildRunId} expected={Expected} actual={Actual}",
+                [childRunId, pending.ChildActorId, publisherActorId ?? "(none)"]);
+            return true;
+        }
+
+        var next = state.Clone();
+        next.PendingSubWorkflows.Remove(childRunId);
+        await _persistStateAsync(next, ct);
+
+        var parentCompleted = new StepCompletedEvent
+        {
+            StepId = pending.ParentStepId,
+            RunId = state.RunId,
+            Success = completed.Success,
+            Output = completed.Output,
+            Error = completed.Error,
+        };
+        parentCompleted.Metadata["workflow_call.invocation_id"] = pending.InvocationId;
+        parentCompleted.Metadata["workflow_call.workflow_name"] = pending.WorkflowName;
+        parentCompleted.Metadata["workflow_call.lifecycle"] = WorkflowCallLifecycle.Normalize(pending.Lifecycle);
+        parentCompleted.Metadata["workflow_call.child_actor_id"] = pending.ChildActorId;
+        parentCompleted.Metadata["workflow_call.child_run_id"] = childRunId;
+        await _publishAsync(parentCompleted, EventDirection.Self, ct);
+
+        if (!string.Equals(WorkflowCallLifecycle.Normalize(pending.Lifecycle), WorkflowCallLifecycle.Singleton, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(pending.ChildActorId))
+        {
+            try
+            {
+                await _effectDispatcher.CleanupChildWorkflowAsync(pending.ChildActorId, ct);
+            }
+            catch (Exception ex)
+            {
+                await _logWarningAsync(ex, "Failed to clean up child workflow actor {ChildActorId}", [pending.ChildActorId]);
+            }
+        }
+
+        return true;
     }
 }

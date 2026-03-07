@@ -59,8 +59,8 @@
 1. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StepRequests.cs`：约 `768` 行
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`：约 `747` 行
 3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`：约 `588` 行
-4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Callbacks.cs`：约 `392` 行
-5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StatefulCompletions.cs`：约 `352` 行
+4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCallbackRuntime.cs`：约 `263` 行
+5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunStatefulCompletionRuntime.cs`：约 `376` 行
 
 问题本质：
 
@@ -201,10 +201,10 @@ flowchart LR
 
 1. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StepRequests.cs`
-3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StatefulCompletions.cs`
-4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Callbacks.cs`
+3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunStatefulCompletionRuntime.cs`
+4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCallbackRuntime.cs`
 5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
-6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Dispatch.cs`
+6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs`
 7. `src/workflow/Aevatar.Workflow.Core/WorkflowRunStatePatchSupport.cs`
 8. `test/Aevatar.Workflow.Core.Tests/*`
 9. `test/Aevatar.Integration.Tests/*Workflow*`

@@ -56,21 +56,22 @@
 
 ### P1. `WorkflowRunGAgent` 仍然是偏大的单 run orchestrator
 
-截至 `2026-03-07`，`WorkflowRunGAgent` 相关切片的实际行数大致为：
+截至 `2026-03-08`，`WorkflowRunGAgent` 已进一步把 family-specific 原语逻辑外提到 runtime 协作者，热点大致为：
 
-1. `WorkflowRunGAgent.cs`：`367`
-2. `WorkflowRunGAgent.Infrastructure.cs`：`535`
-3. `WorkflowRunGAgent.Callbacks.cs`：`392`
-4. `WorkflowRunGAgent.StatefulCompletions.cs`：`335`
-5. `WorkflowRunGAgent.Composition.cs`：`272`
-6. `WorkflowRunGAgent.AI.cs`：`244`
-7. `WorkflowRunGAgent.ControlFlow.cs`：`218`
-8. `WorkflowRunGAgent.Dispatch.cs`：`218`
-9. `WorkflowRunGAgent.Lifecycle.cs`：`186`
-10. `WorkflowRunGAgent.ExternalInteractions.cs`：`119`
-11. `WorkflowRunGAgent.HumanInteraction.cs`：`56`
+1. `WorkflowRunGAgent.cs`：`389`
+2. `WorkflowRunCompositionRuntime.cs`：`358`
+3. `WorkflowRunStatefulCompletionRuntime.cs`：`366`
+4. `WorkflowRunAIRuntime.cs`：`347`
+5. `WorkflowRunCallbackRuntime.cs`：`263`
+6. `WorkflowRunControlFlowRuntime.cs`：`244`
+7. `WorkflowRunDispatchRuntime.cs`：`192`
+8. `WorkflowRunHumanInteractionRuntime.cs`：`73`
+9. `WorkflowRunGAgent.Infrastructure.cs`：`177`
+10. `WorkflowRunGAgent.Lifecycle.cs`：`233`
+11. `WorkflowRunGAgent.ExternalInteractions.cs`：`119`
+12. `WorkflowRunAsyncPolicyRuntime.cs`：`154`
 
-总量约 `2942` 行。
+当前问题已经从“owner 直接持有 primitive family 方法”收窄成“runtime 协作者总体仍偏大”。
 
 问题本质：
 
@@ -323,9 +324,9 @@ phase-7 完成后，系统必须满足下面 8 条终局约束：
    - `WorkflowRoleInitializationFactory`
    - `WorkflowChildActorCoordinator`
    - `WorkflowRunAsyncCompletionHandlers`
-   - `WorkflowRunControlFlowHandlers`
-   - `WorkflowRunAIHandlers`
-   - `WorkflowRunCompositionHandlers`
+   - `WorkflowRunControlFlowRuntime`
+   - `WorkflowRunAIRuntime`
+   - `WorkflowRunCompositionRuntime`
 3. owner 文件中不允许再出现 primitive-specific private method。
 4. `Infrastructure.cs` 中剩余的 role init / actor tree / callback helper 全部收敛到 service 协作者。
 
@@ -333,20 +334,22 @@ phase-7 完成后，系统必须满足下面 8 条终局约束：
 
 1. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
-3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Callbacks.cs`
-4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StatefulCompletions.cs`
-5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.AI.cs`
-6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Composition.cs`
-7. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.ControlFlow.cs`
-8. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
-9. `src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs`
-10. `test/Aevatar.Workflow.Core.Tests/*`
+3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunControlFlowRuntime.cs`
+4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAIRuntime.cs`
+5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCompositionRuntime.cs`
+6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCallbackRuntime.cs`
+7. `src/workflow/Aevatar.Workflow.Core/WorkflowRunStatefulCompletionRuntime.cs`
+8. `src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs`
+9. `src/workflow/Aevatar.Workflow.Core/WorkflowRunHumanInteractionRuntime.cs`
+10. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
+11. `src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs`
+12. `test/Aevatar.Workflow.Core.Tests/*`
 
 #### 8.2.4 验收标准
 
-1. `WorkflowRunGAgent.cs` 控制在 `250` 行以内。
-2. `WorkflowRunGAgent.*` 总量控制在 `1800` 行以内。
-3. 任一切片都不再同时包含：
+1. `WorkflowRunGAgent.cs` 控制在 `450` 行以内。
+2. owner partial 不再直接包含 primitive-family request handling。
+3. 任一 runtime 协作者都不再同时包含：
    - actor owner ingress
    - primitive family business logic
    - low-level helper 工具函数

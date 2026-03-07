@@ -6,6 +6,53 @@ namespace Aevatar.Workflow.Core;
 
 public sealed partial class WorkflowRunGAgent
 {
+    public WorkflowRunBindingSnapshot GetBindingSnapshot() =>
+        new(
+            string.IsNullOrWhiteSpace(State.WorkflowName) ? string.Empty : State.WorkflowName.Trim(),
+            State.WorkflowYaml ?? string.Empty,
+            State.InlineWorkflowYamls.ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase));
+
+    public async Task BindWorkflowDefinitionAsync(
+        string workflowYaml,
+        string? workflowName,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+        CancellationToken ct = default)
+    {
+        EnsureWorkflowNameCanBind(workflowName);
+
+        var next = State.Clone();
+        next.WorkflowYaml = workflowYaml ?? string.Empty;
+        next.WorkflowName = string.IsNullOrWhiteSpace(workflowName)
+            ? next.WorkflowName
+            : workflowName.Trim();
+        next.InlineWorkflowYamls.Clear();
+        if (inlineWorkflowYamls != null)
+        {
+            foreach (var (name, yaml) in inlineWorkflowYamls)
+            {
+                var normalizedName = WorkflowRunIdNormalizer.NormalizeWorkflowName(name);
+                if (string.IsNullOrWhiteSpace(normalizedName) || string.IsNullOrWhiteSpace(yaml))
+                    continue;
+
+                next.InlineWorkflowYamls[normalizedName] = yaml;
+            }
+        }
+
+        WorkflowRunSupport.ResetRuntimeState(next, clearChildActors: true);
+
+        var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
+        next.Compiled = compileResult.Compiled;
+        next.CompilationError = compileResult.CompilationError;
+        if (compileResult.Compiled && compileResult.Workflow != null && string.IsNullOrWhiteSpace(next.WorkflowName))
+            next.WorkflowName = compileResult.Workflow.Name;
+
+        await PersistStateAsync(next, ct);
+    }
+
+    [EventHandler]
+    public Task HandleBindWorkflowDefinition(BindWorkflowDefinitionEvent request) =>
+        BindWorkflowDefinitionAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls);
+
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleDynamicWorkflowInvokeRequested(DynamicWorkflowInvokeRequestedEvent request)
     {

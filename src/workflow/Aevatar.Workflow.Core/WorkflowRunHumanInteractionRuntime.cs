@@ -1,11 +1,27 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
+using Google.Protobuf;
 
 namespace Aevatar.Workflow.Core;
 
-public sealed partial class WorkflowRunGAgent
+internal sealed class WorkflowRunHumanInteractionRuntime
 {
-    private async Task HandleHumanGateStepRequestAsync(StepRequestEvent request, string gateType, CancellationToken ct)
+    private readonly Func<WorkflowRunState> _stateAccessor;
+    private readonly Func<WorkflowRunState, CancellationToken, Task> _persistStateAsync;
+    private readonly Func<IMessage, EventDirection, CancellationToken, Task> _publishAsync;
+
+    public WorkflowRunHumanInteractionRuntime(
+        Func<WorkflowRunState> stateAccessor,
+        Func<WorkflowRunState, CancellationToken, Task> persistStateAsync,
+        Func<IMessage, EventDirection, CancellationToken, Task> publishAsync)
+    {
+        _stateAccessor = stateAccessor ?? throw new ArgumentNullException(nameof(stateAccessor));
+        _persistStateAsync = persistStateAsync ?? throw new ArgumentNullException(nameof(persistStateAsync));
+        _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
+    }
+
+    public async Task HandleHumanGateStepRequestAsync(StepRequestEvent request, string gateType, CancellationToken ct)
     {
         var timeoutSeconds = WorkflowParameterValueParser.ResolveTimeoutSeconds(
             request.Parameters,
@@ -19,8 +35,9 @@ public sealed partial class WorkflowRunGAgent
         var onTimeout = WorkflowParameterValueParser.GetString(request.Parameters, "fail", "on_timeout");
         var onReject = WorkflowParameterValueParser.GetString(request.Parameters, "fail", "on_reject");
 
-        var next = State.Clone();
-        next.Status = StatusSuspended;
+        var state = _stateAccessor();
+        var next = state.Clone();
+        next.Status = "suspended";
         next.PendingHumanGates[request.StepId] = new WorkflowPendingHumanGateState
         {
             StepId = request.StepId,
@@ -33,11 +50,11 @@ public sealed partial class WorkflowRunGAgent
             OnReject = onReject,
             ResumeToken = Guid.NewGuid().ToString("N"),
         };
-        await PersistStateAsync(next, ct);
+        await _persistStateAsync(next, ct);
 
         var suspended = new WorkflowSuspendedEvent
         {
-            RunId = State.RunId,
+            RunId = state.RunId,
             StepId = request.StepId,
             SuspensionType = gateType,
             Prompt = prompt,
@@ -51,6 +68,6 @@ public sealed partial class WorkflowRunGAgent
         if (!string.IsNullOrWhiteSpace(onReject))
             suspended.Metadata["on_reject"] = onReject;
         suspended.Metadata["resume_token"] = next.PendingHumanGates[request.StepId].ResumeToken;
-        await PublishAsync(suspended, EventDirection.Both, ct);
+        await _publishAsync(suspended, EventDirection.Both, ct);
     }
 }
