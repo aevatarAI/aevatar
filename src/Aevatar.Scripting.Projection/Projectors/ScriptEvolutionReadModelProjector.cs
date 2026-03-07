@@ -54,6 +54,18 @@ public sealed class ScriptEvolutionReadModelProjector
             return;
 
         var now = ProjectionEnvelopeTimestampResolver.Resolve(envelope, _clock.UtcNow);
+        if (payload.Is(ScriptEvolutionProposedEvent.Descriptor))
+        {
+            await _storeDispatcher.UpsertAsync(
+                new ScriptEvolutionReadModel
+                {
+                    Id = readModelId,
+                    ProposalId = readModelId,
+                    UpdatedAt = now,
+                },
+                ct);
+        }
+
         await _storeDispatcher.MutateAsync(readModelId, readModel =>
         {
             var mutated = false;

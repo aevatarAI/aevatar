@@ -132,7 +132,7 @@ public class RuntimeScriptEvolutionFlowPortTests
         public Exception? RollbackException { get; set; }
         public List<(string CatalogActorId, string ScriptId, string TargetRevision, string ExpectedCurrentRevision)> RollbackCalls { get; } = [];
 
-        public Task<ScriptPromotionDecision> ProposeAsync(ScriptEvolutionProposal proposal, CancellationToken ct)
+        public Task<ScriptEvolutionCommandAccepted> ProposeAsync(ScriptEvolutionProposal proposal, CancellationToken ct)
         {
             _ = proposal;
             ct.ThrowIfCancellationRequested();
@@ -172,7 +172,7 @@ public class RuntimeScriptEvolutionFlowPortTests
             throw new NotSupportedException();
         }
 
-        public Task RunRuntimeAsync(
+        public Task<ScriptRuntimeRunAccepted> RunRuntimeAsync(
             string runtimeActorId,
             string runId,
             Any? inputPayload,

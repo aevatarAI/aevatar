@@ -10,5 +10,9 @@ public interface IScriptingPortTimeouts
 
     TimeSpan CatalogMutationTimeout { get; }
 
-    TimeSpan EvolutionDecisionTimeout { get; }
+    TimeSpan EvolutionCommandAckTimeout { get; }
+
+    TimeSpan EvolutionSnapshotQueryTimeout { get; }
+
+    TimeSpan RuntimeSnapshotQueryTimeout { get; }
 }

@@ -28,10 +28,22 @@ internal static class ScriptingPortTimeoutExtensions
         return NormalizeOrDefault(timeouts.CatalogMutationTimeout);
     }
 
-    public static TimeSpan GetEvolutionDecisionTimeout(this IScriptingPortTimeouts timeouts)
+    public static TimeSpan GetEvolutionCommandAckTimeout(this IScriptingPortTimeouts timeouts)
     {
         ArgumentNullException.ThrowIfNull(timeouts);
-        return NormalizeOrDefault(timeouts.EvolutionDecisionTimeout);
+        return NormalizeOrDefault(timeouts.EvolutionCommandAckTimeout);
+    }
+
+    public static TimeSpan GetEvolutionSnapshotQueryTimeout(this IScriptingPortTimeouts timeouts)
+    {
+        ArgumentNullException.ThrowIfNull(timeouts);
+        return NormalizeOrDefault(timeouts.EvolutionSnapshotQueryTimeout);
+    }
+
+    public static TimeSpan GetRuntimeSnapshotQueryTimeout(this IScriptingPortTimeouts timeouts)
+    {
+        ArgumentNullException.ThrowIfNull(timeouts);
+        return NormalizeOrDefault(timeouts.RuntimeSnapshotQueryTimeout);
     }
 
     private static TimeSpan NormalizeOrDefault(TimeSpan timeout) =>

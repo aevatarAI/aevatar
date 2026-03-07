@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf;
@@ -12,7 +13,12 @@ public sealed partial class ScriptEvolutionSessionGAgent
         CancellationToken ct)
     {
         foreach (var evt in executionPlan.DomainEvents)
+        {
             await PersistDomainEventAsync(evt, ct);
+
+            if (evt is ScriptEvolutionSessionCompletedEvent completed)
+                await PublishAsync(completed, EventDirection.Self, ct);
+        }
     }
 
     private static ScriptEvolutionSessionExecutionPlanReadyEvent BuildExecutionPlanReadyEvent(

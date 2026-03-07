@@ -48,6 +48,27 @@ public sealed class WorkflowRunExecutionEngine : IWorkflowRunExecutionEngine
 
         try
         {
+            if (!runContext.HasLiveDelivery || runContext.Sink == null)
+            {
+                await WorkflowRunTaskAwaiter.AwaitIgnoringCancellationAsync(processingTask);
+
+                if (onStartedAsync != null)
+                    await onStartedAsync(started, ct);
+
+                projectionCompletionStatus = WorkflowProjectionCompletionStatus.Disabled;
+                await _stateSnapshotEmitter.EmitAsync(
+                    runContext,
+                    projectionCompletionStatus,
+                    projectionCompleted: false,
+                    emitAsync,
+                    ct);
+
+                return new WorkflowChatRunExecutionResult(
+                    WorkflowChatRunStartError.None,
+                    started,
+                    new WorkflowChatRunFinalizeResult(projectionCompletionStatus, false));
+            }
+
             if (onStartedAsync != null)
                 await onStartedAsync(started, ct);
 

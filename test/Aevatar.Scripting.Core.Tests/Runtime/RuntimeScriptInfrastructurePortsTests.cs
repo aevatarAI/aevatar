@@ -468,25 +468,22 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task EvolutionLifecycleService_ShouldReturnDecision_WhenSessionCompletes()
+    public async Task EvolutionLifecycleService_ShouldReturnAcceptedCommand_WhenSessionAcknowledged()
     {
         var streams = new InMemoryStreamProvider();
         var runtime = CreateEvolutionRuntime(streams, (_, start, session) =>
         {
-            session.DecisionResponse = new ScriptEvolutionDecisionRespondedEvent
+            session.AcceptedResponse = new ScriptEvolutionCommandAcceptedEvent
             {
                 ProposalId = start.ProposalId ?? string.Empty,
-                Found = true,
                 Accepted = true,
-                Status = "promoted",
-                DefinitionActorId = "definition-1",
-                CatalogActorId = "catalog-1",
-                Diagnostics = { "compile-ok" },
+                ScriptId = start.ScriptId ?? string.Empty,
+                SessionActorId = "script-evolution-session:proposal-1",
             };
         });
         var service = CreateEvolutionLifecycleService(runtime, streams);
 
-        var decision = await service.ProposeAsync(
+        var accepted = await service.ProposeAsync(
             new ScriptEvolutionProposal(
                 ProposalId: "proposal-1",
                 ScriptId: "script-1",
@@ -497,9 +494,9 @@ public class RuntimeScriptInfrastructurePortsTests
                 Reason: "rollout"),
             CancellationToken.None);
 
-        decision.Accepted.Should().BeTrue();
-        decision.Status.Should().Be("promoted");
-        decision.ValidationReport.Diagnostics.Should().ContainSingle(x => x == "compile-ok");
+        accepted.ProposalId.Should().Be("proposal-1");
+        accepted.ScriptId.Should().Be("script-1");
+        accepted.SessionActorId.Should().Be("script-evolution-session:proposal-1");
     }
 
     [Fact]
@@ -510,17 +507,17 @@ public class RuntimeScriptInfrastructurePortsTests
         var runtime = CreateEvolutionRuntime(streams, (_, start, session) =>
         {
             capturedStart = start;
-            session.DecisionResponse = new ScriptEvolutionDecisionRespondedEvent
+            session.AcceptedResponse = new ScriptEvolutionCommandAcceptedEvent
             {
                 ProposalId = start.ProposalId ?? string.Empty,
-                Found = true,
                 Accepted = true,
-                Status = "promoted",
+                ScriptId = start.ScriptId ?? string.Empty,
+                SessionActorId = $"script-evolution-session:{start.ProposalId}",
             };
         });
         var service = CreateEvolutionLifecycleService(runtime, streams);
 
-        var decision = await service.ProposeAsync(
+        var accepted = await service.ProposeAsync(
             new ScriptEvolutionProposal(
                 ProposalId: string.Empty,
                 ScriptId: "script-1",
@@ -533,7 +530,7 @@ public class RuntimeScriptInfrastructurePortsTests
 
         capturedStart.Should().NotBeNull();
         capturedStart!.ProposalId.Should().NotBeNullOrWhiteSpace();
-        decision.ProposalId.Should().Be(capturedStart.ProposalId);
+        accepted.ProposalId.Should().Be(capturedStart.ProposalId);
     }
 
     [Fact]
@@ -544,7 +541,7 @@ public class RuntimeScriptInfrastructurePortsTests
         var service = CreateEvolutionLifecycleService(
             runtime,
             streams,
-            new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(50) });
+            new FixedTimeouts { EvolutionCommandAckTimeout = TimeSpan.FromMilliseconds(50) });
 
         var act = () => service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -558,20 +555,22 @@ public class RuntimeScriptInfrastructurePortsTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<TimeoutException>()
-            .WithMessage("*script evolution decision query response*");
+            .WithMessage("*script evolution command ack response*");
     }
 
     [Fact]
-    public async Task EvolutionLifecycleService_ShouldThrow_WhenSessionDecisionIsUnavailable()
+    public async Task EvolutionLifecycleService_ShouldThrow_WhenSessionCommandRejected()
     {
         var streams = new InMemoryStreamProvider();
         var runtime = CreateEvolutionRuntime(streams, (_, start, session) =>
         {
-            session.DecisionResponse = new ScriptEvolutionDecisionRespondedEvent
+            session.AcceptedResponse = new ScriptEvolutionCommandAcceptedEvent
             {
                 ProposalId = start.ProposalId ?? string.Empty,
-                Found = false,
-                FailureReason = "Proposal decision not completed yet.",
+                ScriptId = start.ScriptId ?? string.Empty,
+                Accepted = false,
+                SessionActorId = "script-evolution-session:proposal-no-decision",
+                FailureReason = "policy rejected",
             };
         });
         var service = CreateEvolutionLifecycleService(runtime, streams);
@@ -588,7 +587,7 @@ public class RuntimeScriptInfrastructurePortsTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Proposal decision not completed yet.*");
+            .WithMessage("*policy rejected*");
     }
 
     private static RuntimeScriptDefinitionSnapshotPort CreateDefinitionSnapshotPort(
@@ -679,34 +678,17 @@ public class RuntimeScriptInfrastructurePortsTests
                             !string.IsNullOrWhiteSpace(start.RequestId) &&
                             !string.IsNullOrWhiteSpace(start.ReplyStreamId))
                         {
-                            var response = session.DecisionResponse?.Clone()
-                                ?? new ScriptEvolutionDecisionRespondedEvent
+                            var response = session.AcceptedResponse?.Clone()
+                                ?? new ScriptEvolutionCommandAcceptedEvent
                                 {
                                     ProposalId = start.ProposalId ?? string.Empty,
-                                    Found = false,
-                                    FailureReason = "Proposal decision not completed yet.",
+                                    ScriptId = start.ScriptId ?? string.Empty,
+                                    Accepted = true,
+                                    SessionActorId = actorId,
                                 };
                             response.RequestId = start.RequestId;
                             await streams.GetStream(start.ReplyStreamId).ProduceAsync(response, ct);
                         }
-                        return;
-                    }
-
-                    if (envelope.Payload.Is(QueryScriptEvolutionDecisionRequestedEvent.Descriptor))
-                    {
-                        var query = envelope.Payload.Unpack<QueryScriptEvolutionDecisionRequestedEvent>();
-                        if (session.SuppressQueryResponse)
-                            return;
-
-                        var response = session.DecisionResponse?.Clone()
-                            ?? new ScriptEvolutionDecisionRespondedEvent
-                            {
-                                ProposalId = query.ProposalId ?? string.Empty,
-                                Found = false,
-                                FailureReason = "Proposal decision not completed yet.",
-                            };
-                        response.RequestId = query.RequestId;
-                        await streams.GetStream(query.ReplyStreamId).ProduceAsync(response, ct);
                         return;
                     }
 
@@ -728,7 +710,7 @@ public class RuntimeScriptInfrastructurePortsTests
             new RuntimeScriptActorAccessor(runtime),
             new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
-            timeouts ?? new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(200) });
+            timeouts ?? new FixedTimeouts { EvolutionCommandAckTimeout = TimeSpan.FromMilliseconds(200) });
     }
 
     private sealed class TestActorRuntime : IActorRuntime
@@ -880,7 +862,11 @@ public class RuntimeScriptInfrastructurePortsTests
 
         public TimeSpan CatalogMutationTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
 
-        public TimeSpan EvolutionDecisionTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
+        public TimeSpan EvolutionCommandAckTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
+
+        public TimeSpan EvolutionSnapshotQueryTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
+
+        public TimeSpan RuntimeSnapshotQueryTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
     }
 
     private sealed class FixedQueryModes(bool useEventDrivenDefinitionQuery) : IScriptingRuntimeQueryModes
@@ -899,9 +885,7 @@ public class RuntimeScriptInfrastructurePortsTests
 
     private sealed class TestEvolutionSessionState
     {
-        public ScriptEvolutionDecisionRespondedEvent? DecisionResponse { get; set; }
-
-        public bool SuppressQueryResponse { get; set; }
+        public ScriptEvolutionCommandAcceptedEvent? AcceptedResponse { get; set; }
 
         public bool SuppressStartResponse { get; set; }
     }

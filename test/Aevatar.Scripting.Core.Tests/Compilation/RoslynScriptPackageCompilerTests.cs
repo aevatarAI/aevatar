@@ -509,21 +509,20 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
 
         public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
 
-        public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
+        public Task<ScriptEvolutionDecision> ProposeScriptEvolutionAsync(
             ScriptEvolutionProposal proposal,
             CancellationToken ct) =>
             Task.FromResult(
-                new ScriptPromotionDecision(
-                    Accepted: true,
-                    ProposalId: proposal.ProposalId,
-                    ScriptId: proposal.ScriptId,
-                    BaseRevision: proposal.BaseRevision,
-                    CandidateRevision: proposal.CandidateRevision,
-                    Status: "promoted",
-                    FailureReason: string.Empty,
-                    DefinitionActorId: $"script-definition:{proposal.ScriptId}",
-                    CatalogActorId: "script-catalog",
-                    ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
+                new ScriptEvolutionDecision(
+                    proposal.ProposalId ?? string.Empty,
+                    proposal.ScriptId ?? string.Empty,
+                    $"script-evolution-session:{proposal.ProposalId}",
+                    true,
+                    ScriptEvolutionStatuses.Promoted,
+                    string.Empty,
+                    "script-definition:test",
+                    proposal.CandidateRevision ?? string.Empty,
+                    "script-catalog"));
 
         public Task<string> UpsertScriptDefinitionAsync(
             string scriptId,
@@ -541,7 +540,7 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
             CancellationToken ct) =>
             Task.FromResult(runtimeActorId ?? "runtime-1");
 
-        public Task RunScriptInstanceAsync(
+        public Task<ScriptRuntimeRunAccepted> RunScriptInstanceAsync(
             string runtimeActorId,
             string runId,
             Any? inputPayload,
@@ -549,7 +548,7 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
             string definitionActorId,
             string requestedEventType,
             CancellationToken ct) =>
-            Task.CompletedTask;
+            Task.FromResult(new ScriptRuntimeRunAccepted(runtimeActorId, runId, definitionActorId, scriptRevision));
 
         public Task PromoteRevisionAsync(
             string catalogActorId,

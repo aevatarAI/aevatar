@@ -1,5 +1,8 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Evolution;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
@@ -21,8 +24,12 @@ public class ScriptExternalEvolutionE2ETests
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var evolutionService = provider.GetRequiredService<IScriptEvolutionApplicationService>();
+        var evolutionQueryService = provider.GetRequiredService<IScriptEvolutionQueryApplicationService>();
         var lifecyclePort = provider.GetRequiredService<IScriptLifecyclePort>();
+        var projectionLifecycle = provider.GetRequiredService<IScriptEvolutionProjectionLifecyclePort>();
+        var addressResolver = provider.GetRequiredService<IScriptingActorAddressResolver>();
         var definitionActorId = "script-definition:external-script";
+        const string proposalId = "external-proposal-1";
 
         await BootstrapDefinitionAsync(
             lifecyclePort,
@@ -32,7 +39,15 @@ public class ScriptExternalEvolutionE2ETests
             source: ExternalScriptBaselineSource,
             sourceHash: "hash-external-0");
 
-        var decision = await evolutionService.ProposeAsync(
+        var sessionActorId = addressResolver.GetEvolutionSessionActorId(proposalId);
+        var sink = new EventChannel<ScriptEvolutionSessionCompletedEvent>();
+        var lease = await projectionLifecycle.EnsureAndAttachAsync(
+            token => projectionLifecycle.EnsureActorProjectionAsync(sessionActorId, proposalId, token),
+            sink,
+            CancellationToken.None);
+        lease.Should().NotBeNull();
+
+        var accepted = await evolutionService.ProposeAsync(
             new ProposeScriptEvolutionRequest(
                 ScriptId: "external-script",
                 BaseRevision: "rev-0",
@@ -40,16 +55,29 @@ public class ScriptExternalEvolutionE2ETests
                 CandidateSource: ExternalScriptSource,
                 CandidateSourceHash: string.Empty,
                 Reason: "external pipeline rollout",
-                ProposalId: "external-proposal-1"),
+                ProposalId: proposalId),
             CancellationToken.None);
 
-        decision.Accepted.Should().BeTrue();
-        decision.Status.Should().Be("promoted");
-        decision.CandidateRevision.Should().Be("rev-1");
-        decision.DefinitionActorId.Should().Be("script-definition:external-script");
-        decision.CatalogActorId.Should().Be("script-catalog");
+        accepted.ProposalId.Should().Be(proposalId);
+        accepted.ScriptId.Should().Be("external-script");
+        accepted.SessionActorId.Should().Be(sessionActorId);
 
-        var session = (ScriptEvolutionSessionGAgent)(await runtime.GetAsync("script-evolution-session:external-proposal-1"))!.Agent;
+        var completed = await ReadSingleAsync(sink, CancellationToken.None);
+        completed.ProposalId.Should().Be(proposalId);
+        completed.Accepted.Should().BeTrue();
+        completed.Status.Should().Be("promoted");
+        completed.DefinitionActorId.Should().Be("script-definition:external-script");
+        completed.CatalogActorId.Should().Be("script-catalog");
+
+        var snapshot = await evolutionQueryService.GetProposalSnapshotAsync(proposalId, CancellationToken.None);
+        snapshot.Should().NotBeNull();
+        snapshot!.Completed.Should().BeTrue();
+        snapshot.Accepted.Should().BeTrue();
+        snapshot.PromotionStatus.Should().Be("promoted");
+        snapshot.DefinitionActorId.Should().Be("script-definition:external-script");
+        snapshot.CatalogActorId.Should().Be("script-catalog");
+
+        var session = (ScriptEvolutionSessionGAgent)(await runtime.GetAsync(sessionActorId))!.Agent;
         session.State.Status.Should().Be("promoted");
 
         var catalog = (ScriptCatalogGAgent)(await runtime.GetAsync("script-catalog"))!.Agent;
@@ -59,6 +87,18 @@ public class ScriptExternalEvolutionE2ETests
         var definition = (ScriptDefinitionGAgent)(await runtime.GetAsync(definitionActorId))!.Agent;
         definition.State.ScriptId.Should().Be("external-script");
         definition.State.Revision.Should().Be("rev-1");
+
+        await projectionLifecycle.DetachReleaseAndDisposeAsync(lease, sink, null, CancellationToken.None);
+    }
+
+    private static async Task<ScriptEvolutionSessionCompletedEvent> ReadSingleAsync(
+        IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
+        CancellationToken ct)
+    {
+        await foreach (var evt in sink.ReadAllAsync(ct))
+            return evt;
+
+        throw new InvalidOperationException("Script evolution live delivery completed without a terminal event.");
     }
 
     private static async Task BootstrapDefinitionAsync(

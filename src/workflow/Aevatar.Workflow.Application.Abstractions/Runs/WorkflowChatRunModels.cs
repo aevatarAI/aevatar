@@ -13,12 +13,11 @@ public enum WorkflowChatRunStartError
     DefinitionActorNotFound = 1,
     WorkflowNotFound = 2,
     DefinitionActorTypeNotSupported = 3,
-    ProjectionDisabled = 4,
-    DefinitionBindingMismatch = 5,
-    DefinitionActorWorkflowNotConfigured = 6,
-    InvalidWorkflowYaml = 7,
-    WorkflowNameMismatch = 8,
-    DefinitionSourceConflict = 9,
+    DefinitionBindingMismatch = 4,
+    DefinitionActorWorkflowNotConfigured = 5,
+    InvalidWorkflowYaml = 6,
+    WorkflowNameMismatch = 7,
+    DefinitionSourceConflict = 8,
 }
 
 public enum WorkflowProjectionCompletionStatus

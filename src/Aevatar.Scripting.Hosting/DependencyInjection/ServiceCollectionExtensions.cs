@@ -1,6 +1,7 @@
 using Aevatar.Scripting.Application.AI;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Runtime;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
@@ -36,6 +37,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptPackageCompiler, RoslynScriptPackageCompiler>();
         services.TryAddSingleton<IScriptReadModelSchemaActivationPolicy, DefaultScriptReadModelSchemaActivationPolicy>();
         services.TryAddSingleton<IScriptEvolutionApplicationService, ScriptEvolutionApplicationService>();
+        services.TryAddSingleton<IScriptEvolutionQueryApplicationService, ScriptEvolutionQueryApplicationService>();
+        services.TryAddSingleton<IScriptExecutionQueryApplicationService, ScriptExecutionQueryApplicationService>();
         services.TryAddSingleton<IScriptRuntimeCapabilityComposer, ScriptRuntimeCapabilityComposer>();
         services.TryAddSingleton<IScriptRuntimeExecutionOrchestrator, ScriptRuntimeExecutionOrchestrator>();
         services.TryAddSingleton<ScriptEvolutionExecutionCoordinator>();
@@ -47,6 +50,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<RuntimeScriptDefinitionLifecycleService>();
         services.TryAddSingleton<RuntimeScriptExecutionLifecycleService>();
         services.TryAddSingleton<RuntimeScriptCatalogLifecycleService>();
+        services.TryAddSingleton<IScriptEvolutionProjectionQueryPort, RuntimeScriptEvolutionSnapshotQueryService>();
+        services.TryAddSingleton<IScriptExecutionProjectionQueryPort, RuntimeScriptExecutionSnapshotQueryService>();
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, RuntimeScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptLifecyclePort, RuntimeScriptLifecyclePort>();
         services.TryAddSingleton<IScriptEvolutionFlowPort, RuntimeScriptEvolutionFlowPort>();

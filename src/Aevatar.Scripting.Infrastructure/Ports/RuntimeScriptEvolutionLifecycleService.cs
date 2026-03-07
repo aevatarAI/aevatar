@@ -11,7 +11,7 @@ public sealed class RuntimeScriptEvolutionLifecycleService
     private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly RuntimeScriptQueryClient _queryClient;
     private readonly IScriptingActorAddressResolver _addressResolver;
-    private readonly TimeSpan _decisionTimeout;
+    private readonly TimeSpan _commandAckTimeout;
     private readonly StartScriptEvolutionSessionActorRequestAdapter _startSessionAdapter = new();
 
     public RuntimeScriptEvolutionLifecycleService(
@@ -23,11 +23,11 @@ public sealed class RuntimeScriptEvolutionLifecycleService
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
-        _decisionTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
-            .GetEvolutionDecisionTimeout();
+        _commandAckTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
+            .GetEvolutionCommandAckTimeout();
     }
 
-    public async Task<ScriptPromotionDecision> ProposeAsync(
+    public async Task<ScriptEvolutionCommandAccepted> ProposeAsync(
         ScriptEvolutionProposal proposal,
         CancellationToken ct)
     {
@@ -44,9 +44,9 @@ public sealed class RuntimeScriptEvolutionLifecycleService
             "Script evolution session actor not found",
             ct);
 
-        var responded = await _queryClient.QueryAsync<ScriptEvolutionDecisionRespondedEvent>(
+        var accepted = await _queryClient.QueryAsync<ScriptEvolutionCommandAcceptedEvent>(
             ScriptingQueryRouteConventions.EvolutionReplyStreamPrefix,
-            _decisionTimeout,
+            _commandAckTimeout,
             (requestId, replyStreamId) => sessionActor.HandleEventAsync(
                 _startSessionAdapter.Map(
                     new StartScriptEvolutionSessionActorRequest(
@@ -62,37 +62,20 @@ public sealed class RuntimeScriptEvolutionLifecycleService
                     sessionActorId),
                 ct),
             static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
-            ScriptingQueryRouteConventions.BuildEvolutionDecisionTimeoutMessage,
+            ScriptingQueryRouteConventions.BuildEvolutionCommandAckTimeoutMessage,
             ct);
 
-        if (!responded.Found)
+        if (!accepted.Accepted)
         {
-            var reason = string.IsNullOrWhiteSpace(responded.FailureReason)
-                ? $"Script evolution decision unavailable. proposal_id={normalizedProposalId}"
-                : responded.FailureReason;
+            var reason = string.IsNullOrWhiteSpace(accepted.FailureReason)
+                ? $"Script evolution command rejected. proposal_id={normalizedProposalId}"
+                : accepted.FailureReason;
             throw new InvalidOperationException(reason);
         }
 
-        return MapDecision(normalizedProposal, responded);
-    }
-
-    private static ScriptPromotionDecision MapDecision(
-        ScriptEvolutionProposal proposal,
-        ScriptEvolutionDecisionRespondedEvent completed)
-    {
-        var validation = new ScriptEvolutionValidationReport(
-            IsSuccess: completed.Accepted,
-            Diagnostics: completed.Diagnostics.ToArray());
-        return new ScriptPromotionDecision(
-            Accepted: completed.Accepted,
-            ProposalId: proposal.ProposalId ?? string.Empty,
-            ScriptId: proposal.ScriptId ?? string.Empty,
-            BaseRevision: proposal.BaseRevision ?? string.Empty,
-            CandidateRevision: proposal.CandidateRevision ?? string.Empty,
-            Status: completed.Status ?? string.Empty,
-            FailureReason: completed.FailureReason ?? string.Empty,
-            DefinitionActorId: completed.DefinitionActorId ?? string.Empty,
-            CatalogActorId: completed.CatalogActorId ?? string.Empty,
-            ValidationReport: validation);
+        return new ScriptEvolutionCommandAccepted(
+            accepted.ProposalId ?? normalizedProposalId,
+            accepted.ScriptId ?? normalizedProposal.ScriptId,
+            accepted.SessionActorId ?? sessionActorId);
     }
 }

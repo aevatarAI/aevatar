@@ -176,10 +176,7 @@ public class ScriptEvolutionReadModelProjectorTests
         {
             ct.ThrowIfCancellationRequested();
             if (!_store.TryGetValue(key, out var readModel))
-            {
-                readModel = new ScriptEvolutionReadModel { Id = key };
-                _store[key] = readModel;
-            }
+                throw new InvalidOperationException($"ReadModel '{key}' was not initialized.");
 
             mutate(readModel);
             return Task.CompletedTask;

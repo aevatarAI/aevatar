@@ -17,7 +17,7 @@ public sealed class WorkflowRunRequestExecutor : IWorkflowRunRequestExecutor
         IActor actor,
         string actorId,
         EventEnvelope requestEnvelope,
-        IEventSink<WorkflowRunEvent> sink,
+        IEventSink<WorkflowRunEvent>? sink,
         CancellationToken ct = default)
     {
         try
@@ -34,6 +34,10 @@ public sealed class WorkflowRunRequestExecutor : IWorkflowRunRequestExecutor
                 requestEnvelope.Id,
                 requestEnvelope.CorrelationId,
                 payloadType);
+
+            if (sink == null)
+                throw;
+
             try
             {
                 await sink.PushAsync(new WorkflowRunErrorEvent

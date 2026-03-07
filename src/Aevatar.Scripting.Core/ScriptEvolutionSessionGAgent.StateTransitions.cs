@@ -14,8 +14,6 @@ public sealed partial class ScriptEvolutionSessionGAgent
         next.CandidateSource = evt.CandidateSource ?? string.Empty;
         next.CandidateSourceHash = evt.CandidateSourceHash ?? string.Empty;
         next.Reason = evt.Reason ?? string.Empty;
-        next.PendingRequestId = evt.RequestId ?? string.Empty;
-        next.PendingReplyStreamId = evt.ReplyStreamId ?? string.Empty;
         next.Completed = false;
         next.Accepted = false;
         next.Status = SessionStatusStarted;

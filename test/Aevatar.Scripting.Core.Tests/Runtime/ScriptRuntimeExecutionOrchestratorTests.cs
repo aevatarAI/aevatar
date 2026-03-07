@@ -185,23 +185,22 @@ public class ScriptRuntimeExecutionOrchestratorTests
             return Task.CompletedTask;
         }
 
-        public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
+        public Task<ScriptEvolutionDecision> ProposeScriptEvolutionAsync(
             ScriptEvolutionProposal proposal,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(
-                new ScriptPromotionDecision(
-                    Accepted: false,
-                    ProposalId: proposal.ProposalId ?? string.Empty,
-                    ScriptId: proposal.ScriptId ?? string.Empty,
-                    BaseRevision: proposal.BaseRevision ?? string.Empty,
+                new ScriptEvolutionDecision(
+                    proposal.ProposalId ?? string.Empty,
+                    proposal.ScriptId ?? string.Empty,
+                    $"script-evolution-session:{proposal.ProposalId}",
+                    Accepted: true,
+                    Status: ScriptEvolutionStatuses.Promoted,
+                    FailureReason: string.Empty,
+                    DefinitionActorId: "script-definition:test",
                     CandidateRevision: proposal.CandidateRevision ?? string.Empty,
-                    Status: ScriptEvolutionStatuses.Rejected,
-                    FailureReason: "noop",
-                    DefinitionActorId: string.Empty,
-                    CatalogActorId: string.Empty,
-                    ValidationReport: ScriptEvolutionValidationReport.Empty));
+                    CatalogActorId: "script-catalog"));
         }
 
         public Task<string> UpsertScriptDefinitionAsync(
@@ -232,7 +231,7 @@ public class ScriptRuntimeExecutionOrchestratorTests
             return Task.FromResult(runtimeActorId ?? string.Empty);
         }
 
-        public Task RunScriptInstanceAsync(
+        public Task<ScriptRuntimeRunAccepted> RunScriptInstanceAsync(
             string runtimeActorId,
             string runId,
             Any? inputPayload,
@@ -248,7 +247,7 @@ public class ScriptRuntimeExecutionOrchestratorTests
             _ = definitionActorId;
             _ = requestedEventType;
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult(new ScriptRuntimeRunAccepted(runtimeActorId, runId, definitionActorId, scriptRevision));
         }
 
         public Task PromoteRevisionAsync(

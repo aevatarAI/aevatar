@@ -53,6 +53,8 @@ public sealed partial class ScriptRuntimeGAgent
         CopyPayloads(committed.ReadModelPayloads, next.ReadModelPayloads);
         next.LastAppliedSchemaVersion = committed.ReadModelSchemaVersion ?? string.Empty;
         next.LastSchemaHash = committed.ReadModelSchemaHash ?? string.Empty;
+        next.LastEventType = committed.EventType ?? string.Empty;
+        next.LastDomainEventPayload = committed.Payload?.Clone();
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = committed.RunId ?? string.Empty;
 

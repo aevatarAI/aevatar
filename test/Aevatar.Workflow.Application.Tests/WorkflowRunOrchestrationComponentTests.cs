@@ -45,7 +45,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
     }
 
     [Fact]
-    public async Task ContextFactory_WhenProjectionDisabled_ShouldReturnProjectionDisabled()
+    public async Task ContextFactory_WhenProjectionDisabled_ShouldCreateContextWithoutLiveDelivery()
     {
         var actor = new ComponentActor("actor-2");
         var projectionPort = new CapturingProjectionPort { ProjectionEnabled = false };
@@ -59,12 +59,15 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new WorkflowChatRunRequest("hello", "direct", "actor-2"),
             CancellationToken.None);
 
-        result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
-        result.Context.Should().BeNull();
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        result.Context.Should().NotBeNull();
+        result.Context!.HasLiveDelivery.Should().BeFalse();
+        result.Context.Sink.Should().BeNull();
+        result.Context.ProjectionLease.Should().BeNull();
     }
 
     [Fact]
-    public async Task ContextFactory_WhenAttachThrows_ShouldDisposeCreatedSink()
+    public async Task ContextFactory_WhenAttachThrows_ShouldFallbackToRunWithoutLiveDelivery()
     {
         var actor = new ComponentActor("actor-3");
         var projectionPort = new CapturingProjectionPort { ThrowOnAttach = true };
@@ -74,13 +77,13 @@ public sealed class WorkflowRunOrchestrationComponentTests
             projectionPort,
             new DeterministicCommandContextPolicy("cmd-3", "corr-3"));
 
-        var act = async () => await factory.CreateAsync(
+        var result = await factory.CreateAsync(
             new WorkflowChatRunRequest("hello", "direct", "actor-3"),
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("attach failed");
-
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        result.Context.Should().NotBeNull();
+        result.Context!.HasLiveDelivery.Should().BeFalse();
         projectionPort.LastAttachedSink.Should().NotBeNull();
         var push = () => projectionPort.LastAttachedSink!.Push(
             new WorkflowRunStartedEvent { ThreadId = "actor-3" });
@@ -127,6 +130,45 @@ public sealed class WorkflowRunOrchestrationComponentTests
         emitted.Should().HaveCount(3);
         emitted[^1].Type.Should().Be(WorkflowRunEventTypes.StateSnapshot);
         emitted[^1].Snapshot.Should().NotBeNull();
+        requestExecutor.Calls.Should().ContainSingle();
+        finalizer.Calls.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecutionEngine_WhenLiveDeliveryUnavailable_ShouldFinalizeAsDisabled()
+    {
+        var requestExecutor = new CapturingRequestExecutor();
+        var outputStreamer = new SequenceOutputStreamer([]);
+        var finalizer = new SpyResourceFinalizer();
+        var snapshotEmitter = new WorkflowRunStateSnapshotEmitter(
+            new NoopProjectionQueryPort(),
+            outputStreamer);
+        var engine = new WorkflowRunExecutionEngine(
+            new ComponentEnvelopeFactory(),
+            requestExecutor,
+            outputStreamer,
+            new WorkflowRunCompletionPolicy(),
+            finalizer,
+            snapshotEmitter);
+        var runContext = BuildRunContext("actor-disabled", "cmd-disabled", sink: null, includeLiveDelivery: false);
+        var emitted = new List<WorkflowOutputFrame>();
+
+        var result = await engine.ExecuteAsync(
+            runContext,
+            new WorkflowChatRunRequest("hello", "direct", "actor-disabled"),
+            (frame, _) =>
+            {
+                emitted.Add(frame);
+                return ValueTask.CompletedTask;
+            },
+            ct: CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        result.FinalizeResult.Should().NotBeNull();
+        result.FinalizeResult!.ProjectionCompletionStatus.Should().Be(WorkflowProjectionCompletionStatus.Disabled);
+        result.FinalizeResult.ProjectionCompleted.Should().BeFalse();
+        emitted.Should().ContainSingle();
+        emitted[0].Type.Should().Be(WorkflowRunEventTypes.StateSnapshot);
         requestExecutor.Calls.Should().ContainSingle();
         finalizer.Calls.Should().ContainSingle();
     }
@@ -248,6 +290,22 @@ public sealed class WorkflowRunOrchestrationComponentTests
         sink.Disposed.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task ResourceFinalizer_WhenLiveDeliveryUnavailable_ShouldOnlyAwaitProcessingTask()
+    {
+        var projectionPort = new CapturingProjectionPort();
+        var finalizer = new WorkflowRunResourceFinalizer(projectionPort);
+        var runContext = BuildRunContext("actor-plain", "cmd-plain", sink: null, includeLiveDelivery: false);
+
+        await finalizer.FinalizeAsync(
+            runContext,
+            Task.CompletedTask,
+            CancellationToken.None);
+
+        projectionPort.DetachCalls.Should().BeEmpty();
+        projectionPort.ReleaseCalls.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData(WorkflowRunEventTypes.RunFinished, true, WorkflowProjectionCompletionStatus.Completed)]
     [InlineData(WorkflowRunEventTypes.RunError, true, WorkflowProjectionCompletionStatus.Failed)]
@@ -270,21 +328,21 @@ public sealed class WorkflowRunOrchestrationComponentTests
     private static WorkflowRunContext BuildRunContext(
         string actorId,
         string commandId,
-        IEventSink<WorkflowRunEvent>? sink = null)
+        IEventSink<WorkflowRunEvent>? sink = null,
+        bool includeLiveDelivery = true)
     {
-        var resolvedSink = sink ?? new EventChannel<WorkflowRunEvent>();
         return new WorkflowRunContext
         {
             RunActor = new ComponentActor(actorId),
             WorkflowName = "direct",
-            Sink = resolvedSink,
+            Sink = includeLiveDelivery ? sink ?? new EventChannel<WorkflowRunEvent>() : null,
             CommandId = commandId,
             CommandContext = new CommandContext(
                 actorId,
                 commandId,
                 CorrelationId: $"corr-{commandId}",
                 new Dictionary<string, string>(StringComparer.Ordinal)),
-            ProjectionLease = new ProjectionLease(actorId, commandId),
+            ProjectionLease = includeLiveDelivery ? new ProjectionLease(actorId, commandId) : null,
         };
     }
 
@@ -541,7 +599,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             IActor actor,
             string actorId,
             EventEnvelope requestEnvelope,
-            IEventSink<WorkflowRunEvent> sink,
+            IEventSink<WorkflowRunEvent>? sink,
             CancellationToken ct = default)
         {
             _ = actor;

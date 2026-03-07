@@ -23,7 +23,7 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
         _catalogLifecycleService = catalogLifecycleService ?? throw new ArgumentNullException(nameof(catalogLifecycleService));
     }
 
-    public Task<ScriptPromotionDecision> ProposeAsync(
+    public Task<ScriptEvolutionCommandAccepted> ProposeAsync(
         ScriptEvolutionProposal proposal,
         CancellationToken ct) =>
         _evolutionLifecycleService.ProposeAsync(proposal, ct);
@@ -54,7 +54,7 @@ public sealed class RuntimeScriptLifecyclePort : IScriptLifecyclePort
             runtimeActorId,
             ct);
 
-    public Task RunRuntimeAsync(
+    public Task<ScriptRuntimeRunAccepted> RunRuntimeAsync(
         string runtimeActorId,
         string runId,
         Any? inputPayload,

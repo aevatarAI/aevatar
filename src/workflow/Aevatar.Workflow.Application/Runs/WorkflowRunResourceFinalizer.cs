@@ -20,6 +20,12 @@ public sealed class WorkflowRunResourceFinalizer : IWorkflowRunResourceFinalizer
         ArgumentNullException.ThrowIfNull(processingTask);
         ct.ThrowIfCancellationRequested();
 
+        if (!runContext.HasLiveDelivery || runContext.Sink == null)
+        {
+            await WorkflowRunTaskAwaiter.AwaitIgnoringCancellationAsync(processingTask);
+            return;
+        }
+
         await _projectionPort.DetachReleaseAndDisposeAsync(
             runContext.ProjectionLease,
             runContext.Sink,

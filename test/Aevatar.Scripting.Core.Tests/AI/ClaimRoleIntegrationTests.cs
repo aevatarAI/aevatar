@@ -148,21 +148,20 @@ public sealed class ClaimRoleScript : IScriptPackageRuntime
         public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) =>
             Task.CompletedTask;
 
-        public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
+        public Task<ScriptEvolutionDecision> ProposeScriptEvolutionAsync(
             ScriptEvolutionProposal proposal,
             CancellationToken ct) =>
             Task.FromResult(
-                new ScriptPromotionDecision(
+                new ScriptEvolutionDecision(
+                    proposal.ProposalId ?? string.Empty,
+                    proposal.ScriptId ?? string.Empty,
+                    $"script-evolution-session:{proposal.ProposalId}",
                     Accepted: true,
-                    ProposalId: proposal.ProposalId,
-                    ScriptId: proposal.ScriptId,
-                    BaseRevision: proposal.BaseRevision,
-                    CandidateRevision: proposal.CandidateRevision,
-                    Status: "promoted",
+                    Status: ScriptEvolutionStatuses.Promoted,
                     FailureReason: string.Empty,
-                    DefinitionActorId: $"script-definition:{proposal.ScriptId}",
-                    CatalogActorId: "script-catalog",
-                    ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
+                    DefinitionActorId: "script-definition:test",
+                    CandidateRevision: proposal.CandidateRevision ?? string.Empty,
+                    CatalogActorId: "script-catalog"));
 
         public Task<string> UpsertScriptDefinitionAsync(
             string scriptId,
@@ -180,7 +179,7 @@ public sealed class ClaimRoleScript : IScriptPackageRuntime
             CancellationToken ct) =>
             Task.FromResult(runtimeActorId ?? "runtime-1");
 
-        public Task RunScriptInstanceAsync(
+        public Task<ScriptRuntimeRunAccepted> RunScriptInstanceAsync(
             string runtimeActorId,
             string runId,
             Any? inputPayload,
@@ -188,7 +187,7 @@ public sealed class ClaimRoleScript : IScriptPackageRuntime
             string definitionActorId,
             string requestedEventType,
             CancellationToken ct) =>
-            Task.CompletedTask;
+            Task.FromResult(new ScriptRuntimeRunAccepted(runtimeActorId, runId, definitionActorId, scriptRevision));
 
         public Task PromoteRevisionAsync(
             string catalogActorId,

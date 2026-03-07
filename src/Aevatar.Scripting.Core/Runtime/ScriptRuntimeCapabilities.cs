@@ -44,7 +44,7 @@ public sealed class ScriptRuntimeCapabilities : IScriptRuntimeCapabilities
     public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) =>
         _agentLifecycle.UnlinkAgentAsync(childActorId, ct);
 
-    public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct) =>
+    public Task<ScriptEvolutionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct) =>
         _evolution.ProposeScriptEvolutionAsync(proposal, ct);
 
     public Task<string> UpsertScriptDefinitionAsync(
@@ -59,7 +59,7 @@ public sealed class ScriptRuntimeCapabilities : IScriptRuntimeCapabilities
     public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) =>
         _evolution.SpawnScriptRuntimeAsync(definitionActorId, scriptRevision, runtimeActorId, ct);
 
-    public Task RunScriptInstanceAsync(
+    public Task<ScriptRuntimeRunAccepted> RunScriptInstanceAsync(
         string runtimeActorId,
         string runId,
         Any? inputPayload,

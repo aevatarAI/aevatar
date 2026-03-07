@@ -101,7 +101,7 @@ public class ScriptCapabilityEndpointsHandlerTests
     }
 
     [Fact]
-    public async Task HandleProposeEvolution_ShouldReturnOk_AndNormalizeOptionalFields()
+    public async Task HandleProposeEvolution_ShouldReturnAccepted_AndNormalizeOptionalFields()
     {
         var service = new RecordingService();
         var result = await InvokeHandleProposeEvolutionAsync(
@@ -116,7 +116,7 @@ public class ScriptCapabilityEndpointsHandlerTests
             service);
 
         var response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
 
         service.LastRequest.Should().NotBeNull();
         service.LastRequest!.ScriptId.Should().Be("script-1");
@@ -124,6 +124,7 @@ public class ScriptCapabilityEndpointsHandlerTests
         service.LastRequest.CandidateSourceHash.Should().BeEmpty();
         service.LastRequest.Reason.Should().BeEmpty();
         service.LastRequest.ProposalId.Should().BeEmpty();
+        response.Json.GetProperty("proposalId").GetString().Should().Be("generated-proposal");
     }
 
     private static async Task<IResult> InvokeHandleProposeEvolutionAsync(
@@ -156,7 +157,7 @@ public class ScriptCapabilityEndpointsHandlerTests
         public ProposeScriptEvolutionRequest? LastRequest { get; private set; }
         public InvalidOperationException? ThrowOnPropose { get; init; }
 
-        public Task<ScriptPromotionDecision> ProposeAsync(
+        public Task<ScriptEvolutionCommandAccepted> ProposeAsync(
             ProposeScriptEvolutionRequest request,
             CancellationToken ct)
         {
@@ -166,17 +167,10 @@ public class ScriptCapabilityEndpointsHandlerTests
                 throw ThrowOnPropose;
 
             return Task.FromResult(
-                new ScriptPromotionDecision(
-                    Accepted: true,
-                    ProposalId: request.ProposalId,
-                    ScriptId: request.ScriptId,
-                    BaseRevision: request.BaseRevision,
-                    CandidateRevision: request.CandidateRevision,
-                    Status: ScriptEvolutionStatuses.Promoted,
-                    FailureReason: string.Empty,
-                    DefinitionActorId: "definition-1",
-                    CatalogActorId: "catalog-1",
-                    ValidationReport: new ScriptEvolutionValidationReport(true, [])));
+                new ScriptEvolutionCommandAccepted(
+                    string.IsNullOrWhiteSpace(request.ProposalId) ? "generated-proposal" : request.ProposalId,
+                    request.ScriptId,
+                    "script-evolution-session:generated-proposal"));
         }
     }
 }

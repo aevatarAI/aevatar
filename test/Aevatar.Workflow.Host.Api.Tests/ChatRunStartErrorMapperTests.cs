@@ -11,7 +11,6 @@ public class ChatRunStartErrorMapperTests
     [InlineData(WorkflowChatRunStartError.DefinitionActorNotFound, StatusCodes.Status404NotFound)]
     [InlineData(WorkflowChatRunStartError.WorkflowNotFound, StatusCodes.Status404NotFound)]
     [InlineData(WorkflowChatRunStartError.DefinitionActorTypeNotSupported, StatusCodes.Status400BadRequest)]
-    [InlineData(WorkflowChatRunStartError.ProjectionDisabled, StatusCodes.Status503ServiceUnavailable)]
     [InlineData(WorkflowChatRunStartError.DefinitionBindingMismatch, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.DefinitionActorWorkflowNotConfigured, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.InvalidWorkflowYaml, StatusCodes.Status400BadRequest)]

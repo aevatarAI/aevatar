@@ -3,6 +3,8 @@ using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
@@ -143,6 +145,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             var runtimeNode3 = node3.Services.GetRequiredService<IActorRuntime>();
             var evolutionServiceNode2 = node2.Services.GetRequiredService<IScriptEvolutionApplicationService>();
             var evolutionServiceNode3 = node3.Services.GetRequiredService<IScriptEvolutionApplicationService>();
+            var evolutionQueryNode2 = node2.Services.GetRequiredService<IScriptEvolutionQueryApplicationService>();
+            var evolutionQueryNode3 = node3.Services.GetRequiredService<IScriptEvolutionQueryApplicationService>();
             var lifecyclePortNode1 = node1.Services.GetRequiredService<IScriptLifecyclePort>();
             var lifecyclePortNode3 = node3.Services.GetRequiredService<IScriptLifecyclePort>();
             var definitionSnapshotPortNode2 = node2.Services.GetRequiredService<IScriptDefinitionSnapshotPort>();
@@ -254,7 +258,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                 }
             })).Should().BeTrue();
 
-            var decisionA = await evolutionServiceNode2.ProposeAsync(
+            var acceptedA = await evolutionServiceNode2.ProposeAsync(
                 new ProposeScriptEvolutionRequest(
                     ScriptId: workerAScriptId,
                     BaseRevision: "rev-a-1",
@@ -264,7 +268,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                     Reason: "orleans-3node-worker-a",
                     ProposalId: $"external-proposal-a-{scopeId}"),
                 CancellationToken.None);
-            var decisionB = await evolutionServiceNode3.ProposeAsync(
+            var acceptedB = await evolutionServiceNode3.ProposeAsync(
                 new ProposeScriptEvolutionRequest(
                     ScriptId: workerBScriptId,
                     BaseRevision: "rev-b-1",
@@ -275,22 +279,34 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                     ProposalId: $"external-proposal-b-{scopeId}"),
                 CancellationToken.None);
 
-            decisionA.Accepted.Should().BeTrue(
-                "status={0}, failure_reason={1}, definition_actor_id={2}, catalog_actor_id={3}",
-                decisionA.Status,
-                decisionA.FailureReason,
-                decisionA.DefinitionActorId,
-                decisionA.CatalogActorId);
-            decisionB.Accepted.Should().BeTrue(
-                "status={0}, failure_reason={1}, definition_actor_id={2}, catalog_actor_id={3}",
-                decisionB.Status,
-                decisionB.FailureReason,
-                decisionB.DefinitionActorId,
-                decisionB.CatalogActorId);
-            decisionA.Status.Should().Be("promoted");
-            decisionB.Status.Should().Be("promoted");
-            decisionA.DefinitionActorId.Should().Be($"script-definition:{workerAScriptId}");
-            decisionB.DefinitionActorId.Should().Be($"script-definition:{workerBScriptId}");
+            acceptedA.ProposalId.Should().Be($"external-proposal-a-{scopeId}");
+            acceptedB.ProposalId.Should().Be($"external-proposal-b-{scopeId}");
+            acceptedA.ScriptId.Should().Be(workerAScriptId);
+            acceptedB.ScriptId.Should().Be(workerBScriptId);
+
+            ScriptEvolutionProposalSnapshot? snapshotA = null;
+            ScriptEvolutionProposalSnapshot? snapshotB = null;
+            (await EventuallyAsync(async () =>
+            {
+                snapshotA = await evolutionQueryNode2.GetProposalSnapshotAsync(acceptedA.ProposalId, CancellationToken.None);
+                return snapshotA != null &&
+                    snapshotA.Completed &&
+                    snapshotA.Accepted &&
+                    string.Equals(snapshotA.PromotionStatus, ScriptEvolutionStatuses.Promoted, StringComparison.Ordinal);
+            })).Should().BeTrue();
+            (await EventuallyAsync(async () =>
+            {
+                snapshotB = await evolutionQueryNode3.GetProposalSnapshotAsync(acceptedB.ProposalId, CancellationToken.None);
+                return snapshotB != null &&
+                    snapshotB.Completed &&
+                    snapshotB.Accepted &&
+                    string.Equals(snapshotB.PromotionStatus, ScriptEvolutionStatuses.Promoted, StringComparison.Ordinal);
+            })).Should().BeTrue();
+
+            snapshotA.Should().NotBeNull();
+            snapshotB.Should().NotBeNull();
+            snapshotA!.DefinitionActorId.Should().Be($"script-definition:{workerAScriptId}");
+            snapshotB!.DefinitionActorId.Should().Be($"script-definition:{workerBScriptId}");
 
             ScriptCatalogEntrySnapshot? workerACatalogEntry = null;
             ScriptCatalogEntrySnapshot? workerBCatalogEntry = null;
@@ -319,8 +335,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             workerBCatalogEntry.Should().NotBeNull();
             workerACatalogEntry!.ActiveRevision.Should().Be("rev-a-2");
             workerBCatalogEntry!.ActiveRevision.Should().Be("rev-b-2");
-            workerACatalogEntry.ActiveDefinitionActorId.Should().Be(decisionA.DefinitionActorId);
-            workerBCatalogEntry.ActiveDefinitionActorId.Should().Be(decisionB.DefinitionActorId);
+            workerACatalogEntry.ActiveDefinitionActorId.Should().Be(snapshotA.DefinitionActorId);
+            workerBCatalogEntry.ActiveDefinitionActorId.Should().Be(snapshotB.DefinitionActorId);
             workerACatalogEntry.RevisionHistory.Should().Contain("rev-a-2");
             workerBCatalogEntry.RevisionHistory.Should().Contain("rev-b-2");
 
@@ -332,7 +348,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                 try
                 {
                     workerADefinitionSnapshot = await definitionSnapshotPortNode2.GetRequiredAsync(
-                        decisionA.DefinitionActorId,
+                        snapshotA.DefinitionActorId,
                         "rev-a-2",
                         CancellationToken.None);
                     return true;
@@ -347,7 +363,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                 try
                 {
                     workerBDefinitionSnapshot = await definitionSnapshotPortNode3.GetRequiredAsync(
-                        decisionB.DefinitionActorId,
+                        snapshotB.DefinitionActorId,
                         "rev-b-2",
                         CancellationToken.None);
                     return true;

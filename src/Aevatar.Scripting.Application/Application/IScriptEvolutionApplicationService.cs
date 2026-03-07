@@ -4,7 +4,7 @@ namespace Aevatar.Scripting.Application;
 
 public interface IScriptEvolutionApplicationService
 {
-    Task<ScriptPromotionDecision> ProposeAsync(
+    Task<ScriptEvolutionCommandAccepted> ProposeAsync(
         ProposeScriptEvolutionRequest request,
         CancellationToken ct);
 }

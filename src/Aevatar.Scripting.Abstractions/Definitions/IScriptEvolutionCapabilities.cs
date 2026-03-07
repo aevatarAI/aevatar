@@ -4,7 +4,7 @@ namespace Aevatar.Scripting.Abstractions.Definitions;
 
 public interface IScriptEvolutionCapabilities
 {
-    Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
+    Task<ScriptEvolutionDecision> ProposeScriptEvolutionAsync(
         ScriptEvolutionProposal proposal,
         CancellationToken ct);
 
@@ -22,7 +22,7 @@ public interface IScriptEvolutionCapabilities
         string? runtimeActorId,
         CancellationToken ct);
 
-    Task RunScriptInstanceAsync(
+    Task<ScriptRuntimeRunAccepted> RunScriptInstanceAsync(
         string runtimeActorId,
         string runId,
         Any? inputPayload,

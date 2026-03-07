@@ -14,7 +14,7 @@ public sealed record ScriptCatalogEntrySnapshot(
 
 public interface IScriptLifecyclePort
 {
-    Task<ScriptPromotionDecision> ProposeAsync(
+    Task<ScriptEvolutionCommandAccepted> ProposeAsync(
         ScriptEvolutionProposal proposal,
         CancellationToken ct);
 
@@ -32,7 +32,7 @@ public interface IScriptLifecyclePort
         string? runtimeActorId,
         CancellationToken ct);
 
-    Task RunRuntimeAsync(
+    Task<ScriptRuntimeRunAccepted> RunRuntimeAsync(
         string runtimeActorId,
         string runId,
         Any? inputPayload,

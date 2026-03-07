@@ -13,7 +13,7 @@ public class ScriptEvolutionApplicationServiceTests
         var port = new FakeScriptLifecyclePort();
         var service = new ScriptEvolutionApplicationService(port);
 
-        var decision = await service.ProposeAsync(
+        var accepted = await service.ProposeAsync(
             new ProposeScriptEvolutionRequest(
                 ScriptId: "inventory-script",
                 BaseRevision: "rev-1",
@@ -24,7 +24,9 @@ public class ScriptEvolutionApplicationServiceTests
                 ProposalId: string.Empty),
             CancellationToken.None);
 
-        decision.Accepted.Should().BeTrue();
+        accepted.ProposalId.Should().NotBeNullOrWhiteSpace();
+        accepted.ScriptId.Should().Be("inventory-script");
+        accepted.SessionActorId.Should().Be("script-evolution-session");
         port.CapturedProposal.Should().NotBeNull();
         port.CapturedProposal!.ScriptId.Should().Be("inventory-script");
         port.CapturedProposal.CandidateRevision.Should().Be("rev-2");
@@ -57,24 +59,17 @@ public class ScriptEvolutionApplicationServiceTests
     {
         public ScriptEvolutionProposal? CapturedProposal { get; private set; }
 
-        public Task<ScriptPromotionDecision> ProposeAsync(
+        public Task<ScriptEvolutionCommandAccepted> ProposeAsync(
             ScriptEvolutionProposal proposal,
             CancellationToken ct)
         {
             CapturedProposal = proposal;
             ct.ThrowIfCancellationRequested();
 
-            return Task.FromResult(new ScriptPromotionDecision(
-                Accepted: true,
-                ProposalId: proposal.ProposalId,
-                ScriptId: proposal.ScriptId,
-                BaseRevision: proposal.BaseRevision,
-                CandidateRevision: proposal.CandidateRevision,
-                Status: "promoted",
-                FailureReason: string.Empty,
-                DefinitionActorId: string.Empty,
-                CatalogActorId: string.Empty,
-                ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
+            return Task.FromResult(new ScriptEvolutionCommandAccepted(
+                proposal.ProposalId,
+                proposal.ScriptId,
+                "script-evolution-session"));
         }
 
         public Task<string> UpsertDefinitionAsync(
@@ -91,7 +86,7 @@ public class ScriptEvolutionApplicationServiceTests
             string? runtimeActorId,
             CancellationToken ct) => throw new NotSupportedException();
 
-        public Task RunRuntimeAsync(
+        public Task<ScriptRuntimeRunAccepted> RunRuntimeAsync(
             string runtimeActorId,
             string runId,
             Google.Protobuf.WellKnownTypes.Any? inputPayload,

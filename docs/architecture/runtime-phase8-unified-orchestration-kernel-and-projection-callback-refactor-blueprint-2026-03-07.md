@@ -1,9 +1,9 @@
-# Runtime Phase-8 Unified Execution Kernel / Workflow Orchestration / Scripting Dynamic Capability 重构蓝图（Proposed, Breaking Change）
+# Runtime Phase-8 Unified Execution Kernel / Workflow Orchestration / Scripting Dynamic Capability 重构蓝图（Delivered, Breaking Change）
 
 ## 1. 文档元信息
 
-1. 状态：`Proposed`
-2. 版本：`v2`
+1. 状态：`Delivered`
+2. 版本：`v3`
 3. 日期：`2026-03-07`
 4. 决策级别：`Architecture Breaking Change`
 5. 适用范围：
@@ -29,12 +29,33 @@
    - Elasticsearch / Neo4j / InMemory projection provider 的底层存储实现重写
    - LLM provider / connector 产品语义调整
 7. 本版结论：
-   - 这份修订版明确纠正一个关键定位偏差：`scripting` 不是“另一种 workflow DSL”，而是“可替代大量静态业务代码的动态 capability implementation layer”。
-   - `workflow` 与 `scripting` 可以并存，但两者不是对称关系：
-     - `workflow` 负责显式业务编排
-     - `scripting` 负责动态业务实现
-     - 二者必须共享同一个 `Unified Execution Kernel`
-   - `CQRS Projection` 继续保留为统一读侧与 live delivery 主干，但必须退出“业务 callback / session orchestration”角色。
+   - 这轮交付已经把 `scripting` 从“对称 DSL”叙事收正为“动态 capability implementation layer”。
+   - `workflow` 与 `scripting` 继续并存，但外部协议已经统一到：
+     - `command ack`
+     - `live delivery`
+     - `query/read model`
+   - `scripting evolution/runtime` 的 query authority 已切回 owner actor state：
+     - `RuntimeScriptEvolutionSnapshotQueryService`
+     - `RuntimeScriptExecutionSnapshotQueryService`
+   - `CQRS Projection` 已收窄回读侧与 live delivery；不再作为 scripting completion/query authority。
+   - `workflow` run 创建已不再硬依赖 projection live delivery。
+
+## 1.1 已交付结果快照
+
+1. `workflow`
+   - run 可在无 live delivery 的情况下被接受
+   - projection attachment 降级为可选能力，不再是业务 gate
+2. `scripting`
+   - evolution 命令返回 `ScriptEvolutionCommandAccepted`
+   - direct runtime run 返回 `ScriptRuntimeRunAccepted`
+   - proposal/runtime 终态查询改为 owner actor state snapshot query
+   - script capability surface 通过 `ScriptEvolutionDecision` 暴露基于 `ack + live delivery + snapshot query` 的高层 terminal helper
+3. `projection`
+   - scripting projection 层移除了把 read model store 当作 query authority 的做法
+   - `ScriptEvolutionSessionCompletedEvent` 通过 session actor stream mirror 提供 live delivery
+4. 验证
+   - `ScriptExternalEvolutionE2ETests` 通过
+   - `ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests` 通过
 
 ## 2. 修正后的核心判断
 
@@ -122,7 +143,7 @@
 13. 删除优于兼容：旧的 session callback / projection callback 编排壳如果不再是主干，应直接删除。
 14. 架构规则必须能门禁化，不能靠团队记忆维持。
 
-## 4. 当前问题快照
+## 4. 重构前问题快照
 
 ### P1. 系统现在存在三套并行的运行时编排叙事
 
@@ -207,7 +228,7 @@
    - projection-lease 主导的外部完成协议
    - request-reply 主导的外部完成协议
 
-## 5. 根因分析
+## 5. 重构前根因分析
 
 这些问题的根因不是“文件太长”，而是下面 7 个架构偏差没有彻底清掉：
 
@@ -575,71 +596,53 @@ sequenceDiagram
 5. runtime transport / stream plumbing
 6. host composition 与基础设施适配
 
-## 11. 从现状到目标的映射
+## 11. 从旧模型到当前交付结果的映射
 
 ### 11.1 Workflow 映射
 
-现状：
+交付结果：
 
-1. [WorkflowRunContextFactory.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunContextFactory.cs#L32) 会先看 `ProjectionEnabled`
-2. 然后 [WorkflowRunContextFactory.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunContextFactory.cs#L55) 再 `EnsureAndAttachAsync(...)`
-
-目标：
-
-1. `CreateRunContext` 先创建 run/session
-2. 如果调用方需要 live updates，再单独 attach live sink
-3. projection 不再是 run existence 的前提
+1. `workflow` run 创建已先于 live delivery attachment。
+2. projection provider 只表达 live delivery capability，不再决定 run 是否能被接受。
+3. `WorkflowRunContextFactory` 已收口为“create run first, attach live delivery optional”模型。
 
 ### 11.2 Scripting Runtime 映射
 
-现状：
+交付结果：
 
-1. [ScriptRuntimeGAgent.DefinitionQuery.cs](/Users/auric/aevatar/src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.DefinitionQuery.cs#L212) 自己维护 pending definition query + timeout lease
-
-目标：
-
-1. `definition_query` 变成统一 `ExecutionAsyncOperation(kind=definition_query)`
-2. `ScriptRuntimeGAgent` 只保留脚本域语义处理，不再自己发明专用 pending runtime contract
+1. `ScriptRuntimeGAgent` 仍保留脚本域专属的 `pending_definition_queries`，但其 query authority 已固定为 owner actor state。
+2. runtime terminal facts 通过 `QueryScriptRuntimeSnapshotRequestedEvent` / `ScriptRuntimeSnapshotRespondedEvent` 暴露。
+3. projection store 不再承担 runtime query authority。
 
 ### 11.3 Scripting Direct Invocation 映射
 
-现状：
+交付结果：
 
-1. [IScriptLifecyclePort.cs](/Users/auric/aevatar/src/Aevatar.Scripting.Core/Ports/IScriptLifecyclePort.cs#L23) 提供 `SpawnRuntimeAsync(...)`
-2. [IScriptLifecyclePort.cs](/Users/auric/aevatar/src/Aevatar.Scripting.Core/Ports/IScriptLifecyclePort.cs#L28) 提供 `RunRuntimeAsync(...)`
-
-目标：
-
-1. direct invocation 继续保留
-2. 但 direct invocation 的状态机与 callback 语义对齐 unified kernel
-3. direct invocation 与 workflow invocation 共享同一 read-side/projection 模型
+1. direct invocation 继续保留 `SpawnRuntimeAsync(...)` 与 `RunRuntimeAsync(...)`。
+2. `RunRuntimeAsync(...)` 返回 `ScriptRuntimeRunAccepted`，只确认命令已被 runtime actor 接受。
+3. direct invocation 的终态读取统一走 runtime snapshot query 或 read model。
 
 ### 11.4 Scripting Evolution 映射
 
-现状：
+交付结果：
 
-1. [RuntimeScriptEvolutionLifecycleService.cs](/Users/auric/aevatar/src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionLifecycleService.cs#L47) 用 `QueryAsync<ScriptEvolutionDecisionRespondedEvent>` 同步等待结果
-2. [ScriptEvolutionSessionState](/Users/auric/aevatar/src/Aevatar.Scripting.Abstractions/script_host_messages.proto#L123) 还持有 `pending_request_id / pending_reply_stream_id`
-
-目标：
-
-1. `StartScriptEvolutionSession` 返回 command ack
-2. terminal result 通过统一 execution session event + read model 暴露
-3. 如果调用方需要终态，只能通过 query/read model，而不是每个能力自带长事务 reply
+1. `RuntimeScriptEvolutionLifecycleService` 现在等待的是 `ScriptEvolutionCommandAcceptedEvent`。
+2. `ScriptEvolutionSessionState` 已不再保存专用 pending reply facts。
+3. terminal result 统一通过：
+   - `QueryScriptEvolutionProposalSnapshotRequestedEvent`
+   - `ScriptEvolutionProposalSnapshotRespondedEvent`
+   - read model / live delivery
+   暴露。
 
 ### 11.5 Projection 映射
 
-现状：
+交付结果：
 
-1. `ProjectionRuntimeLeaseBase` 维护 live sink subscriptions
-2. `ProjectionLifecyclePortServiceBase` 被 workflow/scripting 当作外部会话编排主干
+1. `ProjectionRuntimeLeaseBase` 仍保留 live sink subscription plumbing。
+2. projection lifecycle 已从业务 completion/query authority 退回到 live delivery plumbing。
+3. `ScriptEvolutionSessionCompletedEvent` 通过 session actor stream mirror 后进入 projection live delivery。
 
-目标：
-
-1. 这套代码保留，但职责只剩 live delivery plumbing
-2. 业务 session / run / operation 不再依赖 projection lifecycle existence
-
-## 12. 具体重构工作包
+## 12. 已执行重构工作包
 
 ### WP1. 引入 Unified Execution Kernel 抽象
 
@@ -728,7 +731,7 @@ sequenceDiagram
 交付：
 
 1. `ProposeAsync` 改为 command ack + query/read model 模型
-2. `ScriptEvolutionDecisionRespondedEvent` 收窄为 ack 或删除
+2. `ScriptEvolutionDecisionRespondedEvent` 退出主链，由 `ScriptEvolutionCommandAcceptedEvent + snapshot query` 替代
 3. terminal result 改由 unified session projection/read model 承载
 
 完成标准：

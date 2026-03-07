@@ -76,7 +76,6 @@ public sealed partial class ScriptEvolutionSessionGAgent
                 State.Accepted,
                 State.Status,
                 State.FailureReason);
-            await SendPendingDecisionResponseIfRequestedAsync(ct);
         }
         finally
         {

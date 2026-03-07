@@ -53,10 +53,8 @@ public sealed partial class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvol
                 State.ProposalId,
                 State.Completed,
                 State.Status);
-            if (State.Completed)
-                await SendStartResponseIfRequestedAsync(evt, CancellationToken.None);
-            else
-                await EnsureExecutionRequestedAsync(CancellationToken.None);
+            await SendAcceptedResponseIfRequestedAsync(evt, State.ProposalId, CancellationToken.None);
+            await EnsureExecutionRequestedAsync(CancellationToken.None);
             return;
         }
 
@@ -69,15 +67,10 @@ public sealed partial class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvol
             CandidateSource = proposal.CandidateSource,
             CandidateSourceHash = proposal.CandidateSourceHash,
             Reason = proposal.Reason,
-            RequestId = evt.RequestId ?? string.Empty,
-            ReplyStreamId = evt.ReplyStreamId ?? string.Empty,
         });
+        await SendAcceptedResponseIfRequestedAsync(evt, proposal.ProposalId, CancellationToken.None);
         await EnsureExecutionRequestedAsync(CancellationToken.None);
     }
-
-    [EventHandler]
-    public Task HandleQueryScriptEvolutionDecisionRequested(QueryScriptEvolutionDecisionRequestedEvent evt) =>
-        HandleDecisionQueryAsync(evt, CancellationToken.None);
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public Task HandleScriptEvolutionSessionExecutionRequested(ScriptEvolutionSessionExecutionRequestedEvent evt) =>

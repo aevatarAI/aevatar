@@ -1,3 +1,4 @@
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Google.Protobuf.WellKnownTypes;
@@ -36,7 +37,7 @@ public sealed class RuntimeScriptExecutionLifecycleService
         return actorId;
     }
 
-    public async Task RunRuntimeAsync(
+    public async Task<ScriptRuntimeRunAccepted> RunRuntimeAsync(
         string runtimeActorId,
         string runId,
         Any? inputPayload,
@@ -58,8 +59,14 @@ public sealed class RuntimeScriptExecutionLifecycleService
                     InputPayload: inputPayload?.Clone(),
                     ScriptRevision: scriptRevision ?? string.Empty,
                     DefinitionActorId: definitionActorId ?? string.Empty,
-                    RequestedEventType: requestedEventType ?? string.Empty),
+                        RequestedEventType: requestedEventType ?? string.Empty),
                 runtimeActorId),
             ct);
+
+        return new ScriptRuntimeRunAccepted(
+            runtimeActorId,
+            runId,
+            definitionActorId ?? string.Empty,
+            scriptRevision ?? string.Empty);
     }
 }

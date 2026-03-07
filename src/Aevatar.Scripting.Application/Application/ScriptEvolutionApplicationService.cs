@@ -15,7 +15,7 @@ public sealed class ScriptEvolutionApplicationService : IScriptEvolutionApplicat
         _lifecyclePort = lifecyclePort ?? throw new ArgumentNullException(nameof(lifecyclePort));
     }
 
-    public Task<ScriptPromotionDecision> ProposeAsync(
+    public Task<ScriptEvolutionCommandAccepted> ProposeAsync(
         ProposeScriptEvolutionRequest request,
         CancellationToken ct)
     {

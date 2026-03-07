@@ -1,6 +1,8 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Application.Runs;
 
@@ -10,17 +12,20 @@ public sealed class WorkflowRunContextFactory : IWorkflowRunContextFactory
     private readonly IWorkflowRunActorPort _actorPort;
     private readonly IWorkflowExecutionProjectionLifecyclePort _projectionPort;
     private readonly ICommandContextPolicy _commandContextPolicy;
+    private readonly ILogger<WorkflowRunContextFactory> _logger;
 
     public WorkflowRunContextFactory(
         IWorkflowRunActorResolver actorResolver,
         IWorkflowRunActorPort actorPort,
         IWorkflowExecutionProjectionLifecyclePort projectionPort,
-        ICommandContextPolicy commandContextPolicy)
+        ICommandContextPolicy commandContextPolicy,
+        ILogger<WorkflowRunContextFactory>? logger = null)
     {
         _actorResolver = actorResolver;
         _actorPort = actorPort;
         _projectionPort = projectionPort;
         _commandContextPolicy = commandContextPolicy;
+        _logger = logger ?? NullLogger<WorkflowRunContextFactory>.Instance;
     }
 
     public async Task<WorkflowRunContextCreateResult> CreateAsync(
@@ -28,9 +33,6 @@ public sealed class WorkflowRunContextFactory : IWorkflowRunContextFactory
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-
-        if (!_projectionPort.ProjectionEnabled)
-            return new WorkflowRunContextCreateResult(WorkflowChatRunStartError.ProjectionDisabled, null);
 
         var actorResolution = await _actorResolver.ResolveOrCreateAsync(request, ct);
         if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.RunActor == null)
@@ -49,43 +51,89 @@ public sealed class WorkflowRunContextFactory : IWorkflowRunContextFactory
             baseContext.CommandId,
             baseContext.CorrelationId,
             metadata);
+        var (sink, projectionLease) = await TryAttachLiveDeliveryAsync(
+            runActor.Id,
+            workflowNameForRun,
+            request.Prompt,
+            commandContext.CommandId,
+            ct);
+
+        return new WorkflowRunContextCreateResult(
+            WorkflowChatRunStartError.None,
+            new WorkflowRunContext
+            {
+                RunActor = runActor,
+                DefinitionActorId = actorResolution.DefinitionActorId,
+                WorkflowName = workflowNameForRun,
+                Sink = sink,
+                CommandId = commandContext.CommandId,
+                CommandContext = commandContext,
+                ProjectionLease = projectionLease,
+            });
+    }
+
+    private async Task<(IEventSink<WorkflowRunEvent>? Sink, IWorkflowExecutionProjectionLease? Lease)> TryAttachLiveDeliveryAsync(
+        string runActorId,
+        string workflowName,
+        string prompt,
+        string commandId,
+        CancellationToken ct)
+    {
+        if (!_projectionPort.ProjectionEnabled)
+            return (null, null);
+
         var sink = new EventChannel<WorkflowRunEvent>();
+        IWorkflowExecutionProjectionLease? lease = null;
         try
         {
-            var projectionLease = await _projectionPort.EnsureAndAttachAsync(
+            lease = await _projectionPort.EnsureAndAttachAsync(
                 token => _projectionPort.EnsureActorProjectionAsync(
-                    runActor.Id,
-                    workflowNameForRun,
-                    request.Prompt,
-                    commandContext.CommandId,
+                    runActorId,
+                    workflowName,
+                    prompt,
+                    commandId,
                     token),
                 sink,
                 ct);
-            if (projectionLease == null)
+            if (lease == null)
             {
                 await DisposeSinkAsync(sink);
-                await _actorPort.DestroyRunActorAsync(runActor.Id, CancellationToken.None);
-                return new WorkflowRunContextCreateResult(WorkflowChatRunStartError.ProjectionDisabled, null);
+                return (null, null);
             }
 
-            return new WorkflowRunContextCreateResult(
-                WorkflowChatRunStartError.None,
-                new WorkflowRunContext
-                {
-                    RunActor = runActor,
-                    DefinitionActorId = actorResolution.DefinitionActorId,
-                    WorkflowName = workflowNameForRun,
-                    Sink = sink,
-                    CommandId = commandContext.CommandId,
-                    CommandContext = commandContext,
-                    ProjectionLease = projectionLease,
-                });
+            return (sink, lease);
         }
-        catch
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Workflow live delivery attach failed. run_actor_id={RunActorId} workflow_name={WorkflowName} command_id={CommandId}",
+                runActorId,
+                workflowName,
+                commandId);
+            await CleanupFailedProjectionAttachAsync(lease, sink);
+            return (null, null);
+        }
+    }
+
+    private async Task CleanupFailedProjectionAttachAsync(
+        IWorkflowExecutionProjectionLease? lease,
+        IEventSink<WorkflowRunEvent> sink)
+    {
+        try
+        {
+            if (lease != null)
+                await _projectionPort.ReleaseActorProjectionAsync(lease, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Workflow live delivery release failed after attach error.");
+        }
+        finally
         {
             await DisposeSinkAsync(sink);
-            await _actorPort.DestroyRunActorAsync(runActor.Id, CancellationToken.None);
-            throw;
         }
     }
 

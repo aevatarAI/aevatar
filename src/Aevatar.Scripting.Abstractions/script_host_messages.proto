@@ -62,6 +62,8 @@ message ScriptRuntimeState {
   string last_applied_schema_version = 8;
   string last_schema_hash = 9;
   map<string, PendingScriptDefinitionQueryState> pending_definition_queries = 10;
+  string last_event_type = 11;
+  google.protobuf.Any last_domain_event_payload = 12;
 }
 
 message PendingScriptDefinitionQueryState {
@@ -120,8 +122,6 @@ message ScriptEvolutionSessionState {
   string candidate_source = 14;
   string candidate_source_hash = 15;
   string reason = 16;
-  string pending_request_id = 17;
-  string pending_reply_stream_id = 18;
 }
 
 message UpsertScriptDefinitionRequestedEvent {
@@ -301,25 +301,58 @@ message ScriptCatalogCommandRespondedEvent {
   string failure_reason = 6;
 }
 
-message QueryScriptEvolutionDecisionRequestedEvent {
+message ScriptEvolutionCommandAcceptedEvent {
+  string request_id = 1;
+  bool accepted = 2;
+  string proposal_id = 3;
+  string script_id = 4;
+  string session_actor_id = 5;
+  string failure_reason = 6;
+}
+
+message QueryScriptEvolutionProposalSnapshotRequestedEvent {
   string request_id = 1;
   string reply_stream_id = 2;
   string proposal_id = 3;
 }
 
-message ScriptEvolutionDecisionRespondedEvent {
+message ScriptEvolutionProposalSnapshotRespondedEvent {
   string request_id = 1;
   bool found = 2;
-  bool accepted = 3;
-  string proposal_id = 4;
-  string script_id = 5;
-  string base_revision = 6;
-  string candidate_revision = 7;
-  string status = 8;
-  string failure_reason = 9;
-  string definition_actor_id = 10;
-  string catalog_actor_id = 11;
-  repeated string diagnostics = 12;
+  string proposal_id = 3;
+  string script_id = 4;
+  string base_revision = 5;
+  string candidate_revision = 6;
+  bool completed = 7;
+  bool accepted = 8;
+  string status = 9;
+  string failure_reason = 10;
+  string definition_actor_id = 11;
+  string catalog_actor_id = 12;
+  repeated string diagnostics = 13;
+}
+
+message QueryScriptRuntimeSnapshotRequestedEvent {
+  string request_id = 1;
+  string reply_stream_id = 2;
+}
+
+message ScriptRuntimeSnapshotRespondedEvent {
+  string request_id = 1;
+  bool found = 2;
+  string runtime_actor_id = 3;
+  string definition_actor_id = 4;
+  string revision = 5;
+  string last_run_id = 6;
+  string last_event_type = 7;
+  google.protobuf.Any last_domain_event_payload = 8;
+  map<string, google.protobuf.Any> state_payloads = 9;
+  map<string, google.protobuf.Any> read_model_payloads = 10;
+  int64 state_version = 11;
+  string last_event_id = 12;
+  string read_model_schema_version = 13;
+  string read_model_schema_hash = 14;
+  string failure_reason = 15;
 }
 
 message ScriptEvolutionSessionStartedEvent {
@@ -330,8 +363,6 @@ message ScriptEvolutionSessionStartedEvent {
   string candidate_source = 5;
   string candidate_source_hash = 6;
   string reason = 7;
-  string request_id = 8;
-  string reply_stream_id = 9;
 }
 
 message ScriptEvolutionSessionExecutionRequestedEvent {

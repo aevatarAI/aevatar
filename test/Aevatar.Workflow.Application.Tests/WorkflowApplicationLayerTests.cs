@@ -1231,7 +1231,7 @@ internal sealed class StubWorkflowRunRequestExecutor : IWorkflowRunRequestExecut
         IActor actor,
         string actorId,
         EventEnvelope requestEnvelope,
-        IEventSink<WorkflowRunEvent> sink,
+        IEventSink<WorkflowRunEvent>? sink,
         CancellationToken ct = default)
     {
         _ = actor;

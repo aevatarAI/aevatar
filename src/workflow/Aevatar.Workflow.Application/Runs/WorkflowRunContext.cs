@@ -13,15 +13,17 @@ public sealed class WorkflowRunContext
 
     public required string WorkflowName { get; init; }
 
-    public required IEventSink<WorkflowRunEvent> Sink { get; init; }
+    public IEventSink<WorkflowRunEvent>? Sink { get; init; }
 
     public required string CommandId { get; init; }
 
     public required CommandContext CommandContext { get; init; }
 
-    public required IWorkflowExecutionProjectionLease ProjectionLease { get; init; }
+    public IWorkflowExecutionProjectionLease? ProjectionLease { get; init; }
 
     public string RunActorId => RunActor.Id;
+
+    public bool HasLiveDelivery => Sink != null && ProjectionLease != null;
 
     public WorkflowChatRunStarted ToStarted() => new(RunActorId, WorkflowName, CommandId, DefinitionActorId);
 }

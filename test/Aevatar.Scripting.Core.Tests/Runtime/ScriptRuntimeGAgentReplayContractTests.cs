@@ -1,7 +1,10 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Abstractions.Evolution;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
@@ -101,7 +104,10 @@ public class ScriptRuntimeGAgentReplayContractTests
         var capabilityComposer = new ScriptRuntimeCapabilityComposer(
             new NullAICapability(),
             new NullAgentRuntimePort(),
-            new NullLifecyclePort());
+            new NullLifecyclePort(),
+            new NullEvolutionProjectionLifecyclePort(),
+            new NullEvolutionQueryPort(),
+            new StaticAddressResolver());
 
         var orchestrator = new ScriptRuntimeExecutionOrchestrator(
             new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
@@ -277,23 +283,15 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
 
     private sealed class NullLifecyclePort : IScriptLifecyclePort
     {
-        public Task<ScriptPromotionDecision> ProposeAsync(
+        public Task<ScriptEvolutionCommandAccepted> ProposeAsync(
             ScriptEvolutionProposal proposal,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(
-                new ScriptPromotionDecision(
-                    Accepted: true,
-                    ProposalId: proposal.ProposalId,
-                    ScriptId: proposal.ScriptId,
-                    BaseRevision: proposal.BaseRevision,
-                    CandidateRevision: proposal.CandidateRevision,
-                    Status: "promoted",
-                    FailureReason: string.Empty,
-                    DefinitionActorId: "definition-1",
-                    CatalogActorId: "script-catalog",
-                    ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
+            return Task.FromResult(new ScriptEvolutionCommandAccepted(
+                proposal.ProposalId ?? string.Empty,
+                proposal.ScriptId ?? string.Empty,
+                $"script-evolution-session:{proposal.ProposalId}"));
         }
 
         public Task<string> UpsertDefinitionAsync(
@@ -324,7 +322,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             return Task.FromResult(runtimeActorId ?? "runtime-1");
         }
 
-        public Task RunRuntimeAsync(
+        public Task<ScriptRuntimeRunAccepted> RunRuntimeAsync(
             string runtimeActorId,
             string runId,
             Any? inputPayload,
@@ -340,7 +338,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             _ = definitionActorId;
             _ = requestedEventType;
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult(new ScriptRuntimeRunAccepted(runtimeActorId, runId, definitionActorId, scriptRevision));
         }
 
         public Task PromoteCatalogRevisionAsync(
@@ -393,5 +391,73 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<ScriptCatalogEntrySnapshot?>(null);
         }
+    }
+
+    private sealed class NullEvolutionProjectionLifecyclePort : IScriptEvolutionProjectionLifecyclePort
+    {
+        public bool ProjectionEnabled => false;
+
+        public Task<IScriptEvolutionProjectionLease?> EnsureActorProjectionAsync(
+            string sessionActorId,
+            string proposalId,
+            CancellationToken ct)
+        {
+            _ = sessionActorId;
+            _ = proposalId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IScriptEvolutionProjectionLease?>(null);
+        }
+
+        public Task AttachLiveSinkAsync(
+            IScriptEvolutionProjectionLease lease,
+            IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = sink;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task DetachLiveSinkAsync(
+            IScriptEvolutionProjectionLease lease,
+            IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = sink;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            IScriptEvolutionProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NullEvolutionQueryPort : IScriptEvolutionProjectionQueryPort
+    {
+        public Task<ScriptEvolutionProposalSnapshot?> GetProposalSnapshotAsync(
+            string proposalId,
+            CancellationToken ct = default)
+        {
+            _ = proposalId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<ScriptEvolutionProposalSnapshot?>(null);
+        }
+    }
+
+    private sealed class StaticAddressResolver : IScriptingActorAddressResolver
+    {
+        public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
+        public string GetRuntimeActorId(string definitionActorId, string revision) =>
+            $"script-runtime:{definitionActorId}:{revision}";
+        public string GetCatalogActorId() => "script-catalog";
+        public string GetEvolutionSessionActorId(string proposalId) => $"script-evolution-session:{proposalId}";
     }
 }

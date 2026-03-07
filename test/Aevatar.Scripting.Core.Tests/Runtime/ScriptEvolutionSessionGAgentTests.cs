@@ -49,7 +49,7 @@ public class ScriptEvolutionSessionGAgentTests
     }
 
     [Fact]
-    public async Task Start_ShouldSendDirectDecisionResponse_WhenReplyStreamProvided()
+    public async Task Start_ShouldSendCommandAck_WhenReplyStreamProvided()
     {
         var publisher = new RecordingEventPublisher();
         var agent = CreateAgent(
@@ -75,58 +75,16 @@ public class ScriptEvolutionSessionGAgentTests
             ReplyStreamId = "reply-stream",
         });
 
-        publisher.Sent.Should().BeEmpty();
-
-        await ExecutePendingAsync(agent, publisher);
-
         publisher.Sent.Should().ContainSingle();
         publisher.Sent[0].TargetActorId.Should().Be("reply-stream");
-        var response = publisher.Sent[0].Payload.Should().BeOfType<ScriptEvolutionDecisionRespondedEvent>().Subject;
-        response.RequestId.Should().Be("request-direct");
-        response.Found.Should().BeTrue();
-        response.Accepted.Should().BeTrue();
-        response.Status.Should().Be(ScriptEvolutionStatuses.Promoted);
-        response.Diagnostics.Should().Contain("compile-ok");
-    }
-
-    [Fact]
-    public async Task QueryDecision_ShouldReturnCompletedDecision()
-    {
-        var publisher = new RecordingEventPublisher();
-        var agent = CreateAgent(
-            new FixedEvolutionFlowPort(
-                ScriptEvolutionFlowResult.ValidationFailed(
-                    new ScriptEvolutionValidationReport(false, ["validation-failed"]))),
-            publisher);
-
-        await agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
-        {
-            ProposalId = "proposal-2",
-            ScriptId = "script-2",
-            BaseRevision = "rev-1",
-            CandidateRevision = "rev-2",
-            CandidateSource = "source",
-            CandidateSourceHash = "hash",
-            Reason = "validation",
-        });
+        var accepted = publisher.Sent[0].Payload.Should().BeOfType<ScriptEvolutionCommandAcceptedEvent>().Subject;
+        accepted.RequestId.Should().Be("request-direct");
+        accepted.Accepted.Should().BeTrue();
+        accepted.ProposalId.Should().Be("proposal-direct");
+        accepted.ScriptId.Should().Be("script-1");
+        accepted.SessionActorId.Should().Be(agent.Id);
 
         await ExecutePendingAsync(agent, publisher);
-        publisher.Sent.Clear();
-
-        await agent.HandleQueryScriptEvolutionDecisionRequested(new QueryScriptEvolutionDecisionRequestedEvent
-        {
-            RequestId = "request-1",
-            ReplyStreamId = "reply-stream",
-            ProposalId = "proposal-2",
-        });
-
-        publisher.Sent.Should().ContainSingle();
-        publisher.Sent[0].TargetActorId.Should().Be("reply-stream");
-        var response = publisher.Sent[0].Payload.Should().BeOfType<ScriptEvolutionDecisionRespondedEvent>().Subject;
-        response.Found.Should().BeTrue();
-        response.Accepted.Should().BeFalse();
-        response.Status.Should().Be(ScriptEvolutionStatuses.Rejected);
-        response.Diagnostics.Should().Contain("validation-failed");
     }
 
     [Fact]
@@ -157,7 +115,7 @@ public class ScriptEvolutionSessionGAgentTests
     }
 
     [Fact]
-    public async Task Start_ShouldReplayCompletedDecision_WhenSameProposalIdIsReplayedWithReplyStream()
+    public async Task Start_ShouldReplayCommandAck_WhenSameProposalIdIsReplayedWithReplyStream()
     {
         var publisher = new RecordingEventPublisher();
         var agent = CreateAgent(
@@ -188,10 +146,10 @@ public class ScriptEvolutionSessionGAgentTests
         await agent.HandleStartScriptEvolutionSessionRequested(request);
 
         publisher.Sent.Should().ContainSingle();
-        var response = publisher.Sent[0].Payload.Should().BeOfType<ScriptEvolutionDecisionRespondedEvent>().Subject;
-        response.RequestId.Should().Be("request-replay");
-        response.Found.Should().BeTrue();
-        response.Accepted.Should().BeTrue();
+        var accepted = publisher.Sent[0].Payload.Should().BeOfType<ScriptEvolutionCommandAcceptedEvent>().Subject;
+        accepted.RequestId.Should().Be("request-replay");
+        accepted.Accepted.Should().BeTrue();
+        accepted.ProposalId.Should().Be("proposal-replay");
     }
 
     [Fact]

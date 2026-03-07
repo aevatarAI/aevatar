@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -13,9 +14,12 @@ public static class ScriptCapabilityEndpoints
         var group = app.MapGroup("/api/scripts").WithTags("Scripts");
 
         group.MapPost("/evolutions/proposals", HandleProposeEvolution)
-            .Produces<ScriptPromotionDecision>(StatusCodes.Status200OK)
+            .Produces<ScriptEvolutionCommandAccepted>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status500InternalServerError);
+        group.MapGet("/evolutions/proposals/{proposalId}", HandleGetEvolutionProposal)
+            .Produces<ScriptEvolutionProposalSnapshot>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
 
         return app;
     }
@@ -36,7 +40,7 @@ public static class ScriptCapabilityEndpoints
 
         try
         {
-            var decision = await service.ProposeAsync(
+            var accepted = await service.ProposeAsync(
                 new ProposeScriptEvolutionRequest(
                     ScriptId: request.ScriptId,
                     BaseRevision: request.BaseRevision ?? string.Empty,
@@ -47,12 +51,23 @@ public static class ScriptCapabilityEndpoints
                     ProposalId: request.ProposalId ?? string.Empty),
                 ct);
 
-            return Results.Ok(decision);
+            return Results.Accepted(
+                $"/api/scripts/evolutions/proposals/{accepted.ProposalId}",
+                accepted);
         }
         catch (InvalidOperationException ex)
         {
             return ValidationError("INVALID_REQUEST", ex.Message);
         }
+    }
+
+    internal static async Task<IResult> HandleGetEvolutionProposal(
+        string proposalId,
+        IScriptEvolutionQueryApplicationService service,
+        CancellationToken ct = default)
+    {
+        var snapshot = await service.GetProposalSnapshotAsync(proposalId, ct);
+        return snapshot == null ? Results.NotFound() : Results.Ok(snapshot);
     }
 
     private static IResult ValidationError(string code, string message) =>
