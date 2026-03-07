@@ -12,7 +12,6 @@ route_mapping_violations=""
 route_mapping_base_files=(
   "src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionEventReducerBase.cs"
   "src/Aevatar.AI.Projection/Reducers/ProjectionEventApplierReducerBase.cs"
-  "demos/Aevatar.Demos.CaseProjection/Reducers/CaseProjectionEventReducerBase.cs"
 )
 
 for base_file in "${route_mapping_base_files[@]}"; do
@@ -33,8 +32,6 @@ done
 reducer_route_contracts=(
   "src/workflow/Aevatar.Workflow.Projection/Reducers|WorkflowExecutionEventReducerBase<"
   "src/Aevatar.AI.Projection/Reducers|ProjectionEventApplierReducerBase<"
-  "demos/Aevatar.Demos.CaseProjection/Reducers|CaseProjectionEventReducerBase<"
-  "demos/Aevatar.Demos.CaseProjection.Extensions.Sla/Reducers|CaseProjectionEventReducerBase<"
 )
 
 for contract in "${reducer_route_contracts[@]}"; do

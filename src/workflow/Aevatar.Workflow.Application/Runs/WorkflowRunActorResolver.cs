@@ -7,16 +7,16 @@ namespace Aevatar.Workflow.Application.Runs;
 public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 {
     private readonly IWorkflowRunActorPort _actorPort;
-    private readonly IWorkflowDefinitionRegistry _workflowRegistry;
+    private readonly IWorkflowDefinitionLookupService _workflowLookup;
     private readonly WorkflowRunBehaviorOptions _behaviorOptions;
 
     public WorkflowRunActorResolver(
         IWorkflowRunActorPort actorPort,
-        IWorkflowDefinitionRegistry workflowRegistry,
+        IWorkflowDefinitionLookupService workflowLookup,
         WorkflowRunBehaviorOptions? behaviorOptions = null)
     {
         _actorPort = actorPort;
-        _workflowRegistry = workflowRegistry;
+        _workflowLookup = workflowLookup;
         _behaviorOptions = behaviorOptions ?? new WorkflowRunBehaviorOptions();
     }
 
@@ -122,7 +122,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
         if (!hasInlineWorkflowYamls)
         {
-            var yaml = _workflowRegistry.GetYaml(workflowNameForRun);
+            var yaml = _workflowLookup.GetYaml(workflowNameForRun);
             if (yaml == null)
             {
                 return new WorkflowActorResolutionResult(

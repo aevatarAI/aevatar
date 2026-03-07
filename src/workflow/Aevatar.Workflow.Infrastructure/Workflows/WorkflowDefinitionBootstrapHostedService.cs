@@ -7,18 +7,18 @@ namespace Aevatar.Workflow.Infrastructure.Workflows;
 
 internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
 {
-    private readonly IWorkflowDefinitionRegistry _registry;
+    private readonly IWorkflowDefinitionCatalog _catalog;
     private readonly WorkflowDefinitionFileLoader _loader;
     private readonly IOptions<WorkflowDefinitionFileSourceOptions> _options;
     private readonly ILogger<WorkflowDefinitionBootstrapHostedService> _logger;
 
     public WorkflowDefinitionBootstrapHostedService(
-        IWorkflowDefinitionRegistry registry,
+        IWorkflowDefinitionCatalog catalog,
         WorkflowDefinitionFileLoader loader,
         IOptions<WorkflowDefinitionFileSourceOptions> options,
         ILogger<WorkflowDefinitionBootstrapHostedService> logger)
     {
-        _registry = registry;
+        _catalog = catalog;
         _loader = loader;
         _options = options;
         _logger = logger;
@@ -28,7 +28,7 @@ internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
     {
         cancellationToken.ThrowIfCancellationRequested();
         _loader.LoadInto(
-            _registry,
+            _catalog,
             _options.Value.WorkflowDirectories,
             _logger,
             _options.Value.DuplicatePolicy);

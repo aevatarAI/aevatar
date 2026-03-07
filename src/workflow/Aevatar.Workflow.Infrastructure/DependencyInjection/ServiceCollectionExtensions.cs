@@ -25,7 +25,7 @@ public static class ServiceCollectionExtensions
         // Infrastructure must use Replace to override it.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>());
         services.TryAddSingleton<IWorkflowRunActorPort, WorkflowRunActorPort>();
-        services.TryAddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
+        services.TryAddSingleton<IWorkflowDefinitionResolver, CatalogWorkflowDefinitionResolver>();
         return services;
     }
 

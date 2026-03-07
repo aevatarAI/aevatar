@@ -29,8 +29,8 @@ Aevatar.Workflow.Application/
 ├── Queries/
 │   └── WorkflowExecutionQueryApplicationService.cs # agents/workflows/runs 查询门面
 ├── Workflows/
-│   ├── WorkflowDefinitionRegistry.cs     # 名称 -> YAML 内存注册表
-│   └── WorkflowDefinitionRegistryOptions.cs
+│   ├── InMemoryWorkflowDefinitionCatalog.cs     # 名称 -> YAML 内存注册表
+│   └── InMemoryWorkflowDefinitionCatalogOptions.cs
 └── Reporting/
     └── NoopWorkflowExecutionReportArtifactSink.cs  # 默认空实现
 ```
@@ -62,7 +62,7 @@ Aevatar.Workflow.Application/
 - `WorkflowExecutionQueryApplicationService`
   - `agents/workflows/runs` 查询门面（经 `IWorkflowExecutionProjectionQueryPort` 读取读侧模型）。
   - `ListAgentsAsync` 仅返回 `WorkflowGAgent`，不扫描暴露非 Workflow actor。
-- `WorkflowDefinitionRegistry`
+- `InMemoryWorkflowDefinitionCatalog`
   - 维护 workflow 名称到 YAML 的内存注册表。
 
 ## 分层约束
@@ -87,7 +87,7 @@ services.AddWorkflowApplication(
 注册内容：
 - `IWorkflowChatRunApplicationService`
 - `IWorkflowExecutionQueryApplicationService`
-- `IWorkflowDefinitionRegistry`
+- `IWorkflowDefinitionCatalog`
 - `WorkflowRunBehaviorOptions` + `WorkflowDirectFallbackPolicy`
 - `IWorkflowExecutionRunOrchestrator` + `IWorkflowExecutionTopologyResolver`
 - `IWorkflowRunActorResolver`、`IWorkflowRunRequestExecutor`、`IWorkflowRunOutputStreamer`

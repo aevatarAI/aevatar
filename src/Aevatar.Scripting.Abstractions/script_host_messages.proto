@@ -101,10 +101,11 @@ message ScriptEvolutionProposalState {
   string promoted_definition_actor_id = 11;
   string promoted_revision = 12;
   string reason = 13;
+  string promoted_catalog_actor_id = 14;
 }
 
 message ScriptEvolutionManagerState {
-  map<string, ScriptEvolutionProposalState> proposals = 1;
+  map<string, string> proposal_session_actor_ids = 1;
   map<string, string> latest_proposal_by_script = 2;
   int64 last_applied_event_version = 3;
   string last_event_id = 4;
@@ -314,6 +315,12 @@ message ScriptEvolutionSessionCompletedEvent {
   string definition_actor_id = 5;
   string catalog_actor_id = 6;
   repeated string diagnostics = 7;
+}
+
+message ScriptEvolutionProposalIndexedEvent {
+  string proposal_id = 1;
+  string script_id = 2;
+  string session_actor_id = 3;
 }
 
 message ScriptEvolutionProposedEvent {

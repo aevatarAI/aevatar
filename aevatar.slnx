@@ -1,9 +1,5 @@
 <Solution>
   <Folder Name="/demos/">
-    <Project Path="demos\Aevatar.Demos.CaseProjection.Abstractions\Aevatar.Demos.CaseProjection.Abstractions.csproj" />
-    <Project Path="demos\Aevatar.Demos.CaseProjection.Extensions.Sla\Aevatar.Demos.CaseProjection.Extensions.Sla.csproj" />
-    <Project Path="demos\Aevatar.Demos.CaseProjection.Host\Aevatar.Demos.CaseProjection.Host.csproj" />
-    <Project Path="demos\Aevatar.Demos.CaseProjection\Aevatar.Demos.CaseProjection.csproj" />
     <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />
     <Project Path="demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj" />
     <Project Path="demos\Aevatar.Demos.Workflow\Aevatar.Demos.Workflow.csproj" />

@@ -19,33 +19,36 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddWorkflowApplication(
         this IServiceCollection services,
-        Action<WorkflowDefinitionRegistryOptions>? configureRegistry = null,
+        Action<InMemoryWorkflowDefinitionCatalogOptions>? configureCatalog = null,
         Action<WorkflowRunBehaviorOptions>? configureRunBehavior = null)
     {
-        var options = new WorkflowDefinitionRegistryOptions();
-        configureRegistry?.Invoke(options);
+        var options = new InMemoryWorkflowDefinitionCatalogOptions();
+        configureCatalog?.Invoke(options);
         var runBehaviorOptions = new WorkflowRunBehaviorOptions();
         configureRunBehavior?.Invoke(runBehaviorOptions);
+        services.AddSingleton(options);
         services.AddSingleton(runBehaviorOptions);
 
-        services.AddSingleton<IWorkflowDefinitionRegistry>(_ =>
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowDefinitionSeedSource, BuiltInWorkflowDefinitionSeedSource>());
+        services.AddSingleton<InMemoryWorkflowDefinitionCatalog>(sp =>
         {
-            var registry = new WorkflowDefinitionRegistry();
-            if (options.RegisterBuiltInDirectWorkflow)
-                registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
-            if (options.RegisterBuiltInAutoWorkflow)
-                registry.Register("auto", WorkflowDefinitionRegistry.BuiltInAutoYaml);
-            if (options.RegisterBuiltInAutoReviewWorkflow)
-                registry.Register("auto_review", WorkflowDefinitionRegistry.BuiltInAutoReviewYaml);
+            var catalog = new InMemoryWorkflowDefinitionCatalog();
+            foreach (var seedSource in sp.GetServices<IWorkflowDefinitionSeedSource>())
+            {
+                foreach (var (name, yaml) in seedSource.GetSeedDefinitions())
+                    catalog.Upsert(name, yaml);
+            }
 
-            return registry;
+            return catalog;
         });
+        services.AddSingleton<IWorkflowDefinitionCatalog>(sp => sp.GetRequiredService<InMemoryWorkflowDefinitionCatalog>());
+        services.AddSingleton<IWorkflowDefinitionLookupService>(sp => sp.GetRequiredService<InMemoryWorkflowDefinitionCatalog>());
 
         services.AddSingleton<WorkflowDirectFallbackPolicy>();
         services.AddSingleton<IWorkflowRunActorResolver>(sp =>
             new WorkflowRunActorResolver(
                 sp.GetRequiredService<IWorkflowRunActorPort>(),
-                sp.GetRequiredService<IWorkflowDefinitionRegistry>(),
+                sp.GetRequiredService<IWorkflowDefinitionLookupService>(),
                 sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
         services.TryAddSingleton<ICommandContextPolicy, WorkflowCommandContextPolicy>();
         services.AddSingleton<ICommandEnvelopeFactory<WorkflowChatRunRequest>, WorkflowChatRequestEnvelopeFactory>();

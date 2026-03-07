@@ -89,8 +89,11 @@ public class ScriptAutonomousEvolutionE2ETests
         (await runtime.ExistsAsync(newDefinitionActorId)).Should().BeTrue();
 
         var manager = ((ScriptEvolutionManagerGAgent)(await runtime.GetAsync("script-evolution-manager"))!.Agent);
-        manager.State.Proposals.Should().ContainKey("proposal-run-autonomy-1");
-        manager.State.Proposals["proposal-run-autonomy-1"].Status.Should().Be("promoted");
+        manager.State.ProposalSessionActorIds.Should().ContainKey("proposal-run-autonomy-1");
+
+        var session = (ScriptEvolutionSessionGAgent)(await runtime.GetAsync("script-evolution-session:proposal-run-autonomy-1"))!.Agent;
+        session.State.Status.Should().Be("promoted");
+        session.State.Accepted.Should().BeTrue();
 
         var catalog = ((ScriptCatalogGAgent)(await runtime.GetAsync("script-catalog"))!.Agent);
         catalog.State.Entries.Should().ContainKey("worker-script");

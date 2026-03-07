@@ -1,71 +1,13 @@
 using System.Text;
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Demos.Workflow.Web;
 
-public sealed class DemoCsvMarkdownModule : IEventModule, IWorkflowPrimitiveHandler
+public sealed class DemoCsvMarkdownModule : IWorkflowPrimitiveHandler
 {
     public string Name => "demo_csv_markdown";
-    public int Priority => -10;
-
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
-        envelope.Payload?.Is(ChatRequestEvent.Descriptor) == true;
-
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
-    {
-        var payload = envelope.Payload;
-        if (payload == null)
-            return;
-
-        if (payload.Is(StepRequestEvent.Descriptor))
-        {
-            var request = payload.Unpack<StepRequestEvent>();
-            if (!IsSupportedStepType(request.StepType))
-                return;
-
-            var input = request.Input ?? string.Empty;
-            var delimiter = request.Parameters.GetValueOrDefault("delimiter", ",");
-            var hasHeader = !string.Equals(request.Parameters.GetValueOrDefault("has_header", "true"), "false",
-                StringComparison.OrdinalIgnoreCase);
-
-            await ctx.PublishAsync(new StepCompletedEvent
-            {
-                StepId = request.StepId,
-                RunId = request.RunId,
-                Success = true,
-                Output = ConvertCsvToMarkdown(input, delimiter, hasHeader),
-            }, EventDirection.Self, ct);
-            return;
-        }
-
-        if (!payload.Is(ChatRequestEvent.Descriptor))
-            return;
-
-        // Only intercept role-level ChatRequest events. Root workflow actor ChatRequest
-        // must continue into WorkflowGAgent -> StartWorkflow flow.
-        if (ctx.AgentId.IndexOf(':', StringComparison.Ordinal) < 0)
-            return;
-
-        var chatRequest = payload.Unpack<ChatRequestEvent>();
-        var table = ConvertCsvToMarkdown(chatRequest.Prompt ?? string.Empty, ",", hasHeader: true);
-        var response = new ChatResponseEvent
-        {
-            SessionId = chatRequest.SessionId ?? string.Empty,
-            Content = $"[demo_csv_markdown role module]\n{table}",
-        };
-
-        await ctx.PublishAsync(response, EventDirection.Up, ct);
-
-        // Replace payload to prevent the default RoleGAgent ChatRequest handler from invoking LLM.
-        envelope.Payload = Any.Pack(response);
-    }
 
     public Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
     {

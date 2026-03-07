@@ -8,7 +8,6 @@ namespace Aevatar.Scripting.Core.Ports;
 public interface IScriptEvolutionDecisionFallbackPort
 {
     Task<ScriptPromotionDecision?> TryResolveAsync(
-        string managerActorId,
         string proposalId,
         CancellationToken ct);
 }

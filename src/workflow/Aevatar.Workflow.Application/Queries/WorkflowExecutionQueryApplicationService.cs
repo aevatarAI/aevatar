@@ -6,14 +6,14 @@ namespace Aevatar.Workflow.Application.Queries;
 
 public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
 {
-    private readonly IWorkflowDefinitionRegistry _workflowRegistry;
+    private readonly IWorkflowDefinitionLookupService _workflowLookup;
     private readonly IWorkflowExecutionProjectionQueryPort _projectionPort;
 
     public WorkflowExecutionQueryApplicationService(
-        IWorkflowDefinitionRegistry workflowRegistry,
+        IWorkflowDefinitionLookupService workflowLookup,
         IWorkflowExecutionProjectionQueryPort projectionPort)
     {
-        _workflowRegistry = workflowRegistry;
+        _workflowLookup = workflowLookup;
         _projectionPort = projectionPort;
     }
 
@@ -34,7 +34,7 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
             .ToList();
     }
 
-    public IReadOnlyList<string> ListWorkflows() => _workflowRegistry.GetNames();
+    public IReadOnlyList<string> ListWorkflows() => _workflowLookup.GetNames();
 
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
     {

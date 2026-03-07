@@ -103,14 +103,20 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         (await runtime.ExistsAsync(evolvedBRuntimeId)).Should().BeTrue();
 
         var manager = (ScriptEvolutionManagerGAgent)(await runtime.GetAsync("script-evolution-manager"))!.Agent;
-        manager.State.Proposals.Should().ContainKey("proposal-a-2-run-multi-script-1");
-        manager.State.Proposals.Should().ContainKey("proposal-a-3-run-multi-script-1");
-        manager.State.Proposals.Should().ContainKey("proposal-b-2-run-multi-script-1");
-        manager.State.Proposals.Should().ContainKey("proposal-b-3-run-multi-script-1");
-        manager.State.Proposals["proposal-a-2-run-multi-script-1"].Status.Should().Be("promoted");
-        manager.State.Proposals["proposal-a-3-run-multi-script-1"].Status.Should().Be("promoted");
-        manager.State.Proposals["proposal-b-2-run-multi-script-1"].Status.Should().Be("promoted");
-        manager.State.Proposals["proposal-b-3-run-multi-script-1"].Status.Should().Be("promoted");
+        manager.State.ProposalSessionActorIds.Should().ContainKeys(
+            "proposal-a-2-run-multi-script-1",
+            "proposal-a-3-run-multi-script-1",
+            "proposal-b-2-run-multi-script-1",
+            "proposal-b-3-run-multi-script-1");
+
+        ((ScriptEvolutionSessionGAgent)(await runtime.GetAsync("script-evolution-session:proposal-a-2-run-multi-script-1"))!.Agent)
+            .State.Status.Should().Be("promoted");
+        ((ScriptEvolutionSessionGAgent)(await runtime.GetAsync("script-evolution-session:proposal-a-3-run-multi-script-1"))!.Agent)
+            .State.Status.Should().Be("promoted");
+        ((ScriptEvolutionSessionGAgent)(await runtime.GetAsync("script-evolution-session:proposal-b-2-run-multi-script-1"))!.Agent)
+            .State.Status.Should().Be("promoted");
+        ((ScriptEvolutionSessionGAgent)(await runtime.GetAsync("script-evolution-session:proposal-b-3-run-multi-script-1"))!.Agent)
+            .State.Status.Should().Be("promoted");
 
         var catalog = (ScriptCatalogGAgent)(await runtime.GetAsync("script-catalog"))!.Agent;
         catalog.State.Entries.Should().ContainKey("worker-a-script");
@@ -191,10 +197,13 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         (await runtime.ExistsAsync(v3RuntimeId)).Should().BeTrue();
 
         var manager = (ScriptEvolutionManagerGAgent)(await runtime.GetAsync("script-evolution-manager"))!.Agent;
-        manager.State.Proposals.Should().ContainKey("self-proposal-v2-run-self-1");
-        manager.State.Proposals.Should().ContainKey("self-proposal-v3-self-v2-run-run-self-1");
-        manager.State.Proposals["self-proposal-v2-run-self-1"].Status.Should().Be("promoted");
-        manager.State.Proposals["self-proposal-v3-self-v2-run-run-self-1"].Status.Should().Be("promoted");
+        manager.State.ProposalSessionActorIds.Should().ContainKeys(
+            "self-proposal-v2-run-self-1",
+            "self-proposal-v3-self-v2-run-run-self-1");
+        ((ScriptEvolutionSessionGAgent)(await runtime.GetAsync("script-evolution-session:self-proposal-v2-run-self-1"))!.Agent)
+            .State.Status.Should().Be("promoted");
+        ((ScriptEvolutionSessionGAgent)(await runtime.GetAsync("script-evolution-session:self-proposal-v3-self-v2-run-run-self-1"))!.Agent)
+            .State.Status.Should().Be("promoted");
 
         var catalog = (ScriptCatalogGAgent)(await runtime.GetAsync("script-catalog"))!.Agent;
         catalog.State.Entries.Should().ContainKey("self-evolving-script");

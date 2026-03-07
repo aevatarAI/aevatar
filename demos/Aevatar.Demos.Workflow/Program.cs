@@ -254,9 +254,9 @@ if (Directory.Exists(workflowRoot))
         }
     }
 }
-var workflowRegistry = new WorkflowDefinitionRegistry();
+var workflowRegistry = new InMemoryWorkflowDefinitionCatalog();
 foreach (var (workflowName, workflowYaml) in workflowDefinitions)
-    workflowRegistry.Register(workflowName, workflowYaml);
+    workflowRegistry.Upsert(workflowName, workflowYaml);
 
 // ─── Build services ───
 
@@ -266,8 +266,8 @@ services.AddAevatarRuntime();
 services.AddAevatarConfig();
 services.AddAevatarWorkflow();
 services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
-services.AddSingleton<IWorkflowDefinitionRegistry>(workflowRegistry);
-services.AddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
+services.AddSingleton<IWorkflowDefinitionCatalog>(workflowRegistry);
+services.AddSingleton<IWorkflowDefinitionResolver, CatalogWorkflowDefinitionResolver>();
 
 if (needsLlm && !string.IsNullOrEmpty(apiKey))
 {

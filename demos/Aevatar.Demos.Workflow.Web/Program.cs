@@ -16,7 +16,6 @@ using Aevatar.Configuration;
 using Aevatar.Demos.Workflow.Web;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Workflow.Abstractions;
@@ -71,7 +70,6 @@ builder.Services.AddWorkflowDefinitionFileSource(options =>
 builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, HttpConnectorBuilder>());
 builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, CliConnectorBuilder>());
 builder.Services.AddSingleton<IWorkflowModulePack, DemoWorkflowModulePack>();
-builder.Services.Replace(ServiceDescriptor.Singleton<IEventModuleFactory, DemoWorkflowModuleFactory>());
 builder.Services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
 var config = new ConfigurationBuilder()
@@ -171,20 +169,6 @@ var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCas
     "01_transform", "02_guard", "03_conditional", "04_switch",
     "05_assign", "06_retrieve_facts", "07_pipeline",
     "17_demo_template", "18_demo_csv_markdown", "19_demo_json_pick",
-    "20_role_event_module_template", "21_role_event_module_csv_markdown", "22_role_event_module_json_pick",
-    "23_role_event_module_multiplex_template", "24_role_event_module_multiplex_csv", "25_role_event_module_multiplex_json",
-    "26_role_event_module_multi_role_chain",
-    "27_role_event_module_extensions_template", "28_role_event_module_extensions_csv",
-    "29_role_event_module_top_level_overrides_extensions",
-    "30_role_event_module_extensions_multi_role_chain",
-    "31_role_event_module_extensions_multiplex_json",
-    "32_role_event_module_top_level_overrides_extensions_multiplex",
-    "33_role_event_module_no_routes_template",
-    "34_role_event_module_route_dsl_csv",
-    "35_role_event_module_unknown_ignored_template",
-    "36_mixed_step_json_pick_then_role_template",
-    "37_mixed_step_csv_markdown_then_role_template",
-    "38_mixed_step_template_then_role_csv_markdown",
     "39_human_input_basic_auto_resume",
     "40_human_approval_approved_auto_resume",
     "41_human_approval_rejected_fail_auto_resume",
@@ -230,25 +214,6 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
     ["17_demo_template"] = "payment_api_timeout",
     ["18_demo_csv_markdown"] = "service,error_rate,latency_ms\ngateway,1.2,210\ncheckout,0.3,120",
     ["19_demo_json_pick"] = """{"incident":{"id":"INC-2026-001","owner":{"team":"sre","user":"alice"}},"severity":"high"}""",
-    ["20_role_event_module_template"] = "checkout_db_latency_spike",
-    ["21_role_event_module_csv_markdown"] = "service,error_rate,latency_ms\nauth,0.8,180\nbilling,1.4,260",
-    ["22_role_event_module_json_pick"] = """{"incident":{"id":"INC-2026-007","owner":{"team":"platform","user":"bob"}},"severity":"critical"}""",
-    ["23_role_event_module_multiplex_template"] = "order_service_high_latency",
-    ["24_role_event_module_multiplex_csv"] = "service,error_rate,latency_ms\napi,1.1,240\nworker,0.5,170",
-    ["25_role_event_module_multiplex_json"] = """{"incident":{"id":"INC-2026-011","owner":{"team":"infra","user":"charlie"}},"severity":"high"}""",
-    ["26_role_event_module_multi_role_chain"] = "checkout_timeout_spike",
-    ["27_role_event_module_extensions_template"] = "payments_retry_exhausted",
-    ["28_role_event_module_extensions_csv"] = "service,error_rate,latency_ms\nsearch,0.6,150\nrecommendation,1.3,280",
-    ["29_role_event_module_top_level_overrides_extensions"] = """{"incident":{"id":"INC-2026-023","owner":{"team":"runtime","user":"eve"}},"severity":"critical"}""",
-    ["30_role_event_module_extensions_multi_role_chain"] = "payment_timeout_burst",
-    ["31_role_event_module_extensions_multiplex_json"] = """{"incident":{"id":"INC-2026-033","owner":{"team":"gateway","user":"gina"}},"severity":"high"}""",
-    ["32_role_event_module_top_level_overrides_extensions_multiplex"] = "service,error_rate,latency_ms\nedge,1.0,210\npayment,1.8,320",
-    ["33_role_event_module_no_routes_template"] = "inventory_sync_lag",
-    ["34_role_event_module_route_dsl_csv"] = "service,error_rate,latency_ms\ncatalog,0.4,140\ncheckout,1.6,300",
-    ["35_role_event_module_unknown_ignored_template"] = "payments_duplicate_callback",
-    ["36_mixed_step_json_pick_then_role_template"] = """{"incident":{"id":"INC-2026-041","owner":{"team":"data","user":"harry"}},"severity":"high"}""",
-    ["37_mixed_step_csv_markdown_then_role_template"] = "service,error_rate,latency_ms\nsearch,0.7,160\nfeed,1.4,295",
-    ["38_mixed_step_template_then_role_csv_markdown"] = "1.3",
     ["39_human_input_basic_auto_resume"] = "checkout request missing approver and rollback plan",
     ["40_human_approval_approved_auto_resume"] = "deploy release v1.2.3 to production",
     ["41_human_approval_rejected_fail_auto_resume"] = "delete production database",
@@ -668,7 +633,7 @@ static object[] BuildPrimitivesCatalog()
         },
         new {
             name = "demo_template", aliases = new[] { "demo_template", "demo_format" }, category = "data",
-            description = "Demo custom module. Renders a text template for StepRequest, and can short-circuit role ChatRequest when attached via roles.event_modules.",
+            description = "Demo custom primitive. Renders a text template for a workflow step.",
             parameters = new object[] {
                 P("template", "Template text. Supports {{input}} and {{param.<key>}} placeholders", "Incident {{input}} owned by {{param.owner}}"),
                 P("prefix", "Optional prefix to prepend to rendered output"),
@@ -678,7 +643,7 @@ static object[] BuildPrimitivesCatalog()
         },
         new {
             name = "demo_csv_markdown", aliases = new[] { "demo_csv_markdown", "demo_table" }, category = "data",
-            description = "Demo custom module. Converts CSV to markdown table for StepRequest, and can respond to role ChatRequest with deterministic table output.",
+            description = "Demo custom primitive. Converts CSV to markdown table for a workflow step.",
             parameters = new object[] {
                 P("delimiter", "CSV delimiter", ","),
                 P("has_header", "Treat first line as header", "true", "true, false"),
@@ -686,7 +651,7 @@ static object[] BuildPrimitivesCatalog()
         },
         new {
             name = "demo_json_pick", aliases = new[] { "demo_json_pick", "demo_json_path" }, category = "data",
-            description = "Demo custom module. Extracts a nested JSON field for StepRequest, and can process role ChatRequest JSON payload deterministically.",
+            description = "Demo custom primitive. Extracts a nested JSON field for a workflow step.",
             parameters = new object[] {
                 P("path", "Dot path to extract", "incident.owner.team"),
             },
@@ -1197,6 +1162,8 @@ static Dictionary<string, WorkflowFileEntry> DiscoverWorkflowFiles(IEnumerable<W
                      .OrderBy(Path.GetFileNameWithoutExtension, StringComparer.OrdinalIgnoreCase))
         {
             var workflowName = Path.GetFileNameWithoutExtension(file);
+            if (IsLegacyRoleEventModuleWorkflow(workflowName))
+                continue;
             if (workflowFiles.ContainsKey(workflowName))
                 continue;
 
@@ -1205,6 +1172,17 @@ static Dictionary<string, WorkflowFileEntry> DiscoverWorkflowFiles(IEnumerable<W
     }
 
     return workflowFiles;
+}
+
+static bool IsLegacyRoleEventModuleWorkflow(string workflowName)
+{
+    if (string.IsNullOrWhiteSpace(workflowName))
+        return false;
+
+    return workflowName.Contains("role_event_module", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(workflowName, "36_mixed_step_json_pick_then_role_template", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(workflowName, "37_mixed_step_csv_markdown_then_role_template", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(workflowName, "38_mixed_step_template_then_role_csv_markdown", StringComparison.OrdinalIgnoreCase);
 }
 
 static bool TryResolveWorkflowFile(
@@ -1350,17 +1328,6 @@ static List<string> ValidateWorkflowDefinitionForRuntime(WorkflowDefinition defi
     var knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
         modulePacks.SelectMany(pack => pack.Modules).SelectMany(module => module.Names));
 
-    var moduleFactory = services.GetRequiredService<IEventModuleFactory>();
-    foreach (var stepType in EnumerateReferencedStepTypes(definition.Steps))
-    {
-        var canonical = WorkflowPrimitiveCatalog.ToCanonicalType(stepType);
-        if (string.IsNullOrWhiteSpace(canonical) || knownStepTypes.Contains(canonical))
-            continue;
-
-        if (moduleFactory.TryCreate(canonical, out _))
-            knownStepTypes.Add(canonical);
-    }
-
     return WorkflowValidator.Validate(
         definition,
         new WorkflowValidator.WorkflowValidationOptions
@@ -1369,29 +1336,6 @@ static List<string> ValidateWorkflowDefinitionForRuntime(WorkflowDefinition defi
             KnownStepTypes = knownStepTypes,
         },
         availableWorkflowNames: null);
-}
-
-static IEnumerable<string> EnumerateReferencedStepTypes(IEnumerable<StepDefinition> steps)
-{
-    foreach (var step in steps)
-    {
-        yield return step.Type;
-
-        foreach (var (key, value) in step.Parameters)
-        {
-            if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
-                !string.IsNullOrWhiteSpace(value))
-            {
-                yield return value;
-            }
-        }
-
-        if (step.Children is { Count: > 0 })
-        {
-            foreach (var childType in EnumerateReferencedStepTypes(step.Children))
-                yield return childType;
-        }
-    }
 }
 
 static int? TryParseWorkflowIndex(string workflowName)
@@ -1436,12 +1380,7 @@ roles:                  # optional — LLM persona definitions
     max_tool_rounds: int # optional
     max_history_messages: int # optional
     stream_buffer_capacity: int # optional
-    event_modules: string # optional, comma-separated module names
-    event_routes: string  # optional, route DSL/YAML list
     connectors: [string]  # optional
-    extensions:           # optional compatibility container
-      event_modules: string
-      event_routes: string
 steps:                  # ordered step list
   - id: string          # required — unique
     type: string        # default "llm_call"
@@ -1461,8 +1400,7 @@ steps:                  # ordered step list
 - For multi-stage workflows, prefer specialized roles (e.g. researcher, reviewer, writer) over one generic role.
 - All role-referenced steps must point to existing role ids (`target_role` or `role`).
 - Runtime tuning fields are optional: `temperature`, `max_tokens`, `max_tool_rounds`,
-  `max_history_messages`, `stream_buffer_capacity`, `event_modules`,
-  `event_routes`, `connectors`.
+  `max_history_messages`, `stream_buffer_capacity`, `connectors`.
 - Prefer not to set `provider` and `model` unless the user explicitly asks.
 - If user explicitly wants a single-role workflow, keep exactly one role.
 - If workflow is purely deterministic and has no role-driven AI steps, roles can be omitted.
@@ -1500,7 +1438,6 @@ steps:                  # ordered step list
 - All parameter values are strings (even numbers: "3" not 3).
 - type defaults to "llm_call" when omitted.
 - target_role and role are aliases; target_role takes precedence.
-- Role fields `event_modules/event_routes` support both top-level and `extensions.*`; top-level has higher priority.
 - For workflows using `llm_call` / `evaluate` / `reflect`, always provide matching roles.
 - When user customizes roles, preserve requested role names/ids and wire all related steps correctly.
 - Steps flow: next → explicit jump; branches → conditional routing; neither → sequential (list order).

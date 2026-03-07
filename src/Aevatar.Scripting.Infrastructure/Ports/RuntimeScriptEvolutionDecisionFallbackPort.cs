@@ -9,40 +9,42 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
 {
     private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly RuntimeScriptQueryClient _queryClient;
+    private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly TimeSpan _decisionTimeout;
     private readonly QueryScriptEvolutionDecisionRequestAdapter _queryAdapter = new();
 
     public RuntimeScriptEvolutionDecisionFallbackPort(
         RuntimeScriptActorAccessor actorAccessor,
         RuntimeScriptQueryClient queryClient,
+        IScriptingActorAddressResolver addressResolver,
         IScriptingPortTimeouts timeouts)
     {
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
+        _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
         _decisionTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
             .GetEvolutionDecisionTimeout();
     }
 
     public async Task<ScriptPromotionDecision?> TryResolveAsync(
-        string managerActorId,
         string proposalId,
         CancellationToken ct)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(managerActorId);
         ArgumentException.ThrowIfNullOrWhiteSpace(proposalId);
 
-        var managerActor = await _actorAccessor.GetAsync(managerActorId);
-        if (managerActor == null)
+        var sessionActorId = _addressResolver.GetEvolutionSessionActorId(proposalId);
+        var sessionActor = await _actorAccessor.GetAsync(sessionActorId);
+        if (sessionActor == null)
             return null;
 
         ScriptEvolutionDecisionRespondedEvent? response;
         try
         {
             response = await _queryClient.QueryActorAsync<ScriptEvolutionDecisionRespondedEvent>(
-                managerActor,
+                sessionActor,
                 ScriptingQueryRouteConventions.EvolutionReplyStreamPrefix,
                 _decisionTimeout,
-                (requestId, replyStreamId) => _queryAdapter.Map(managerActorId, requestId, replyStreamId, proposalId),
+                (requestId, replyStreamId) => _queryAdapter.Map(sessionActorId, requestId, replyStreamId, proposalId),
                 static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
                 ScriptingQueryRouteConventions.BuildEvolutionDecisionTimeoutMessage,
                 ct);

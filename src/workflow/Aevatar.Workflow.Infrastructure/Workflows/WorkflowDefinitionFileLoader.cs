@@ -6,17 +6,17 @@ namespace Aevatar.Workflow.Infrastructure.Workflows;
 public sealed class WorkflowDefinitionFileLoader
 {
     public int LoadInto(
-        IWorkflowDefinitionRegistry registry,
+        IWorkflowDefinitionCatalog catalog,
         IEnumerable<string> directories,
         ILogger logger,
         WorkflowDefinitionDuplicatePolicy duplicatePolicy = WorkflowDefinitionDuplicatePolicy.Throw)
     {
-        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(directories);
         ArgumentNullException.ThrowIfNull(logger);
 
         var loaded = 0;
-        var registeredNames = new HashSet<string>(registry.GetNames(), StringComparer.OrdinalIgnoreCase);
+        var registeredNames = new HashSet<string>(catalog.GetNames(), StringComparer.OrdinalIgnoreCase);
         var normalizedDirectories = directories
             .Where(static directory => !string.IsNullOrWhiteSpace(directory))
             .Select(static directory => Path.GetFullPath(directory))
@@ -56,7 +56,7 @@ public sealed class WorkflowDefinitionFileLoader
                 }
 
                 var yaml = File.ReadAllText(file);
-                registry.Register(name, yaml);
+                catalog.Upsert(name, yaml);
                 loaded++;
             }
         }

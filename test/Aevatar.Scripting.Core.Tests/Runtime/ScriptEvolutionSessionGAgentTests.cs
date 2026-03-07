@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using FluentAssertions;
@@ -11,15 +12,18 @@ namespace Aevatar.Scripting.Core.Tests.Runtime;
 public class ScriptEvolutionSessionGAgentTests
 {
     [Fact]
-    public async Task Start_ShouldDispatchProposeToManagerActor()
+    public async Task Start_ShouldPersistPromotedDecision_AndIndexManager()
     {
         var publisher = new RecordingEventPublisher();
-        var agent = new ScriptEvolutionSessionGAgent(new StaticAddressResolver())
-        {
-            EventPublisher = publisher,
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptEvolutionSessionState>(
-                new InMemoryEventStore()),
-        };
+        var agent = CreateAgent(
+            new FixedEvolutionFlowPort(
+                ScriptEvolutionFlowResult.Promoted(
+                    new ScriptEvolutionValidationReport(true, ["compile-ok"]),
+                    new ScriptPromotionResult(
+                        DefinitionActorId: "script-definition:script-1",
+                        CatalogActorId: "script-catalog",
+                        PromotedRevision: "rev-2"))),
+            publisher);
 
         await agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
         {
@@ -34,21 +38,24 @@ public class ScriptEvolutionSessionGAgentTests
 
         publisher.Sent.Should().ContainSingle();
         publisher.Sent[0].TargetActorId.Should().Be("script-evolution-manager");
-        var propose = publisher.Sent[0].Payload.Should().BeOfType<ProposeScriptEvolutionRequestedEvent>().Subject;
-        propose.ProposalId.Should().Be("proposal-1");
-        propose.CallbackActorId.Should().Be(agent.Id);
-        propose.CallbackRequestId.Should().Be("proposal-1");
+        publisher.Sent[0].Payload.Should().BeOfType<ScriptEvolutionProposalIndexedEvent>();
 
         agent.State.ProposalId.Should().Be("proposal-1");
-        agent.State.ScriptId.Should().Be("script-1");
-        agent.State.Completed.Should().BeFalse();
+        agent.State.Completed.Should().BeTrue();
+        agent.State.Accepted.Should().BeTrue();
+        agent.State.Status.Should().Be(ScriptEvolutionStatuses.Promoted);
+        agent.State.DefinitionActorId.Should().Be("script-definition:script-1");
     }
 
     [Fact]
-    public async Task Decision_ShouldPersistSessionCompletionWithoutDirectStreamPush()
+    public async Task QueryDecision_ShouldReturnCompletedDecision()
     {
         var publisher = new RecordingEventPublisher();
-        var agent = CreateAgent(publisher);
+        var agent = CreateAgent(
+            new FixedEvolutionFlowPort(
+                ScriptEvolutionFlowResult.ValidationFailed(
+                    new ScriptEvolutionValidationReport(false, ["validation-failed"]))),
+            publisher);
 
         await agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
         {
@@ -58,66 +65,39 @@ public class ScriptEvolutionSessionGAgentTests
             CandidateRevision = "rev-2",
             CandidateSource = "source",
             CandidateSourceHash = "hash",
-            Reason = "rollout",
+            Reason = "validation",
         });
 
         publisher.Sent.Clear();
 
-        await agent.HandleScriptEvolutionDecisionResponded(new ScriptEvolutionDecisionRespondedEvent
+        await agent.HandleQueryScriptEvolutionDecisionRequested(new QueryScriptEvolutionDecisionRequestedEvent
         {
-            RequestId = "proposal-2",
-            Found = true,
-            Accepted = true,
+            RequestId = "request-1",
+            ReplyStreamId = "reply-stream",
             ProposalId = "proposal-2",
-            ScriptId = "script-2",
-            BaseRevision = "rev-1",
-            CandidateRevision = "rev-2",
-            Status = "promoted",
-            FailureReason = string.Empty,
-            DefinitionActorId = "script-definition:script-2",
-            CatalogActorId = "script-catalog",
-            Diagnostics = { "compile-ok" },
         });
 
-        publisher.Sent.Should().BeEmpty();
-
-        agent.State.Completed.Should().BeTrue();
-        agent.State.Accepted.Should().BeTrue();
-        agent.State.Status.Should().Be("promoted");
-    }
-
-    [Fact]
-    public async Task Start_ShouldGenerateProposalId_WhenMissing()
-    {
-        var publisher = new RecordingEventPublisher();
-        var agent = CreateAgent(publisher);
-
-        await agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
-        {
-            ProposalId = string.Empty,
-            ScriptId = "script-auto-id",
-            BaseRevision = "rev-1",
-            CandidateRevision = "rev-2",
-            CandidateSource = "source",
-            CandidateSourceHash = "hash",
-            Reason = "auto-id",
-        });
-
-        agent.State.ProposalId.Should().NotBeNullOrWhiteSpace();
         publisher.Sent.Should().ContainSingle();
-        var propose = publisher.Sent[0].Payload.Should().BeOfType<ProposeScriptEvolutionRequestedEvent>().Subject;
-        propose.ProposalId.Should().Be(agent.State.ProposalId);
+        publisher.Sent[0].TargetActorId.Should().Be("reply-stream");
+        var response = publisher.Sent[0].Payload.Should().BeOfType<ScriptEvolutionDecisionRespondedEvent>().Subject;
+        response.Found.Should().BeTrue();
+        response.Accepted.Should().BeFalse();
+        response.Status.Should().Be(ScriptEvolutionStatuses.Rejected);
+        response.Diagnostics.Should().Contain("validation-failed");
     }
 
     [Fact]
     public async Task Start_ShouldNoOp_WhenSameProposalIdIsReplayed()
     {
         var publisher = new RecordingEventPublisher();
-        var agent = CreateAgent(publisher);
+        var agent = CreateAgent(
+            new FixedEvolutionFlowPort(
+                ScriptEvolutionFlowResult.PolicyRejected("policy-denied")),
+            publisher);
         var request = new StartScriptEvolutionSessionRequestedEvent
         {
             ProposalId = "proposal-duplicate",
-            ScriptId = "script-duplicate",
+            ScriptId = "script-1",
             BaseRevision = "rev-1",
             CandidateRevision = "rev-2",
             CandidateSource = "source",
@@ -135,8 +115,10 @@ public class ScriptEvolutionSessionGAgentTests
     [Fact]
     public async Task Start_ShouldThrow_WhenSessionReceivesDifferentProposalAfterBound()
     {
-        var publisher = new RecordingEventPublisher();
-        var agent = CreateAgent(publisher);
+        var agent = CreateAgent(
+            new FixedEvolutionFlowPort(
+                ScriptEvolutionFlowResult.PolicyRejected("policy-denied")),
+            new RecordingEventPublisher());
 
         await agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
         {
@@ -160,187 +142,67 @@ public class ScriptEvolutionSessionGAgentTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*bound to proposal*proposal-bound*proposal-conflict*");
-        publisher.Sent.Should().ContainSingle();
     }
 
-    [Fact]
-    public async Task Start_ShouldThrow_WhenScriptIdMissing()
-    {
-        var agent = CreateAgent(new RecordingEventPublisher());
-        var act = () => agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
-        {
-            ProposalId = "proposal-missing-script",
-            ScriptId = string.Empty,
-            CandidateRevision = "rev-2",
-            CandidateSource = "source",
-        });
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*ScriptId is required*");
-    }
-
-    [Fact]
-    public async Task Start_ShouldThrow_WhenCandidateRevisionMissing()
-    {
-        var agent = CreateAgent(new RecordingEventPublisher());
-        var act = () => agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
-        {
-            ProposalId = "proposal-missing-revision",
-            ScriptId = "script-1",
-            CandidateRevision = string.Empty,
-            CandidateSource = "source",
-        });
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*CandidateRevision is required*");
-    }
-
-    [Fact]
-    public async Task Start_ShouldThrow_WhenCandidateSourceMissing()
-    {
-        var agent = CreateAgent(new RecordingEventPublisher());
-        var act = () => agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
-        {
-            ProposalId = "proposal-missing-source",
-            ScriptId = "script-1",
-            CandidateRevision = "rev-2",
-            CandidateSource = string.Empty,
-        });
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*CandidateSource is required*");
-    }
-
-    [Fact]
-    public async Task Decision_ShouldIgnore_WhenSessionNotStarted()
-    {
-        var publisher = new RecordingEventPublisher();
-        var agent = CreateAgent(publisher);
-
-        await agent.HandleScriptEvolutionDecisionResponded(new ScriptEvolutionDecisionRespondedEvent
-        {
-            ProposalId = "proposal-not-started",
-            Accepted = true,
-            Status = "promoted",
-        });
-
-        publisher.Sent.Should().BeEmpty();
-        agent.State.Completed.Should().BeFalse();
-        agent.State.ProposalId.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task Decision_ShouldIgnore_WhenProposalIdDoesNotMatch()
-    {
-        var publisher = new RecordingEventPublisher();
-        var agent = CreateAgent(publisher);
-        await agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
-        {
-            ProposalId = "proposal-expected",
-            ScriptId = "script-1",
-            CandidateRevision = "rev-2",
-            CandidateSource = "source",
-        });
-
-        await agent.HandleScriptEvolutionDecisionResponded(new ScriptEvolutionDecisionRespondedEvent
-        {
-            ProposalId = "proposal-other",
-            Accepted = true,
-            Status = "promoted",
-        });
-
-        agent.State.Completed.Should().BeFalse();
-        agent.State.Status.Should().Be("session_started");
-    }
-
-    [Fact]
-    public async Task Decision_ShouldIgnore_WhenSessionAlreadyCompleted()
-    {
-        var publisher = new RecordingEventPublisher();
-        var agent = CreateAgent(publisher);
-        await agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
-        {
-            ProposalId = "proposal-completed",
-            ScriptId = "script-1",
-            CandidateRevision = "rev-2",
-            CandidateSource = "source",
-        });
-
-        await agent.HandleScriptEvolutionDecisionResponded(new ScriptEvolutionDecisionRespondedEvent
-        {
-            ProposalId = "proposal-completed",
-            Accepted = true,
-            Status = "promoted",
-            Diagnostics = { "first" },
-        });
-        await agent.HandleScriptEvolutionDecisionResponded(new ScriptEvolutionDecisionRespondedEvent
-        {
-            ProposalId = "proposal-completed",
-            Accepted = false,
-            Status = "rejected",
-            FailureReason = "should-be-ignored",
-            Diagnostics = { "second" },
-        });
-
-        agent.State.Completed.Should().BeTrue();
-        agent.State.Accepted.Should().BeTrue();
-        agent.State.Status.Should().Be("promoted");
-        agent.State.FailureReason.Should().BeEmpty();
-        agent.State.Diagnostics.Should().ContainSingle(x => x == "first");
-    }
-
-    private static ScriptEvolutionSessionGAgent CreateAgent(RecordingEventPublisher publisher)
-    {
-        return new ScriptEvolutionSessionGAgent(new StaticAddressResolver())
+    private static ScriptEvolutionSessionGAgent CreateAgent(
+        IScriptEvolutionFlowPort flowPort,
+        RecordingEventPublisher publisher) =>
+        new(flowPort, new StaticAddressResolver())
         {
             EventPublisher = publisher,
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptEvolutionSessionState>(
                 new InMemoryEventStore()),
         };
+
+    private sealed class FixedEvolutionFlowPort(ScriptEvolutionFlowResult result) : IScriptEvolutionFlowPort
+    {
+        public Task<ScriptEvolutionFlowResult> ExecuteAsync(ScriptEvolutionProposal proposal, CancellationToken ct) =>
+            Task.FromResult(result);
+
+        public Task RollbackAsync(ScriptRollbackRequest request, CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed class RecordingEventPublisher : IEventPublisher
     {
-        public List<PublishedMessage> Sent { get; } = [];
+        public List<(string TargetActorId, IMessage Payload)> Sent { get; } = [];
 
-        public Task PublishAsync<T>(
-            T evt,
-            EventDirection direction = EventDirection.Down,
+        public Task PublishAsync<TEvent>(TEvent eventData, CancellationToken ct = default) where TEvent : IMessage =>
+            Task.CompletedTask;
+
+        public Task PublishAsync<TEvent>(
+            TEvent eventData,
+            EventDirection direction,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
-            where T : IMessage
-        {
-            _ = evt;
-            _ = direction;
-            _ = sourceEnvelope;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
+            EventEnvelope? sourceEnvelope = null) where TEvent : IMessage =>
+            Task.CompletedTask;
 
-        public Task SendToAsync<T>(
+        public Task PublishAsync<TEvent>(
+            string topic,
+            TEvent eventData,
+            CancellationToken ct = default) where TEvent : IMessage =>
+            Task.CompletedTask;
+
+        public Task SendToAsync<TEvent>(
             string targetActorId,
-            T evt,
+            TEvent eventData,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
-            where T : IMessage
+            EventEnvelope? sourceEnvelope = null) where TEvent : IMessage
         {
-            _ = sourceEnvelope;
-            ct.ThrowIfCancellationRequested();
-            Sent.Add(new PublishedMessage(targetActorId, evt));
+            Sent.Add((targetActorId, eventData));
             return Task.CompletedTask;
         }
     }
 
-    private sealed record PublishedMessage(string TargetActorId, IMessage Payload);
-
     private sealed class StaticAddressResolver : IScriptingActorAddressResolver
     {
-        public string GetEvolutionManagerActorId() => "script-evolution-manager";
-
-        public string GetEvolutionSessionActorId(string proposalId) => $"script-evolution-session:{proposalId}";
-
         public string GetCatalogActorId() => "script-catalog";
 
-        public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
+        public string GetDefinitionActorId(string scriptId) => "script-definition:" + scriptId;
+
+        public string GetEvolutionManagerActorId() => "script-evolution-manager";
+
+        public string GetEvolutionSessionActorId(string proposalId) => "script-evolution-session:" + proposalId;
+
+        public string GetRuntimeActorId(string scriptId) => "script-runtime:" + scriptId;
     }
 }

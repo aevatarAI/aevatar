@@ -88,7 +88,7 @@ public sealed class RuntimeScriptEvolutionLifecycleService
         }
         catch (TimeoutException)
         {
-            var fallback = await _decisionFallbackPort.TryResolveAsync(managerActorId, normalizedProposalId, ct);
+            var fallback = await _decisionFallbackPort.TryResolveAsync(normalizedProposalId, ct);
             if (fallback != null)
                 return fallback;
 

@@ -39,9 +39,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddSingleton<IActorRuntime>(new FakeActorRuntime());
         services.AddSingleton<IActorTypeProbe, RuntimeBackedActorTypeProbe>();
         services.AddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
-        var registry = new WorkflowDefinitionRegistry();
-        registry.Register("sub_flow", "name: sub_flow\nroles: []\nsteps: []\n");
-        services.AddSingleton<IWorkflowDefinitionRegistry>(registry);
+        var registry = new InMemoryWorkflowDefinitionCatalog();
+        registry.Upsert("sub_flow", "name: sub_flow\nroles: []\nsteps: []\n");
+        services.AddSingleton<IWorkflowDefinitionCatalog>(registry);
 
         services.AddWorkflowInfrastructure(options =>
         {
@@ -94,7 +94,7 @@ public sealed class WorkflowInfrastructureCoverageTests
 
             var options = new WorkflowDefinitionFileSourceOptions();
             options.WorkflowDirectories.Add(tempDir);
-            var registry = new WorkflowDefinitionRegistry();
+            var registry = new InMemoryWorkflowDefinitionCatalog();
             var service = new WorkflowDefinitionBootstrapHostedService(
                 registry,
                 new WorkflowDefinitionFileLoader(),
@@ -117,7 +117,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     public async Task WorkflowDefinitionBootstrapHostedService_WhenCanceled_ShouldThrow()
     {
         var options = new WorkflowDefinitionFileSourceOptions();
-        var registry = new WorkflowDefinitionRegistry();
+        var registry = new InMemoryWorkflowDefinitionCatalog();
         var service = new WorkflowDefinitionBootstrapHostedService(
             registry,
             new WorkflowDefinitionFileLoader(),
