@@ -22,7 +22,7 @@ public sealed class GarnetEventStore : IEventStore
 
                                       local expected = tonumber(ARGV[1])
                                       if current ~= expected then
-                                        return {0, current}
+                                        return {0, current, expected}
                                       end
 
                                       local count = tonumber(ARGV[2])
@@ -112,15 +112,20 @@ public sealed class GarnetEventStore : IEventStore
         ct.ThrowIfCancellationRequested();
 
         var result = (RedisResult[])rawResult!;
-        if (result.Length != 2)
+        if (result.Length < 2 || result.Length > 3)
             throw new InvalidOperationException("Unexpected Garnet append script result.");
 
         var status = (long)result[0];
         var actualVersion = (long)result[1];
         if (status == 0)
         {
+            var luaExpected = result.Length > 2 ? (long)result[2] : -1;
+            var rawParts = string.Join(", ", result.Select(
+                (r, i) => $"result[{i}]={{raw={r}, type={r.Resp2Type}}}"));
             throw new InvalidOperationException(
-                $"Optimistic concurrency conflict: expected {expectedVersion}, actual {actualVersion}");
+                $"Optimistic concurrency conflict: expected {expectedVersion}, actual {actualVersion}, " +
+                $"luaExpected {luaExpected}, " +
+                $"rawResult=[{rawParts}]");
         }
 
         if (status != 1)
