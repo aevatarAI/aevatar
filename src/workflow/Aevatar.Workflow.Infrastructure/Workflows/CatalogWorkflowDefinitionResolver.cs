@@ -19,7 +19,8 @@ public sealed class CatalogWorkflowDefinitionResolver : IWorkflowDefinitionResol
         if (string.IsNullOrWhiteSpace(workflowName))
             return Task.FromResult<string?>(null);
 
-        var lookup = _services.GetService<IWorkflowDefinitionLookupService>();
+        var lookup = _services.GetService<IWorkflowDefinitionLookupService>()
+                     ?? _services.GetService<IWorkflowDefinitionCatalog>();
         return Task.FromResult(lookup?.GetYaml(workflowName.Trim()));
     }
 }

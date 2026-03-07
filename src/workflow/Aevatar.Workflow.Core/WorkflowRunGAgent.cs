@@ -72,23 +72,26 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             createWorkflowDefinitionBindEnvelope: CreateWorkflowDefinitionBindEnvelopeCore);
         _primitiveExecutionPlanner = new WorkflowPrimitiveExecutionPlanner(
             TryHandleRegisteredPrimitiveAsync,
-            new Dictionary<string, WorkflowStepRequestHandler>(StringComparer.Ordinal)
-            {
-                ["delay"] = HandleDelayStepRequestAsync,
-                ["wait_signal"] = HandleWaitSignalStepRequestAsync,
-                ["human_input"] = (request, ct) => HandleHumanGateStepRequestAsync(request, "human_input", ct),
-                ["human_approval"] = (request, ct) => HandleHumanGateStepRequestAsync(request, "human_approval", ct),
-                ["llm_call"] = HandleLlmCallStepRequestAsync,
-                ["evaluate"] = HandleEvaluateStepRequestAsync,
-                ["reflect"] = HandleReflectStepRequestAsync,
-                ["parallel"] = HandleParallelStepRequestAsync,
-                ["foreach"] = HandleForEachStepRequestAsync,
-                ["map_reduce"] = HandleMapReduceStepRequestAsync,
-                ["race"] = HandleRaceStepRequestAsync,
-                ["while"] = HandleWhileStepRequestAsync,
-                ["cache"] = HandleCacheStepRequestAsync,
-                ["workflow_call"] = HandleWorkflowCallStepRequestAsync,
-            });
+            [
+                new WorkflowControlFlowPlanner(
+                    HandleDelayStepRequestAsync,
+                    HandleWaitSignalStepRequestAsync,
+                    HandleRaceStepRequestAsync,
+                    HandleWhileStepRequestAsync),
+                new WorkflowHumanInteractionPlanner(
+                    (request, ct) => HandleHumanGateStepRequestAsync(request, "human_input", ct),
+                    (request, ct) => HandleHumanGateStepRequestAsync(request, "human_approval", ct)),
+                new WorkflowAIPlanner(
+                    HandleLlmCallStepRequestAsync,
+                    HandleEvaluateStepRequestAsync,
+                    HandleReflectStepRequestAsync,
+                    HandleCacheStepRequestAsync),
+                new WorkflowCompositionPlanner(
+                    HandleParallelStepRequestAsync,
+                    HandleForEachStepRequestAsync,
+                    HandleMapReduceStepRequestAsync,
+                    HandleWorkflowCallStepRequestAsync),
+            ]);
         _asyncOperationReconciler = new WorkflowAsyncOperationReconciler(
             [
                 TryHandleParallelCompletionAsync,

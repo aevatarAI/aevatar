@@ -344,6 +344,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         string revision,
         string source)
     {
+        var sourceHash = $"hash-{scriptId}-{revision}";
         var actor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await actor.HandleEventAsync(
@@ -352,8 +353,23 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
                     ScriptId: scriptId,
                     ScriptRevision: revision,
                     SourceText: source,
-                    SourceHash: $"hash-{scriptId}-{revision}"),
+                    SourceHash: sourceHash),
                 definitionActorId),
+            CancellationToken.None);
+
+        var catalogActor = await runtime.GetAsync("script-catalog")
+            ?? await runtime.CreateAsync<ScriptCatalogGAgent>("script-catalog");
+        var promote = new PromoteScriptRevisionActorRequestAdapter();
+        await catalogActor.HandleEventAsync(
+            promote.Map(
+                new PromoteScriptRevisionActorRequest(
+                    ScriptId: scriptId,
+                    Revision: revision,
+                    DefinitionActorId: definitionActorId,
+                    SourceHash: sourceHash,
+                    ProposalId: $"bootstrap-{scriptId}-{revision}",
+                    ExpectedBaseRevision: string.Empty),
+                "script-catalog"),
             CancellationToken.None);
     }
 

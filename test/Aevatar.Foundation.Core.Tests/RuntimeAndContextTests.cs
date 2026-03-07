@@ -1,61 +1,10 @@
 using Aevatar.Foundation.Runtime.Actors;
-using Aevatar.Foundation.Abstractions.Context;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Foundation.Core.Tests;
-
-public class RunManagerTests
-{
-    [Fact]
-    public void StartNewRun_SameScope_CancelsPreviousRun()
-    {
-        var manager = new RunManager();
-
-        var first = manager.StartNewRun("scope-a");
-        first.IsCancelled.Should().BeFalse();
-
-        var second = manager.StartNewRun("scope-a");
-
-        first.IsCancelled.Should().BeTrue();
-        second.IsCancelled.Should().BeFalse();
-        manager.GetCurrentRun("scope-a").Should().BeSameAs(second);
-    }
-
-    [Fact]
-    public void CancelRun_RemovesAndCancelsCurrentRun()
-    {
-        var manager = new RunManager();
-        var run = manager.StartNewRun("scope-b");
-
-        manager.CancelRun("scope-b");
-
-        run.IsCancelled.Should().BeTrue();
-        manager.GetCurrentRun("scope-b").Should().BeNull();
-    }
-
-    [Fact]
-    public void RunContextScope_Begin_RestoresPreviousRunOnDispose()
-    {
-        var outer = new RunContext();
-        var inner = new RunContext();
-
-        using (RunContextScope.Begin(outer))
-        {
-            RunContextScope.CurrentRun.Should().BeSameAs(outer);
-            using (RunContextScope.Begin(inner))
-            {
-                RunContextScope.CurrentRun.Should().BeSameAs(inner);
-            }
-
-            RunContextScope.CurrentRun.Should().BeSameAs(outer);
-        }
-
-        RunContextScope.CurrentRun.Should().BeNull();
-    }
-}
 
 public class AgentContextPropagatorTests
 {

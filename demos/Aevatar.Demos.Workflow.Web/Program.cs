@@ -60,6 +60,7 @@ builder.Services.AddAevatarRuntime();
 builder.Services.AddAevatarConfig();
 builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
 builder.Services.AddWorkflowCapability(builder.Configuration);
+builder.Services.AddInMemoryWorkflowDefinitionCatalog();
 builder.Services.AddWorkflowDefinitionFileSource(options =>
 {
     options.WorkflowDirectories.Add(primaryYamlDir);

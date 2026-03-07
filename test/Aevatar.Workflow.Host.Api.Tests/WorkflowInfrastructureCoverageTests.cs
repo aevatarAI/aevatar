@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Hosting;
+using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -328,6 +329,8 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
+        services.Should().NotContain(x => x.ServiceType == typeof(IWorkflowDefinitionCatalog));
+        services.Should().NotContain(x => x.ServiceType == typeof(IWorkflowDefinitionLookupService));
     }
 
     [Fact]
@@ -342,6 +345,105 @@ public sealed class WorkflowInfrastructureCoverageTests
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<IOptions<WorkflowDefinitionFileSourceOptions>>().Value;
         options.DuplicatePolicy.Should().Be(WorkflowDefinitionDuplicatePolicy.Override);
+    }
+
+    [Fact]
+    public void AddInMemoryWorkflowDefinitionCatalog_ShouldRegisterDefinitionCatalogAndLookupService()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        services.AddInMemoryWorkflowDefinitionCatalog();
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IWorkflowDefinitionCatalog>()
+            .Should().BeOfType<InMemoryWorkflowDefinitionCatalog>();
+        provider.GetRequiredService<IWorkflowDefinitionLookupService>()
+            .Should().BeSameAs(provider.GetRequiredService<IWorkflowDefinitionCatalog>());
+    }
+
+    [Fact]
+    public void AddInMemoryWorkflowDefinitionCatalog_Default_ShouldRegisterBuiltInDirectWorkflow()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        services.AddInMemoryWorkflowDefinitionCatalog();
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IWorkflowDefinitionCatalog>()
+            .GetYaml("direct")
+            .Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public void AddInMemoryWorkflowDefinitionCatalog_WhenConfigured_ShouldAllowDisablingBuiltInDirectWorkflow()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        services.AddInMemoryWorkflowDefinitionCatalog(options => options.RegisterBuiltInDirectWorkflow = false);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IWorkflowDefinitionCatalog>()
+            .GetYaml("direct")
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void AddInMemoryWorkflowDefinitionCatalog_Default_ShouldRegisterBuiltInAutoWorkflow()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        services.AddInMemoryWorkflowDefinitionCatalog();
+
+        using var provider = services.BuildServiceProvider();
+        var yaml = provider.GetRequiredService<IWorkflowDefinitionCatalog>().GetYaml("auto");
+        yaml.Should().NotBeNullOrWhiteSpace();
+        yaml.Should().Contain("name: auto");
+        yaml.Should().Contain("dynamic_workflow");
+        yaml!.IndexOf("- id: done", StringComparison.Ordinal)
+            .Should().BeGreaterThan(yaml.IndexOf("- id: extract_and_execute", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AddInMemoryWorkflowDefinitionCatalog_WhenConfigured_ShouldAllowDisablingBuiltInAutoWorkflow()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        services.AddInMemoryWorkflowDefinitionCatalog(options => options.RegisterBuiltInAutoWorkflow = false);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IWorkflowDefinitionCatalog>()
+            .GetYaml("auto")
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void AddInMemoryWorkflowDefinitionCatalog_Default_ShouldRegisterBuiltInAutoReviewWorkflow()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        services.AddInMemoryWorkflowDefinitionCatalog();
+
+        using var provider = services.BuildServiceProvider();
+        var yaml = provider.GetRequiredService<IWorkflowDefinitionCatalog>().GetYaml("auto_review");
+        yaml.Should().NotBeNullOrWhiteSpace();
+        yaml.Should().Contain("name: auto_review");
+        yaml.Should().Contain("\"true\": done");
+        yaml.Should().Contain("Approve to finalize YAML for manual run");
+        yaml!.IndexOf("- id: done", StringComparison.Ordinal)
+            .Should().BeGreaterThan(yaml.IndexOf("- id: show_for_approval", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AddInMemoryWorkflowDefinitionCatalog_WhenConfigured_ShouldAllowDisablingBuiltInAutoReviewWorkflow()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        services.AddInMemoryWorkflowDefinitionCatalog(options => options.RegisterBuiltInAutoReviewWorkflow = false);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IWorkflowDefinitionCatalog>()
+            .GetYaml("auto_review")
+            .Should().BeNull();
     }
 
     private static WorkflowRunActorPort CreatePort(FakeActorRuntime runtime)

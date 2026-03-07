@@ -1,4 +1,3 @@
-using System.Globalization;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -42,6 +41,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         CompatibilityFailureInjectionPolicy.Disabled;
     private RuntimeEnvelopeRetryPolicy _runtimeEnvelopeRetryPolicy =
         RuntimeEnvelopeRetryPolicy.Disabled;
+    private RuntimeEnvelopeRetryCoordinator? _retryCoordinator;
+    private RuntimeEnvelopePipeline? _envelopePipeline;
 
     public RuntimeActorGrain(
         [PersistentState("agent", OrleansRuntimeConstants.GrainStateStorageName)] IPersistentState<RuntimeActorGrainState> state)
@@ -61,6 +62,20 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         _logger = loggerFactory?.CreateLogger<RuntimeActorGrain>() ?? NullLogger<RuntimeActorGrain>.Instance;
         _compatibilityFailureInjectionPolicy = CompatibilityFailureInjectionPolicy.FromEnvironment();
         _runtimeEnvelopeRetryPolicy = RuntimeEnvelopeRetryPolicy.FromEnvironment();
+        _retryCoordinator = new RuntimeEnvelopeRetryCoordinator(
+            () => this.GetPrimaryKeyString(),
+            _runtimeEnvelopeRetryPolicy,
+            _logger,
+            _streams,
+            ServiceProvider.GetRequiredService<IActorRuntimeCallbackScheduler>());
+        _envelopePipeline = new RuntimeEnvelopePipeline(
+            new RuntimeEnvelopeCompatibilityInjectionHook(
+                () => this.GetPrimaryKeyString(),
+                _compatibilityFailureInjectionPolicy,
+                _logger,
+                _retryCoordinator),
+            new RuntimeEnvelopeDedupGuard(() => this.GetPrimaryKeyString(), _deduplicator),
+            new RuntimeEnvelopeForwardingGuard(() => this.GetPrimaryKeyString()));
         if (_compatibilityFailureInjectionPolicy.Enabled)
         {
             _logger.LogWarning(
@@ -137,43 +152,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             _logger,
             this.GetPrimaryKeyString(),
             envelope);
-        if (await TryHandleCompatibilityRetryAsync(envelope))
+        if (_envelopePipeline != null && !await _envelopePipeline.ShouldDeliverAsync(envelope))
             return;
-
-        if (!string.IsNullOrWhiteSpace(envelope.Id) && _deduplicator != null)
-        {
-            var dedupKey = BuildDedupKey(envelope);
-            if (!await _deduplicator.TryRecordAsync(dedupKey))
-                return;
-        }
-
-        if (PublisherChainMetadata.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
-            return;
-
-        var selfActorId = this.GetPrimaryKeyString();
-        switch (envelope.Direction)
-        {
-            case EventDirection.Self:
-            case EventDirection.Up:
-                break;
-            case EventDirection.Down:
-            case EventDirection.Both:
-                if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
-                {
-                    if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
-                        return;
-                    break;
-                }
-
-                if (envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.SourceActorId, out var sourceActorId) &&
-                    string.Equals(sourceActorId, selfActorId, StringComparison.Ordinal))
-                {
-                    return;
-                }
-                break;
-            default:
-                return;
-        }
 
         try
         {
@@ -182,7 +162,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
         catch (Exception ex)
         {
-            if (await TryScheduleRetryAsync(envelope, ex))
+            if (_retryCoordinator != null && await _retryCoordinator.TryScheduleRetryAsync(envelope, ex))
                 return;
 
             _logger.LogError(
@@ -369,104 +349,5 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             return;
 
         _ = _deactivationHookDispatcher.DispatchAsync(this.GetPrimaryKeyString(), CancellationToken.None);
-    }
-
-    private async Task<bool> TryScheduleRetryAsync(EventEnvelope envelope, Exception ex)
-    {
-        if (!_runtimeEnvelopeRetryPolicy.TryBuildRetryEnvelope(
-                envelope,
-                ex,
-                out var retryEnvelope,
-                out var nextAttempt))
-            return false;
-
-        if (_runtimeEnvelopeRetryPolicy.RetryDelayMs > 0)
-        {
-            var scheduler = ServiceProvider.GetRequiredService<IActorRuntimeCallbackScheduler>();
-            await scheduler.ScheduleTimeoutAsync(
-                new RuntimeCallbackTimeoutRequest
-                {
-                    ActorId = this.GetPrimaryKeyString(),
-                    CallbackId = BuildRuntimeRetryCallbackId(envelope, nextAttempt),
-                    DueTime = TimeSpan.FromMilliseconds(_runtimeEnvelopeRetryPolicy.RetryDelayMs),
-                    TriggerEnvelope = retryEnvelope,
-                });
-        }
-        else
-        {
-            await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(retryEnvelope);
-        }
-
-        _logger.LogWarning(
-            ex,
-            "Runtime envelope retry scheduled for actor {ActorId}, attempt {Attempt}/{MaxAttempts}.",
-            this.GetPrimaryKeyString(),
-            nextAttempt,
-            _runtimeEnvelopeRetryPolicy.MaxAttempts);
-        return true;
-    }
-
-    private string BuildDedupKey(EventEnvelope envelope)
-    {
-        var originId = envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
-                       !string.IsNullOrWhiteSpace(metadataOriginId)
-            ? metadataOriginId
-            : envelope.Id;
-
-        if (string.IsNullOrWhiteSpace(originId))
-            originId = envelope.Id ?? string.Empty;
-
-        var attempt = 0;
-        if (envelope.Metadata.TryGetValue(RetryAttemptMetadataKey, out var metadataAttempt) &&
-            int.TryParse(metadataAttempt, out var parsedAttempt) &&
-            parsedAttempt > 0)
-        {
-            attempt = parsedAttempt;
-        }
-
-        return $"{this.GetPrimaryKeyString()}:{originId}:{attempt}";
-    }
-
-    private string BuildRuntimeRetryCallbackId(EventEnvelope envelope, int nextAttempt)
-    {
-        var originId = envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
-                       !string.IsNullOrWhiteSpace(metadataOriginId)
-            ? metadataOriginId
-            : envelope.Id;
-
-        if (string.IsNullOrWhiteSpace(originId))
-            originId = envelope.Id ?? Guid.NewGuid().ToString("N");
-
-        return RuntimeCallbackKeyComposer.BuildCallbackId(
-            "runtime-envelope-retry",
-            originId,
-            nextAttempt.ToString(CultureInfo.InvariantCulture));
-    }
-
-    private async Task<bool> TryHandleCompatibilityRetryAsync(EventEnvelope envelope)
-    {
-        // Production behavior is "mixed-version rollout stays available and converges via retry".
-        // This branch does not implement that feature toggle; it only injects synthetic old-node
-        // failures in tests/staging so the production rolling-upgrade path can be exercised on demand.
-        if (!_compatibilityFailureInjectionPolicy.ShouldInject(envelope.Payload?.TypeUrl))
-            return false;
-
-        _logger.LogWarning(
-            "Injected compatibility failure for actor {ActorId}, event type '{EventTypeUrl}'.",
-            this.GetPrimaryKeyString(),
-            envelope.Payload?.TypeUrl ?? "(none)");
-
-        var compatibilityException =
-            new InvalidOperationException("Injected compatibility failure for mixed-version rollout testing.");
-        if (await TryScheduleRetryAsync(envelope, compatibilityException))
-            return true;
-
-        _logger.LogError(
-            compatibilityException,
-            "Runtime envelope handling failed after compatibility retry exhausted (or retry disabled) for actor {ActorId}, envelope {EnvelopeId}, event type '{EventTypeUrl}'.",
-            this.GetPrimaryKeyString(),
-            envelope.Id,
-            envelope.Payload?.TypeUrl ?? "(none)");
-        return true;
     }
 }

@@ -97,6 +97,14 @@ public class RuntimeScriptEvolutionFlowPortTests
         var lifecycle = new RecordingLifecyclePort
         {
             UpsertException = new InvalidOperationException("upsert-failed"),
+            CatalogBefore = new ScriptCatalogEntrySnapshot(
+                ScriptId: "script-1",
+                ActiveRevision: "rev-1",
+                ActiveDefinitionActorId: "definition-rev-1",
+                ActiveSourceHash: "hash-rev-1",
+                PreviousRevision: "rev-0",
+                RevisionHistory: ["rev-0", "rev-1"],
+                LastProposalId: "proposal-prev"),
         };
         var port = new RuntimeScriptEvolutionFlowPort(
             new SuccessCompiler(),
@@ -144,13 +152,14 @@ public class RuntimeScriptEvolutionFlowPortTests
             CancellationToken.None);
 
         result.Status.Should().Be(ScriptEvolutionFlowStatus.PromotionFailed);
-        result.FailureReason.Should().Contain("no base revision fallback");
+        result.FailureReason.Should().Contain("Failed to load catalog baseline before promotion");
+        result.FailureReason.Should().Contain("reason=catalog-query-failed");
         lifecycle.UpsertCallCount.Should().Be(0);
         lifecycle.RollbackCalls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenCatalogBaselineQueryFailsWithBaseRevision_ShouldFallbackAndCompensate()
+    public async Task ExecuteAsync_WhenCatalogBaselineQueryFailsWithBaseRevision_ShouldFailBeforeUpsert()
     {
         var lifecycle = new RecordingLifecyclePort
         {
@@ -174,12 +183,66 @@ public class RuntimeScriptEvolutionFlowPortTests
             CancellationToken.None);
 
         result.Status.Should().Be(ScriptEvolutionFlowStatus.PromotionFailed);
+        result.FailureReason.Should().Contain("Failed to load catalog baseline before promotion");
+        result.FailureReason.Should().Contain("expected_base_revision=rev-1");
+        lifecycle.UpsertCallCount.Should().Be(0);
+        lifecycle.RollbackCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCatalogBaselineQueryReturnsNullWithBaseRevision_ShouldFailBeforeUpsert()
+    {
+        var lifecycle = new RecordingLifecyclePort();
+        var port = new RuntimeScriptEvolutionFlowPort(
+            new SuccessCompiler(),
+            lifecycle,
+            new StaticAddressResolver());
+
+        var result = await port.ExecuteAsync(
+            new ScriptEvolutionProposal(
+                ProposalId: "proposal-null-baseline",
+                ScriptId: "script-1",
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "source-v2",
+                CandidateSourceHash: "hash-v2",
+                Reason: "upgrade"),
+            CancellationToken.None);
+
+        result.Status.Should().Be(ScriptEvolutionFlowStatus.PromotionFailed);
+        result.FailureReason.Should().Contain("Catalog baseline not found before promotion");
+        result.FailureReason.Should().Contain("expected_base_revision=rev-1");
+        lifecycle.UpsertCallCount.Should().Be(0);
+        lifecycle.RollbackCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCatalogBaselineQueryReturnsNullWithoutBaseRevision_ShouldAllowInitialPromotionFlow()
+    {
+        var lifecycle = new RecordingLifecyclePort
+        {
+            PromoteException = new InvalidOperationException("promote-failed"),
+        };
+        var port = new RuntimeScriptEvolutionFlowPort(
+            new SuccessCompiler(),
+            lifecycle,
+            new StaticAddressResolver());
+
+        var result = await port.ExecuteAsync(
+            new ScriptEvolutionProposal(
+                ProposalId: "proposal-initial-create",
+                ScriptId: "script-1",
+                BaseRevision: string.Empty,
+                CandidateRevision: "rev-1",
+                CandidateSource: "source-v1",
+                CandidateSourceHash: "hash-v1",
+                Reason: "initial-create"),
+            CancellationToken.None);
+
+        result.Status.Should().Be(ScriptEvolutionFlowStatus.PromotionFailed);
         lifecycle.UpsertCallCount.Should().Be(1);
-        lifecycle.RollbackCalls.Should().ContainSingle();
-        lifecycle.RollbackCalls[0].TargetRevision.Should().Be("rev-1");
-        lifecycle.RollbackCalls[0].ExpectedCurrentRevision.Should().Be("rev-2");
-        result.FailureReason.Should().Contain("catalog_baseline_source=fallback_base_revision_after_query_failure");
-        result.FailureReason.Should().Contain("compensation=rollback_to_previous_active_revision_success");
+        lifecycle.RollbackCalls.Should().BeEmpty();
+        result.FailureReason.Should().Contain("compensation=not_required");
     }
 
     [Fact]
@@ -189,6 +252,14 @@ public class RuntimeScriptEvolutionFlowPortTests
         var lifecycle = new RecordingLifecyclePort
         {
             UpsertException = new InvalidOperationException("upsert-failed"),
+            CatalogBefore = new ScriptCatalogEntrySnapshot(
+                ScriptId: "script-1",
+                ActiveRevision: "rev-1",
+                ActiveDefinitionActorId: "definition-rev-1",
+                ActiveSourceHash: "hash-rev-1",
+                PreviousRevision: "rev-0",
+                RevisionHistory: ["rev-0", "rev-1"],
+                LastProposalId: "proposal-prev"),
         };
         var port = new RuntimeScriptEvolutionFlowPort(
             new DisposableTrackingCompiler(definition),

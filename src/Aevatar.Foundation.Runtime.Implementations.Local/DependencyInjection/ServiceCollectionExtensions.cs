@@ -90,7 +90,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IRouterHierarchyStore, InMemoryRouterStore>();
 
         // Context
-        services.TryAddSingleton<IRunManager, RunManager>();
         services.TryAddSingleton<IAgentContextAccessor, AsyncLocalAgentContextAccessor>();
         services.TryAddSingleton<ICorrelationLinkPolicy, DefaultCorrelationLinkPolicy>();
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();

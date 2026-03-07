@@ -18,87 +18,15 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowApplicationRegistrationAndExecutionTests
 {
     [Fact]
-    public void AddWorkflowApplication_Default_ShouldRegisterBuiltInDirectWorkflow()
+    public void AddWorkflowApplication_Default_ShouldNotRegisterDefinitionCatalog()
     {
         var services = new ServiceCollection();
 
         services.AddWorkflowApplication();
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
-        var yaml = registry.GetYaml("direct");
-        yaml.Should().NotBeNullOrWhiteSpace();
-    }
-
-    [Fact]
-    public void AddWorkflowApplication_WhenConfigured_ShouldAllowDisablingBuiltInDirectWorkflow()
-    {
-        var services = new ServiceCollection();
-
-        services.AddWorkflowApplication(options => options.RegisterBuiltInDirectWorkflow = false);
-
-        using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
-        registry.GetYaml("direct").Should().BeNull();
-    }
-
-    [Fact]
-    public void AddWorkflowApplication_Default_ShouldRegisterBuiltInAutoWorkflow()
-    {
-        var services = new ServiceCollection();
-
-        services.AddWorkflowApplication();
-
-        using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
-        var yaml = registry.GetYaml("auto");
-        yaml.Should().NotBeNullOrWhiteSpace();
-        yaml.Should().Contain("name: auto");
-        yaml.Should().Contain("dynamic_workflow");
-        yaml!.IndexOf("- id: done", StringComparison.Ordinal)
-            .Should().BeGreaterThan(yaml.IndexOf("- id: extract_and_execute", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void AddWorkflowApplication_WhenConfigured_ShouldAllowDisablingBuiltInAutoWorkflow()
-    {
-        var services = new ServiceCollection();
-
-        services.AddWorkflowApplication(options => options.RegisterBuiltInAutoWorkflow = false);
-
-        using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
-        registry.GetYaml("auto").Should().BeNull();
-    }
-
-    [Fact]
-    public void AddWorkflowApplication_Default_ShouldRegisterBuiltInAutoReviewWorkflow()
-    {
-        var services = new ServiceCollection();
-
-        services.AddWorkflowApplication();
-
-        using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
-        var yaml = registry.GetYaml("auto_review");
-        yaml.Should().NotBeNullOrWhiteSpace();
-        yaml.Should().Contain("name: auto_review");
-        yaml.Should().Contain("\"true\": done");
-        yaml.Should().Contain("Approve to finalize YAML for manual run");
-        yaml!.IndexOf("- id: done", StringComparison.Ordinal)
-            .Should().BeGreaterThan(yaml.IndexOf("- id: show_for_approval", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void AddWorkflowApplication_WhenConfigured_ShouldAllowDisablingBuiltInAutoReviewWorkflow()
-    {
-        var services = new ServiceCollection();
-
-        services.AddWorkflowApplication(options => options.RegisterBuiltInAutoReviewWorkflow = false);
-
-        using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
-        registry.GetYaml("auto_review").Should().BeNull();
+        provider.GetService<IWorkflowDefinitionCatalog>().Should().BeNull();
+        provider.GetService<IWorkflowDefinitionLookupService>().Should().BeNull();
     }
 
     [Fact]
@@ -120,7 +48,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication(
-            configureRunBehavior: options =>
+            options =>
             {
                 options.DefaultWorkflowName = "direct";
                 options.UseAutoAsDefaultWhenWorkflowUnspecified = true;

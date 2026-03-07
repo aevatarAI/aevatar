@@ -16,7 +16,6 @@
 - `GAgentBase<TState, TConfig>`：有效配置型基类（类默认值 + 事件/状态覆盖）
 - `StateGuard`：限制状态写入时机
 - `EventPipelineBuilder`：合并并排序静态/动态处理器
-- `RunManager`：latest-wins 的运行上下文管理
 - `AsyncLocalAgentContext`：上下文注入与提取
 - `DefaultEnvelopePropagationPolicy` / `DefaultCorrelationLinkPolicy`：事件关联字段自动透传策略
 

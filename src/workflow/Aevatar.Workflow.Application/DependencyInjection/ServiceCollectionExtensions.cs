@@ -19,30 +19,11 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddWorkflowApplication(
         this IServiceCollection services,
-        Action<InMemoryWorkflowDefinitionCatalogOptions>? configureCatalog = null,
         Action<WorkflowRunBehaviorOptions>? configureRunBehavior = null)
     {
-        var options = new InMemoryWorkflowDefinitionCatalogOptions();
-        configureCatalog?.Invoke(options);
         var runBehaviorOptions = new WorkflowRunBehaviorOptions();
         configureRunBehavior?.Invoke(runBehaviorOptions);
-        services.AddSingleton(options);
         services.AddSingleton(runBehaviorOptions);
-
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowDefinitionSeedSource, BuiltInWorkflowDefinitionSeedSource>());
-        services.AddSingleton<InMemoryWorkflowDefinitionCatalog>(sp =>
-        {
-            var catalog = new InMemoryWorkflowDefinitionCatalog();
-            foreach (var seedSource in sp.GetServices<IWorkflowDefinitionSeedSource>())
-            {
-                foreach (var (name, yaml) in seedSource.GetSeedDefinitions())
-                    catalog.Upsert(name, yaml);
-            }
-
-            return catalog;
-        });
-        services.AddSingleton<IWorkflowDefinitionCatalog>(sp => sp.GetRequiredService<InMemoryWorkflowDefinitionCatalog>());
-        services.AddSingleton<IWorkflowDefinitionLookupService>(sp => sp.GetRequiredService<InMemoryWorkflowDefinitionCatalog>());
 
         services.AddSingleton<IWorkflowRunActorResolver>(sp =>
             new WorkflowRunActorResolver(

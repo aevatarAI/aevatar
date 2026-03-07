@@ -1,7 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Abstractions.Evolution;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
@@ -11,19 +10,20 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 public sealed class RuntimeScriptEvolutionLifecycleService
 {
     private readonly RuntimeScriptActorAccessor _actorAccessor;
-    private readonly IScriptEvolutionProjectionLifecyclePort _projectionLifecyclePort;
+    private readonly RuntimeScriptQueryClient _queryClient;
     private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly TimeSpan _decisionTimeout;
     private readonly StartScriptEvolutionSessionActorRequestAdapter _startSessionAdapter = new();
+    private readonly QueryScriptEvolutionDecisionRequestAdapter _queryDecisionAdapter = new();
 
     public RuntimeScriptEvolutionLifecycleService(
         RuntimeScriptActorAccessor actorAccessor,
-        IScriptEvolutionProjectionLifecyclePort projectionLifecyclePort,
+        RuntimeScriptQueryClient queryClient,
         IScriptingActorAddressResolver addressResolver,
         IScriptingPortTimeouts timeouts)
     {
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
-        _projectionLifecyclePort = projectionLifecyclePort ?? throw new ArgumentNullException(nameof(projectionLifecyclePort));
+        _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
         _decisionTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
             .GetEvolutionDecisionTimeout();
@@ -46,81 +46,46 @@ public sealed class RuntimeScriptEvolutionLifecycleService
             "Script evolution session actor not found",
             ct);
 
-        var sink = new EventChannel<ScriptEvolutionSessionCompletedEvent>(capacity: 256);
-        var projectionLease = await _projectionLifecyclePort.EnsureAndAttachAsync(
-            token => _projectionLifecyclePort.EnsureActorProjectionAsync(
-                sessionActorId,
-                normalizedProposalId,
-                token),
-            sink,
+        await sessionActor.HandleEventAsync(
+            _startSessionAdapter.Map(
+                new StartScriptEvolutionSessionActorRequest(
+                    ProposalId: normalizedProposal.ProposalId ?? string.Empty,
+                    ScriptId: normalizedProposal.ScriptId ?? string.Empty,
+                    BaseRevision: normalizedProposal.BaseRevision ?? string.Empty,
+                    CandidateRevision: normalizedProposal.CandidateRevision ?? string.Empty,
+                    CandidateSource: normalizedProposal.CandidateSource ?? string.Empty,
+                    CandidateSourceHash: normalizedProposal.CandidateSourceHash ?? string.Empty,
+                    Reason: normalizedProposal.Reason ?? string.Empty),
+                sessionActorId),
             ct);
-        if (projectionLease == null)
-            throw new InvalidOperationException("Script evolution projection is disabled.");
 
-        try
+        var responded = await _queryClient.QueryActorAsync<ScriptEvolutionDecisionRespondedEvent>(
+            sessionActor,
+            ScriptingQueryRouteConventions.EvolutionReplyStreamPrefix,
+            _decisionTimeout,
+            (requestId, replyStreamId) => _queryDecisionAdapter.Map(
+                sessionActorId,
+                requestId,
+                replyStreamId,
+                normalizedProposalId),
+            static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
+            ScriptingQueryRouteConventions.BuildEvolutionDecisionTimeoutMessage,
+            ct);
+
+        if (!responded.Found)
         {
-            var completed = await WaitForSessionCompletionAsync(
-                normalizedProposalId,
-                sink,
-                () => sessionActor.HandleEventAsync(
-                    _startSessionAdapter.Map(
-                        new StartScriptEvolutionSessionActorRequest(
-                            ProposalId: normalizedProposal.ProposalId ?? string.Empty,
-                            ScriptId: normalizedProposal.ScriptId ?? string.Empty,
-                            BaseRevision: normalizedProposal.BaseRevision ?? string.Empty,
-                            CandidateRevision: normalizedProposal.CandidateRevision ?? string.Empty,
-                            CandidateSource: normalizedProposal.CandidateSource ?? string.Empty,
-                            CandidateSourceHash: normalizedProposal.CandidateSourceHash ?? string.Empty,
-                            Reason: normalizedProposal.Reason ?? string.Empty),
-                        sessionActorId),
-                    ct),
-                ct);
-
-            return MapDecision(normalizedProposal, completed);
-        }
-        finally
-        {
-            await _projectionLifecyclePort.DetachReleaseAndDisposeAsync(
-                projectionLease,
-                sink,
-                onDetachedAsync: null,
-                CancellationToken.None);
-        }
-    }
-
-    private async Task<ScriptEvolutionSessionCompletedEvent> WaitForSessionCompletionAsync(
-        string proposalId,
-        IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
-        Func<Task> dispatchAsync,
-        CancellationToken ct)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(proposalId);
-        ArgumentNullException.ThrowIfNull(sink);
-        ArgumentNullException.ThrowIfNull(dispatchAsync);
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(_decisionTimeout);
-
-        await dispatchAsync();
-        try
-        {
-            await foreach (var evt in sink.ReadAllAsync(timeoutCts.Token))
-            {
-                if (string.Equals(evt.ProposalId, proposalId, StringComparison.Ordinal))
-                    return evt;
-            }
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested && timeoutCts.IsCancellationRequested)
-        {
-            throw new TimeoutException($"Timeout waiting for script evolution session completion. proposal_id={proposalId}");
+            var reason = string.IsNullOrWhiteSpace(responded.FailureReason)
+                ? $"Script evolution decision unavailable. proposal_id={normalizedProposalId}"
+                : responded.FailureReason;
+            throw new InvalidOperationException(reason);
         }
 
-        throw new TimeoutException($"Timeout waiting for script evolution session completion. proposal_id={proposalId}");
+        return MapDecision(normalizedProposal, responded);
     }
 
     private static ScriptPromotionDecision MapDecision(
         ScriptEvolutionProposal proposal,
-        ScriptEvolutionSessionCompletedEvent completed)
+        ScriptEvolutionDecisionRespondedEvent completed)
     {
         var validation = new ScriptEvolutionValidationReport(
             IsSuccess: completed.Accepted,

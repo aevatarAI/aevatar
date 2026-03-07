@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Abstractions.Evolution;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Infrastructure.Ports;
@@ -406,26 +405,21 @@ public class RuntimeScriptInfrastructurePortsTests
     [Fact]
     public async Task EvolutionLifecycleService_ShouldReturnDecision_WhenSessionCompletes()
     {
-        var projectionPort = new TestProjectionLifecyclePort();
-        var runtime = CreateEvolutionRuntime(projectionPort, (_, start) =>
+        var streams = new InMemoryStreamProvider();
+        var runtime = CreateEvolutionRuntime(streams, (_, start, session) =>
         {
-            projectionPort.Publish("script-evolution-session:proposal-1", new ScriptEvolutionSessionCompletedEvent
+            session.DecisionResponse = new ScriptEvolutionDecisionRespondedEvent
             {
-                ProposalId = "another-proposal",
-                Accepted = false,
-                Status = "ignored",
-            });
-            projectionPort.Publish("script-evolution-session:proposal-1", new ScriptEvolutionSessionCompletedEvent
-            {
-                ProposalId = start.ProposalId,
+                ProposalId = start.ProposalId ?? string.Empty,
+                Found = true,
                 Accepted = true,
                 Status = "promoted",
                 DefinitionActorId = "definition-1",
                 CatalogActorId = "catalog-1",
                 Diagnostics = { "compile-ok" },
-            });
+            };
         });
-        var service = CreateEvolutionLifecycleService(runtime, projectionPort);
+        var service = CreateEvolutionLifecycleService(runtime, streams);
 
         var decision = await service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -441,26 +435,25 @@ public class RuntimeScriptInfrastructurePortsTests
         decision.Accepted.Should().BeTrue();
         decision.Status.Should().Be("promoted");
         decision.ValidationReport.Diagnostics.Should().ContainSingle(x => x == "compile-ok");
-        projectionPort.DetachCount.Should().Be(1);
-        projectionPort.ReleaseCount.Should().Be(1);
     }
 
     [Fact]
     public async Task EvolutionLifecycleService_ShouldGenerateProposalId_WhenRequestProposalIdMissing()
     {
-        var projectionPort = new TestProjectionLifecyclePort();
+        var streams = new InMemoryStreamProvider();
         StartScriptEvolutionSessionRequestedEvent? capturedStart = null;
-        var runtime = CreateEvolutionRuntime(projectionPort, (_, start) =>
+        var runtime = CreateEvolutionRuntime(streams, (_, start, session) =>
         {
             capturedStart = start;
-            projectionPort.Publish("script-evolution-session:" + start.ProposalId, new ScriptEvolutionSessionCompletedEvent
+            session.DecisionResponse = new ScriptEvolutionDecisionRespondedEvent
             {
-                ProposalId = start.ProposalId,
+                ProposalId = start.ProposalId ?? string.Empty,
+                Found = true,
                 Accepted = true,
                 Status = "promoted",
-            });
+            };
         });
-        var service = CreateEvolutionLifecycleService(runtime, projectionPort);
+        var service = CreateEvolutionLifecycleService(runtime, streams);
 
         var decision = await service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -481,11 +474,11 @@ public class RuntimeScriptInfrastructurePortsTests
     [Fact]
     public async Task EvolutionLifecycleService_ShouldThrowTimeout_WhenSessionTimesOut()
     {
-        var projectionPort = new TestProjectionLifecyclePort();
-        var runtime = CreateEvolutionRuntime(projectionPort, (_, _) => { });
+        var streams = new InMemoryStreamProvider();
+        var runtime = CreateEvolutionRuntime(streams, (_, _, session) => session.SuppressQueryResponse = true);
         var service = CreateEvolutionLifecycleService(
             runtime,
-            projectionPort,
+            streams,
             new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(50) });
 
         var act = () => service.ProposeAsync(
@@ -500,21 +493,27 @@ public class RuntimeScriptInfrastructurePortsTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<TimeoutException>()
-            .WithMessage("*proposal-timeout*");
-        projectionPort.DetachCount.Should().Be(1);
-        projectionPort.ReleaseCount.Should().Be(1);
+            .WithMessage("*script evolution decision query response*");
     }
 
     [Fact]
-    public async Task EvolutionLifecycleService_ShouldThrow_WhenProjectionLeaseIsUnavailable()
+    public async Task EvolutionLifecycleService_ShouldThrow_WhenSessionDecisionIsUnavailable()
     {
-        var projectionPort = new TestProjectionLifecyclePort { ReturnNullLease = true };
-        var runtime = CreateEvolutionRuntime(projectionPort, (_, _) => { });
-        var service = CreateEvolutionLifecycleService(runtime, projectionPort);
+        var streams = new InMemoryStreamProvider();
+        var runtime = CreateEvolutionRuntime(streams, (_, start, session) =>
+        {
+            session.DecisionResponse = new ScriptEvolutionDecisionRespondedEvent
+            {
+                ProposalId = start.ProposalId ?? string.Empty,
+                Found = false,
+                FailureReason = "Proposal decision not completed yet.",
+            };
+        });
+        var service = CreateEvolutionLifecycleService(runtime, streams);
 
         var act = () => service.ProposeAsync(
             new ScriptEvolutionProposal(
-                ProposalId: "proposal-no-projection",
+                ProposalId: "proposal-no-decision",
                 ScriptId: "script-1",
                 BaseRevision: "rev-1",
                 CandidateRevision: "rev-2",
@@ -524,9 +523,7 @@ public class RuntimeScriptInfrastructurePortsTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*projection is disabled*");
-        projectionPort.DetachCount.Should().Be(0);
-        projectionPort.ReleaseCount.Should().Be(0);
+            .WithMessage("*Proposal decision not completed yet.*");
     }
 
     private static RuntimeScriptDefinitionSnapshotPort CreateDefinitionSnapshotPort(
@@ -578,20 +575,45 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     private static TestActorRuntime CreateEvolutionRuntime(
-        TestProjectionLifecyclePort projectionPort,
-        Action<string, StartScriptEvolutionSessionRequestedEvent> onStartSession)
+        InMemoryStreamProvider streams,
+        Action<string, StartScriptEvolutionSessionRequestedEvent, TestEvolutionSessionState> onStartSession)
     {
         var runtime = new TestActorRuntime();
+        var sessions = new Dictionary<string, TestEvolutionSessionState>(StringComparer.Ordinal);
         runtime.CreateActor = actorId =>
         {
             if (actorId.StartsWith("script-evolution-session:", StringComparison.Ordinal))
             {
-                return new TestActor(actorId, (envelope, ct) =>
+                var session = new TestEvolutionSessionState();
+                sessions[actorId] = session;
+                return new TestActor(actorId, async (envelope, ct) =>
                 {
-                    var start = envelope.Payload.Unpack<StartScriptEvolutionSessionRequestedEvent>();
-                    onStartSession(actorId, start);
+                    if (envelope.Payload.Is(StartScriptEvolutionSessionRequestedEvent.Descriptor))
+                    {
+                        var start = envelope.Payload.Unpack<StartScriptEvolutionSessionRequestedEvent>();
+                        onStartSession(actorId, start, session);
+                        return;
+                    }
+
+                    if (envelope.Payload.Is(QueryScriptEvolutionDecisionRequestedEvent.Descriptor))
+                    {
+                        var query = envelope.Payload.Unpack<QueryScriptEvolutionDecisionRequestedEvent>();
+                        if (session.SuppressQueryResponse)
+                            return;
+
+                        var response = session.DecisionResponse?.Clone()
+                            ?? new ScriptEvolutionDecisionRespondedEvent
+                            {
+                                ProposalId = query.ProposalId ?? string.Empty,
+                                Found = false,
+                                FailureReason = "Proposal decision not completed yet.",
+                            };
+                        response.RequestId = query.RequestId;
+                        await streams.GetStream(query.ReplyStreamId).ProduceAsync(response, ct);
+                        return;
+                    }
+
                     ct.ThrowIfCancellationRequested();
-                    return Task.CompletedTask;
                 });
             }
 
@@ -602,12 +624,12 @@ public class RuntimeScriptInfrastructurePortsTests
 
     private static RuntimeScriptEvolutionLifecycleService CreateEvolutionLifecycleService(
         TestActorRuntime runtime,
-        TestProjectionLifecyclePort projectionPort,
+        InMemoryStreamProvider streams,
         IScriptingPortTimeouts? timeouts = null)
     {
         return new RuntimeScriptEvolutionLifecycleService(
             new RuntimeScriptActorAccessor(runtime),
-            projectionPort,
+            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
             timeouts ?? new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(200) });
     }
@@ -774,74 +796,10 @@ public class RuntimeScriptInfrastructurePortsTests
         public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
     }
 
-    private sealed class TestProjectionLease(string actorId, string proposalId) : IScriptEvolutionProjectionLease
+    private sealed class TestEvolutionSessionState
     {
-        public string ActorId { get; } = actorId;
+        public ScriptEvolutionDecisionRespondedEvent? DecisionResponse { get; set; }
 
-        public string ProposalId { get; } = proposalId;
-    }
-
-    private sealed class TestProjectionLifecyclePort : IScriptEvolutionProjectionLifecyclePort
-    {
-        private readonly Dictionary<string, IEventSink<ScriptEvolutionSessionCompletedEvent>> _sinks =
-            new(StringComparer.Ordinal);
-
-        public bool ProjectionEnabled => true;
-
-        public bool ReturnNullLease { get; set; }
-
-        public int DetachCount { get; private set; }
-
-        public int ReleaseCount { get; private set; }
-
-        public Task<IScriptEvolutionProjectionLease?> EnsureActorProjectionAsync(
-            string sessionActorId,
-            string proposalId,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (ReturnNullLease)
-                return Task.FromResult<IScriptEvolutionProjectionLease?>(null);
-            return Task.FromResult<IScriptEvolutionProjectionLease?>(
-                new TestProjectionLease(sessionActorId, proposalId));
-        }
-
-        public Task AttachLiveSinkAsync(
-            IScriptEvolutionProjectionLease lease,
-            IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _sinks[lease.ActorId] = sink;
-            return Task.CompletedTask;
-        }
-
-        public Task DetachLiveSinkAsync(
-            IScriptEvolutionProjectionLease lease,
-            IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
-            CancellationToken ct = default)
-        {
-            _ = sink;
-            ct.ThrowIfCancellationRequested();
-            DetachCount++;
-            _sinks.Remove(lease.ActorId);
-            return Task.CompletedTask;
-        }
-
-        public Task ReleaseActorProjectionAsync(
-            IScriptEvolutionProjectionLease lease,
-            CancellationToken ct = default)
-        {
-            _ = lease;
-            ct.ThrowIfCancellationRequested();
-            ReleaseCount++;
-            return Task.CompletedTask;
-        }
-
-        public void Publish(string sessionActorId, ScriptEvolutionSessionCompletedEvent evt)
-        {
-            if (_sinks.TryGetValue(sessionActorId, out var sink))
-                sink.Push(evt);
-        }
+        public bool SuppressQueryResponse { get; set; }
     }
 }

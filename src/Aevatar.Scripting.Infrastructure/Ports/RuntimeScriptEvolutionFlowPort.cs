@@ -47,31 +47,15 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
             var scriptId = proposal.ScriptId ?? string.Empty;
             var candidateRevision = proposal.CandidateRevision ?? string.Empty;
             var catalogActorId = _addressResolver.GetCatalogActorId();
-            ScriptCatalogEntrySnapshot? catalogBefore;
-            var catalogBaselineSource = "query";
-            try
-            {
-                catalogBefore = await _lifecyclePort.GetCatalogEntryAsync(catalogActorId, scriptId, ct);
-            }
-            catch (Exception ex)
-            {
-                if (string.IsNullOrWhiteSpace(proposal.BaseRevision))
-                {
-                    return ScriptEvolutionFlowResult.PromotionFailed(
-                        validation,
-                        "Failed to load catalog baseline before promotion and no base revision fallback is available. reason=" +
-                        ex.Message);
-                }
+            var catalogBaseline = await LoadCatalogBaselineAsync(
+                catalogActorId,
+                proposal,
+                validation,
+                ct);
+            if (!catalogBaseline.Succeeded)
+                return catalogBaseline.Failure!;
 
-                catalogBefore = BuildFallbackCatalogBaseline(proposal);
-                catalogBaselineSource = "fallback_base_revision_after_query_failure";
-            }
-
-            if (catalogBefore == null && !string.IsNullOrWhiteSpace(proposal.BaseRevision))
-            {
-                catalogBefore = BuildFallbackCatalogBaseline(proposal);
-                catalogBaselineSource = "fallback_base_revision_after_null_query";
-            }
+            var catalogBefore = catalogBaseline.Snapshot;
 
             string definitionActorId;
             try
@@ -126,7 +110,6 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
                     "Promotion failed after definition upsert. definition_actor_id=" +
                     definitionActorId +
                     " candidate_revision=" + candidateRevision +
-                    " catalog_baseline_source=" + catalogBaselineSource +
                     " reason=" + ex.Message +
                     " compensation=" + compensation,
                     partial);
@@ -176,18 +159,41 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
         return string.Empty;
     }
 
-    private static ScriptCatalogEntrySnapshot BuildFallbackCatalogBaseline(ScriptEvolutionProposal proposal)
+    private async Task<CatalogBaselineRequirementResult> LoadCatalogBaselineAsync(
+        string catalogActorId,
+        ScriptEvolutionProposal proposal,
+        ScriptEvolutionValidationReport validation,
+        CancellationToken ct)
     {
         var scriptId = proposal.ScriptId ?? string.Empty;
-        var baseRevision = proposal.BaseRevision ?? string.Empty;
-        return new ScriptCatalogEntrySnapshot(
-            ScriptId: scriptId,
-            ActiveRevision: baseRevision,
-            ActiveDefinitionActorId: string.Empty,
-            ActiveSourceHash: string.Empty,
-            PreviousRevision: string.Empty,
-            RevisionHistory: [baseRevision],
-            LastProposalId: proposal.ProposalId ?? string.Empty);
+        try
+        {
+            var catalogBefore = await _lifecyclePort.GetCatalogEntryAsync(catalogActorId, scriptId, ct);
+            if (catalogBefore == null && !string.IsNullOrWhiteSpace(proposal.BaseRevision))
+            {
+                return CatalogBaselineRequirementResult.Fail(
+                    ScriptEvolutionFlowResult.PromotionFailed(
+                        validation,
+                        "Catalog baseline not found before promotion. script_id=" +
+                        scriptId +
+                        " expected_base_revision=" +
+                        proposal.BaseRevision));
+            }
+
+            return CatalogBaselineRequirementResult.Success(catalogBefore);
+        }
+        catch (Exception ex)
+        {
+            return CatalogBaselineRequirementResult.Fail(
+                ScriptEvolutionFlowResult.PromotionFailed(
+                    validation,
+                    "Failed to load catalog baseline before promotion. script_id=" +
+                    scriptId +
+                    " expected_base_revision=" +
+                    (proposal.BaseRevision ?? string.Empty) +
+                    " reason=" +
+                    ex.Message));
+        }
     }
 
     private async Task<string> TryCompensateCatalogRevisionAsync(
@@ -228,5 +234,17 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
 
         if (definition is IDisposable disposable)
             disposable.Dispose();
+    }
+
+    private readonly record struct CatalogBaselineRequirementResult(
+        bool Succeeded,
+        ScriptCatalogEntrySnapshot? Snapshot,
+        ScriptEvolutionFlowResult? Failure)
+    {
+        public static CatalogBaselineRequirementResult Success(ScriptCatalogEntrySnapshot? snapshot) =>
+            new(true, snapshot, null);
+
+        public static CatalogBaselineRequirementResult Fail(ScriptEvolutionFlowResult failure) =>
+            new(false, null, failure);
     }
 }

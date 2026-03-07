@@ -133,9 +133,11 @@ Core 响应处理要点：
 
 1. 外部入口：Host API -> `IScriptEvolutionApplicationService`
 2. 脚本入口：`IScriptRuntimeCapabilities.ProposeScriptEvolutionAsync`
-3. 外部入口等待终态时走 `RuntimeScriptLifecyclePort` 的 `ensure projection -> attach sink -> dispatch -> wait -> detach/release` 链路。
+3. 运行时命令链路统一走 `RuntimeScriptEvolutionLifecycleService` 的 `dispatch session actor -> query session actor decision`，不再把 projection session sink 当作 command completion 通道。
 
 4. proposal 生命周期与 decision query 已全部收敛到 `ScriptEvolutionSessionGAgent`；不再保留 manager/index actor。
+5. `RuntimeScriptEvolutionFlowPort` 在 promotion 前必须先拿到权威 catalog baseline：query 异常直接失败；当 proposal 声明了 `base_revision` 但 catalog query 返回空时也直接失败，不再用 proposal 字段伪造 fallback baseline。
+6. 任何允许后续 evolution 的初始脚本 revision，都必须先 bootstrap 进 `script-catalog`；单独 definition upsert 不再被视为可演化 baseline。
 
 两条入口在 session actor 生命周期与 Catalog 事实层合流，保证策略、验证、发布、回滚语义一致。
 

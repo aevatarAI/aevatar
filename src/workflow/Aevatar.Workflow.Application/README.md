@@ -64,6 +64,7 @@ Aevatar.Workflow.Application/
   - `ListAgentsAsync` 仅返回 `WorkflowGAgent`，不扫描暴露非 Workflow actor。
 - `InMemoryWorkflowDefinitionCatalog`
   - 明确的 dev/test in-memory definition catalog；内建 workflow 由 `IWorkflowDefinitionSeedSource` 注入。
+  - 不再由 `AddWorkflowApplication()` 默认装配；需要由 Host/dev/test 显式调用 `AddInMemoryWorkflowDefinitionCatalog()`。
 
 ## 分层约束
 
@@ -76,22 +77,30 @@ Aevatar.Workflow.Application/
 
 ```csharp
 services.AddWorkflowApplication(
-    configureCatalog: opt => opt.RegisterBuiltInDirectWorkflow = true,
-    configureRunBehavior: opt =>
+    opt =>
     {
         opt.UseAutoAsDefaultWhenWorkflowUnspecified = false; // default
     });
+services.AddInMemoryWorkflowDefinitionCatalog(opt =>
+{
+    opt.RegisterBuiltInDirectWorkflow = true;
+});
 ```
 
 注册内容：
 - `IWorkflowChatRunApplicationService`
 - `IWorkflowExecutionQueryApplicationService`
-- `IWorkflowDefinitionCatalog`
 - `WorkflowRunBehaviorOptions`
 - `IWorkflowExecutionRunOrchestrator` + `IWorkflowExecutionTopologyResolver`
 - `IWorkflowRunActorResolver`、`IWorkflowRunRequestExecutor`、`IWorkflowRunOutputStreamer`
 - `IWorkflowChatRequestEnvelopeFactory`
 - `IWorkflowExecutionReportArtifactSink`（Noop 默认）
+
+显式 definition fact source：
+- `AddInMemoryWorkflowDefinitionCatalog(...)`
+  - 注册 `InMemoryWorkflowDefinitionCatalog`
+  - 注册 `IWorkflowDefinitionCatalog` / `IWorkflowDefinitionLookupService`
+  - 注入内建 `direct/auto/auto_review` workflow seeds（可通过 options 关闭）
 
 ## 依赖
 

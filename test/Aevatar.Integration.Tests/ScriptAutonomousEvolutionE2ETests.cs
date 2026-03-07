@@ -40,6 +40,12 @@ public class ScriptAutonomousEvolutionE2ETests
                     SourceHash: "hash-worker-1"),
                 workerDefinitionActorId),
             CancellationToken.None);
+        await PromoteToCatalogAsync(
+            runtime,
+            scriptId: "worker-script",
+            revision: "rev-worker-1",
+            definitionActorId: workerDefinitionActorId,
+            sourceHash: "hash-worker-1");
 
         var orchestratorDefinition = await runtime.CreateAsync<ScriptDefinitionGAgent>(orchestratorDefinitionActorId);
         await orchestratorDefinition.HandleEventAsync(
@@ -51,6 +57,12 @@ public class ScriptAutonomousEvolutionE2ETests
                     SourceHash: "hash-orchestrator-1"),
                 orchestratorDefinitionActorId),
             CancellationToken.None);
+        await PromoteToCatalogAsync(
+            runtime,
+            scriptId: "orchestrator-script",
+            revision: "rev-orchestrator-1",
+            definitionActorId: orchestratorDefinitionActorId,
+            sourceHash: "hash-orchestrator-1");
 
         var orchestratorRuntime = await runtime.CreateAsync<ScriptRuntimeGAgent>(orchestratorRuntimeActorId);
         await orchestratorRuntime.HandleEventAsync(
@@ -106,6 +118,29 @@ public class ScriptAutonomousEvolutionE2ETests
 
         var events = await eventStore.GetEventsAsync(orchestratorRuntimeActorId, ct: CancellationToken.None);
         events.Should().Contain(x => x.EventData != null && x.EventData.Is(ScriptRunDomainEventCommitted.Descriptor));
+    }
+
+    private static async Task PromoteToCatalogAsync(
+        IActorRuntime runtime,
+        string scriptId,
+        string revision,
+        string definitionActorId,
+        string sourceHash)
+    {
+        var catalogActor = await runtime.GetAsync("script-catalog")
+            ?? await runtime.CreateAsync<ScriptCatalogGAgent>("script-catalog");
+        var promote = new PromoteScriptRevisionActorRequestAdapter();
+        await catalogActor.HandleEventAsync(
+            promote.Map(
+                new PromoteScriptRevisionActorRequest(
+                    ScriptId: scriptId,
+                    Revision: revision,
+                    DefinitionActorId: definitionActorId,
+                    SourceHash: sourceHash,
+                    ProposalId: $"bootstrap-{scriptId}-{revision}",
+                    ExpectedBaseRevision: string.Empty),
+                "script-catalog"),
+            CancellationToken.None);
     }
 
     private const string ScriptOnlyOrchestratorSource = """

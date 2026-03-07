@@ -222,6 +222,12 @@ public sealed class MyWorkflowModulePack : IWorkflowModulePack
 
 ## 8. 当前代码入口
 
+Definition catalog 装配规则：
+
+1. `AddWorkflowApplication()` 只注册 run/query/orchestration 应用服务，不默认声明 definition fact source。
+2. dev/test/demo 若要使用内存 definition catalog，必须显式调用 `AddInMemoryWorkflowDefinitionCatalog()`。
+3. production composition 若不用 `InMemory`，必须在 Host/Infrastructure 层显式提供自己的 `IWorkflowDefinitionCatalog`。
+
 最关键的代码文件：
 
 1. `src/workflow/Aevatar.Workflow.Core/WorkflowGAgent.cs`
