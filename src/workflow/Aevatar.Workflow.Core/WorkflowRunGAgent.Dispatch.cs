@@ -26,11 +26,11 @@ public sealed partial class WorkflowRunGAgent
             return;
         }
 
-        var request = BuildStepRequest(step, input, runId);
+        var request = _stepRequestFactory.BuildStepRequest(step, input, runId, State, _compiledWorkflow);
         var next = State.Clone();
         next.ActiveStepId = step.Id;
         next.Status = StatusActive;
-        next.StepExecutions[step.Id] = BuildExecutionState(
+        next.StepExecutions[step.Id] = _stepRequestFactory.BuildExecutionState(
             step.Id,
             canonicalType,
             input,
@@ -44,7 +44,7 @@ public sealed partial class WorkflowRunGAgent
             {
                 StepId = step.Id,
                 TimeoutMs = Math.Clamp(step.TimeoutMs.Value, 100, 600_000),
-                SemanticGeneration = NextSemanticGeneration(
+                SemanticGeneration = WorkflowRunSupport.NextSemanticGeneration(
                     State.PendingTimeouts.TryGetValue(step.Id, out var existingTimeout)
                         ? existingTimeout.SemanticGeneration
                         : 0),
@@ -60,7 +60,7 @@ public sealed partial class WorkflowRunGAgent
         if (step.TimeoutMs is > 0)
         {
             await ScheduleWorkflowCallbackAsync(
-                BuildStepTimeoutCallbackId(runId, step.Id),
+                WorkflowRunSupport.BuildStepTimeoutCallbackId(runId, step.Id),
                 TimeSpan.FromMilliseconds(next.PendingTimeouts[step.Id].TimeoutMs),
                 new WorkflowStepTimeoutFiredEvent
                 {
@@ -113,7 +113,7 @@ public sealed partial class WorkflowRunGAgent
             request.Parameters[key] = value;
 
         var next = State.Clone();
-        next.StepExecutions[stepId] = BuildExecutionState(
+        next.StepExecutions[stepId] = _stepRequestFactory.BuildExecutionState(
             stepId,
             request.StepType,
             input,
@@ -144,7 +144,7 @@ public sealed partial class WorkflowRunGAgent
         string input,
         CancellationToken ct)
     {
-        var vars = BuildIterationVariables(input, state.Iteration, state.MaxIterations);
+        var vars = _stepRequestFactory.BuildIterationVariables(input, state.Iteration, state.MaxIterations);
         var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, value) in state.SubParameters)
             parameters[key] = _expressionEvaluator.Evaluate(value, vars);

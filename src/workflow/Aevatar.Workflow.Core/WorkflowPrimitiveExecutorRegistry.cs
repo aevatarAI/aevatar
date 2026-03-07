@@ -9,7 +9,7 @@ public sealed class WorkflowPrimitiveExecutorRegistry
 
     public WorkflowPrimitiveExecutorRegistry(IEnumerable<IWorkflowPrimitivePack> primitivePacks)
     {
-        _entriesByName = BuildModuleMap(primitivePacks ?? throw new ArgumentNullException(nameof(primitivePacks)));
+        _entriesByName = BuildPrimitiveMap(primitivePacks ?? throw new ArgumentNullException(nameof(primitivePacks)));
     }
 
     public IReadOnlyCollection<string> RegisteredNames => _entriesByName.Keys.ToArray();
@@ -29,14 +29,14 @@ public sealed class WorkflowPrimitiveExecutorRegistry
         return handler != null;
     }
 
-    private static IReadOnlyDictionary<string, PrimitiveEntry> BuildModuleMap(
+    private static IReadOnlyDictionary<string, PrimitiveEntry> BuildPrimitiveMap(
         IEnumerable<IWorkflowPrimitivePack> primitivePacks)
     {
         var map = new Dictionary<string, PrimitiveEntry>(StringComparer.OrdinalIgnoreCase);
-        foreach (var modulePack in primitivePacks)
+        foreach (var primitivePack in primitivePacks)
         {
-            var packName = string.IsNullOrWhiteSpace(modulePack.Name) ? modulePack.GetType().Name : modulePack.Name;
-            foreach (var registration in modulePack.Executors)
+            var packName = string.IsNullOrWhiteSpace(primitivePack.Name) ? primitivePack.GetType().Name : primitivePack.Name;
+            foreach (var registration in primitivePack.Executors)
             {
                 foreach (var name in registration.Names)
                 {

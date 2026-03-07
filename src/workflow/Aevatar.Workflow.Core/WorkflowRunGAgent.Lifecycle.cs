@@ -33,7 +33,7 @@ public sealed partial class WorkflowRunGAgent
             ? $"{State.RunId}:dynamic:{parentStepId}:{Guid.NewGuid():N}"
             : request.InvocationId.Trim();
         var childRunId = invocationId;
-        var childActorId = BuildSubWorkflowRunActorId(workflowName, WorkflowCallLifecycle.Transient, invocationId);
+        var childActorId = WorkflowRunSupport.BuildSubWorkflowRunActorId(Id, workflowName, WorkflowCallLifecycle.Transient, invocationId);
         var next = State.Clone();
         next.PendingSubWorkflows[childRunId] = new WorkflowPendingSubWorkflowState
         {

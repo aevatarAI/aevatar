@@ -19,17 +19,12 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     private const string StatusCompleted = "completed";
     private const string StatusFailed = "failed";
 
-    private const string CallbackSemanticGenerationMetadataKey = "workflow.semantic_generation";
-    private const string CallbackRunIdMetadataKey = "workflow.run_id";
-    private const string CallbackStepIdMetadataKey = "workflow.step_id";
-    private const string CallbackSessionIdMetadataKey = "workflow.session_id";
-    private const string CallbackKindMetadataKey = "workflow.callback_kind";
-
     private readonly IActorRuntime _runtime;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IWorkflowDefinitionResolver? _workflowDefinitionResolver;
     private readonly WorkflowPrimitiveExecutorRegistry _primitiveRegistry;
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
+    private readonly WorkflowRunStepRequestFactory _stepRequestFactory;
     private readonly ISet<string> _knownStepTypes;
     private readonly WorkflowCompilationService _workflowCompilationService;
     private readonly WorkflowRunEffectDispatcher _effectDispatcher;
@@ -47,6 +42,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
         _workflowDefinitionResolver = workflowDefinitionResolver;
+        _stepRequestFactory = new WorkflowRunStepRequestFactory(_expressionEvaluator);
 
         var packs = (primitivePacks ?? throw new ArgumentNullException(nameof(primitivePacks))).ToList();
         if (packs.Count == 0)
@@ -63,7 +59,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             compiledWorkflowAccessor: () => _compiledWorkflow,
             runtime: _runtime,
             resolveRoleAgentType: _roleAgentTypeResolver.ResolveRoleAgentType,
-            buildChildActorId: BuildChildActorId,
+            buildChildActorId: roleId => WorkflowRunSupport.BuildChildActorId(Id, roleId),
             createRoleAgentInitializeEnvelope: CreateRoleAgentInitializeEnvelopeCore,
             scheduleSelfDurableTimeoutAsync: async (callbackId, dueTime, evt, metadata, ct) =>
             {
@@ -175,7 +171,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             }
         }
 
-        ResetRuntimeState(next, clearChildActors: true);
+        WorkflowRunSupport.ResetRuntimeState(next, clearChildActors: true);
 
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
@@ -222,7 +218,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         var input = request.Prompt ?? string.Empty;
 
         var next = State.Clone();
-        ResetRuntimeState(next, clearChildActors: false);
+        WorkflowRunSupport.ResetRuntimeState(next, clearChildActors: false);
         next.RunId = runId;
         next.Status = StatusActive;
         next.Variables["input"] = input;

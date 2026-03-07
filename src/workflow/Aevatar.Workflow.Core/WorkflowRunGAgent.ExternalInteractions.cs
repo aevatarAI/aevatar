@@ -11,7 +11,7 @@ public sealed partial class WorkflowRunGAgent
         if (!string.Equals(WorkflowRunIdNormalizer.Normalize(resumed.RunId), State.RunId, StringComparison.Ordinal))
             return;
 
-        if (!TryResolvePendingHumanGate(resumed.ResumeToken, out var pending))
+        if (!WorkflowRunSupport.TryResolvePendingHumanGate(State, resumed.ResumeToken, out var pending))
             return;
 
         var next = State.Clone();
@@ -72,7 +72,7 @@ public sealed partial class WorkflowRunGAgent
         if (!string.Equals(WorkflowRunIdNormalizer.Normalize(signal.RunId), State.RunId, StringComparison.Ordinal))
             return;
 
-        if (!TryResolvePendingSignalWait(signal.WaitToken, out var pending))
+        if (!WorkflowRunSupport.TryResolvePendingSignalWait(State, signal.WaitToken, out var pending))
             return;
 
         var next = State.Clone();

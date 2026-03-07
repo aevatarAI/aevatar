@@ -19,6 +19,8 @@ Aevatar.Workflow.Core/
 ├── WorkflowPrimitiveExecutionPlanner.cs
 ├── WorkflowAsyncOperationReconciler.cs
 ├── WorkflowRunEffectDispatcher.cs
+├── WorkflowRunStepRequestFactory.cs
+├── WorkflowRunSupport.cs
 ├── WorkflowRunGAgent.StatefulCompletions.cs
 ├── WorkflowRunGAgent.Callbacks.cs
 ├── WorkflowRunGAgent.Dispatch.cs
@@ -66,6 +68,7 @@ Aevatar.Workflow.Core/
 6. 通过 `WorkflowRunReducer / WorkflowPrimitiveExecutionPlanner / WorkflowAsyncOperationReconciler / WorkflowRunEffectDispatcher` 把 reducer、planning、对账和 effect 组装从 actor shell 里显式抽出。
 7. `WorkflowRunGAgent` 主文件只保留 owner shell；binding/finalization 在 `Lifecycle`，外部恢复/信号/回包入口在 `ExternalInteractions`。
 8. DSL compile/validate 已从 actor shell 抽成 `WorkflowCompilationService + Validation/*`。
+9. step request 构建、while 条件求值、callback key / parent-step 推导等纯 helper 逻辑继续下沉到 `WorkflowRunStepRequestFactory + WorkflowRunSupport`，避免 owner 切片继续膨胀。
 
 ## 3. 状态模型
 
@@ -109,7 +112,7 @@ Aevatar.Workflow.Core/
 - `cache_entries`
 - `pending_cache_calls`
 
-## 4. 模块边界
+## 4. 运行边界
 
 ### 4.1 WorkflowCorePrimitivePack 当前只注册无状态 primitive handlers
 

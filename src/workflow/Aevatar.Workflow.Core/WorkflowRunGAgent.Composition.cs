@@ -228,7 +228,7 @@ public sealed partial class WorkflowRunGAgent
 
         var invocationId = WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId);
         var childRunId = invocationId;
-        var childActorId = BuildSubWorkflowRunActorId(workflowName, lifecycle, invocationId);
+        var childActorId = WorkflowRunSupport.BuildSubWorkflowRunActorId(Id, workflowName, lifecycle, invocationId);
         var next = State.Clone();
         next.PendingSubWorkflows[childRunId] = new WorkflowPendingSubWorkflowState
         {

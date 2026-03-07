@@ -12,11 +12,11 @@ public sealed partial class WorkflowRunGAgent
         EventEnvelope envelope,
         CancellationToken ct)
     {
-        if (!TryMatchRunAndStep(evt.RunId, evt.StepId))
+        if (!WorkflowRunSupport.TryMatchRunAndStep(State.RunId, evt.RunId, evt.StepId))
             return;
         if (!State.PendingTimeouts.TryGetValue(evt.StepId, out var pending))
             return;
-        if (!MatchesSemanticGeneration(envelope, pending.SemanticGeneration))
+        if (!WorkflowRunSupport.MatchesSemanticGeneration(envelope, pending.SemanticGeneration))
             return;
 
         var next = State.Clone();
@@ -36,11 +36,11 @@ public sealed partial class WorkflowRunGAgent
         EventEnvelope envelope,
         CancellationToken ct)
     {
-        if (!TryMatchRunAndStep(evt.RunId, evt.StepId))
+        if (!WorkflowRunSupport.TryMatchRunAndStep(State.RunId, evt.RunId, evt.StepId))
             return;
         if (!State.PendingRetryBackoffs.TryGetValue(evt.StepId, out var pending))
             return;
-        if (!MatchesSemanticGeneration(envelope, pending.SemanticGeneration))
+        if (!WorkflowRunSupport.MatchesSemanticGeneration(envelope, pending.SemanticGeneration))
             return;
 
         var step = _compiledWorkflow?.GetStep(evt.StepId);
@@ -58,11 +58,11 @@ public sealed partial class WorkflowRunGAgent
         EventEnvelope envelope,
         CancellationToken ct)
     {
-        if (!TryMatchRunAndStep(evt.RunId, evt.StepId))
+        if (!WorkflowRunSupport.TryMatchRunAndStep(State.RunId, evt.RunId, evt.StepId))
             return;
         if (!State.PendingDelays.TryGetValue(evt.StepId, out var pending))
             return;
-        if (!MatchesSemanticGeneration(envelope, pending.SemanticGeneration))
+        if (!WorkflowRunSupport.MatchesSemanticGeneration(envelope, pending.SemanticGeneration))
             return;
 
         var next = State.Clone();
@@ -82,11 +82,11 @@ public sealed partial class WorkflowRunGAgent
         EventEnvelope envelope,
         CancellationToken ct)
     {
-        if (!TryMatchRunAndStep(evt.RunId, evt.StepId))
+        if (!WorkflowRunSupport.TryMatchRunAndStep(State.RunId, evt.RunId, evt.StepId))
             return;
         if (!State.PendingSignalWaits.TryGetValue(evt.StepId, out var pending))
             return;
-        if (!MatchesSemanticGeneration(envelope, pending.TimeoutGeneration))
+        if (!WorkflowRunSupport.MatchesSemanticGeneration(envelope, pending.TimeoutGeneration))
             return;
 
         var next = State.Clone();
@@ -111,7 +111,7 @@ public sealed partial class WorkflowRunGAgent
             return;
         if (string.IsNullOrWhiteSpace(evt.SessionId) || !State.PendingLlmCalls.TryGetValue(evt.SessionId, out var pending))
             return;
-        if (!MatchesSemanticGeneration(envelope, pending.WatchdogGeneration))
+        if (!WorkflowRunSupport.MatchesSemanticGeneration(envelope, pending.WatchdogGeneration))
             return;
 
         var next = State.Clone();
@@ -138,7 +138,7 @@ public sealed partial class WorkflowRunGAgent
             next.PendingLlmCalls.Remove(sessionId);
             await PersistStateAsync(next, ct);
 
-            if (TryExtractLlmFailure(content, out var llmError))
+            if (WorkflowRunSupport.TryExtractLlmFailure(content, out var llmError))
             {
                 await PublishAsync(new StepCompletedEvent
                 {
@@ -164,7 +164,7 @@ public sealed partial class WorkflowRunGAgent
 
         if (State.PendingEvaluations.TryGetValue(sessionId, out var evalPending))
         {
-            var score = ParseScore(content);
+            var score = WorkflowRunSupport.ParseScore(content);
             var passed = score >= evalPending.Threshold;
             var next = State.Clone();
             next.PendingEvaluations.Remove(sessionId);
@@ -289,7 +289,7 @@ public sealed partial class WorkflowRunGAgent
         if (policy == null)
             return false;
 
-        if (IsTimeoutError(evt.Error))
+        if (WorkflowRunSupport.IsTimeoutError(evt.Error))
             return false;
 
         var scheduledRetryCount = State.RetryAttemptsByStepId.TryGetValue(step.Id, out var existingRetryCount)
@@ -321,14 +321,14 @@ public sealed partial class WorkflowRunGAgent
             StepId = step.Id,
             DelayMs = delayMs,
             NextAttempt = nextRetryCount + 1,
-            SemanticGeneration = NextSemanticGeneration(
+            SemanticGeneration = WorkflowRunSupport.NextSemanticGeneration(
                 State.PendingRetryBackoffs.TryGetValue(step.Id, out var existingBackoff)
                     ? existingBackoff.SemanticGeneration
                     : 0),
         };
         await PersistStateAsync(next, ct);
         await ScheduleWorkflowCallbackAsync(
-            BuildRetryBackoffCallbackId(State.RunId, step.Id),
+            WorkflowRunSupport.BuildRetryBackoffCallbackId(State.RunId, step.Id),
             TimeSpan.FromMilliseconds(delayMs),
             new WorkflowStepRetryBackoffFiredEvent
             {

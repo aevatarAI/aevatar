@@ -48,13 +48,13 @@ public sealed partial class WorkflowRunGAgent
             StepId = stepId,
             Input = request.Input ?? string.Empty,
             DurationMs = durationMs,
-            SemanticGeneration = NextSemanticGeneration(
+            SemanticGeneration = WorkflowRunSupport.NextSemanticGeneration(
                 State.PendingDelays.TryGetValue(stepId, out var existing) ? existing.SemanticGeneration : 0),
         };
         await PersistStateAsync(next, ct);
 
         await ScheduleWorkflowCallbackAsync(
-            BuildDelayCallbackId(runId, stepId),
+            WorkflowRunSupport.BuildDelayCallbackId(runId, stepId),
             TimeSpan.FromMilliseconds(durationMs),
             new DelayStepTimeoutFiredEvent
             {
@@ -73,7 +73,7 @@ public sealed partial class WorkflowRunGAgent
     {
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var stepId = request.StepId?.Trim() ?? string.Empty;
-        var signalName = NormalizeSignalName(
+        var signalName = WorkflowRunSupport.NormalizeSignalName(
             WorkflowParameterValueParser.GetString(request.Parameters, "default", "signal_name", "signal"));
         var prompt = WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "prompt", "message");
 
@@ -105,7 +105,7 @@ public sealed partial class WorkflowRunGAgent
             Prompt = prompt,
             TimeoutMs = timeoutMs,
             TimeoutGeneration = timeoutMs > 0
-                ? NextSemanticGeneration(
+                ? WorkflowRunSupport.NextSemanticGeneration(
                     State.PendingSignalWaits.TryGetValue(stepId, out var existing) ? existing.TimeoutGeneration : 0)
                 : 0,
             WaitToken = Guid.NewGuid().ToString("N"),
@@ -126,7 +126,7 @@ public sealed partial class WorkflowRunGAgent
             return;
 
         await ScheduleWorkflowCallbackAsync(
-            BuildWaitSignalCallbackId(runId, signalName, stepId),
+            WorkflowRunSupport.BuildWaitSignalCallbackId(runId, signalName, stepId),
             TimeSpan.FromMilliseconds(timeoutMs),
             new WaitSignalTimeoutFiredEvent
             {

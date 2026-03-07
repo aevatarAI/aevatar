@@ -1,8 +1,8 @@
-# Runtime Phase-7 Thin Owner / Event Module Retirement 重构蓝图（Proposed, Breaking Change）
+# Runtime Phase-7 Thin Owner / Event Module Retirement 重构蓝图（Delivered, Historical Snapshot）
 
 ## 1. 文档元信息
 
-1. 状态：`Proposed`
+1. 状态：`Delivered`
 2. 版本：`v1`
 3. 日期：`2026-03-07`
 4. 决策级别：`Architecture Breaking Change`
@@ -32,10 +32,9 @@
    - AI provider failover 产品语义调整
    - Workflow DSL 产品语法新增能力设计
 7. 本版结论：
-   - 现状已经从“错误主链”收回到正确方向，但还未达到最佳实践终态。
-   - phase-7 的目标不是再补局部 patch，而是完成两件终局工作：
-     1. 把 `WorkflowRunGAgent` 从“大型 run orchestrator”继续压成真正的 thin owner。
-     2. 把 `EventModules` 从 `Workflow -> Role -> Foundation` 这条运行链路中彻底删除，不保留第二套扩展体系。
+   - phase-7 记录的是 `2026-03-07` 当天的终局重构决策与问题快照。
+   - 其中 `EventModules` 从 `Workflow -> Role -> Foundation` 主链中彻底删除，已经在后续交付中完成。
+   - `WorkflowRunGAgent` 的持续薄化在后续 phase-8 之后继续推进；本文件保留原始问题快照，作为历史证据而非当前待办。
 
 ## 2. 最佳实践基线
 
@@ -53,7 +52,7 @@
 10. 删除优于兼容；旧抽象一旦被替换，直接删除，不留空壳和桥接。
 11. 架构治理必须前置为静态门禁和测试约束，而不是靠口头约定。
 
-## 3. 当前问题快照
+## 3. 原始问题快照（Historical, 2026-03-07）
 
 ### P1. `WorkflowRunGAgent` 仍然是偏大的单 run orchestrator
 

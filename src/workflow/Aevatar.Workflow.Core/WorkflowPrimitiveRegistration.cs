@@ -10,26 +10,26 @@ public sealed class WorkflowPrimitiveRegistration
     private readonly Func<IServiceProvider, IWorkflowPrimitiveExecutor> _factory;
 
     private WorkflowPrimitiveRegistration(
-        Type handlerType,
+        Type executorType,
         Func<IServiceProvider, IWorkflowPrimitiveExecutor> factory,
         IReadOnlyList<string> names)
     {
-        ModuleType = handlerType;
+        ExecutorType = executorType;
         _factory = factory;
         Names = names;
     }
 
-    public Type ModuleType { get; }
+    public Type ExecutorType { get; }
 
     public IReadOnlyList<string> Names { get; }
 
-    public static WorkflowPrimitiveRegistration Create<TModule>(params string[] names)
-        where TModule : class, IWorkflowPrimitiveExecutor
+    public static WorkflowPrimitiveRegistration Create<TExecutor>(params string[] names)
+        where TExecutor : class, IWorkflowPrimitiveExecutor
     {
         var cleanedNames = NormalizeNames(names);
         return new WorkflowPrimitiveRegistration(
-            typeof(TModule),
-            sp => ActivatorUtilities.CreateInstance<TModule>(sp),
+            typeof(TExecutor),
+            sp => ActivatorUtilities.CreateInstance<TExecutor>(sp),
             cleanedNames);
     }
 
@@ -50,7 +50,7 @@ public sealed class WorkflowPrimitiveRegistration
             .ToArray();
 
         if (cleaned.Length == 0)
-            throw new ArgumentException("At least one non-empty module name is required.", nameof(names));
+            throw new ArgumentException("At least one non-empty primitive name is required.", nameof(names));
 
         return cleaned;
     }

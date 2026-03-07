@@ -78,6 +78,8 @@ flowchart LR
    - `WorkflowPrimitiveExecutionPlanner.cs`：step type routing 与 primitive planning
    - `WorkflowAsyncOperationReconciler.cs`：callback / LLM response / stateful completion 对账入口
    - `WorkflowRunEffectDispatcher.cs`：actor tree、durable callback、sub-workflow effect
+   - `WorkflowRunStepRequestFactory.cs`：step request / while iteration 变量构建
+   - `WorkflowRunSupport.cs`：callback key、pending token lookup、parent-step 推导等纯 helper
    - `WorkflowCompilationService.cs` + `Validation/*`：DSL compile/validate 服务边界
    - `WorkflowRunGAgent.StatefulCompletions.cs` / `Callbacks.cs` / `Dispatch.cs` / `Infrastructure.cs` / `Composition.cs` / `AI.cs` / `ControlFlow.cs` / `HumanInteraction.cs`：stateful primitive 与 helper 实现切片，不再把主 shell 当成规则实现容器。
 
@@ -176,7 +178,7 @@ POST /api/workflows/signal
 
 ## 6. 扩展方式
 
-### 6.1 注册无状态模块
+### 6.1 注册无状态原语
 
 ```csharp
 services.AddAevatarWorkflow();

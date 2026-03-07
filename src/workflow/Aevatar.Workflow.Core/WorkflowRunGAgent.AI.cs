@@ -31,7 +31,7 @@ public sealed partial class WorkflowRunGAgent
         var attempt = State.StepExecutions.TryGetValue(stepId, out var execution) && execution.Attempt > 0
             ? execution.Attempt
             : 1;
-        var timeoutMs = ResolveLlmTimeoutMs(request.Parameters);
+        var timeoutMs = WorkflowRunSupport.ResolveLlmTimeoutMs(request.Parameters);
         var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(Id, runId, stepId, attempt);
         var next = State.Clone();
         next.PendingLlmCalls[sessionId] = new WorkflowPendingLlmCallState
@@ -41,7 +41,7 @@ public sealed partial class WorkflowRunGAgent
             OriginalInput = request.Input ?? string.Empty,
             TargetRole = request.TargetRole ?? string.Empty,
             TimeoutMs = timeoutMs,
-            WatchdogGeneration = NextSemanticGeneration(
+            WatchdogGeneration = WorkflowRunSupport.NextSemanticGeneration(
                 State.PendingLlmCalls.TryGetValue(sessionId, out var existing) ? existing.WatchdogGeneration : 0),
             Attempt = attempt,
         };
@@ -77,7 +77,7 @@ public sealed partial class WorkflowRunGAgent
         try
         {
             await ScheduleWorkflowCallbackAsync(
-                BuildLlmWatchdogCallbackId(sessionId),
+                WorkflowRunSupport.BuildLlmWatchdogCallbackId(sessionId),
                 TimeSpan.FromMilliseconds(timeoutMs),
                 new LlmCallWatchdogTimeoutFiredEvent
                 {
@@ -192,7 +192,7 @@ public sealed partial class WorkflowRunGAgent
                 Output = existing.Value,
             };
             hit.Metadata["cache.hit"] = "true";
-            hit.Metadata["cache.key"] = ShortenKey(cacheKey);
+            hit.Metadata["cache.key"] = WorkflowRunSupport.ShortenKey(cacheKey);
             await PublishAsync(hit, EventDirection.Self, ct);
             return;
         }
