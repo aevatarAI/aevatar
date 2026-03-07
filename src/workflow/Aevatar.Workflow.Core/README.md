@@ -1,6 +1,6 @@
 # Aevatar.Workflow.Core
 
-`Aevatar.Workflow.Core` 是 workflow 子系统的领域内核，当前模型已经收敛为：
+`Aevatar.Workflow.Core` 是 workflow 子系统的领域内核。当前针对 `WorkflowRunGAgent` 的详细终局重构方案见 [workflow-run-runtime-suite-thin-owner-blueprint-2026-03-08.md](/Users/auric/aevatar/docs/architecture/workflow-run-runtime-suite-thin-owner-blueprint-2026-03-08.md)。当前模型已经收敛为：
 
 1. `WorkflowGAgent` 负责 definition/binding。
 2. `WorkflowRunGAgent` 负责单次 run 的持久事实与执行推进。
@@ -23,10 +23,14 @@ Aevatar.Workflow.Core/
 ├── WorkflowRunStepRequestFactory.cs
 ├── WorkflowRunSupport.cs
 ├── WorkflowRunControlFlowRuntime.cs
-├── WorkflowRunAIRuntime.cs
+├── WorkflowRunLlmRuntime.cs
+├── WorkflowRunEvaluationRuntime.cs
+├── WorkflowRunReflectRuntime.cs
+├── WorkflowRunCacheRuntime.cs
+├── WorkflowRunAIResponseRuntime.cs
 ├── WorkflowRunFanOutRuntime.cs
 ├── WorkflowRunSubWorkflowRuntime.cs
-├── WorkflowRunCallbackRuntime.cs
+├── WorkflowRunTimeoutCallbackRuntime.cs
 ├── WorkflowRunAggregationCompletionRuntime.cs
 ├── WorkflowRunProgressionCompletionRuntime.cs
 ├── WorkflowRunAsyncPolicyRuntime.cs
@@ -77,7 +81,7 @@ Aevatar.Workflow.Core/
 7. `WorkflowRunGAgent` 主文件只保留 owner shell；binding/finalization 在 `Lifecycle`，外部恢复/信号/回包入口在 `ExternalInteractions`。
 8. DSL compile/validate 已从 actor shell 抽成 `WorkflowCompilationService + Validation/*`。
 9. 所有 runtime 现在共享 `WorkflowRunRuntimeContext` 访问 `State/CompiledWorkflow/persist/publish/send/effect`，不再各自持有一组零散 `Func<>` delegate。
-10. step-family 运行逻辑已经按 `WorkflowRunControlFlowRuntime + WorkflowRunAIRuntime + WorkflowRunFanOutRuntime + WorkflowRunSubWorkflowRuntime + WorkflowRunCallbackRuntime + WorkflowRunAggregationCompletionRuntime + WorkflowRunProgressionCompletionRuntime` 分拆；owner 只保留 ingress/reducer/effect boundary。
+10. step-family 运行逻辑已经按 `WorkflowRunControlFlowRuntime + WorkflowRunLlmRuntime + WorkflowRunEvaluationRuntime + WorkflowRunReflectRuntime + WorkflowRunCacheRuntime + WorkflowRunAIResponseRuntime + WorkflowRunFanOutRuntime + WorkflowRunSubWorkflowRuntime + WorkflowRunTimeoutCallbackRuntime + WorkflowRunAggregationCompletionRuntime + WorkflowRunProgressionCompletionRuntime` 分拆；owner 只保留 ingress/reducer/effect boundary。
 11. step request 构建、while 条件求值、callback key / parent-step 推导等纯 helper 逻辑继续下沉到 `WorkflowRunStepRequestFactory + WorkflowRunSupport`，避免 owner 切片继续膨胀。
 
 ## 3. 状态模型
@@ -186,16 +190,20 @@ Aevatar.Workflow.Core/
 7. `WorkflowRunGAgent.Lifecycle.cs`
 8. `WorkflowRunGAgent.ExternalInteractions.cs`
 9. `WorkflowRunControlFlowRuntime.cs`
-10. `WorkflowRunAIRuntime.cs`
-11. `WorkflowRunFanOutRuntime.cs`
-12. `WorkflowRunSubWorkflowRuntime.cs`
-13. `WorkflowRunCallbackRuntime.cs`
-14. `WorkflowRunAggregationCompletionRuntime.cs`
-15. `WorkflowRunProgressionCompletionRuntime.cs`
-16. `WorkflowRunAsyncPolicyRuntime.cs`
-17. `WorkflowRunDispatchRuntime.cs`
-18. `WorkflowRunHumanInteractionRuntime.cs`
-19. `WorkflowRunGAgent.Infrastructure.cs`
-20. `WorkflowCompilationService.cs`
-21. `workflow_state.proto`
-22. `workflow_run_state.proto`
+10. `WorkflowRunLlmRuntime.cs`
+11. `WorkflowRunEvaluationRuntime.cs`
+12. `WorkflowRunReflectRuntime.cs`
+13. `WorkflowRunCacheRuntime.cs`
+14. `WorkflowRunAIResponseRuntime.cs`
+15. `WorkflowRunFanOutRuntime.cs`
+16. `WorkflowRunSubWorkflowRuntime.cs`
+17. `WorkflowRunTimeoutCallbackRuntime.cs`
+18. `WorkflowRunAggregationCompletionRuntime.cs`
+19. `WorkflowRunProgressionCompletionRuntime.cs`
+20. `WorkflowRunAsyncPolicyRuntime.cs`
+21. `WorkflowRunDispatchRuntime.cs`
+22. `WorkflowRunHumanInteractionRuntime.cs`
+23. `WorkflowRunGAgent.Infrastructure.cs`
+24. `WorkflowCompilationService.cs`
+25. `workflow_state.proto`
+26. `workflow_run_state.proto`

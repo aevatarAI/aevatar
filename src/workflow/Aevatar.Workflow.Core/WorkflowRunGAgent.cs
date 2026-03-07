@@ -32,11 +32,15 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     private readonly WorkflowRunDispatchRuntime _dispatchRuntime;
     private readonly WorkflowRunControlFlowRuntime _controlFlowRuntime;
     private readonly WorkflowRunHumanInteractionRuntime _humanInteractionRuntime;
-    private readonly WorkflowRunAIRuntime _aiRuntime;
+    private readonly WorkflowRunLlmRuntime _llmRuntime;
+    private readonly WorkflowRunEvaluationRuntime _evaluationRuntime;
+    private readonly WorkflowRunReflectRuntime _reflectRuntime;
+    private readonly WorkflowRunCacheRuntime _cacheRuntime;
     private readonly WorkflowRunFanOutRuntime _fanOutRuntime;
     private readonly WorkflowRunSubWorkflowRuntime _subWorkflowRuntime;
     private readonly WorkflowPrimitiveExecutionPlanner _primitiveExecutionPlanner;
-    private readonly WorkflowRunCallbackRuntime _callbackRuntime;
+    private readonly WorkflowRunTimeoutCallbackRuntime _timeoutCallbackRuntime;
+    private readonly WorkflowRunAIResponseRuntime _aiResponseRuntime;
     private readonly WorkflowRunAggregationCompletionRuntime _aggregationCompletionRuntime;
     private readonly WorkflowRunProgressionCompletionRuntime _progressionCompletionRuntime;
     private readonly WorkflowRunAsyncPolicyRuntime _asyncPolicyRuntime;
@@ -93,10 +97,14 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             _expressionEvaluator);
         _controlFlowRuntime = new WorkflowRunControlFlowRuntime(_runtimeContext, _dispatchRuntime);
         _humanInteractionRuntime = new WorkflowRunHumanInteractionRuntime(_runtimeContext);
-        _aiRuntime = new WorkflowRunAIRuntime(_runtimeContext, _dispatchRuntime);
+        _llmRuntime = new WorkflowRunLlmRuntime(_runtimeContext);
+        _evaluationRuntime = new WorkflowRunEvaluationRuntime(_runtimeContext);
+        _reflectRuntime = new WorkflowRunReflectRuntime(_runtimeContext);
+        _cacheRuntime = new WorkflowRunCacheRuntime(_runtimeContext, _dispatchRuntime);
         _fanOutRuntime = new WorkflowRunFanOutRuntime(_runtimeContext, _dispatchRuntime);
         _subWorkflowRuntime = new WorkflowRunSubWorkflowRuntime(_runtimeContext);
-        _callbackRuntime = new WorkflowRunCallbackRuntime(_runtimeContext, _dispatchRuntime, _aiRuntime);
+        _timeoutCallbackRuntime = new WorkflowRunTimeoutCallbackRuntime(_runtimeContext, _dispatchRuntime);
+        _aiResponseRuntime = new WorkflowRunAIResponseRuntime(_llmRuntime, _evaluationRuntime, _reflectRuntime);
         _aggregationCompletionRuntime = new WorkflowRunAggregationCompletionRuntime(_runtimeContext, _dispatchRuntime);
         _progressionCompletionRuntime = new WorkflowRunProgressionCompletionRuntime(_runtimeContext, _dispatchRuntime, _stepRequestFactory);
         _asyncPolicyRuntime = new WorkflowRunAsyncPolicyRuntime(_runtimeContext, _dispatchRuntime, FinalizeRunAsync);
@@ -112,10 +120,10 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
                     (request, ct) => _humanInteractionRuntime.HandleHumanGateStepRequestAsync(request, "human_input", ct),
                     (request, ct) => _humanInteractionRuntime.HandleHumanGateStepRequestAsync(request, "human_approval", ct)),
                 new WorkflowAIPlanner(
-                    _aiRuntime.HandleLlmCallStepRequestAsync,
-                    _aiRuntime.HandleEvaluateStepRequestAsync,
-                    _aiRuntime.HandleReflectStepRequestAsync,
-                    _aiRuntime.HandleCacheStepRequestAsync),
+                    _llmRuntime.HandleLlmCallStepRequestAsync,
+                    _evaluationRuntime.HandleEvaluateStepRequestAsync,
+                    _reflectRuntime.HandleReflectStepRequestAsync,
+                    _cacheRuntime.HandleCacheStepRequestAsync),
                 new WorkflowFanOutPlanner(
                     _fanOutRuntime.HandleParallelStepRequestAsync,
                     _fanOutRuntime.HandleForEachStepRequestAsync,
@@ -132,12 +140,12 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
                 _progressionCompletionRuntime.TryHandleWhileCompletionAsync,
                 _progressionCompletionRuntime.TryHandleCacheCompletionAsync,
             ],
-            _callbackRuntime.HandleWorkflowStepTimeoutFiredAsync,
-            _callbackRuntime.HandleWorkflowStepRetryBackoffFiredAsync,
-            _callbackRuntime.HandleDelayStepTimeoutFiredAsync,
-            _callbackRuntime.HandleWaitSignalTimeoutFiredAsync,
-            _callbackRuntime.HandleLlmCallWatchdogTimeoutFiredAsync,
-            _callbackRuntime.HandleLlmLikeResponseAsync);
+            _timeoutCallbackRuntime.HandleWorkflowStepTimeoutFiredAsync,
+            _timeoutCallbackRuntime.HandleWorkflowStepRetryBackoffFiredAsync,
+            _timeoutCallbackRuntime.HandleDelayStepTimeoutFiredAsync,
+            _timeoutCallbackRuntime.HandleWaitSignalTimeoutFiredAsync,
+            _llmRuntime.HandleLlmCallWatchdogTimeoutFiredAsync,
+            _aiResponseRuntime.HandleLlmLikeResponseAsync);
     }
 
     public override Task<string> GetDescriptionAsync()

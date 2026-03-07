@@ -1,6 +1,6 @@
 # 工作流能力设计与实践
 
-`Workflow` 现在采用明确的双 Actor 模型：
+`Workflow` 现在采用明确的双 Actor 模型。当前针对 `WorkflowRunGAgent` 终局收口的唯一权威蓝图是 [workflow-run-runtime-suite-thin-owner-blueprint-2026-03-08.md](/Users/auric/aevatar/docs/architecture/workflow-run-runtime-suite-thin-owner-blueprint-2026-03-08.md)。
 
 1. `WorkflowGAgent` 只负责 definition/binding。
 2. `WorkflowRunGAgent` 负责单次 accepted run 的持久事实与执行推进。
@@ -82,7 +82,7 @@ flowchart LR
    - `WorkflowRunStepRequestFactory.cs`：step request / while iteration 变量构建
    - `WorkflowRunSupport.cs`：callback key、pending token lookup、parent-step 推导等纯 helper
    - `WorkflowCompilationService.cs` + `Validation/*`：DSL compile/validate 服务边界
-   - `WorkflowRunDispatchRuntime.cs` / `WorkflowRunHumanInteractionRuntime.cs` / `WorkflowRunControlFlowRuntime.cs` / `WorkflowRunAIRuntime.cs` / `WorkflowRunFanOutRuntime.cs` / `WorkflowRunSubWorkflowRuntime.cs` / `WorkflowRunCallbackRuntime.cs` / `WorkflowRunAggregationCompletionRuntime.cs` / `WorkflowRunProgressionCompletionRuntime.cs` / `WorkflowRunAsyncPolicyRuntime.cs` / `Infrastructure.cs`：基于共享 runtime context 的 stateful primitive、callback/completion runtime 与 helper 实现切片，不再把主 shell 当成规则实现容器。
+   - `WorkflowRunDispatchRuntime.cs` / `WorkflowRunHumanInteractionRuntime.cs` / `WorkflowRunControlFlowRuntime.cs` / `WorkflowRunLlmRuntime.cs` / `WorkflowRunEvaluationRuntime.cs` / `WorkflowRunReflectRuntime.cs` / `WorkflowRunCacheRuntime.cs` / `WorkflowRunAIResponseRuntime.cs` / `WorkflowRunFanOutRuntime.cs` / `WorkflowRunSubWorkflowRuntime.cs` / `WorkflowRunTimeoutCallbackRuntime.cs` / `WorkflowRunAggregationCompletionRuntime.cs` / `WorkflowRunProgressionCompletionRuntime.cs` / `WorkflowRunAsyncPolicyRuntime.cs` / `Infrastructure.cs`：基于共享 runtime context 的 stateful primitive、callback/completion runtime 与 helper 实现切片，不再把主 shell 当成规则实现容器。
 
 ## 4. 原语归属
 
@@ -245,22 +245,26 @@ Definition catalog 装配规则：
 7. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Lifecycle.cs`
 8. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.ExternalInteractions.cs`
 9. `src/workflow/Aevatar.Workflow.Core/WorkflowRunControlFlowRuntime.cs`
-10. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAIRuntime.cs`
-11. `src/workflow/Aevatar.Workflow.Core/WorkflowRunFanOutRuntime.cs`
-12. `src/workflow/Aevatar.Workflow.Core/WorkflowRunSubWorkflowRuntime.cs`
-13. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCallbackRuntime.cs`
-14. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAggregationCompletionRuntime.cs`
-15. `src/workflow/Aevatar.Workflow.Core/WorkflowRunProgressionCompletionRuntime.cs`
-16. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAsyncPolicyRuntime.cs`
-17. `src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs`
-18. `src/workflow/Aevatar.Workflow.Core/WorkflowRunHumanInteractionRuntime.cs`
-19. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
-20. `src/workflow/Aevatar.Workflow.Core/WorkflowCompilationService.cs`
-21. `src/workflow/Aevatar.Workflow.Core/workflow_state.proto`
-22. `src/workflow/Aevatar.Workflow.Core/workflow_run_state.proto`
-23. `src/workflow/Aevatar.Workflow.Core/WorkflowCorePrimitivePack.cs`
-24. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs`
-25. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowCapabilityEndpoints*.cs`
+10. `src/workflow/Aevatar.Workflow.Core/WorkflowRunLlmRuntime.cs`
+11. `src/workflow/Aevatar.Workflow.Core/WorkflowRunEvaluationRuntime.cs`
+12. `src/workflow/Aevatar.Workflow.Core/WorkflowRunReflectRuntime.cs`
+13. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCacheRuntime.cs`
+14. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAIResponseRuntime.cs`
+15. `src/workflow/Aevatar.Workflow.Core/WorkflowRunFanOutRuntime.cs`
+16. `src/workflow/Aevatar.Workflow.Core/WorkflowRunSubWorkflowRuntime.cs`
+17. `src/workflow/Aevatar.Workflow.Core/WorkflowRunTimeoutCallbackRuntime.cs`
+18. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAggregationCompletionRuntime.cs`
+19. `src/workflow/Aevatar.Workflow.Core/WorkflowRunProgressionCompletionRuntime.cs`
+20. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAsyncPolicyRuntime.cs`
+21. `src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs`
+22. `src/workflow/Aevatar.Workflow.Core/WorkflowRunHumanInteractionRuntime.cs`
+23. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
+24. `src/workflow/Aevatar.Workflow.Core/WorkflowCompilationService.cs`
+25. `src/workflow/Aevatar.Workflow.Core/workflow_state.proto`
+26. `src/workflow/Aevatar.Workflow.Core/workflow_run_state.proto`
+27. `src/workflow/Aevatar.Workflow.Core/WorkflowCorePrimitivePack.cs`
+28. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs`
+29. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowCapabilityEndpoints*.cs`
 
 更完整的系统说明见：
 
