@@ -38,7 +38,7 @@ public sealed partial class WorkflowRunGAgent
             }
         }
 
-        WorkflowRunSupport.ResetRuntimeState(next, clearChildActors: true);
+        WorkflowRunReset.ResetRuntimeState(next, clearChildActors: true);
 
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
@@ -80,7 +80,7 @@ public sealed partial class WorkflowRunGAgent
             ? $"{State.RunId}:dynamic:{parentStepId}:{Guid.NewGuid():N}"
             : request.InvocationId.Trim();
         var childRunId = invocationId;
-        var childActorId = WorkflowRunSupport.BuildSubWorkflowRunActorId(Id, workflowName, WorkflowCallLifecycle.Transient, invocationId);
+        var childActorId = WorkflowActorIds.BuildSubWorkflowRunActorId(Id, workflowName, WorkflowCallLifecycle.Transient, invocationId);
         var next = State.Clone();
         next.PendingSubWorkflows[childRunId] = new WorkflowPendingSubWorkflowState
         {
@@ -97,9 +97,9 @@ public sealed partial class WorkflowRunGAgent
 
         try
         {
-            var childActor = await ResolveOrCreateSubWorkflowRunActorAsync(childActorId, CancellationToken.None);
+            var childActor = await _effectPorts.ResolveOrCreateSubWorkflowRunActorAsync(childActorId, CancellationToken.None);
             await _runtime.LinkAsync(Id, childActor.Id, CancellationToken.None);
-            await childActor.HandleEventAsync(CreateWorkflowDefinitionBindEnvelope(
+            await childActor.HandleEventAsync(_effectPorts.CreateWorkflowDefinitionBindEnvelope(
                 workflowYaml,
                 workflowName), CancellationToken.None);
             await SendToAsync(childActor.Id, new ChatRequestEvent
@@ -154,7 +154,7 @@ public sealed partial class WorkflowRunGAgent
 
     private Task PersistStateAsync(WorkflowRunState next, CancellationToken ct)
     {
-        var patch = WorkflowRunStatePatchSupport.BuildPatch(State, next);
+        var patch = _statePatchAssembler.BuildPatch(State, next);
         return patch == null
             ? Task.CompletedTask
             : PersistDomainEventAsync(patch, ct);

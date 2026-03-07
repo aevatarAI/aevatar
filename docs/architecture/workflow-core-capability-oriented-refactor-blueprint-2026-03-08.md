@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 
-1. 状态：`Proposed`
+1. 状态：`Delivered`
 2. 版本：`v1`
 3. 日期：`2026-03-08`
 4. 决策级别：`Architecture Breaking Change`
@@ -14,9 +14,9 @@
    - `docs/WORKFLOW.md`
    - `src/workflow/Aevatar.Workflow.Core/README.md`
 6. 替代关系：
-   - 本文不是对 `workflow-run-runtime-suite-thin-owner-blueprint-2026-03-08.md` 的补充
-   - 本文定义的是下一阶段完整重构方案
-   - 若实施本文，`RuntimeSuite + 宽 Context + 多 Registry` 方案将被整体替换
+   - 本文已替代并完成 `workflow-run-runtime-suite-thin-owner-blueprint-2026-03-08.md`
+   - 本文定义的 capability-oriented 方案已经落地
+   - 旧 `RuntimeSuite + 宽 Context + 多 Registry` 方案已删除
 
 ## 2. 结论先行
 

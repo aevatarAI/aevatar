@@ -25,10 +25,19 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     private readonly WorkflowPrimitiveExecutorRegistry _primitiveRegistry;
     private readonly ISet<string> _knownStepTypes;
     private readonly WorkflowCompilationService _workflowCompilationService;
-    private readonly WorkflowRunRuntimeContext _runtimeContext;
-    private readonly WorkflowRunRuntimeSuite _runtimeSuite;
-    private readonly WorkflowPrimitiveExecutionPlanner _primitiveExecutionPlanner;
-    private readonly WorkflowAsyncOperationReconciler _asyncOperationReconciler;
+    private readonly WorkflowRunReadContext _readContext;
+    private readonly WorkflowRunWriteContext _writeContext;
+    private readonly WorkflowRunEffectPorts _effectPorts;
+    private readonly WorkflowRunCapabilityRegistry _capabilityRegistry;
+    private readonly WorkflowRunStepRouter _stepRouter;
+    private readonly WorkflowRunCompletionRouter _completionRouter;
+    private readonly WorkflowRunInternalSignalRouter _internalSignalRouter;
+    private readonly WorkflowRunResponseRouter _responseRouter;
+    private readonly WorkflowRunChildCompletionRouter _childCompletionRouter;
+    private readonly WorkflowRunResumeRouter _resumeRouter;
+    private readonly WorkflowRunExternalSignalRouter _externalSignalRouter;
+    private readonly WorkflowRunFailurePolicyService _failurePolicyService;
+    private readonly WorkflowRunStatePatchAssembler _statePatchAssembler;
 
     private WorkflowDefinition? _compiledWorkflow;
 
@@ -53,13 +62,14 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         _knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
         _workflowCompilationService = new WorkflowCompilationService(
             new HashSet<string>(_knownStepTypes, StringComparer.OrdinalIgnoreCase));
-        var effectDispatcher = new WorkflowRunEffectDispatcher(
+
+        var infrastructureEffects = new WorkflowRunEffectDispatcher(
             actorIdAccessor: () => Id,
             runIdAccessor: () => State.RunId,
             compiledWorkflowAccessor: () => _compiledWorkflow,
             runtime: _runtime,
             resolveRoleAgentType: _roleAgentTypeResolver.ResolveRoleAgentType,
-            buildChildActorId: roleId => WorkflowRunSupport.BuildChildActorId(Id, roleId),
+            buildChildActorId: roleId => WorkflowActorIds.BuildChildActorId(Id, roleId),
             createRoleAgentInitializeEnvelope: CreateRoleAgentInitializeEnvelopeCore,
             scheduleSelfDurableTimeoutAsync: async (callbackId, dueTime, evt, metadata, ct) =>
             {
@@ -67,27 +77,63 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             },
             resolveWorkflowYamlAsync: ResolveWorkflowYamlCoreAsync,
             createWorkflowDefinitionBindEnvelope: CreateWorkflowDefinitionBindEnvelopeCore);
-        _runtimeContext = new WorkflowRunRuntimeContext(
+        _readContext = new WorkflowRunReadContext(
             actorIdAccessor: () => Id,
             stateAccessor: () => State,
-            compiledWorkflowAccessor: () => _compiledWorkflow,
+            compiledWorkflowAccessor: () => _compiledWorkflow);
+        _writeContext = new WorkflowRunWriteContext(
             persistStateAsync: PersistStateAsync,
             publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
             sendToAsync: (targetActorId, evt, ct) => SendToAsync(targetActorId, evt, ct),
-            logWarningAsync: LogWarningAsync,
-            effectDispatcher: effectDispatcher);
-        _runtimeSuite = new WorkflowRunRuntimeSuite(
-            _runtimeContext,
+            logWarningAsync: LogWarningAsync);
+
+        var dispatcher = new WorkflowRunStepDispatcher(
+            _readContext,
+            _writeContext,
+            infrastructureEffects.ScheduleWorkflowCallbackAsync,
             stepRequestFactory,
-            expressionEvaluator,
+            expressionEvaluator);
+
+        _effectPorts = new WorkflowRunEffectPorts(
+            ensureAgentTreeAsync: infrastructureEffects.EnsureAgentTreeAsync,
+            scheduleWorkflowCallbackAsync: infrastructureEffects.ScheduleWorkflowCallbackAsync,
+            resolveOrCreateSubWorkflowRunActorAsync: infrastructureEffects.ResolveOrCreateSubWorkflowRunActorAsync,
+            linkChildAsync: infrastructureEffects.LinkChildAsync,
+            cleanupChildWorkflowAsync: infrastructureEffects.CleanupChildWorkflowAsync,
+            resolveWorkflowYamlAsync: infrastructureEffects.ResolveWorkflowYamlAsync,
+            createWorkflowDefinitionBindEnvelope: infrastructureEffects.CreateWorkflowDefinitionBindEnvelope,
+            createRoleAgentInitializeEnvelope: infrastructureEffects.CreateRoleAgentInitializeEnvelope,
+            dispatchWorkflowStepAsync: dispatcher.DispatchWorkflowStepAsync,
+            dispatchInternalStepAsync: dispatcher.DispatchInternalStepAsync,
+            dispatchWhileIterationAsync: dispatcher.DispatchWhileIterationAsync,
+            finalizeRunAsync: FinalizeRunAsync);
+        _failurePolicyService = new WorkflowRunFailurePolicyService(
+            _readContext,
+            _writeContext,
+            dispatcher,
             FinalizeRunAsync);
-        _primitiveExecutionPlanner = new WorkflowPrimitiveExecutionPlanner(
-            TryHandleRegisteredPrimitiveAsync,
-            _runtimeSuite.StepFamilyDispatchTable);
-        _asyncOperationReconciler = new WorkflowAsyncOperationReconciler(
-            _runtimeSuite.StatefulCompletionHandlers,
-            _runtimeSuite.InternalSignalHandlers,
-            _runtimeSuite.ResponseHandlers);
+
+        var capabilityList = CreateBuiltInCapabilities();
+        _capabilityRegistry = new WorkflowRunCapabilityRegistry(capabilityList);
+
+        var contributorList = CreateBuiltInPatchContributors();
+        _statePatchAssembler = new WorkflowRunStatePatchAssembler(contributorList);
+
+        _stepRouter = new WorkflowRunStepRouter(
+            _capabilityRegistry,
+            _primitiveRegistry,
+            new HashSet<string>(_knownStepTypes, StringComparer.OrdinalIgnoreCase),
+            servicesAccessor: () => Services,
+            loggerAccessor: () => Logger,
+            _readContext,
+            _writeContext,
+            _effectPorts);
+        _completionRouter = new WorkflowRunCompletionRouter(_capabilityRegistry, _readContext, _writeContext, _effectPorts);
+        _internalSignalRouter = new WorkflowRunInternalSignalRouter(_capabilityRegistry, _readContext, _writeContext, _effectPorts);
+        _responseRouter = new WorkflowRunResponseRouter(_capabilityRegistry, _readContext, _writeContext, _effectPorts);
+        _childCompletionRouter = new WorkflowRunChildCompletionRouter(_capabilityRegistry, _readContext, _writeContext, _effectPorts);
+        _resumeRouter = new WorkflowRunResumeRouter(_capabilityRegistry, _readContext, _writeContext, _effectPorts);
+        _externalSignalRouter = new WorkflowRunExternalSignalRouter(_capabilityRegistry, _readContext, _writeContext, _effectPorts);
     }
 
     public override Task<string> GetDescriptionAsync()
@@ -112,7 +158,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             !string.Equals(State.Status, StatusIdle, StringComparison.OrdinalIgnoreCase) &&
             _compiledWorkflow != null)
         {
-            await EnsureAgentTreeAsync(ct);
+            await _effectPorts.EnsureAgentTreeAsync(ct);
             await RepublishSuspendedFactsAsync(ct);
         }
     }
@@ -120,7 +166,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     protected override WorkflowRunState TransitionState(WorkflowRunState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
-            .On<WorkflowRunStatePatchedEvent>(WorkflowRunReducer.ApplyPatchedEvent)
+            .On<WorkflowRunStatePatchedEvent>((state, patch) => _statePatchAssembler.ApplyPatch(state, patch))
             .OrCurrent();
 
     [EventHandler]
@@ -146,7 +192,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             return;
         }
 
-        await EnsureAgentTreeAsync(CancellationToken.None);
+        await _effectPorts.EnsureAgentTreeAsync(CancellationToken.None);
 
         var runId = WorkflowRunIdNormalizer.Normalize(
             string.IsNullOrWhiteSpace(request.SessionId)
@@ -155,7 +201,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         var input = request.Prompt ?? string.Empty;
 
         var next = State.Clone();
-        WorkflowRunSupport.ResetRuntimeState(next, clearChildActors: false);
+        WorkflowRunReset.ResetRuntimeState(next, clearChildActors: false);
         next.RunId = runId;
         next.Status = StatusActive;
         next.Variables["input"] = input;
@@ -175,13 +221,13 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             return;
         }
 
-        await _runtimeSuite.DispatchWorkflowStepAsync(entry, input, runId, CancellationToken.None);
+        await _effectPorts.DispatchWorkflowStepAsync(entry, input, runId, CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true, Priority = 1)]
     public async Task HandleStepRequest(StepRequestEvent request)
     {
-        await _primitiveExecutionPlanner.DispatchAsync(request, CancellationToken.None);
+        await _stepRouter.DispatchAsync(request, CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true, Priority = 2)]
@@ -191,7 +237,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         if (!string.Equals(runId, State.RunId, StringComparison.Ordinal))
             return;
 
-        if (await _asyncOperationReconciler.TryHandleStatefulCompletionAsync(evt, CancellationToken.None))
+        if (await _completionRouter.TryHandleAsync(evt, CancellationToken.None))
             return;
 
         if (!string.Equals(State.ActiveStepId, evt.StepId, StringComparison.Ordinal))
@@ -238,7 +284,10 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
 
         if (!evt.Success)
         {
-            if (await _runtimeSuite.TryHandleFailureAsync(currentStep, evt, next, CancellationToken.None))
+            if (await _failurePolicyService.TryScheduleRetryAsync(currentStep, evt, next, CancellationToken.None))
+                return;
+
+            if (await _failurePolicyService.TryHandleOnErrorAsync(currentStep, evt, next, CancellationToken.None))
                 return;
 
             next.StepExecutions.Remove(evt.StepId);
@@ -286,9 +335,35 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
         }
 
         await PersistStateAsync(next, CancellationToken.None);
-        await _runtimeSuite.DispatchWorkflowStepAsync(nextStep, evt.Output ?? string.Empty, runId, CancellationToken.None);
+        await _effectPorts.DispatchWorkflowStepAsync(nextStep, evt.Output ?? string.Empty, runId, CancellationToken.None);
     }
 
+    private static IWorkflowRunCapability[] CreateBuiltInCapabilities() =>
+    [
+        new WorkflowLlmCallCapability(),
+        new WorkflowEvaluateCapability(),
+        new WorkflowReflectCapability(),
+        new WorkflowHumanInteractionCapability(),
+        new WorkflowControlFlowCapability(),
+        new WorkflowFanOutCapability(),
+        new WorkflowSubWorkflowCapability(),
+        new WorkflowCacheCapability(),
+    ];
+
+    private static IWorkflowRunStatePatchContributor[] CreateBuiltInPatchContributors() =>
+    [
+        new WorkflowRunBindingPatchContributor(),
+        new WorkflowRunLifecyclePatchContributor(),
+        new WorkflowRunExecutionPatchContributor(),
+        new WorkflowHumanInteractionPatchContributor(),
+        new WorkflowControlFlowPatchContributor(),
+        new WorkflowLlmCallPatchContributor(),
+        new WorkflowEvaluatePatchContributor(),
+        new WorkflowReflectPatchContributor(),
+        new WorkflowFanOutPatchContributor(),
+        new WorkflowSubWorkflowPatchContributor(),
+        new WorkflowCachePatchContributor(),
+    ];
 }
 
 public sealed record WorkflowRunBindingSnapshot(
