@@ -4,7 +4,6 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Shouldly;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -33,30 +32,15 @@ public class PipelineAsPipelineBddTests
             .Reply.ShouldBe("pong:hello");
     }
 
-    [Fact(DisplayName = "Given a module-driven transformer Agent, when module is replaced, behavior should change")]
-    public async Task Given_ModuleDrivenAgent_When_ModuleSwapped_Then_BehaviorChanges()
+    [Fact(DisplayName = "Given two static transformer Agents, behavior should be replaceable at composition boundary")]
+    public async Task Given_TwoStaticTransformerAgents_Then_BehaviorCanBeSwapped()
     {
-        // Given: Empty Agent + Module A (always replies "A")
         var published = new List<IMessage>();
-        var agent = new EmptyAgent();
+        var agent = new FixedReplyAgent("B");
         agent.SetId("transformer-2");
         agent.EventPublisher = new CollectingPublisher(published);
-
-        agent.RegisterModule(new ReplyModule("reply_a", "A"));
-
-        // When: Module A handles event
         await agent.HandleEventAsync(TestHelper.Envelope(new PingEvent { Message = "test" }));
 
-        // Then: Reply A
-        published.ShouldHaveSingleItem();
-        ((PongEvent)published[0]).Reply.ShouldBe("A");
-
-        // When: Replace with Module B
-        published.Clear();
-        agent.SetModules([new ReplyModule("reply_b", "B")]);
-        await agent.HandleEventAsync(TestHelper.Envelope(new PingEvent { Message = "test" }));
-
-        // Then: Reply B (behavior has changed)
         published.ShouldHaveSingleItem();
         ((PongEvent)published[0]).Reply.ShouldBe("B");
     }
@@ -71,10 +55,9 @@ public class PipelineAsPipelineBddTests
         agent1.EventPublisher = new CollectingPublisher(pub1);
 
         var pub2 = new List<IMessage>();
-        var agent2 = new EmptyAgent();
+        var agent2 = new FixedReplyAgent("alt-pong");
         agent2.SetId("node-b");
         agent2.EventPublisher = new CollectingPublisher(pub2);
-        agent2.RegisterModule(new ReplyModule("alt_pong", "alt-pong"));
 
         var envelope = TestHelper.Envelope(new PingEvent { Message = "x" });
 
@@ -99,26 +82,20 @@ public class PingToPongAgent : TestGAgentBase<CounterState>
     }
 }
 
-// ─── Test Module: Fixed reply ───
-
-public class ReplyModule : IEventModule
+public class FixedReplyAgent : TestGAgentBase<CounterState>
 {
     private readonly string _reply;
-    public string Name { get; }
-    public int Priority => 0;
 
-    public ReplyModule(string name, string reply)
+    public FixedReplyAgent(string reply)
     {
-        Name = name;
         _reply = reply;
     }
 
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(PingEvent.Descriptor) == true;
-
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    [EventHandler]
+    public async Task Handle(PingEvent evt)
     {
-        await ctx.PublishAsync(new PongEvent { Reply = _reply }, ct: ct);
+        _ = evt;
+        await PublishAsync(new PongEvent { Reply = _reply });
     }
 }
 

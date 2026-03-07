@@ -1,0 +1,10 @@
+name: 27_explicit_extensions_template_route
+description: |
+  Replaces old 27_role_event_module_extensions_template.
+  The intended template business logic stays the same, but extensions-based routing is removed.
+
+steps:
+  - id: render_template
+    type: demo_template
+    parameters:
+      template: "Extensions template route: {{input}}"

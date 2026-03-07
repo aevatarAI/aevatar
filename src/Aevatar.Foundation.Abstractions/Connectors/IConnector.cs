@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // Connector contracts
 // Provides a unified external invocation abstraction used by
-// workflow modules (MCP / HTTP / CLI / custom adapters).
+// workflow primitive executors (MCP / HTTP / CLI / custom adapters).
 // ─────────────────────────────────────────────────────────────
 
 namespace Aevatar.Foundation.Abstractions.Connectors;

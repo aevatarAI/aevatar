@@ -76,7 +76,7 @@ builder.Services.AddConfiguredConnectorCatalog(options =>
     if (!string.IsNullOrWhiteSpace(localConnectorConfigPath))
         options.AdditionalConfigPaths.Add(localConnectorConfigPath);
 });
-builder.Services.AddSingleton<IWorkflowModulePack, DemoWorkflowModulePack>();
+builder.Services.AddSingleton<IWorkflowPrimitivePack, DemoWorkflowPrimitivePack>();
 builder.Services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
 var config = new ConfigurationBuilder()
@@ -176,6 +176,25 @@ var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCas
     "01_transform", "02_guard", "03_conditional", "04_switch",
     "05_assign", "06_retrieve_facts", "07_pipeline",
     "17_demo_template", "18_demo_csv_markdown", "19_demo_json_pick",
+    "20_explicit_template_route",
+    "21_explicit_csv_markdown_route",
+    "22_explicit_json_pick_route",
+    "23_explicit_multiplex_template_route",
+    "24_explicit_multiplex_csv_route",
+    "25_explicit_multiplex_json_route",
+    "26_explicit_multi_stage_template_csv_json_chain",
+    "27_explicit_extensions_template_route",
+    "28_explicit_extensions_csv_route",
+    "29_explicit_precedence_json_pick",
+    "30_explicit_extensions_multi_stage_chain",
+    "31_explicit_extensions_multiplex_json_route",
+    "32_explicit_precedence_multiplex_csv",
+    "33_explicit_template_without_routes",
+    "34_explicit_csv_route_dsl_equivalent",
+    "35_explicit_template_ignore_unknown_module",
+    "36_explicit_json_pick_then_template",
+    "37_explicit_csv_markdown_then_template",
+    "38_explicit_template_then_csv_markdown",
     "39_human_input_basic_auto_resume",
     "40_human_approval_approved_auto_resume",
     "41_human_approval_rejected_fail_auto_resume",
@@ -221,6 +240,25 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
     ["17_demo_template"] = "payment_api_timeout",
     ["18_demo_csv_markdown"] = "service,error_rate,latency_ms\ngateway,1.2,210\ncheckout,0.3,120",
     ["19_demo_json_pick"] = """{"incident":{"id":"INC-2026-001","owner":{"team":"sre","user":"alice"}},"severity":"high"}""",
+    ["20_explicit_template_route"] = "payment_api_timeout",
+    ["21_explicit_csv_markdown_route"] = "service,error_rate,latency_ms\ngateway,1.2,210\ncheckout,0.3,120",
+    ["22_explicit_json_pick_route"] = """{"incident":{"id":"INC-2026-002","owner":{"team":"payments-sre","user":"bob"}},"severity":"critical"}""",
+    ["23_explicit_multiplex_template_route"] = "template branch selected",
+    ["24_explicit_multiplex_csv_route"] = "service,error_rate,latency_ms\ngateway,1.2,210\ncheckout,0.3,120",
+    ["25_explicit_multiplex_json_route"] = """{"incident":{"owner":{"team":"platform"}}}""",
+    ["26_explicit_multi_stage_template_csv_json_chain"] = "prepare routing escalation",
+    ["27_explicit_extensions_template_route"] = "extensions-template",
+    ["28_explicit_extensions_csv_route"] = "service,error_rate,latency_ms\nsearch,0.9,190\nfeed,1.5,310",
+    ["29_explicit_precedence_json_pick"] = """{"incident":{"owner":{"team":"top-level-wins"}}}""",
+    ["30_explicit_extensions_multi_stage_chain"] = "extensions chain kickoff",
+    ["31_explicit_extensions_multiplex_json_route"] = """{"incident":{"owner":{"team":"extensions-multiplex"}}}""",
+    ["32_explicit_precedence_multiplex_csv"] = "service,error_rate,latency_ms\ngateway,1.9,250\ncheckout,0.4,140",
+    ["33_explicit_template_without_routes"] = "no-routes-template",
+    ["34_explicit_csv_route_dsl_equivalent"] = "service,error_rate,latency_ms\napi,2.2,260\nworker,0.5,110",
+    ["35_explicit_template_ignore_unknown_module"] = "ignore-missing-module",
+    ["36_explicit_json_pick_then_template"] = """{"incident":{"owner":{"team":"database-oncall"}}}""",
+    ["37_explicit_csv_markdown_then_template"] = "service,error_rate,latency_ms\ngateway,1.2,210\ncheckout,0.3,120",
+    ["38_explicit_template_then_csv_markdown"] = "1.7",
     ["39_human_input_basic_auto_resume"] = "checkout request missing approver and rollback plan",
     ["40_human_approval_approved_auto_resume"] = "deploy release v1.2.3 to production",
     ["41_human_approval_rejected_fail_auto_resume"] = "delete production database",
@@ -618,7 +656,7 @@ app.MapGet("/api/llm/status", () => Results.Json(new
     providers = llmAvailable ? availableProviderNames.ToArray() : Array.Empty<string>(),
 }));
 
-// GET /api/primitives — module catalog with parameter docs
+// GET /api/primitives — primitive catalog with parameter docs
 app.MapGet("/api/primitives", () => Results.Json(BuildPrimitivesCatalog()));
 
 static object[] BuildPrimitivesCatalog()
@@ -874,7 +912,7 @@ static object[] BuildPrimitivesCatalog()
         },
         new {
             name = "workflow_loop", aliases = new[] { "workflow_loop" }, category = "control",
-            description = "Internal orchestrator module. Drives step-by-step execution of the workflow definition. Not used directly in YAML.",
+            description = "Internal orchestrator primitive. Drives step-by-step execution of the workflow definition. Not used directly in YAML.",
             parameters = Array.Empty<object>(),
         },
     ];
@@ -1065,8 +1103,6 @@ static object BuildRoleDto(RoleDefinition role) => new
     maxToolRounds = role.MaxToolRounds,
     maxHistoryMessages = role.MaxHistoryMessages,
     streamBufferCapacity = role.StreamBufferCapacity,
-    eventModules = role.EventModules,
-    eventRoutes = role.EventRoutes,
     connectors = role.Connectors,
 };
 
@@ -1169,8 +1205,6 @@ static Dictionary<string, WorkflowFileEntry> DiscoverWorkflowFiles(IEnumerable<W
                      .OrderBy(Path.GetFileNameWithoutExtension, StringComparer.OrdinalIgnoreCase))
         {
             var workflowName = Path.GetFileNameWithoutExtension(file);
-            if (IsLegacyRoleEventModuleWorkflow(workflowName))
-                continue;
             if (workflowFiles.ContainsKey(workflowName))
                 continue;
 
@@ -1179,17 +1213,6 @@ static Dictionary<string, WorkflowFileEntry> DiscoverWorkflowFiles(IEnumerable<W
     }
 
     return workflowFiles;
-}
-
-static bool IsLegacyRoleEventModuleWorkflow(string workflowName)
-{
-    if (string.IsNullOrWhiteSpace(workflowName))
-        return false;
-
-    return workflowName.Contains("role_event_module", StringComparison.OrdinalIgnoreCase) ||
-           string.Equals(workflowName, "36_mixed_step_json_pick_then_role_template", StringComparison.OrdinalIgnoreCase) ||
-           string.Equals(workflowName, "37_mixed_step_csv_markdown_then_role_template", StringComparison.OrdinalIgnoreCase) ||
-           string.Equals(workflowName, "38_mixed_step_template_then_role_csv_markdown", StringComparison.OrdinalIgnoreCase);
 }
 
 static bool TryResolveWorkflowFile(
@@ -1272,8 +1295,8 @@ static WorkflowListClassification ClassifyWorkflowForList(
     {
         return new WorkflowListClassification(
             Category: "deterministic",
-            Group: "custom-step-modules",
-            GroupLabel: "Custom Step Modules",
+            Group: "custom-step-executors",
+            GroupLabel: "Custom Step Executors",
             SortOrder: index.Value);
     }
 
@@ -1299,8 +1322,8 @@ static WorkflowListClassification ClassifyWorkflowForList(
     {
         return new WorkflowListClassification(
             Category: "deterministic",
-            Group: "role-event-modules",
-            GroupLabel: "Role Routed Extensions",
+            Group: "explicit-composition-replacements",
+            GroupLabel: "Explicit Composition Replacements",
             SortOrder: index.Value);
     }
 
@@ -1331,9 +1354,9 @@ static WorkflowListClassification ClassifyWorkflowForList(
 
 static List<string> ValidateWorkflowDefinitionForRuntime(WorkflowDefinition definition, IServiceProvider services)
 {
-    var modulePacks = services.GetServices<IWorkflowModulePack>();
+    var primitivePacks = services.GetServices<IWorkflowPrimitivePack>();
     var knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
-        modulePacks.SelectMany(pack => pack.Modules).SelectMany(module => module.Names));
+        primitivePacks.SelectMany(pack => pack.Executors).SelectMany(registration => registration.Names));
 
     return WorkflowValidator.Validate(
         definition,

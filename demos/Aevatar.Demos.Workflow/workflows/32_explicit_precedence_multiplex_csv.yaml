@@ -1,0 +1,37 @@
+name: 32_explicit_precedence_multiplex_csv
+description: |
+  Replaces old 32_role_event_module_top_level_overrides_extensions_multiplex.
+  The intended CSV route is written directly; there is no hidden precedence layer anymore.
+
+steps:
+  - id: choose_route
+    type: switch
+    branches:
+      template: render_template
+      "service,error_rate,latency_ms": render_csv_markdown
+      '{"incident"': extract_owner_team
+      _default: render_template
+
+  - id: render_template
+    type: demo_template
+    parameters:
+      template: "Precedence fallback template: {{input}}"
+    next: finish
+
+  - id: render_csv_markdown
+    type: demo_csv_markdown
+    parameters:
+      delimiter: ","
+      has_header: "true"
+    next: finish
+
+  - id: extract_owner_team
+    type: demo_json_pick
+    parameters:
+      path: "incident.owner.team"
+    next: finish
+
+  - id: finish
+    type: transform
+    parameters:
+      op: identity

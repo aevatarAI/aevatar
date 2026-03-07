@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Hosting;
@@ -227,7 +226,7 @@ public sealed class WorkflowInfrastructureCoverageTests
         var port = CreatePort(runtime);
         var actor = new StubActor(
             "wf-actor",
-            new WorkflowGAgent(runtime, [new WorkflowCoreModulePack()]));
+            new WorkflowGAgent(runtime, [new WorkflowCorePrimitivePack()]));
         runtime.ActorToReturn = actor;
 
         (await port.IsWorkflowDefinitionActorAsync(actor, CancellationToken.None)).Should().BeTrue();
@@ -451,7 +450,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     private static WorkflowRunActorPort CreatePort(FakeActorRuntime runtime)
     {
         var verifier = new DefaultAgentTypeVerifier(new RuntimeBackedActorTypeProbe(runtime));
-        return new WorkflowRunActorPort(runtime, verifier, [new WorkflowCoreModulePack()]);
+        return new WorkflowRunActorPort(runtime, verifier, [new WorkflowCorePrimitivePack()]);
     }
 
     private sealed class FakeReportSink : IWorkflowExecutionReportArtifactSink
@@ -556,10 +555,10 @@ public sealed class WorkflowInfrastructureCoverageTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class EmptyWorkflowModulePack : IWorkflowModulePack
+    private sealed class EmptyWorkflowPrimitivePack : IWorkflowPrimitivePack
     {
         public string Name => "empty";
-        public IReadOnlyList<WorkflowModuleRegistration> Modules { get; } = [];
+        public IReadOnlyList<WorkflowPrimitiveRegistration> Executors { get; } = [];
     }
 
     private sealed class RuntimeBackedActorTypeProbe : IActorTypeProbe

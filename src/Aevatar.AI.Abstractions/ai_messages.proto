@@ -23,8 +23,6 @@ message InitializeRoleAgentEvent {
   int32 max_tool_rounds = 7;
   int32 max_history_messages = 8;
   int32 stream_buffer_capacity = 9;
-  string event_modules = 10;
-  string event_routes = 11;
 }
 
 message AIAgentConfigOverrides {

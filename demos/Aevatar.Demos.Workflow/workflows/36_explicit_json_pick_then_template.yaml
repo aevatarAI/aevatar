@@ -1,0 +1,16 @@
+name: 36_explicit_json_pick_then_template
+description: |
+  Replaces old 36_mixed_step_json_pick_then_role_template.
+  Extract JSON data first, then apply template rendering explicitly.
+
+steps:
+  - id: extract_owner_team
+    type: demo_json_pick
+    parameters:
+      path: "incident.owner.team"
+    next: render_message
+
+  - id: render_message
+    type: demo_template
+    parameters:
+      template: "Escalate to {{input}}"

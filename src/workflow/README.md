@@ -76,21 +76,21 @@ flowchart TD
 
 ## 4. 当前可扩展面
 
-唯一保留的 workflow runtime 扩展面是 `IWorkflowModulePack`：
+唯一保留的 workflow runtime 扩展面是 `IWorkflowPrimitivePack`：
 
 ```csharp
-public interface IWorkflowModulePack
+public interface IWorkflowPrimitivePack
 {
     string Name { get; }
-    IReadOnlyList<WorkflowModuleRegistration> Modules { get; }
+    IReadOnlyList<WorkflowPrimitiveRegistration> Executors { get; }
 }
 ```
 
 约束：
 
-1. pack 只注册无状态原语。
+1. pack 只注册无状态原语 executor。
 2. 旧 `DependencyExpander` / `Configurator` 扩展点已移除。
-3. 若原语需要跨事件 pending 或恢复语义，必须进入 `WorkflowRunState` 和 `WorkflowRunGAgent`，不能只靠 module。
+3. 若原语需要跨事件 pending 或恢复语义，必须进入 `WorkflowRunState` 和 `WorkflowRunGAgent`，不能只靠 executor 私有内存。
 
 ## 5. 对外控制句柄
 

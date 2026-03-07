@@ -1,0 +1,10 @@
+name: 20_explicit_template_route
+description: |
+  Replaces old 20_role_event_module_template.
+  The old role-level template interception is now an explicit workflow step.
+
+steps:
+  - id: render_template
+    type: demo_template
+    parameters:
+      template: "Template route handled: {{input}}"

@@ -1,0 +1,38 @@
+name: 30_explicit_extensions_multi_stage_chain
+description: |
+  Replaces old 30_role_event_module_extensions_multi_role_chain.
+  The old extensions-driven template -> CSV -> JSON chain is now a direct deterministic workflow.
+
+steps:
+  - id: prepare_brief
+    type: demo_template
+    parameters:
+      template: "Extensions chain brief: {{input}}"
+    next: seed_csv
+
+  - id: seed_csv
+    type: assign
+    parameters:
+      value: |
+        service,error_rate,latency_ms
+        search,0.9,190
+        feed,1.5,310
+    next: render_csv_markdown
+
+  - id: render_csv_markdown
+    type: demo_csv_markdown
+    parameters:
+      delimiter: ","
+      has_header: "true"
+    next: seed_json
+
+  - id: seed_json
+    type: assign
+    parameters:
+      value: '{"incident":{"owner":{"team":"extensions-chain"}},"severity":"high"}'
+    next: extract_owner_team
+
+  - id: extract_owner_team
+    type: demo_json_pick
+    parameters:
+      path: "incident.owner.team"

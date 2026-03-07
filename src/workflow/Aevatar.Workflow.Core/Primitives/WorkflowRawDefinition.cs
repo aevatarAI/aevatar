@@ -35,12 +35,6 @@ internal sealed class WorkflowRawRole
 
     public int? StreamBufferCapacity { get; set; }
 
-    public string? EventModules { get; set; }
-
-    public string? EventRoutes { get; set; }
-
-    public WorkflowRawRoleExtensions? Extensions { get; set; }
-
     public List<string>? Connectors { get; set; }
 }
 
@@ -140,11 +134,4 @@ internal sealed class WorkflowRawOnError
 internal sealed class WorkflowRawConfiguration
 {
     public bool? ClosedWorldMode { get; set; }
-}
-
-internal sealed class WorkflowRawRoleExtensions
-{
-    public string? EventModules { get; set; }
-
-    public string? EventRoutes { get; set; }
 }

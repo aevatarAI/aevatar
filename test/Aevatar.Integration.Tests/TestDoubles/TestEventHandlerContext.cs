@@ -1,6 +1,5 @@
 using System.Globalization;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Core;
 using Google.Protobuf;
@@ -9,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Integration.Tests;
 
-internal sealed class TestEventHandlerContext : IEventHandlerContext
+internal sealed class TestEventHandlerContext
 {
     private readonly Dictionary<string, long> _generations = new(StringComparer.Ordinal);
 

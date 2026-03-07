@@ -1,7 +1,6 @@
 // GAgentBase tests.
 
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Shouldly;
 
 namespace Aevatar.Foundation.Core.Tests;
@@ -30,23 +29,6 @@ public class AgentBaseCounterAgent : TestGAgentBase<CounterState>
 
     public override Task<string> GetDescriptionAsync() =>
         Task.FromResult($"Counter:{State.Count}");
-}
-
-// Test modules.
-
-public class TestModule : IEventModule
-{
-    public string Name => "test_module";
-    public int Priority { get; init; } = 5;
-    public bool CanHandle(EventEnvelope envelope) => true;
-
-    public int InvocationCount { get; private set; }
-
-    public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
-    {
-        InvocationCount++;
-        return Task.CompletedTask;
-    }
 }
 
 // ─── Tests ───
@@ -96,41 +78,23 @@ public class AgentBaseTests
     }
 
     [Fact]
-    public async Task Modules_ParticipateInPipeline()
+    public async Task HandleEvent_RespectsStaticHandlerPriorities()
     {
         var agent = new AgentBaseCounterAgent();
         agent.SetId("test-4");
-        var module = new TestModule();
-        agent.RegisterModule(module);
 
-        var envelope = TestHelper.Envelope(new IncrementEvent { Amount = 1 });
-        await agent.HandleEventAsync(envelope);
+        await agent.HandleEventAsync(TestHelper.Envelope(new IncrementEvent { Amount = 2 }));
+        await agent.HandleEventAsync(TestHelper.Envelope(new DecrementEvent { Amount = 1 }));
 
-        // Both static handler and module should execute
         agent.State.Count.ShouldBe(1);
-        module.InvocationCount.ShouldBe(1);
-    }
-
-    [Fact]
-    public async Task SetModules_ReplacesExisting()
-    {
-        var agent = new AgentBaseCounterAgent();
-        agent.SetId("test-5");
-
-        var mod1 = new TestModule();
-        var mod2 = new TestModule();
-        agent.RegisterModule(mod1);
-        agent.SetModules([mod2]);
-
-        agent.GetModules().Count.ShouldBe(1);
-        agent.GetModules()[0].ShouldBeSameAs(mod2);
+        agent.HandleCount.ShouldBe(2);
     }
 
     [Fact]
     public async Task GetSubscribedEventTypes_ReturnsStaticHandlerTypes()
     {
         var agent = new AgentBaseCounterAgent();
-        agent.SetId("test-6");
+        agent.SetId("test-5");
 
         var types = await agent.GetSubscribedEventTypesAsync();
 
@@ -142,7 +106,7 @@ public class AgentBaseTests
     public async Task Description_ReturnsCustom()
     {
         var agent = new AgentBaseCounterAgent();
-        agent.SetId("test-7");
+        agent.SetId("test-6");
 
         var desc = await agent.GetDescriptionAsync();
         desc.ShouldBe("Counter:0");
@@ -152,7 +116,7 @@ public class AgentBaseTests
     public void State_ThrowsOutsideHandlerScope()
     {
         var agent = new AgentBaseCounterAgent();
-        agent.SetId("test-8");
+        agent.SetId("test-7");
 
         // State getter is always allowed
         var state = agent.State;

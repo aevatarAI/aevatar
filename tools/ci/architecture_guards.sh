@@ -273,8 +273,9 @@ if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
   exit 1
 fi
 
-if [ -f "src/workflow/Aevatar.Workflow.Core/Modules/WorkflowCallModule.cs" ]; then
-  echo "WorkflowCallModule is forbidden. workflow_call must remain run-owned inside WorkflowRunGAgent."
+if [ -f "src/workflow/Aevatar.Workflow.Core/PrimitiveExecutors/WorkflowCallPrimitiveExecutor.cs" ] || \
+   [ -f "src/workflow/Aevatar.Workflow.Core/Modules/WorkflowCallModule.cs" ]; then
+  echo "WorkflowCallPrimitiveExecutor is forbidden. workflow_call must remain run-owned inside WorkflowRunGAgent."
   exit 1
 fi
 
@@ -529,22 +530,23 @@ then
 fi
 
 if [ -f "src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/MakerModuleFactory.cs" ]; then
-  echo "Maker extension must use unified module pack model; MakerModuleFactory is forbidden."
+  echo "Maker extension must use unified primitive-pack model; MakerModuleFactory is forbidden."
   exit 1
 fi
 
-if [ -f "src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/Modules/MakerRecursiveModule.cs" ]; then
-  echo "MakerRecursiveModule is forbidden. Stateful maker recursion must not live in workflow modules."
+if [ -f "src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/PrimitiveExecutors/MakerRecursivePrimitiveExecutor.cs" ] || \
+   [ -f "src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/Modules/MakerRecursiveModule.cs" ]; then
+  echo "MakerRecursivePrimitiveExecutor is forbidden. Stateful maker recursion must not live in workflow primitive executors."
   exit 1
 fi
 
 if rg -n "IEventModuleFactory" src/workflow/extensions/Aevatar.Workflow.Extensions.Maker -g '*.cs'; then
-  echo "Maker extension must not register standalone IEventModuleFactory. Use IWorkflowModulePack."
+  echo "Maker extension must not register standalone IEventModuleFactory. Use IWorkflowPrimitivePack."
   exit 1
 fi
 
 if rg -n "IEventModuleFactory" demos/Aevatar.Demos.Workflow.Web -g '*.cs'; then
-  echo "Workflow web demo must not depend on IEventModuleFactory. Use DemoWorkflowModulePack + IWorkflowPrimitiveHandler."
+  echo "Workflow web demo must not depend on IEventModuleFactory. Use DemoWorkflowPrimitivePack + IWorkflowPrimitiveExecutor."
   exit 1
 fi
 
@@ -553,8 +555,34 @@ if rg -n "Aevatar\.Demos\.CaseProjection" aevatar.slnx demos src test tools -g '
   exit 1
 fi
 
-if ! rg -n "AddWorkflowModulePack<MakerModulePack>\(" src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/ServiceCollectionExtensions.cs >/dev/null; then
-  echo "Maker extension must register MakerModulePack via AddWorkflowModulePack<MakerModulePack>()."
+if ! rg -n "AddWorkflowPrimitivePack<MakerPrimitivePack>\(" src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/ServiceCollectionExtensions.cs >/dev/null; then
+  echo "Maker extension must register MakerPrimitivePack via AddWorkflowPrimitivePack<MakerPrimitivePack>()."
+  exit 1
+fi
+
+if rg -n "event_modules|event_routes" demos/Aevatar.Demos.Workflow/workflows workflows -g '*.yaml' -g '*.yml'; then
+  echo "Workflow YAML must not reintroduce legacy role-internal event routing fields."
+  exit 1
+fi
+
+active_docs=(
+  "docs/FOUNDATION.md"
+  "docs/WORKFLOW.md"
+  "docs/WORKFLOW_PRIMITIVES.md"
+  "docs/PROJECT_ARCHITECTURE.md"
+  "docs/CQRS_ARCHITECTURE.md"
+  "docs/CONNECTOR.md"
+  "docs/architecture/workflow-vs-n8n-comparison.md"
+  "docs/architecture/AEVATAR_MAINNET_ARCHITECTURE.md"
+  "src/Aevatar.AI.Core/README.md"
+  "src/Aevatar.Foundation.Abstractions/README.md"
+  "src/workflow/README.md"
+  "src/workflow/Aevatar.Workflow.Core/README.md"
+  "demos/Aevatar.Demos.Workflow/README.md"
+)
+
+if rg -n "event_modules|event_routes|IEventModule|IEventModuleFactory|RoutedEventModule" "${active_docs[@]}"; then
+  echo "Active docs must not present the retired EventModule model as current architecture."
   exit 1
 fi
 

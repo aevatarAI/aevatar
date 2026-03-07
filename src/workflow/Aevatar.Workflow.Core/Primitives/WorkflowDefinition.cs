@@ -146,16 +146,6 @@ public sealed class RoleDefinition
     public int? StreamBufferCapacity { get; init; }
 
     /// <summary>
-    /// 该角色绑定的事件模块列表（逗号分隔）。
-    /// </summary>
-    public string? EventModules { get; init; }
-
-    /// <summary>
-    /// 该角色绑定的事件路由规则（DSL 或 YAML list）。
-    /// </summary>
-    public string? EventRoutes { get; init; }
-
-    /// <summary>
     /// 该角色允许使用的 Connector 名称列表（中心化配置在 ~/.aevatar/connectors.json）。
     /// 当 connector_call 步骤指定本角色时，仅允许调用此列表中的 connector。
     /// </summary>

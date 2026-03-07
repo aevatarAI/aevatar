@@ -2,14 +2,12 @@
 // GAgentBase - stateless base class for GAgent.
 //
 // Responsibilities:
-// 1. Unified event pipeline ([EventHandler] + IEventModule interleaved by priority)
-// 2. Module management APIs (RegisterModule / SetModules)
-// 3. Dual hook channels (virtual methods + IGAgentExecutionHook pipeline)
-// 4. Publishing helpers (PublishAsync / SendToAsync)
+// 1. Priority-sorted static event-handler pipeline
+// 2. Dual hook channels (virtual methods + IGAgentExecutionHook pipeline)
+// 3. Publishing helpers (PublishAsync / SendToAsync)
 // ─────────────────────────────────────────────────────────────
 
 using System.Diagnostics;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -22,13 +20,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.Foundation.Core;
 
 /// <summary>
-/// Stateless GAgent base class with unified event pipeline, module management,
+/// Stateless GAgent base class with priority-sorted static event handlers
 /// and dual hook channels (virtual methods + IGAgentExecutionHook pipeline).
 /// </summary>
 public abstract class GAgentBase : IAgent
 {
     private EventHandlerMetadata[]? _staticHandlers;
-    private volatile IEventModule[] _modules = [];
     private volatile IGAgentExecutionHook[] _hooks = [];
     private EventEnvelope? _activeInboundEnvelope;
 
@@ -95,13 +92,11 @@ public abstract class GAgentBase : IAgent
         _activeInboundEnvelope = envelope;
         try
         {
-            var ctx = CreateHandlerContext(envelope);
-            var pipeline = EventPipelineBuilder.Build(GetStaticHandlers(), _modules, this);
-
-            foreach (var handler in pipeline)
+            foreach (var handler in GetStaticHandlers())
             {
                 ct.ThrowIfCancellationRequested();
-                if (!handler.CanHandle(envelope)) continue;
+                if (!StaticEventHandlerDispatcher.CanHandle(handler, this, envelope))
+                    continue;
 
                 var hookCtx = new GAgentExecutionHookContext
                 {
@@ -120,7 +115,7 @@ public abstract class GAgentBase : IAgent
                     await OnEventHandlerStartAsync(envelope, handler.Name, null, ct);
                     await RunHooksAsync(h => h.OnEventHandlerStartAsync(hookCtx, ct), "OnEventHandlerStart");
 
-                    await handler.HandleAsync(envelope, ctx, ct);
+                    await StaticEventHandlerDispatcher.InvokeAsync(handler, this, envelope, ct);
                 }
                 catch (Exception ex)
                 {
@@ -192,27 +187,6 @@ public abstract class GAgentBase : IAgent
 
     /// <summary>Gets all currently registered hooks.</summary>
     public IReadOnlyList<IGAgentExecutionHook> GetHooks() => _hooks;
-
-    // Module management APIs
-
-    /// <summary>Registers a dynamic event module.</summary>
-    public void RegisterModule(IEventModule module)
-    {
-        var current = _modules;
-        var next = new IEventModule[current.Length + 1];
-        current.CopyTo(next, 0);
-        next[current.Length] = module;
-        _modules = next;
-    }
-
-    /// <summary>Replaces dynamic event modules in batch.</summary>
-    public void SetModules(IEnumerable<IEventModule> modules)
-    {
-        _modules = modules.ToArray();
-    }
-
-    /// <summary>Gets all currently registered dynamic modules.</summary>
-    public IReadOnlyList<IEventModule> GetModules() => _modules;
 
     // Publishing helper methods
 
@@ -319,15 +293,6 @@ public abstract class GAgentBase : IAgent
 
     private EventHandlerMetadata[] GetStaticHandlers() =>
         _staticHandlers ??= EventHandlerDiscoverer.Discover(GetType());
-
-    private EventHandlerContext CreateHandlerContext(EventEnvelope envelope) =>
-        new(
-            this,
-            EventPublisher,
-            Services.GetRequiredService<IActorRuntimeCallbackScheduler>(),
-            Services,
-            Logger,
-            envelope);
 
     // Null implementations
 

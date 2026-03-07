@@ -8,10 +8,11 @@ cd "${REPO_ROOT}"
 
 workflow_definition_state="src/workflow/Aevatar.Workflow.Core/workflow_state.proto"
 workflow_definition_actor="src/workflow/Aevatar.Workflow.Core/WorkflowGAgent.cs"
-workflow_core_pack="src/workflow/Aevatar.Workflow.Core/WorkflowCoreModulePack.cs"
-workflow_module_pack_contract="src/workflow/Aevatar.Workflow.Core/IWorkflowModulePack.cs"
+workflow_core_pack="src/workflow/Aevatar.Workflow.Core/WorkflowCorePrimitivePack.cs"
+workflow_primitive_pack_contract="src/workflow/Aevatar.Workflow.Core/IWorkflowPrimitivePack.cs"
 workflow_composition_dir="src/workflow/Aevatar.Workflow.Core/Composition"
 workflow_run_coverage="test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
+workflow_primitive_executor_dir="src/workflow/Aevatar.Workflow.Core/PrimitiveExecutors"
 current_workflow_docs=(
   "docs/WORKFLOW.md"
   "src/workflow/README.md"
@@ -38,16 +39,16 @@ if ! rg -n "CreateAsync<WorkflowRunGAgent>" "${workflow_definition_actor}" >/dev
   exit 1
 fi
 
-if rg -n "WorkflowModuleRegistration.Create<(WorkflowLoopModule|WhileModule|WorkflowCallModule|ParallelFanOutModule|ForEachModule|RaceModule|MapReduceModule|LLMCallModule|WaitSignalModule|EvaluateModule|ReflectModule|DelayModule|CacheModule|HumanApprovalModule|HumanInputModule)>" "${workflow_core_pack}"; then
-  echo "WorkflowCoreModulePack must not register stateful runtime modules; those are owned by WorkflowRunGAgent."
+if rg -n "WorkflowPrimitiveRegistration.Create<(WorkflowLoopPrimitiveExecutor|WhilePrimitiveExecutor|WorkflowCallPrimitiveExecutor|ParallelFanOutPrimitiveExecutor|ForEachPrimitiveExecutor|RacePrimitiveExecutor|MapReducePrimitiveExecutor|LLMCallPrimitiveExecutor|WaitSignalPrimitiveExecutor|EvaluatePrimitiveExecutor|ReflectPrimitiveExecutor|DelayPrimitiveExecutor|CachePrimitiveExecutor|HumanApprovalPrimitiveExecutor|HumanInputPrimitiveExecutor)>" "${workflow_core_pack}"; then
+  echo "WorkflowCorePrimitivePack must not register stateful runtime executors; those are owned by WorkflowRunGAgent."
   exit 1
 fi
 
-if rg -n "DependencyExpanders|Configurators" "${workflow_module_pack_contract}" "${workflow_core_pack}" \
-  "src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/MakerModulePack.cs" \
-  "demos/Aevatar.Demos.Workflow.Web/DemoWorkflowModulePack.cs"
+if rg -n "DependencyExpanders|Configurators" "${workflow_primitive_pack_contract}" "${workflow_core_pack}" \
+  "src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/MakerPrimitivePack.cs" \
+  "demos/Aevatar.Demos.Workflow.Web/DemoWorkflowPrimitivePack.cs"
 then
-  echo "Workflow module packs must expose only stateless Modules registrations."
+  echo "Workflow primitive packs must expose only stateless executor registrations."
   exit 1
 fi
 
@@ -57,13 +58,13 @@ if [ -d "${workflow_composition_dir}" ] && rg --files "${workflow_composition_di
 fi
 
 legacy_stateful_modules="$(
-  rg --files src/workflow/Aevatar.Workflow.Core/Modules \
-    | rg '/(WorkflowLoopModule|LLMCallModule|ParallelFanOutModule|ForEachModule|WhileModule|WaitSignalModule|DelayModule|HumanApprovalModule|HumanInputModule|MapReduceModule|RaceModule|ReflectModule|EvaluateModule|CacheModule)\\.cs$' || true
+  rg --files "${workflow_primitive_executor_dir}" \
+    | rg '/(WorkflowLoopPrimitiveExecutor|LLMCallPrimitiveExecutor|ParallelFanOutPrimitiveExecutor|ForEachPrimitiveExecutor|WhilePrimitiveExecutor|WaitSignalPrimitiveExecutor|DelayPrimitiveExecutor|HumanApprovalPrimitiveExecutor|HumanInputPrimitiveExecutor|MapReducePrimitiveExecutor|RacePrimitiveExecutor|ReflectPrimitiveExecutor|EvaluatePrimitiveExecutor|CachePrimitiveExecutor)\\.cs$' || true
 )"
 
 if [ -n "${legacy_stateful_modules}" ]; then
   echo "${legacy_stateful_modules}"
-  echo "Legacy stateful workflow runtime modules must stay deleted."
+  echo "Legacy stateful workflow runtime executors must stay deleted."
   exit 1
 fi
 

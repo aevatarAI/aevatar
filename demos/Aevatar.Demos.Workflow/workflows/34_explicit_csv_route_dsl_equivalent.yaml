@@ -1,0 +1,11 @@
+name: 34_explicit_csv_route_dsl_equivalent
+description: |
+  Replaces old 34_role_event_module_route_dsl_csv.
+  The old route DSL disappears; the CSV formatter is called directly.
+
+steps:
+  - id: render_csv_markdown
+    type: demo_csv_markdown
+    parameters:
+      delimiter: ","
+      has_header: "true"

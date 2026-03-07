@@ -1,0 +1,10 @@
+name: 22_explicit_json_pick_route
+description: |
+  Replaces old 22_role_event_module_json_pick.
+  JSON extraction is now an explicit workflow step instead of a role-side interceptor.
+
+steps:
+  - id: extract_owner_team
+    type: demo_json_pick
+    parameters:
+      path: "incident.owner.team"

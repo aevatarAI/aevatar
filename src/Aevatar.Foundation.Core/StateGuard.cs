@@ -7,7 +7,7 @@ namespace Aevatar.Foundation.Core;
 
 /// <summary>
 /// State write protection using AsyncLocal scope tracking.
-/// Ensures state is mutated only inside EventHandler/EventModule/OnActivateAsync scopes.
+/// Ensures state is mutated only inside EventHandler/OnActivateAsync scopes.
 /// </summary>
 internal static class StateGuard
 {
@@ -24,7 +24,7 @@ internal static class StateGuard
     {
         if (!Writable.Value)
             throw new InvalidOperationException(
-                "State can only be modified inside EventHandler / EventModule / OnActivateAsync scopes.");
+                "State can only be modified inside EventHandler / OnActivateAsync scopes.");
     }
 
     /// <summary>Disposable writable scope handle that restores previous writable state.</summary>

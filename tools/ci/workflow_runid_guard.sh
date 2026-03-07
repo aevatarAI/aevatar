@@ -7,7 +7,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 scan_roots=(
-  "src/workflow/Aevatar.Workflow.Core/Modules"
+  "src/workflow/Aevatar.Workflow.Core/PrimitiveExecutors"
   "src/workflow/extensions"
 )
 

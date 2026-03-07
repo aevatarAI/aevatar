@@ -24,7 +24,6 @@ using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
-using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -448,10 +447,10 @@ public class WorkflowIntegrationTests
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  Scenario 7: WorkflowPrimitiveRegistry 仅创建 stateless runtime 模块
+    //  Scenario 7: WorkflowPrimitiveExecutorRegistry 仅创建 stateless runtime 模块
     // ═══════════════════════════════════════════════════════════
 
-    [Fact(DisplayName = "WorkflowPrimitiveRegistry 应只创建 stateless runtime 模块")]
+    [Fact(DisplayName = "WorkflowPrimitiveExecutorRegistry 应只创建 stateless runtime 模块")]
     [Trait("Feature", "ModuleFactory")]
     public void Scenario7_AllCoreModules()
     {
@@ -460,7 +459,7 @@ public class WorkflowIntegrationTests
         services.AddSingleton<Aevatar.Foundation.Abstractions.Connectors.IConnectorCatalog>(
             StaticConnectorCatalog.Empty);
         using var provider = services.BuildServiceProvider();
-        var registry = new WorkflowPrimitiveRegistry(provider.GetServices<IWorkflowModulePack>());
+        var registry = new WorkflowPrimitiveExecutorRegistry(provider.GetServices<IWorkflowPrimitivePack>());
 
         registry.TryCreate("conditional", provider, out var m).Should().BeTrue(); m!.Name.Should().Be("conditional");
         registry.TryCreate("switch", provider, out m).Should().BeTrue(); m!.Name.Should().Be("switch");
@@ -497,7 +496,7 @@ public class WorkflowIntegrationTests
 
         // ─── 不存在的类型 ───
         registry.TryCreate("nonexistent", provider, out m).Should().BeFalse();
-        registry.TryCreate("maker_vote", provider, out m).Should().BeFalse(); // maker module pack is not registered in this test scope
+        registry.TryCreate("maker_vote", provider, out m).Should().BeFalse(); // maker primitive pack is not registered in this test scope
         m.Should().BeNull();
     }
 }

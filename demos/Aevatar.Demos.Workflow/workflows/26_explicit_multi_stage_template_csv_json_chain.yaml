@@ -1,0 +1,38 @@
+name: 26_explicit_multi_stage_template_csv_json_chain
+description: |
+  Replaces old 26_role_event_module_multi_role_chain.
+  The old template -> CSV -> JSON role chain is now expressed as a deterministic step chain.
+
+steps:
+  - id: prepare_brief
+    type: demo_template
+    parameters:
+      template: "Prepared brief: {{input}}"
+    next: seed_csv
+
+  - id: seed_csv
+    type: assign
+    parameters:
+      value: |
+        service,error_rate,latency_ms
+        gateway,1.2,230
+        checkout,0.7,160
+    next: render_csv_markdown
+
+  - id: render_csv_markdown
+    type: demo_csv_markdown
+    parameters:
+      delimiter: ","
+      has_header: "true"
+    next: seed_json
+
+  - id: seed_json
+    type: assign
+    parameters:
+      value: '{"incident":{"owner":{"team":"routing-platform"}},"severity":"high"}'
+    next: extract_owner_team
+
+  - id: extract_owner_team
+    type: demo_json_pick
+    parameters:
+      path: "incident.owner.team"

@@ -1,0 +1,11 @@
+name: 28_explicit_extensions_csv_route
+description: |
+  Replaces old 28_role_event_module_extensions_csv.
+  CSV formatting is now explicit instead of being declared through extensions metadata.
+
+steps:
+  - id: render_csv_markdown
+    type: demo_csv_markdown
+    parameters:
+      delimiter: ","
+      has_header: "true"

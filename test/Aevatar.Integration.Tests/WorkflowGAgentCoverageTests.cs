@@ -1,7 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -131,8 +130,6 @@ public sealed class WorkflowRunGAgentCoverageTests
         initialize.MaxToolRounds.Should().Be(4);
         initialize.MaxHistoryMessages.Should().Be(30);
         initialize.StreamBufferCapacity.Should().Be(64);
-        initialize.EventModules.Should().Be("llm_handler,tool_handler");
-        initialize.EventRoutes.Should().Contain("event.type");
     }
 
     [Fact]
@@ -255,16 +252,16 @@ public sealed class WorkflowRunGAgentCoverageTests
     private static WorkflowRunGAgent CreateRunAgent(
         IActorRuntime? runtime = null,
         IRoleAgentTypeResolver? roleResolver = null,
-        IEnumerable<IWorkflowModulePack>? modulePacks = null,
+        IEnumerable<IWorkflowPrimitivePack>? primitivePacks = null,
         IEventStore? eventStore = null)
     {
         runtime ??= new RecordingActorRuntime();
         roleResolver ??= new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent));
-        modulePacks ??= [new EmptyWorkflowModulePack()];
+        primitivePacks ??= [new EmptyWorkflowPrimitivePack()];
         eventStore ??= new InMemoryEventStore();
 
         var services = CreateServices(eventStore);
-        var agent = new WorkflowRunGAgent(runtime, roleResolver, modulePacks)
+        var agent = new WorkflowRunGAgent(runtime, roleResolver, primitivePacks)
         {
             Services = services,
         };
@@ -494,10 +491,6 @@ file static class WorkflowGAgentCoverageTestHelpers
             max_tool_rounds: 4
             max_history_messages: 30
             stream_buffer_capacity: 64
-            extensions:
-              event_modules: "llm_handler,tool_handler"
-              event_routes: |
-                event.type == ChatRequestEvent -> tool_handler
         steps:
           - id: step_1
             type: transform
@@ -713,9 +706,9 @@ file sealed class StaticRoleAgentTypeResolver(SystemType roleAgentType) : IRoleA
     public SystemType ResolveRoleAgentType() => roleAgentType;
 }
 
-file sealed class EmptyWorkflowModulePack : IWorkflowModulePack
+file sealed class EmptyWorkflowPrimitivePack : IWorkflowPrimitivePack
 {
     public string Name => "empty";
 
-    public IReadOnlyList<WorkflowModuleRegistration> Modules { get; } = [];
+    public IReadOnlyList<WorkflowPrimitiveRegistration> Executors { get; } = [];
 }

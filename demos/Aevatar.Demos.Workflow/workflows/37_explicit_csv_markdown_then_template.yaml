@@ -1,0 +1,17 @@
+name: 37_explicit_csv_markdown_then_template
+description: |
+  Replaces old 37_mixed_step_csv_markdown_then_role_template.
+  Format the CSV first, then wrap the rendered report with a template step.
+
+steps:
+  - id: render_csv_markdown
+    type: demo_csv_markdown
+    parameters:
+      delimiter: ","
+      has_header: "true"
+    next: wrap_report
+
+  - id: wrap_report
+    type: demo_template
+    parameters:
+      template: "Rendered report:\n{{input}}"

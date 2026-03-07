@@ -49,7 +49,7 @@ Maker 插件工程：`src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`
 
 1. 提供 `maker_vote` 等无状态 workflow primitive 扩展。
 2. 提供 `AddWorkflowMakerExtensions()` 统一注册入口。
-3. 通过 `IWorkflowModulePack` 贡献模块定义，与内建 primitive 走同一注册体系。
+3. 通过 `IWorkflowPrimitivePack` 贡献无状态原语 executor，与内建 primitive 走同一注册体系。
 
 依赖约束：
 
@@ -59,7 +59,7 @@ Maker 插件工程：`src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`
 
 ## 5. 分层职责
 
-1. Domain：模块语义与状态转换（step/module）。
+1. Domain：原语语义与状态转换（step / executor / reducer）。
 2. Application：命令执行编排与查询服务。
 3. Infrastructure：IO 适配、持久化、投影存储、host 扩展。
 4. Host：协议适配、能力组合、运行参数配置。

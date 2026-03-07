@@ -98,8 +98,6 @@ public sealed partial class WorkflowRunGAgent
             MaxToolRounds = role.MaxToolRounds ?? 0,
             MaxHistoryMessages = role.MaxHistoryMessages ?? 0,
             StreamBufferCapacity = role.StreamBufferCapacity ?? 0,
-            EventModules = role.EventModules ?? string.Empty,
-            EventRoutes = role.EventRoutes ?? string.Empty,
         };
         if (role.Temperature.HasValue)
             initialize.Temperature = role.Temperature.Value;

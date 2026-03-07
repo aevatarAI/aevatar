@@ -1,7 +1,7 @@
 namespace Aevatar.AI.Abstractions;
 
 /// <summary>
-/// Canonical helpers for chat session identifiers used across workflow modules and projections.
+/// Canonical helpers for chat session identifiers used across workflow step execution and projections.
 /// </summary>
 public static class ChatSessionKeys
 {

@@ -1,5 +1,5 @@
 global using Aevatar.Foundation.Abstractions;
-global using Aevatar.Foundation.Abstractions.EventModules;
+global using Aevatar.Foundation.Abstractions.Attributes;
 global using Aevatar.Foundation.Core;
 global using Aevatar.Foundation.Core.EventSourcing;
 global using Aevatar.Foundation.Runtime.Actors;

@@ -1,0 +1,10 @@
+name: 29_explicit_precedence_json_pick
+description: |
+  Replaces old 29_role_event_module_top_level_overrides_extensions.
+  The old precedence rule is removed; the intended JSON extraction is written directly.
+
+steps:
+  - id: extract_owner_team
+    type: demo_json_pick
+    parameters:
+      path: "incident.owner.team"

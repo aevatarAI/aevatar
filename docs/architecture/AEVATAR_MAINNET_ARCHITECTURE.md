@@ -106,15 +106,15 @@ flowchart LR
         Runtime["Runtime (IActorRuntime)"]
         Stream["Stream (IStream)"]
         Envelope["EventEnvelope"]
-        Module["EventModule (IEventModule)"]
+        Handler["Static Event Handler"]
     end
 
     Runtime -->|"创建 / 销毁 / 链接"| Actor
     Actor -->|"承载"| Agent
     Agent -->|"发布事件"| Stream
     Stream -->|"传播"| Envelope
-    Envelope -->|"路由到"| Module
-    Module -->|"处理后回写"| Agent
+    Envelope -->|"路由到"| Handler
+    Handler -->|"处理后回写"| Agent
 ```
 
 | 概念 | 接口 | 说明 |
@@ -124,9 +124,9 @@ flowchart LR
 | Runtime | `IActorRuntime` | Actor 生命周期与拓扑管理器（创建、销毁、链接、解链） |
 | Stream | `IStream` / `IStreamProvider` | 事件传播通道，支持方向路由（Self / Down / Up / Both） |
 | EventEnvelope | `EventEnvelope` (Proto) | 统一传输契约，包含 payload、publisher、direction、correlation 等元数据 |
-| EventModule | `IEventModule` | 可插拔事件处理器，`CanHandle` 过滤 + `HandleAsync` 执行，按 `Priority` 排序 |
+| Static Event Handler | `[EventHandler]` / `[AllEventHandler]` | 静态声明的事件处理入口，由 `GAgentBase` 串行分发 |
 
-主链路：所有业务事件先包入 `EventEnvelope.payload` → 按 `EventDirection` 路由到目标 Stream → `GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule` 合并后按优先级执行。
+主链路：所有业务事件先包入 `EventEnvelope.payload` → 按 `EventDirection` 路由到目标 Stream → `GAgentBase` 按 handler 元数据匹配并串行执行静态事件处理器。
 
 ---
 
@@ -354,12 +354,12 @@ flowchart LR
 
 ### 5.3 模块系统
 
-`IWorkflowModulePack` 仍然存在，但它只注册无状态原语。跨事件 pending、恢复语义和聚合事实现在都归 `WorkflowRunGAgent` 持久化管理：
+`IWorkflowPrimitivePack` 仍然存在，但它只注册无状态原语。跨事件 pending、恢复语义和聚合事实现在都归 `WorkflowRunGAgent` 持久化管理：
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
-    subgraph core_pack ["WorkflowCoreModulePack (stateless only)"]
+    subgraph core_pack ["WorkflowCorePrimitivePack (stateless only)"]
         direction TB
         subgraph supported_modules ["Factory-Registered Primitives"]
             Tool["tool_call"]
@@ -384,7 +384,7 @@ flowchart TB
         MakerVote["maker_vote"]
     end
 
-    Registry["WorkflowPrimitiveRegistry"] --> core_pack
+    Registry["WorkflowPrimitiveExecutorRegistry"] --> core_pack
     Registry --> ext_pack
     StepReq["StepRequestEvent"] --> Registry
     Registry -->|"step_type 精确命中"| LLM
@@ -392,14 +392,14 @@ flowchart TB
     Registry -->|"step_type 精确命中"| MakerVote
 ```
 
-扩展模块通过实现 `IWorkflowModulePack` 注册，与内建模块遵循相同的抽象模型与生命周期协议：
+扩展模块通过实现 `IWorkflowPrimitivePack` 注册，与内建模块遵循相同的抽象模型与生命周期协议：
 
 ```csharp
-public sealed class MakerModulePack : IWorkflowModulePack
+public sealed class MakerPrimitivePack : IWorkflowPrimitivePack
 {
-    public IReadOnlyList<WorkflowModuleRegistration> Modules =>
+    public IReadOnlyList<WorkflowPrimitiveRegistration> Executors =>
     [
-        WorkflowModuleRegistration.Create<MakerVoteModule>("maker_vote"),
+        WorkflowPrimitiveRegistration.Create<MakerVotePrimitiveExecutor>("maker_vote"),
     ];
 }
 ```
@@ -440,7 +440,7 @@ flowchart TB
     end
 
     subgraph workflow_int ["工作流集成"]
-        CCM["ConnectorCallModule"]
+        CCM["ConnectorCallPrimitiveExecutor"]
         YAML["connector_call 步骤"]
     end
 
@@ -476,7 +476,7 @@ Agent 通过 Connector 调用 Chrono 能力服务的典型场景：
 %%{init: {"maxTextSize": 100000, "sequence": {"useMaxWidth": false}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
     participant Agent as "RoleGAgent"
-    participant Module as "ConnectorCallModule"
+    participant Module as "ConnectorCallPrimitiveExecutor"
     participant Registry as "IConnectorCatalog"
     participant HTTP as "HttpConnector"
     participant Chrono as "Chrono Gateway"
@@ -1393,7 +1393,7 @@ sequenceDiagram
 | 钱包账户 / 地址 | Tenant + User + Agent Identity | 这里是业务身份，不是链上账户资产语义 |
 | 交易（Tx） | Command（如启动 workflow run、发送输入） | 写入意图入口，异步产出事件 |
 | 区块确认 / Finality | Actor 串行执行 + 持久化 + 事件可追踪 | 不是拜占庭共识；是工程一致性与可恢复性 |
-| 智能合约 | Workflow YAML + RoleGAgent + EventModule | 业务逻辑的声明式 + 代码化组合 |
+| 智能合约 | Workflow YAML + RoleGAgent + Primitive Executor | 业务逻辑的声明式 + 代码化组合 |
 | Oracle / Data Feed | Chrono Platform + Connector | 将外部能力（storage/notification/search/third-party）可靠引入 Agent |
 | 链上日志（Event Log） | Domain Events + EventEnvelope | 统一事件信封，支持关联追踪 |
 | Indexer / The Graph | Projection Pipeline + ReadModel | 一对多投影，支撑 Query 与实时推送 |

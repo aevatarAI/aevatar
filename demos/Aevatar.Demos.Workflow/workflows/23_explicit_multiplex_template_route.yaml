@@ -1,0 +1,37 @@
+name: 23_explicit_multiplex_template_route
+description: |
+  Replaces old 23_role_event_module_multiplex_template.
+  Hidden role-internal multiplex routing becomes an explicit workflow-level switch.
+
+steps:
+  - id: choose_route
+    type: switch
+    branches:
+      template: render_template
+      "service,error_rate,latency_ms": render_csv_markdown
+      '{"incident"': extract_owner_team
+      _default: render_template
+
+  - id: render_template
+    type: demo_template
+    parameters:
+      template: "Template multiplex route: {{input}}"
+    next: finish
+
+  - id: render_csv_markdown
+    type: demo_csv_markdown
+    parameters:
+      delimiter: ","
+      has_header: "true"
+    next: finish
+
+  - id: extract_owner_team
+    type: demo_json_pick
+    parameters:
+      path: "incident.owner.team"
+    next: finish
+
+  - id: finish
+    type: transform
+    parameters:
+      op: identity

@@ -55,9 +55,6 @@ internal sealed class WorkflowDefinitionNormalizer
 
     private static RoleDefinition MapRole(WorkflowRawRole role)
     {
-        var eventModules = PreferTopLevelText(role.EventModules, role.Extensions?.EventModules);
-        var eventRoutes = PreferTopLevelText(role.EventRoutes, role.Extensions?.EventRoutes);
-
         var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
         {
             Id = role.Id,
@@ -70,8 +67,6 @@ internal sealed class WorkflowDefinitionNormalizer
             MaxToolRounds = role.MaxToolRounds,
             MaxHistoryMessages = role.MaxHistoryMessages,
             StreamBufferCapacity = role.StreamBufferCapacity,
-            EventModules = eventModules,
-            EventRoutes = eventRoutes,
             Connectors = role.Connectors,
         });
 
@@ -87,24 +82,8 @@ internal sealed class WorkflowDefinitionNormalizer
             MaxToolRounds = normalized.MaxToolRounds,
             MaxHistoryMessages = normalized.MaxHistoryMessages,
             StreamBufferCapacity = normalized.StreamBufferCapacity,
-            EventModules = normalized.EventModules,
-            EventRoutes = normalized.EventRoutes,
             Connectors = normalized.Connectors.ToList(),
         };
-    }
-
-    private static string? PreferTopLevelText(string? topLevel, string? fallback)
-    {
-        var primary = NormalizeText(topLevel);
-        return primary ?? NormalizeText(fallback);
-    }
-
-    private static string? NormalizeText(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        return value.Trim();
     }
 
     private static StepDefinition MapStep(WorkflowRawStep step)

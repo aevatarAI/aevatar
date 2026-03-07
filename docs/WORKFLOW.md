@@ -4,7 +4,7 @@
 
 1. `WorkflowGAgent` 只负责 definition/binding。
 2. `WorkflowRunGAgent` 负责单次 accepted run 的持久事实与执行推进。
-3. Workflow 主执行链只接受 `IWorkflowPrimitiveHandler + WorkflowPrimitiveRegistry`；`IEventModule` 不再承担 workflow runtime 主状态机。
+3. Workflow 主执行链只接受 `IWorkflowPrimitiveExecutor + WorkflowPrimitiveExecutorRegistry`。
 
 这份文档只描述当前有效模型，不再保留旧 loop-module 驱动架构的兼容说明。
 
@@ -102,11 +102,11 @@ flowchart LR
 - `while`
 - `cache`
 
-这类原语的正确性必须依赖 `WorkflowRunState`，而不是 module 私有字段。
+这类原语的正确性必须依赖 `WorkflowRunState`，而不是 executor 私有字段。
 
-### 4.2 仍通过 WorkflowPrimitiveRegistry 解析的无状态原语
+### 4.2 仍通过 WorkflowPrimitiveExecutorRegistry 解析的无状态原语
 
-当前 `WorkflowCoreModulePack` 只注册无状态模块：
+当前 `WorkflowCorePrimitivePack` 只注册无状态 executor：
 
 - `conditional`
 - `switch`
@@ -180,24 +180,24 @@ POST /api/workflows/signal
 
 ```csharp
 services.AddAevatarWorkflow();
-services.AddWorkflowModulePack<MyWorkflowModulePack>();
+services.AddWorkflowPrimitivePack<MyPrimitivePack>();
 ```
 
 ```csharp
-public sealed class MyWorkflowModulePack : IWorkflowModulePack
+public sealed class MyPrimitivePack : IWorkflowPrimitivePack
 {
     public string Name => "my.pack";
 
-    public IReadOnlyList<WorkflowModuleRegistration> Modules =>
+    public IReadOnlyList<WorkflowPrimitiveRegistration> Executors =>
     [
-        WorkflowModuleRegistration.Create<MyStatelessModule>("my_step")
+        WorkflowPrimitiveRegistration.Create<MyPrimitiveExecutor>("my_step")
     ];
 }
 ```
 
 ### 6.2 什么时候必须改 WorkflowRunState
 
-如果新原语引入以下任意一种事实，就不能只写 module，必须同时扩展 `WorkflowRunState` 与 `WorkflowRunGAgent`：
+如果新原语引入以下任意一种事实，就不能只写无状态 executor，必须同时扩展 `WorkflowRunState` 与 `WorkflowRunGAgent`：
 
 1. 跨事件 pending。
 2. timeout/retry/delay/backoff。
@@ -212,7 +212,7 @@ public sealed class MyWorkflowModulePack : IWorkflowModulePack
 
 ## 7. 从旧模型迁移
 
-旧模型的核心问题不是“某个回调没持久化”，而是“run 事实被 event module 私有内存持有”。现在统一按下面的方式迁移：
+旧模型的核心问题不是“某个回调没持久化”，而是“run 事实被错误地放进非持久化扩展点私有内存里”。现在统一按下面的方式迁移：
 
 | 旧做法 | 新做法 |
 |---|---|
@@ -248,7 +248,7 @@ Definition catalog 装配规则：
 13. `src/workflow/Aevatar.Workflow.Core/WorkflowCompilationService.cs`
 14. `src/workflow/Aevatar.Workflow.Core/workflow_state.proto`
 15. `src/workflow/Aevatar.Workflow.Core/workflow_run_state.proto`
-16. `src/workflow/Aevatar.Workflow.Core/WorkflowCoreModulePack.cs`
+16. `src/workflow/Aevatar.Workflow.Core/WorkflowCorePrimitivePack.cs`
 17. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs`
 18. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowCapabilityEndpoints*.cs`
 

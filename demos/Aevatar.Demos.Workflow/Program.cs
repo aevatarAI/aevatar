@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // Workflow Primitives Demo
 //
-// Showcases every built-in workflow event module (primitive)
+// Showcases every built-in workflow primitive and explicit orchestration pattern
 // through focused YAML workflows.
 //
 // Usage:
@@ -102,6 +102,25 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
     ["15_reflect"] = "Write a concise explanation of the CAP theorem suitable for a junior developer.",
 
     ["16_cache"] = "What is the difference between SQL and NoSQL databases?",
+    ["20_explicit_template_route"] = "payment_api_timeout",
+    ["21_explicit_csv_markdown_route"] = "service,error_rate,latency_ms\ngateway,1.2,210\ncheckout,0.3,120",
+    ["22_explicit_json_pick_route"] = """{"incident":{"id":"INC-2026-002","owner":{"team":"payments-sre","user":"bob"}},"severity":"critical"}""",
+    ["23_explicit_multiplex_template_route"] = "template branch selected",
+    ["24_explicit_multiplex_csv_route"] = "service,error_rate,latency_ms\ngateway,1.2,210\ncheckout,0.3,120",
+    ["25_explicit_multiplex_json_route"] = """{"incident":{"owner":{"team":"platform"}}}""",
+    ["26_explicit_multi_stage_template_csv_json_chain"] = "prepare routing escalation",
+    ["27_explicit_extensions_template_route"] = "extensions-template",
+    ["28_explicit_extensions_csv_route"] = "service,error_rate,latency_ms\nsearch,0.9,190\nfeed,1.5,310",
+    ["29_explicit_precedence_json_pick"] = """{"incident":{"owner":{"team":"top-level-wins"}}}""",
+    ["30_explicit_extensions_multi_stage_chain"] = "extensions chain kickoff",
+    ["31_explicit_extensions_multiplex_json_route"] = """{"incident":{"owner":{"team":"extensions-multiplex"}}}""",
+    ["32_explicit_precedence_multiplex_csv"] = "service,error_rate,latency_ms\ngateway,1.9,250\ncheckout,0.4,140",
+    ["33_explicit_template_without_routes"] = "no-routes-template",
+    ["34_explicit_csv_route_dsl_equivalent"] = "service,error_rate,latency_ms\napi,2.2,260\nworker,0.5,110",
+    ["35_explicit_template_ignore_unknown_module"] = "ignore-missing-module",
+    ["36_explicit_json_pick_then_template"] = """{"incident":{"owner":{"team":"database-oncall"}}}""",
+    ["37_explicit_csv_markdown_then_template"] = "service,error_rate,latency_ms\ngateway,1.2,210\ncheckout,0.3,120",
+    ["38_explicit_template_then_csv_markdown"] = "1.7",
 
     ["49_workflow_call_multilevel"] = """
           apple  
@@ -115,6 +134,25 @@ var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCas
 {
     "01_transform", "02_guard", "03_conditional", "04_switch",
     "05_assign", "06_retrieve_facts", "07_pipeline",
+    "20_explicit_template_route",
+    "21_explicit_csv_markdown_route",
+    "22_explicit_json_pick_route",
+    "23_explicit_multiplex_template_route",
+    "24_explicit_multiplex_csv_route",
+    "25_explicit_multiplex_json_route",
+    "26_explicit_multi_stage_template_csv_json_chain",
+    "27_explicit_extensions_template_route",
+    "28_explicit_extensions_csv_route",
+    "29_explicit_precedence_json_pick",
+    "30_explicit_extensions_multi_stage_chain",
+    "31_explicit_extensions_multiplex_json_route",
+    "32_explicit_precedence_multiplex_csv",
+    "33_explicit_template_without_routes",
+    "34_explicit_csv_route_dsl_equivalent",
+    "35_explicit_template_ignore_unknown_module",
+    "36_explicit_json_pick_then_template",
+    "37_explicit_csv_markdown_then_template",
+    "38_explicit_template_then_csv_markdown",
     "49_workflow_call_multilevel",
 };
 

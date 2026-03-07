@@ -57,7 +57,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        RoleGAgentFactory.ApplyModuleExtensions(this, evt.EventModules, evt.EventRoutes, Services);
     }
 
     /// <summary>Returns agent description.</summary>

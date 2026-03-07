@@ -4,7 +4,7 @@
 
 1. `WorkflowGAgent` 负责 definition/binding。
 2. `WorkflowRunGAgent` 负责单次 run 的持久事实与执行推进。
-3. `WorkflowPrimitiveRegistry` 只解析无状态原语处理器。
+3. `WorkflowPrimitiveExecutorRegistry` 只解析无状态原语处理器。
 
 ## 1. 目录结构
 
@@ -25,15 +25,15 @@ Aevatar.Workflow.Core/
 ├── WorkflowRunGAgent.Infrastructure.cs
 ├── workflow_state.proto
 ├── workflow_run_state.proto
-├── WorkflowPrimitiveRegistry.cs
+├── WorkflowPrimitiveExecutorRegistry.cs
 ├── WorkflowPrimitiveExecutionContext.cs
 ├── WorkflowRunStatePatchSupport.cs
-├── WorkflowCoreModulePack.cs
-├── IWorkflowModulePack.cs
+├── WorkflowCorePrimitivePack.cs
+├── IWorkflowPrimitivePack.cs
 ├── Primitives/
 ├── Validation/
 ├── Expressions/
-├── Modules/
+├── PrimitiveExecutors/
 └── Connectors/
 ```
 
@@ -111,7 +111,7 @@ Aevatar.Workflow.Core/
 
 ## 4. 模块边界
 
-### 4.1 WorkflowCoreModulePack 当前只注册无状态 primitive handlers
+### 4.1 WorkflowCorePrimitivePack 当前只注册无状态 primitive handlers
 
 - `conditional`
 - `switch`
@@ -144,14 +144,14 @@ Aevatar.Workflow.Core/
 - `while`
 - `cache`
 
-这些原语要么存在跨事件 pending，要么存在恢复语义，因此不能回退为 module 私有状态机。
+这些原语要么存在跨事件 pending，要么存在恢复语义，因此不能回退为 executor 私有状态机。
 
 ## 5. 扩展规则
 
 若新增 step type 只做纯函数或事件转换：
 
-1. 实现 `IWorkflowPrimitiveHandler`
-2. 放入 `IWorkflowModulePack.Modules`
+1. 实现 `IWorkflowPrimitiveExecutor`
+2. 放入 `IWorkflowPrimitivePack.Executors`
 
 若新增 step type 需要以下任意能力，就必须扩展 `WorkflowRunState` 和 `WorkflowRunGAgent`：
 

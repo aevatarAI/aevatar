@@ -80,8 +80,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             MaxToolRounds = 3,
             MaxHistoryMessages = 40,
             StreamBufferCapacity = 128,
-            EventModules = "demo",
-            EventRoutes = "event.type == X -> demo",
         }, InitializeRoleAgentEvent.Parser);
         initialize.RoleName.Should().Be("assistant");
         initialize.HasTemperature.Should().BeTrue();

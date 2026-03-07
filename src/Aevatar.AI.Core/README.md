@@ -1,87 +1,68 @@
 # Aevatar.AI.Core
 
-`Aevatar.AI.Core` 是 Aevatar 的 AI 能力核心层，提供 AI Agent 基类、LLM 抽象、Tool Calling 和 Hook 管线。
+`Aevatar.AI.Core` 是 Aevatar 的 AI 运行内核，负责 Role/LLM/Tool 的 typed 执行链。
 
 ## 职责
 
-- 提供 AI Agent 基类 `AIGAgentBase<TState>`
-- 定义统一 LLM 抽象：`ILLMProvider`、`ILLMProviderFactory`
-- 管理工具系统：`IAgentTool`、`ToolManager`、`ToolCallLoop`
-- 管理会话历史与请求构建：`ChatHistory`、`ChatRuntime`
-- 提供 AI 事件与消息协议（`ai_messages.proto`）
-- 提供角色型 Agent：`RoleGAgent` 及 YAML 配置工厂
+- 提供 `AIGAgentBase<TState>`
+- 提供 `RoleGAgent`
+- 管理 LLM 请求构建、聊天历史、Tool loop
+- 暴露 AI 事件协议（`ai_messages.proto`）
+- 提供 AI 层 typed middleware / hook 扩展点
 
 ## 核心类型
 
-- `AIGAgentBase<TState>`：组合 ChatRuntime + ToolManager + Hooks
-- `RoleGAgent`：面向对话场景的默认 AI Agent 实现
-- `RoleGAgentFactory`：从 YAML 配置角色 Prompt/Provider/模块
-- `Routing/*`：AI 层事件路由规则与模块过滤包装
-- `Hooks/*`：AI 层 Hook 管线与内置 Hook
-- `LLM/*`：跨 Provider 的请求/响应模型
+- `AIGAgentBase<TState>`：AI Agent 基类
+- `RoleGAgent`：标准对话角色 Agent
+- `RoleGAgentFactory`：把 YAML/配置归一化为 `InitializeRoleAgentEvent`
+- `ChatRuntime`：聊天历史与请求构建
+- `ToolManager` / `ToolCallLoop`：工具调用管理
 
-## AI Routing（EventRoutes）
+## Role 初始化语义
 
-`Aevatar.AI.Core` 里有一套“模块级路由”，用于控制**哪些事件可以进入哪些 EventModule**。  
-这套路由配置在 `RoleGAgentFactory` 中生效，不是 Runtime 的 Actor 层级路由。
+`RoleGAgent` 只保留强类型初始化链路。
 
-### 相关类型
+`InitializeRoleAgentEvent` 当前承载：
 
-- `EventRoute`：路由规则模型与解析器
-- `RoutedEventModule`：对 `IEventModule` 的过滤包装器
-- `IEventRouteEvaluator`：从 `EventEnvelope` 提取匹配字段（默认支持 `event.type`）
+- `role_name`
+- `provider_name`
+- `model`
+- `system_prompt`
+- `temperature`
+- `max_tokens`
+- `max_tool_rounds`
+- `max_history_messages`
+- `stream_buffer_capacity`
 
-### 生效机制
+已删除旧的 role 内部字符串路由配置。
 
-1. `RoleGAgentFactory` 根据 `event_modules` 创建模块
-2. 解析 `extensions.event_routes`
-3. 对非 `IRouteBypassModule` 的模块，用 `RoutedEventModule` 包装
-4. 运行时匹配通过的事件才进入目标模块
+所以 Role YAML 现在表达的是“角色执行参数”，不是“内部业务管线配置”。
 
-### 支持的匹配条件
+## 扩展方式
 
-- `event.type == "ChatRequestEvent"`
-- `event.step_type == "llm_call"`（需要 evaluator 提供 step_type 解析）
+AI 扩展不再借用 Foundation 的旧事件模块机制，而是走 AI 自己的 typed seam：
 
-### YAML 示例
+- `IAgentRunMiddleware`
+- `ILLMCallMiddleware`
+- `IToolCallMiddleware`
+- `IAIGAgentExecutionHook`
 
-```yaml
-name: researcher
-extensions:
-  event_modules: "llm_handler,tool_handler"
-  event_routes: |
-    - when: event.type == "ChatRequestEvent"
-      to: llm_handler
-    - when: event.step_type == "tool_call"
-      to: tool_handler
-```
+这些扩展点适合处理：
 
-## RoleGAgent 初始化与配置边界
+- 调用前后观测
+- tracing / logging / metrics
+- request/response 变换
+- tool / LLM 调用治理
 
-`RoleGAgent` 现在只保留一条强类型初始化链路，不再提供通用 `app_config_* / app_state_*` 字符串扩展槽位。
+如果能力需要跨事件、跨 reactivation 持有业务事实，就不应塞进 Role 内部 middleware，而应升级为 actor + state。
 
-### 标准初始化事件
+## 设计原则
 
-- `InitializeRoleAgentEvent`
-  - 承载角色启动参数：`role_name`、`provider/model/system_prompt`、温度与各类 limits、`event_modules/event_routes`
-  - 事件持久化后可回放恢复 `RoleGAgentState`
+- Role 负责 AI 执行语义，不负责 workflow 业务编排
+- 业务流程控制应由 workflow 显式步骤表达
+- 横切扩展走 middleware / hook
+- 持久业务事实走 actor state
 
-### 配置与参数语义
+一句话：
 
-- `InitializeRoleAgentEvent` 表示“启动/重初始化参数”（init input），不是通用业务配置总线
-- 业务配置请定义在业务 GAgent 自己的强类型 `State` / 领域事件中，不走框架通用 `Any`/JSON payload
-- 是否把 init 参数持久化为长期业务状态，由对应 GAgent 在自己的状态模型内决定
-
-## 设计特点
-
-- 通过接口隔离具体 LLM 供应商实现
-- Tool Calling 循环与对话历史独立组件化
-- 支持 Hook 双通道（Foundation 事件钩子 + AI 调用钩子）
-
-## 依赖
-
-- `Aevatar.Foundation.Core`
-- `Microsoft.Extensions.AI`
-- `Google.Protobuf` / `Grpc.Tools`
-- `YamlDotNet`
-- `Microsoft.Extensions.*.Abstractions`
+`Aevatar.AI.Core` 提供的是 typed AI execution pipeline，不再提供可热插拔的 role 内部事件模块体系。

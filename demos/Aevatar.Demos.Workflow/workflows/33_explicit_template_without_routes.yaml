@@ -1,0 +1,10 @@
+name: 33_explicit_template_without_routes
+description: |
+  Replaces old 33_role_event_module_no_routes_template.
+  The intended template behavior is now just the template step itself.
+
+steps:
+  - id: render_template
+    type: demo_template
+    parameters:
+      template: "No-routes explicit template: {{input}}"

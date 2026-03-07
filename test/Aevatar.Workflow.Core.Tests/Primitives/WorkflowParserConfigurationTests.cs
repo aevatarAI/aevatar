@@ -46,10 +46,10 @@ public class WorkflowParserConfigurationTests
     }
 
     [Fact]
-    public void Parse_WhenRoleUsesExtensions_ShouldBindRoleRuntimeFields()
+    public void Parse_WhenRoleDefinesRuntimeFields_ShouldBindRoleRuntimeFields()
     {
         var yaml = """
-            name: role_extensions
+            name: role_runtime_fields
             roles:
               - id: planner
                 system_prompt: "You are planner"
@@ -61,10 +61,6 @@ public class WorkflowParserConfigurationTests
                 max_history_messages: 50
                 stream_buffer_capacity: 128
                 connectors: [conn_a, conn_b]
-                extensions:
-                  event_modules: "llm_handler,tool_handler"
-                  event_routes: |
-                    event.type == ChatRequestEvent -> llm_handler
             steps:
               - id: s1
                 type: assign
@@ -86,36 +82,7 @@ public class WorkflowParserConfigurationTests
         role.MaxToolRounds.Should().Be(3);
         role.MaxHistoryMessages.Should().Be(50);
         role.StreamBufferCapacity.Should().Be(128);
-        role.EventModules.Should().Be("llm_handler,tool_handler");
-        role.EventRoutes.Should().Contain("event.type");
         role.Connectors.Should().BeEquivalentTo(["conn_a", "conn_b"]);
-    }
-
-    [Fact]
-    public void Parse_WhenRoleDefinesTopLevelAndExtensionsEventFields_ShouldPreferTopLevel()
-    {
-        var yaml = """
-            name: role_override
-            roles:
-              - id: reviewer
-                event_modules: "top_a,top_b"
-                event_routes: "event.type == ChatRequestEvent -> top_a"
-                extensions:
-                  event_modules: "ext_a,ext_b"
-                  event_routes: "event.type == ChatRequestEvent -> ext_a"
-            steps:
-              - id: s1
-                type: assign
-                parameters:
-                  target: x
-                  value: "1"
-            """;
-
-        var workflow = new WorkflowParser().Parse(yaml);
-        var role = workflow.Roles.Should().ContainSingle().Subject;
-
-        role.EventModules.Should().Be("top_a,top_b");
-        role.EventRoutes.Should().Be("event.type == ChatRequestEvent -> top_a");
     }
 
     [Fact]

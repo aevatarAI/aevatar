@@ -22,16 +22,16 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
     public WorkflowRunActorPort(
         IActorRuntime runtime,
         IAgentTypeVerifier agentTypeVerifier,
-        IEnumerable<IWorkflowModulePack> modulePacks)
+        IEnumerable<IWorkflowPrimitivePack> primitivePacks)
     {
         _runtime = runtime;
         _agentTypeVerifier = agentTypeVerifier;
-        var packs = modulePacks?.ToList()
-            ?? throw new ArgumentNullException(nameof(modulePacks));
+        var packs = primitivePacks?.ToList()
+            ?? throw new ArgumentNullException(nameof(primitivePacks));
         if (packs.Count == 0)
-            packs.Add(new WorkflowCoreModulePack());
+            packs.Add(new WorkflowCorePrimitivePack());
         var knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
-            packs.SelectMany(x => x.Modules).SelectMany(x => x.Names));
+            packs.SelectMany(x => x.Executors).SelectMany(x => x.Names));
         _workflowCompilationService = new WorkflowCompilationService(
             new HashSet<string>(knownStepTypes, StringComparer.OrdinalIgnoreCase));
     }

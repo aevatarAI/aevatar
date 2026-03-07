@@ -45,17 +45,11 @@ roles:
     max_tool_rounds: 4
     max_history_messages: 80
     stream_buffer_capacity: 256
-    event_modules: "llm_handler,tool_handler"
-    event_routes: |
-      event.type == ChatRequestEvent -> llm_handler
     connectors: [my_api, my_mcp]
-    extensions:
-      event_modules: "fallback_module"
-      event_routes: "event.type == X -> fallback_module"
 ```
 
 - `roles` 配置会透传到 `InitializeRoleAgentEvent`，并在 `RoleGAgent` 运行时生效。
-- `event_modules/event_routes` 合并优先级：平铺字段 > `extensions.*`。
+- workflow role 只表达 typed AI 执行参数，不再承载 role 内部事件路由策略。
 - `workflow yaml roles` 与独立 `role yaml` 共享同一归一化语义，避免双套解析规则。
 
 ## 2. Data 原语

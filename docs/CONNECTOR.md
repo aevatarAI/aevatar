@@ -128,7 +128,7 @@ roles:
 
 ## 3.2 connector_call 执行主链路
 
-`ConnectorCallModule` 处理 `StepRequestEvent`（`step_type == connector_call`）：
+`ConnectorCallPrimitiveExecutor` 处理 `StepRequestEvent`（`step_type == connector_call`）：
 
 1. 读取参数：
    - `connector`（或 `connector_name`）必填
@@ -204,13 +204,13 @@ Ergonomic 别名（解析期归一化到 `connector_call`）：
 这里有两个容易混淆的路径：
 
 1. `connector_call` 路径（本文件主线）
-   - 执行者是 Workflow 内的 `ConnectorCallModule`；
+   - 执行者是 Workflow 内的 `ConnectorCallPrimitiveExecutor`；
    - Role 的 `connectors` 仅用于授权校验；
    - 不是由 `RoleGAgent` 直接发起 connector 调用。
 
 2. `tool_call` 路径（Agent 工具系统）
    - 来自 `IAgentToolSource`（例如 MCP Tools、Skills）；
-   - 由 `ToolCallModule` 解析工具并执行；
+   - 由 `ToolCallPrimitiveExecutor` 解析工具并执行；
    - 与 `connectors.json` 是两套机制。
 
 当前代码现状（很重要）：

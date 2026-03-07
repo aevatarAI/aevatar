@@ -1,6 +1,6 @@
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Core.Modules;
+using Aevatar.Workflow.Core.PrimitiveExecutors;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,9 +13,9 @@ namespace Aevatar.Integration.Tests;
 public sealed class WorkflowAdditionalModulesCoverageTests
 {
     [Fact]
-    public async Task EmitModule_ShouldHandleExplicitAndFallbackPayloads()
+    public async Task EmitPrimitiveExecutor_ShouldHandleExplicitAndFallbackPayloads()
     {
-        var module = new EmitModule();
+        var module = new EmitPrimitiveExecutor();
         var ctx = CreateContext();
         var primitive = CreatePrimitiveContext(ctx);
 
@@ -59,9 +59,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task SwitchModule_ShouldResolveExactContainsAndDefaultBranches()
+    public async Task SwitchPrimitiveExecutor_ShouldResolveExactContainsAndDefaultBranches()
     {
-        var module = new SwitchModule();
+        var module = new SwitchPrimitiveExecutor();
         var ctx = CreateContext();
         var primitive = CreatePrimitiveContext(ctx);
 
@@ -125,9 +125,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task DynamicWorkflowModule_ShouldExtractYamlAndPublishChildRunInvocation()
+    public async Task DynamicWorkflowPrimitiveExecutor_ShouldExtractYamlAndPublishChildRunInvocation()
     {
-        var module = new DynamicWorkflowModule();
+        var module = new DynamicWorkflowPrimitiveExecutor();
         var ctx = CreateContext();
         var primitive = CreatePrimitiveContext(ctx);
 
@@ -165,9 +165,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task DynamicWorkflowModule_WhenYamlValidationFails_ShouldEmitFailedStep()
+    public async Task DynamicWorkflowPrimitiveExecutor_WhenYamlValidationFails_ShouldEmitFailedStep()
     {
-        var module = new DynamicWorkflowModule();
+        var module = new DynamicWorkflowPrimitiveExecutor();
         var ctx = CreateContext();
         var primitive = CreatePrimitiveContext(ctx);
 
@@ -197,9 +197,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowYamlValidateModule_ShouldEmitCanonicalYamlOrFailure()
+    public async Task WorkflowYamlValidatePrimitiveExecutor_ShouldEmitCanonicalYamlOrFailure()
     {
-        var module = new WorkflowYamlValidateModule();
+        var module = new WorkflowYamlValidatePrimitiveExecutor();
         var ctx = CreateContext();
         var primitive = CreatePrimitiveContext(ctx);
 
@@ -258,8 +258,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     {
         var knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
             ctx.Services
-                .GetServices<IWorkflowModulePack>()
-                .SelectMany(pack => pack.Modules)
+                .GetServices<IWorkflowPrimitivePack>()
+                .SelectMany(pack => pack.Executors)
                 .SelectMany(module => module.Names));
         knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
         return ctx.CreatePrimitiveContext(new HashSet<string>(knownStepTypes, StringComparer.OrdinalIgnoreCase));

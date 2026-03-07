@@ -10,18 +10,18 @@ namespace Aevatar.Workflow.Core;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers workflow core module packs and primitive handlers.
+    /// Registers workflow core primitive packs and primitive executors.
     /// </summary>
     public static IServiceCollection AddAevatarWorkflow(this IServiceCollection services)
     {
-        services.AddWorkflowModulePack<WorkflowCoreModulePack>();
+        services.AddWorkflowPrimitivePack<WorkflowCorePrimitivePack>();
         return services;
     }
 
-    public static IServiceCollection AddWorkflowModulePack<TModulePack>(this IServiceCollection services)
-        where TModulePack : class, IWorkflowModulePack
+    public static IServiceCollection AddWorkflowPrimitivePack<TPrimitivePack>(this IServiceCollection services)
+        where TPrimitivePack : class, IWorkflowPrimitivePack
     {
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModulePack, TModulePack>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowPrimitivePack, TPrimitivePack>());
         return services;
     }
 }

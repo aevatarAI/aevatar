@@ -1,14 +1,12 @@
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Hooks.BuiltIn;
-using Aevatar.AI.Core.Routing;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -37,29 +35,24 @@ public class AIHooksAndRoleFactoryCoverageTests
             ToolName = "tool-a",
         };
 
-        // Budget false branch: missing/invalid history_count.
         await budget.OnLLMRequestStartAsync(ctx, CancellationToken.None);
         ctx.Metadata["history_count"] = "invalid";
         await budget.OnLLMRequestStartAsync(ctx, CancellationToken.None);
 
-        // Budget true branch: numeric history_count over threshold.
         ctx.Metadata["history_count"] = 3;
         await budget.OnLLMRequestStartAsync(ctx, CancellationToken.None);
 
-        // Tool truncation: null/short branch.
         ctx.ToolResult = null;
         await toolTruncation.OnToolExecuteEndAsync(ctx, CancellationToken.None);
         ctx.ToolResult = "abcd";
         await toolTruncation.OnToolExecuteEndAsync(ctx, CancellationToken.None);
         ctx.ToolResult.Should().Be("abcd");
 
-        // Tool truncation: long branch.
         ctx.ToolResult = "abcdefghijk";
         await toolTruncation.OnToolExecuteEndAsync(ctx, CancellationToken.None);
         ctx.ToolResult.Should().StartWith("abcde");
         ctx.ToolResult.Should().Contain("[truncated]");
 
-        // Trace hook coverage.
         var hookCtx = new GAgentExecutionHookContext
         {
             AgentId = "agent-1",
@@ -122,11 +115,10 @@ public class AIHooksAndRoleFactoryCoverageTests
     }
 
     [Fact]
-    public async Task RoleGAgentFactory_ShouldInitializeFromYamlAndWrapRoutableModules()
+    public async Task RoleGAgentFactory_ShouldInitializeFromYaml()
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
-        services.AddSingleton<IEventModuleFactory, StubEventModuleFactory>();
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
@@ -139,23 +131,20 @@ public class AIHooksAndRoleFactoryCoverageTests
                    provider: stub
                    model: model-x
                    temperature: 0.2
-                   extensions:
-                     event_modules: "routable,bypass,missing"
-                     event_routes: |
-                       event.type == DemoEvent -> routable
+                   max_tokens: 256
                    """;
 
         await RoleGAgentFactory.InitializeFromYaml(agent, yaml, provider);
 
         agent.RoleName.Should().Be("planner");
-        var modules = agent.GetModules();
-        modules.Should().HaveCount(2);
-        modules.Should().ContainSingle(m => m.Name == "bypass" && m is StubBypassModule);
-        modules.Should().ContainSingle(m => m.Name == "routable" && m is RoutedEventModule);
+        agent.EffectiveConfig.ProviderName.Should().Be("stub");
+        agent.EffectiveConfig.Model.Should().Be("model-x");
+        agent.EffectiveConfig.Temperature.Should().Be(0.2);
+        agent.EffectiveConfig.MaxTokens.Should().Be(256);
     }
 
     [Fact]
-    public async Task RoleGAgentFactory_ShouldSupportDirectInitializationWithoutExtensions()
+    public async Task RoleGAgentFactory_ShouldSupportDirectInitialization()
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
@@ -171,36 +160,33 @@ public class AIHooksAndRoleFactoryCoverageTests
             Provider = "stub",
             Model = "m",
             Temperature = 0.4,
-            Extensions = new RoleYamlExtensions
-            {
-                EventModules = null,
-                EventRoutes = "event.type == X -> y",
-            },
         };
 
         var agent = CreateRoleAgent(provider);
         await RoleGAgentFactory.ApplyInitialization(agent, cfg, provider);
 
         agent.RoleName.Should().Be("worker");
-        agent.GetModules().Should().BeEmpty();
+        agent.EffectiveConfig.ProviderName.Should().Be("stub");
+        agent.EffectiveConfig.Model.Should().Be("m");
+        agent.EffectiveConfig.Temperature.Should().Be(0.4);
     }
 
     [Fact]
-    public void RoleConfigurationNormalizer_ShouldBindTopLevelEventFields()
+    public void RoleConfigurationNormalizer_ShouldBindTypedRoleFields()
     {
         var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
         {
             Id = "planner",
             Name = "Planner",
-            EventModules = "top_module",
-            EventRoutes = "event.type == DemoEvent -> top_module",
+            Provider = "stub",
+            Model = "model-x",
             Connectors = ["a", "A", "  ", "b"],
         });
 
         normalized.Id.Should().Be("planner");
         normalized.Name.Should().Be("Planner");
-        normalized.EventModules.Should().Be("top_module");
-        normalized.EventRoutes.Should().Be("event.type == DemoEvent -> top_module");
+        normalized.Provider.Should().Be("stub");
+        normalized.Model.Should().Be("model-x");
         normalized.Connectors.Should().BeEquivalentTo(["a", "A", "  ", "b"]);
     }
 
@@ -209,7 +195,6 @@ public class AIHooksAndRoleFactoryCoverageTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
-        services.AddSingleton<IEventModuleFactory, StubEventModuleFactory>();
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
@@ -226,64 +211,25 @@ public class AIHooksAndRoleFactoryCoverageTests
             MaxToolRounds = 2,
             MaxHistoryMessages = 8,
             StreamBufferCapacity = 32,
-            EventModules = "routable",
-            EventRoutes = "event.type == DemoEvent -> routable",
-            Extensions = new RoleYamlExtensions
-            {
-                EventModules = "bypass",
-                EventRoutes = "event.type == DemoEvent -> bypass",
-            },
         };
 
         var agent = CreateRoleAgent(provider);
         await RoleGAgentFactory.ApplyInitialization(agent, cfg, provider);
 
         agent.RoleName.Should().Be("worker");
+        agent.EffectiveConfig.ProviderName.Should().Be("stub");
+        agent.EffectiveConfig.Model.Should().Be("model-x");
         agent.EffectiveConfig.Temperature.Should().Be(0.4);
         agent.EffectiveConfig.MaxTokens.Should().Be(128);
         agent.EffectiveConfig.MaxToolRounds.Should().Be(2);
         agent.EffectiveConfig.MaxHistoryMessages.Should().Be(8);
         agent.EffectiveConfig.StreamBufferCapacity.Should().Be(32);
-
-        var modules = agent.GetModules();
-        modules.Should().HaveCount(1);
-        modules.Should().ContainSingle(m => m.Name == "routable" && m is RoutedEventModule);
     }
 
     private sealed class MinimalHook : IAIGAgentExecutionHook
     {
         public string Name => "minimal";
         public int Priority => 0;
-    }
-
-    private sealed class StubEventModuleFactory : IEventModuleFactory
-    {
-        public bool TryCreate(string name, out IEventModule? module)
-        {
-            module = name switch
-            {
-                "routable" => new StubRoutableModule(),
-                "bypass" => new StubBypassModule(),
-                _ => null,
-            };
-            return module != null;
-        }
-    }
-
-    private sealed class StubRoutableModule : IEventModule
-    {
-        public string Name => "routable";
-        public int Priority => 0;
-        public bool CanHandle(EventEnvelope envelope) => envelope != null;
-        public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct) => Task.CompletedTask;
-    }
-
-    private sealed class StubBypassModule : IEventModule, IRouteBypassModule
-    {
-        public string Name => "bypass";
-        public int Priority => 0;
-        public bool CanHandle(EventEnvelope envelope) => envelope != null;
-        public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed class StubLLMProviderFactory : ILLMProviderFactory

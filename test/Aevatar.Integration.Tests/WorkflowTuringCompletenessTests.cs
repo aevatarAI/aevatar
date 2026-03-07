@@ -8,7 +8,7 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Core.Modules;
+using Aevatar.Workflow.Core.PrimitiveExecutors;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using FluentAssertions;
@@ -186,7 +186,7 @@ public sealed class WorkflowTuringCompletenessTests
         var agent = new WorkflowRunGAgent(
             new NullActorRuntime(),
             new StaticRoleAgentTypeResolver(typeof(ClosedWorldRoleAgent)),
-            [new ClosedWorldModulePack()])
+            [new ClosedWorldPrimitivePack()])
         {
             Services = services,
         };
@@ -218,16 +218,16 @@ public sealed class WorkflowTuringCompletenessTests
         method!.Invoke(agent, [id]);
     }
 
-    private sealed class ClosedWorldModulePack : IWorkflowModulePack
+    private sealed class ClosedWorldPrimitivePack : IWorkflowPrimitivePack
     {
         public string Name => "closed-world";
 
-        public IReadOnlyList<WorkflowModuleRegistration> Modules { get; } =
+        public IReadOnlyList<WorkflowPrimitiveRegistration> Executors { get; } =
         [
-            WorkflowModuleRegistration.Create<AssignModule>("assign"),
-            WorkflowModuleRegistration.Create<ConditionalModule>("conditional"),
-            WorkflowModuleRegistration.Create<SwitchModule>("switch"),
-            WorkflowModuleRegistration.Create<TransformModule>("transform"),
+            WorkflowPrimitiveRegistration.Create<AssignPrimitiveExecutor>("assign"),
+            WorkflowPrimitiveRegistration.Create<ConditionalPrimitiveExecutor>("conditional"),
+            WorkflowPrimitiveRegistration.Create<SwitchPrimitiveExecutor>("switch"),
+            WorkflowPrimitiveRegistration.Create<TransformPrimitiveExecutor>("transform"),
         ];
     }
 

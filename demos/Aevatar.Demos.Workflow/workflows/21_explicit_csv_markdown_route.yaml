@@ -1,0 +1,11 @@
+name: 21_explicit_csv_markdown_route
+description: |
+  Replaces old 21_role_event_module_csv_markdown.
+  CSV formatting is now expressed directly as a workflow step.
+
+steps:
+  - id: render_csv_markdown
+    type: demo_csv_markdown
+    parameters:
+      delimiter: ","
+      has_header: "true"

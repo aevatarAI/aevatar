@@ -33,11 +33,11 @@
   };
   const WORKFLOW_GROUP_ORDER = [
     "start-here",
-    "custom-step-modules",
+    "custom-step-executors",
     "connector-integration",
     "ergonomic-aliases",
     "integration-utility",
-    "role-event-modules",
+    "explicit-composition-replacements",
     "human-interaction-manual",
     "human-interaction-auto",
     "turing-completeness",
@@ -47,11 +47,11 @@
   ];
   const WORKFLOW_GROUP_LABELS = {
     "start-here": "Start Here (Deterministic Basics)",
-    "custom-step-modules": "Custom Step Modules",
+    "custom-step-executors": "Custom Step Executors",
     "connector-integration": "Connector Integration",
     "ergonomic-aliases": "Ergonomic Aliases",
     "integration-utility": "Integration Utility",
-    "role-event-modules": "Role Routed Extensions",
+    "explicit-composition-replacements": "Explicit Composition Replacements",
     "human-interaction-manual": "Human Interaction (Manual)",
     "human-interaction-auto": "Human Interaction (Auto)",
     "turing-completeness": "Turing Completeness",
@@ -1121,7 +1121,6 @@
       ? role.connectors.map((item) => String(item).trim()).filter((item) => item.length > 0)
       : [];
     const systemPrompt = role.systemPrompt ? truncate(role.systemPrompt, 220) : "";
-    const routes = role.eventRoutes ? role.eventRoutes : "";
 
     return `
       <article class="role-card">
@@ -1139,18 +1138,9 @@
             <div class="role-prompt">${esc(systemPrompt)}</div>
           </div>` : ""}
         <div class="role-section">
-          <div class="role-key">event_modules</div>
-          <div class="role-tags">${renderRoleTags(modules)}</div>
-        </div>
-        <div class="role-section">
           <div class="role-key">connectors</div>
           <div class="role-tags">${renderRoleTags(connectors)}</div>
         </div>
-        ${routes ? `
-          <div class="role-section">
-            <div class="role-key">event_routes</div>
-            <pre class="role-routes">${esc(routes)}</pre>
-          </div>` : ""}
       </article>
     `;
   }

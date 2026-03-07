@@ -1,0 +1,20 @@
+name: 38_explicit_template_then_csv_markdown
+description: |
+  Replaces old 38_mixed_step_template_then_role_csv_markdown.
+  Compose CSV text with a template step, then format it into markdown explicitly.
+
+steps:
+  - id: compose_csv
+    type: demo_template
+    parameters:
+      template: |
+        service,error_rate,latency_ms
+        gateway,{{input}},220
+        checkout,0.9,170
+    next: render_csv_markdown
+
+  - id: render_csv_markdown
+    type: demo_csv_markdown
+    parameters:
+      delimiter: ","
+      has_header: "true"

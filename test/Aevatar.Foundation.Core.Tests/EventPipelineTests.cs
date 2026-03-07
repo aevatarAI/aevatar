@@ -1,30 +1,32 @@
 // ─── EventPipeline tests: Verify unified pipeline priority ordering ───
 
-using Aevatar.Foundation.Abstractions.EventModules;
 using Shouldly;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.Core.Tests;
 
-// Module that tracks execution order
-public class OrderTrackingModule : IEventModule
+public sealed class PriorityTrackingAgent : TestGAgentBase<CounterState>
 {
     private readonly List<string> _log;
-    public string Name { get; }
-    public int Priority { get; }
-    public bool CanHandle(EventEnvelope envelope) => true;
 
-    public OrderTrackingModule(string name, int priority, List<string> log)
+    public PriorityTrackingAgent(List<string> log)
     {
-        Name = name;
-        Priority = priority;
         _log = log;
     }
 
-    public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    [EventHandler(Priority = -10)]
+    public Task HandleFirst(IncrementEvent evt)
     {
-        _log.Add(Name);
+        State.Count += evt.Amount;
+        _log.Add("first");
+        return Task.CompletedTask;
+    }
+
+    [EventHandler(Priority = 10)]
+    public Task HandleSecond(IncrementEvent evt)
+    {
+        _log.Add("second");
         return Task.CompletedTask;
     }
 }
@@ -33,31 +35,20 @@ public class EventPipelineTests
 {
 
     [Fact]
-    public async Task Pipeline_ModulesAndHandlers_InterleavedByPriority()
+    public async Task Pipeline_StaticHandlers_RunByPriority()
     {
-        // CounterAgent's HandleIncrement has default Priority = 0
-        // CounterAgent's HandleDecrement has Priority = 10
-        // Insert module with Priority = 5
-        var agent = new CounterAgent();
-        agent.SetId("pipeline-test");
-
         var executionLog = new List<string>();
-
-        // Module at priority 5, between two static handlers
-        var module = new OrderTrackingModule("mid_module", 5, executionLog);
-        agent.RegisterModule(module);
-
-        // Send IncrementEvent, only HandleIncrement(p=0) and mid_module(p=5) will handle
-        // HandleDecrement(p=10) doesn't match IncrementEvent
+        var agent = new PriorityTrackingAgent(executionLog);
+        agent.SetId("pipeline-test");
         var envelope = TestHelper.Envelope(new IncrementEvent { Amount = 1 });
         await agent.HandleEventAsync(envelope);
 
         agent.State.Count.ShouldBe(1);
-        executionLog.ShouldContain("mid_module");
+        executionLog.ShouldBe(["first", "second"]);
     }
 
     [Fact]
-    public async Task Pipeline_NoModules_OnlyStaticHandlers()
+    public async Task Pipeline_StaticOnly_OnlyStaticHandlers()
     {
         var agent = new CounterAgent();
         agent.SetId("no-modules");
@@ -70,16 +61,11 @@ public class EventPipelineTests
     }
 
     [Fact]
-    public async Task Pipeline_OnlyModules_NoStaticHandlers()
+    public async Task Pipeline_OnlyStaticHandlers_NoMatch_NoError()
     {
         var agent = new EmptyAgent();
-        agent.SetId("modules-only");
-
-        var module = new TestModule();
-        agent.RegisterModule(module);
+        agent.SetId("no-handlers");
 
         await agent.HandleEventAsync(TestHelper.Envelope(new PingEvent { Message = "hi" }));
-        module.InvocationCount.ShouldBe(1);
     }
 }
-

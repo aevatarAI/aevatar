@@ -1,68 +1,73 @@
 # Aevatar.Foundation.Abstractions
 
-`Aevatar.Foundation.Abstractions` 是 Aevatar 的契约层，定义 Agent 框架的公共语言。
+`Aevatar.Foundation.Abstractions` 是 Aevatar 的公共契约层。
 
 ## 职责
 
-- 定义 Agent/Actor/Runtime 的核心接口
-- 定义事件发布、流、模块与持久化接口
-- 定义框架级 connector 契约（`IConnector` / `IConnectorCatalog`）
-- 提供跨项目共享的 Proto 消息
-- 提供少量基础工具类型（如 `AgentId`、时间工具、属性标记）
+- 定义 Agent / Actor / Runtime 基础接口
+- 定义事件发布与流接口
+- 定义持久化、传播、回调、connector 抽象
+- 提供共享 Proto 消息和基础属性标记
 
-本项目不包含运行时实现，不依赖 `Aevatar.Foundation.Core` 或 `Aevatar.Foundation.Runtime`。
+本项目只放契约，不放运行时实现。
 
 ## 主要内容
 
-```
+```text
 Aevatar.Foundation.Abstractions/
 ├── IAgent.cs
 ├── IActor.cs
 ├── IActorRuntime.cs
 ├── IEventPublisher.cs
-├── IStream.cs
-├── IStreamProvider.cs
 ├── Attributes/
-├── EventModules/
 ├── Connectors/
 ├── Context/
-├── Propagation/
-├── Persistence/
+├── Deduplication/
 ├── Hooks/
-├── Helpers/
+├── Persistence/
+├── Propagation/
+├── Runtime/
+├── Streaming/
+├── TypeSystem/
 └── agent_messages.proto
 ```
 
 ## 核心接口
 
-- `IAgent` / `IAgent<TState>`：生命周期、事件处理、订阅类型、强类型状态
-- `IActor`：Agent 包装容器，父子关系与事件分发入口
-- `IActorRuntime`：Actor 创建、销毁、查询、链接
-- `IEventPublisher`：按方向发布或点对点发送事件
-- `IEnvelopePropagationPolicy` / `ICorrelationLinkPolicy`：基于 Raw `EventEnvelope` 的关联字段传播策略
-- `IEventModule`：可插拔事件处理模块（含优先级）
-- `IConnector` / `IConnectorCatalog`：命名 connector 调用契约与只读目录
-- `IStateStore<TState>` / `IEventStore`：状态与事件持久化契约
+- `IAgent` / `IAgent<TState>`
+- `IActor`
+- `IActorRuntime`
+- `IEventPublisher`
+- `IStream` / `IStreamProvider`
+- `IConnector` / `IConnectorCatalog`
+- `IStateStore<TState>` / `IEventStore`
+- `IGAgentExecutionHook`
+- `IActorRuntimeCallbackScheduler`
 
-## Proto 说明
+## 当前边界
 
-`agent_messages.proto` 定义 Foundation 公共消息，包括：
+Foundation 抽象层已经删除旧的动态事件模块契约。
+
+现在的框架约束是：
+
+- 事件处理走静态 handler
+- 业务扩展走上层专用 typed seam
+- 跨事件事实必须进入 actor state
+
+## Proto
+
+`agent_messages.proto` 定义公共传输消息，包括：
 
 - `EventDirection`
 - `EventEnvelope`
 - `StateEvent`
-- 层级变更事件（`ParentChangedEvent`、`ChildAddedEvent`、`ChildRemovedEvent`）
-
-## 依赖
-
-- `Google.Protobuf`
-- `Microsoft.Extensions.DependencyInjection.Abstractions`
-- `Microsoft.Extensions.Logging.Abstractions`
-
-版本统一由仓库根目录 `Directory.Packages.props` 管理。
+- `ParentChangedEvent`
+- `ChildAddedEvent`
+- `ChildRemovedEvent`
 
 ## 设计原则
 
-1. 纯契约，避免实现耦合
-2. 最小依赖，保持可复用
-3. 接口稳定优先，变更需配套测试与文档
+1. 纯契约
+2. 最小依赖
+3. 单一语义
+4. 不为历史兼容保留空壳

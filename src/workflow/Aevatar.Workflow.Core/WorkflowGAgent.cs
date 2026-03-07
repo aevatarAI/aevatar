@@ -25,16 +25,16 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
 
     public WorkflowGAgent(
         IActorRuntime runtime,
-        IEnumerable<IWorkflowModulePack> modulePacks)
+        IEnumerable<IWorkflowPrimitivePack> primitivePacks)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
 
-        var packs = (modulePacks ?? throw new ArgumentNullException(nameof(modulePacks))).ToList();
+        var packs = (primitivePacks ?? throw new ArgumentNullException(nameof(primitivePacks))).ToList();
         if (packs.Count == 0)
-            packs.Add(new WorkflowCoreModulePack());
+            packs.Add(new WorkflowCorePrimitivePack());
 
         _knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
-            packs.SelectMany(x => x.Modules).SelectMany(x => x.Names));
+            packs.SelectMany(x => x.Executors).SelectMany(x => x.Names));
         _knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
         _workflowCompilationService = new WorkflowCompilationService(
             new HashSet<string>(_knownStepTypes, StringComparer.OrdinalIgnoreCase));

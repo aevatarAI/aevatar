@@ -28,7 +28,7 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     private readonly IActorRuntime _runtime;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IWorkflowDefinitionResolver? _workflowDefinitionResolver;
-    private readonly WorkflowPrimitiveRegistry _primitiveRegistry;
+    private readonly WorkflowPrimitiveExecutorRegistry _primitiveRegistry;
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
     private readonly ISet<string> _knownStepTypes;
     private readonly WorkflowCompilationService _workflowCompilationService;
@@ -41,18 +41,18 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     public WorkflowRunGAgent(
         IActorRuntime runtime,
         IRoleAgentTypeResolver roleAgentTypeResolver,
-        IEnumerable<IWorkflowModulePack> modulePacks,
+        IEnumerable<IWorkflowPrimitivePack> primitivePacks,
         IWorkflowDefinitionResolver? workflowDefinitionResolver = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
         _workflowDefinitionResolver = workflowDefinitionResolver;
 
-        var packs = (modulePacks ?? throw new ArgumentNullException(nameof(modulePacks))).ToList();
+        var packs = (primitivePacks ?? throw new ArgumentNullException(nameof(primitivePacks))).ToList();
         if (packs.Count == 0)
-            packs = [new WorkflowCoreModulePack()];
+            packs = [new WorkflowCorePrimitivePack()];
 
-        _primitiveRegistry = new WorkflowPrimitiveRegistry(packs);
+        _primitiveRegistry = new WorkflowPrimitiveExecutorRegistry(packs);
         _knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(_primitiveRegistry.RegisteredNames);
         _knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
         _workflowCompilationService = new WorkflowCompilationService(

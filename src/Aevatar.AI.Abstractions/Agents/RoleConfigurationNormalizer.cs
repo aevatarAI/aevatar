@@ -17,9 +17,6 @@ public sealed class RoleConfigurationInput
     public int? MaxToolRounds { get; init; }
     public int? MaxHistoryMessages { get; init; }
     public int? StreamBufferCapacity { get; init; }
-
-    public string? EventModules { get; init; }
-    public string? EventRoutes { get; init; }
     public IReadOnlyList<string>? Connectors { get; init; }
 }
 
@@ -39,9 +36,6 @@ public sealed class RoleConfigurationNormalized
     public int? MaxToolRounds { get; init; }
     public int? MaxHistoryMessages { get; init; }
     public int? StreamBufferCapacity { get; init; }
-
-    public string? EventModules { get; init; }
-    public string? EventRoutes { get; init; }
     public IReadOnlyList<string> Connectors { get; init; } = [];
 }
 
@@ -54,9 +48,6 @@ public static class RoleConfigurationNormalizer
     {
         var effectiveId = input.Id ?? input.Name ?? string.Empty;
         var effectiveName = input.Name ?? input.Id ?? string.Empty;
-
-        var eventModules = NormalizeText(input.EventModules);
-        var eventRoutes = NormalizeText(input.EventRoutes);
 
         var connectors = input.Connectors?.ToList() ?? [];
         return new RoleConfigurationNormalized
@@ -71,8 +62,6 @@ public static class RoleConfigurationNormalizer
             MaxToolRounds = input.MaxToolRounds,
             MaxHistoryMessages = input.MaxHistoryMessages,
             StreamBufferCapacity = input.StreamBufferCapacity,
-            EventModules = eventModules,
-            EventRoutes = eventRoutes,
             Connectors = connectors,
         };
     }

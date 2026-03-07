@@ -1,0 +1,10 @@
+name: 35_explicit_template_ignore_unknown_module
+description: |
+  Replaces old 35_role_event_module_unknown_ignored_template.
+  There is no unknown-module fallback anymore; only the intended template step remains.
+
+steps:
+  - id: render_template
+    type: demo_template
+    parameters:
+      template: "Known template still runs: {{input}}"

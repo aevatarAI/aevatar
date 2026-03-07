@@ -3,24 +3,11 @@
 //
 // 从 YAML 初始化 RoleGAgent：
 // 1. 初始化字段：名称、SystemPrompt、Provider、Model
-// 2. EventModules：按名字从 IEventModuleFactory 创建
-// 3. EventRoutes：解析路由规则，用 RoutedEventModule 包装非 bypass 模块
-//
-// YAML 示例:
-//   extensions:
-//     event_modules: "llm_handler,web_search"
-//     event_routes: |
-//       - when: event.type == "ChatRequestEvent"
-//         to: llm_handler
-//       - when: event.step_type == "llm_call"
-//         to: llm_handler
+// 2. 归一化 typed role config
+// 3. 发送 InitializeRoleAgentEvent
 // ─────────────────────────────────────────────────────────────
 
-using Aevatar.AI.Core.Routing;
 using Aevatar.AI.Abstractions.Agents;
-using Aevatar.Foundation.Abstractions.EventModules;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -28,7 +15,7 @@ namespace Aevatar.AI.Core;
 
 /// <summary>
 /// RoleGAgent 初始化工厂。从 YAML 或初始化对象装配 Agent：
-/// 初始化字段 → 创建 EventModules → 解析 EventRoutes → 路由包装 → 注册到 Agent。
+/// 初始化字段 → 归一化配置 → 发送 InitializeRoleAgentEvent。
 /// </summary>
 public static class RoleGAgentFactory
 {
@@ -47,9 +34,6 @@ public static class RoleGAgentFactory
     /// <summary>应用 RoleYamlConfig 初始化 RoleGAgent。</summary>
     public static async Task ApplyInitialization(RoleGAgent agent, RoleYamlConfig config, IServiceProvider services)
     {
-        var eventModules = PreferTopLevelText(config.EventModules, config.Extensions?.EventModules);
-        var eventRoutes = PreferTopLevelText(config.EventRoutes, config.Extensions?.EventRoutes);
-
         var normalized = RoleConfigurationNormalizer.Normalize(new RoleConfigurationInput
         {
             Id = config.Name,
@@ -62,8 +46,6 @@ public static class RoleGAgentFactory
             MaxToolRounds = config.MaxToolRounds,
             MaxHistoryMessages = config.MaxHistoryMessages,
             StreamBufferCapacity = config.StreamBufferCapacity,
-            EventModules = eventModules,
-            EventRoutes = eventRoutes,
         });
 
         // ─── 基础配置（事件优先） ───
@@ -77,83 +59,11 @@ public static class RoleGAgentFactory
             MaxToolRounds = normalized.MaxToolRounds ?? 0,
             MaxHistoryMessages = normalized.MaxHistoryMessages ?? 0,
             StreamBufferCapacity = normalized.StreamBufferCapacity ?? 0,
-            EventModules = normalized.EventModules ?? string.Empty,
-            EventRoutes = normalized.EventRoutes ?? string.Empty,
         };
         if (normalized.Temperature.HasValue)
             initializeEvent.Temperature = normalized.Temperature.Value;
 
         await agent.HandleInitializeRoleAgent(initializeEvent);
-    }
-
-    public static void ApplyModuleExtensions(
-        RoleGAgent agent,
-        string? eventModules,
-        string? eventRoutes,
-        IServiceProvider services)
-    {
-        if (string.IsNullOrWhiteSpace(eventModules))
-            return;
-
-        var factories = services.GetServices<IEventModuleFactory>().ToList();
-        var moduleNames = eventModules
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (moduleNames.Length == 0)
-            return;
-
-        var logger = services.GetService<ILoggerFactory>()?.CreateLogger("RoleGAgentFactory");
-        var rawModules = new List<IEventModule>();
-        foreach (var name in moduleNames)
-        {
-            var created = false;
-            foreach (var f in factories)
-            {
-                if (f.TryCreate(name, out var m) && m != null)
-                {
-                    rawModules.Add(m);
-                    created = true;
-                    break;
-                }
-            }
-            if (!created)
-                logger?.LogWarning("EventModule '{Name}' 未找到对应的 factory", name);
-        }
-
-        // ─── EventRoutes 解析 + 路由包装 ───
-        var routes = EventRoute.Parse(eventRoutes, logger);
-        var evaluator = services.GetService<IEventRouteEvaluator>()
-                        ?? DefaultEventRouteEvaluator.Instance;
-
-        var finalModules = new List<IEventModule>();
-        foreach (var module in rawModules)
-        {
-            if (routes.Length > 0 && module is not IRouteBypassModule)
-            {
-                // 非 bypass 模块用 RoutedEventModule 包装
-                finalModules.Add(new RoutedEventModule(module, routes, evaluator));
-            }
-            else
-            {
-                // bypass 模块或无路由规则 → 直接注册
-                finalModules.Add(module);
-            }
-        }
-
-        if (finalModules.Count > 0)
-            agent.SetModules(finalModules);
-    }
-
-    private static string? PreferTopLevelText(string? topLevel, string? fallback)
-    {
-        var primary = NormalizeText(topLevel);
-        return primary ?? NormalizeText(fallback);
-    }
-
-    private static string? NormalizeText(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-        return value.Trim();
     }
 }
 
@@ -187,26 +97,4 @@ public sealed class RoleYamlConfig
     /// <summary>流式缓冲区容量。</summary>
     public int? StreamBufferCapacity { get; set; }
 
-    /// <summary>平铺写法：逗号分隔的 EventModule 名称列表。</summary>
-    public string? EventModules { get; set; }
-
-    /// <summary>平铺写法：事件路由规则。</summary>
-    public string? EventRoutes { get; set; }
-
-    /// <summary>扩展配置。</summary>
-    public RoleYamlExtensions? Extensions { get; set; }
-}
-
-/// <summary>RoleYamlConfig 扩展配置。</summary>
-public sealed class RoleYamlExtensions
-{
-    /// <summary>逗号分隔的 EventModule 名称列表。</summary>
-    public string? EventModules { get; set; }
-
-    /// <summary>
-    /// 事件路由规则（YAML list 或行式 DSL）。
-    /// 匹配条件：event.type / event.step_type。
-    /// 目标：to 指定的模块名。
-    /// </summary>
-    public string? EventRoutes { get; set; }
 }

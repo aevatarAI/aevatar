@@ -30,7 +30,7 @@ public static class WorkflowPrimitiveCatalog
             ["http_post"] = "connector_call",
             ["http_put"] = "connector_call",
             ["http_delete"] = "connector_call",
-            // Keep runtime module matching stable: VoteConsensusModule currently handles "vote".
+            // Keep runtime module matching stable: VoteConsensusPrimitiveExecutor currently handles "vote".
             ["vote_consensus"] = "vote",
         };
 

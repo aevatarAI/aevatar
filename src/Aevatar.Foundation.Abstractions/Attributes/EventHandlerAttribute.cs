@@ -7,7 +7,7 @@ namespace Aevatar.Foundation.Abstractions.Attributes;
 /// <summary>
 /// Marks methods on Agent classes as event handlers.
 /// Method signature: async Task HandleXxx(TEvent evt) where TEvent : IMessage.
-/// Handlers and IEventModule execute interleaved in the same pipeline by Priority.
+/// Handlers execute in a priority-sorted static pipeline.
 /// </summary>
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class EventHandlerAttribute : Attribute

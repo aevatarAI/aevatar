@@ -13,6 +13,7 @@ internal sealed class EventHandlerMetadata
     public required int Priority { get; init; }
     public required bool AllowSelfHandling { get; init; }
     public required bool OnlySelfHandling { get; init; }
+    public string Name => Method.Name;
 }
 
 internal static class EventHandlerDiscoverer
