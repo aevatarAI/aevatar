@@ -235,7 +235,7 @@ public sealed class MyWorkflowModulePack : IWorkflowModulePack
 9. `src/workflow/Aevatar.Workflow.Core/workflow_run_state.proto`
 10. `src/workflow/Aevatar.Workflow.Core/WorkflowCoreModulePack.cs`
 11. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs`
-12. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs`
+12. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowCapabilityEndpoints*.cs`
 
 更完整的系统说明见：
 

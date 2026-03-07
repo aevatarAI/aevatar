@@ -51,7 +51,7 @@
     "connector-integration": "Connector Integration",
     "ergonomic-aliases": "Ergonomic Aliases",
     "integration-utility": "Integration Utility",
-    "role-event-modules": "Role Event Modules",
+    "role-event-modules": "Role Routed Extensions",
     "human-interaction-manual": "Human Interaction (Manual)",
     "human-interaction-legacy": "Human Interaction (Legacy Auto)",
     "turing-completeness": "Turing Completeness",

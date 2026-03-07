@@ -1293,7 +1293,7 @@ static WorkflowListClassification ClassifyWorkflowForList(
         return new WorkflowListClassification(
             Category: "deterministic",
             Group: "role-event-modules",
-            GroupLabel: "Role Event Modules",
+            GroupLabel: "Role Routed Extensions",
             SortOrder: index.Value);
     }
 

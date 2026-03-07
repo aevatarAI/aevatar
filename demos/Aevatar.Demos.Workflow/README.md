@@ -1,6 +1,6 @@
 # Workflow Primitives Demo
 
-本示例逐一演示 Aevatar Workflow 的所有内置原语（Event Module），每个 YAML 工作流聚焦一个或一组原语，配有预置输入，开箱即跑。
+本示例逐一演示 Aevatar Workflow 的内置原语与 role 路由扩展能力。每个 YAML 工作流聚焦一个或一组能力，配有预置输入，开箱即跑。
 
 ## 运行方式
 
@@ -65,7 +65,7 @@ dotnet run -- --all
 |---|---|---|---|
 | `while` | `loop` | WhileModule | 循环执行子步骤，直到条件不满足或达到 max_iterations |
 | `foreach` | `for_each` | ForEachModule | 遍历分隔列表，对每项执行子步骤，收齐后合并 |
-| `workflow_call` | `sub_workflow` | WorkflowCallModule | 递归调用子工作流 |
+| `workflow_call` | `sub_workflow` | WorkflowRunGAgent sub-workflow executor | 递归调用子工作流 |
 | `cache` | — | CacheModule | 缓存步骤结果，TTL 过期前命中直接返回 |
 
 ### 引擎原语（自动加载）
@@ -87,7 +87,7 @@ dotnet run -- --all
 | Start Here（Deterministic Basics） | `01-07` | 7 | 基础确定性原语：`transform`、`guard`、`conditional`、`switch`、`assign`、`retrieve_facts`、组合 pipeline |
 | LLM Workflows | `08-16` | 9 | 基础 LLM 编排：`llm_call`、chain、`parallel`、`race`、`map_reduce`、`foreach`、`evaluate`、`reflect`、`cache` |
 | Custom Step Modules | `17-19` | 3 | 自定义步骤模块：`demo_template`、`demo_csv_markdown`、`demo_json_pick` |
-| Role Event Modules | `20-38` | 19 | Role 级 `event_modules`/`event_routes` 配置、multiplex 路由、`extensions` 兼容与覆盖优先级、混合 step+role 执行链 |
+| Role Routed Extensions | `20-38` | 19 | Role 级 `event_modules`/`event_routes` 配置、multiplex 路由、`extensions` 兼容与覆盖优先级、混合 step+role 执行链 |
 | Human Interaction（Legacy Auto） | `39-42` | 4 | 自动恢复式人机交互：`human_input`/`human_approval` 自动继续，覆盖 approve/reject(fail/skip) 分支 |
 | Human Interaction（Manual） | `43-47` | 5 | 手动交互场景：人工输入、人工审批、`wait_signal` 成功与超时、审批+信号混合编排 |
 | Workflow Call（Multi-level） | `49` + `48_subworkflow_*` | 1(+3) | 多层子流程调用：`workflow_call` 递归调用 + 子流程文本标准化/去重/反转处理 |
@@ -95,7 +95,7 @@ dotnet run -- --all
 | Ergonomic Aliases | `51-53` | 3 | ergonomic alias 演示：`cli_call`、`foreach_llm`、`map_reduce_llm` |
 | Integration Utility | `54-56` | 3 | 集成辅助场景：`publish/emit`、`tool_call` 失败 fallback、`delay+checkpoint` |
 
-### Role Event Modules（20-38）子分组速览
+### Role Routed Extensions（20-38）子分组速览
 
 - `20-22`：单模块路由（template / csv / json）。
 - `23-25`：多模块 multiplex 路由。

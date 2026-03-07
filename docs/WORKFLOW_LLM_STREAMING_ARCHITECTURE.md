@@ -40,7 +40,7 @@
 
 关键代码锚点：
 
-1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:17`
+1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowCapabilityEndpoints.cs:9`
 2. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunContextFactory.cs:53`
 3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunExecutionEngine.cs:29`
 4. `src/Aevatar.AI.Core/RoleGAgent.cs:106`
@@ -139,7 +139,7 @@ sequenceDiagram
 
 链路锚点：
 
-1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:44`
+1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowCapabilityEndpoints.ChatHttp.cs:10`
 2. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunContextFactory.cs:62`
 3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunExecutionEngine.cs:51`
 4. `src/Aevatar.AI.Core/RoleGAgent.cs:122`
@@ -175,7 +175,7 @@ sequenceDiagram
 
 链路锚点：
 
-1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:152`
+1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowCapabilityEndpoints.ChatWebSocket.cs:10`
 2. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketProtocol.cs:16`
 3. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketCommandParser.cs:20`
 4. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatWebSocketRunCoordinator.cs:22`

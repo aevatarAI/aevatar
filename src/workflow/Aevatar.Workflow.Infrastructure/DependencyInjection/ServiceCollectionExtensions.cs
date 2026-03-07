@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
@@ -25,6 +26,7 @@ public static class ServiceCollectionExtensions
         // Infrastructure must use Replace to override it.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>());
         services.TryAddSingleton<IWorkflowRunActorPort, WorkflowRunActorPort>();
+        services.TryAddSingleton<IWorkflowDefinitionLookupService>(sp => sp.GetRequiredService<IWorkflowDefinitionCatalog>());
         services.TryAddSingleton<IWorkflowDefinitionResolver, CatalogWorkflowDefinitionResolver>();
         return services;
     }

@@ -66,7 +66,7 @@ services.AddWorkflowExecutionAGUIAdapter();
 
 注册内容：
 - `IEventEnvelopeToAGUIEventMapper`（组合 mapper）
-- 6 个默认 handler（`StartWorkflow`/`StepRequest`/`StepCompleted`/`AITextStream`/`WorkflowCompleted`/`ToolCall`）
+- 9 个默认 handler（`StartWorkflow`/`StepRequest`/`StepCompleted`/`AITextStream`/`AIReasoning`/`WorkflowCompleted`/`ToolCall`/`WorkflowSuspended`/`WorkflowWaitingSignal`）
 
 ## 分层边界
 

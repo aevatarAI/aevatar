@@ -273,8 +273,8 @@ if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
   exit 1
 fi
 
-if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevatar.Workflow.Core/Modules/WorkflowCallModule.cs; then
-  echo "WorkflowCallModule must stay stateless; workflow_call fact state must live in WorkflowRunGAgent persisted state."
+if [ -f "src/workflow/Aevatar.Workflow.Core/Modules/WorkflowCallModule.cs" ]; then
+  echo "WorkflowCallModule is forbidden. workflow_call must remain run-owned inside WorkflowRunGAgent."
   exit 1
 fi
 
@@ -283,7 +283,7 @@ workflow_run_resolver="src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRu
 workflow_chat_models="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatCapabilityModels.cs"
 workflow_run_models="src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowChatRunModels.cs"
 workflow_run_context="src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunContext.cs"
-workflow_chat_endpoints="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs"
+workflow_run_control_endpoints="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowCapabilityEndpoints.RunControl.cs"
 
 if ! rg -n "CreateAsync<WorkflowRunGAgent>" "${workflow_run_actor_port}" >/dev/null; then
   echo "Workflow capability path must create WorkflowRunGAgent for accepted runs."
@@ -327,7 +327,7 @@ if rg -n "agentId" "${workflow_chat_models}" >/dev/null; then
   exit 1
 fi
 
-if ! rg -n "GetRunActorAsync" "${workflow_chat_endpoints}" >/dev/null; then
+if ! rg -n "GetRunActorAsync" "${workflow_run_control_endpoints}" >/dev/null; then
   echo "Workflow resume/signal endpoints must resolve WorkflowRunGAgent explicitly."
   exit 1
 fi
@@ -540,6 +540,16 @@ fi
 
 if rg -n "IEventModuleFactory" src/workflow/extensions/Aevatar.Workflow.Extensions.Maker -g '*.cs'; then
   echo "Maker extension must not register standalone IEventModuleFactory. Use IWorkflowModulePack."
+  exit 1
+fi
+
+if rg -n "IEventModuleFactory" demos/Aevatar.Demos.Workflow.Web -g '*.cs'; then
+  echo "Workflow web demo must not depend on IEventModuleFactory. Use DemoWorkflowModulePack + IWorkflowPrimitiveHandler."
+  exit 1
+fi
+
+if rg -n "Aevatar\.Demos\.CaseProjection" aevatar.slnx demos src test tools -g '!**/bin/**' -g '!**/obj/**' >/dev/null; then
+  echo "CaseProjection demo must remain removed. Do not reintroduce parallel projection demo projects."
   exit 1
 fi
 

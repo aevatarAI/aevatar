@@ -14,7 +14,7 @@ Aevatar.Workflow.Application.Abstractions/
 │   ├── IWorkflowExecutionQueryApplicationService.cs  # 查询门面
 │   └── WorkflowExecutionQueryModels.cs               # Summary/Report/StepTrace 等查询模型
 ├── Workflows/
-│   └── IWorkflowDefinitionCatalog.cs         # workflow 名称注册表
+│   └── IWorkflowDefinitionCatalog.cs         # definition catalog + lookup contract
 ├── Reporting/
 │   └── IWorkflowExecutionReportArtifactSink.cs # 报告工件落盘端口
 └── Projections/
@@ -75,7 +75,7 @@ Aevatar.Workflow.Application.Abstractions/
 
 - **稳定端口优先**：Host 与 Infrastructure 只依赖本项目的接口与模型
 - **依赖反转**：避免基础设施直接依赖应用层实现程序集
-- **可替换实现**：应用层、落盘策略、workflow 来源都可独立替换
+- **可替换实现**：应用层、落盘策略、workflow definition catalog 都可独立替换
 
 ## 依赖
 

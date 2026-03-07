@@ -29,8 +29,10 @@ Aevatar.Workflow.Application/
 ├── Queries/
 │   └── WorkflowExecutionQueryApplicationService.cs # agents/workflows/runs 查询门面
 ├── Workflows/
-│   ├── InMemoryWorkflowDefinitionCatalog.cs     # 名称 -> YAML 内存注册表
-│   └── InMemoryWorkflowDefinitionCatalogOptions.cs
+│   ├── InMemoryWorkflowDefinitionCatalog.cs     # dev/test 用内存 definition catalog
+│   ├── InMemoryWorkflowDefinitionCatalogOptions.cs
+│   ├── IWorkflowDefinitionSeedSource.cs         # 启动期种子定义来源
+│   └── BuiltInWorkflowDefinitionSeedSource.cs   # 内建 direct/auto/auto_review seeds
 └── Reporting/
     └── NoopWorkflowExecutionReportArtifactSink.cs  # 默认空实现
 ```
@@ -50,7 +52,7 @@ Aevatar.Workflow.Application/
 - `WorkflowRunResourceFinalizer`
   - 负责 `detach/release/complete/dispose` 兜底清理。
 - `WorkflowRunActorResolver`
-  - 解析优先级：`workflowYamls`（inline bundle，首项入口） > `workflow`（registry 名称） > 默认 workflow（`WorkflowRunBehaviorOptions.DefaultWorkflowName`，默认 `direct`）。
+  - 解析优先级：`workflowYamls`（inline bundle，首项入口） > `workflow`（catalog lookup） > 默认 workflow（`WorkflowRunBehaviorOptions.DefaultWorkflowName`，默认 `direct`）。
   - 可通过 `UseAutoAsDefaultWhenWorkflowUnspecified=true` 切换为默认 `auto` 路由。
   - inline bundle 会把 `name -> yaml` 注入运行态，`workflow_call` 解析顺序为：inline bundle > 外部 resolver。
   - 无 `actorId` 时创建并绑定 workflow actor。
@@ -63,7 +65,7 @@ Aevatar.Workflow.Application/
   - `agents/workflows/runs` 查询门面（经 `IWorkflowExecutionProjectionQueryPort` 读取读侧模型）。
   - `ListAgentsAsync` 仅返回 `WorkflowGAgent`，不扫描暴露非 Workflow actor。
 - `InMemoryWorkflowDefinitionCatalog`
-  - 维护 workflow 名称到 YAML 的内存注册表。
+  - 明确的 dev/test in-memory definition catalog；内建 workflow 由 `IWorkflowDefinitionSeedSource` 注入。
 
 ## 分层约束
 
@@ -76,7 +78,7 @@ Aevatar.Workflow.Application/
 
 ```csharp
 services.AddWorkflowApplication(
-    configureRegistry: opt => opt.RegisterBuiltInDirectWorkflow = true,
+    configureCatalog: opt => opt.RegisterBuiltInDirectWorkflow = true,
     configureRunBehavior: opt =>
     {
         opt.UseAutoAsDefaultWhenWorkflowUnspecified = false; // default

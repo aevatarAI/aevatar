@@ -191,4 +191,5 @@ POST /api/workflows/signal
 
 - `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/*`
 - `src/workflow/Aevatar.Workflow.Application/Runs/*`
-- `src/workflow/Aevatar.Workflow.Application/Workflows/WorkflowDefinitionRegistry.cs`
+- `src/workflow/Aevatar.Workflow.Application.Abstractions/Workflows/IWorkflowDefinitionCatalog.cs`
+- `src/workflow/Aevatar.Workflow.Application/Workflows/InMemoryWorkflowDefinitionCatalog.cs`

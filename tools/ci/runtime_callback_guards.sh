@@ -10,7 +10,7 @@ runtime_delay_hits="$(
   rg -n "Task\.Delay\(" \
     src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs \
     src/workflow/Aevatar.Workflow.Core/Modules \
-    src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs \
+    src/Aevatar.Scripting.Core/ScriptRuntimeGAgent*.cs \
     || true
 )"
 
@@ -23,7 +23,7 @@ fi
 raw_callback_metadata_hits="$(
   rg -n "RuntimeCallbackMetadataKeys\.(CallbackId|CallbackGeneration|CallbackFireIndex|CallbackFiredAtUnixTimeMs)" \
     src/workflow/Aevatar.Workflow.Core/Modules \
-    src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs \
+    src/Aevatar.Scripting.Core/ScriptRuntimeGAgent*.cs \
     || true
 )"
 
@@ -36,7 +36,7 @@ fi
 raw_callback_id_hits="$(
   rg -n '"(delay-step:|wait-signal-timeout:|workflow-step-timeout:|workflow-step-retry-backoff:|llm-watchdog:|script-definition-query-timeout:)' \
     src/workflow/Aevatar.Workflow.Core/Modules \
-    src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs \
+    src/Aevatar.Scripting.Core/ScriptRuntimeGAgent*.cs \
     || true
 )"
 

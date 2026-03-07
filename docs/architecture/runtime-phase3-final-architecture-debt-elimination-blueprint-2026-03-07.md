@@ -1,9 +1,9 @@
-# Runtime Phase-3 Final Architecture Debt Elimination 重构蓝图（v1, Breaking Change）
+# Runtime Phase-3 Final Architecture Debt Elimination 重构蓝图（Delivered, Breaking Change）
 
 ## 1. 文档元信息
 
-1. 状态：`Proposed`
-2. 版本：`v1`
+1. 状态：`Delivered`
+2. 版本：`v2`
 3. 日期：`2026-03-07`
 4. 决策级别：`Architecture Breaking Change`
 5. 适用范围：
@@ -20,6 +20,7 @@
    - Orleans durable callback reminder-only 主策略
    - 已完成的 `WorkflowRunGAgent` actorized-run 主链重构
 7. 本版结论：
+   - 本蓝图中的 WP1-WP6 已全部交付完成；以下问题描述保留为设计基线与验收依据。
    - `Workflow` phase-1 / phase-2 已经解决了“run 事实源错位”的主问题，但系统仍残留若干会继续制造架构回流的债点。
    - 剩余问题不再是单一模块 bug，而是“命名与语义不清的内存事实源”“旧扩展模型兼容壳”“新的单体 actor 文件”和“中间层 demo 违背生产架构”的组合。
    - 彻底收口的唯一正确方向是：
@@ -55,7 +56,7 @@
 3. 旧模型虽然不再是主链，但仍通过遗留类型、demo、兼容适配留在代码库中，容易把错误心智重新带回实现。
 4. 部分 demo 与边缘适配仍保留过期心智，容易把错误模型重新带回主链。
 
-## 3. 剩余结构性问题
+## 3. 原始结构性问题（已关闭）
 
 ### P1. `ScriptRuntimeGAgent` 仍是下一个核心单体
 
