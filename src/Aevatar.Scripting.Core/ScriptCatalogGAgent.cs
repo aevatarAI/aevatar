@@ -17,80 +17,98 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
     public async Task HandlePromoteScriptRevisionRequested(PromoteScriptRevisionRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        var scriptId = evt.ScriptId ?? string.Empty;
-        var revision = evt.Revision ?? string.Empty;
-        var expectedBaseRevision = evt.ExpectedBaseRevision ?? string.Empty;
-
-        if (string.IsNullOrWhiteSpace(scriptId))
-            throw new InvalidOperationException("ScriptId is required.");
-        if (string.IsNullOrWhiteSpace(revision))
-            throw new InvalidOperationException("Revision is required.");
-
-        if (!string.IsNullOrWhiteSpace(expectedBaseRevision))
+        try
         {
-            if (State.Entries.TryGetValue(scriptId, out var currentEntry) &&
-                !string.Equals(currentEntry.ActiveRevision, expectedBaseRevision, StringComparison.Ordinal))
+            var scriptId = evt.ScriptId ?? string.Empty;
+            var revision = evt.Revision ?? string.Empty;
+            var expectedBaseRevision = evt.ExpectedBaseRevision ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(scriptId))
+                throw new InvalidOperationException("ScriptId is required.");
+            if (string.IsNullOrWhiteSpace(revision))
+                throw new InvalidOperationException("Revision is required.");
+
+            if (!string.IsNullOrWhiteSpace(expectedBaseRevision))
             {
-                throw new InvalidOperationException(
-                    $"Promotion conflict for script `{scriptId}`. expected_base_revision=`{expectedBaseRevision}` actual_active_revision=`{currentEntry.ActiveRevision}`.");
+                if (State.Entries.TryGetValue(scriptId, out var currentEntry) &&
+                    !string.Equals(currentEntry.ActiveRevision, expectedBaseRevision, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Promotion conflict for script `{scriptId}`. expected_base_revision=`{expectedBaseRevision}` actual_active_revision=`{currentEntry.ActiveRevision}`.");
+                }
             }
-        }
 
-        await PersistDomainEventAsync(new ScriptCatalogRevisionPromotedEvent
+            await PersistDomainEventAsync(new ScriptCatalogRevisionPromotedEvent
+            {
+                ScriptId = scriptId,
+                Revision = revision,
+                DefinitionActorId = evt.DefinitionActorId ?? string.Empty,
+                SourceHash = evt.SourceHash ?? string.Empty,
+                ProposalId = evt.ProposalId ?? string.Empty,
+            });
+            await SendCommandResponseIfRequestedAsync(evt.RequestId, evt.ReplyStreamId, scriptId);
+        }
+        catch (Exception ex)
         {
-            ScriptId = scriptId,
-            Revision = revision,
-            DefinitionActorId = evt.DefinitionActorId ?? string.Empty,
-            SourceHash = evt.SourceHash ?? string.Empty,
-            ProposalId = evt.ProposalId ?? string.Empty,
-        });
+            await SendCommandFailureIfRequestedAsync(evt.RequestId, evt.ReplyStreamId, evt.ScriptId ?? string.Empty, ex.Message);
+            throw;
+        }
     }
 
     [EventHandler]
     public async Task HandleRollbackScriptRevisionRequested(RollbackScriptRevisionRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        var scriptId = evt.ScriptId ?? string.Empty;
-        var targetRevision = evt.TargetRevision ?? string.Empty;
-        var expectedCurrentRevision = evt.ExpectedCurrentRevision ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(scriptId))
-            throw new InvalidOperationException("ScriptId is required.");
-        if (string.IsNullOrWhiteSpace(targetRevision))
-            throw new InvalidOperationException("TargetRevision is required.");
-
-        if (!State.Entries.TryGetValue(scriptId, out var entry))
-            throw new InvalidOperationException($"Script `{scriptId}` does not exist in catalog.");
-
-        if (!string.IsNullOrWhiteSpace(expectedCurrentRevision) &&
-            !string.Equals(entry.ActiveRevision, expectedCurrentRevision, StringComparison.Ordinal))
+        try
         {
-            throw new InvalidOperationException(
-                $"Rollback conflict for script `{scriptId}`. expected_current_revision=`{expectedCurrentRevision}` actual_active_revision=`{entry.ActiveRevision}`.");
+            var scriptId = evt.ScriptId ?? string.Empty;
+            var targetRevision = evt.TargetRevision ?? string.Empty;
+            var expectedCurrentRevision = evt.ExpectedCurrentRevision ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(scriptId))
+                throw new InvalidOperationException("ScriptId is required.");
+            if (string.IsNullOrWhiteSpace(targetRevision))
+                throw new InvalidOperationException("TargetRevision is required.");
+
+            if (!State.Entries.TryGetValue(scriptId, out var entry))
+                throw new InvalidOperationException($"Script `{scriptId}` does not exist in catalog.");
+
+            if (!string.IsNullOrWhiteSpace(expectedCurrentRevision) &&
+                !string.Equals(entry.ActiveRevision, expectedCurrentRevision, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Rollback conflict for script `{scriptId}`. expected_current_revision=`{expectedCurrentRevision}` actual_active_revision=`{entry.ActiveRevision}`.");
+            }
+
+            var existsInHistory = entry.RevisionHistory.Any(x =>
+                string.Equals(x, targetRevision, StringComparison.Ordinal));
+            if (!existsInHistory && !string.Equals(entry.ActiveRevision, targetRevision, StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    $"Target revision `{targetRevision}` does not exist in script catalog for `{scriptId}`.");
+
+            var previousRevision = entry.ActiveRevision ?? string.Empty;
+
+            await PersistDomainEventAsync(new ScriptCatalogRollbackRequestedEvent
+            {
+                ScriptId = scriptId,
+                TargetRevision = targetRevision,
+                Reason = evt.Reason ?? string.Empty,
+                ProposalId = evt.ProposalId ?? string.Empty,
+            });
+
+            await PersistDomainEventAsync(new ScriptCatalogRolledBackEvent
+            {
+                ScriptId = scriptId,
+                TargetRevision = targetRevision,
+                PreviousRevision = previousRevision,
+                ProposalId = evt.ProposalId ?? string.Empty,
+            });
+            await SendCommandResponseIfRequestedAsync(evt.RequestId, evt.ReplyStreamId, scriptId);
         }
-
-        var existsInHistory = entry.RevisionHistory.Any(x =>
-            string.Equals(x, targetRevision, StringComparison.Ordinal));
-        if (!existsInHistory && !string.Equals(entry.ActiveRevision, targetRevision, StringComparison.Ordinal))
-            throw new InvalidOperationException(
-                $"Target revision `{targetRevision}` does not exist in script catalog for `{scriptId}`.");
-
-        var previousRevision = entry.ActiveRevision ?? string.Empty;
-
-        await PersistDomainEventAsync(new ScriptCatalogRollbackRequestedEvent
+        catch (Exception ex)
         {
-            ScriptId = scriptId,
-            TargetRevision = targetRevision,
-            Reason = evt.Reason ?? string.Empty,
-            ProposalId = evt.ProposalId ?? string.Empty,
-        });
-
-        await PersistDomainEventAsync(new ScriptCatalogRolledBackEvent
-        {
-            ScriptId = scriptId,
-            TargetRevision = targetRevision,
-            PreviousRevision = previousRevision,
-            ProposalId = evt.ProposalId ?? string.Empty,
-        });
+            await SendCommandFailureIfRequestedAsync(evt.RequestId, evt.ReplyStreamId, evt.ScriptId ?? string.Empty, ex.Message);
+            throw;
+        }
     }
 
     [EventHandler]
@@ -152,6 +170,92 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
         CancellationToken ct = default)
     {
         return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
+    }
+
+    private Task SendCommandResponseIfRequestedAsync(string requestId, string replyStreamId, string scriptId)
+    {
+        if (string.IsNullOrWhiteSpace(requestId) || string.IsNullOrWhiteSpace(replyStreamId))
+            return Task.CompletedTask;
+
+        return SendCommandResponseAsync(replyStreamId, BuildCommandResponse(requestId, scriptId));
+    }
+
+    private Task SendCommandFailureIfRequestedAsync(
+        string requestId,
+        string replyStreamId,
+        string scriptId,
+        string failureReason)
+    {
+        if (string.IsNullOrWhiteSpace(requestId) || string.IsNullOrWhiteSpace(replyStreamId))
+            return Task.CompletedTask;
+
+        return SendCommandResponseAsync(replyStreamId, new ScriptCatalogCommandRespondedEvent
+        {
+            RequestId = requestId,
+            Succeeded = false,
+            ScriptId = scriptId,
+            FailureReason = failureReason ?? string.Empty,
+        });
+    }
+
+    private Task SendCommandResponseAsync(
+        string replyStreamId,
+        ScriptCatalogCommandRespondedEvent response,
+        CancellationToken ct = default)
+    {
+        return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
+    }
+
+    private ScriptCatalogEntryRespondedEvent BuildCatalogEntryResponse(string requestId, string scriptId)
+    {
+        if (!State.Entries.TryGetValue(scriptId, out var entry))
+        {
+            return new ScriptCatalogEntryRespondedEvent
+            {
+                RequestId = requestId,
+                Found = false,
+                ScriptId = scriptId,
+                FailureReason = $"Script `{scriptId}` not found in catalog.",
+            };
+        }
+
+        var responded = new ScriptCatalogEntryRespondedEvent
+        {
+            RequestId = requestId,
+            Found = true,
+            ScriptId = entry.ScriptId ?? string.Empty,
+            ActiveRevision = entry.ActiveRevision ?? string.Empty,
+            ActiveDefinitionActorId = entry.ActiveDefinitionActorId ?? string.Empty,
+            ActiveSourceHash = entry.ActiveSourceHash ?? string.Empty,
+            PreviousRevision = entry.PreviousRevision ?? string.Empty,
+            LastProposalId = entry.LastProposalId ?? string.Empty,
+        };
+        responded.RevisionHistory.Add(entry.RevisionHistory);
+        return responded;
+    }
+
+    private ScriptCatalogCommandRespondedEvent BuildCommandResponse(string requestId, string scriptId)
+    {
+        if (!State.Entries.TryGetValue(scriptId, out var entry))
+        {
+            return new ScriptCatalogCommandRespondedEvent
+            {
+                RequestId = requestId,
+                Succeeded = false,
+                ScriptId = scriptId,
+                FailureReason = $"Script `{scriptId}` not found in catalog.",
+            };
+        }
+
+        return new ScriptCatalogCommandRespondedEvent
+        {
+            RequestId = requestId,
+            Succeeded = true,
+            ScriptId = entry.ScriptId ?? string.Empty,
+            ActiveRevision = entry.ActiveRevision ?? string.Empty,
+            ActiveDefinitionActorId = entry.ActiveDefinitionActorId ?? string.Empty,
+            FailureReason = string.Empty,
+        };
     }
 
     private static ScriptCatalogState ApplyPromoted(

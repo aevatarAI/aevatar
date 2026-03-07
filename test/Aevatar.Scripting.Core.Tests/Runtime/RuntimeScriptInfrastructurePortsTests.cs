@@ -268,21 +268,76 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
+    public async Task DefinitionLifecycleService_ShouldDispatchUpsertRequest_AndWaitForCommandAck()
+    {
+        UpsertScriptDefinitionRequestedEvent? captured = null;
+        var streams = new InMemoryStreamProvider();
+        var runtime = new TestActorRuntime
+        {
+            CreateActor = actorId => new TestActor(actorId, async (envelope, ct) =>
+            {
+                if (!envelope.Payload.Is(UpsertScriptDefinitionRequestedEvent.Descriptor))
+                    return;
+
+                captured = envelope.Payload.Unpack<UpsertScriptDefinitionRequestedEvent>();
+                await streams.GetStream(captured.ReplyStreamId).ProduceAsync(new ScriptDefinitionCommandRespondedEvent
+                {
+                    RequestId = captured.RequestId,
+                    Succeeded = true,
+                    ScriptId = captured.ScriptId,
+                    Revision = captured.ScriptRevision,
+                }, ct);
+            }),
+        };
+        var service = new RuntimeScriptDefinitionLifecycleService(
+            new RuntimeScriptActorAccessor(runtime),
+            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
+            new StaticAddressResolver(),
+            new FixedTimeouts());
+
+        var actorId = await service.UpsertDefinitionAsync(
+            scriptId: "script-1",
+            scriptRevision: "rev-1",
+            sourceText: "public sealed class RuntimeScript {}",
+            sourceHash: "hash-1",
+            definitionActorId: null,
+            ct: CancellationToken.None);
+
+        actorId.Should().Be("script-definition:script-1");
+        captured.Should().NotBeNull();
+        captured!.ScriptId.Should().Be("script-1");
+        captured.ScriptRevision.Should().Be("rev-1");
+        captured.RequestId.Should().NotBeNullOrWhiteSpace();
+        captured.ReplyStreamId.Should().StartWith(ScriptingQueryChannels.DefinitionReplyStreamPrefix + ":");
+    }
+
+    [Fact]
     public async Task CatalogLifecycleService_ShouldDispatchPromoteRequest_WithResolvedCatalogActorId()
     {
         PromoteScriptRevisionRequestedEvent? captured = null;
+        var streams = new InMemoryStreamProvider();
         var runtime = new TestActorRuntime
         {
-            CreateActor = actorId => new TestActor(actorId, (envelope, ct) =>
+            CreateActor = actorId => new TestActor(actorId, async (envelope, ct) =>
             {
-                captured = envelope.Payload.Unpack<PromoteScriptRevisionRequestedEvent>();
-                ct.ThrowIfCancellationRequested();
-                return Task.CompletedTask;
+                if (envelope.Payload.Is(PromoteScriptRevisionRequestedEvent.Descriptor))
+                {
+                    captured = envelope.Payload.Unpack<PromoteScriptRevisionRequestedEvent>();
+                    await streams.GetStream(captured.ReplyStreamId).ProduceAsync(new ScriptCatalogCommandRespondedEvent
+                    {
+                        RequestId = captured.RequestId,
+                        Succeeded = true,
+                        ScriptId = "script-1",
+                        ActiveRevision = "rev-2",
+                        ActiveDefinitionActorId = "definition-2",
+                    }, ct);
+                    return;
+                }
             }),
         };
         var service = new RuntimeScriptCatalogLifecycleService(
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(new InMemoryStreamProvider(), new RuntimeStreamRequestReplyClient()),
+            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
             new FixedTimeouts());
 
@@ -306,18 +361,28 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task CatalogLifecycleService_ShouldDispatchRollbackRequest_WithProvidedCatalogActorId()
     {
         RollbackScriptRevisionRequestedEvent? captured = null;
+        var streams = new InMemoryStreamProvider();
         var runtime = new TestActorRuntime
         {
-            CreateActor = actorId => new TestActor(actorId, (envelope, ct) =>
+            CreateActor = actorId => new TestActor(actorId, async (envelope, ct) =>
             {
-                captured = envelope.Payload.Unpack<RollbackScriptRevisionRequestedEvent>();
-                ct.ThrowIfCancellationRequested();
-                return Task.CompletedTask;
+                if (envelope.Payload.Is(RollbackScriptRevisionRequestedEvent.Descriptor))
+                {
+                    captured = envelope.Payload.Unpack<RollbackScriptRevisionRequestedEvent>();
+                    await streams.GetStream(captured.ReplyStreamId).ProduceAsync(new ScriptCatalogCommandRespondedEvent
+                    {
+                        RequestId = captured.RequestId,
+                        Succeeded = true,
+                        ScriptId = "script-1",
+                        ActiveRevision = "rev-1",
+                    }, ct);
+                    return;
+                }
             }),
         };
         var service = new RuntimeScriptCatalogLifecycleService(
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(new InMemoryStreamProvider(), new RuntimeStreamRequestReplyClient()),
+            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
             new FixedTimeouts());
 
@@ -475,7 +540,7 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task EvolutionLifecycleService_ShouldThrowTimeout_WhenSessionTimesOut()
     {
         var streams = new InMemoryStreamProvider();
-        var runtime = CreateEvolutionRuntime(streams, (_, _, session) => session.SuppressQueryResponse = true);
+        var runtime = CreateEvolutionRuntime(streams, (_, _, session) => session.SuppressStartResponse = true);
         var service = CreateEvolutionLifecycleService(
             runtime,
             streams,
@@ -546,11 +611,29 @@ public class RuntimeScriptInfrastructurePortsTests
 
     private static RuntimeScriptCatalogLifecycleService CreateCatalogLifecycleService(
         TestActorRuntime runtime,
-        Func<QueryScriptCatalogEntryRequestedEvent, ScriptCatalogEntryRespondedEvent>? responseFactory = null)
+        Func<QueryScriptCatalogEntryRequestedEvent, ScriptCatalogEntryRespondedEvent>? responseFactory = null,
+        Func<PromoteScriptRevisionRequestedEvent, ScriptCatalogCommandRespondedEvent>? promoteResponseFactory = null,
+        Func<RollbackScriptRevisionRequestedEvent, ScriptCatalogCommandRespondedEvent>? rollbackResponseFactory = null)
     {
         var streams = new InMemoryStreamProvider();
         runtime.CreateActor = actorId => new TestActor(actorId, async (envelope, ct) =>
         {
+            if (promoteResponseFactory != null && envelope.Payload.Is(PromoteScriptRevisionRequestedEvent.Descriptor))
+            {
+                var request = envelope.Payload.Unpack<PromoteScriptRevisionRequestedEvent>();
+                var response = promoteResponseFactory(request);
+                await streams.GetStream(request.ReplyStreamId).ProduceAsync(response, ct);
+                return;
+            }
+
+            if (rollbackResponseFactory != null && envelope.Payload.Is(RollbackScriptRevisionRequestedEvent.Descriptor))
+            {
+                var request = envelope.Payload.Unpack<RollbackScriptRevisionRequestedEvent>();
+                var response = rollbackResponseFactory(request);
+                await streams.GetStream(request.ReplyStreamId).ProduceAsync(response, ct);
+                return;
+            }
+
             if (responseFactory != null && envelope.Payload.Is(QueryScriptCatalogEntryRequestedEvent.Descriptor))
             {
                 var request = envelope.Payload.Unpack<QueryScriptCatalogEntryRequestedEvent>();
@@ -592,6 +675,20 @@ public class RuntimeScriptInfrastructurePortsTests
                     {
                         var start = envelope.Payload.Unpack<StartScriptEvolutionSessionRequestedEvent>();
                         onStartSession(actorId, start, session);
+                        if (!session.SuppressStartResponse &&
+                            !string.IsNullOrWhiteSpace(start.RequestId) &&
+                            !string.IsNullOrWhiteSpace(start.ReplyStreamId))
+                        {
+                            var response = session.DecisionResponse?.Clone()
+                                ?? new ScriptEvolutionDecisionRespondedEvent
+                                {
+                                    ProposalId = start.ProposalId ?? string.Empty,
+                                    Found = false,
+                                    FailureReason = "Proposal decision not completed yet.",
+                                };
+                            response.RequestId = start.RequestId;
+                            await streams.GetStream(start.ReplyStreamId).ProduceAsync(response, ct);
+                        }
                         return;
                     }
 
@@ -777,7 +874,11 @@ public class RuntimeScriptInfrastructurePortsTests
     {
         public TimeSpan DefinitionSnapshotQueryTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
 
+        public TimeSpan DefinitionMutationTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
+
         public TimeSpan CatalogEntryQueryTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
+
+        public TimeSpan CatalogMutationTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
 
         public TimeSpan EvolutionDecisionTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
     }
@@ -801,5 +902,7 @@ public class RuntimeScriptInfrastructurePortsTests
         public ScriptEvolutionDecisionRespondedEvent? DecisionResponse { get; set; }
 
         public bool SuppressQueryResponse { get; set; }
+
+        public bool SuppressStartResponse { get; set; }
     }
 }

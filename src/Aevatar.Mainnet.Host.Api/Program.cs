@@ -1,5 +1,6 @@
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Extensions.Maker;
 
@@ -13,6 +14,7 @@ builder.AddAevatarDefaultHost(
     });
 builder.AddMainnetDistributedOrleansHost();
 builder.AddWorkflowCapabilityWithAIDefaults();
+builder.Services.AddActorBackedWorkflowDefinitionCatalog();
 builder.Services.AddWorkflowMakerExtensions();
 
 var app = builder.Build();

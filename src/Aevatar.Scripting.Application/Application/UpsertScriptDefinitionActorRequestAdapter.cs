@@ -18,6 +18,8 @@ public sealed class UpsertScriptDefinitionActorRequestAdapter
                 ScriptRevision = request.ScriptRevision ?? string.Empty,
                 SourceText = request.SourceText ?? string.Empty,
                 SourceHash = request.SourceHash ?? string.Empty,
+                RequestId = request.RequestId ?? string.Empty,
+                ReplyStreamId = request.ReplyStreamId ?? string.Empty,
             });
     }
 }

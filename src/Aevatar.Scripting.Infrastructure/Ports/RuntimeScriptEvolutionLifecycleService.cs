@@ -1,4 +1,3 @@
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
@@ -14,7 +13,6 @@ public sealed class RuntimeScriptEvolutionLifecycleService
     private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly TimeSpan _decisionTimeout;
     private readonly StartScriptEvolutionSessionActorRequestAdapter _startSessionAdapter = new();
-    private readonly QueryScriptEvolutionDecisionRequestAdapter _queryDecisionAdapter = new();
 
     public RuntimeScriptEvolutionLifecycleService(
         RuntimeScriptActorAccessor actorAccessor,
@@ -46,28 +44,23 @@ public sealed class RuntimeScriptEvolutionLifecycleService
             "Script evolution session actor not found",
             ct);
 
-        await sessionActor.HandleEventAsync(
-            _startSessionAdapter.Map(
-                new StartScriptEvolutionSessionActorRequest(
-                    ProposalId: normalizedProposal.ProposalId ?? string.Empty,
-                    ScriptId: normalizedProposal.ScriptId ?? string.Empty,
-                    BaseRevision: normalizedProposal.BaseRevision ?? string.Empty,
-                    CandidateRevision: normalizedProposal.CandidateRevision ?? string.Empty,
-                    CandidateSource: normalizedProposal.CandidateSource ?? string.Empty,
-                    CandidateSourceHash: normalizedProposal.CandidateSourceHash ?? string.Empty,
-                    Reason: normalizedProposal.Reason ?? string.Empty),
-                sessionActorId),
-            ct);
-
-        var responded = await _queryClient.QueryActorAsync<ScriptEvolutionDecisionRespondedEvent>(
-            sessionActor,
+        var responded = await _queryClient.QueryAsync<ScriptEvolutionDecisionRespondedEvent>(
             ScriptingQueryRouteConventions.EvolutionReplyStreamPrefix,
             _decisionTimeout,
-            (requestId, replyStreamId) => _queryDecisionAdapter.Map(
-                sessionActorId,
-                requestId,
-                replyStreamId,
-                normalizedProposalId),
+            (requestId, replyStreamId) => sessionActor.HandleEventAsync(
+                _startSessionAdapter.Map(
+                    new StartScriptEvolutionSessionActorRequest(
+                        ProposalId: normalizedProposal.ProposalId ?? string.Empty,
+                        ScriptId: normalizedProposal.ScriptId ?? string.Empty,
+                        BaseRevision: normalizedProposal.BaseRevision ?? string.Empty,
+                        CandidateRevision: normalizedProposal.CandidateRevision ?? string.Empty,
+                        CandidateSource: normalizedProposal.CandidateSource ?? string.Empty,
+                        CandidateSourceHash: normalizedProposal.CandidateSourceHash ?? string.Empty,
+                        Reason: normalizedProposal.Reason ?? string.Empty,
+                        RequestId: requestId,
+                        ReplyStreamId: replyStreamId),
+                    sessionActorId),
+                ct),
             static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
             ScriptingQueryRouteConventions.BuildEvolutionDecisionTimeoutMessage,
             ct);

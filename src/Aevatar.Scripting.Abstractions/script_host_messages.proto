@@ -117,6 +117,11 @@ message ScriptEvolutionSessionState {
   repeated string diagnostics = 11;
   int64 last_applied_event_version = 12;
   string last_event_id = 13;
+  string candidate_source = 14;
+  string candidate_source_hash = 15;
+  string reason = 16;
+  string pending_request_id = 17;
+  string pending_reply_stream_id = 18;
 }
 
 message UpsertScriptDefinitionRequestedEvent {
@@ -124,6 +129,8 @@ message UpsertScriptDefinitionRequestedEvent {
   string script_revision = 2;
   string source_text = 3;
   string source_hash = 4;
+  string request_id = 5;
+  string reply_stream_id = 6;
 }
 
 message ScriptDefinitionUpsertedEvent {
@@ -188,6 +195,8 @@ message StartScriptEvolutionSessionRequestedEvent {
   string candidate_source = 5;
   string candidate_source_hash = 6;
   string reason = 7;
+  string request_id = 8;
+  string reply_stream_id = 9;
 }
 
 message ProposeScriptEvolutionRequestedEvent {
@@ -209,6 +218,8 @@ message PromoteScriptRevisionRequestedEvent {
   string source_hash = 4;
   string proposal_id = 5;
   string expected_base_revision = 6;
+  string request_id = 7;
+  string reply_stream_id = 8;
 }
 
 message RollbackScriptRevisionRequestedEvent {
@@ -217,6 +228,17 @@ message RollbackScriptRevisionRequestedEvent {
   string reason = 3;
   string proposal_id = 4;
   string expected_current_revision = 5;
+  string request_id = 6;
+  string reply_stream_id = 7;
+}
+
+message ScriptDefinitionCommandRespondedEvent {
+  string request_id = 1;
+  bool succeeded = 2;
+  string script_id = 3;
+  string revision = 4;
+  string failure_reason = 5;
+  repeated string diagnostics = 6;
 }
 
 message QueryScriptDefinitionSnapshotRequestedEvent {
@@ -270,6 +292,15 @@ message ScriptCatalogEntryRespondedEvent {
   string failure_reason = 10;
 }
 
+message ScriptCatalogCommandRespondedEvent {
+  string request_id = 1;
+  bool succeeded = 2;
+  string script_id = 3;
+  string active_revision = 4;
+  string active_definition_actor_id = 5;
+  string failure_reason = 6;
+}
+
 message QueryScriptEvolutionDecisionRequestedEvent {
   string request_id = 1;
   string reply_stream_id = 2;
@@ -296,6 +327,20 @@ message ScriptEvolutionSessionStartedEvent {
   string script_id = 2;
   string base_revision = 3;
   string candidate_revision = 4;
+  string candidate_source = 5;
+  string candidate_source_hash = 6;
+  string reason = 7;
+  string request_id = 8;
+  string reply_stream_id = 9;
+}
+
+message ScriptEvolutionSessionExecutionRequestedEvent {
+  string proposal_id = 1;
+}
+
+message ScriptEvolutionSessionExecutionPlanReadyEvent {
+  string proposal_id = 1;
+  repeated google.protobuf.Any domain_events = 2;
 }
 
 message ScriptEvolutionSessionCompletedEvent {

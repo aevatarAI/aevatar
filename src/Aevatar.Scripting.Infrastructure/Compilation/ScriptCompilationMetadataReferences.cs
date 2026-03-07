@@ -7,7 +7,12 @@ namespace Aevatar.Scripting.Infrastructure.Compilation;
 
 internal static class ScriptCompilationMetadataReferences
 {
-    public static IReadOnlyList<MetadataReference> Build()
+    private static readonly Lazy<IReadOnlyList<MetadataReference>> CachedReferences =
+        new(BuildReferences, LazyThreadSafetyMode.ExecutionAndPublication);
+
+    public static IReadOnlyList<MetadataReference> Build() => CachedReferences.Value;
+
+    private static IReadOnlyList<MetadataReference> BuildReferences()
     {
         var assemblyLocations = AppDomain.CurrentDomain
             .GetAssemblies()

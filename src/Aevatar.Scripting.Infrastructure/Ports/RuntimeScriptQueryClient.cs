@@ -43,4 +43,28 @@ public sealed class RuntimeScriptQueryClient
             timeoutMessageFactory,
             ct);
     }
+
+    public Task<TResponse> QueryAsync<TResponse>(
+        string replyStreamPrefix,
+        TimeSpan timeout,
+        Func<string, string, Task> dispatchAsync,
+        Func<TResponse, string, bool> isMatch,
+        Func<string, string> timeoutMessageFactory,
+        CancellationToken ct)
+        where TResponse : IMessage, new()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(replyStreamPrefix);
+        ArgumentNullException.ThrowIfNull(dispatchAsync);
+        ArgumentNullException.ThrowIfNull(isMatch);
+        ArgumentNullException.ThrowIfNull(timeoutMessageFactory);
+
+        return _requestReplyClient.QueryAsync<TResponse>(
+            _streams,
+            replyStreamPrefix,
+            timeout,
+            dispatchAsync,
+            isMatch,
+            timeoutMessageFactory,
+            ct);
+    }
 }

@@ -20,6 +20,8 @@ public sealed class PromoteScriptRevisionActorRequestAdapter
                 SourceHash = request.SourceHash ?? string.Empty,
                 ProposalId = request.ProposalId ?? string.Empty,
                 ExpectedBaseRevision = request.ExpectedBaseRevision ?? string.Empty,
+                RequestId = request.RequestId ?? string.Empty,
+                ReplyStreamId = request.ReplyStreamId ?? string.Empty,
             });
     }
 }

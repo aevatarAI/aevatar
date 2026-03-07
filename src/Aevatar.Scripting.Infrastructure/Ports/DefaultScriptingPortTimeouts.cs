@@ -2,11 +2,17 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class DefaultScriptingPortTimeouts : IScriptingPortTimeouts
 {
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan DefaultQueryTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan DefaultMutationTimeout = TimeSpan.FromSeconds(120);
+    private static readonly TimeSpan DefaultEvolutionDecisionTimeout = TimeSpan.FromMinutes(5);
 
-    public TimeSpan DefinitionSnapshotQueryTimeout => DefaultTimeout;
+    public TimeSpan DefinitionSnapshotQueryTimeout => DefaultQueryTimeout;
 
-    public TimeSpan CatalogEntryQueryTimeout => DefaultTimeout;
+    public TimeSpan DefinitionMutationTimeout => DefaultMutationTimeout;
 
-    public TimeSpan EvolutionDecisionTimeout => DefaultTimeout;
+    public TimeSpan CatalogEntryQueryTimeout => DefaultQueryTimeout;
+
+    public TimeSpan CatalogMutationTimeout => DefaultMutationTimeout;
+
+    public TimeSpan EvolutionDecisionTimeout => DefaultEvolutionDecisionTimeout;
 }

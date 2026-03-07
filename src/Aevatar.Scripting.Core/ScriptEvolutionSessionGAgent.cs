@@ -4,6 +4,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Scripting.Core;
 
@@ -25,15 +26,39 @@ public sealed partial class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvol
         InitializeId();
     }
 
+    protected override Task OnActivateAsync(CancellationToken ct) =>
+        EnsureExecutionRequestedAsync(ct);
+
     [EventHandler]
     public async Task HandleStartScriptEvolutionSessionRequested(StartScriptEvolutionSessionRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
 
         var proposal = NormalizeProposal(evt);
+        Logger.LogInformation(
+            "Script evolution session start received. actor_id={ActorId} proposal_id={ProposalId} script_id={ScriptId} base_revision={BaseRevision} candidate_revision={CandidateRevision} request_id={RequestId} reply_stream_id={ReplyStreamId}",
+            Id,
+            proposal.ProposalId,
+            proposal.ScriptId,
+            proposal.BaseRevision,
+            proposal.CandidateRevision,
+            evt.RequestId,
+            evt.ReplyStreamId);
         EnsureProposalBinding(proposal);
         if (!string.IsNullOrWhiteSpace(State.ProposalId))
+        {
+            Logger.LogInformation(
+                "Script evolution session already bound. actor_id={ActorId} proposal_id={ProposalId} completed={Completed} status={Status}",
+                Id,
+                State.ProposalId,
+                State.Completed,
+                State.Status);
+            if (State.Completed)
+                await SendStartResponseIfRequestedAsync(evt, CancellationToken.None);
+            else
+                await EnsureExecutionRequestedAsync(CancellationToken.None);
             return;
+        }
 
         await PersistDomainEventAsync(new ScriptEvolutionSessionStartedEvent
         {
@@ -41,15 +66,26 @@ public sealed partial class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvol
             ScriptId = proposal.ScriptId,
             BaseRevision = proposal.BaseRevision,
             CandidateRevision = proposal.CandidateRevision,
+            CandidateSource = proposal.CandidateSource,
+            CandidateSourceHash = proposal.CandidateSourceHash,
+            Reason = proposal.Reason,
+            RequestId = evt.RequestId ?? string.Empty,
+            ReplyStreamId = evt.ReplyStreamId ?? string.Empty,
         });
-
-        var executionPlan = await _executionCoordinator.ExecuteAsync(proposal, CancellationToken.None);
-        await PersistExecutionPlanAsync(executionPlan, CancellationToken.None);
+        await EnsureExecutionRequestedAsync(CancellationToken.None);
     }
 
     [EventHandler]
     public Task HandleQueryScriptEvolutionDecisionRequested(QueryScriptEvolutionDecisionRequestedEvent evt) =>
         HandleDecisionQueryAsync(evt, CancellationToken.None);
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public Task HandleScriptEvolutionSessionExecutionRequested(ScriptEvolutionSessionExecutionRequestedEvent evt) =>
+        HandleExecutionRequestedAsync(evt, CancellationToken.None);
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public Task HandleScriptEvolutionSessionExecutionPlanReady(ScriptEvolutionSessionExecutionPlanReadyEvent evt) =>
+        HandleExecutionPlanReadyAsync(evt, CancellationToken.None);
 
     protected override ScriptEvolutionSessionState TransitionState(
         ScriptEvolutionSessionState current,

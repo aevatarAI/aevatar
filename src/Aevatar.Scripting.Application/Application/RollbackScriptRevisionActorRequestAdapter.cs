@@ -19,6 +19,8 @@ public sealed class RollbackScriptRevisionActorRequestAdapter
                 Reason = request.Reason ?? string.Empty,
                 ProposalId = request.ProposalId ?? string.Empty,
                 ExpectedCurrentRevision = request.ExpectedCurrentRevision ?? string.Empty,
+                RequestId = request.RequestId ?? string.Empty,
+                ReplyStreamId = request.ReplyStreamId ?? string.Empty,
             });
     }
 }

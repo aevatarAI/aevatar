@@ -5,4 +5,6 @@ public sealed record RollbackScriptRevisionActorRequest(
     string TargetRevision,
     string Reason,
     string ProposalId,
-    string ExpectedCurrentRevision);
+    string ExpectedCurrentRevision,
+    string RequestId = "",
+    string ReplyStreamId = "");

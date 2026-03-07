@@ -33,18 +33,37 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     public async Task HandleUpsertScriptDefinitionRequested(UpsertScriptDefinitionRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        var sourceText = evt.SourceText ?? string.Empty;
-        var compilation = await _compiler.CompileAsync(
-            new ScriptPackageCompilationRequest(
-                evt.ScriptId ?? string.Empty,
-                evt.ScriptRevision ?? string.Empty,
-                sourceText),
-            CancellationToken.None);
+        Logger.LogInformation(
+            "Script definition upsert received. actor_id={ActorId} script_id={ScriptId} revision={Revision} request_id={RequestId} reply_stream_id={ReplyStreamId}",
+            Id,
+            evt.ScriptId,
+            evt.ScriptRevision,
+            evt.RequestId,
+            evt.ReplyStreamId);
         try
         {
+            var sourceText = evt.SourceText ?? string.Empty;
+            var compilation = await _compiler.CompileAsync(
+                new ScriptPackageCompilationRequest(
+                    evt.ScriptId ?? string.Empty,
+                    evt.ScriptRevision ?? string.Empty,
+                    sourceText),
+                CancellationToken.None);
+            try
+            {
             if (!compilation.IsSuccess || compilation.ContractManifest == null)
-                throw new InvalidOperationException(
-                    "Script definition compilation failed: " + string.Join("; ", compilation.Diagnostics));
+            {
+                var diagnostics = compilation.Diagnostics?.ToArray() ?? Array.Empty<string>();
+                var failureReason = "Script definition compilation failed: " + string.Join("; ", diagnostics);
+                Logger.LogWarning(
+                    "Script definition upsert rejected by compilation. actor_id={ActorId} script_id={ScriptId} revision={Revision} diagnostics={Diagnostics}",
+                    Id,
+                    evt.ScriptId,
+                    evt.ScriptRevision,
+                    string.Join(" | ", diagnostics));
+                await SendCommandFailureIfRequestedAsync(evt, failureReason, diagnostics);
+                return;
+            }
 
             var readModelSchema = Any.Pack(new Empty());
             var readModelSchemaHash = string.Empty;
@@ -76,7 +95,15 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             });
 
             if (!hasReadModelSchema)
+            {
+                Logger.LogInformation(
+                    "Script definition upsert persisted without read model schema. actor_id={ActorId} script_id={ScriptId} revision={Revision}",
+                    Id,
+                    evt.ScriptId,
+                    evt.ScriptRevision);
+                await SendCommandResponseIfRequestedAsync(evt);
                 return;
+            }
 
             await PersistDomainEventAsync(new ScriptReadModelSchemaDeclaredEvent
             {
@@ -106,6 +133,13 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                         .ToArray(),
                 },
                 });
+                Logger.LogInformation(
+                    "Script definition upsert persisted with validated read model schema. actor_id={ActorId} script_id={ScriptId} revision={Revision} schema_version={SchemaVersion}",
+                    Id,
+                    evt.ScriptId,
+                    evt.ScriptRevision,
+                    readModelSchemaVersion);
+                await SendCommandResponseIfRequestedAsync(evt);
                 return;
             }
 
@@ -116,10 +150,30 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 ReadModelSchemaVersion = readModelSchemaVersion,
                 FailureReason = activation.FailureReason,
             });
+            Logger.LogInformation(
+                "Script definition upsert persisted with schema activation failure. actor_id={ActorId} script_id={ScriptId} revision={Revision} reason={FailureReason}",
+                Id,
+                evt.ScriptId,
+                evt.ScriptRevision,
+                activation.FailureReason);
+            await SendCommandResponseIfRequestedAsync(evt);
+            }
+            finally
+            {
+                await DisposeCompiledDefinitionAsync(compilation.CompiledDefinition);
+            }
         }
-        finally
+        catch (Exception ex)
         {
-            await DisposeCompiledDefinitionAsync(compilation.CompiledDefinition);
+            Logger.LogError(
+                ex,
+                "Script definition upsert failed. actor_id={ActorId} script_id={ScriptId} revision={Revision} request_id={RequestId}",
+                Id,
+                evt.ScriptId,
+                evt.ScriptRevision,
+                evt.RequestId);
+            await SendCommandFailureIfRequestedAsync(evt, ex.Message, Array.Empty<string>());
+            throw;
         }
     }
 
@@ -193,6 +247,70 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     {
         return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
     }
+
+    private Task SendCommandResponseIfRequestedAsync(UpsertScriptDefinitionRequestedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
+            return Task.CompletedTask;
+
+        return SendCommandResponseAsync(evt.ReplyStreamId, BuildCommandResponse(evt.RequestId));
+    }
+
+    private Task SendCommandFailureIfRequestedAsync(
+        UpsertScriptDefinitionRequestedEvent evt,
+        string failureReason,
+        IReadOnlyList<string> diagnostics)
+    {
+        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
+            return Task.CompletedTask;
+
+        var response = new ScriptDefinitionCommandRespondedEvent
+        {
+            RequestId = evt.RequestId,
+            Succeeded = false,
+            ScriptId = evt.ScriptId ?? string.Empty,
+            Revision = evt.ScriptRevision ?? string.Empty,
+            FailureReason = failureReason ?? string.Empty,
+        };
+        if (diagnostics.Count > 0)
+            response.Diagnostics.Add(diagnostics);
+        return SendCommandResponseAsync(evt.ReplyStreamId, response);
+    }
+
+    private Task SendCommandResponseAsync(
+        string replyStreamId,
+        ScriptDefinitionCommandRespondedEvent response,
+        CancellationToken ct = default)
+    {
+        return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
+    }
+
+    private ScriptDefinitionSnapshotRespondedEvent BuildSnapshotResponse(string requestId) =>
+        new()
+        {
+            RequestId = requestId,
+            Found = !string.IsNullOrWhiteSpace(State.SourceText),
+            ScriptId = State.ScriptId ?? string.Empty,
+            Revision = State.Revision ?? string.Empty,
+            SourceText = State.SourceText ?? string.Empty,
+            ReadModelSchemaVersion = State.ReadModelSchemaVersion ?? string.Empty,
+            ReadModelSchemaHash = State.ReadModelSchemaHash ?? string.Empty,
+            FailureReason = string.IsNullOrWhiteSpace(State.SourceText)
+                ? "Script source text is empty."
+                : string.Empty,
+        };
+
+    private ScriptDefinitionCommandRespondedEvent BuildCommandResponse(string requestId) =>
+        new()
+        {
+            RequestId = requestId,
+            Succeeded = !string.IsNullOrWhiteSpace(State.SourceText),
+            ScriptId = State.ScriptId ?? string.Empty,
+            Revision = State.Revision ?? string.Empty,
+            FailureReason = string.IsNullOrWhiteSpace(State.SourceText)
+                ? "Script source text is empty."
+                : string.Empty,
+        };
 
     private static async Task DisposeCompiledDefinitionAsync(IScriptPackageDefinition? definition)
     {

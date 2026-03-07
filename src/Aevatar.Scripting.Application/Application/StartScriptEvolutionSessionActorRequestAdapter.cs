@@ -21,6 +21,8 @@ public sealed class StartScriptEvolutionSessionActorRequestAdapter
                 CandidateSource = request.CandidateSource ?? string.Empty,
                 CandidateSourceHash = request.CandidateSourceHash ?? string.Empty,
                 Reason = request.Reason ?? string.Empty,
+                RequestId = request.RequestId ?? string.Empty,
+                ReplyStreamId = request.ReplyStreamId ?? string.Empty,
             });
     }
 }

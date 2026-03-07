@@ -6,4 +6,6 @@ public sealed record PromoteScriptRevisionActorRequest(
     string DefinitionActorId,
     string SourceHash,
     string ProposalId,
-    string ExpectedBaseRevision);
+    string ExpectedBaseRevision,
+    string RequestId = "",
+    string ReplyStreamId = "");

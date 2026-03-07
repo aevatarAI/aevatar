@@ -11,6 +11,7 @@ using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Orleans.Hosting;
 using Orleans.Serialization;
 using PbValue = Google.Protobuf.WellKnownTypes.Value;
@@ -19,6 +20,81 @@ namespace Aevatar.Integration.Tests;
 
 public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
 {
+    [Orleans3ClusterIntegrationFact]
+    public async Task DefaultDefinitionActorUpsert_ShouldRemainConsistentAcrossThreeOrleansSilos()
+    {
+        var clusterId = $"aevatar-script-cluster-{Guid.NewGuid():N}";
+        var serviceId = $"aevatar-script-service-{Guid.NewGuid():N}";
+        var streamProviderName = $"aevatar-script-provider-{Guid.NewGuid():N}";
+        var actorEventNamespace = $"aevatar.script.cluster.{Guid.NewGuid():N}";
+
+        var node1SiloPort = ReserveTcpPort();
+        var node1GatewayPort = ReserveTcpPort();
+        var node2SiloPort = ReserveTcpPort();
+        var node2GatewayPort = ReserveTcpPort();
+        var node3SiloPort = ReserveTcpPort();
+        var node3GatewayPort = ReserveTcpPort();
+        var primaryEndpoint = new IPEndPoint(IPAddress.Loopback, node1SiloPort);
+
+        var node1 = await StartSiloHostAsync(
+            clusterId,
+            serviceId,
+            streamProviderName,
+            actorEventNamespace,
+            node1SiloPort,
+            node1GatewayPort,
+            primarySiloEndpoint: null);
+        var node2 = await StartSiloHostAsync(
+            clusterId,
+            serviceId,
+            streamProviderName,
+            actorEventNamespace,
+            node2SiloPort,
+            node2GatewayPort,
+            primarySiloEndpoint: primaryEndpoint);
+        var node3 = await StartSiloHostAsync(
+            clusterId,
+            serviceId,
+            streamProviderName,
+            actorEventNamespace,
+            node3SiloPort,
+            node3GatewayPort,
+            primarySiloEndpoint: primaryEndpoint);
+
+        try
+        {
+            var lifecyclePortNode2 = node2.Services.GetRequiredService<IScriptLifecyclePort>();
+            var definitionSnapshotPortNode3 = node3.Services.GetRequiredService<IScriptDefinitionSnapshotPort>();
+
+            var scopeId = Guid.NewGuid().ToString("N")[..10];
+            var scriptId = $"orleans-direct-upsert-script-{scopeId}";
+            var revision = "rev-direct-1";
+            var source = BuildSimpleRuntimeSource("OrleansDirectUpsertRuntime", "OrleansDirectUpsertCompletedEvent");
+            var sourceHash = $"hash-{scriptId}-{revision}";
+
+            var actorId = await lifecyclePortNode2.UpsertDefinitionAsync(
+                scriptId,
+                revision,
+                source,
+                sourceHash,
+                definitionActorId: null,
+                CancellationToken.None);
+
+            actorId.Should().Be($"script-definition:{scriptId}");
+            (await EventuallyAsync(() =>
+                DefinitionSnapshotExistsAsync(
+                    definitionSnapshotPortNode3,
+                    actorId,
+                    revision))).Should().BeTrue();
+        }
+        finally
+        {
+            await StopHostAsync(node3);
+            await StopHostAsync(node2);
+            await StopHostAsync(node1);
+        }
+    }
+
     [Orleans3ClusterIntegrationFact]
     public async Task ComplexScriptFlow_ShouldRemainConsistentAcrossThreeOrleansSilos()
     {
@@ -94,19 +170,19 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             (await EventuallyAsync(() => runtimeNode3.ExistsAsync(convergenceProbeActorId))).Should().BeTrue();
 
             await UpsertDefinitionAsync(
-                runtimeNode1,
+                lifecyclePortNode1,
                 workerADefinitionActorId,
                 workerAScriptId,
                 "rev-a-1",
                 BuildSimpleRuntimeSource("OrleansWorkerARev1Runtime", "OrleansWorkerARev1CompletedEvent"));
             await UpsertDefinitionAsync(
-                runtimeNode1,
+                lifecyclePortNode1,
                 workerBDefinitionActorId,
                 workerBScriptId,
                 "rev-b-1",
                 BuildSimpleRuntimeSource("OrleansWorkerBRev1Runtime", "OrleansWorkerBRev1CompletedEvent"));
             await UpsertDefinitionAsync(
-                runtimeNode1,
+                lifecyclePortNode1,
                 orchestratorDefinitionActorId,
                 $"orleans-orchestrator-script-{scopeId}",
                 "rev-orchestrator-1",
@@ -199,8 +275,18 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                     ProposalId: $"external-proposal-b-{scopeId}"),
                 CancellationToken.None);
 
-            decisionA.Accepted.Should().BeTrue();
-            decisionB.Accepted.Should().BeTrue();
+            decisionA.Accepted.Should().BeTrue(
+                "status={0}, failure_reason={1}, definition_actor_id={2}, catalog_actor_id={3}",
+                decisionA.Status,
+                decisionA.FailureReason,
+                decisionA.DefinitionActorId,
+                decisionA.CatalogActorId);
+            decisionB.Accepted.Should().BeTrue(
+                "status={0}, failure_reason={1}, definition_actor_id={2}, catalog_actor_id={3}",
+                decisionB.Status,
+                decisionB.FailureReason,
+                decisionB.DefinitionActorId,
+                decisionB.CatalogActorId);
             decisionA.Status.Should().Be("promoted");
             decisionB.Status.Should().Be("promoted");
             decisionA.DefinitionActorId.Should().Be($"script-definition:{workerAScriptId}");
@@ -311,7 +397,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
         int gatewayPort,
         IPEndPoint? primarySiloEndpoint)
     {
-        var host = Host.CreateDefaultBuilder()
+        var hostBuilder = Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering(
@@ -333,8 +419,23 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             .ConfigureServices(services =>
             {
                 services.AddScriptCapability();
-            })
-            .Build();
+            });
+
+        if (string.Equals(Environment.GetEnvironmentVariable("AEVATAR_TEST_VERBOSE_LOGS"), "1", StringComparison.Ordinal))
+        {
+            hostBuilder.ConfigureLogging(logging =>
+            {
+                logging.ClearProviders();
+                logging.AddSimpleConsole(options =>
+                {
+                    options.SingleLine = true;
+                    options.TimestampFormat = "HH:mm:ss.fff ";
+                });
+                logging.SetMinimumLevel(LogLevel.Information);
+            });
+        }
+
+        var host = hostBuilder.Build();
 
         await host.StartAsync();
         return host;
@@ -374,38 +475,28 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
     }
 
     private static async Task UpsertDefinitionAsync(
-        IActorRuntime runtime,
+        IScriptLifecyclePort lifecyclePort,
         string definitionActorId,
         string scriptId,
         string revision,
         string source)
     {
         var sourceHash = $"hash-{scriptId}-{revision}";
-        var actor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
-        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
-        await actor.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: scriptId,
-                    ScriptRevision: revision,
-                    SourceText: source,
-                    SourceHash: sourceHash),
-                definitionActorId),
+        await lifecyclePort.UpsertDefinitionAsync(
+            scriptId,
+            revision,
+            source,
+            sourceHash,
+            definitionActorId,
             CancellationToken.None);
-
-        var catalogActor = await runtime.GetAsync("script-catalog")
-            ?? await runtime.CreateAsync<ScriptCatalogGAgent>("script-catalog");
-        var promote = new PromoteScriptRevisionActorRequestAdapter();
-        await catalogActor.HandleEventAsync(
-            promote.Map(
-                new PromoteScriptRevisionActorRequest(
-                    ScriptId: scriptId,
-                    Revision: revision,
-                    DefinitionActorId: definitionActorId,
-                    SourceHash: sourceHash,
-                    ProposalId: $"bootstrap-{scriptId}-{revision}",
-                    ExpectedBaseRevision: string.Empty),
-                "script-catalog"),
+        await lifecyclePort.PromoteCatalogRevisionAsync(
+            "script-catalog",
+            scriptId,
+            string.Empty,
+            revision,
+            definitionActorId,
+            sourceHash,
+            $"bootstrap-{scriptId}-{revision}",
             CancellationToken.None);
     }
 

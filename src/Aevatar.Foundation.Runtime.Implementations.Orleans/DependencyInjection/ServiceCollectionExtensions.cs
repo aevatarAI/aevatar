@@ -13,11 +13,15 @@ using Orleans.Hosting;
 using Orleans.Streams;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Streaming;
+using Orleans.Configuration;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
+    private static readonly TimeSpan DefaultOrleansResponseTimeout = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan DefaultOrleansRequestWarningTime = TimeSpan.FromMinutes(1);
+
     public static IServiceCollection AddAevatarFoundationRuntimeOrleans(
         this IServiceCollection services,
         Action<AevatarOrleansRuntimeOptions>? configure = null)
@@ -77,6 +81,18 @@ public static class ServiceCollectionExtensions
         var options = new AevatarOrleansRuntimeOptions();
         configure?.Invoke(options);
         ValidateOptions(options);
+
+        builder.Configure<MessagingOptions>(messaging =>
+        {
+            messaging.ResponseTimeout = DefaultOrleansResponseTimeout;
+        });
+        builder.Configure<SiloMessagingOptions>(messaging =>
+        {
+            messaging.SystemResponseTimeout = DefaultOrleansResponseTimeout;
+            messaging.MaxRequestProcessingTime = DefaultOrleansResponseTimeout;
+            messaging.RequestProcessingWarningTime = DefaultOrleansRequestWarningTime;
+            messaging.RequestQueueDelayWarningTime = DefaultOrleansRequestWarningTime;
+        });
 
         ConfigureGrainStateStorage(builder, options);
         ConfigureReminderService(builder, options);

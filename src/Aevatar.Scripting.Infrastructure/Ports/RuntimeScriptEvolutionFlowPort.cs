@@ -1,21 +1,17 @@
 using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
 {
-    private readonly IScriptPackageCompiler _compiler;
     private readonly IScriptLifecyclePort _lifecyclePort;
     private readonly IScriptingActorAddressResolver _addressResolver;
 
     public RuntimeScriptEvolutionFlowPort(
-        IScriptPackageCompiler compiler,
         IScriptLifecyclePort lifecyclePort,
         IScriptingActorAddressResolver addressResolver)
     {
-        _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
         _lifecyclePort = lifecyclePort ?? throw new ArgumentNullException(nameof(lifecyclePort));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }
@@ -30,94 +26,71 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
         if (!string.IsNullOrWhiteSpace(policyFailure))
             return ScriptEvolutionFlowResult.PolicyRejected(policyFailure);
 
-        var compilation = await _compiler.CompileAsync(
-            new ScriptPackageCompilationRequest(
-                proposal.ScriptId ?? string.Empty,
-                proposal.CandidateRevision ?? string.Empty,
-                proposal.CandidateSource ?? string.Empty),
-            ct);
+        var validation = new ScriptEvolutionValidationReport(
+            IsSuccess: true,
+            Diagnostics: Array.Empty<string>());
+        var scriptId = proposal.ScriptId ?? string.Empty;
+        var candidateRevision = proposal.CandidateRevision ?? string.Empty;
+        var catalogActorId = _addressResolver.GetCatalogActorId();
+
+        string definitionActorId;
         try
         {
-            var validation = new ScriptEvolutionValidationReport(
-                IsSuccess: compilation.IsSuccess,
-                Diagnostics: compilation.Diagnostics ?? Array.Empty<string>());
-            if (!validation.IsSuccess)
-                return ScriptEvolutionFlowResult.ValidationFailed(validation);
-
-            var scriptId = proposal.ScriptId ?? string.Empty;
-            var candidateRevision = proposal.CandidateRevision ?? string.Empty;
-            var catalogActorId = _addressResolver.GetCatalogActorId();
-            var catalogBaseline = await LoadCatalogBaselineAsync(
-                catalogActorId,
-                proposal,
-                validation,
+            definitionActorId = await _lifecyclePort.UpsertDefinitionAsync(
+                scriptId,
+                candidateRevision,
+                proposal.CandidateSource ?? string.Empty,
+                proposal.CandidateSourceHash ?? string.Empty,
+                null,
                 ct);
-            if (!catalogBaseline.Succeeded)
-                return catalogBaseline.Failure!;
-
-            var catalogBefore = catalogBaseline.Snapshot;
-
-            string definitionActorId;
-            try
-            {
-                definitionActorId = await _lifecyclePort.UpsertDefinitionAsync(
-                    scriptId,
-                    candidateRevision,
-                    proposal.CandidateSource ?? string.Empty,
-                    proposal.CandidateSourceHash ?? string.Empty,
-                    null,
-                    ct);
-            }
-            catch (Exception ex)
-            {
-                return ScriptEvolutionFlowResult.PromotionFailed(
-                    validation,
-                    "Failed to upsert candidate definition before promotion. reason=" + ex.Message);
-            }
-
-            try
-            {
-                await _lifecyclePort.PromoteCatalogRevisionAsync(
-                    catalogActorId,
-                    scriptId,
-                    proposal.BaseRevision ?? string.Empty,
-                    candidateRevision,
-                    definitionActorId,
-                    proposal.CandidateSourceHash ?? string.Empty,
-                    proposal.ProposalId ?? string.Empty,
-                    ct);
-
-                var promotion = new ScriptPromotionResult(
-                    DefinitionActorId: definitionActorId,
-                    CatalogActorId: catalogActorId,
-                    PromotedRevision: candidateRevision);
-
-                return ScriptEvolutionFlowResult.Promoted(validation, promotion);
-            }
-            catch (Exception ex)
-            {
-                var compensation = await TryCompensateCatalogRevisionAsync(
-                    catalogActorId,
-                    proposal,
-                    catalogBefore,
-                    ct);
-                var partial = new ScriptPromotionResult(
-                    DefinitionActorId: definitionActorId,
-                    CatalogActorId: catalogActorId,
-                    PromotedRevision: candidateRevision);
-                return ScriptEvolutionFlowResult.PromotionFailed(
-                    validation,
-                    "Promotion failed after definition upsert. definition_actor_id=" +
-                    definitionActorId +
-                    " candidate_revision=" + candidateRevision +
-                    " reason=" + ex.Message +
-                    " compensation=" + compensation,
-                    partial);
-            }
         }
-        finally
+        catch (ScriptDefinitionMutationRejectedException ex)
         {
-            await DisposeCompiledDefinitionAsync(compilation.CompiledDefinition);
+            var diagnostics = ex.Diagnostics.Count > 0
+                ? ex.Diagnostics
+                : [ex.Message];
+            return ScriptEvolutionFlowResult.ValidationFailed(
+                new ScriptEvolutionValidationReport(false, diagnostics));
+        }
+        catch (Exception ex)
+        {
+            return ScriptEvolutionFlowResult.PromotionFailed(
+                validation,
+                "Failed to upsert candidate definition before promotion. reason=" + ex.Message);
+        }
+
+        try
+        {
+            await _lifecyclePort.PromoteCatalogRevisionAsync(
+                catalogActorId,
+                scriptId,
+                proposal.BaseRevision ?? string.Empty,
+                candidateRevision,
+                definitionActorId,
+                proposal.CandidateSourceHash ?? string.Empty,
+                proposal.ProposalId ?? string.Empty,
+                ct);
+
+            var promotion = new ScriptPromotionResult(
+                DefinitionActorId: definitionActorId,
+                CatalogActorId: catalogActorId,
+                PromotedRevision: candidateRevision);
+
+            return ScriptEvolutionFlowResult.Promoted(validation, promotion);
+        }
+        catch (Exception ex)
+        {
+            var partial = new ScriptPromotionResult(
+                DefinitionActorId: definitionActorId,
+                CatalogActorId: catalogActorId,
+                PromotedRevision: candidateRevision);
+            return ScriptEvolutionFlowResult.PromotionFailed(
+                validation,
+                "Promotion failed after definition upsert. definition_actor_id=" +
+                definitionActorId +
+                " candidate_revision=" + candidateRevision +
+                " reason=" + ex.Message,
+                partial);
         }
     }
 
@@ -157,94 +130,5 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
         }
 
         return string.Empty;
-    }
-
-    private async Task<CatalogBaselineRequirementResult> LoadCatalogBaselineAsync(
-        string catalogActorId,
-        ScriptEvolutionProposal proposal,
-        ScriptEvolutionValidationReport validation,
-        CancellationToken ct)
-    {
-        var scriptId = proposal.ScriptId ?? string.Empty;
-        try
-        {
-            var catalogBefore = await _lifecyclePort.GetCatalogEntryAsync(catalogActorId, scriptId, ct);
-            if (catalogBefore == null && !string.IsNullOrWhiteSpace(proposal.BaseRevision))
-            {
-                return CatalogBaselineRequirementResult.Fail(
-                    ScriptEvolutionFlowResult.PromotionFailed(
-                        validation,
-                        "Catalog baseline not found before promotion. script_id=" +
-                        scriptId +
-                        " expected_base_revision=" +
-                        proposal.BaseRevision));
-            }
-
-            return CatalogBaselineRequirementResult.Success(catalogBefore);
-        }
-        catch (Exception ex)
-        {
-            return CatalogBaselineRequirementResult.Fail(
-                ScriptEvolutionFlowResult.PromotionFailed(
-                    validation,
-                    "Failed to load catalog baseline before promotion. script_id=" +
-                    scriptId +
-                    " expected_base_revision=" +
-                    (proposal.BaseRevision ?? string.Empty) +
-                    " reason=" +
-                    ex.Message));
-        }
-    }
-
-    private async Task<string> TryCompensateCatalogRevisionAsync(
-        string catalogActorId,
-        ScriptEvolutionProposal proposal,
-        ScriptCatalogEntrySnapshot? catalogBefore,
-        CancellationToken ct)
-    {
-        var scriptId = proposal.ScriptId ?? string.Empty;
-        if (catalogBefore == null || string.IsNullOrWhiteSpace(catalogBefore.ActiveRevision))
-            return "not_required";
-
-        try
-        {
-            await _lifecyclePort.RollbackCatalogRevisionAsync(
-                catalogActorId,
-                scriptId,
-                catalogBefore.ActiveRevision,
-                "compensate promotion failure",
-                proposal.ProposalId ?? string.Empty,
-                proposal.CandidateRevision ?? string.Empty,
-                ct);
-            return "rollback_to_previous_active_revision_success";
-        }
-        catch (Exception ex)
-        {
-            return "rollback_failed:" + ex.Message;
-        }
-    }
-
-    private static async Task DisposeCompiledDefinitionAsync(IScriptPackageDefinition? definition)
-    {
-        if (definition is IAsyncDisposable asyncDisposable)
-        {
-            await asyncDisposable.DisposeAsync();
-            return;
-        }
-
-        if (definition is IDisposable disposable)
-            disposable.Dispose();
-    }
-
-    private readonly record struct CatalogBaselineRequirementResult(
-        bool Succeeded,
-        ScriptCatalogEntrySnapshot? Snapshot,
-        ScriptEvolutionFlowResult? Failure)
-    {
-        public static CatalogBaselineRequirementResult Success(ScriptCatalogEntrySnapshot? snapshot) =>
-            new(true, snapshot, null);
-
-        public static CatalogBaselineRequirementResult Fail(ScriptEvolutionFlowResult failure) =>
-            new(false, null, failure);
     }
 }

@@ -10,20 +10,17 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
 {
     private readonly string _actorId;
     private readonly Func<string?> _getParentId;
-    private readonly Func<EventEnvelope, Task> _dispatchToSelfAsync;
     private readonly IEnvelopePropagationPolicy _propagationPolicy;
     private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
 
     public OrleansGrainEventPublisher(
         string actorId,
         Func<string?> getParentId,
-        Func<EventEnvelope, Task> dispatchToSelfAsync,
         IEnvelopePropagationPolicy propagationPolicy,
         Aevatar.Foundation.Abstractions.IStreamProvider streams)
     {
         _actorId = actorId;
         _getParentId = getParentId;
-        _dispatchToSelfAsync = dispatchToSelfAsync;
         _propagationPolicy = propagationPolicy;
         _streams = streams;
     }
@@ -53,7 +50,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         switch (direction)
         {
             case EventDirection.Self:
-                await DispatchAsync(_actorId, _actorId, envelope, ct);
+                await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
                 break;
             case EventDirection.Down:
                 await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
@@ -118,9 +115,6 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
     {
         var routedEnvelope = envelope.Clone();
         PublisherChainMetadata.AppendDispatchPublisher(routedEnvelope, senderActorId, targetActorId);
-
-        if (string.Equals(targetActorId, _actorId, StringComparison.Ordinal))
-            return _dispatchToSelfAsync(routedEnvelope);
 
         return _streams.GetStream(targetActorId).ProduceAsync(routedEnvelope, ct);
     }

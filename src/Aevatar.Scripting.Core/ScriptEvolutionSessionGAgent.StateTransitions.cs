@@ -11,6 +11,11 @@ public sealed partial class ScriptEvolutionSessionGAgent
         next.ScriptId = evt.ScriptId ?? string.Empty;
         next.BaseRevision = evt.BaseRevision ?? string.Empty;
         next.CandidateRevision = evt.CandidateRevision ?? string.Empty;
+        next.CandidateSource = evt.CandidateSource ?? string.Empty;
+        next.CandidateSourceHash = evt.CandidateSourceHash ?? string.Empty;
+        next.Reason = evt.Reason ?? string.Empty;
+        next.PendingRequestId = evt.RequestId ?? string.Empty;
+        next.PendingReplyStreamId = evt.ReplyStreamId ?? string.Empty;
         next.Completed = false;
         next.Accepted = false;
         next.Status = SessionStatusStarted;
@@ -34,6 +39,9 @@ public sealed partial class ScriptEvolutionSessionGAgent
         next.FailureReason = evt.FailureReason ?? string.Empty;
         next.DefinitionActorId = evt.DefinitionActorId ?? string.Empty;
         next.CatalogActorId = evt.CatalogActorId ?? string.Empty;
+        next.CandidateSource = string.Empty;
+        next.CandidateSourceHash = string.Empty;
+        next.Reason = string.Empty;
         next.Diagnostics.Clear();
         next.Diagnostics.Add(evt.Diagnostics);
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;

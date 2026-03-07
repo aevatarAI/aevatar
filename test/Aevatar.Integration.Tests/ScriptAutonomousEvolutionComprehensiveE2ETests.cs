@@ -4,6 +4,7 @@ using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -24,6 +25,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
+        var lifecyclePort = provider.GetRequiredService<IScriptLifecyclePort>();
 
         const string workerADefinitionActorId = "multi-worker-a-definition";
         const string workerBDefinitionActorId = "multi-worker-b-definition";
@@ -31,19 +33,19 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         const string orchestratorRuntimeActorId = "multi-orchestrator-runtime";
 
         await UpsertDefinitionAsync(
-            runtime,
+            lifecyclePort,
             workerADefinitionActorId,
             scriptId: "worker-a-script",
             revision: "rev-a-1",
             source: BuildSimpleRuntimeSource("WorkerARev1Runtime", "WorkerARev1CompletedEvent"));
         await UpsertDefinitionAsync(
-            runtime,
+            lifecyclePort,
             workerBDefinitionActorId,
             scriptId: "worker-b-script",
             revision: "rev-b-1",
             source: BuildSimpleRuntimeSource("WorkerBRev1Runtime", "WorkerBRev1CompletedEvent"));
         await UpsertDefinitionAsync(
-            runtime,
+            lifecyclePort,
             orchestratorDefinitionActorId,
             scriptId: "multi-orchestrator-script",
             revision: "rev-orchestrator-1",
@@ -145,12 +147,13 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
+        var lifecyclePort = provider.GetRequiredService<IScriptLifecyclePort>();
 
         const string definitionActorId = "self-evolving-definition";
         const string runtimeActorId = "self-evolving-runtime";
 
         await UpsertDefinitionAsync(
-            runtime,
+            lifecyclePort,
             definitionActorId,
             scriptId: "self-evolving-script",
             revision: "rev-self-1",
@@ -222,12 +225,13 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
+        var lifecyclePort = provider.GetRequiredService<IScriptLifecyclePort>();
 
         const string controllerDefinitionActorId = "catalog-controller-definition";
         const string controllerRuntimeActorId = "catalog-controller-runtime";
 
         await UpsertDefinitionAsync(
-            runtime,
+            lifecyclePort,
             controllerDefinitionActorId,
             scriptId: "catalog-controller-script",
             revision: "rev-controller-1",
@@ -285,12 +289,13 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await using var provider = services.BuildServiceProvider();
 
         var runtime = provider.GetRequiredService<IActorRuntime>();
+        var lifecyclePort = provider.GetRequiredService<IScriptLifecyclePort>();
 
         const string controllerDefinitionActorId = "interaction-controller-definition";
         const string controllerRuntimeActorId = "interaction-controller-runtime";
 
         await UpsertDefinitionAsync(
-            runtime,
+            lifecyclePort,
             controllerDefinitionActorId,
             scriptId: "interaction-controller-script",
             revision: "rev-interaction-1",
@@ -338,38 +343,28 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
     }
 
     private static async Task UpsertDefinitionAsync(
-        IActorRuntime runtime,
+        IScriptLifecyclePort lifecyclePort,
         string definitionActorId,
         string scriptId,
         string revision,
         string source)
     {
         var sourceHash = $"hash-{scriptId}-{revision}";
-        var actor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
-        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
-        await actor.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: scriptId,
-                    ScriptRevision: revision,
-                    SourceText: source,
-                    SourceHash: sourceHash),
-                definitionActorId),
+        await lifecyclePort.UpsertDefinitionAsync(
+            scriptId,
+            revision,
+            source,
+            sourceHash,
+            definitionActorId,
             CancellationToken.None);
-
-        var catalogActor = await runtime.GetAsync("script-catalog")
-            ?? await runtime.CreateAsync<ScriptCatalogGAgent>("script-catalog");
-        var promote = new PromoteScriptRevisionActorRequestAdapter();
-        await catalogActor.HandleEventAsync(
-            promote.Map(
-                new PromoteScriptRevisionActorRequest(
-                    ScriptId: scriptId,
-                    Revision: revision,
-                    DefinitionActorId: definitionActorId,
-                    SourceHash: sourceHash,
-                    ProposalId: $"bootstrap-{scriptId}-{revision}",
-                    ExpectedBaseRevision: string.Empty),
-                "script-catalog"),
+        await lifecyclePort.PromoteCatalogRevisionAsync(
+            "script-catalog",
+            scriptId,
+            string.Empty,
+            revision,
+            definitionActorId,
+            sourceHash,
+            $"bootstrap-{scriptId}-{revision}",
             CancellationToken.None);
     }
 

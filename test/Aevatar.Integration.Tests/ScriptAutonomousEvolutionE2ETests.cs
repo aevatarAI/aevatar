@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -22,6 +23,7 @@ public class ScriptAutonomousEvolutionE2ETests
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
+        var lifecyclePort = provider.GetRequiredService<IScriptLifecyclePort>();
 
         const string workerDefinitionActorId = "worker-definition";
         const string orchestratorDefinitionActorId = "orchestrator-definition";
@@ -41,7 +43,7 @@ public class ScriptAutonomousEvolutionE2ETests
                 workerDefinitionActorId),
             CancellationToken.None);
         await PromoteToCatalogAsync(
-            runtime,
+            lifecyclePort,
             scriptId: "worker-script",
             revision: "rev-worker-1",
             definitionActorId: workerDefinitionActorId,
@@ -58,7 +60,7 @@ public class ScriptAutonomousEvolutionE2ETests
                 orchestratorDefinitionActorId),
             CancellationToken.None);
         await PromoteToCatalogAsync(
-            runtime,
+            lifecyclePort,
             scriptId: "orchestrator-script",
             revision: "rev-orchestrator-1",
             definitionActorId: orchestratorDefinitionActorId,
@@ -121,25 +123,20 @@ public class ScriptAutonomousEvolutionE2ETests
     }
 
     private static async Task PromoteToCatalogAsync(
-        IActorRuntime runtime,
+        IScriptLifecyclePort lifecyclePort,
         string scriptId,
         string revision,
         string definitionActorId,
         string sourceHash)
     {
-        var catalogActor = await runtime.GetAsync("script-catalog")
-            ?? await runtime.CreateAsync<ScriptCatalogGAgent>("script-catalog");
-        var promote = new PromoteScriptRevisionActorRequestAdapter();
-        await catalogActor.HandleEventAsync(
-            promote.Map(
-                new PromoteScriptRevisionActorRequest(
-                    ScriptId: scriptId,
-                    Revision: revision,
-                    DefinitionActorId: definitionActorId,
-                    SourceHash: sourceHash,
-                    ProposalId: $"bootstrap-{scriptId}-{revision}",
-                    ExpectedBaseRevision: string.Empty),
-                "script-catalog"),
+        await lifecyclePort.PromoteCatalogRevisionAsync(
+            "script-catalog",
+            scriptId,
+            string.Empty,
+            revision,
+            definitionActorId,
+            sourceHash,
+            $"bootstrap-{scriptId}-{revision}",
             CancellationToken.None);
     }
 

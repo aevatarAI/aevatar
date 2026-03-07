@@ -7,4 +7,6 @@ public sealed record StartScriptEvolutionSessionActorRequest(
     string CandidateRevision,
     string CandidateSource,
     string CandidateSourceHash,
-    string Reason);
+    string Reason,
+    string RequestId,
+    string ReplyStreamId);
