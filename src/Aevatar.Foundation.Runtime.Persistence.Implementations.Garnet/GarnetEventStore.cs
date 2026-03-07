@@ -20,13 +20,21 @@ public sealed class GarnetEventStore : IEventStore
                                         current = tonumber(currentRaw)
                                       end
 
+                                      if ARGV[1] == nil or ARGV[1] == false then
+                                        return {-1, current, #ARGV}
+                                      end
+
                                       local expected = tonumber(ARGV[1])
+                                      if expected == nil then
+                                        return {-2, current, tostring(ARGV[1])}
+                                      end
+
                                       if current ~= expected then
-                                        return {0, current, tostring(ARGV[1] or 'NIL'), type(ARGV[1]), tostring(expected or 'NIL')}
+                                        return {0, current, expected}
                                       end
 
                                       local count = tonumber(ARGV[2])
-                                      if count <= 0 then
+                                      if count == nil or count <= 0 then
                                         return {1, current}
                                       end
 
@@ -112,21 +120,27 @@ public sealed class GarnetEventStore : IEventStore
         ct.ThrowIfCancellationRequested();
 
         var result = (RedisResult[])rawResult!;
-        if (result.Length < 2 || result.Length > 5)
+        if (result.Length < 2 || result.Length > 3)
             throw new InvalidOperationException("Unexpected Garnet append script result.");
 
         var status = (long)result[0];
+
+        if (status == -1 || status == -2)
+        {
+            var diagParts = string.Join(", ", result.Select(
+                (r, i) => $"result[{i}]={{raw={r}, type={r.Resp2Type}}}"));
+            throw new InvalidOperationException(
+                $"Garnet Lua ARGV loss: agentId={agentId}, expectedVersion={expectedVersion}, " +
+                $"argvCount={scriptArgs.Length}, rawResult=[{diagParts}]");
+        }
+
         var actualVersion = (long)result[1];
         if (status == 0)
         {
-            var rawParts = string.Join(", ", result.Select(
-                (r, i) => $"result[{i}]={{raw={r}, type={r.Resp2Type}}}"));
-            var ev = (RedisValue)expectedVersion.ToString();
+            var luaExpected = result.Length > 2 ? (long)result[2] : -1;
             throw new InvalidOperationException(
-                $"Optimistic concurrency conflict: expected {expectedVersion}, actual {actualVersion}, " +
-                $"redisValue={{raw={scriptArgs[0]}, hasValue={scriptArgs[0].HasValue}, isInteger={scriptArgs[0].IsInteger}, isNull={scriptArgs[0].IsNull}}}, " +
-                $"redisValueStr={{raw={ev}, hasValue={ev.HasValue}, isInteger={ev.IsInteger}, isNull={ev.IsNull}}}, " +
-                $"rawResult=[{rawParts}]");
+                $"Optimistic concurrency conflict: expected={expectedVersion}, " +
+                $"actual={actualVersion}, luaExpected={luaExpected}");
         }
 
         if (status != 1)
@@ -221,7 +235,7 @@ public sealed class GarnetEventStore : IEventStore
         var rawDeleted = await _database.ScriptEvaluateAsync(
             DeleteScript,
             [keys.EventIndexKey, keys.EventDataKey],
-            [toVersion]);
+            [(RedisValue)toVersion.ToString()]);
         ct.ThrowIfCancellationRequested();
 
         var deleted = (long)rawDeleted;
@@ -255,11 +269,11 @@ public sealed class GarnetEventStore : IEventStore
         IReadOnlyList<StateEvent> pendingEvents)
     {
         var values = new RedisValue[2 + (pendingEvents.Count * 2)];
-        values[0] = expectedVersion;
-        values[1] = pendingEvents.Count;
+        values[0] = expectedVersion.ToString();
+        values[1] = pendingEvents.Count.ToString();
         for (var i = 0; i < pendingEvents.Count; i++)
         {
-            values[2 + (i * 2)] = pendingEvents[i].Version;
+            values[2 + (i * 2)] = pendingEvents[i].Version.ToString();
             values[3 + (i * 2)] = pendingEvents[i].ToByteArray();
         }
 
