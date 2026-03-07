@@ -32,10 +32,12 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
     private readonly WorkflowRunControlFlowRuntime _controlFlowRuntime;
     private readonly WorkflowRunHumanInteractionRuntime _humanInteractionRuntime;
     private readonly WorkflowRunAIRuntime _aiRuntime;
-    private readonly WorkflowRunCompositionRuntime _compositionRuntime;
+    private readonly WorkflowRunFanOutRuntime _fanOutRuntime;
+    private readonly WorkflowRunSubWorkflowRuntime _subWorkflowRuntime;
     private readonly WorkflowPrimitiveExecutionPlanner _primitiveExecutionPlanner;
     private readonly WorkflowRunCallbackRuntime _callbackRuntime;
-    private readonly WorkflowRunStatefulCompletionRuntime _statefulCompletionRuntime;
+    private readonly WorkflowRunAggregationCompletionRuntime _aggregationCompletionRuntime;
+    private readonly WorkflowRunProgressionCompletionRuntime _progressionCompletionRuntime;
     private readonly WorkflowRunAsyncPolicyRuntime _asyncPolicyRuntime;
     private readonly WorkflowAsyncOperationReconciler _asyncOperationReconciler;
 
@@ -102,22 +104,20 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             sendToAsync: (targetActorId, evt, ct) => SendToAsync(targetActorId, evt, ct),
             effectDispatcher: _effectDispatcher,
             dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync);
-        _compositionRuntime = new WorkflowRunCompositionRuntime(
+        _fanOutRuntime = new WorkflowRunFanOutRuntime(
+            stateAccessor: () => State,
+            persistStateAsync: PersistStateAsync,
+            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
+            effectDispatcher: _effectDispatcher,
+            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync);
+        _subWorkflowRuntime = new WorkflowRunSubWorkflowRuntime(
             actorIdAccessor: () => Id,
             stateAccessor: () => State,
             persistStateAsync: PersistStateAsync,
             publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
             sendToAsync: (targetActorId, evt, ct) => SendToAsync(targetActorId, evt, ct),
-            logWarningAsync: (ex, message, args) =>
-            {
-                if (ex == null)
-                    Logger.LogWarning(message, args);
-                else
-                    Logger.LogWarning(ex, message, args);
-                return Task.CompletedTask;
-            },
-            effectDispatcher: _effectDispatcher,
-            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync);
+            logWarningAsync: LogWarningAsync,
+            effectDispatcher: _effectDispatcher);
         _callbackRuntime = new WorkflowRunCallbackRuntime(
             actorIdAccessor: () => Id,
             stateAccessor: () => State,
@@ -126,11 +126,15 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
             publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
             dispatchWorkflowStepAsync: _dispatchRuntime.DispatchWorkflowStepAsync,
             dispatchReflectPhaseAsync: _aiRuntime.DispatchReflectPhaseAsync);
-        _statefulCompletionRuntime = new WorkflowRunStatefulCompletionRuntime(
+        _aggregationCompletionRuntime = new WorkflowRunAggregationCompletionRuntime(
             stateAccessor: () => State,
             persistStateAsync: PersistStateAsync,
             publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
-            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync,
+            dispatchInternalStepAsync: _dispatchRuntime.DispatchInternalStepAsync);
+        _progressionCompletionRuntime = new WorkflowRunProgressionCompletionRuntime(
+            stateAccessor: () => State,
+            persistStateAsync: PersistStateAsync,
+            publishAsync: (evt, direction, ct) => PublishAsync(evt, direction, ct),
             dispatchWhileIterationAsync: _dispatchRuntime.DispatchWhileIterationAsync,
             evaluateWhileCondition: (state, output, nextIteration) => _stepRequestFactory.EvaluateWhileCondition(state, output, nextIteration));
         _asyncPolicyRuntime = new WorkflowRunAsyncPolicyRuntime(
@@ -156,20 +160,21 @@ public sealed partial class WorkflowRunGAgent : GAgentBase<WorkflowRunState>
                     _aiRuntime.HandleEvaluateStepRequestAsync,
                     _aiRuntime.HandleReflectStepRequestAsync,
                     _aiRuntime.HandleCacheStepRequestAsync),
-                new WorkflowCompositionPlanner(
-                    _compositionRuntime.HandleParallelStepRequestAsync,
-                    _compositionRuntime.HandleForEachStepRequestAsync,
-                    _compositionRuntime.HandleMapReduceStepRequestAsync,
-                    _compositionRuntime.HandleWorkflowCallStepRequestAsync),
+                new WorkflowFanOutPlanner(
+                    _fanOutRuntime.HandleParallelStepRequestAsync,
+                    _fanOutRuntime.HandleForEachStepRequestAsync,
+                    _fanOutRuntime.HandleMapReduceStepRequestAsync),
+                new WorkflowSubWorkflowPlanner(
+                    _subWorkflowRuntime.HandleWorkflowCallStepRequestAsync),
             ]);
         _asyncOperationReconciler = new WorkflowAsyncOperationReconciler(
             [
-                _statefulCompletionRuntime.TryHandleParallelCompletionAsync,
-                _statefulCompletionRuntime.TryHandleForEachCompletionAsync,
-                _statefulCompletionRuntime.TryHandleMapReduceCompletionAsync,
-                _statefulCompletionRuntime.TryHandleRaceCompletionAsync,
-                _statefulCompletionRuntime.TryHandleWhileCompletionAsync,
-                _statefulCompletionRuntime.TryHandleCacheCompletionAsync,
+                _aggregationCompletionRuntime.TryHandleParallelCompletionAsync,
+                _aggregationCompletionRuntime.TryHandleForEachCompletionAsync,
+                _aggregationCompletionRuntime.TryHandleMapReduceCompletionAsync,
+                _progressionCompletionRuntime.TryHandleRaceCompletionAsync,
+                _progressionCompletionRuntime.TryHandleWhileCompletionAsync,
+                _progressionCompletionRuntime.TryHandleCacheCompletionAsync,
             ],
             _callbackRuntime.HandleWorkflowStepTimeoutFiredAsync,
             _callbackRuntime.HandleWorkflowStepRetryBackoffFiredAsync,

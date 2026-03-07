@@ -59,8 +59,8 @@
 截至 `2026-03-08`，`WorkflowRunGAgent` 已进一步把 family-specific 原语逻辑外提到 runtime 协作者，热点大致为：
 
 1. `WorkflowRunGAgent.cs`：`389`
-2. `WorkflowRunCompositionRuntime.cs`：`358`
-3. `WorkflowRunStatefulCompletionRuntime.cs`：`366`
+2. `WorkflowRunFanOutRuntime.cs`：`207`
+3. `WorkflowRunSubWorkflowRuntime.cs`：`177`
 4. `WorkflowRunAIRuntime.cs`：`347`
 5. `WorkflowRunCallbackRuntime.cs`：`263`
 6. `WorkflowRunControlFlowRuntime.cs`：`244`
@@ -70,6 +70,8 @@
 10. `WorkflowRunGAgent.Lifecycle.cs`：`233`
 11. `WorkflowRunGAgent.ExternalInteractions.cs`：`119`
 12. `WorkflowRunAsyncPolicyRuntime.cs`：`154`
+13. `WorkflowRunAggregationCompletionRuntime.cs`：`216`
+14. `WorkflowRunProgressionCompletionRuntime.cs`：`170`
 
 当前问题已经从“owner 直接持有 primitive family 方法”收窄成“runtime 协作者总体仍偏大”。
 
@@ -326,7 +328,10 @@ phase-7 完成后，系统必须满足下面 8 条终局约束：
    - `WorkflowRunAsyncCompletionHandlers`
    - `WorkflowRunControlFlowRuntime`
    - `WorkflowRunAIRuntime`
-   - `WorkflowRunCompositionRuntime`
+   - `WorkflowRunFanOutRuntime`
+   - `WorkflowRunSubWorkflowRuntime`
+   - `WorkflowRunAggregationCompletionRuntime`
+   - `WorkflowRunProgressionCompletionRuntime`
 3. owner 文件中不允许再出现 primitive-specific private method。
 4. `Infrastructure.cs` 中剩余的 role init / actor tree / callback helper 全部收敛到 service 协作者。
 
@@ -336,14 +341,16 @@ phase-7 完成后，系统必须满足下面 8 条终局约束：
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
 3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunControlFlowRuntime.cs`
 4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAIRuntime.cs`
-5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCompositionRuntime.cs`
+5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunFanOutRuntime.cs`
 6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCallbackRuntime.cs`
-7. `src/workflow/Aevatar.Workflow.Core/WorkflowRunStatefulCompletionRuntime.cs`
-8. `src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs`
-9. `src/workflow/Aevatar.Workflow.Core/WorkflowRunHumanInteractionRuntime.cs`
-10. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
-11. `src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs`
-12. `test/Aevatar.Workflow.Core.Tests/*`
+7. `src/workflow/Aevatar.Workflow.Core/WorkflowRunSubWorkflowRuntime.cs`
+8. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAggregationCompletionRuntime.cs`
+9. `src/workflow/Aevatar.Workflow.Core/WorkflowRunProgressionCompletionRuntime.cs`
+10. `src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs`
+11. `src/workflow/Aevatar.Workflow.Core/WorkflowRunHumanInteractionRuntime.cs`
+12. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
+13. `src/workflow/Aevatar.Workflow.Core/WorkflowAsyncOperationReconciler.cs`
+14. `test/Aevatar.Workflow.Core.Tests/*`
 
 #### 8.2.4 验收标准
 

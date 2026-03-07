@@ -60,13 +60,15 @@ phase-6 不是继续开新主链，而是把剩余“结构热点”和“语义
 1. `WorkflowRunGAgent.cs`：`389`
 2. `WorkflowRunGAgent.Infrastructure.cs`：`177`
 3. `WorkflowRunCallbackRuntime.cs`：`263`
-4. `WorkflowRunStatefulCompletionRuntime.cs`：`366`
-5. `WorkflowRunCompositionRuntime.cs`：`358`
+4. `WorkflowRunAggregationCompletionRuntime.cs`：`216`
+5. `WorkflowRunProgressionCompletionRuntime.cs`：`170`
 6. `WorkflowRunAIRuntime.cs`：`347`
 7. `WorkflowRunControlFlowRuntime.cs`：`244`
 8. `WorkflowRunDispatchRuntime.cs`：`192`
 9. `WorkflowRunHumanInteractionRuntime.cs`：`73`
 10. `WorkflowRunAsyncPolicyRuntime.cs`：`154`
+11. `WorkflowRunFanOutRuntime.cs`：`207`
+12. `WorkflowRunSubWorkflowRuntime.cs`：`177`
 
 问题本质：
 
@@ -250,12 +252,15 @@ phase-6 完成后，系统应满足下面 6 条终局约束：
 1. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
 3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunCallbackRuntime.cs`
-4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunStatefulCompletionRuntime.cs`
-5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs`
-6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunHumanInteractionRuntime.cs`
-7. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
-8. `test/Aevatar.Workflow.Core.Tests/*`
-9. `test/Aevatar.Integration.Tests/*Workflow*`
+4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunAggregationCompletionRuntime.cs`
+5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunProgressionCompletionRuntime.cs`
+6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunFanOutRuntime.cs`
+7. `src/workflow/Aevatar.Workflow.Core/WorkflowRunSubWorkflowRuntime.cs`
+8. `src/workflow/Aevatar.Workflow.Core/WorkflowRunDispatchRuntime.cs`
+9. `src/workflow/Aevatar.Workflow.Core/WorkflowRunHumanInteractionRuntime.cs`
+10. `src/workflow/Aevatar.Workflow.Core/WorkflowPrimitiveExecutionPlanner.cs`
+11. `test/Aevatar.Workflow.Core.Tests/*`
+12. `test/Aevatar.Integration.Tests/*Workflow*`
 
 #### 6.1.5 验收标准
 

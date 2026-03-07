@@ -133,27 +133,24 @@ internal sealed class WorkflowAIPlanner : IWorkflowPrimitivePlanner
         };
 }
 
-internal sealed class WorkflowCompositionPlanner : IWorkflowPrimitivePlanner
+internal sealed class WorkflowFanOutPlanner : IWorkflowPrimitivePlanner
 {
     private readonly Func<StepRequestEvent, CancellationToken, Task> _handleParallelAsync;
     private readonly Func<StepRequestEvent, CancellationToken, Task> _handleForEachAsync;
     private readonly Func<StepRequestEvent, CancellationToken, Task> _handleMapReduceAsync;
-    private readonly Func<StepRequestEvent, CancellationToken, Task> _handleWorkflowCallAsync;
 
-    public WorkflowCompositionPlanner(
+    public WorkflowFanOutPlanner(
         Func<StepRequestEvent, CancellationToken, Task> handleParallelAsync,
         Func<StepRequestEvent, CancellationToken, Task> handleForEachAsync,
-        Func<StepRequestEvent, CancellationToken, Task> handleMapReduceAsync,
-        Func<StepRequestEvent, CancellationToken, Task> handleWorkflowCallAsync)
+        Func<StepRequestEvent, CancellationToken, Task> handleMapReduceAsync)
     {
         _handleParallelAsync = handleParallelAsync;
         _handleForEachAsync = handleForEachAsync;
         _handleMapReduceAsync = handleMapReduceAsync;
-        _handleWorkflowCallAsync = handleWorkflowCallAsync;
     }
 
     public bool CanHandle(string stepType) =>
-        stepType is "parallel" or "foreach" or "map_reduce" or "workflow_call";
+        stepType is "parallel" or "foreach" or "map_reduce";
 
     public Task HandleAsync(StepRequestEvent request, CancellationToken ct) =>
         WorkflowPrimitiveCatalog.ToCanonicalType(request.StepType) switch
@@ -161,7 +158,22 @@ internal sealed class WorkflowCompositionPlanner : IWorkflowPrimitivePlanner
             "parallel" => _handleParallelAsync(request, ct),
             "foreach" => _handleForEachAsync(request, ct),
             "map_reduce" => _handleMapReduceAsync(request, ct),
-            "workflow_call" => _handleWorkflowCallAsync(request, ct),
             _ => Task.CompletedTask,
         };
+}
+
+internal sealed class WorkflowSubWorkflowPlanner : IWorkflowPrimitivePlanner
+{
+    private readonly Func<StepRequestEvent, CancellationToken, Task> _handleWorkflowCallAsync;
+
+    public WorkflowSubWorkflowPlanner(
+        Func<StepRequestEvent, CancellationToken, Task> handleWorkflowCallAsync)
+    {
+        _handleWorkflowCallAsync = handleWorkflowCallAsync ?? throw new ArgumentNullException(nameof(handleWorkflowCallAsync));
+    }
+
+    public bool CanHandle(string stepType) => stepType == "workflow_call";
+
+    public Task HandleAsync(StepRequestEvent request, CancellationToken ct) =>
+        _handleWorkflowCallAsync(request, ct);
 }

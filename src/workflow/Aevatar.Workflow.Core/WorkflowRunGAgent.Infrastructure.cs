@@ -47,6 +47,16 @@ public sealed partial class WorkflowRunGAgent
     private EventEnvelope CreateRoleAgentInitializeEnvelope(RoleDefinition role) =>
         _effectDispatcher.CreateRoleAgentInitializeEnvelope(role);
 
+    private Task LogWarningAsync(Exception? ex, string message, object?[] args)
+    {
+        if (ex == null)
+            Logger.LogWarning(message, args);
+        else
+            Logger.LogWarning(ex, message, args);
+
+        return Task.CompletedTask;
+    }
+
     private async Task<string> ResolveWorkflowYamlCoreAsync(string workflowName, CancellationToken ct)
     {
         foreach (var (registeredName, yaml) in State.InlineWorkflowYamls)
