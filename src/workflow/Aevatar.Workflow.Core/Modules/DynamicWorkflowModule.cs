@@ -1,41 +1,25 @@
 using System.Text.RegularExpressions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Validation;
 using Aevatar.Workflow.Abstractions;
-using Microsoft.Extensions.DependencyInjection;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>
-/// Extracts a workflow YAML from step input, then publishes
-/// <see cref="ReplaceWorkflowDefinitionAndExecuteEvent"/> so the owning
-/// <see cref="WorkflowRunGAgent"/> can replace the in-flight run binding and continue from the new definition.
+/// Extracts a workflow YAML from step input and asks the owning
+/// <see cref="WorkflowRunGAgent"/> to spawn a derived child run from it.
 /// </summary>
-public sealed class DynamicWorkflowModule : IEventModule
+public sealed class DynamicWorkflowModule : IWorkflowPrimitiveHandler
 {
     private static readonly Regex YamlFenceRegex = new(
         @"```ya?ml\s*\n([\s\S]*?)```",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public string Name => "dynamic_workflow";
-    public int Priority => 5;
 
-    public bool CanHandle(EventEnvelope envelope)
+    public async Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
     {
-        var payload = envelope.Payload;
-        return payload != null && payload.Is(StepRequestEvent.Descriptor);
-    }
-
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
-    {
-        var payload = envelope.Payload;
-        if (payload == null) return;
-
-        if (!payload.Is(StepRequestEvent.Descriptor)) return;
-        var request = payload.Unpack<StepRequestEvent>();
         if (!string.Equals(request.StepType, "dynamic_workflow", StringComparison.OrdinalIgnoreCase))
             return;
 
@@ -59,7 +43,7 @@ public sealed class DynamicWorkflowModule : IEventModule
             return;
         }
 
-        var validationErrors = ValidateWorkflowYaml(yaml, ctx);
+        var validationErrors = ValidateWorkflowYaml(yaml, ctx.KnownStepTypes);
         if (validationErrors.Count > 0)
         {
             var errorMessage = string.Join("; ", validationErrors);
@@ -80,11 +64,15 @@ public sealed class DynamicWorkflowModule : IEventModule
         }
 
         ctx.Logger.LogInformation(
-            "DynamicWorkflow: run={RunId} step={StepId} — reconfiguring with extracted YAML ({Len} chars)",
+            "DynamicWorkflow: run={RunId} step={StepId} — spawning derived child workflow ({Len} chars)",
             request.RunId, request.StepId, yaml.Length);
 
-        await ctx.PublishAsync(new ReplaceWorkflowDefinitionAndExecuteEvent
+        await ctx.PublishAsync(new DynamicWorkflowInvokeRequestedEvent
         {
+            InvocationId = $"{request.RunId}:dynamic:{request.StepId}:{Guid.NewGuid():N}",
+            ParentRunId = request.RunId,
+            ParentStepId = request.StepId,
+            WorkflowName = DeriveWorkflowName(yaml, request.StepId),
             WorkflowYaml = yaml,
             Input = originalInput,
         }, EventDirection.Self, ct);
@@ -105,74 +93,21 @@ public sealed class DynamicWorkflowModule : IEventModule
         return string.IsNullOrWhiteSpace(lastYaml) ? null : lastYaml;
     }
 
-    internal static List<string> ValidateWorkflowYaml(string yaml, IEventHandlerContext ctx)
+    internal static List<string> ValidateWorkflowYaml(string yaml, IReadOnlySet<string> knownStepTypes) =>
+        WorkflowYamlValidationSupport.ValidateWorkflowYaml(yaml, knownStepTypes);
+
+    internal static string DeriveWorkflowName(string yaml, string stepId)
     {
-        WorkflowDefinition parsed;
         try
         {
-            parsed = new WorkflowParser().Parse(yaml);
+            var parsed = new WorkflowParser().Parse(yaml);
+            if (!string.IsNullOrWhiteSpace(parsed.Name))
+                return parsed.Name.Trim();
         }
-        catch (Exception ex)
+        catch
         {
-            return [$"YAML parse failed: {ex.Message}"];
         }
 
-        var knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
-            ctx.Services.GetServices<IWorkflowModulePack>()
-                .SelectMany(pack => pack.Modules)
-                .SelectMany(module => module.Names));
-        knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
-
-        var moduleFactory = ctx.Services.GetService<IEventModuleFactory>();
-        if (moduleFactory != null)
-            ExpandKnownStepTypesFromFactory(parsed.Steps, knownStepTypes, moduleFactory);
-
-        return WorkflowValidator.Validate(
-            parsed,
-            new WorkflowValidator.WorkflowValidationOptions
-            {
-                RequireKnownStepTypes = true,
-                KnownStepTypes = knownStepTypes,
-            },
-            availableWorkflowNames: null);
-    }
-
-    private static void ExpandKnownStepTypesFromFactory(
-        IEnumerable<StepDefinition> steps,
-        ISet<string> knownStepTypes,
-        IEventModuleFactory moduleFactory)
-    {
-        foreach (var stepType in EnumerateReferencedStepTypes(steps))
-        {
-            var canonical = WorkflowPrimitiveCatalog.ToCanonicalType(stepType);
-            if (string.IsNullOrWhiteSpace(canonical) || knownStepTypes.Contains(canonical))
-                continue;
-
-            if (moduleFactory.TryCreate(canonical, out _))
-                knownStepTypes.Add(canonical);
-        }
-    }
-
-    private static IEnumerable<string> EnumerateReferencedStepTypes(IEnumerable<StepDefinition> steps)
-    {
-        foreach (var step in steps)
-        {
-            yield return step.Type;
-
-            foreach (var (key, value) in step.Parameters)
-            {
-                if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
-                    !string.IsNullOrWhiteSpace(value))
-                {
-                    yield return value;
-                }
-            }
-
-            if (step.Children is { Count: > 0 })
-            {
-                foreach (var childType in EnumerateReferencedStepTypes(step.Children))
-                    yield return childType;
-            }
-        }
+        return $"derived_{stepId.Trim()}";
     }
 }

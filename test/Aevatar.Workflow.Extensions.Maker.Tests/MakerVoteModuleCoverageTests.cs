@@ -1,30 +1,18 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Extensions.Maker.Modules;
 using FluentAssertions;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Extensions.Maker.Tests;
 
-public class MakerVoteModuleCoverageTests
+public sealed class MakerVoteModuleCoverageTests
 {
-    [Fact]
-    public void CanHandle_ShouldMatchOnlyStepRequestPayload()
-    {
-        var module = new MakerVoteModule();
-
-        module.CanHandle(Envelope(new StepRequestEvent { StepType = "maker_vote", StepId = "s1" })).Should().BeTrue();
-        module.CanHandle(Envelope(new ChatResponseEvent { Content = "x" })).Should().BeFalse();
-        module.CanHandle(new EventEnvelope()).Should().BeFalse();
-    }
-
     [Fact]
     public async Task HandleAsync_NonMakerVoteStep_ShouldIgnore()
     {
@@ -32,16 +20,16 @@ public class MakerVoteModuleCoverageTests
         var ctx = CreateContext();
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "vote-ignored",
                 StepType = "vote",
                 Input = "A\n---\nB",
-            }),
-            ctx,
+            },
+            ctx.Context,
             CancellationToken.None);
 
-        ctx.Published.Should().BeEmpty();
+        ctx.Events.Should().BeEmpty();
     }
 
     [Fact]
@@ -51,17 +39,17 @@ public class MakerVoteModuleCoverageTests
         var ctx = CreateContext();
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "vote-empty",
                 StepType = "maker_vote",
                 RunId = "run-vote-empty",
-                Input = "",
-            }),
-            ctx,
+                Input = string.Empty,
+            },
+            ctx.Context,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var completed = ctx.Events.Should().ContainSingle().Subject.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.RunId.Should().Be("run-vote-empty");
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("No candidates provided");
@@ -79,7 +67,7 @@ public class MakerVoteModuleCoverageTests
         var ctx = CreateContext();
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "vote-flagged",
                 StepType = "maker_vote",
@@ -90,11 +78,11 @@ public class MakerVoteModuleCoverageTests
                     ["max_response_length"] = "3",
                     ["k"] = "2",
                 },
-            }),
-            ctx,
+            },
+            ctx.Context,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var completed = ctx.Events.Should().ContainSingle().Subject.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.RunId.Should().Be("run-vote-flagged");
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("red-flagged");
@@ -112,7 +100,7 @@ public class MakerVoteModuleCoverageTests
         var ctx = CreateContext();
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "vote-ok",
                 StepType = "maker_vote",
@@ -123,11 +111,11 @@ public class MakerVoteModuleCoverageTests
                     ["k"] = "2",
                     ["max_response_length"] = "100",
                 },
-            }),
-            ctx,
+            },
+            ctx.Context,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var completed = ctx.Events.Should().ContainSingle().Subject.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.RunId.Should().Be("run-vote-ok");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("B");
@@ -147,7 +135,7 @@ public class MakerVoteModuleCoverageTests
         var longCandidate = new string('X', 2300);
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "vote-defaults",
                 StepType = "maker_vote",
@@ -158,11 +146,11 @@ public class MakerVoteModuleCoverageTests
                     ["k"] = "invalid",
                     ["max_response_length"] = "invalid",
                 },
-            }),
-            ctx,
+            },
+            ctx.Context,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        var completed = ctx.Events.Should().ContainSingle().Subject.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.RunId.Should().Be("run-vote-defaults");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("short");
@@ -173,93 +161,31 @@ public class MakerVoteModuleCoverageTests
         completed.Metadata["maker_vote.used_majority_fallback"].Should().Be("False");
     }
 
-    private static RecordingEventHandlerContext CreateContext()
-    {
-        return new RecordingEventHandlerContext(
+    private static PrimitiveRecorder CreateContext() =>
+        new(
             new ServiceCollection().BuildServiceProvider(),
             new StubAgent("maker-module-test"),
             NullLogger.Instance);
-    }
 
-    private static EventEnvelope Envelope(IMessage evt)
+    private sealed class PrimitiveRecorder
     {
-        return new EventEnvelope
+        public PrimitiveRecorder(IServiceProvider services, IAgent agent, ILogger logger)
         {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-            PublisherId = "test-publisher",
-            Direction = EventDirection.Self,
-        };
-    }
-
-    private sealed class RecordingEventHandlerContext : IEventHandlerContext
-    {
-        public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
-        {
-            Services = services;
-            Agent = agent;
-            Logger = logger;
-            InboundEnvelope = new EventEnvelope();
+            Context = new WorkflowPrimitiveExecutionContext(
+                agent.Id,
+                services,
+                logger,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                (evt, _, _) =>
+                {
+                    Events.Add(evt);
+                    return Task.CompletedTask;
+                });
         }
 
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
-        public EventEnvelope InboundEnvelope { get; }
-        public string AgentId => Agent.Id;
-        public IAgent Agent { get; }
-        public IServiceProvider Services { get; }
-        public ILogger Logger { get; }
+        public WorkflowPrimitiveExecutionContext Context { get; }
 
-        public Task PublishAsync<TEvent>(
-            TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
-            where TEvent : IMessage
-        {
-            Published.Add((evt, direction));
-            return Task.CompletedTask;
-        }
-
-        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
-            string callbackId,
-            TimeSpan dueTime,
-            IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
-            CancellationToken ct = default)
-        {
-            _ = callbackId;
-            _ = dueTime;
-            _ = evt;
-            _ = metadata;
-            _ = ct;
-            throw new NotSupportedException("This test context does not support scheduling.");
-        }
-
-        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
-            string callbackId,
-            TimeSpan dueTime,
-            TimeSpan period,
-            IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
-            CancellationToken ct = default)
-        {
-            _ = callbackId;
-            _ = dueTime;
-            _ = period;
-            _ = evt;
-            _ = metadata;
-            _ = ct;
-            throw new NotSupportedException("This test context does not support scheduling.");
-        }
-
-        public Task CancelDurableCallbackAsync(
-            RuntimeCallbackLease lease,
-            CancellationToken ct = default)
-        {
-            _ = lease;
-            _ = ct;
-            throw new NotSupportedException("This test context does not support scheduling.");
-        }
+        public List<IMessage> Events { get; } = [];
     }
 
     private sealed class StubAgent(string id) : IAgent

@@ -136,27 +136,6 @@ public sealed class MakerRunProjectionAccumulator
                         connectorData);
                 }
 
-                if (step.StepType.Equals("maker_recursive", StringComparison.OrdinalIgnoreCase))
-                {
-                    var stage = evt.Metadata.TryGetValue("maker.stage", out var st) ? st : "";
-                    var depth = evt.Metadata.TryGetValue("maker.depth", out var dp) ? dp : "";
-                    var atomic = evt.Metadata.TryGetValue("maker.atomic_decision", out var at) ? at : "";
-                    AddTimeline(
-                        now,
-                        "maker.recursive",
-                        $"{evt.StepId} stage={stage} depth={depth} atomic={atomic}",
-                        envelope.PublisherId,
-                        evt.StepId,
-                        step.StepType,
-                        typeUrl,
-                        new Dictionary<string, string>
-                        {
-                            ["stage"] = stage,
-                            ["depth"] = depth,
-                            ["atomic"] = atomic,
-                        });
-                }
-
                 return;
             }
 
@@ -348,40 +327,6 @@ public sealed class MakerRunProjectionAccumulator
     {
         var checks = new List<MakerVerificationCheck>();
 
-        var recursiveSteps = steps
-            .Where(x => string.Equals(x.StepType, "maker_recursive", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        var recursiveStages = recursiveSteps
-            .Select(x => x.CompletionMetadata.TryGetValue("maker.stage", out var stage) ? stage : "")
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        AddCheck(
-            checks,
-            "recursive_stage_coverage",
-            recursiveStages.Any(x => string.Equals(x, "leaf", StringComparison.OrdinalIgnoreCase)) &&
-            recursiveStages.Any(x => string.Equals(x, "composed", StringComparison.OrdinalIgnoreCase)),
-            $"stages=[{string.Join(",", recursiveStages)}]");
-
-        var hasAtomicVote = steps.Any(x => x.StepId.Contains("_atomic_vote", StringComparison.Ordinal));
-        var hasDecomposeVote = steps.Any(x => x.StepId.Contains("_decompose_vote", StringComparison.Ordinal));
-        var hasLeafVote = steps.Any(x => x.StepId.Contains("_leaf_vote", StringComparison.Ordinal));
-        var hasComposeVote = steps.Any(x => x.StepId.Contains("_compose_vote", StringComparison.Ordinal));
-        AddCheck(
-            checks,
-            "internal_vote_step_coverage",
-            hasAtomicVote && hasDecomposeVote && hasLeafVote && hasComposeVote,
-            $"atomic={hasAtomicVote},decompose={hasDecomposeVote},leaf={hasLeafVote},compose={hasComposeVote}");
-
-        var childRecursiveStepCount = steps.Count(x =>
-            string.Equals(x.StepType, "maker_recursive", StringComparison.OrdinalIgnoreCase) &&
-            x.StepId.Contains("_child_", StringComparison.Ordinal));
-        AddCheck(
-            checks,
-            "child_recursion_presence",
-            childRecursiveStepCount > 0,
-            $"child_recursive_steps={childRecursiveStepCount}");
-
         var actualVoteSteps = steps.Count(x => string.Equals(x.StepType, "maker_vote", StringComparison.OrdinalIgnoreCase));
         AddCheck(
             checks,
@@ -402,7 +347,7 @@ public sealed class MakerRunProjectionAccumulator
         var timelineStages = timeline
             .Select(x => x.Stage)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var requiredTimelineStages = new[] { "maker.recursive", "maker.vote", "maker.red_flag", "connector.call" };
+        var requiredTimelineStages = new[] { "maker.vote", "maker.red_flag", "connector.call" };
         var missingTimelineStages = requiredTimelineStages
             .Where(stage => !timelineStages.Contains(stage))
             .ToList();
@@ -422,8 +367,6 @@ public sealed class MakerRunProjectionAccumulator
         var warnings = new List<string>();
         if (!steps.Any(x => string.Equals(x.StepType, "connector_call", StringComparison.OrdinalIgnoreCase)))
             warnings.Add("No connector_call step found in this run.");
-        if (recursiveSteps.Count == 0)
-            warnings.Add("No maker_recursive step found in this run.");
 
         return new MakerRunVerification
         {

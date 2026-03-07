@@ -47,9 +47,9 @@ Maker 插件工程：`src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`
 
 职责：
 
-1. 提供 `maker_recursive`、`maker_vote` 模块实现。
+1. 提供 `maker_vote` 等无状态 workflow primitive 扩展。
 2. 提供 `AddWorkflowMakerExtensions()` 统一注册入口。
-3. 通过 `IWorkflowModulePack` 贡献模块定义，与内建模块走同一注册体系。
+3. 通过 `IWorkflowModulePack` 贡献模块定义，与内建 primitive 走同一注册体系。
 
 依赖约束：
 

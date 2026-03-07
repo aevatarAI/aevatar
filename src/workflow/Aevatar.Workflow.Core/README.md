@@ -4,7 +4,7 @@
 
 1. `WorkflowGAgent` 负责 definition/binding。
 2. `WorkflowRunGAgent` 负责单次 run 的持久事实与执行推进。
-3. `WorkflowModuleFactory` 只创建无状态原语模块。
+3. `WorkflowPrimitiveRegistry` 只解析无状态原语处理器。
 
 ## 1. 目录结构
 
@@ -12,9 +12,16 @@
 Aevatar.Workflow.Core/
 ├── WorkflowGAgent.cs
 ├── WorkflowRunGAgent.cs
+├── WorkflowRunGAgent.StepRequests.cs
+├── WorkflowRunGAgent.StatefulCompletions.cs
+├── WorkflowRunGAgent.Callbacks.cs
+├── WorkflowRunGAgent.Dispatch.cs
+├── WorkflowRunGAgent.Infrastructure.cs
 ├── workflow_state.proto
 ├── workflow_run_state.proto
-├── WorkflowModuleFactory.cs
+├── WorkflowPrimitiveRegistry.cs
+├── WorkflowPrimitiveExecutionContext.cs
+├── WorkflowRunStatePatchSupport.cs
 ├── WorkflowCoreModulePack.cs
 ├── IWorkflowModulePack.cs
 ├── Primitives/
@@ -48,8 +55,9 @@ Aevatar.Workflow.Core/
 1. 持有 `WorkflowRunState`。
 2. 启动和推进单次 run。
 3. 持久化 timeout/retry/delay/wait/human gate/sub-workflow 等 pending facts。
-4. reactivation 后重建编译缓存、重装无状态 modules、重发 suspended facts。
+4. reactivation 后重建编译缓存、恢复 slice-level state patch 结果、重发 suspended facts。
 5. 统一处理 `WorkflowResumedEvent`、`SignalReceivedEvent`、callback fired、自身 domain events。
+6. 通过 `WorkflowRunEffectDispatcher` 集中承载 actor 树创建、durable callback 调度与子 workflow actor effect。
 
 ## 3. 状态模型
 
@@ -95,7 +103,7 @@ Aevatar.Workflow.Core/
 
 ## 4. 模块边界
 
-### 4.1 WorkflowCoreModulePack 当前只注册无状态模块
+### 4.1 WorkflowCoreModulePack 当前只注册无状态 primitive handlers
 
 - `conditional`
 - `switch`
@@ -134,7 +142,7 @@ Aevatar.Workflow.Core/
 
 若新增 step type 只做纯函数或事件转换：
 
-1. 实现 `IEventModule`
+1. 实现 `IWorkflowPrimitiveHandler`
 2. 放入 `IWorkflowModulePack.Modules`
 
 若新增 step type 需要以下任意能力，就必须扩展 `WorkflowRunState` 和 `WorkflowRunGAgent`：
@@ -150,8 +158,12 @@ Aevatar.Workflow.Core/
 
 1. `WorkflowGAgent.cs`
 2. `WorkflowRunGAgent.cs`
-3. `workflow_state.proto`
-4. `workflow_run_state.proto`
-5. `WorkflowCoreModulePack.cs`
-6. `ServiceCollectionExtensions.cs`
-7. `Modules/WorkflowCallModule.cs`
+3. `WorkflowRunGAgent.StepRequests.cs`
+4. `WorkflowRunGAgent.StatefulCompletions.cs`
+5. `WorkflowRunGAgent.Callbacks.cs`
+6. `WorkflowRunGAgent.Dispatch.cs`
+7. `WorkflowRunGAgent.Infrastructure.cs`
+8. `workflow_state.proto`
+9. `workflow_run_state.proto`
+10. `WorkflowCoreModulePack.cs`
+11. `ServiceCollectionExtensions.cs`

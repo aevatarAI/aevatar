@@ -4,26 +4,18 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>检查点模块。处理 type=checkpoint 的步骤。</summary>
-public sealed class CheckpointModule : IEventModule
+public sealed class CheckpointModule : IWorkflowPrimitiveHandler
 {
     public string Name => "checkpoint";
-    public int Priority => 5;
 
-    /// <inheritdoc />
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
-
-    /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
     {
-        var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "checkpoint") return;
 
         // 检查点：记录当前 input（变量快照）

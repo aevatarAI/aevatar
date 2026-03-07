@@ -40,9 +40,73 @@ message WorkflowRunState
   map<string, WorkflowChildRunIdSet> pending_child_run_ids_by_parent_run_id = 41;
 }
 
-message WorkflowRunStateUpdatedEvent
+message WorkflowRunBindingFacts
 {
-  WorkflowRunState state = 1;
+  string workflow_name = 1;
+  string workflow_yaml = 2;
+  map<string, string> inline_workflow_yamls = 3;
+  bool compiled = 4;
+  string compilation_error = 5;
+}
+
+message WorkflowRunLifecycleFacts
+{
+  string run_id = 1;
+  string status = 2;
+  string active_step_id = 3;
+  string final_output = 4;
+  string final_error = 5;
+}
+
+message WorkflowRunVariablesFacts { map<string, string> entries = 1; }
+message WorkflowRunStepExecutionFacts { map<string, WorkflowStepExecutionState> entries = 1; }
+message WorkflowRunRetryAttemptsFacts { map<string, int32> entries = 1; }
+message WorkflowRunPendingTimeoutFacts { map<string, WorkflowPendingTimeoutState> entries = 1; }
+message WorkflowRunPendingRetryBackoffFacts { map<string, WorkflowPendingRetryBackoffState> entries = 1; }
+message WorkflowRunPendingDelayFacts { map<string, WorkflowPendingDelayState> entries = 1; }
+message WorkflowRunPendingSignalWaitFacts { map<string, WorkflowPendingSignalWaitState> entries = 1; }
+message WorkflowRunPendingHumanGateFacts { map<string, WorkflowPendingHumanGateState> entries = 1; }
+message WorkflowRunPendingLlmCallFacts { map<string, WorkflowPendingLlmCallState> entries = 1; }
+message WorkflowRunPendingEvaluateFacts { map<string, WorkflowPendingEvaluateState> entries = 1; }
+message WorkflowRunPendingReflectFacts { map<string, WorkflowPendingReflectState> entries = 1; }
+message WorkflowRunParallelFacts { map<string, WorkflowParallelState> entries = 1; }
+message WorkflowRunForEachFacts { map<string, WorkflowForEachState> entries = 1; }
+message WorkflowRunMapReduceFacts { map<string, WorkflowMapReduceState> entries = 1; }
+message WorkflowRunRaceFacts { map<string, WorkflowRaceState> entries = 1; }
+message WorkflowRunWhileFacts { map<string, WorkflowWhileState> entries = 1; }
+message WorkflowRunPendingSubWorkflowFacts { map<string, WorkflowPendingSubWorkflowState> entries = 1; }
+message WorkflowRunCacheEntryFacts { map<string, WorkflowCacheEntry> entries = 1; }
+message WorkflowRunPendingCacheFacts { map<string, WorkflowPendingCacheState> entries = 1; }
+message WorkflowRunChildActorIdsFacts { repeated string actor_ids = 1; }
+message WorkflowRunSubWorkflowBindingFacts { map<string, WorkflowSubWorkflowBindingState> entries = 1; }
+message WorkflowRunPendingChildRunIdsFacts { map<string, WorkflowChildRunIdSet> entries = 1; }
+
+message WorkflowRunStatePatchedEvent
+{
+  WorkflowRunBindingFacts binding = 1;
+  WorkflowRunLifecycleFacts lifecycle = 2;
+  WorkflowRunVariablesFacts variables = 3;
+  WorkflowRunStepExecutionFacts step_executions = 4;
+  WorkflowRunRetryAttemptsFacts retry_attempts_by_step_id = 5;
+  WorkflowRunPendingTimeoutFacts pending_timeouts = 6;
+  WorkflowRunPendingRetryBackoffFacts pending_retry_backoffs = 7;
+  WorkflowRunPendingDelayFacts pending_delays = 8;
+  WorkflowRunPendingSignalWaitFacts pending_signal_waits = 9;
+  WorkflowRunPendingHumanGateFacts pending_human_gates = 10;
+  WorkflowRunPendingLlmCallFacts pending_llm_calls = 11;
+  WorkflowRunPendingEvaluateFacts pending_evaluations = 12;
+  WorkflowRunPendingReflectFacts pending_reflections = 13;
+  WorkflowRunParallelFacts pending_parallel_steps = 14;
+  WorkflowRunForEachFacts pending_foreach_steps = 15;
+  WorkflowRunMapReduceFacts pending_map_reduce_steps = 16;
+  WorkflowRunRaceFacts pending_race_steps = 17;
+  WorkflowRunWhileFacts pending_while_steps = 18;
+  WorkflowRunPendingSubWorkflowFacts pending_sub_workflows = 19;
+  WorkflowRunCacheEntryFacts cache_entries = 20;
+  WorkflowRunPendingCacheFacts pending_cache_calls = 21;
+  WorkflowRunChildActorIdsFacts child_actor_ids = 22;
+  WorkflowRunSubWorkflowBindingFacts sub_workflow_bindings = 23;
+  WorkflowRunPendingChildRunIdsFacts pending_child_run_ids_by_parent_run_id = 24;
 }
 
 message WorkflowStepExecutionState

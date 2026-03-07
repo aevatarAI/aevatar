@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -10,17 +9,12 @@ namespace Aevatar.Workflow.Core.Modules;
 /// user-defined event type and payload for observability, inter-workflow signaling, or webhooks.
 /// The step completes immediately after emitting.
 /// </summary>
-public sealed class EmitModule : IEventModule
+public sealed class EmitModule : IWorkflowPrimitiveHandler
 {
     public string Name => "emit";
-    public int Priority => 5;
 
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
-
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
     {
-        var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "emit") return;
 
         var eventType = request.Parameters.GetValueOrDefault("event_type", "custom");

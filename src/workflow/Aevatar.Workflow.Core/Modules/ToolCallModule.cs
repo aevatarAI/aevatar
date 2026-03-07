@@ -5,34 +5,19 @@
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>工具调用模块。处理 type=tool_call 的步骤。</summary>
-public sealed class ToolCallModule : IEventModule
+public sealed class ToolCallModule : IWorkflowPrimitiveHandler
 {
-    private readonly Dictionary<string, IAgentTool> _toolIndex = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SemaphoreSlim _toolIndexLock = new(1, 1);
-    private bool _toolIndexInitialized;
-
     public string Name => "tool_call";
-    public int Priority => 10;
 
-    /// <inheritdoc />
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
-
-    /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
     {
-        var payload = envelope.Payload;
-        if (payload == null) return;
-
-        var request = payload.Unpack<StepRequestEvent>();
         if (request.StepType != "tool_call") return;
 
         var toolName = request.Parameters.GetValueOrDefault("tool", "").Trim();
@@ -92,50 +77,30 @@ public sealed class ToolCallModule : IEventModule
         }
     }
 
-    private async Task<IAgentTool?> ResolveToolAsync(string toolName, IEventHandlerContext ctx, CancellationToken ct)
+    private static async Task<IAgentTool?> ResolveToolAsync(
+        string toolName,
+        WorkflowPrimitiveExecutionContext ctx,
+        CancellationToken ct)
     {
-        if (_toolIndex.TryGetValue(toolName, out var cached))
-            return cached;
-
-        await _toolIndexLock.WaitAsync(ct);
+        var sources = ctx.Services.GetServices<IAgentToolSource>().ToList();
+        foreach (var source in sources)
         try
         {
-            if (_toolIndex.TryGetValue(toolName, out cached))
-                return cached;
-
-            if (!_toolIndexInitialized)
-            {
-                var sources = ctx.Services.GetServices<IAgentToolSource>().ToList();
-                foreach (var source in sources)
-                {
-                    IReadOnlyList<IAgentTool> tools;
-                    try
-                    {
-                        tools = await source.DiscoverToolsAsync(ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        ctx.Logger.LogWarning(ex, "Tool source discovery failed: {Source}", source.GetType().Name);
-                        continue;
-                    }
-
-                    foreach (var tool in tools)
-                        _toolIndex[tool.Name] = tool;
-                }
-
-                _toolIndexInitialized = true;
-            }
-
-            return _toolIndex.GetValueOrDefault(toolName);
+            var tools = await source.DiscoverToolsAsync(ct);
+            var matched = tools.FirstOrDefault(tool => string.Equals(tool.Name, toolName, StringComparison.OrdinalIgnoreCase));
+            if (matched != null)
+                return matched;
         }
-        finally
+        catch (Exception ex)
         {
-            _toolIndexLock.Release();
+            ctx.Logger.LogWarning(ex, "Tool source discovery failed: {Source}", source.GetType().Name);
         }
+
+        return null;
     }
 
     private static async Task PublishToolFailureAsync(
-        IEventHandlerContext ctx,
+        WorkflowPrimitiveExecutionContext ctx,
         StepRequestEvent request,
         string toolName,
         string error,

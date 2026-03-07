@@ -1,8 +1,7 @@
 using System.Diagnostics;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
@@ -12,7 +11,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Connector invocation module.
 /// Handles step_type == "connector_call" and delegates execution to a named connector.
 /// </summary>
-public sealed class ConnectorCallModule : IEventModule
+public sealed class ConnectorCallModule : IWorkflowPrimitiveHandler
 {
     private readonly IConnectorRegistry _registry;
 
@@ -22,16 +21,9 @@ public sealed class ConnectorCallModule : IEventModule
     }
 
     public string Name => "connector_call";
-    public int Priority => 9;
 
-    /// <inheritdoc />
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
-
-    /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
     {
-        var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (!string.Equals(request.StepType, "connector_call", StringComparison.OrdinalIgnoreCase)) return;
 
         var connectorName = WorkflowParameterValueParser.GetString(
@@ -92,10 +84,9 @@ public sealed class ConnectorCallModule : IEventModule
 
             try
             {
-                var runId = string.IsNullOrEmpty(request.RunId) ? envelope.CorrelationId : request.RunId;
                 var connectorRequest = new ConnectorRequest
                 {
-                    RunId = runId,
+                    RunId = request.RunId,
                     StepId = request.StepId,
                     Connector = connectorName,
                     Operation = operation,
@@ -180,7 +171,7 @@ public sealed class ConnectorCallModule : IEventModule
     }
 
     private static async Task PublishFailureAsync(
-        IEventHandlerContext ctx,
+        WorkflowPrimitiveExecutionContext ctx,
         StepRequestEvent request,
         string error,
         CancellationToken ct)
@@ -195,7 +186,7 @@ public sealed class ConnectorCallModule : IEventModule
     }
 
     private static async Task PublishSkippedAsync(
-        IEventHandlerContext ctx,
+        WorkflowPrimitiveExecutionContext ctx,
         StepRequestEvent request,
         string connectorName,
         string operation,

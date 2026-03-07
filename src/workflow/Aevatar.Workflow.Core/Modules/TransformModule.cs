@@ -5,27 +5,19 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>确定性变换模块。处理 type=transform 的步骤。</summary>
-public sealed class TransformModule : IEventModule
+public sealed class TransformModule : IWorkflowPrimitiveHandler
 {
     public string Name => "transform";
-    public int Priority => 5;
 
-    /// <inheritdoc />
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
-
-    /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
     {
-        var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "transform") return;
 
         var op = request.Parameters.GetValueOrDefault("op", "identity").Trim().ToLowerInvariant();

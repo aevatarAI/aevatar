@@ -1,6 +1,5 @@
 using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -13,13 +12,11 @@ public static class ServiceCollectionExtensions
 {
     /// <summary>
     /// Registers Cognitive defaults:
-    /// - <see cref="WorkflowModuleFactory"/>
     /// - <see cref="IConnectorRegistry"/> (in-memory)
     /// </summary>
     public static IServiceCollection AddAevatarWorkflow(this IServiceCollection services)
     {
         services.AddWorkflowModulePack<WorkflowCoreModulePack>();
-        services.TryAddSingleton<IEventModuleFactory, WorkflowModuleFactory>();
         services.TryAddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
         return services;
     }

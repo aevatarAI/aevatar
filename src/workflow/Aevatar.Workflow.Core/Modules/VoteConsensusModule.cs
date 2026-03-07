@@ -4,26 +4,18 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>投票共识模块。处理 type=vote 的步骤。</summary>
-public sealed class VoteConsensusModule : IEventModule
+public sealed class VoteConsensusModule : IWorkflowPrimitiveHandler
 {
     public string Name => "vote_consensus";
-    public int Priority => 5;
 
-    /// <inheritdoc />
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
-
-    /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(StepRequestEvent evt, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
     {
-        var evt = envelope.Payload!.Unpack<StepRequestEvent>();
         if (evt.StepType != "vote") return;
 
         var candidates = evt.Input.Split("\n---\n", StringSplitOptions.RemoveEmptyEntries);

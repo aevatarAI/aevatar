@@ -66,8 +66,15 @@ message WorkflowResumedEvent
   string resume_token = 6;
 }
 
-// Replaces an existing workflow actor's definition using runtime-provided YAML and starts execution immediately.
-message ReplaceWorkflowDefinitionAndExecuteEvent { string workflow_yaml = 1; string input = 2; }
+message DynamicWorkflowInvokeRequestedEvent
+{
+  string invocation_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string workflow_name = 4;
+  string workflow_yaml = 5;
+  string input = 6;
+}
 
 message WaitingForSignalEvent
 {

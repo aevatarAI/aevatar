@@ -108,53 +108,6 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         await runActor.HandleEventAsync(CreateEnvelope(request, Id), CancellationToken.None);
     }
 
-    [EventHandler]
-    public async Task HandleReplaceWorkflowDefinitionAndExecute(ReplaceWorkflowDefinitionAndExecuteEvent request)
-    {
-        var workflowYaml = request.WorkflowYaml ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(workflowYaml))
-        {
-            await PublishAsync(new ChatResponseEvent
-            {
-                Content = "Dynamic workflow YAML is empty.",
-            }, EventDirection.Up);
-            return;
-        }
-
-        WorkflowDefinition parsed;
-        try
-        {
-            parsed = _parser.Parse(workflowYaml);
-        }
-        catch (Exception ex)
-        {
-            await PublishAsync(new ChatResponseEvent
-            {
-                Content = $"Dynamic workflow YAML compilation failed: {ex.Message}",
-            }, EventDirection.Up);
-            return;
-        }
-
-        var validationErrors = ValidateWorkflowDefinition(parsed);
-        if (validationErrors.Count > 0)
-        {
-            await PublishAsync(new ChatResponseEvent
-            {
-                Content = $"Dynamic workflow YAML compilation failed: {string.Join("; ", validationErrors)}",
-            }, EventDirection.Up);
-            return;
-        }
-
-        await BindWorkflowDefinitionAsync(workflowYaml, parsed.Name, ct: CancellationToken.None);
-
-        var runActor = await CreateAndBindRunActorAsync(CancellationToken.None);
-        await runActor.HandleEventAsync(CreateEnvelope(new ChatRequestEvent
-        {
-            Prompt = request.Input ?? string.Empty,
-            SessionId = Guid.NewGuid().ToString("N"),
-        }, Id), CancellationToken.None);
-    }
-
     [AllEventHandler(Priority = 40, AllowSelfHandling = true)]
     public async Task HandleWorkflowCompletionEnvelope(EventEnvelope envelope)
     {

@@ -4,11 +4,12 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Demos.Workflow.Web;
 
-public sealed class DemoJsonPickModule : IEventModule
+public sealed class DemoJsonPickModule : IEventModule, IWorkflowPrimitiveHandler
 {
     public string Name => "demo_json_pick";
     public int Priority => -10;
@@ -37,7 +38,7 @@ public sealed class DemoJsonPickModule : IEventModule
                 using var document = JsonDocument.Parse(input);
                 if (!TryResolvePath(document.RootElement, path, out var resolved))
                 {
-                    await PublishFailureAsync(request, $"Path '{path}' not found.", ctx, ct);
+                    await PublishFailureAsync(request, $"Path '{path}' not found.", ctx.PublishAsync, ct);
                     return;
                 }
 
@@ -56,7 +57,7 @@ public sealed class DemoJsonPickModule : IEventModule
             }
             catch (Exception ex)
             {
-                await PublishFailureAsync(request, $"Invalid JSON input: {ex.Message}", ctx, ct);
+                await PublishFailureAsync(request, $"Invalid JSON input: {ex.Message}", ctx.PublishAsync, ct);
                 return;
             }
         }
@@ -81,6 +82,41 @@ public sealed class DemoJsonPickModule : IEventModule
 
         // Replace payload to prevent the default RoleGAgent ChatRequest handler from invoking LLM.
         envelope.Payload = Any.Pack(response);
+    }
+
+    public async Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
+    {
+        if (!IsSupportedStepType(request.StepType))
+            return;
+
+        var input = request.Input ?? string.Empty;
+        var path = request.Parameters.GetValueOrDefault("path", "$");
+
+        try
+        {
+            using var document = JsonDocument.Parse(input);
+            if (!TryResolvePath(document.RootElement, path, out var resolved))
+            {
+                await PublishFailureAsync(request, $"Path '{path}' not found.", ctx.PublishAsync, ct);
+                return;
+            }
+
+            var output = resolved.ValueKind == JsonValueKind.String
+                ? resolved.GetString() ?? string.Empty
+                : resolved.GetRawText();
+
+            await ctx.PublishAsync(new StepCompletedEvent
+            {
+                StepId = request.StepId,
+                RunId = request.RunId,
+                Success = true,
+                Output = output,
+            }, EventDirection.Self, ct);
+        }
+        catch (Exception ex)
+        {
+            await PublishFailureAsync(request, $"Invalid JSON input: {ex.Message}", ctx.PublishAsync, ct);
+        }
     }
 
     private static bool IsSupportedStepType(string stepType) =>
@@ -129,10 +165,10 @@ public sealed class DemoJsonPickModule : IEventModule
     private static Task PublishFailureAsync(
         StepRequestEvent request,
         string error,
-        IEventHandlerContext ctx,
+        Func<StepCompletedEvent, EventDirection, CancellationToken, Task> publishAsync,
         CancellationToken ct)
     {
-        return ctx.PublishAsync(new StepCompletedEvent
+        return publishAsync(new StepCompletedEvent
         {
             StepId = request.StepId,
             RunId = request.RunId,

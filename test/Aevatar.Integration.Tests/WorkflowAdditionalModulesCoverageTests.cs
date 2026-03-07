@@ -1,16 +1,10 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
+using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using SystemType = System.Type;
 
 namespace Aevatar.Integration.Tests;
 
@@ -23,9 +17,10 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     {
         var module = new EmitModule();
         var ctx = CreateContext();
+        var primitive = CreatePrimitiveContext(ctx);
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "emit-1",
                 StepType = "emit",
@@ -36,8 +31,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                     ["event_type"] = "audit",
                     ["payload"] = "{\"k\":1}",
                 },
-            }),
-            ctx,
+            },
+            primitive,
             CancellationToken.None);
 
         var emitted = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
@@ -48,14 +43,14 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "emit-2",
                 StepType = "emit",
                 RunId = "run-1",
                 Input = "fallback-payload",
-            }),
-            ctx,
+            },
+            primitive,
             CancellationToken.None);
 
         var fallback = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
@@ -68,9 +63,10 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     {
         var module = new SwitchModule();
         var ctx = CreateContext();
+        var primitive = CreatePrimitiveContext(ctx);
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "switch-exact",
                 StepType = "switch",
@@ -82,15 +78,15 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                     ["branch.bar"] = "s-next-bar",
                     ["branch._default"] = "s-next-default",
                 },
-            }),
-            ctx,
+            },
+            primitive,
             CancellationToken.None);
 
         ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single().Metadata["branch"].Should().Be("foo");
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "switch-contains",
                 StepType = "switch",
@@ -102,15 +98,15 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                     ["branch.bar"] = "s-next-bar",
                     ["branch._default"] = "s-next-default",
                 },
-            }),
-            ctx,
+            },
+            primitive,
             CancellationToken.None);
 
         ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single().Metadata["branch"].Should().Be("bar");
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "switch-default",
                 StepType = "switch",
@@ -121,21 +117,22 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                     ["branch.foo"] = "s-next-foo",
                     ["branch._default"] = "s-next-default",
                 },
-            }),
-            ctx,
+            },
+            primitive,
             CancellationToken.None);
 
         ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single().Metadata["branch"].Should().Be("_default");
     }
 
     [Fact]
-    public async Task DynamicWorkflowModule_ShouldExtractYamlAndPublishReconfigureEvent()
+    public async Task DynamicWorkflowModule_ShouldExtractYamlAndPublishChildRunInvocation()
     {
         var module = new DynamicWorkflowModule();
         var ctx = CreateContext();
+        var primitive = CreatePrimitiveContext(ctx);
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "dynamic-1",
                 StepType = "dynamic_workflow",
@@ -155,13 +152,16 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 {
                     ["original_input"] = "replay-input",
                 },
-            }),
-            ctx,
+            },
+            primitive,
             CancellationToken.None);
 
-        var replacement = ctx.Published.Select(x => x.evt).OfType<ReplaceWorkflowDefinitionAndExecuteEvent>().Single();
-        replacement.Input.Should().Be("replay-input");
-        replacement.WorkflowYaml.Should().Contain("name: nested_demo");
+        var invocation = ctx.Published.Select(x => x.evt).OfType<DynamicWorkflowInvokeRequestedEvent>().Single();
+        invocation.ParentRunId.Should().Be("run-1");
+        invocation.ParentStepId.Should().Be("dynamic-1");
+        invocation.Input.Should().Be("replay-input");
+        invocation.WorkflowYaml.Should().Contain("name: nested_demo");
+        invocation.WorkflowName.Should().Be("nested_demo");
     }
 
     [Fact]
@@ -169,9 +169,10 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     {
         var module = new DynamicWorkflowModule();
         var ctx = CreateContext();
+        var primitive = CreatePrimitiveContext(ctx);
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "dynamic-invalid",
                 StepType = "dynamic_workflow",
@@ -186,8 +187,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                         type: typo_unknown_step
                     ```
                     """,
-            }),
-            ctx,
+            },
+            primitive,
             CancellationToken.None);
 
         var failed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
@@ -200,9 +201,10 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     {
         var module = new WorkflowYamlValidateModule();
         var ctx = CreateContext();
+        var primitive = CreatePrimitiveContext(ctx);
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "validate-ok",
                 StepType = "workflow_yaml_validate",
@@ -217,8 +219,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                         type: transform
                     ```
                     """,
-            }),
-            ctx,
+            },
+            primitive,
             CancellationToken.None);
 
         var success = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
@@ -229,14 +231,14 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Clear();
 
         await module.HandleAsync(
-            Envelope(new StepRequestEvent
+            new StepRequestEvent
             {
                 StepId = "validate-fail",
                 StepType = "workflow_yaml_validate",
                 RunId = "run-1",
                 Input = "no yaml here",
-            }),
-            ctx,
+            },
+            primitive,
             CancellationToken.None);
 
         var failed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
@@ -249,77 +251,17 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var services = new ServiceCollection()
             .AddAevatarWorkflow()
             .BuildServiceProvider();
-        return new TestEventHandlerContext(services, NullLogger.Instance);
+        return new TestEventHandlerContext(services, new TestAgent("workflow-test-agent"), NullLogger.Instance);
     }
 
-    private static EventEnvelope Envelope(IMessage evt) =>
-        new()
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-            PublisherId = "workflow-test",
-            Direction = EventDirection.Self,
-        };
-
-    private sealed class TestEventHandlerContext(IServiceProvider services, ILogger logger) : IEventHandlerContext
+    private static WorkflowPrimitiveExecutionContext CreatePrimitiveContext(TestEventHandlerContext ctx)
     {
-        public EventEnvelope InboundEnvelope { get; } = new()
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        };
-
-        public string AgentId => "workflow-test-agent";
-
-        public IAgent Agent { get; } = new StubAgent();
-
-        public IServiceProvider Services { get; } = services;
-
-        public ILogger Logger { get; } = logger;
-
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
-
-        public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down, CancellationToken ct = default)
-            where TEvent : IMessage
-        {
-            Published.Add((evt, direction));
-            return Task.CompletedTask;
-        }
-
-        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
-            string callbackId,
-            TimeSpan dueTime,
-            IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
-            CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
-            string callbackId,
-            TimeSpan dueTime,
-            TimeSpan period,
-            IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
-            CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-    }
-
-    private sealed class StubAgent : IAgent
-    {
-        public string Id => "workflow-test-agent";
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
-
-        public Task<IReadOnlyList<SystemType>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<SystemType>>([]);
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        var knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
+            ctx.Services
+                .GetServices<IWorkflowModulePack>()
+                .SelectMany(pack => pack.Modules)
+                .SelectMany(module => module.Names));
+        knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
+        return ctx.CreatePrimitiveContext(new HashSet<string>(knownStepTypes, StringComparer.OrdinalIgnoreCase));
     }
 }

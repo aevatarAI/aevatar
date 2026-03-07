@@ -1,8 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -12,17 +11,12 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Runs a configurable check against the input. On failure, applies <c>on_fail</c> strategy.
 /// Supported checks: not_empty, json_valid, regex, max_length, contains.
 /// </summary>
-public sealed class GuardModule : IEventModule
+public sealed class GuardModule : IWorkflowPrimitiveHandler
 {
     public string Name => "guard";
-    public int Priority => 5;
 
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
-
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
     {
-        var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "guard") return;
 
         var check = request.Parameters.GetValueOrDefault("check", "not_empty");

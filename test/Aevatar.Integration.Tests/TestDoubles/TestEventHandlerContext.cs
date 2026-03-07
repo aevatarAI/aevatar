@@ -2,6 +2,7 @@ using System.Globalization;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Workflow.Core;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -40,6 +41,23 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext
         Published.Add((evt, direction));
         OnPublish?.Invoke(evt, direction);
         return Task.CompletedTask;
+    }
+
+    public WorkflowPrimitiveExecutionContext CreatePrimitiveContext(
+        IReadOnlySet<string>? knownStepTypes = null)
+    {
+        var stepTypes = knownStepTypes ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return new WorkflowPrimitiveExecutionContext(
+            AgentId,
+            Services,
+            Logger,
+            stepTypes,
+            (evt, direction, ct) =>
+            {
+                Published.Add((evt, direction));
+                OnPublish?.Invoke(evt, direction);
+                return Task.CompletedTask;
+            });
     }
 
     public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(

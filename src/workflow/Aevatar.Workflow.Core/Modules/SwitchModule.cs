@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -12,19 +11,12 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Publishes <c>StepCompletedEvent</c> with <c>metadata["branch"]</c> indicating the chosen key.
 /// <see cref="WorkflowRunGAgent"/> uses the branch value to resolve the next step.
 /// </summary>
-public sealed class SwitchModule : IEventModule
+public sealed class SwitchModule : IWorkflowPrimitiveHandler
 {
     public string Name => "switch";
-    public int Priority => 5;
 
-    /// <inheritdoc />
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
-
-    /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
     {
-        var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "switch") return;
 
         var value = request.Parameters.GetValueOrDefault("on", "").Trim();

@@ -448,10 +448,10 @@ public class WorkflowIntegrationTests
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  Scenario 7: WorkflowModuleFactory 仅创建 stateless runtime 模块
+    //  Scenario 7: WorkflowPrimitiveRegistry 仅创建 stateless runtime 模块
     // ═══════════════════════════════════════════════════════════
 
-    [Fact(DisplayName = "WorkflowModuleFactory 应只创建 stateless runtime 模块")]
+    [Fact(DisplayName = "WorkflowPrimitiveRegistry 应只创建 stateless runtime 模块")]
     [Trait("Feature", "ModuleFactory")]
     public void Scenario7_AllCoreModules()
     {
@@ -461,44 +461,44 @@ public class WorkflowIntegrationTests
         services.AddSingleton<Aevatar.Foundation.Abstractions.Connectors.IConnectorRegistry>(sp =>
             sp.GetRequiredService<InMemoryConnectorRegistry>());
         using var provider = services.BuildServiceProvider();
-        var factory = provider.GetRequiredService<IEventModuleFactory>();
+        var registry = new WorkflowPrimitiveRegistry(provider.GetServices<IWorkflowModulePack>());
 
-        factory.TryCreate("conditional", out var m).Should().BeTrue(); m!.Name.Should().Be("conditional");
-        factory.TryCreate("switch", out m).Should().BeTrue(); m!.Name.Should().Be("switch");
-        factory.TryCreate("checkpoint", out m).Should().BeTrue(); m!.Name.Should().Be("checkpoint");
-        factory.TryCreate("assign", out m).Should().BeTrue(); m!.Name.Should().Be("assign");
-        factory.TryCreate("vote_consensus", out m).Should().BeTrue(); m!.Name.Should().Be("vote_consensus");
-        factory.TryCreate("tool_call", out m).Should().BeTrue(); m!.Name.Should().Be("tool_call");
-        factory.TryCreate("connector_call", out m).Should().BeTrue(); m!.Name.Should().Be("connector_call");
-        factory.TryCreate("transform", out m).Should().BeTrue(); m!.Name.Should().Be("transform");
-        factory.TryCreate("retrieve_facts", out m).Should().BeTrue(); m!.Name.Should().Be("retrieve_facts");
-        factory.TryCreate("guard", out m).Should().BeTrue(); m!.Name.Should().Be("guard");
-        factory.TryCreate("emit", out m).Should().BeTrue(); m!.Name.Should().Be("emit");
-        factory.TryCreate("workflow_yaml_validate", out m).Should().BeTrue(); m!.Name.Should().Be("workflow_yaml_validate");
-        factory.TryCreate("dynamic_workflow", out m).Should().BeTrue(); m!.Name.Should().Be("dynamic_workflow");
+        registry.TryCreate("conditional", provider, out var m).Should().BeTrue(); m!.Name.Should().Be("conditional");
+        registry.TryCreate("switch", provider, out m).Should().BeTrue(); m!.Name.Should().Be("switch");
+        registry.TryCreate("checkpoint", provider, out m).Should().BeTrue(); m!.Name.Should().Be("checkpoint");
+        registry.TryCreate("assign", provider, out m).Should().BeTrue(); m!.Name.Should().Be("assign");
+        registry.TryCreate("vote_consensus", provider, out m).Should().BeTrue(); m!.Name.Should().Be("vote_consensus");
+        registry.TryCreate("tool_call", provider, out m).Should().BeTrue(); m!.Name.Should().Be("tool_call");
+        registry.TryCreate("connector_call", provider, out m).Should().BeTrue(); m!.Name.Should().Be("connector_call");
+        registry.TryCreate("transform", provider, out m).Should().BeTrue(); m!.Name.Should().Be("transform");
+        registry.TryCreate("retrieve_facts", provider, out m).Should().BeTrue(); m!.Name.Should().Be("retrieve_facts");
+        registry.TryCreate("guard", provider, out m).Should().BeTrue(); m!.Name.Should().Be("guard");
+        registry.TryCreate("emit", provider, out m).Should().BeTrue(); m!.Name.Should().Be("emit");
+        registry.TryCreate("workflow_yaml_validate", provider, out m).Should().BeTrue(); m!.Name.Should().Be("workflow_yaml_validate");
+        registry.TryCreate("dynamic_workflow", provider, out m).Should().BeTrue(); m!.Name.Should().Be("dynamic_workflow");
 
-        factory.TryCreate("vote", out m).Should().BeTrue();
-        factory.TryCreate("bridge_call", out m).Should().BeTrue();
-        factory.TryCreate("publish", out m).Should().BeTrue();
-        factory.TryCreate("assert", out m).Should().BeTrue();
+        registry.TryCreate("vote", provider, out m).Should().BeTrue();
+        registry.TryCreate("bridge_call", provider, out m).Should().BeTrue();
+        registry.TryCreate("publish", provider, out m).Should().BeTrue();
+        registry.TryCreate("assert", provider, out m).Should().BeTrue();
 
-        factory.TryCreate("workflow_loop", out m).Should().BeFalse();
-        factory.TryCreate("while", out m).Should().BeFalse();
-        factory.TryCreate("workflow_call", out m).Should().BeFalse();
-        factory.TryCreate("parallel", out m).Should().BeFalse();
-        factory.TryCreate("parallel_fanout", out m).Should().BeFalse();
-        factory.TryCreate("llm_call", out m).Should().BeFalse();
-        factory.TryCreate("wait_signal", out m).Should().BeFalse();
-        factory.TryCreate("evaluate", out m).Should().BeFalse();
-        factory.TryCreate("reflect", out m).Should().BeFalse();
-        factory.TryCreate("delay", out m).Should().BeFalse();
-        factory.TryCreate("cache", out m).Should().BeFalse();
-        factory.TryCreate("human_input", out m).Should().BeFalse();
-        factory.TryCreate("human_approval", out m).Should().BeFalse();
+        registry.TryCreate("workflow_loop", provider, out m).Should().BeFalse();
+        registry.TryCreate("while", provider, out m).Should().BeFalse();
+        registry.TryCreate("workflow_call", provider, out m).Should().BeFalse();
+        registry.TryCreate("parallel", provider, out m).Should().BeFalse();
+        registry.TryCreate("parallel_fanout", provider, out m).Should().BeFalse();
+        registry.TryCreate("llm_call", provider, out m).Should().BeFalse();
+        registry.TryCreate("wait_signal", provider, out m).Should().BeFalse();
+        registry.TryCreate("evaluate", provider, out m).Should().BeFalse();
+        registry.TryCreate("reflect", provider, out m).Should().BeFalse();
+        registry.TryCreate("delay", provider, out m).Should().BeFalse();
+        registry.TryCreate("cache", provider, out m).Should().BeFalse();
+        registry.TryCreate("human_input", provider, out m).Should().BeFalse();
+        registry.TryCreate("human_approval", provider, out m).Should().BeFalse();
 
         // ─── 不存在的类型 ───
-        factory.TryCreate("nonexistent", out m).Should().BeFalse();
-        factory.TryCreate("maker_vote", out m).Should().BeFalse(); // maker module pack is not registered in this test scope
+        registry.TryCreate("nonexistent", provider, out m).Should().BeFalse();
+        registry.TryCreate("maker_vote", provider, out m).Should().BeFalse(); // maker module pack is not registered in this test scope
         m.Should().BeNull();
     }
 }

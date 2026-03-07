@@ -4,11 +4,12 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Demos.Workflow.Web;
 
-public sealed class DemoCsvMarkdownModule : IEventModule
+public sealed class DemoCsvMarkdownModule : IEventModule, IWorkflowPrimitiveHandler
 {
     public string Name => "demo_csv_markdown";
     public int Priority => -10;
@@ -64,6 +65,25 @@ public sealed class DemoCsvMarkdownModule : IEventModule
 
         // Replace payload to prevent the default RoleGAgent ChatRequest handler from invoking LLM.
         envelope.Payload = Any.Pack(response);
+    }
+
+    public Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
+    {
+        if (!IsSupportedStepType(request.StepType))
+            return Task.CompletedTask;
+
+        var input = request.Input ?? string.Empty;
+        var delimiter = request.Parameters.GetValueOrDefault("delimiter", ",");
+        var hasHeader = !string.Equals(request.Parameters.GetValueOrDefault("has_header", "true"), "false",
+            StringComparison.OrdinalIgnoreCase);
+
+        return ctx.PublishAsync(new StepCompletedEvent
+        {
+            StepId = request.StepId,
+            RunId = request.RunId,
+            Success = true,
+            Output = ConvertCsvToMarkdown(input, delimiter, hasHeader),
+        }, EventDirection.Self, ct);
     }
 
     private static bool IsSupportedStepType(string stepType) =>

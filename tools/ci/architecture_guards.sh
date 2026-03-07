@@ -533,6 +533,11 @@ if [ -f "src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/MakerModuleFa
   exit 1
 fi
 
+if [ -f "src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/Modules/MakerRecursiveModule.cs" ]; then
+  echo "MakerRecursiveModule is forbidden. Stateful maker recursion must not live in workflow modules."
+  exit 1
+fi
+
 if rg -n "IEventModuleFactory" src/workflow/extensions/Aevatar.Workflow.Extensions.Maker -g '*.cs'; then
   echo "Maker extension must not register standalone IEventModuleFactory. Use IWorkflowModulePack."
   exit 1
@@ -540,6 +545,15 @@ fi
 
 if ! rg -n "AddWorkflowModulePack<MakerModulePack>\(" src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/ServiceCollectionExtensions.cs >/dev/null; then
   echo "Maker extension must register MakerModulePack via AddWorkflowModulePack<MakerModulePack>()."
+  exit 1
+fi
+
+if rg -n "WorkflowRunStateUpdatedEvent|ReplaceWorkflowDefinitionAndExecuteEvent" \
+  src/workflow/Aevatar.Workflow.Core \
+  src/workflow/Aevatar.Workflow.Abstractions \
+  -g '*.cs' -g '*.proto'
+then
+  echo "Workflow runtime must not use legacy full-state update or replace-and-execute events."
   exit 1
 fi
 

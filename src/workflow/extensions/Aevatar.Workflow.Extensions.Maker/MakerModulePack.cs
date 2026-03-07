@@ -11,7 +11,6 @@ public sealed class MakerModulePack : IWorkflowModulePack
     private static readonly IReadOnlyList<WorkflowModuleRegistration> ModuleRegistrations =
     [
         WorkflowModuleRegistration.Create<MakerVoteModule>("maker_vote"),
-        WorkflowModuleRegistration.Create<MakerRecursiveModule>("maker_recursive", "maker_recursive_solve"),
     ];
 
     public string Name => "workflow.extensions.maker";

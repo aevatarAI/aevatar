@@ -1,13 +1,11 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Connectors;
 using FluentAssertions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Integration.Tests;
@@ -28,7 +26,7 @@ public sealed class ConnectorCallModuleCoverageTests
             Input = "input",
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await module.HandleAsync(request, ctx.CreatePrimitiveContext(), CancellationToken.None);
 
         ctx.Published.Should().BeEmpty();
     }
@@ -45,7 +43,7 @@ public sealed class ConnectorCallModuleCoverageTests
             Input = "input",
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await module.HandleAsync(request, ctx.CreatePrimitiveContext(), CancellationToken.None);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeFalse();
@@ -69,7 +67,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await module.HandleAsync(request, ctx.CreatePrimitiveContext(), CancellationToken.None);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeTrue();
@@ -91,6 +89,7 @@ public sealed class ConnectorCallModuleCoverageTests
         {
             StepId = "s-retry",
             StepType = "connector_call",
+            RunId = "corr-1",
             Input = "in",
             Parameters =
             {
@@ -100,7 +99,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request, correlationId: "corr-1"), ctx, CancellationToken.None);
+        await module.HandleAsync(request, ctx.CreatePrimitiveContext(), CancellationToken.None);
 
         connector.Attempts.Should().Be(2);
         connector.LastRequest.Should().NotBeNull();
@@ -134,7 +133,7 @@ public sealed class ConnectorCallModuleCoverageTests
             },
         };
 
-        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        await module.HandleAsync(request, ctx.CreatePrimitiveContext(), CancellationToken.None);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeTrue();
@@ -150,19 +149,6 @@ public sealed class ConnectorCallModuleCoverageTests
             new ServiceCollection().BuildServiceProvider(),
             new TestAgent("connector-module-test-agent"),
             NullLogger.Instance);
-    }
-
-    private static EventEnvelope Envelope(IMessage evt, string? correlationId = null)
-    {
-        return new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            CorrelationId = correlationId ?? string.Empty,
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-            PublisherId = "test-publisher",
-            Direction = EventDirection.Self,
-        };
     }
 
     private sealed class ThrowThenSuccessConnector(string name) : IConnector

@@ -153,24 +153,31 @@ public sealed class WorkflowRunGAgentCoverageTests
     }
 
     [Fact]
-    public async Task HandleReplaceWorkflowDefinitionAndExecute_WhenYamlInvalid_ShouldKeepPreviousWorkflowState()
+    public async Task HandleDynamicWorkflowInvokeRequested_WhenRequestInvalid_ShouldFailParentStepAndKeepBinding()
     {
         var publisher = new RecordingEventPublisher();
         var agent = CreateRunAgent();
         agent.EventPublisher = publisher;
         var originalYaml = BuildValidWorkflowYaml("role_a", "RoleA");
         await agent.BindWorkflowDefinitionAsync(originalYaml, "wf_valid");
+        agent.State.RunId = "parent-run";
 
-        await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
+        await agent.HandleDynamicWorkflowInvokeRequested(new DynamicWorkflowInvokeRequestedEvent
         {
-            WorkflowYaml = "not: [valid",
+            ParentRunId = "parent-run",
+            ParentStepId = "dynamic-step",
+            WorkflowName = string.Empty,
+            WorkflowYaml = string.Empty,
             Input = "hello",
         });
 
         agent.State.WorkflowYaml.Should().Be(originalYaml);
         agent.State.WorkflowName.Should().Be("wf_valid");
         agent.State.Compiled.Should().BeTrue();
-        publisher.Published.Select(x => x.evt).OfType<ChatResponseEvent>().Single().Content.Should().Contain("compilation failed");
+        var completed = publisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("dynamic-step");
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("requires parent step id, workflow name, and workflow yaml");
     }
 
     [Fact]
@@ -323,58 +330,6 @@ public sealed class WorkflowGAgentCoverageTests
         var request = runAgent.Received[1].Payload!.Unpack<ChatRequestEvent>();
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-1");
-    }
-
-    [Fact]
-    public async Task HandleReplaceWorkflowDefinitionAndExecute_WhenYamlInvalid_ShouldKeepPreviousWorkflowState()
-    {
-        var publisher = new RecordingEventPublisher();
-        var agent = CreateDefinitionAgent();
-        agent.EventPublisher = publisher;
-        var originalYaml = BuildValidWorkflowYaml("role_a", "RoleA");
-        await agent.BindWorkflowDefinitionAsync(originalYaml, "wf_original");
-
-        await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
-        {
-            WorkflowYaml = "not: [valid",
-            Input = "hello",
-        });
-
-        agent.State.WorkflowYaml.Should().Be(originalYaml);
-        agent.State.WorkflowName.Should().Be("wf_original");
-        agent.State.Compiled.Should().BeTrue();
-        publisher.Published.Select(x => x.evt).OfType<ChatResponseEvent>().Single().Content.Should().Contain("compilation failed");
-    }
-
-    [Fact]
-    public async Task HandleReplaceWorkflowDefinitionAndExecute_WhenYamlValid_ShouldRebindAndStartRun()
-    {
-        var runAgent = new RecordingRunAgent("actor-1");
-        var runtime = new RecordingActorRuntime
-        {
-            ActorFactory = (agentType, actorId) =>
-                agentType == typeof(WorkflowRunGAgent)
-                    ? new FakeActor(actorId, runAgent)
-                    : null,
-        };
-        var agent = CreateDefinitionAgent(runtime: runtime);
-
-        await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
-        {
-            WorkflowYaml = BuildValidWorkflowYaml("role_a", "RoleA"),
-            Input = "dynamic-input",
-        });
-
-        agent.State.WorkflowName.Should().Be("wf_valid");
-        agent.State.Compiled.Should().BeTrue();
-        runAgent.Received.Should().HaveCount(2);
-
-        var bind = runAgent.Received[0].Payload!.Unpack<BindWorkflowDefinitionEvent>();
-        bind.WorkflowName.Should().Be("wf_valid");
-
-        var request = runAgent.Received[1].Payload!.Unpack<ChatRequestEvent>();
-        request.Prompt.Should().Be("dynamic-input");
-        request.SessionId.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]

@@ -4,7 +4,7 @@
 
 1. `WorkflowGAgent` 只负责 definition/binding。
 2. `WorkflowRunGAgent` 负责单次 accepted run 的持久事实与执行推进。
-3. `IEventModule` 只保留为无状态原语处理器扩展点，不能再作为 workflow 主状态机。
+3. Workflow 主执行链只接受 `IWorkflowPrimitiveHandler + WorkflowPrimitiveRegistry`；`IEventModule` 不再承担 workflow runtime 主状态机。
 
 这份文档只描述当前有效模型，不再保留旧 loop-module 驱动架构的兼容说明。
 
@@ -69,7 +69,14 @@ flowchart LR
 5. 持有 `pending_llm_calls/pending_evaluations/pending_reflections`。
 6. 持有 `pending_parallel_steps/pending_foreach_steps/pending_map_reduce_steps/pending_race_steps/pending_while_steps`。
 7. 持有 `pending_sub_workflows/pending_child_run_ids_by_parent_run_id`。
-8. reactivation 后重建编译缓存、重装无状态 modules、重发 suspended facts。
+8. reactivation 后重建编译缓存、重放 `WorkflowRunStatePatchedEvent`、重发 suspended facts。
+9. 内部实现已按职责拆分为：
+   - `WorkflowRunGAgent.cs`：run core reducer 与入口事件处理
+   - `WorkflowRunGAgent.StepRequests.cs`：stateful step request handlers
+   - `WorkflowRunGAgent.StatefulCompletions.cs`：fanout/loop/cache 聚合收敛
+   - `WorkflowRunGAgent.Callbacks.cs`：timeout/retry/LLM response 对账
+   - `WorkflowRunGAgent.Dispatch.cs`：step dispatch 与 sub-workflow completion
+   - `WorkflowRunGAgent.Infrastructure.cs`：helper 与 `WorkflowRunEffectDispatcher`
 
 ## 4. 原语归属
 
@@ -94,7 +101,7 @@ flowchart LR
 
 这类原语的正确性必须依赖 `WorkflowRunState`，而不是 module 私有字段。
 
-### 4.2 仍通过 WorkflowModuleFactory 注册的无状态原语
+### 4.2 仍通过 WorkflowPrimitiveRegistry 解析的无状态原语
 
 当前 `WorkflowCoreModulePack` 只注册无状态模块：
 
@@ -112,7 +119,7 @@ flowchart LR
 - `workflow_yaml_validate`
 - `dynamic_workflow`
 
-扩展包也必须遵循同一规则：只注册无状态原语，不再引入 `DependencyExpander` 或 `Configurator`。
+扩展包也必须遵循同一规则：只注册无状态原语处理器，不再引入 `DependencyExpander` 或 `Configurator`，也不再通过旧工厂式主链安装模型扩展 runtime。
 
 ## 5. API 语义
 
@@ -219,11 +226,16 @@ public sealed class MyWorkflowModulePack : IWorkflowModulePack
 
 1. `src/workflow/Aevatar.Workflow.Core/WorkflowGAgent.cs`
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`
-3. `src/workflow/Aevatar.Workflow.Core/workflow_state.proto`
-4. `src/workflow/Aevatar.Workflow.Core/workflow_run_state.proto`
-5. `src/workflow/Aevatar.Workflow.Core/WorkflowCoreModulePack.cs`
-6. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs`
-7. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs`
+3. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StepRequests.cs`
+4. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.StatefulCompletions.cs`
+5. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Callbacks.cs`
+6. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Dispatch.cs`
+7. `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.Infrastructure.cs`
+8. `src/workflow/Aevatar.Workflow.Core/workflow_state.proto`
+9. `src/workflow/Aevatar.Workflow.Core/workflow_run_state.proto`
+10. `src/workflow/Aevatar.Workflow.Core/WorkflowCoreModulePack.cs`
+11. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunActorResolver.cs`
+12. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs`
 
 更完整的系统说明见：
 

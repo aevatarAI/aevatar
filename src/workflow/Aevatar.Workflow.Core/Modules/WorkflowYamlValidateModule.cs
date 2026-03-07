@@ -1,5 +1,5 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Core.Modules;
 
@@ -7,21 +7,12 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Validates workflow YAML from step input.
 /// Emits success with canonical fenced YAML when valid, or failure with validation details.
 /// </summary>
-public sealed class WorkflowYamlValidateModule : IEventModule
+public sealed class WorkflowYamlValidateModule : IWorkflowPrimitiveHandler
 {
     public string Name => "workflow_yaml_validate";
-    public int Priority => 5;
 
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
-
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(StepRequestEvent request, WorkflowPrimitiveExecutionContext ctx, CancellationToken ct)
     {
-        var payload = envelope.Payload;
-        if (payload == null || !payload.Is(StepRequestEvent.Descriptor))
-            return;
-
-        var request = payload.Unpack<StepRequestEvent>();
         if (!string.Equals(request.StepType, Name, StringComparison.OrdinalIgnoreCase))
             return;
 
@@ -39,7 +30,7 @@ public sealed class WorkflowYamlValidateModule : IEventModule
             return;
         }
 
-        var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx);
+        var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx.KnownStepTypes);
         if (errors.Count > 0)
         {
             await ctx.PublishAsync(new StepCompletedEvent

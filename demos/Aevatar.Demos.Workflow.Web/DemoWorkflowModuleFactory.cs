@@ -1,10 +1,9 @@
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Workflow.Core;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Demos.Workflow.Web;
 
-public sealed class DemoWorkflowModuleFactory : WorkflowModuleFactory
+public sealed class DemoWorkflowModuleFactory : IEventModuleFactory
 {
     private readonly IServiceProvider _serviceProvider;
 
@@ -20,18 +19,13 @@ public sealed class DemoWorkflowModuleFactory : WorkflowModuleFactory
         };
 
     public DemoWorkflowModuleFactory(
-        IServiceProvider serviceProvider,
-        IEnumerable<IWorkflowModulePack> modulePacks)
-        : base(serviceProvider, modulePacks)
+        IServiceProvider serviceProvider)
     {
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
     }
 
-    public override bool TryCreate(string name, out IEventModule? module)
+    public bool TryCreate(string name, out IEventModule? module)
     {
-        if (base.TryCreate(name, out module) && module != null)
-            return true;
-
         module = null;
         if (string.IsNullOrWhiteSpace(name))
             return false;
