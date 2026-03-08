@@ -94,6 +94,74 @@ public sealed class WorkflowRunOrchestrationComponentTests
     }
 
     [Fact]
+    public async Task ContextFactory_WhenProjectionDisabled_ShouldRollbackDistinctActorsInReverseOrder()
+    {
+        var actor = new ComponentActor("actor-rollback");
+        var actorPort = new RecordingActorPort();
+        var projectionPort = new CapturingProjectionPort { ProjectionEnabled = false };
+        var factory = new WorkflowRunContextFactory(
+            new ComponentRunActorResolver(actor, "direct", [" ", "definition-rollback", "actor-rollback", "definition-rollback", "actor-rollback"]),
+            actorPort,
+            projectionPort,
+            new DeterministicCommandContextPolicy("cmd-r1", "corr-r1"));
+
+        var result = await factory.CreateAsync(
+            new WorkflowChatRunRequest("hello", "direct", "actor-rollback"),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
+        result.Context.Should().BeNull();
+        actorPort.DestroyedActorIds.Should().Equal("actor-rollback", "definition-rollback");
+    }
+
+    [Fact]
+    public async Task ContextFactory_WhenProjectionDisabledRollbackFails_ShouldThrowAggregateRollbackError()
+    {
+        var actor = new ComponentActor("actor-rf");
+        var actorPort = new RecordingActorPort();
+        actorPort.FailDestroyIds.UnionWith(["actor-rf", "definition-rf"]);
+        var projectionPort = new CapturingProjectionPort { ProjectionEnabled = false };
+        var factory = new WorkflowRunContextFactory(
+            new ComponentRunActorResolver(actor, "direct", ["definition-rf", "actor-rf"]),
+            actorPort,
+            projectionPort,
+            new DeterministicCommandContextPolicy("cmd-rf", "corr-rf"));
+
+        var act = async () => await factory.CreateAsync(
+            new WorkflowChatRunRequest("hello", "direct", "actor-rf"),
+            CancellationToken.None);
+
+        var error = await act.Should().ThrowAsync<AggregateException>();
+        error.Which.Message.Should().Contain("Workflow actor rollback failed");
+        error.Which.InnerExceptions.Should().HaveCount(2);
+        actorPort.DestroyedActorIds.Should().Equal("actor-rf", "definition-rf");
+    }
+
+    [Fact]
+    public async Task ContextFactory_WhenAttachThrowsAndRollbackFails_ShouldThrowCompositeAggregate()
+    {
+        var actor = new ComponentActor("actor-attach");
+        var actorPort = new RecordingActorPort();
+        actorPort.FailDestroyIds.Add("actor-attach");
+        var projectionPort = new CapturingProjectionPort { ThrowOnAttach = true };
+        var factory = new WorkflowRunContextFactory(
+            new ComponentRunActorResolver(actor, "direct", ["definition-attach", "actor-attach"]),
+            actorPort,
+            projectionPort,
+            new DeterministicCommandContextPolicy("cmd-attach", "corr-attach"));
+
+        var act = async () => await factory.CreateAsync(
+            new WorkflowChatRunRequest("hello", "direct", "actor-attach"),
+            CancellationToken.None);
+
+        var error = await act.Should().ThrowAsync<AggregateException>();
+        error.Which.Message.Should().Contain("rollback also failed");
+        error.Which.InnerExceptions.Should().HaveCount(2);
+        error.Which.InnerExceptions[0].Message.Should().Contain("attach failed");
+        error.Which.InnerExceptions[1].Message.Should().Contain("Failed to rollback workflow actor 'actor-attach'");
+    }
+
+    [Fact]
     public async Task ExecutionEngine_WhenNoTerminalFrame_ShouldFinalizeAsFailed()
     {
         var requestExecutor = new CapturingRequestExecutor();
@@ -327,6 +395,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
     private sealed class RecordingActorPort : IWorkflowRunActorPort
     {
         public List<string> DestroyedActorIds { get; } = [];
+        public HashSet<string> FailDestroyIds { get; } = new(StringComparer.Ordinal);
 
         public Task<IActor?> GetAsync(string actorId, CancellationToken ct = default) =>
             Task.FromResult<IActor?>(null);
@@ -343,6 +412,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
         public Task DestroyAsync(string actorId, CancellationToken ct = default)
         {
             DestroyedActorIds.Add(actorId);
+            if (FailDestroyIds.Contains(actorId))
+                throw new InvalidOperationException($"destroy failed: {actorId}");
             return Task.CompletedTask;
         }
 

@@ -389,6 +389,338 @@ public class RuntimeCallbackEventizationTests
         retryStepRequest.Input.Should().Be("input-v1");
     }
 
+    [Fact]
+    public async Task WorkflowLoop_ShouldRejectStartWhenRunAlreadyActive()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                },
+            ],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf",
+                RunId = "run-active",
+                Input = "first",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf",
+                RunId = "run-active",
+                Input = "second",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().Contain("already active");
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldFailWhenWorkflowHasNoSteps()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf-empty",
+            Roles = [],
+            Steps = [],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf-empty",
+                RunId = "run-empty",
+                Input = "input",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().Contain("无步骤");
+        ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel").Active.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldCompleteSuccessfullyWhenOnErrorSkipHasNoNextStep()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf-skip",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                    OnError = new StepErrorPolicy
+                    {
+                        Strategy = "skip",
+                        DefaultOutput = "skipped-output",
+                    },
+                },
+            ],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf-skip",
+                RunId = "run-skip",
+                Input = "input",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-skip",
+                Success = false,
+                Error = "boom",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Be("skipped-output");
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldDispatchFallbackStepWhenOnErrorFallbackConfigured()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf-fallback",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                    OnError = new StepErrorPolicy
+                    {
+                        Strategy = "fallback",
+                        FallbackStep = "step-2",
+                    },
+                },
+                new StepDefinition
+                {
+                    Id = "step-2",
+                    Type = "transform",
+                },
+            ],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf-fallback",
+                RunId = "run-fallback",
+                Input = "input",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-fallback",
+                Success = false,
+                Error = "boom",
+                Output = "fallback-input",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var fallbackRequest = ctx.Published.Select(x => x.Event).OfType<StepRequestEvent>().Single();
+        fallbackRequest.StepId.Should().Be("step-2");
+        fallbackRequest.Input.Should().Be("fallback-input");
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldFailWhenDirectNextStepIsInvalid()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf-next",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                },
+                new StepDefinition
+                {
+                    Id = "step-2",
+                    Type = "transform",
+                },
+            ],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf-next",
+                RunId = "run-next",
+                Input = "input",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-next",
+                Success = true,
+                Output = "done",
+                Metadata = { ["next_step"] = "missing-step" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().Contain("invalid next_step");
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldRedispatchImmediatelyWhenRetryDelayIsZero()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf-retry-immediate",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                    Retry = new StepRetryPolicy
+                    {
+                        MaxAttempts = 3,
+                        Backoff = "fixed",
+                        DelayMs = 0,
+                    },
+                },
+            ],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf-retry-immediate",
+                RunId = "run-retry-immediate",
+                Input = "input",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-retry-immediate",
+                Success = false,
+                Error = "boom",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var retryRequest = ctx.Published.Select(x => x.Event).OfType<StepRequestEvent>().Single();
+        retryRequest.StepId.Should().Be("step-1");
+        retryRequest.Input.Should().Be("input");
+        ctx.Scheduled.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldFailTimeoutWithoutRetrying()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf-timeout",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                    Retry = new StepRetryPolicy
+                    {
+                        MaxAttempts = 3,
+                        DelayMs = 100,
+                    },
+                },
+            ],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf-timeout",
+                RunId = "run-timeout",
+                Input = "input",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-timeout",
+                Success = false,
+                Error = "TIMEOUT after 100ms",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().Contain("TIMEOUT");
+        ctx.Scheduled.Should().BeEmpty();
+    }
+
     private static EventEnvelope Wrap(
         IMessage evt,
         IReadOnlyDictionary<string, string>? metadata = null)
