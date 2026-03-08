@@ -89,6 +89,10 @@
 - 图示建议：统一使用 Mermaid，并遵循仓库图示规范。
 - 若新增架构规则，需同时补充对应门禁脚本和测试。
 
+### 7.1 当前具体文档示例
+- `workflow-run-actorized-state-boundary-blueprint-2026-03-08.md`：`workflow` 从“定义 Actor + 模块私有运行态”演进到“definition actor + run actor + 无状态 step executor”的重构蓝图。
+- `workflow-run-actorized-target-architecture-2026-03-08.md`：`workflow` 重构完成后的目标架构说明，聚焦最终职责边界、状态归属、事件流与读写侧模型。
+
 ## 8. 最小模板（可直接复制）
 ```md
 # <Blueprint Title>
