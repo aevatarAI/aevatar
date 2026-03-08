@@ -102,5 +102,8 @@
 - `sequenceDiagram` 默认使用紧凑布局（优先收紧 `actorMargin/messageMargin/diagramMarginX/diagramMarginY` 与文案长度），避免图整体过大。
 - 禁止通过固定大宽度样式撑大时序图（如 `min-width: 2200px`、`width: max-content` 强制放大）；优先按容器宽度渲染。
 - 需要查看完整细节时，使用外层容器横向滚动（`overflow-x: auto`），不要放大图本体。
+- 文件名中带时间/日期的文档，时间戳必须放在文件名开头，禁止后置时间戳。
+- 时间戳必须使用固定字长格式：仅日期用 `YYYY-MM-DD-`（10 位日期 + 1 位连接符），日期时间用 `YYYY-MM-DD-HH-mm-ss-`（19 位日期时间 + 1 位连接符）。
+- 禁止在同类文档中混用 `2026-3-9`、`20260309`、`03-09-2026`、尾部 `-2026-03-09` 等变长或后置格式；统一使用前置定长格式，例如 `2026-03-09-workflow-architecture.md`。
 - 默认将打分/审计文档生成到 `docs/audit-scorecard/` 目录。
 - 工作文档不需要添加到解决方案（`aevatar.slnx`）。
