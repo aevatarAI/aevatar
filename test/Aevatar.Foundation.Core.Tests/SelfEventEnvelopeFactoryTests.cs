@@ -92,5 +92,12 @@ public class SelfEventEnvelopeFactoryTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 }

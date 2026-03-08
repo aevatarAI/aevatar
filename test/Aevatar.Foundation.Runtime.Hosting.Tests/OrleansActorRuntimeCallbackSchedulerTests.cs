@@ -1,6 +1,7 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using FluentAssertions;
@@ -33,6 +34,39 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
         dedicatedGrain.ScheduleTimeoutCalls.Should().Be(1);
         dedicatedGrain.ScheduleTimerCalls.Should().Be(0);
         grainFactoryProxy.CallbackSchedulerGrainCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DurableScheduleTimeoutAsync_ShouldPreserveOriginalTriggerEnvelopeSemantics()
+    {
+        var dedicatedGrain = new RecordingCallbackSchedulerGrain { NextGeneration = 9 };
+        var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
+        var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
+        grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
+        var scheduler = new OrleansActorRuntimeDurableCallbackScheduler(grainFactory);
+
+        await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
+        {
+            ActorId = "parent-run",
+            CallbackId = "retry-cb",
+            DueTime = TimeSpan.FromMilliseconds(50),
+            DeliveryMode = RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+            TriggerEnvelope = new EventEnvelope
+            {
+                Id = "retry-envelope-1",
+                Payload = Any.Pack(new StringValue { Value = "retry-payload" }),
+                Direction = EventDirection.Down,
+                TargetActorId = "parent-run",
+                PublisherId = "child-run",
+            },
+        });
+
+        var scheduled = EventEnvelope.Parser.ParseFrom(dedicatedGrain.LastTimeoutEnvelopeBytes);
+        dedicatedGrain.LastDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
+        scheduled.Id.Should().Be("retry-envelope-1");
+        scheduled.PublisherId.Should().Be("child-run");
+        scheduled.Direction.Should().Be(EventDirection.Down);
+        scheduled.TargetActorId.Should().Be("parent-run");
     }
 
     [Fact]
@@ -71,6 +105,69 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
 
         dedicatedGrain.CancelCalls.Should().Be(1);
         dedicatedGrain.LastCancelExpectedGeneration.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task PurgeActorAsync_ShouldUseDedicatedSchedulerGrain()
+    {
+        var dedicatedGrain = new RecordingCallbackSchedulerGrain();
+        var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
+        var grainFactoryProxy = (GrainFactoryProxy)(object)grainFactory;
+        grainFactoryProxy.ResolveCallbackSchedulerGrain = _ => dedicatedGrain;
+        var scheduler = new OrleansActorRuntimeDurableCallbackScheduler(grainFactory);
+
+        await scheduler.PurgeActorAsync("actor-1");
+
+        dedicatedGrain.PurgeCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public void CreateFiredEnvelope_ShouldRetargetActorWithoutOverwritingPublisher()
+    {
+        var fired = RuntimeCallbackEnvelopeFactory.CreateFiredEnvelope(
+            actorId: "parent-run",
+            callbackId: "retry-fired",
+            generation: 2,
+            fireIndex: 1,
+            triggerEnvelope: new EventEnvelope
+            {
+                Payload = Any.Pack(new StringValue { Value = "retry-payload" }),
+                Direction = EventDirection.Up,
+                TargetActorId = "stale-target",
+                PublisherId = "child-run",
+            });
+
+        fired.PublisherId.Should().Be("child-run");
+        fired.Direction.Should().Be(EventDirection.Up);
+        fired.TargetActorId.Should().Be("parent-run");
+    }
+
+    [Fact]
+    public void CreateScheduledEnvelope_WhenEnvelopeRedelivery_ShouldPreserveOriginalEnvelopeIdentity()
+    {
+        var original = new EventEnvelope
+        {
+            Id = "retry-envelope-2",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new StringValue { Value = "retry-payload" }),
+            Direction = EventDirection.Down,
+            TargetActorId = "parent-run",
+            PublisherId = "child-run",
+        };
+
+        var scheduled = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
+            actorId: "parent-run",
+            callbackId: "retry-cb",
+            generation: 3,
+            fireIndex: 1,
+            triggerEnvelope: original,
+            deliveryMode: RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
+
+        scheduled.Id.Should().Be("retry-envelope-2");
+        scheduled.Timestamp.Should().BeEquivalentTo(original.Timestamp);
+        scheduled.Direction.Should().Be(EventDirection.Down);
+        scheduled.PublisherId.Should().Be("child-run");
+        scheduled.Metadata.Should().BeEmpty();
     }
 
     private static EventEnvelope CreateEnvelope() => new()
@@ -115,18 +212,26 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
 
         public int CancelCalls { get; private set; }
 
+        public int PurgeCalls { get; private set; }
+
         public int LastTimerPeriodMs { get; private set; }
 
         public long LastCancelExpectedGeneration { get; private set; }
 
+        public byte[] LastTimeoutEnvelopeBytes { get; private set; } = [];
+
+        public RuntimeCallbackDeliveryMode LastDeliveryMode { get; private set; } = RuntimeCallbackDeliveryMode.FiredSelfEvent;
+
         public Task<long> ScheduleTimeoutAsync(
             string callbackId,
             byte[] envelopeBytes,
-            int dueTimeMs)
+            int dueTimeMs,
+            RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
-            _ = envelopeBytes;
             _ = dueTimeMs;
+            LastDeliveryMode = deliveryMode;
+            LastTimeoutEnvelopeBytes = envelopeBytes;
             ScheduleTimeoutCalls++;
             return Task.FromResult(NextGeneration);
         }
@@ -135,12 +240,14 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             string callbackId,
             byte[] envelopeBytes,
             int dueTimeMs,
-            int periodMs)
+            int periodMs,
+            RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
         {
             _ = callbackId;
             _ = envelopeBytes;
             _ = dueTimeMs;
             LastTimerPeriodMs = periodMs;
+            LastDeliveryMode = deliveryMode;
             ScheduleTimerCalls++;
             return Task.FromResult(NextGeneration);
         }
@@ -150,6 +257,12 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             _ = callbackId;
             LastCancelExpectedGeneration = expectedGeneration;
             CancelCalls++;
+            return Task.CompletedTask;
+        }
+
+        public Task PurgeAsync()
+        {
+            PurgeCalls++;
             return Task.CompletedTask;
         }
     }

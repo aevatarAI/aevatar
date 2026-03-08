@@ -23,12 +23,12 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         ValidateRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
         ct.ThrowIfCancellationRequested();
 
-        var envelope = RuntimeCallbackEnvelopeFactory.CreateSelfEnvelope(request.ActorId, request.TriggerEnvelope);
         var generation = await ScheduleViaDedicatedGrainTimeoutAsync(
             request.ActorId,
             request.CallbackId,
-            envelope,
-            request.DueTime);
+            request.TriggerEnvelope,
+            request.DueTime,
+            request.DeliveryMode);
 
         return new RuntimeCallbackLease(
             request.ActorId,
@@ -46,13 +46,13 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(request.Period, TimeSpan.Zero);
         ct.ThrowIfCancellationRequested();
 
-        var envelope = RuntimeCallbackEnvelopeFactory.CreateSelfEnvelope(request.ActorId, request.TriggerEnvelope);
         var generation = await ScheduleViaDedicatedGrainTimerAsync(
             request.ActorId,
             request.CallbackId,
-            envelope,
+            request.TriggerEnvelope,
             request.DueTime,
-            request.Period);
+            request.Period,
+            request.DeliveryMode);
 
         return new RuntimeCallbackLease(
             request.ActorId,
@@ -77,17 +77,28 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         return CancelDedicatedCallbackAsync(lease.ActorId, lease.CallbackId, lease.Generation);
     }
 
+    public Task PurgeActorAsync(
+        string actorId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ct.ThrowIfCancellationRequested();
+        return _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId).PurgeAsync();
+    }
+
     private async Task<long> ScheduleViaDedicatedGrainTimeoutAsync(
         string actorId,
         string callbackId,
         EventEnvelope envelope,
-        TimeSpan dueTime)
+        TimeSpan dueTime,
+        RuntimeCallbackDeliveryMode deliveryMode)
     {
         var grain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
         return await grain.ScheduleTimeoutAsync(
             callbackId,
             envelope.ToByteArray(),
-            ToPositiveMilliseconds(dueTime));
+            ToPositiveMilliseconds(dueTime),
+            deliveryMode);
     }
 
     private async Task<long> ScheduleViaDedicatedGrainTimerAsync(
@@ -95,14 +106,16 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         string callbackId,
         EventEnvelope envelope,
         TimeSpan dueTime,
-        TimeSpan period)
+        TimeSpan period,
+        RuntimeCallbackDeliveryMode deliveryMode)
     {
         var grain = _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
         return await grain.ScheduleTimerAsync(
             callbackId,
             envelope.ToByteArray(),
             ToPositiveMilliseconds(dueTime),
-            ToPositiveMilliseconds(period));
+            ToPositiveMilliseconds(period),
+            deliveryMode);
     }
 
     private Task CancelDedicatedCallbackAsync(

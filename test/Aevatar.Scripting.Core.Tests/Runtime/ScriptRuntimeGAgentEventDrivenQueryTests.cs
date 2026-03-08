@@ -243,6 +243,68 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
     }
 
     [Fact]
+    public async Task RecoveredPendingQuery_ShouldScheduleOnlyRemainingTimeout()
+    {
+        var eventStore = new InMemoryEventStore();
+        var scheduler = new RecordingCallbackScheduler();
+        var orchestrator = new RecordingOrchestrator();
+        var publisher = new RecordingEventPublisher();
+        var agentId = "runtime-recover-remaining";
+        var requestId = "request-recover-remaining";
+
+        await SeedPendingDefinitionQueryAsync(
+            eventStore,
+            agentId,
+            requestId,
+            runId: "run-recover-remaining",
+            definitionActorId: "definition-recover-remaining",
+            scriptRevision: "rev-recover-remaining",
+            queuedAtUnixTimeMs: DateTimeOffset.UtcNow.AddSeconds(-12).ToUnixTimeMilliseconds());
+
+        var replayed = CreateAgent(orchestrator, publisher, scheduler, eventStore);
+        SetAgentId(replayed, agentId);
+        await replayed.ActivateAsync();
+
+        var scheduled = scheduler.Timeouts.Should().ContainSingle().Subject.Request;
+        scheduled.CallbackId.Should().Be(
+            RuntimeCallbackKeyComposer.BuildCallbackId("script-definition-query-timeout", requestId));
+        scheduled.DueTime.Should().BeLessThan(TimeSpan.FromSeconds(40));
+        scheduled.DueTime.Should().BeGreaterThan(TimeSpan.FromSeconds(25));
+        HasPendingDefinitionQuery(replayed, requestId).Should().BeTrue();
+        publisher.Sent.Should().ContainSingle(x => x.TargetActorId == "definition-recover-remaining");
+    }
+
+    [Fact]
+    public async Task RecoveredExpiredPendingQuery_ShouldFailImmediatelyWithoutRescheduling()
+    {
+        var eventStore = new InMemoryEventStore();
+        var scheduler = new RecordingCallbackScheduler();
+        var orchestrator = new RecordingOrchestrator();
+        var publisher = new RecordingEventPublisher();
+        const string agentId = "runtime-recover-expired";
+        const string requestId = "request-recover-expired";
+
+        await SeedPendingDefinitionQueryAsync(
+            eventStore,
+            agentId,
+            requestId,
+            runId: "run-recover-expired",
+            definitionActorId: "definition-recover-expired",
+            scriptRevision: "rev-recover-expired",
+            queuedAtUnixTimeMs: DateTimeOffset.UtcNow.AddSeconds(-50).ToUnixTimeMilliseconds());
+
+        var replayed = CreateAgent(orchestrator, publisher, scheduler, eventStore);
+        SetAgentId(replayed, agentId);
+        await replayed.ActivateAsync();
+
+        scheduler.Timeouts.Should().BeEmpty();
+        publisher.Sent.Should().BeEmpty();
+        orchestrator.Requests.Should().BeEmpty();
+        replayed.State.LastRunId.Should().Be("run-recover-expired");
+        HasPendingDefinitionQuery(replayed, requestId).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task TimeoutSignal_WithMismatchedRunId_ShouldBeIgnored()
     {
         var orchestrator = new RecordingOrchestrator();
@@ -599,6 +661,47 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
         method!.Invoke(agent, [agentId]);
     }
 
+    private static async Task SeedPendingDefinitionQueryAsync(
+        InMemoryEventStore eventStore,
+        string agentId,
+        string requestId,
+        string runId,
+        string definitionActorId,
+        string scriptRevision,
+        long queuedAtUnixTimeMs)
+    {
+        await eventStore.AppendAsync(
+            agentId,
+            [
+                new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = 1,
+                    EventType = ScriptDefinitionQueryQueuedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new ScriptDefinitionQueryQueuedEvent
+                    {
+                        RequestId = requestId,
+                        RunEvent = new RunScriptRequestedEvent
+                        {
+                            RunId = runId,
+                            InputPayload = Any.Pack(new Struct()),
+                            ScriptRevision = scriptRevision,
+                            DefinitionActorId = definitionActorId,
+                            RequestedEventType = "chat.requested",
+                        },
+                        QueuedAtUnixTimeMs = queuedAtUnixTimeMs,
+                        TimeoutCallbackId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                            "script-definition-query-timeout",
+                            requestId),
+                    }),
+                    AgentId = agentId,
+                },
+            ],
+            expectedVersion: 0,
+            CancellationToken.None);
+    }
+
     private sealed class EventDrivenSnapshotPort : IScriptDefinitionSnapshotPort
     {
         public bool UseEventDrivenDefinitionQuery => true;
@@ -738,6 +841,13 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
         {
             ct.ThrowIfCancellationRequested();
             Canceled.Add(lease);
+            return Task.CompletedTask;
+        }
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
     }

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Helpers;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -11,16 +12,19 @@ public sealed class OrleansActorRuntime : IActorRuntime
     private readonly IGrainFactory _grainFactory;
     private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
     private readonly IStreamLifecycleManager _streamLifecycleManager;
+    private readonly IActorRuntimeCallbackScheduler _callbackScheduler;
     private readonly ILogger<OrleansActorRuntime> _logger;
 
     public OrleansActorRuntime(
         IGrainFactory grainFactory,
         Aevatar.Foundation.Abstractions.IStreamProvider streams,
+        IActorRuntimeCallbackScheduler callbackScheduler,
         IStreamLifecycleManager? streamLifecycleManager = null,
         ILogger<OrleansActorRuntime>? logger = null)
     {
         _grainFactory = grainFactory;
         _streams = streams;
+        _callbackScheduler = callbackScheduler ?? throw new ArgumentNullException(nameof(callbackScheduler));
         _streamLifecycleManager = streamLifecycleManager ?? NullStreamLifecycleManager.Instance;
         _logger = logger ?? NullLogger<OrleansActorRuntime>.Instance;
     }
@@ -50,6 +54,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
     public async Task DestroyAsync(string id, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        await _callbackScheduler.PurgeActorAsync(id, ct);
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(id);
 
         var parentId = await grain.GetParentAsync();

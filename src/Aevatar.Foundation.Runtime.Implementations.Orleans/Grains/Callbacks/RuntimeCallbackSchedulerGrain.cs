@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,7 +32,8 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     public async Task<long> ScheduleTimeoutAsync(
         string callbackId,
         byte[] envelopeBytes,
-        int dueTimeMs)
+        int dueTimeMs,
+        RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
         ValidateScheduleRequest(callbackId, envelopeBytes, dueTimeMs);
         var dueTime = TimeSpan.FromMilliseconds(dueTimeMs);
@@ -42,7 +44,8 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             periodic: false,
             periodMs: 0,
             envelopeBytes,
-            dueTime);
+            dueTime,
+            deliveryMode);
         return nextGeneration;
     }
 
@@ -50,7 +53,8 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         string callbackId,
         byte[] envelopeBytes,
         int dueTimeMs,
-        int periodMs)
+        int periodMs,
+        RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
         ValidateScheduleRequest(callbackId, envelopeBytes, dueTimeMs);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(periodMs, 0);
@@ -63,7 +67,8 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             periodic: true,
             periodMs,
             envelopeBytes,
-            dueTime);
+            dueTime,
+            deliveryMode);
         return nextGeneration;
     }
 
@@ -79,6 +84,24 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         _state.State.ReminderCallbacks.Remove(callbackId);
         await _state.WriteStateAsync();
         await TryUnregisterReminderAsync(callbackId);
+    }
+
+    public async Task PurgeAsync()
+    {
+        if (_state.State.ReminderCallbacks.Count == 0)
+        {
+            DeactivateOnIdle();
+            return;
+        }
+
+        var callbackIds = _state.State.ReminderCallbacks.Keys.ToArray();
+        _state.State.ReminderCallbacks.Clear();
+        await _state.WriteStateAsync();
+
+        foreach (var callbackId in callbackIds)
+            await TryUnregisterReminderAsync(callbackId);
+
+        DeactivateOnIdle();
     }
 
     private static void ValidateScheduleRequest(string callbackId, byte[] envelopeBytes, int dueTimeMs)
@@ -117,6 +140,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             scheduled.Generation,
             fireIndex,
             scheduled.EnvelopeBytes,
+            scheduled.DeliveryMode,
             CancellationToken.None);
 
         if (!scheduled.Periodic)
@@ -140,7 +164,8 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         bool periodic,
         int periodMs,
         byte[] envelopeBytes,
-        TimeSpan dueTime)
+        TimeSpan dueTime,
+        RuntimeCallbackDeliveryMode deliveryMode)
     {
         var reminderName = BuildReminderName(callbackId);
         _state.State.ReminderCallbacks[callbackId] = new ReminderScheduledCallbackState
@@ -150,6 +175,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             PeriodMs = periodMs,
             EnvelopeBytes = envelopeBytes,
             FireIndex = 0,
+            DeliveryMode = deliveryMode,
         };
         await _state.WriteStateAsync();
 
@@ -173,14 +199,16 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         long generation,
         int fireIndex,
         byte[] envelopeBytes,
+        RuntimeCallbackDeliveryMode deliveryMode,
         CancellationToken ct)
     {
-        var envelope = RuntimeCallbackEnvelopeFactory.CreateFiredEnvelope(
+        var envelope = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
             this.GetPrimaryKeyString(),
             callbackId,
             generation,
             fireIndex,
-            EventEnvelope.Parser.ParseFrom(envelopeBytes));
+            EventEnvelope.Parser.ParseFrom(envelopeBytes),
+            deliveryMode);
 
         await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(envelope, ct);
     }

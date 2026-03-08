@@ -56,6 +56,38 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
         lease.Backend.Should().Be(RuntimeCallbackBackend.InMemory);
     }
 
+    [Fact]
+    public async Task ScheduleTimeoutAsync_WhenUsingEnvelopeRedelivery_ShouldPublishOriginalPublisher()
+    {
+        var streams = new RecordingStreamProvider();
+        var scheduler = new InMemoryActorRuntimeCallbackScheduler(streams);
+
+        await scheduler.ScheduleTimeoutAsync(new RuntimeCallbackTimeoutRequest
+        {
+            ActorId = "parent-run",
+            CallbackId = "retry-cb",
+            DueTime = TimeSpan.FromMilliseconds(10),
+            DeliveryMode = RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+            TriggerEnvelope = new EventEnvelope
+            {
+                Id = "retry-envelope-3",
+                Payload = Any.Pack(new StringValue { Value = "payload" }),
+                Direction = EventDirection.Down,
+                TargetActorId = "parent-run",
+                PublisherId = "child-run",
+            },
+        });
+
+        await streams.LastStreamProduced.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        streams.LastProduced.Should().NotBeNull();
+        var produced = streams.LastProduced!;
+        produced.Id.Should().Be("retry-envelope-3");
+        produced.PublisherId.Should().Be("child-run");
+        produced.Direction.Should().Be(EventDirection.Down);
+        produced.Metadata.Should().BeEmpty();
+    }
+
     private static EventEnvelope CreateEnvelope() => new()
     {
         Payload = Any.Pack(new StringValue { Value = "payload" }),
@@ -105,46 +137,51 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
 
     private sealed class RecordingStreamProvider : IStreamProvider
     {
-        public IStream GetStream(string actorId) => new RecordingStream(actorId);
-    }
+        public EventEnvelope? LastProduced { get; private set; }
 
-    private sealed class RecordingStream(string actorId) : IStream
-    {
-        public string StreamId { get; } = actorId;
+        public TaskCompletionSource<bool> LastStreamProduced { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
+        public IStream GetStream(string actorId) => new RecordingStream(actorId, this);
+
+        private sealed class RecordingStream(string actorId, RecordingStreamProvider owner) : IStream
         {
-            _ = message;
-            _ = ct;
-            return Task.CompletedTask;
-        }
+            public string StreamId { get; } = actorId;
 
-        public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
-            where T : IMessage, new()
-        {
-            _ = handler;
-            _ = ct;
-            return Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
-        }
+            public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
+            {
+                ct.ThrowIfCancellationRequested();
+                owner.LastProduced = message as EventEnvelope;
+                owner.LastStreamProduced.TrySetResult(true);
+                return Task.CompletedTask;
+            }
 
-        public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)
-        {
-            _ = binding;
-            _ = ct;
-            return Task.CompletedTask;
-        }
+            public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
+                where T : IMessage, new()
+            {
+                _ = handler;
+                _ = ct;
+                return Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
+            }
 
-        public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default)
-        {
-            _ = targetStreamId;
-            _ = ct;
-            return Task.CompletedTask;
-        }
+            public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+            {
+                _ = binding;
+                _ = ct;
+                return Task.CompletedTask;
+            }
 
-        public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default)
-        {
-            _ = ct;
-            return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
+            public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default)
+            {
+                _ = targetStreamId;
+                _ = ct;
+                return Task.CompletedTask;
+            }
+
+            public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default)
+            {
+                _ = ct;
+                return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
+            }
         }
     }
 

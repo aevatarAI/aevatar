@@ -26,8 +26,18 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         var key = new CallbackKey(request.ActorId, request.CallbackId);
         var callback = _callbacks.AddOrUpdate(
             key,
-            _ => ScheduledCallback.Create(request.ActorId, request.CallbackId, request.TriggerEnvelope.Clone(), isPeriodic: false, TimeSpan.Zero),
-            (_, existing) => existing.Replace(request.TriggerEnvelope.Clone(), isPeriodic: false, TimeSpan.Zero));
+            _ => ScheduledCallback.Create(
+                request.ActorId,
+                request.CallbackId,
+                request.TriggerEnvelope.Clone(),
+                request.DeliveryMode,
+                isPeriodic: false,
+                TimeSpan.Zero),
+            (_, existing) => existing.Replace(
+                request.TriggerEnvelope.Clone(),
+                request.DeliveryMode,
+                isPeriodic: false,
+                TimeSpan.Zero));
 
         callback.Start(this, request.DueTime);
         return Task.FromResult(new RuntimeCallbackLease(
@@ -47,8 +57,18 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         var key = new CallbackKey(request.ActorId, request.CallbackId);
         var callback = _callbacks.AddOrUpdate(
             key,
-            _ => ScheduledCallback.Create(request.ActorId, request.CallbackId, request.TriggerEnvelope.Clone(), isPeriodic: true, request.Period),
-            (_, existing) => existing.Replace(request.TriggerEnvelope.Clone(), isPeriodic: true, request.Period));
+            _ => ScheduledCallback.Create(
+                request.ActorId,
+                request.CallbackId,
+                request.TriggerEnvelope.Clone(),
+                request.DeliveryMode,
+                isPeriodic: true,
+                request.Period),
+            (_, existing) => existing.Replace(
+                request.TriggerEnvelope.Clone(),
+                request.DeliveryMode,
+                isPeriodic: true,
+                request.Period));
 
         callback.Start(this, request.DueTime);
         return Task.FromResult(new RuntimeCallbackLease(
@@ -80,6 +100,24 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         return Task.CompletedTask;
     }
 
+    public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ct.ThrowIfCancellationRequested();
+
+        var callbacks = _callbacks
+            .Where(x => string.Equals(x.Key.ActorId, actorId, StringComparison.Ordinal))
+            .ToList();
+
+        foreach (var entry in callbacks)
+        {
+            if (_callbackEntries.Remove(new KeyValuePair<CallbackKey, ScheduledCallback>(entry.Key, entry.Value)))
+                entry.Value.Stop();
+        }
+
+        return Task.CompletedTask;
+    }
+
     private static void ValidateScheduleRequest(
         string actorId,
         string callbackId,
@@ -102,12 +140,13 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             return;
 
         var fireIndex = callback.IncrementFireIndex();
-        var envelope = RuntimeCallbackEnvelopeFactory.CreateFiredEnvelope(
+        var envelope = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
             callback.ActorId,
             callback.CallbackId,
             callback.Generation,
             fireIndex,
-            callback.TriggerEnvelope);
+            callback.TriggerEnvelope,
+            callback.DeliveryMode);
 
         await _streams.GetStream(callback.ActorId).ProduceAsync(envelope, ct);
 
@@ -136,6 +175,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             string actorId,
             string callbackId,
             EventEnvelope triggerEnvelope,
+            RuntimeCallbackDeliveryMode deliveryMode,
             bool isPeriodic,
             TimeSpan period,
             long generation)
@@ -143,6 +183,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             ActorId = actorId;
             CallbackId = callbackId;
             TriggerEnvelope = triggerEnvelope;
+            DeliveryMode = deliveryMode;
             IsPeriodic = isPeriodic;
             Period = period;
             Generation = generation;
@@ -154,6 +195,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
 
         public EventEnvelope TriggerEnvelope { get; }
 
+        public RuntimeCallbackDeliveryMode DeliveryMode { get; }
+
         public bool IsPeriodic { get; }
 
         public TimeSpan Period { get; }
@@ -164,14 +207,16 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             string actorId,
             string callbackId,
             EventEnvelope triggerEnvelope,
+            RuntimeCallbackDeliveryMode deliveryMode,
             bool isPeriodic,
             TimeSpan period)
         {
-            return new ScheduledCallback(actorId, callbackId, triggerEnvelope, isPeriodic, period, generation: 1);
+            return new ScheduledCallback(actorId, callbackId, triggerEnvelope, deliveryMode, isPeriodic, period, generation: 1);
         }
 
         public ScheduledCallback Replace(
             EventEnvelope triggerEnvelope,
+            RuntimeCallbackDeliveryMode deliveryMode,
             bool isPeriodic,
             TimeSpan period)
         {
@@ -180,6 +225,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
                 ActorId,
                 CallbackId,
                 triggerEnvelope,
+                deliveryMode,
                 isPeriodic,
                 period,
                 Generation + 1);

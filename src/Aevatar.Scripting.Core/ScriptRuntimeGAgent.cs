@@ -36,7 +36,12 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
     {
         _pendingDefinitionQueries.Clear();
 
-        foreach (var pending in State.PendingDefinitionQueries.Values.OrderBy(x => x.QueuedAtUnixTimeMs))
+        var pendingQueries = State.PendingDefinitionQueries.Values
+            .OrderBy(x => x.QueuedAtUnixTimeMs)
+            .Select(x => x.Clone())
+            .ToList();
+
+        foreach (var pending in pendingQueries)
             await RecoverPendingDefinitionQueryAsync(pending, ct);
     }
 
@@ -280,7 +285,10 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         PendingRunRuntimeContext pending;
         try
         {
-            pending = await ArmPendingDefinitionQueryAsync(pendingState, ct);
+            pending = await ArmPendingDefinitionQueryAsync(
+                pendingState,
+                PendingRunTimeout,
+                ct);
         }
         catch (Exception ex)
         {
@@ -333,10 +341,31 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         PendingScriptDefinitionQueryState pending,
         CancellationToken ct)
     {
-        PendingRunRuntimeContext runtimePending;
+        var remainingTimeout = ResolveRemainingPendingRunTimeout(pending, DateTimeOffset.UtcNow);
+        if (remainingTimeout <= TimeSpan.Zero)
+        {
+            await PersistPendingRunFailureAsync(
+                pending,
+                BuildDefinitionQueryTimeoutFailureReason(pending.RequestId),
+                ct);
+            await ClearPendingDefinitionQueryRuntimeAsync(
+                new PendingRunRuntimeContext(pending.Clone(), null),
+                "recovered_expired",
+                CancellationToken.None);
+            Logger.LogWarning(
+                "Recovered script definition query exceeded timeout before reactivation. runtime_actor_id={RuntimeActorId} run_id={RunId} request_id={RequestId}",
+                Id,
+                pending.RunEvent.RunId,
+                pending.RequestId);
+            return;
+        }
+
         try
         {
-            runtimePending = await ArmPendingDefinitionQueryAsync(pending, ct);
+            await ArmPendingDefinitionQueryAsync(
+                pending,
+                remainingTimeout,
+                ct);
         }
         catch (Exception ex)
         {
@@ -366,11 +395,12 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
 
     private async Task<PendingRunRuntimeContext> ArmPendingDefinitionQueryAsync(
         PendingScriptDefinitionQueryState pending,
+        TimeSpan timeout,
         CancellationToken ct)
     {
         var timeoutLease = await ScheduleSelfDurableTimeoutAsync(
             pending.TimeoutCallbackId,
-            PendingRunTimeout,
+            timeout,
             new ScriptDefinitionQueryTimeoutFiredEvent
             {
                 RequestId = pending.RequestId,
@@ -436,7 +466,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
 
         await PersistPendingRunFailureAsync(
             pending.Pending,
-            $"Definition snapshot query timed out. request_id={pending.Pending.RequestId} timeout_seconds={PendingRunTimeout.TotalSeconds}",
+            BuildDefinitionQueryTimeoutFailureReason(pending.Pending.RequestId),
             ct);
         await ClearPendingDefinitionQueryRuntimeAsync(
             pending,
@@ -602,6 +632,27 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         {
             RequestId = requestId ?? string.Empty,
         };
+
+    private static string BuildDefinitionQueryTimeoutFailureReason(string requestId) =>
+        $"Definition snapshot query timed out. request_id={requestId} timeout_seconds={PendingRunTimeout.TotalSeconds}";
+
+    private static TimeSpan ResolveRemainingPendingRunTimeout(
+        PendingScriptDefinitionQueryState pending,
+        DateTimeOffset now)
+    {
+        if (pending.QueuedAtUnixTimeMs <= 0)
+            return PendingRunTimeout;
+
+        var elapsedMs = now.ToUnixTimeMilliseconds() - pending.QueuedAtUnixTimeMs;
+        if (elapsedMs <= 0)
+            return PendingRunTimeout;
+
+        var remainingMs = checked((long)PendingRunTimeout.TotalMilliseconds) - elapsedMs;
+        if (remainingMs <= 0)
+            return TimeSpan.Zero;
+
+        return TimeSpan.FromMilliseconds(remainingMs);
+    }
 
     private ScriptRunDomainEventCommitted BuildRunFailureCommittedEvent(
         RunScriptRequestedEvent runEvent,

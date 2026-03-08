@@ -1,3 +1,5 @@
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 
 public sealed class RuntimeCallbackSchedulerGrainState
@@ -16,4 +18,6 @@ public sealed class ReminderScheduledCallbackState
     public byte[] EnvelopeBytes { get; set; } = [];
 
     public int FireIndex { get; set; }
+
+    public RuntimeCallbackDeliveryMode DeliveryMode { get; set; } = RuntimeCallbackDeliveryMode.FiredSelfEvent;
 }

@@ -5,6 +5,7 @@
 
 using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions.Helpers;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
@@ -26,6 +27,7 @@ public sealed class LocalActorRuntime : IActorRuntime
     private readonly IStreamLifecycleManager _streamLifecycleManager;
     private readonly ILocalActivationIndexStore _activationIndexStore;
     private readonly IServiceProvider _services;
+    private readonly IActorRuntimeCallbackScheduler? _callbackScheduler;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private readonly ILogger<LocalActorRuntime> _logger;
 
@@ -42,6 +44,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         _logger = logger ?? NullLogger<LocalActorRuntime>.Instance;
         _activationIndexStore = services.GetService<ILocalActivationIndexStore>()
             ?? new InMemoryLocalActivationIndexStore();
+        _callbackScheduler = services.GetService<IActorRuntimeCallbackScheduler>();
         _deactivationHookDispatcher = services.GetService<IActorDeactivationHookDispatcher>();
     }
 
@@ -84,6 +87,9 @@ public sealed class LocalActorRuntime : IActorRuntime
     public async Task DestroyAsync(string id, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        if (_callbackScheduler != null)
+            await _callbackScheduler.PurgeActorAsync(id, ct);
+
         if (!_actors.TryRemove(id, out var actor))
         {
             _streamLifecycleManager.RemoveStream(id);

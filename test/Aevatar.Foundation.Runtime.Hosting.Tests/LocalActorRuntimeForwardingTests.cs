@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -13,7 +14,7 @@ public sealed class LocalActorRuntimeForwardingTests
     [Fact]
     public async Task DestroyAsync_ShouldCleanupIncomingAndOutgoingForwardingBindings()
     {
-        var runtime = CreateRuntime(out var registry);
+        var runtime = CreateRuntime(out var registry, out var scheduler);
         var parent = await runtime.CreateAsync<LocalTestAgent>("parent");
         var middle = await runtime.CreateAsync<LocalTestAgent>("middle");
         var child = await runtime.CreateAsync<LocalTestAgent>("child");
@@ -27,16 +28,22 @@ public sealed class LocalActorRuntimeForwardingTests
         (await child.GetParentIdAsync()).Should().BeNull();
         (await registry.ListBySourceAsync("parent", CancellationToken.None)).Should().BeEmpty();
         (await registry.ListBySourceAsync("middle", CancellationToken.None)).Should().BeEmpty();
+        scheduler.PurgedActorIds.Should().ContainSingle("middle");
     }
 
-    private static LocalActorRuntime CreateRuntime(out InMemoryStreamForwardingRegistry registry)
+    private static LocalActorRuntime CreateRuntime(
+        out InMemoryStreamForwardingRegistry registry,
+        out RecordingCallbackScheduler scheduler)
     {
         registry = new InMemoryStreamForwardingRegistry();
         var streams = new InMemoryStreamProvider(
             new InMemoryStreamOptions(),
             NullLoggerFactory.Instance,
             registry);
-        var services = new ServiceCollection().BuildServiceProvider();
+        scheduler = new RecordingCallbackScheduler();
+        var services = new ServiceCollection()
+            .AddSingleton<IActorRuntimeCallbackScheduler>(scheduler)
+            .BuildServiceProvider();
         return new LocalActorRuntime(
             streams,
             services,
@@ -56,5 +63,42 @@ public sealed class LocalActorRuntimeForwardingTests
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<string> PurgedActorIds { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            throw new NotSupportedException();
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            throw new NotSupportedException();
+        }
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            PurgedActorIds.Add(actorId);
+            return Task.CompletedTask;
+        }
     }
 }

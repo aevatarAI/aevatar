@@ -17,4 +17,8 @@ public interface IActorRuntimeCallbackScheduler
     Task CancelAsync(
         RuntimeCallbackLease lease,
         CancellationToken ct = default);
+
+    Task PurgeActorAsync(
+        string actorId,
+        CancellationToken ct = default);
 }

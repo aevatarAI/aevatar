@@ -1,8 +1,11 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -16,7 +19,7 @@ public sealed class OrleansActorRuntimeForwardingTests
     [Fact]
     public async Task LinkAsync_ShouldRegisterForwardingBinding_AndUpdateTopology()
     {
-        var runtime = CreateRuntime(out var registry, out var grains);
+        var runtime = CreateRuntime(out var registry, out var grains, out _);
 
         await runtime.LinkAsync("parent", "child");
 
@@ -31,7 +34,7 @@ public sealed class OrleansActorRuntimeForwardingTests
     [Fact]
     public async Task UnlinkAsync_ShouldRemoveForwardingBinding_AndTopology()
     {
-        var runtime = CreateRuntime(out var registry, out var grains);
+        var runtime = CreateRuntime(out var registry, out var grains, out _);
         await runtime.LinkAsync("parent", "child");
 
         await runtime.UnlinkAsync("child");
@@ -45,7 +48,7 @@ public sealed class OrleansActorRuntimeForwardingTests
     public async Task LinkAsync_ShouldCreateCallChainReentrancyScope_ForGrainCalls()
     {
         RequestContext.Clear();
-        var runtime = CreateRuntime(out _, out var grains);
+        var runtime = CreateRuntime(out _, out var grains, out _);
 
         await runtime.LinkAsync("parent", "child");
 
@@ -57,7 +60,7 @@ public sealed class OrleansActorRuntimeForwardingTests
     [Fact]
     public async Task DestroyAsync_ShouldCleanupIncomingAndOutgoingForwardingBindings()
     {
-        var runtime = CreateRuntime(out var registry, out var grains);
+        var runtime = CreateRuntime(out var registry, out var grains, out _);
         await runtime.LinkAsync("parent", "middle");
         await runtime.LinkAsync("middle", "child-1");
         await runtime.LinkAsync("middle", "child-2");
@@ -75,7 +78,7 @@ public sealed class OrleansActorRuntimeForwardingTests
     [Fact]
     public async Task LinkAsync_WhenChildIsNotInitialized_ShouldThrow_AndNotMutateTopology()
     {
-        var runtime = CreateRuntime(out var registry, out var grains);
+        var runtime = CreateRuntime(out var registry, out var grains, out _);
         await runtime.ExistsAsync("parent");
         await runtime.ExistsAsync("child");
         grains["child"].Initialized = false;
@@ -91,7 +94,7 @@ public sealed class OrleansActorRuntimeForwardingTests
     [Fact]
     public async Task LinkAsync_WhenParentIsNotInitialized_ShouldStillLink_AndSkipParentInitializationProbe()
     {
-        var runtime = CreateRuntime(out var registry, out var grains);
+        var runtime = CreateRuntime(out var registry, out var grains, out _);
         await runtime.ExistsAsync("parent");
         await runtime.ExistsAsync("child");
         grains["parent"].Initialized = false;
@@ -110,19 +113,31 @@ public sealed class OrleansActorRuntimeForwardingTests
     public async Task DestroyAsync_ShouldRemoveStreamFromLifecycleManager()
     {
         var lifecycleManager = new RecordingStreamLifecycleManager();
-        var runtime = CreateRuntime(out _, out _, lifecycleManager);
+        var runtime = CreateRuntime(out _, out _, out _, lifecycleManager);
 
         await runtime.DestroyAsync("actor-1");
 
         lifecycleManager.RemovedStreamActorIds.Should().ContainSingle("actor-1");
     }
 
+    [Fact]
+    public async Task DestroyAsync_ShouldPurgeDurableCallbackSchedulerState()
+    {
+        var runtime = CreateRuntime(out _, out _, out var callbackSchedulerGrains);
+
+        await runtime.DestroyAsync("actor-1");
+
+        callbackSchedulerGrains["actor-1"].PurgeCalls.Should().Be(1);
+    }
+
     private static OrleansActorRuntime CreateRuntime(
         out InMemoryStreamForwardingRegistry registry,
         out Dictionary<string, RecordingRuntimeActorGrain> grains,
+        out Dictionary<string, RecordingCallbackSchedulerGrain> callbackSchedulerGrains,
         IStreamLifecycleManager? streamLifecycleManager = null)
     {
         var grainMap = new Dictionary<string, RecordingRuntimeActorGrain>(StringComparer.Ordinal);
+        var callbackSchedulerGrainMap = new Dictionary<string, RecordingCallbackSchedulerGrain>(StringComparer.Ordinal);
         var grainFactory = DispatchProxy.Create<IGrainFactory, GrainFactoryProxy>();
         ((GrainFactoryProxy)(object)grainFactory).ResolveGrain = actorId =>
         {
@@ -134,19 +149,33 @@ public sealed class OrleansActorRuntimeForwardingTests
 
             return grain;
         };
+        ((GrainFactoryProxy)(object)grainFactory).ResolveCallbackSchedulerGrain = actorId =>
+        {
+            if (!callbackSchedulerGrainMap.TryGetValue(actorId, out var grain))
+            {
+                grain = new RecordingCallbackSchedulerGrain();
+                callbackSchedulerGrainMap[actorId] = grain;
+            }
+
+            return grain;
+        };
 
         registry = new InMemoryStreamForwardingRegistry();
         var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
         grains = grainMap;
+        callbackSchedulerGrains = callbackSchedulerGrainMap;
         return new OrleansActorRuntime(
             grainFactory,
             streams,
+            new OrleansActorRuntimeDurableCallbackScheduler(grainFactory),
             streamLifecycleManager: streamLifecycleManager);
     }
 
     private class GrainFactoryProxy : DispatchProxy
     {
         public Func<string, IRuntimeActorGrain>? ResolveGrain { get; set; }
+
+        public Func<string, IRuntimeCallbackSchedulerGrain>? ResolveCallbackSchedulerGrain { get; set; }
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
@@ -159,6 +188,17 @@ public sealed class OrleansActorRuntimeForwardingTests
                 ResolveGrain != null)
             {
                 return ResolveGrain(actorId);
+            }
+
+            if (targetMethod?.Name == "GetGrain" &&
+                targetMethod.IsGenericMethod &&
+                targetMethod.GetGenericArguments().Length == 1 &&
+                targetMethod.GetGenericArguments()[0] == typeof(IRuntimeCallbackSchedulerGrain) &&
+                args is { Length: > 0 } &&
+                args[0] is string callbackActorId &&
+                ResolveCallbackSchedulerGrain != null)
+            {
+                return ResolveCallbackSchedulerGrain(callbackActorId);
             }
 
             throw new NotSupportedException($"Unexpected grain factory call: {targetMethod?.Name}");
@@ -267,6 +307,52 @@ public sealed class OrleansActorRuntimeForwardingTests
         public void RemoveStream(string actorId)
         {
             RemovedStreamActorIds.Add(actorId);
+        }
+    }
+
+    private sealed class RecordingCallbackSchedulerGrain : IRuntimeCallbackSchedulerGrain
+    {
+        public int PurgeCalls { get; private set; }
+
+        public Task<long> ScheduleTimeoutAsync(
+            string callbackId,
+            byte[] envelopeBytes,
+            int dueTimeMs,
+            RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
+        {
+            _ = callbackId;
+            _ = envelopeBytes;
+            _ = dueTimeMs;
+            _ = deliveryMode;
+            throw new NotSupportedException();
+        }
+
+        public Task<long> ScheduleTimerAsync(
+            string callbackId,
+            byte[] envelopeBytes,
+            int dueTimeMs,
+            int periodMs,
+            RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
+        {
+            _ = callbackId;
+            _ = envelopeBytes;
+            _ = dueTimeMs;
+            _ = periodMs;
+            _ = deliveryMode;
+            throw new NotSupportedException();
+        }
+
+        public Task CancelAsync(string callbackId, long expectedGeneration = 0)
+        {
+            _ = callbackId;
+            _ = expectedGeneration;
+            return Task.CompletedTask;
+        }
+
+        public Task PurgeAsync()
+        {
+            PurgeCalls++;
+            return Task.CompletedTask;
         }
     }
 }

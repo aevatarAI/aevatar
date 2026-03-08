@@ -382,6 +382,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                     CallbackId = BuildRuntimeRetryCallbackId(envelope, nextAttempt),
                     DueTime = TimeSpan.FromMilliseconds(_runtimeEnvelopeRetryPolicy.RetryDelayMs),
                     TriggerEnvelope = retryEnvelope,
+                    DeliveryMode = RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
                 });
         }
         else

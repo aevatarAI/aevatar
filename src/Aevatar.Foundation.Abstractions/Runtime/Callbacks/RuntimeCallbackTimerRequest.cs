@@ -11,4 +11,6 @@ public sealed class RuntimeCallbackTimerRequest
     public required TimeSpan DueTime { get; init; }
 
     public required TimeSpan Period { get; init; }
+
+    public RuntimeCallbackDeliveryMode DeliveryMode { get; init; } = RuntimeCallbackDeliveryMode.FiredSelfEvent;
 }

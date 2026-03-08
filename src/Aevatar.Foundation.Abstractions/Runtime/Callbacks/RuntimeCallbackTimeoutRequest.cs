@@ -9,4 +9,6 @@ public sealed class RuntimeCallbackTimeoutRequest
     public required EventEnvelope TriggerEnvelope { get; init; }
 
     public required TimeSpan DueTime { get; init; }
+
+    public RuntimeCallbackDeliveryMode DeliveryMode { get; init; } = RuntimeCallbackDeliveryMode.FiredSelfEvent;
 }
