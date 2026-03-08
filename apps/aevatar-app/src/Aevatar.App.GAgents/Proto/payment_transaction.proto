@@ -1,0 +1,45 @@
+syntax = "proto3";
+package aevatar_app;
+option csharp_namespace = "Aevatar.App.GAgents";
+import "google/protobuf/timestamp.proto";
+
+message PaymentTransactionState {
+  string transaction_id = 1;
+  string user_id = 2;
+  string original_transaction_id = 3;
+  int32 amount = 4;
+  string currency = 5;
+  int32 amount_usd = 6;
+  string billing_type = 7;
+  string product_id = 8;
+  string store = 9;
+  google.protobuf.Timestamp created_at = 10;
+  string affiliate_transaction_id = 11;
+  string affiliate_platform = 12;
+  bool refunded = 13;
+  google.protobuf.Timestamp refunded_at = 14;
+}
+
+message PaymentTransactionCreatedEvent {
+  string transaction_id = 1;
+  string user_id = 2;
+  string original_transaction_id = 3;
+  int32 amount = 4;
+  string currency = 5;
+  int32 amount_usd = 6;
+  string billing_type = 7;
+  string product_id = 8;
+  string store = 9;
+  google.protobuf.Timestamp created_at = 10;
+}
+
+message PaymentTransactionAffiliateTrackedEvent {
+  string transaction_id = 1;
+  string affiliate_transaction_id = 2;
+  string affiliate_platform = 3;
+}
+
+message PaymentTransactionRefundedEvent {
+  string transaction_id = 1;
+  google.protobuf.Timestamp refunded_at = 2;
+}

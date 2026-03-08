@@ -41,7 +41,7 @@ public sealed class AuthAppService : IAuthAppService
             return TrialRegisterResult.Existing(existingToken, existingTrialId);
         }
 
-        var userId = Guid.NewGuid().ToString("N");
+        var userId = Guid.NewGuid().ToString();
         var trialId = $"trial_{userId}";
 
         await _projectionManager.EnsureSubscribedAsync(_actors.ResolveActorId<UserAccountGAgent>(userId));

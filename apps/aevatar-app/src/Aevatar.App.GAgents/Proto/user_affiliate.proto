@@ -1,0 +1,18 @@
+syntax = "proto3";
+package aevatar_app;
+option csharp_namespace = "Aevatar.App.GAgents";
+import "google/protobuf/timestamp.proto";
+
+message UserAffiliateState {
+  string user_id = 1;
+  string customer_id = 2;
+  string platform = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message UserAffiliateCreatedEvent {
+  string user_id = 1;
+  string customer_id = 2;
+  string platform = 3;
+  google.protobuf.Timestamp created_at = 4;
+}

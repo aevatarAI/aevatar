@@ -33,6 +33,12 @@ public static class AppProjectionServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentStore<AppSyncEntityLastResultReadModel, string>>(
             _ => new AppInMemoryDocumentStore<AppSyncEntityLastResultReadModel, string>(m => m.Id));
 
+        services.TryAddSingleton<IProjectionDocumentStore<AppUserAffiliateReadModel, string>>(
+            _ => new AppInMemoryDocumentStore<AppUserAffiliateReadModel, string>(m => m.Id));
+
+        services.TryAddSingleton<IProjectionDocumentStore<AppPaymentTransactionReadModel, string>>(
+            _ => new AppInMemoryDocumentStore<AppPaymentTransactionReadModel, string>(m => m.Id));
+
         RegisterFromAssembly(services, typeof(AppProjectionServiceCollectionExtensions).Assembly);
 
         services.TryAddSingleton<IAppProjectionContextFactory, DefaultAppProjectionContextFactory>();
@@ -76,6 +82,22 @@ public static class AppProjectionServiceCollectionExtensions
             services,
             assembly,
             typeof(IProjectionEventReducer<AppAuthLookupReadModel, AppProjectionContext>),
+            typeof(IProjectionProjector<AppProjectionContext, object?>),
+            ReducerContract,
+            ProjectorContract);
+
+        ProjectionAssemblyRegistration.RegisterProjectionExtensionsFromAssembly(
+            services,
+            assembly,
+            typeof(IProjectionEventReducer<AppUserAffiliateReadModel, AppProjectionContext>),
+            typeof(IProjectionProjector<AppProjectionContext, object?>),
+            ReducerContract,
+            ProjectorContract);
+
+        ProjectionAssemblyRegistration.RegisterProjectionExtensionsFromAssembly(
+            services,
+            assembly,
+            typeof(IProjectionEventReducer<AppPaymentTransactionReadModel, AppProjectionContext>),
             typeof(IProjectionProjector<AppProjectionContext, object?>),
             ReducerContract,
             ProjectorContract);

@@ -42,6 +42,12 @@ public static class AppElasticsearchProjectionExtensions
         services.AddElasticsearchDocumentProjectionStore<AppSyncEntityLastResultReadModel, string>(
             _ => BuildOptions(), _ => IndexMeta("sync-last-results"), m => m.Id);
 
+        services.AddElasticsearchDocumentProjectionStore<AppUserAffiliateReadModel, string>(
+            _ => BuildOptions(), _ => IndexMeta("user-affiliates"), m => m.Id);
+
+        services.AddElasticsearchDocumentProjectionStore<AppPaymentTransactionReadModel, string>(
+            _ => BuildOptions(), _ => IndexMeta("payment-transactions"), m => m.Id);
+
         return services;
     }
 

@@ -38,6 +38,7 @@ namespace Aevatar.App.Host.Api.Tests;
 public sealed class AppTestFixture : IAsyncLifetime
 {
     public const string TrialSecret = "integration-test-secret-32-chars!";
+    public const string WebhookSecret = "test-webhook-secret";
 
     private WebApplication? _app;
     private readonly InMemoryEventStore _eventStore = new();
@@ -47,6 +48,8 @@ public sealed class AppTestFixture : IAsyncLifetime
     public StubWorkflowService WorkflowStub { get; } = new();
     public StubConnector ConnectorStub { get; private set; } = null!;
     public StubS3StorageClient S3Stub { get; } = new();
+    public StubToltService ToltStub { get; } = new();
+    public StubWebhookHandler WebhookStub { get; } = new();
     public InMemoryEventStore EventStore => _eventStore;
     public IActorRuntime Runtime => _runtime;
 
@@ -116,6 +119,8 @@ public sealed class AppTestFixture : IAsyncLifetime
 
         services.AddSingleton<IS3StorageClient>(S3Stub);
         services.AddSingleton<IImageStorageAppService, ImageStorageAppService>();
+        services.AddSingleton<IToltAppService>(ToltStub);
+        services.AddSingleton<IRevenueCatWebhookHandler>(WebhookStub);
         services.Configure<ImageStorageOptions>(o =>
         {
             o.Region = "us-east-1";
@@ -123,6 +128,7 @@ public sealed class AppTestFixture : IAsyncLifetime
             o.CdnUrl = "https://cdn.test";
         });
 
+        builder.Configuration["RevenueCat:WebhookSecret"] = WebhookSecret;
         services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
 
         _app = builder.Build();
@@ -146,7 +152,8 @@ public sealed class AppTestFixture : IAsyncLifetime
                 || context.Request.Path.StartsWithSegments("/api/state")
                 || context.Request.Path.StartsWithSegments("/api/sync")
                 || context.Request.Path.StartsWithSegments("/api/generate")
-                || context.Request.Path.StartsWithSegments("/api/upload"),
+                || context.Request.Path.StartsWithSegments("/api/upload")
+                || context.Request.Path.StartsWithSegments("/api/referral/bind"),
             branch => branch.UseMiddleware<AppUserProvisioningMiddleware>());
 
         _app.MapHealthEndpoints();
@@ -157,6 +164,8 @@ public sealed class AppTestFixture : IAsyncLifetime
         _app.MapSyncEndpoints();
         _app.MapGenerateEndpoints();
         _app.MapUploadEndpoints();
+        _app.MapReferralEndpoints();
+        _app.MapWebhookEndpoints();
 
         await _app.StartAsync();
         Client = new HttpClient { BaseAddress = new Uri(_app.Urls.First()) };
@@ -284,19 +293,25 @@ internal sealed class SyncingAppProjectionManager : IAppProjectionManager
     private readonly IProjectionDocumentStore<AppUserAccountReadModel, string> _accountStore;
     private readonly IProjectionDocumentStore<AppUserProfileReadModel, string> _profileStore;
     private readonly IProjectionDocumentStore<AppAuthLookupReadModel, string> _authLookupStore;
+    private readonly IProjectionDocumentStore<AppUserAffiliateReadModel, string> _affiliateStore;
+    private readonly IProjectionDocumentStore<AppPaymentTransactionReadModel, string> _transactionStore;
 
     public SyncingAppProjectionManager(
         IActorRuntime runtime,
         IProjectionDocumentStore<AppSyncEntityReadModel, string> syncStore,
         IProjectionDocumentStore<AppUserAccountReadModel, string> accountStore,
         IProjectionDocumentStore<AppUserProfileReadModel, string> profileStore,
-        IProjectionDocumentStore<AppAuthLookupReadModel, string> authLookupStore)
+        IProjectionDocumentStore<AppAuthLookupReadModel, string> authLookupStore,
+        IProjectionDocumentStore<AppUserAffiliateReadModel, string> affiliateStore,
+        IProjectionDocumentStore<AppPaymentTransactionReadModel, string> transactionStore)
     {
         _runtime = runtime;
         _syncStore = syncStore;
         _accountStore = accountStore;
         _profileStore = profileStore;
         _authLookupStore = authLookupStore;
+        _affiliateStore = affiliateStore;
+        _transactionStore = transactionStore;
     }
 
     public async Task EnsureSubscribedAsync(string actorId, CancellationToken ct = default)
@@ -389,6 +404,35 @@ internal sealed class SyncingAppProjectionManager : IAppProjectionManager
                 {
                     m.LookupKey = authAgent.State.LookupKey;
                     m.UserId = authAgent.State.UserId;
+                }, ct);
+                break;
+
+            case GAgentBase<UserAffiliateState> affiliateAgent:
+                await _affiliateStore.MutateAsync(actorId, m =>
+                {
+                    m.UserId = affiliateAgent.State.UserId;
+                    m.CustomerId = affiliateAgent.State.CustomerId;
+                    m.Platform = affiliateAgent.State.Platform;
+                    m.CreatedAt = affiliateAgent.State.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue;
+                }, ct);
+                break;
+
+            case GAgentBase<PaymentTransactionState> txAgent:
+                await _transactionStore.MutateAsync(actorId, m =>
+                {
+                    m.TransactionId = txAgent.State.TransactionId;
+                    m.UserId = txAgent.State.UserId;
+                    m.Amount = txAgent.State.Amount;
+                    m.Currency = txAgent.State.Currency;
+                    m.AmountUsd = txAgent.State.AmountUsd;
+                    m.BillingType = txAgent.State.BillingType;
+                    m.ProductId = txAgent.State.ProductId;
+                    m.Store = txAgent.State.Store;
+                    m.CreatedAt = txAgent.State.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue;
+                    m.AffiliateTransactionId = txAgent.State.AffiliateTransactionId;
+                    m.AffiliatePlatform = txAgent.State.AffiliatePlatform;
+                    m.Refunded = txAgent.State.Refunded;
+                    m.RefundedAt = txAgent.State.RefundedAt?.ToDateTimeOffset();
                 }, ct);
                 break;
         }
@@ -565,4 +609,35 @@ internal sealed class StubActor : IActor
 
     public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
     public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+}
+
+public sealed class StubToltService : IToltAppService
+{
+    public ToltClickResult? NextClickResult { get; set; }
+    public ToltBindResult NextBindResult { get; set; } = new(false, null, "not configured");
+
+    public Task<ToltClickResult?> TrackClickAsync(string refValue, string pageUrl, string? device)
+        => Task.FromResult(NextClickResult);
+
+    public Task<ToltBindResult> BindReferralAsync(string email, string referralCode, string userId)
+        => Task.FromResult(NextBindResult);
+
+    public Task<ToltPaymentResult> TrackPaymentAsync(
+        string customerId, int amountUsd, string billingType,
+        string transactionId, string productId, string source)
+        => Task.FromResult(new ToltPaymentResult(false, null, "not configured"));
+
+    public Task<bool> TrackRefundAsync(string toltTransactionId)
+        => Task.FromResult(false);
+}
+
+public sealed class StubWebhookHandler : IRevenueCatWebhookHandler
+{
+    public int HandleCount { get; private set; }
+
+    public Task HandleAsync(RevenueCatWebhookPayload payload)
+    {
+        HandleCount++;
+        return Task.CompletedTask;
+    }
 }

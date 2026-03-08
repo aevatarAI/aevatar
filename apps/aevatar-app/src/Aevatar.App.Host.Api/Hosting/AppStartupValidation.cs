@@ -23,7 +23,10 @@ public static class AppStartupValidation
         Require(configuration, "Orleans:ClusterId", missingKeys);
         Require(configuration, "Orleans:ServiceId", missingKeys);
         if (!environment.IsDevelopment())
+        {
             Require(configuration, "Firebase:ProjectId", missingKeys);
+            Require(configuration, "RevenueCat:WebhookSecret", missingKeys);
+        }
 
         if (missingKeys.Count > 0)
             throw new InvalidOperationException(

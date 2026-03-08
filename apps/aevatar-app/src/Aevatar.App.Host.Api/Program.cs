@@ -121,6 +121,19 @@ builder.Services.AddSingleton<Amazon.S3.IAmazonS3>(sp =>
 builder.Services.AddSingleton<IS3StorageClient, AwsS3StorageClient>();
 builder.Services.AddSingleton<IImageStorageAppService, ImageStorageAppService>();
 
+// ── Tolt (Referral) ──
+builder.Services.Configure<ToltOptions>(builder.Configuration.GetSection(ToltOptions.SectionName));
+builder.Services.AddHttpClient<IToltAppService, ToltAppService>((sp, client) =>
+{
+    var opts = sp.GetRequiredService<IOptions<ToltOptions>>().Value;
+    if (!string.IsNullOrWhiteSpace(opts.ApiKey))
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", opts.ApiKey);
+});
+
+// ── RevenueCat Webhook ──
+builder.Services.AddSingleton<IRevenueCatWebhookHandler, RevenueCatWebhookHandler>();
+
 // ── CORS ──
 var allowedOrigins = builder.Configuration["App:AllowedOrigins"]?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
     ?? ["http://localhost:3000"];
@@ -162,7 +175,8 @@ app.UseWhen(
         || context.Request.Path.StartsWithSegments("/api/state")
         || context.Request.Path.StartsWithSegments("/api/sync")
         || context.Request.Path.StartsWithSegments("/api/generate")
-        || context.Request.Path.StartsWithSegments("/api/upload"),
+        || context.Request.Path.StartsWithSegments("/api/upload")
+        || context.Request.Path.StartsWithSegments("/api/referral/bind"),
     branch => branch.UseMiddleware<AppUserProvisioningMiddleware>());
 
 // Optional auth for public endpoint enhancements.
@@ -179,6 +193,8 @@ app.MapStateEndpoints();
 app.MapSyncEndpoints();
 app.MapGenerateEndpoints();
 app.MapUploadEndpoints();
+app.MapReferralEndpoints();
+app.MapWebhookEndpoints();
 
 app.Run();
 

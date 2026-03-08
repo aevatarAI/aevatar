@@ -18,6 +18,7 @@ public sealed class AppStartupValidationTests
         ["Orleans:ClusterId"] = "dev",
         ["Orleans:ServiceId"] = "app",
         ["Firebase:ProjectId"] = "fb-proj",
+        ["RevenueCat:WebhookSecret"] = "test-secret",
     };
 
     [Fact]
@@ -77,6 +78,30 @@ public sealed class AppStartupValidationTests
         var act = () => AppStartupValidation.ValidateRequiredConfiguration(config, env);
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*Firebase*");
+    }
+
+    [Fact]
+    public void NonDev_MissingWebhookSecret_Throws()
+    {
+        var values = new Dictionary<string, string?>(AllRequired) { ["RevenueCat:WebhookSecret"] = null };
+        var config = BuildConfig(values);
+        var env = new StubEnv("Production");
+
+        var act = () => AppStartupValidation.ValidateRequiredConfiguration(config, env);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*RevenueCat:WebhookSecret*");
+    }
+
+    [Fact]
+    public void Development_MissingWebhookSecret_DoesNotThrow()
+    {
+        var values = new Dictionary<string, string?>(AllRequired) { ["RevenueCat:WebhookSecret"] = null };
+        var config = BuildConfig(values);
+        var env = new StubEnv("Development");
+
+        var act = () => AppStartupValidation.ValidateRequiredConfiguration(config, env);
+
+        act.Should().NotThrow();
     }
 
     [Fact]

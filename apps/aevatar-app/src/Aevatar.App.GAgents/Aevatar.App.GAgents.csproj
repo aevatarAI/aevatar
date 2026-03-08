@@ -22,5 +22,7 @@
     <Protobuf Include="Proto\user_account.proto" GrpcServices="None" />
     <Protobuf Include="Proto\user_profile.proto" GrpcServices="None" />
     <Protobuf Include="Proto\auth_lookup.proto" GrpcServices="None" />
+    <Protobuf Include="Proto\user_affiliate.proto" GrpcServices="None" />
+    <Protobuf Include="Proto\payment_transaction.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>
