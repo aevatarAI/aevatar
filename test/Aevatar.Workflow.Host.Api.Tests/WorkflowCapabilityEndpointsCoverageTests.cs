@@ -4,6 +4,7 @@ using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Host.Api.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
@@ -169,6 +170,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     [Fact]
     public async Task HandleChatWebSocket_WhenParseFails_ShouldSendCommandError()
     {
+        using var metricCapture = new ApiMetricCapture();
         using var activity = new System.Diagnostics.Activity("ws-parse-trace").Start();
         var socket = new FakeWebSocket(WebSocketState.Open);
         socket.EnqueueReceive(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("""{"type":"chat.command","requestId":"req-parse","payload":{"prompt":""}}"""), true);
@@ -193,11 +195,15 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         doc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-parse");
         doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
+        metricCapture.FirstResponseMeasurements.Should().ContainSingle();
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "ws"));
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }
 
     [Fact]
     public async Task HandleChatWebSocket_WhenExecutionThrows_ShouldSendRunExecutionFailed()
     {
+        using var metricCapture = new ApiMetricCapture();
         using var activity = new System.Diagnostics.Activity("ws-exception-trace").Start();
         var socket = new FakeWebSocket(WebSocketState.Open);
         socket.EnqueueReceive(
@@ -226,6 +232,10 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
         doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
         doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
+        metricCapture.FirstResponseMeasurements.Should().BeEmpty();
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "ws"));
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "error"));
     }
 
     [Fact]
@@ -259,6 +269,83 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
         doc.RootElement.GetProperty("code").GetString().Should().Be("RUN_EXECUTION_FAILED");
         doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleChatWebSocket_WhenStarted_ShouldRecordFirstResponseMetric()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Text,
+            Encoding.UTF8.GetBytes("""{"type":"chat.command","requestId":"req-ok","payload":{"prompt":"hello"}}"""),
+            true);
+
+        var http = new DefaultHttpContext();
+        http.Features.Set<IHttpWebSocketFeature>(new FakeWebSocketFeature(socket));
+
+        var service = new FakeCommandExecutionService
+        {
+            Handler = async (_, _, onStartedAsync, ct) =>
+            {
+                if (onStartedAsync != null)
+                    await onStartedAsync(new WorkflowChatRunStarted("actor-1", "direct", "cmd-ok"), ct);
+
+                return new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
+                    WorkflowChatRunStartError.None,
+                    new WorkflowChatRunStarted("actor-1", "direct", "cmd-ok"),
+                    new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+
+        await WorkflowCapabilityEndpoints.HandleChatWebSocket(
+            http,
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        metricCapture.FirstResponseMeasurements.Should().ContainSingle();
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "ws"));
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+    }
+
+    [Fact]
+    public async Task HandleChatWebSocket_WhenProjectionDisabled_ShouldRecordRequestAndFirstResponseAsError()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(
+            WebSocketMessageType.Text,
+            Encoding.UTF8.GetBytes("""{"type":"chat.command","requestId":"req-proj-off","payload":{"prompt":"hello","workflow":"direct"}}"""),
+            true);
+
+        var http = new DefaultHttpContext();
+        http.Features.Set<IHttpWebSocketFeature>(new FakeWebSocketFeature(socket));
+
+        var service = new FakeCommandExecutionService
+        {
+            Handler = (_, _, _, _) => Task.FromResult(
+                new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
+                    WorkflowChatRunStartError.ProjectionDisabled,
+                    null,
+                    null)),
+        };
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+
+        await WorkflowCapabilityEndpoints.HandleChatWebSocket(
+            http,
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        metricCapture.FirstResponseMeasurements.Should().ContainSingle();
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "ws"));
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "error"));
+
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "ws"));
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "error"));
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
@@ -384,4 +471,5 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             return Task.CompletedTask;
         }
     }
+
 }

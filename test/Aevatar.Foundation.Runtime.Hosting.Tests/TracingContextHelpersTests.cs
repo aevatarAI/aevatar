@@ -75,7 +75,7 @@ public sealed class TracingContextHelpersTests
     }
 
     [Fact]
-    public void BeginHandleEnvelopeInstrumentation_ShouldCreateActivityAndAttachScope()
+    public void EventHandleScope_ShouldCreateActivityAndAttachScope()
     {
         using var listener = new ActivityListener
         {
@@ -96,9 +96,9 @@ public sealed class TracingContextHelpersTests
             PublisherId = "publisher-3",
         };
 
-        using var instrumentation = TracingContextHelpers.BeginHandleEnvelopeInstrumentation(logger, "agent-3", envelope);
-        instrumentation.Activity.Should().NotBeNull();
-        instrumentation.Activity!.GetTagItem("aevatar.agent.id").Should().Be("agent-3");
+        using var scope = EventHandleScope.Begin(logger, "agent-3", envelope);
+        scope.Activity.Should().NotBeNull();
+        scope.Activity!.GetTagItem("aevatar.agent.id").Should().Be("agent-3");
         logger.LogInformation("runtime log line");
 
         provider.Entries.Should().ContainSingle();

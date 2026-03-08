@@ -6,20 +6,6 @@ namespace Aevatar.Foundation.Runtime.Observability;
 
 public static class TracingContextHelpers
 {
-    public static HandleEnvelopeInstrumentation BeginHandleEnvelopeInstrumentation(
-        ILogger logger,
-        string agentId,
-        EventEnvelope envelope)
-    {
-        ArgumentNullException.ThrowIfNull(logger);
-        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
-        ArgumentNullException.ThrowIfNull(envelope);
-
-        var activity = AevatarActivitySource.StartHandleEvent(agentId, envelope);
-        var logScope = logger.BeginScope(CreateLogScopeState(envelope));
-        return new HandleEnvelopeInstrumentation(activity, logScope);
-    }
-
     public static void PopulateTraceId(EventEnvelope envelope, bool overwrite = false)
     {
         var activity = Activity.Current;
@@ -69,22 +55,4 @@ public static class TracingContextHelpers
         !string.IsNullOrWhiteSpace(causationId)
             ? causationId
             : string.Empty;
-
-    public sealed class HandleEnvelopeInstrumentation : IDisposable
-    {
-        private readonly IDisposable? _logScope;
-        public Activity? Activity { get; }
-
-        internal HandleEnvelopeInstrumentation(Activity? activity, IDisposable? logScope)
-        {
-            Activity = activity;
-            _logScope = logScope;
-        }
-
-        public void Dispose()
-        {
-            _logScope?.Dispose();
-            Activity?.Dispose();
-        }
-    }
 }
