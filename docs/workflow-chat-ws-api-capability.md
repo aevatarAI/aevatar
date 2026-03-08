@@ -23,8 +23,12 @@
 
 口径补充：
 
-- API 输入会先规范化为应用命令模型，再包装成 `EventEnvelope` 投递到目标 Actor。
+- API 输入会先规范化为应用命令模型，再走 CQRS 标准命令骨架：`target resolve -> command context -> envelope -> runtime dispatch -> accepted receipt`。
+- Workflow capability 只提供 workflow 特有的目标解析、payload 映射与观察映射；命令生命周期契约属于 CQRS Core，而不是 workflow 私有协议。
+- 命令最终会被包装成 `EventEnvelope`，并通过 `IActorRuntime` 获取/创建目标 Actor 后投递。
 - 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
+- 命令主链路不额外经过 ingress queue/stream；stream 保留给 actor envelope 的投影、实时输出与读侧观察。
+- `command.ack` / `accepted=true` 对外只应被解释为“系统接受了该次交互并返回追踪句柄”，不应被解释为领域事件已提交或 ReadModel 已可见。
 
 ## 2. 输入模型（chat）
 
@@ -156,6 +160,12 @@ POST /api/workflows/signal
 - `command.ack`：返回 `commandId/actorId/workflow`
 - `agui.event`：逐帧业务事件（payload 即 `WorkflowOutputFrame`）
 - `command.error`：输入或启动阶段错误
+
+`command.ack` 使用约束：
+
+1. 客户端应把 `actorId + commandId` 视为后续观察句柄，其中 `commandId` 负责追踪，`actorId` 负责定位。
+2. `command.ack` 是 CQRS dispatch pipeline 生成的 accepted receipt，只表示当前命令已经通过 runtime 成功 dispatch 到目标 actor 语义边界。
+3. 最终结果仍以 `agui.event` 流与 `/api/actors/*` 查询为准。
 
 ## 7. 常见使用模式
 

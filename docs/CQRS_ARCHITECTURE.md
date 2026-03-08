@@ -11,7 +11,7 @@
 ## 2. 顶层原则
 
 1. Host 只做协议与组合，不做业务编排。
-2. 命令执行走 Application 服务，不引入额外命令总线壳层。
+2. 命令执行必须走 CQRS Core 标准命令骨架，不允许每个 capability 私自拼一套 `resolve/ack/observe/finalize` 生命周期；同时不引入与 runtime 平行的命令总线壳层。
 3. 读写分离保持单一事实源：`EventStore` 中的领域事件 + 投影读模型。
 4. 中间层禁止维护 actor/run/session 事实态内存映射。
 
@@ -19,7 +19,7 @@
 
 | 层 | 项目 | 职责 |
 |---|---|---|
-| CQRS Core | `Aevatar.CQRS.Core*` | 命令执行抽象、上下文策略、输出流抽象 |
+| CQRS Core | `Aevatar.CQRS.Core*` | 标准命令管线抽象、上下文策略、envelope/dispatch/receipt contract、输出流抽象 |
 | Projection Core | `Aevatar.CQRS.Projection.*` | 投影生命周期、订阅、分发、协调 |
 | Foundation/AI Projection | `Aevatar.Foundation.Projection` / `Aevatar.AI.Projection` | 通用读模型能力与 AI reducer |
 | Workflow Projection | `src/workflow/Aevatar.Workflow.Projection` | Workflow 领域读模型与投影 |
@@ -45,6 +45,54 @@ flowchart LR
 2. Command 进入 Application 后，会被包装成 `EventEnvelope` 投递到目标 Actor 邮箱。
 3. Actor 在自己的串行上下文里做决策，只有显式持久化的领域事件才进入 `EventStore`。
 4. Projection 当前消费的是 Actor envelope 流，并把其中有业务语义的 payload 映射为 read model 与实时输出。
+
+### 4.1 CQRS Core 统一命令骨架
+
+CQRS 不应只提供零散 helper，而应定义所有 capability 复用的标准命令处理逻辑：
+
+1. `Normalize Command`
+   Host/Adapter 负责协议解析、鉴权、限流、基础校验，并把外部请求收敛为应用命令模型。
+2. `Resolve Target`
+   根据命令解析目标 actor 身份、创建/复用策略与必要的资源语义。
+3. `Create CommandContext`
+   统一分配 `commandId / correlationId / metadata`，避免各子系统各自生成追踪语义。
+4. `Build Envelope`
+   把应用命令映射成统一 `EventEnvelope`，但 payload 的业务语义仍由 capability 自己定义。
+5. `Dispatch via IActorRuntime`
+   通过 runtime 获取/创建目标 actor，并完成 mailbox 语义下的投递。
+6. `Create Accepted Receipt`
+   统一返回 `Accepted + commandId (+ actorId/correlationId)`，只承诺可追踪，不承诺 committed / observed。
+7. `Observe Result`
+   后续完成态统一走 read model 或 actor/session stream 观察，而不是在 command API 内私自拼装会话生命周期。
+
+职责归属：
+
+1. CQRS Core 应拥有 `Resolve Target / Context / Envelope / Dispatch / Receipt` 的通用抽象与默认实现。
+2. Capability 只提供领域命令模型、目标解析规则、payload 映射与领域特有的观察模型。
+3. Projection Core 只负责写后传播、读模型与实时观察，不回流承担命令入口语义。
+
+现状映射：
+
+1. `ICommandContextPolicy`、`ICommandEnvelopeFactory<TCommand>` 已经是 CQRS Core 抽象。
+2. `DefaultCommandExecutor<TCommand>` 只是低层 envelope 投递 helper，还不足以代表完整命令骨架。
+3. 当前 `ICommandExecutionService<...>` 混合了 dispatch、started、emit、finalize 等职责，属于过渡形态，不应成为长期标准。
+
+### 4.2 下一阶段蓝图（IActorRuntime 直投 Actor + CQRS Core 统一命令骨架）
+
+当前基线仍是 `Host -> Application -> Actor` 直连执行。  
+如果要继续按最佳实践演进，目标方向是：
+
+1. `Endpoint` 只做 normalize / validate / auth / 应用层组合。
+2. 外部命令继续使用统一 `Envelope` 载体，不强制拆不同物理 envelope 类型。
+3. CQRS Core 统一承载 target resolve / command context / envelope build / runtime dispatch / accepted receipt。
+4. Infrastructure 通过 `IActorRuntime` 获取/创建目标 actor 并投递 envelope。
+5. 命令主链路不再额外引入 ingress queue/stream。
+6. 对外同步 ACK 只表示 dispatch 成功，不承诺 committed / observed。
+7. 实时输出与读侧仍然通过 actor envelope stream + projection 观察。
+
+详细蓝图见：
+
+- [2026-03-09-cqrs-command-actor-receipt-projection-blueprint.md](architecture/2026-03-09-cqrs-command-actor-receipt-projection-blueprint.md)
 
 ## 5. 投影约束
 
