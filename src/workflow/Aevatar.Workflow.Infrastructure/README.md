@@ -15,10 +15,10 @@
 
 - `CreateDefinitionAsync()` 创建 `WorkflowGAgent`
 - `DescribeAsync()` 读取 source actor binding，输出 `WorkflowActorBinding`
-- `CreateRunAsync(WorkflowDefinitionBinding)` 创建 `WorkflowRunGAgent`
+- `CreateRunAsync(WorkflowDefinitionBinding)` 创建 `WorkflowRunGAgent`，并返回本次创建的 actor 集合用于失败回滚
 - `IsWorkflowDefinitionActorAsync()` / `IsWorkflowRunActorAsync()` 区分 actor 类型
 
-`CreateRunAsync()` 会把 definition snapshot 绑定到新的 run actor，而不是复用 source actor 直接执行。
+`CreateRunAsync()` 会把 definition snapshot 绑定到新的 run actor，而不是复用 source actor 直接执行；若 definition actor 由这次调用新建，也会一并纳入 rollback 元数据。
 
 ## API 语义
 

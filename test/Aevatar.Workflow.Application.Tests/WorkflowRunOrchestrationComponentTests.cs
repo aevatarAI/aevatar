@@ -16,9 +16,11 @@ public sealed class WorkflowRunOrchestrationComponentTests
     public async Task ContextFactory_ShouldCreateContextAndInjectSessionMetadata()
     {
         var actor = new ComponentActor("actor-1");
+        var actorPort = new RecordingActorPort();
         var projectionPort = new CapturingProjectionPort();
         var factory = new WorkflowRunContextFactory(
             new ComponentRunActorResolver(actor, "direct"),
+            actorPort,
             projectionPort,
             new DeterministicCommandContextPolicy(
                 commandId: "cmd-1",
@@ -41,15 +43,18 @@ public sealed class WorkflowRunOrchestrationComponentTests
         result.Context.CommandContext.Metadata["source"].Should().Be("tests");
         projectionPort.EnsureCalls.Should().ContainSingle()
             .Which.Should().Be(("actor-1", "direct", "hello", "cmd-1"));
+        actorPort.DestroyedActorIds.Should().BeEmpty();
     }
 
     [Fact]
     public async Task ContextFactory_WhenProjectionDisabled_ShouldReturnProjectionDisabled()
     {
         var actor = new ComponentActor("actor-2");
+        var actorPort = new RecordingActorPort();
         var projectionPort = new CapturingProjectionPort { ProjectionEnabled = false };
         var factory = new WorkflowRunContextFactory(
-            new ComponentRunActorResolver(actor, "direct"),
+            new ComponentRunActorResolver(actor, "direct", ["definition-2", "actor-2"]),
+            actorPort,
             projectionPort,
             new DeterministicCommandContextPolicy("cmd-2", "corr-2"));
 
@@ -59,15 +64,18 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
         result.Context.Should().BeNull();
+        actorPort.DestroyedActorIds.Should().Equal("actor-2", "definition-2");
     }
 
     [Fact]
     public async Task ContextFactory_WhenAttachThrows_ShouldDisposeCreatedSink()
     {
         var actor = new ComponentActor("actor-3");
+        var actorPort = new RecordingActorPort();
         var projectionPort = new CapturingProjectionPort { ThrowOnAttach = true };
         var factory = new WorkflowRunContextFactory(
-            new ComponentRunActorResolver(actor, "direct"),
+            new ComponentRunActorResolver(actor, "direct", ["definition-3", "actor-3"]),
+            actorPort,
             projectionPort,
             new DeterministicCommandContextPolicy("cmd-3", "corr-3"));
 
@@ -82,6 +90,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var push = () => projectionPort.LastAttachedSink!.Push(
             new WorkflowRunStartedEvent { ThreadId = "actor-3" });
         push.Should().Throw<EventSinkCompletedException>();
+        actorPort.DestroyedActorIds.Should().Equal("actor-3", "definition-3");
     }
 
     [Fact]
@@ -289,11 +298,16 @@ public sealed class WorkflowRunOrchestrationComponentTests
     {
         private readonly IActor _actor;
         private readonly string _workflowName;
+        private readonly IReadOnlyList<string> _createdActorIds;
 
-        public ComponentRunActorResolver(IActor actor, string workflowName)
+        public ComponentRunActorResolver(
+            IActor actor,
+            string workflowName,
+            IReadOnlyList<string>? createdActorIds = null)
         {
             _actor = actor;
             _workflowName = workflowName;
+            _createdActorIds = createdActorIds ?? Array.Empty<string>();
         }
 
         public Task<WorkflowActorResolutionResult> ResolveOrCreateAsync(
@@ -302,8 +316,54 @@ public sealed class WorkflowRunOrchestrationComponentTests
         {
             _ = request;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new WorkflowActorResolutionResult(_actor, _workflowName, WorkflowChatRunStartError.None));
+            return Task.FromResult(new WorkflowActorResolutionResult(
+                _actor,
+                _workflowName,
+                WorkflowChatRunStartError.None,
+                _createdActorIds));
         }
+    }
+
+    private sealed class RecordingActorPort : IWorkflowRunActorPort
+    {
+        public List<string> DestroyedActorIds { get; } = [];
+
+        public Task<IActor?> GetAsync(string actorId, CancellationToken ct = default) =>
+            Task.FromResult<IActor?>(null);
+
+        public Task<WorkflowActorBinding> DescribeAsync(IActor actor, CancellationToken ct = default) =>
+            Task.FromResult(WorkflowActorBinding.Unsupported(actor.Id));
+
+        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string actorId, CancellationToken ct = default)
+        {
+            DestroyedActorIds.Add(actorId);
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> IsWorkflowDefinitionActorAsync(IActor actor, CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task<bool> IsWorkflowRunActorAsync(IActor actor, CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default) =>
+            Task.FromResult<string?>(null);
+
+        public Task BindWorkflowDefinitionAsync(
+            IActor actor,
+            string workflowYaml,
+            string workflowName,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
+            Task.FromResult(WorkflowYamlParseResult.Success("direct"));
     }
 
     private sealed class DeterministicCommandContextPolicy : ICommandContextPolicy

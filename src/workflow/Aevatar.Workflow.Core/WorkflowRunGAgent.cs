@@ -156,7 +156,7 @@ public sealed class WorkflowRunGAgent
 
         await PersistDomainEventAsync(bindDefinitionEvent, ct);
         RebuildCompiledWorkflowCache();
-        _childAgentIds.Clear();
+        await ResetDerivedRuntimeStateAsync(ct);
         InstallCognitiveModules();
     }
 
@@ -432,6 +432,15 @@ public sealed class WorkflowRunGAgent
         next.RunId = string.IsNullOrWhiteSpace(evt.RunId)
             ? (string.IsNullOrWhiteSpace(current.RunId) ? Id : current.RunId)
             : WorkflowRunIdNormalizer.Normalize(evt.RunId);
+        next.Status = "bound";
+        next.Input = string.Empty;
+        next.FinalOutput = string.Empty;
+        next.FinalError = string.Empty;
+        next.ExecutionStates.Clear();
+        next.SubWorkflowBindings.Clear();
+        next.PendingSubWorkflowInvocations.Clear();
+        next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
+        next.PendingChildRunIdsByParentRunId.Clear();
         next.InlineWorkflowYamls.Clear();
         foreach (var (workflowNameKey, workflowYamlValue) in evt.InlineWorkflowYamls)
         {
@@ -448,10 +457,6 @@ public sealed class WorkflowRunGAgent
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
         next.CompilationError = compileResult.CompilationError;
-        if (string.IsNullOrWhiteSpace(next.Status))
-            next.Status = "bound";
-        if (compileResult.Compiled && compileResult.Workflow != null)
-            SubWorkflowOrchestrator.PruneIdleSubWorkflowBindings(next, compileResult.Workflow);
         return next;
     }
 
@@ -577,9 +582,34 @@ public sealed class WorkflowRunGAgent
             InlineWorkflowYamls = { State.InlineWorkflowYamls },
         }, ct);
         RebuildCompiledWorkflowCache();
-        _childAgentIds.Clear();
+        await ResetDerivedRuntimeStateAsync(ct);
         InstallCognitiveModules();
         return WorkflowCompilationResult.Success(parsed);
+    }
+
+    private async Task ResetDerivedRuntimeStateAsync(CancellationToken ct)
+    {
+        var childActorIds = new HashSet<string>(_childAgentIds, StringComparer.Ordinal);
+        if (!string.IsNullOrWhiteSpace(Id))
+        {
+            var selfActor = await _runtime.GetAsync(Id);
+            if (selfActor != null)
+            {
+                foreach (var childActorId in await selfActor.GetChildrenIdsAsync())
+                {
+                    if (!string.IsNullOrWhiteSpace(childActorId))
+                        childActorIds.Add(childActorId);
+                }
+            }
+        }
+
+        foreach (var childActorId in childActorIds)
+        {
+            await _runtime.UnlinkAsync(childActorId, ct);
+            await _runtime.DestroyAsync(childActorId, ct);
+        }
+
+        _childAgentIds.Clear();
     }
 
     private void EnsureWorkflowNameCanBind(string? workflowName)

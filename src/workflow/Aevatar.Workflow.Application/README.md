@@ -27,6 +27,7 @@
 ### WorkflowRunContextFactory
 
 - 调用 resolver 拿到 run actor
+- 若 resolver 本次新建了 actor，而 projection 不可用或 attach 失败，负责回滚这些新建 actor
 - 为 run actor 创建 `CommandContext`
 - 创建 `EventChannel<WorkflowRunEvent>`
 - 通过 projection lifecycle port 建立 run-isolated projection lease

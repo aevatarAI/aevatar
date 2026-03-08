@@ -28,6 +28,11 @@ public sealed record WorkflowDefinitionBinding(
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls);
 
+public sealed record WorkflowRunCreationResult(
+    IActor Actor,
+    string DefinitionActorId,
+    IReadOnlyList<string> CreatedActorIds);
+
 public sealed record WorkflowActorBinding(
     WorkflowActorKind ActorKind,
     string ActorId,
@@ -74,7 +79,7 @@ public interface IWorkflowRunActorPort
 
     Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default);
 
-    Task<IActor> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default);
+    Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default);
 
     Task DestroyAsync(string actorId, CancellationToken ct = default);
 

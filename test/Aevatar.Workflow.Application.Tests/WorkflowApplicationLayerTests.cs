@@ -23,7 +23,7 @@ public class WorkflowChatRunApplicationServiceTests
         var projectionPort = new FakeProjectionService();
         var commandContextPolicy = new FakeCommandContextPolicy();
         var service = CreateWorkflowRunService(
-            new WorkflowRunContextFactory(actorResolver, projectionPort, commandContextPolicy),
+            new WorkflowRunContextFactory(actorResolver, new FakeWorkflowRunActorPort([]), projectionPort, commandContextPolicy),
             new FakeEnvelopeFactory(),
             new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance),
             new WorkflowRunOutputStreamer(),
@@ -48,6 +48,7 @@ public class WorkflowChatRunApplicationServiceTests
         var projectionPort = new FakeProjectionService();
         var runContextFactory = new WorkflowRunContextFactory(
             new StubWorkflowRunActorResolver(new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None)),
+            new FakeWorkflowRunActorPort([]),
             projectionPort,
             new FakeCommandContextPolicy());
         var service = CreateWorkflowRunService(
@@ -82,6 +83,7 @@ public class WorkflowChatRunApplicationServiceTests
         var service = CreateWorkflowRunService(
             new WorkflowRunContextFactory(
                 new StubWorkflowRunActorResolver(new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None)),
+                new FakeWorkflowRunActorPort([]),
                 projectionPort,
                 new FakeCommandContextPolicy()),
             new FakeEnvelopeFactory(),
@@ -114,6 +116,7 @@ public class WorkflowChatRunApplicationServiceTests
         var service = CreateWorkflowRunService(
             new WorkflowRunContextFactory(
                 new StubWorkflowRunActorResolver(new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None)),
+                new FakeWorkflowRunActorPort([]),
                 projectionPort,
                 new FakeCommandContextPolicy()),
             new FakeEnvelopeFactory(),
@@ -1410,7 +1413,7 @@ internal sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
     public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
         CreateActorAsync(actorId, ct);
 
-    public async Task<IActor> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
+    public async Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
     {
         var actor = await CreateActorAsync(null, ct);
         if (BindWorkflowDefinitionHandler != null)
@@ -1418,7 +1421,10 @@ internal sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
         else if (actor.Agent is FakeWorkflowAgent workflowAgent)
             workflowAgent.BindWorkflowDefinition(definition.WorkflowYaml, definition.WorkflowName);
 
-        return actor;
+        return new WorkflowRunCreationResult(
+            actor,
+            definition.DefinitionActorId,
+            [actor.Id]);
     }
 
     private Task<IActor> CreateActorAsync(string? actorId, CancellationToken ct)

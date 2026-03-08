@@ -139,6 +139,22 @@ jobs:
             -p:UseSharedCompilation=false \
             -p:NuGetAudit=false
 
+  slow-test-guards:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Run slow test guard
+        run: bash tools/ci/slow_test_guards.sh
+
   projection-provider-e2e:
     if: |
       github.event_name != 'schedule' && (

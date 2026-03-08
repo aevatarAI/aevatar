@@ -17,6 +17,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Any = Google.Protobuf.WellKnownTypes.Any;
+using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
 
 namespace Aevatar.Integration.Tests;
@@ -171,6 +172,52 @@ public class WorkflowGAgentCoverageTests
         initializeEvent.StreamBufferCapacity.Should().Be(64);
         initializeEvent.EventModules.Should().Be("llm_handler,tool_handler");
         initializeEvent.EventRoutes.Should().Contain("event.type");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenRebindingDefinition_ShouldResetExecutionStateAndDestroyOldChildren()
+    {
+        var publisher = new RecordingEventPublisher();
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        agent.EventPublisher = publisher;
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-1");
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
+        await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
+        await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            WorkflowName = "wf_valid",
+            RunId = "run-1",
+            Success = true,
+            Output = "done-a",
+        });
+
+        var oldChildActorId = runtime.CreatedActors.Single().Id;
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_b", "RoleB"),
+            "wf_valid",
+            runId: "run-2");
+
+        agent.State.Status.Should().Be("bound");
+        agent.State.Input.Should().BeEmpty();
+        agent.State.FinalOutput.Should().BeEmpty();
+        agent.State.FinalError.Should().BeEmpty();
+        agent.State.ExecutionStates.Should().BeEmpty();
+        runtime.Unlinked.Should().Contain(oldChildActorId);
+        runtime.Destroyed.Should().Contain(oldChildActorId);
+
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "second", SessionId = "s2" });
+
+        runtime.Linked.Should().Contain(x => x.child.EndsWith(":role_b", StringComparison.Ordinal));
+        runtime.CreatedActors.Select(x => x.Id).Should().Contain($"{agent.Id}:role_b");
     }
 
     [Fact]
@@ -331,6 +378,49 @@ public class WorkflowGAgentCoverageTests
         persisted.Count(x => x.EventType.Contains(nameof(BindWorkflowRunDefinitionEvent), StringComparison.Ordinal))
             .Should()
             .Be(1);
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenReplacingDefinition_ShouldResetExecutionStateAndRebuildChildTopology()
+    {
+        var publisher = new RecordingEventPublisher();
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        agent.EventPublisher = publisher;
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-replace");
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
+        await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
+        await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            WorkflowName = "wf_valid",
+            RunId = "run-replace",
+            Success = true,
+            Output = "done-a",
+        });
+
+        var oldChildActorId = runtime.CreatedActors.Single().Id;
+
+        await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
+        {
+            WorkflowYaml = BuildValidWorkflowYaml("role_b", "RoleB"),
+            Input = "second",
+        });
+
+        runtime.Unlinked.Should().Contain(oldChildActorId);
+        runtime.Destroyed.Should().Contain(oldChildActorId);
+        agent.State.ExecutionStates.Should().BeEmpty();
+        agent.State.FinalOutput.Should().BeEmpty();
+        agent.State.FinalError.Should().BeEmpty();
+        agent.State.Status.Should().Be("running");
+        agent.State.Input.Should().Be("second");
+        runtime.Linked.Should().Contain(x => x.child.EndsWith(":role_b", StringComparison.Ordinal));
+        runtime.CreatedActors.Select(x => x.Id).Should().Contain($"{agent.Id}:role_b");
     }
 
     [Fact]
@@ -702,6 +792,7 @@ public class WorkflowGAgentCoverageTests
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
             Destroyed.Add(id);
+            CreatedActors.RemoveAll(x => string.Equals(x.Id, id, StringComparison.Ordinal));
             return Task.CompletedTask;
         }
 

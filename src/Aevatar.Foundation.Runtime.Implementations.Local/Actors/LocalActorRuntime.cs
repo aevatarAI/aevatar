@@ -83,11 +83,31 @@ public sealed class LocalActorRuntime : IActorRuntime
     /// <summary>Destroys actor and cleans up stream and activation index.</summary>
     public async Task DestroyAsync(string id, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         if (!_actors.TryRemove(id, out var actor))
         {
             _streamLifecycleManager.RemoveStream(id);
             await _activationIndexStore.DeleteAsync(id, ct);
             return;
+        }
+
+        var parentId = await actor.GetParentIdAsync();
+        if (!string.IsNullOrWhiteSpace(parentId))
+        {
+            if (_actors.TryGetValue(parentId, out var parent))
+                parent.RemoveChild(id);
+
+            await _streams.GetStream(parentId).RemoveRelayAsync(id, ct);
+            await actor.UnsubscribeFromParentAsync();
+        }
+
+        var children = await actor.GetChildrenIdsAsync();
+        foreach (var childId in children)
+        {
+            if (_actors.TryGetValue(childId, out var child))
+                await child.UnsubscribeFromParentAsync();
+
+            await _streams.GetStream(id).RemoveRelayAsync(childId, ct);
         }
 
         await actor.DeactivateAsync(ct);

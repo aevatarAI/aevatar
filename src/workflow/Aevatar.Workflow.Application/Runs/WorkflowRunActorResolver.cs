@@ -70,7 +70,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             workflowYamlForRun = yaml;
         }
 
-        var actor = await CreateRunActorAsync(
+        var createdRun = await CreateRunActorAsync(
             new WorkflowDefinitionBinding(
                 string.Empty,
                 workflowNameForRun,
@@ -79,7 +79,11 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             wrapAsFallbackTrigger: !hasInlineWorkflowYamls,
             ct);
 
-        return new WorkflowActorResolutionResult(actor, workflowNameForRun, WorkflowChatRunStartError.None);
+        return new WorkflowActorResolutionResult(
+            createdRun.Actor,
+            workflowNameForRun,
+            WorkflowChatRunStartError.None,
+            createdRun.CreatedActorIds);
     }
 
     private async Task<WorkflowActorResolutionResult> ResolveFromSourceActorAsync(
@@ -123,7 +127,11 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     inlineWorkflowYamlMapForRun),
                 wrapAsFallbackTrigger: false,
                 ct);
-            return new WorkflowActorResolutionResult(inlineRunActor, workflowNameForRun, WorkflowChatRunStartError.None);
+            return new WorkflowActorResolutionResult(
+                inlineRunActor.Actor,
+                workflowNameForRun,
+                WorkflowChatRunStartError.None,
+                inlineRunActor.CreatedActorIds);
         }
 
         if (string.IsNullOrWhiteSpace(boundWorkflowName))
@@ -162,9 +170,10 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             ct);
 
         return new WorkflowActorResolutionResult(
-            runActor,
+            runActor.Actor,
             boundWorkflowName,
-            WorkflowChatRunStartError.None);
+            WorkflowChatRunStartError.None,
+            runActor.CreatedActorIds);
     }
 
     private string ResolveDefaultWorkflowName()
@@ -222,7 +231,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             workflowByName);
     }
 
-    private async Task<IActor> CreateRunActorAsync(
+    private async Task<WorkflowRunCreationResult> CreateRunActorAsync(
         WorkflowDefinitionBinding definitionBinding,
         bool wrapAsFallbackTrigger,
         CancellationToken ct)

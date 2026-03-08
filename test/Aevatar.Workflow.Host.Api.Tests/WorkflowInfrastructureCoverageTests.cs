@@ -210,11 +210,12 @@ public sealed class WorkflowInfrastructureCoverageTests
                 "name: direct\nroles: []\nsteps: []\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
             CancellationToken.None);
-        createdRun.Id.Should().Be("run-created");
+        createdRun.Actor.Id.Should().Be("run-created");
         runtime.LastGenericCreateType.Should().Be(typeof(WorkflowRunGAgent));
         createdRunActor.LastHandledEnvelope.Should().NotBeNull();
         createdRunActor.LastHandledEnvelope!.Payload.Should().NotBeNull();
         createdRunActor.LastHandledEnvelope.Payload!.Is(BindWorkflowRunDefinitionEvent.Descriptor).Should().BeTrue();
+        createdRun.CreatedActorIds.Should().Contain("run-created");
 
         var destroyAct = async () => await port.DestroyAsync(" ", CancellationToken.None);
         await destroyAct.Should().ThrowAsync<ArgumentException>();
@@ -320,6 +321,49 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunActorPort_WhenDefinitionActorIdBlank_ShouldCreateDefinitionWithNullPreferredId()
+    {
+        var runtime = new FakeActorRuntime();
+        runtime.ActorsToCreate.Enqueue(new StubActor("definition-generated", new StubAgent("definition-generated")));
+        runtime.ActorsToCreate.Enqueue(new StubActor("run-generated", new StubAgent("run-generated")));
+        var port = CreatePort(runtime);
+
+        var result = await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "   ",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        result.DefinitionActorId.Should().Be("definition-generated");
+        runtime.CreateRequests.Should().ContainInOrder(
+            (typeof(WorkflowGAgent), (string?)null),
+            (typeof(WorkflowRunGAgent), (string?)null));
+    }
+
+    [Fact]
+    public async Task WorkflowRunActorPort_WhenDefinitionActorIdRequestedAndMissing_ShouldPreserveRequestedId()
+    {
+        var runtime = new FakeActorRuntime();
+        runtime.ActorsToCreate.Enqueue(new StubActor("definition-preferred", new StubAgent("definition-preferred")));
+        runtime.ActorsToCreate.Enqueue(new StubActor("run-generated", new StubAgent("run-generated")));
+        var port = CreatePort(runtime);
+
+        _ = await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-preferred",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        runtime.CreateRequests.Should().ContainInOrder(
+            (typeof(WorkflowGAgent), "definition-preferred"),
+            (typeof(WorkflowRunGAgent), (string?)null));
+    }
+
+    [Fact]
     public void AddWorkflowCapability_ShouldRegisterCapabilityAndValidateNull()
     {
         Action act = () => WorkflowCapabilityHostBuilderExtensions.AddWorkflowCapability(null!);
@@ -403,21 +447,23 @@ public sealed class WorkflowInfrastructureCoverageTests
         public Type? LastGenericCreateType { get; private set; }
         public List<string> GetCalls { get; } = [];
         public List<string> DestroyCalls { get; } = [];
+        public Queue<IActor> ActorsToCreate { get; } = [];
+        public List<(Type AgentType, string? RequestedId)> CreateRequests { get; } = [];
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
         {
-            _ = id;
             ct.ThrowIfCancellationRequested();
             LastGenericCreateType = typeof(TAgent);
-            return Task.FromResult(ActorToCreate ?? new StubActor("new", new StubAgent("new-agent")));
+            CreateRequests.Add((typeof(TAgent), id));
+            return Task.FromResult(ResolveCreatedActor(id));
         }
 
         public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
         {
-            _ = agentType;
-            _ = id;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(ActorToCreate ?? new StubActor("new", new StubAgent("new-agent")));
+            LastGenericCreateType = agentType;
+            CreateRequests.Add((agentType, id));
+            return Task.FromResult(ResolveCreatedActor(id));
         }
 
         public Task DestroyAsync(string id, CancellationToken ct = default)
@@ -452,6 +498,17 @@ public sealed class WorkflowInfrastructureCoverageTests
             _ = childId;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
+        }
+
+        private IActor ResolveCreatedActor(string? id)
+        {
+            if (ActorsToCreate.Count > 0)
+                return ActorsToCreate.Dequeue();
+
+            if (ActorToCreate != null)
+                return ActorToCreate;
+
+            return new StubActor(id ?? "new", new StubAgent("new-agent"));
         }
 
     }
