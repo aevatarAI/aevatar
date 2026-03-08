@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 
-- 状态：Proposed
+- 状态：Implemented
 - 版本：R1
 - 日期：2026-03-08
 - 目标分支：`refactor/workflow-run-actorized-state-boundary-20260308`
@@ -17,7 +17,22 @@
   - 重新设计外部 Chat API 协议
   - 改写 Projection 主链路
   - 在本轮引入第二套 workflow 执行体系
-- 文档定位：本蓝图用于指导 `workflow` 从“定义 Actor + 多 run + 模块私有运行态”演进到“定义 Actor + run Actor + Actor 化运行事实源”。
+- 文档定位：本文保留本轮重构的设计决策与迁移蓝图，同时记录最终已落地的实现状态。
+
+## 1.1 实施状态（2026-03-08）
+
+以下设计已经落地到主代码路径：
+
+- `WorkflowGAgent` 已收敛为 definition actor。
+- `WorkflowRunGAgent` 已成为单次 run 的执行 actor。
+- `WorkflowLoopModule` 以及主要 stateful modules 已迁移到 actor-owned module state。
+- `WorkflowRunActorResolver / WorkflowRunActorPort` 已切到 definition binding -> run actor 创建路径。
+- Projection read model 已切到 `RunIsolated` 语义。
+- README 与 capability endpoint 语义已同步到 run actor 模型。
+
+说明：
+
+- 下文第 6 节到第 8 节保留的是本轮重构启动前的基线分析，用于解释为何要做本次调整；这些段落不是当前实现现状。
 
 ## 2. 背景与关键决策（统一认知）
 
@@ -127,7 +142,12 @@
 9. 迁移后仍必须支持 `build/test` 与架构门禁验证。
 10. 文档、门禁、测试必须与实现同步演进。
 
-## 6. 当前基线（代码事实）
+## 6. 历史基线（重构前代码事实）
+
+说明：
+
+- 本节保留的是重构启动前的基线事实，用于解释问题来源。
+- 当前实现已不再满足下表中的旧约束，现状以第 7 节和第 16 节为准。
 
 | 事实 | 代码证据 | 结论 |
 |---|---|---|
@@ -144,14 +164,14 @@
 
 | ID | 需求 | 验收标准 | 当前状态 | 证据 | 差距 |
 |---|---|---|---|---|---|
-| WR-01 | run 必须有唯一 Actor 事实源 | 一个 run 一个 `WorkflowRunGAgent`，所有 run 状态在 `WorkflowRunState` | 未实现 | 当前仅有 `WorkflowGAgent` | 需要新增 actor、state、事件迁移 |
-| WR-02 | `IEventModule` 不得持有权威状态 | 所有 run/step/session 事实从模块字段迁出 | 未实现 | 多个模块有私有字典 | 需要迁移到 state 或独立 actor |
-| WR-03 | 定义与执行分离 | definition actor 只管模板和 run 派生 | 未实现 | `WorkflowGAgent` 同时干两件事 | 需要收敛职责与入口 |
-| WR-04 | timeout/retry/wait 全事件化 | 所有异步触发只发布内部事件，由 run actor 对账 | 部分实现 | 已有 timeout fired 事件 | 关联状态仍在模块字段 |
-| WR-05 | Projection 继续单链路 | run actor 事件继续进入统一 projection | 未实现 | 当前投影依赖 workflow actor | 需要调整上下文键与 query 语义 |
-| WR-06 | Application 不直接操作状态 | 只做 `resolve/create actor + attach sink + dispatch` | 部分实现 | 现有 app 层较干净 | 需要切换到 run actor 入口 |
-| WR-07 | API 尽量兼容 | 现有 `/api/chat`、WS、signal/resume 可继续工作 | 未实现 | 外部协议绑在 workflow actor 语义上 | 需要兼容映射 |
-| WR-08 | 架构可验证 | build/test/guards 全通过，并有文档与测试覆盖 | 未实现 | 当前没有 run actor 专项门禁 | 需要新增测试与门禁 |
+| WR-01 | run 必须有唯一 Actor 事实源 | 一个 run 一个 `WorkflowRunGAgent`，所有 run 状态在 `WorkflowRunState` | 已实现 | `WorkflowRunGAgent.cs`、`workflow_state.proto`、`WorkflowRunActorPort.cs` | 无 |
+| WR-02 | `IEventModule` 不得持有权威状态 | 所有 run/step/session 事实从模块字段迁出 | 已实现 | `WorkflowRunModuleStateAccess.cs`、`DelayModule.cs`、`WaitSignalModule.cs`、`WorkflowLoopModule.cs`、`LLMCallModule.cs` 等 | 无 |
+| WR-03 | 定义与执行分离 | definition actor 只管模板和 run 派生 | 已实现 | `WorkflowGAgent.cs`、`WorkflowRunGAgent.cs` | 无 |
+| WR-04 | timeout/retry/wait 全事件化 | 所有异步触发只发布内部事件，由 run actor 对账 | 已实现 | `DelayModule.cs`、`WaitSignalModule.cs`、`WorkflowLoopModule.cs`、`RuntimeCallbackEventizationTests.cs` | 无 |
+| WR-05 | Projection 继续单链路 | run actor 事件继续进入统一 projection | 已实现 | `WorkflowExecutionReadModel.cs`、`WorkflowExecutionReadModelProjector.cs`、`WorkflowExecutionQueryApplicationService.cs` | 无 |
+| WR-06 | Application 不直接操作状态 | 只做 `resolve/create actor + attach sink + dispatch` | 已实现 | `WorkflowRunActorResolver.cs`、`WorkflowRunContextFactory.cs` | 无 |
+| WR-07 | API 尽量兼容 | 现有 `/api/chat`、WS、signal/resume 可继续工作 | 已实现 | `ChatEndpoints.cs`、`ChatCapabilityModels.cs`、`ChatRunStartErrorMapper.cs` | 无 |
+| WR-08 | 架构可验证 | build/test/guards 全通过，并有文档与测试覆盖 | 已实现 | `WorkflowGAgentCoverageTests.cs`、`architecture_guards.sh`、workflow README / architecture docs | 无 |
 
 ## 8. 差距详解
 
@@ -536,37 +556,38 @@ sequenceDiagram
 
 ## 15. 执行清单（可勾选）
 
-- [ ] 新增 `WorkflowRunGAgent` 与 `WorkflowRunState`
-- [ ] 将 `WorkflowGAgent` 收敛为 definition actor
-- [ ] 重构 `WorkflowRunActorPort` / actor resolver
-- [ ] 将 `workflow_loop` 运行态迁入 run state
-- [ ] 将 `delay` / `wait_signal` / `human_*` 运行态迁入 run state
-- [ ] 将 `llm_call` / `evaluate` / `reflect` correlation 迁入 run state
-- [ ] 调整 projection context 到 run actor 作用域
-- [ ] 补充 query 兼容层
-- [ ] 删除旧模块私有事实态字段
-- [ ] 补充 architecture guards / tests / docs
-- [ ] 完成 build/test/guards 验证
+- [x] 新增 `WorkflowRunGAgent` 与 `WorkflowRunState`
+- [x] 将 `WorkflowGAgent` 收敛为 definition actor
+- [x] 重构 `WorkflowRunActorPort` / actor resolver
+- [x] 将 `workflow_loop` 运行态迁入 run state
+- [x] 将 `delay` / `wait_signal` / `human_*` 运行态迁入 run state
+- [x] 将 `llm_call` / `evaluate` / `reflect` correlation 迁入 run state
+- [x] 调整 projection context 到 run actor 作用域
+- [x] 补充 query 兼容层
+- [x] 删除旧模块私有事实态字段
+- [x] 补充 architecture guards / tests / docs
+- [x] 完成 build/test/guards 验证
 
 ## 16. 当前执行快照（2026-03-08）
 
 ### 已完成
 
-- 对 `Workflow/Core/Application/Projection` 当前链路完成基线梳理。
-- 明确本次重构的核心方向是“run actor 化 + EventModule 去事实态化”。
-- 输出本蓝图文档，固定目标边界、阶段与验证矩阵。
+- `WorkflowGAgent` 已降为 definition actor；`WorkflowRunGAgent` 已成为 run 的唯一写侧事实源。
+- `workflow_loop / delay / wait_signal / human_* / parallel* / map_reduce / race / cache / llm_call / evaluate / reflect / while / foreach` 等运行态已迁入 run actor module state。
+- `Application / Infrastructure / Projection / Capability API` 已全部切换到 definition-binding -> run actor 执行路径。
+- workflow README、architecture docs、API 语义、projection scope 文档已同步为 run actor 模型。
 
-### 部分完成
+### 已完成验证
 
-- timeout/retry 的“回调只发信号”方向已有事件化基础，但未完成事实状态收敛。
-
-### 未开始
-
-- `WorkflowRunGAgent` 实现
-- definition/run actor 入口切换
-- 模块私有状态迁移
-- projection/query 作用域迁移
-- 新门禁与测试补齐
+- `dotnet build aevatar.slnx --nologo`
+- `dotnet build test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo`
+- `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo --filter FullyQualifiedName~WorkflowGAgentCoverageTests`
+- `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo --filter FullyQualifiedName~WorkflowTuringCompletenessTests`
+- `dotnet test test/Aevatar.Workflow.Core.Tests/Aevatar.Workflow.Core.Tests.csproj --nologo --filter "FullyQualifiedName~RuntimeCallbackEventizationTests|FullyQualifiedName~WorkflowLoopModuleExpressionEvaluationTests"`
+- `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --nologo --filter FullyQualifiedName~WorkflowExecutionProjectionServiceTests`
+- `bash tools/ci/architecture_guards.sh`
+- `bash tools/ci/test_stability_guards.sh`
+- `bash tools/ci/solution_split_guards.sh`
 
 ### 当前阻塞项
 

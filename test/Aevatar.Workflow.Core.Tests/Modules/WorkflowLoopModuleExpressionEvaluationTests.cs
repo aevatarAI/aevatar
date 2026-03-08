@@ -5,6 +5,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Runtime;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -99,7 +100,7 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         };
 
         public string AgentId => "agent-1";
-        public IAgent Agent { get; } = new StubAgent();
+        public IAgent Agent { get; } = new StubWorkflowRunAgent("agent-1", "run-1");
         public IServiceProvider Services { get; } = new NullServiceProvider();
         public ILogger Logger { get; } = NullLogger.Instance;
 
@@ -154,9 +155,30 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         }
     }
 
-    private sealed class StubAgent : IAgent
+    private sealed class StubWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowRunModuleStateHost
     {
-        public string Id => "agent-1";
+        private readonly Dictionary<string, string> _moduleStateJson = new(StringComparer.Ordinal);
+
+        public string Id => id;
+
+        public string RunId { get; } = runId;
+
+        public string? GetModuleStateJson(string moduleName) =>
+            _moduleStateJson.TryGetValue(moduleName, out var json) ? json : null;
+
+        public Task UpsertModuleStateJsonAsync(string moduleName, string stateJson, CancellationToken ct = default)
+        {
+            _ = ct;
+            _moduleStateJson[moduleName] = stateJson;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearModuleStateAsync(string moduleName, CancellationToken ct = default)
+        {
+            _ = ct;
+            _moduleStateJson.Remove(moduleName);
+            return Task.CompletedTask;
+        }
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 

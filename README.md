@@ -357,8 +357,12 @@ sequenceDiagram
 ## 给开发者
 
 - **运行测试**：`dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj`
+- **默认全量测试**：`dotnet test aevatar.slnx --nologo`
+  说明：默认全量回归不包含脚本自治演化慢测，当前本地口径约 `8.5s` 结束。
 - **分片守卫**：`bash tools/ci/solution_split_guards.sh`
 - **分片测试守卫**：`bash tools/ci/solution_split_test_guards.sh`
+- **慢测守卫**：`bash tools/ci/slow_test_guards.sh`
+  说明：单独执行 `Aevatar.Integration.Slow.Tests`，包含脚本自治演化与 3-node Orleans 一致性慢测。
 - **按域构建**：`dotnet build aevatar.foundation.slnf` / `dotnet build aevatar.ai.slnf` / `dotnet build aevatar.cqrs.slnf` / `dotnet build aevatar.workflow.slnf` / `dotnet build aevatar.hosting.slnf`
 - **CLI 演示**（不看 LLM，只看事件流）：  
   `dotnet run --project demos/Aevatar.Demos.Cli -- run hierarchy --web artifacts/demo/hierarchy.html`

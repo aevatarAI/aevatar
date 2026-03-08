@@ -387,7 +387,7 @@ public class ChatEndpointsInternalTests
         var actorPort = new FakeWorkflowRunActorPort
         {
             ActorToReturn = actor,
-            IsWorkflowActorValue = true,
+            IsWorkflowRunActorValue = true,
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleResume(
@@ -460,7 +460,7 @@ public class ChatEndpointsInternalTests
         var actorPort = new FakeWorkflowRunActorPort
         {
             ActorToReturn = actor,
-            IsWorkflowActorValue = true,
+            IsWorkflowRunActorValue = true,
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleSignal(
@@ -1254,7 +1254,8 @@ public class ChatEndpointsInternalTests
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
     {
         public IActor? ActorToReturn { get; set; }
-        public bool IsWorkflowActorValue { get; set; } = true;
+        public bool IsWorkflowDefinitionActorValue { get; set; } = true;
+        public bool IsWorkflowRunActorValue { get; set; } = true;
 
         public Task<IActor?> GetAsync(string actorId, CancellationToken ct = default)
         {
@@ -1263,9 +1264,24 @@ public class ChatEndpointsInternalTests
             return Task.FromResult(ActorToReturn);
         }
 
-        public Task<IActor> CreateAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<WorkflowActorBinding> DescribeAsync(IActor actor, CancellationToken ct = default)
+        {
+            _ = actor;
+            _ = ct;
+            return Task.FromResult(WorkflowActorBinding.Unsupported(actor.Id));
+        }
+
+        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<bool> IsWorkflowActorAsync(IActor actor, CancellationToken ct = default) => Task.FromResult(IsWorkflowActorValue);
+        public Task<bool> IsWorkflowDefinitionActorAsync(IActor actor, CancellationToken ct = default) =>
+            Task.FromResult(IsWorkflowDefinitionActorValue);
+        public Task<bool> IsWorkflowRunActorAsync(IActor actor, CancellationToken ct = default) =>
+            Task.FromResult(IsWorkflowRunActorValue);
         public Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default) => Task.FromResult<string?>(null);
         public Task BindWorkflowDefinitionAsync(
             IActor actor,

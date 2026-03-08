@@ -88,6 +88,7 @@ Maker 插件工程：`src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`
 1. `bash tools/ci/architecture_guards.sh`
 2. `dotnet build aevatar.slnx --nologo`
 3. `dotnet test aevatar.slnx --nologo`
+4. `bash tools/ci/slow_test_guards.sh`
 
 关键守卫语义：
 
@@ -95,3 +96,4 @@ Maker 插件工程：`src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`
 2. 禁止残留独立 Maker 工程（Application/Infrastructure/Host/Core）。
 3. 禁止 `AddMakerCapability()` 与 `/api/maker/*` 端点回流。
 4. 强制 Mainnet 使用 `AddWorkflowMakerExtensions()` 装配插件。
+5. 默认 `dotnet test aevatar.slnx --nologo` 为快速主链路；分钟级脚本自治演化回归由 `slow_test_guards.sh` 单独承接。

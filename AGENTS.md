@@ -39,6 +39,12 @@
 - 方法内局部临时集合可用，但不得提升为服务级/单例级事实状态字段。
 - 投影端口规范：禁止通过 `actorId -> context` 反查方式管理生命周期，改为显式 `lease/session` 句柄传递。
 
+## 序列化约束（强制）
+- 所有序列化与反序列化操作统一使用 `Protobuf`，尤其是 `State`、领域事件、命令、回调载荷、快照、缓存载荷、跨 Actor/跨节点内部传输对象。
+- 禁止在 `Actor State`、`WorkflowRun State`、模块持久态、投影检查点或其他事实存储中使用 `JSON/XML/自定义字符串格式` 作为内部序列化方案。
+- 若外部协议或第三方接口必须使用 `JSON`，仅允许在 `Host/Adapter` 边界做临时协议转换；进入应用层、领域层、运行时层后必须恢复为 `Protobuf` 对象，且内部落盘、持久化、发布、重放仍统一使用 `Protobuf`。
+- 新增状态对象、事件对象、持久化载荷时，先定义 `.proto` 契约并生成类型，再接入实现；禁止先写临时序列化结构、后补 `Protobuf`。
+
 ## 项目结构与模块组织
 - `src/`：生产代码，按能力与分层组织（`Aevatar.Foundation.*`、`Aevatar.Workflow.Core`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Abstractions/Core/WorkflowExecution`、`Aevatar.Host.*`）。
 - `test/`：与 `src/` 对应的测试项目（单元、集成、API）。

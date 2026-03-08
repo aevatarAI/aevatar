@@ -201,8 +201,9 @@ public class WorkflowIntegrationTests
         using var _ = sp;
 
         // 创建 WorkflowGAgent 并通过配置事件注入 YAML
-        var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-1");
-        await actor.HandleEventAsync(new EventEnvelope
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-1");
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-1-run");
+        await definitionActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
@@ -216,8 +217,24 @@ public class WorkflowIntegrationTests
             CorrelationId = Guid.NewGuid().ToString("N"),
         });
 
-        // 触发一次 ChatRequest，驱动 WorkflowGAgent 创建子角色树
-        await actor.HandleEventAsync(new EventEnvelope
+        await runActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = definitionActor.Id,
+                WorkflowYaml = ResearchWorkflowYaml,
+                WorkflowName = "research_workflow",
+                RunId = "wf-1-run",
+            }),
+            PublisherId = "test",
+            Direction = EventDirection.Self,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        });
+
+        // 触发一次 ChatRequest，驱动 WorkflowRunGAgent 创建子角色树
+        await runActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
@@ -233,19 +250,20 @@ public class WorkflowIntegrationTests
 
         // Then
         (await runtime.ExistsAsync("wf-1")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1:researcher")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1:reviewer")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1:writer")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run:researcher")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run:reviewer")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run:writer")).Should().BeTrue();
 
         // 验证层级
-        var children = await actor.GetChildrenIdsAsync();
+        var children = await runActor.GetChildrenIdsAsync();
         children.Should().HaveCount(3);
-        children.Should().Contain("wf-1:researcher");
-        children.Should().Contain("wf-1:reviewer");
-        children.Should().Contain("wf-1:writer");
+        children.Should().Contain("wf-1-run:researcher");
+        children.Should().Contain("wf-1-run:reviewer");
+        children.Should().Contain("wf-1-run:writer");
 
         // 验证每个 RoleGAgent 的配置
-        var researcherActor = await runtime.GetAsync("wf-1:researcher");
+        var researcherActor = await runtime.GetAsync("wf-1-run:researcher");
         researcherActor.Should().NotBeNull();
         var researcher = (RoleGAgent)researcherActor!.Agent;
         researcher.RoleName.Should().Be("Researcher");

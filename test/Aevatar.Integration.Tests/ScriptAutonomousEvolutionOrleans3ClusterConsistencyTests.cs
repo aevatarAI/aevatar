@@ -19,6 +19,7 @@ namespace Aevatar.Integration.Tests;
 
 public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
 {
+    [Trait("Category", "Slow")]
     [Orleans3ClusterIntegrationFact]
     public async Task ComplexScriptFlow_ShouldRemainConsistentAcrossThreeOrleansSilos()
     {

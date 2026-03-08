@@ -11,6 +11,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -22,8 +23,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class ForEachModule : IEventModule
 {
-    private readonly Dictionary<string, int> _expected = [];
-    private readonly Dictionary<string, List<StepCompletedEvent>> _collected = [];
+    private const string ModuleStateKey = "foreach";
 
     /// <summary>Module name.</summary>
     public string Name => "foreach";
@@ -72,8 +72,13 @@ public sealed class ForEachModule : IEventModule
                 return;
             }
 
-            _expected[parentKey] = items.Length;
-            _collected[parentKey] = [];
+            var state = WorkflowRunModuleStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
+            state.Parents[parentKey] = new ForEachParentState
+            {
+                Expected = items.Length,
+                Collected = [],
+            };
+            await SaveStateAsync(state, ctx, ct);
 
             ctx.Logger.LogInformation(
                 "ForEach {StepId}: {Count} items, sub_step_type={SubType}",
@@ -110,14 +115,16 @@ public sealed class ForEachModule : IEventModule
             var parent = TryGetParentFromDirectItemStepId(evt.StepId);
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var parentKey = parent == null ? null : BuildRunStepKey(runId, parent);
+            var state = WorkflowRunModuleStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
 
-            if (parent == null || parentKey == null || !_collected.ContainsKey(parentKey)) return;
+            if (parent == null || parentKey == null || !state.Parents.TryGetValue(parentKey, out var parentState)) return;
 
-            _collected[parentKey].Add(evt);
+            parentState.Collected.Add(ForEachItemResult.From(evt));
+            state.Parents[parentKey] = parentState;
 
-            if (_collected[parentKey].Count >= _expected[parentKey])
+            if (parentState.Collected.Count >= parentState.Expected)
             {
-                var results = _collected[parentKey];
+                var results = parentState.Collected;
                 var allSuccess = results.All(r => r.Success);
                 var merged = string.Join("\n---\n", results.Select(r => r.Output));
 
@@ -125,15 +132,19 @@ public sealed class ForEachModule : IEventModule
                     "ForEach {StepId}: all {Count} items completed, success={Success}",
                     parent, results.Count, allSuccess);
 
+                state.Parents.Remove(parentKey);
+                await SaveStateAsync(state, ctx, ct);
+
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = parent,
                     RunId = runId,
                     Success = allSuccess, Output = merged,
                 }, EventDirection.Self, ct);
-
-                _collected.Remove(parentKey);
-                _expected.Remove(parentKey);
+            }
+            else
+            {
+                await SaveStateAsync(state, ctx, ct);
             }
         }
     }
@@ -151,5 +162,39 @@ public sealed class ForEachModule : IEventModule
             return null;
 
         return stepId[..idx];
+    }
+
+    private static Task SaveStateAsync(
+        ForEachModuleState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        if (state.Parents.Count == 0)
+            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+
+        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
+    public sealed class ForEachModuleState
+    {
+        public Dictionary<string, ForEachParentState> Parents { get; set; } = [];
+    }
+
+    public sealed class ForEachParentState
+    {
+        public int Expected { get; set; }
+        public List<ForEachItemResult> Collected { get; set; } = [];
+    }
+
+    public sealed class ForEachItemResult
+    {
+        public bool Success { get; set; }
+        public string Output { get; set; } = string.Empty;
+
+        public static ForEachItemResult From(StepCompletedEvent evt) => new()
+        {
+            Success = evt.Success,
+            Output = evt.Output ?? string.Empty,
+        };
     }
 }

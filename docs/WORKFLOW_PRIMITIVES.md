@@ -388,7 +388,7 @@ steps:
 
 ### `dynamic_workflow`
 
-- 作用：从上一步输出中提取 YAML 代码块，动态重配当前 workflow actor 后继续执行。
+- 作用：从上一步输出中提取 YAML 代码块，动态重配当前 workflow run actor 后继续执行。
 - 常用参数：`original_input`（可选，作为动态流程启动输入）。
 - 说明：仅在非 `closed_world_mode` 下可用；若输入中无 YAML 代码块则返回失败 `StepCompletedEvent`。
 

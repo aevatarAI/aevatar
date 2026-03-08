@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -13,9 +14,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class CacheModule : IEventModule
 {
-    private readonly Dictionary<string, CacheEntry> _cache = [];
-    private readonly Dictionary<string, PendingCacheCall> _pendingByCacheKey = [];
-    private readonly Dictionary<(string RunId, string ChildStepId), string> _childToCacheKey = [];
+    private const string ModuleStateKey = "cache";
 
     public string Name => "cache";
     public int Priority => 3;
@@ -35,16 +34,17 @@ public sealed class CacheModule : IEventModule
             if (request.StepType != "cache") return;
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
             var now = DateTimeOffset.UtcNow;
+            var state = WorkflowRunModuleStateAccess.Load<CacheModuleState>(ctx, ModuleStateKey);
 
             var cacheKey = request.Parameters.GetValueOrDefault("cache_key", request.Input ?? "");
             var ttlSeconds = int.TryParse(request.Parameters.GetValueOrDefault("ttl_seconds", "3600"), out var t) ? t : 3600;
             ttlSeconds = Math.Clamp(ttlSeconds, 1, 86_400);
-            var waiter = new CacheWaiter(runId, request.StepId);
+            var waiter = new CacheWaiterState { ParentStepId = request.StepId, RunId = runId };
 
-            if (_cache.TryGetValue(cacheKey, out var existingCache) && existingCache.ExpiresAt <= now)
-                _cache.Remove(cacheKey);
+            if (state.CacheEntries.TryGetValue(cacheKey, out var existingCache) && existingCache.ExpiresAt <= now)
+                state.CacheEntries.Remove(cacheKey);
 
-            if (_cache.TryGetValue(cacheKey, out var cached) && cached.ExpiresAt > now)
+            if (state.CacheEntries.TryGetValue(cacheKey, out var cached) && cached.ExpiresAt > now)
             {
                 ctx.Logger.LogInformation("Cache {StepId}: HIT key={Key}", request.StepId, ShortenKey(cacheKey));
                 var hit = new StepCompletedEvent
@@ -60,9 +60,11 @@ public sealed class CacheModule : IEventModule
                 return;
             }
 
-            if (_pendingByCacheKey.TryGetValue(cacheKey, out var pending))
+            if (state.PendingByCacheKey.TryGetValue(cacheKey, out var pending))
             {
                 pending.Waiters.Add(waiter);
+                state.PendingByCacheKey[cacheKey] = pending;
+                await SaveStateAsync(state, ctx, ct);
                 ctx.Logger.LogInformation(
                     "Cache {StepId}: PENDING key={Key}, join waiters={Waiters}",
                     request.StepId,
@@ -78,9 +80,13 @@ public sealed class CacheModule : IEventModule
             var childRole = request.Parameters.GetValueOrDefault("child_target_role", request.TargetRole);
             var childStepId = $"{request.StepId}_cached_{Guid.NewGuid():N}";
 
-            var pendingCall = new PendingCacheCall(ttlSeconds, [waiter]);
-            _pendingByCacheKey[cacheKey] = pendingCall;
-            _childToCacheKey[(runId, childStepId)] = cacheKey;
+            state.PendingByCacheKey[cacheKey] = new PendingCacheCallState
+            {
+                TtlSeconds = ttlSeconds,
+                Waiters = [waiter],
+            };
+            state.ChildStepToCacheKey[BuildChildKey(runId, childStepId)] = cacheKey;
+            await SaveStateAsync(state, ctx, ct);
 
             await ctx.PublishAsync(new StepRequestEvent
             {
@@ -95,17 +101,22 @@ public sealed class CacheModule : IEventModule
         {
             var evt = payload.Unpack<StepCompletedEvent>();
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
-            if (!_childToCacheKey.Remove((runId, evt.StepId), out var cacheKey))
+            var state = WorkflowRunModuleStateAccess.Load<CacheModuleState>(ctx, ModuleStateKey);
+            var childKey = BuildChildKey(runId, evt.StepId);
+            if (!state.ChildStepToCacheKey.Remove(childKey, out var cacheKey))
                 return;
-            if (!_pendingByCacheKey.Remove(cacheKey, out var pending))
+            if (!state.PendingByCacheKey.Remove(cacheKey, out var pending))
                 return;
 
             if (evt.Success)
             {
-                _cache[cacheKey] = new CacheEntry(
-                    evt.Output ?? string.Empty,
-                    DateTimeOffset.UtcNow.AddSeconds(pending.TtlSeconds));
+                state.CacheEntries[cacheKey] = new CacheEntryState
+                {
+                    Value = evt.Output ?? string.Empty,
+                    ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(pending.TtlSeconds),
+                };
             }
+            await SaveStateAsync(state, ctx, ct);
 
             foreach (var waiter in pending.Waiters)
             {
@@ -126,15 +137,46 @@ public sealed class CacheModule : IEventModule
 
     private static string ShortenKey(string key) => key.Length > 60 ? key[..60] + "..." : key;
 
-    private sealed record CacheEntry(string Value, DateTimeOffset ExpiresAt);
+    private static string BuildChildKey(string runId, string childStepId) =>
+        $"{runId}:{childStepId}";
 
-    private sealed record CacheWaiter(string RunId, string ParentStepId);
-
-    private sealed class PendingCacheCall(
-        int ttlSeconds,
-        List<CacheWaiter> waiters)
+    private static Task SaveStateAsync(
+        CacheModuleState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
     {
-        public int TtlSeconds { get; } = ttlSeconds;
-        public List<CacheWaiter> Waiters { get; } = waiters;
+        if (state.CacheEntries.Count == 0 &&
+            state.PendingByCacheKey.Count == 0 &&
+            state.ChildStepToCacheKey.Count == 0)
+        {
+            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+        }
+
+        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
+    public sealed class CacheModuleState
+    {
+        public Dictionary<string, CacheEntryState> CacheEntries { get; set; } = [];
+        public Dictionary<string, PendingCacheCallState> PendingByCacheKey { get; set; } = [];
+        public Dictionary<string, string> ChildStepToCacheKey { get; set; } = [];
+    }
+
+    public sealed class CacheEntryState
+    {
+        public string Value { get; set; } = string.Empty;
+        public DateTimeOffset ExpiresAt { get; set; }
+    }
+
+    public sealed class CacheWaiterState
+    {
+        public string RunId { get; set; } = string.Empty;
+        public string ParentStepId { get; set; } = string.Empty;
+    }
+
+    public sealed class PendingCacheCallState
+    {
+        public int TtlSeconds { get; set; }
+        public List<CacheWaiterState> Waiters { get; set; } = [];
     }
 }

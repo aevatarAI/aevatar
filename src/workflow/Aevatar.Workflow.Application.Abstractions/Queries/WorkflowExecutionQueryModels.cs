@@ -94,8 +94,7 @@ public sealed record WorkflowTopologyEdge(string Parent, string Child);
 
 public enum WorkflowRunProjectionScope
 {
-    ActorShared = 0,
-    RunIsolated = 1,
+    RunIsolated = 0,
     Unknown = 99,
 }
 

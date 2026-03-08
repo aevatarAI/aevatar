@@ -12,7 +12,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>
 /// Extracts a workflow YAML from step input, then publishes
 /// <see cref="ReplaceWorkflowDefinitionAndExecuteEvent"/> so the owning
-/// WorkflowGAgent replaces its bound workflow definition and restarts execution.
+/// workflow run actor replaces its bound definition snapshot and restarts execution.
 /// </summary>
 public sealed class DynamicWorkflowModule : IEventModule
 {

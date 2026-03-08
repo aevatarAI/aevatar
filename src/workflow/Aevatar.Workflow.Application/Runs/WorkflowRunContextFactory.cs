@@ -30,12 +30,12 @@ public sealed class WorkflowRunContextFactory : IWorkflowRunContextFactory
         if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Actor == null)
             return new WorkflowRunContextCreateResult(actorResolution.Error, null);
 
-        var actor = actorResolution.Actor;
+        var executionActor = actorResolution.Actor;
         var workflowNameForRun = actorResolution.WorkflowNameForRun;
         if (!_projectionPort.ProjectionEnabled)
             return new WorkflowRunContextCreateResult(WorkflowChatRunStartError.ProjectionDisabled, null);
 
-        var baseContext = _commandContextPolicy.Create(actor.Id);
+        var baseContext = _commandContextPolicy.Create(executionActor.Id);
         var metadata = new Dictionary<string, string>(baseContext.Metadata, StringComparer.Ordinal)
         {
             [WorkflowRunCommandMetadataKeys.SessionId] = baseContext.CorrelationId,
@@ -48,7 +48,7 @@ public sealed class WorkflowRunContextFactory : IWorkflowRunContextFactory
         var sink = new EventChannel<WorkflowRunEvent>();
         var projectionLease = await _projectionPort.EnsureAndAttachAsync(
             token => _projectionPort.EnsureActorProjectionAsync(
-                actor.Id,
+                executionActor.Id,
                 workflowNameForRun,
                 request.Prompt,
                 commandContext.CommandId,
@@ -62,7 +62,7 @@ public sealed class WorkflowRunContextFactory : IWorkflowRunContextFactory
             WorkflowChatRunStartError.None,
             new WorkflowRunContext
             {
-                Actor = actor,
+                Actor = executionActor,
                 WorkflowName = workflowNameForRun,
                 Sink = sink,
                 CommandId = commandContext.CommandId,

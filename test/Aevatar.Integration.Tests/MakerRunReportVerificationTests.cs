@@ -80,10 +80,11 @@ public class MakerRunReportVerificationTests
         string workflowYaml,
         string input)
     {
-        var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-maker-verification-" + Guid.NewGuid().ToString("N")[..8]);
-        var recorder = new MakerRunProjectionAccumulator(actor.Id);
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-maker-definition-" + Guid.NewGuid().ToString("N")[..8]);
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-maker-run-" + Guid.NewGuid().ToString("N")[..8]);
+        var recorder = new MakerRunProjectionAccumulator(runActor.Id);
 
-        await actor.HandleEventAsync(new EventEnvelope
+        await definitionActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
@@ -97,7 +98,23 @@ public class MakerRunReportVerificationTests
             CorrelationId = Guid.NewGuid().ToString("N"),
         });
 
-        var stream = provider.GetRequiredService<IStreamProvider>().GetStream(actor.Id);
+        await runActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = definitionActor.Id,
+                WorkflowYaml = workflowYaml,
+                WorkflowName = "maker_report_verification",
+                RunId = "maker-report-run",
+            }),
+            PublisherId = "test",
+            Direction = EventDirection.Self,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        });
+
+        var stream = provider.GetRequiredService<IStreamProvider>().GetStream(runActor.Id);
         var workflowCompleted = new TaskCompletionSource<WorkflowCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var sub = await stream.SubscribeAsync<EventEnvelope>(envelope =>
         {
@@ -110,7 +127,7 @@ public class MakerRunReportVerificationTests
         });
 
         var startedAt = DateTimeOffset.UtcNow;
-        await actor.HandleEventAsync(new EventEnvelope
+        await runActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
@@ -123,7 +140,7 @@ public class MakerRunReportVerificationTests
         var completed = await workflowCompleted.Task.WaitAsync(timeout.Token);
         var endedAt = DateTimeOffset.UtcNow;
 
-        var topology = await CollectTopologyAsync(runtime, actor.Id);
+        var topology = await CollectTopologyAsync(runtime, runActor.Id);
         var report = recorder.BuildReport(
             "maker_report_verification",
             "inline:test",
@@ -135,7 +152,8 @@ public class MakerRunReportVerificationTests
             timedOut: false,
             topology);
 
-        await runtime.DestroyAsync(actor.Id);
+        await runtime.DestroyAsync(runActor.Id);
+        await runtime.DestroyAsync(definitionActor.Id);
         return new VerificationRunResult(completed, report);
     }
 

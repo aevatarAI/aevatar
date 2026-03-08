@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
 
+[Trait("Category", "Slow")]
 public class ScriptAutonomousEvolutionE2ETests
 {
     [Fact]

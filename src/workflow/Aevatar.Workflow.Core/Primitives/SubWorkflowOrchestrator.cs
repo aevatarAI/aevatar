@@ -9,8 +9,8 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Workflow.Core.Primitives;
 
 /// <summary>
-/// Encapsulates workflow_call runtime orchestration for <see cref="WorkflowGAgent"/>.
-/// Keeps sub-workflow actor lifecycle and state transition helpers out of the root agent.
+/// Encapsulates workflow_call runtime orchestration for <see cref="WorkflowRunGAgent"/>.
+/// Keeps sub-workflow actor lifecycle and state transition helpers out of the run actor.
 /// </summary>
 internal sealed class SubWorkflowOrchestrator
 {
@@ -57,7 +57,7 @@ internal sealed class SubWorkflowOrchestrator
 
     public async Task HandleInvokeRequestedAsync(
         SubWorkflowInvokeRequestedEvent request,
-        WorkflowState state,
+        WorkflowRunState state,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -95,11 +95,16 @@ internal sealed class SubWorkflowOrchestrator
         var invocationId = string.IsNullOrWhiteSpace(request.InvocationId)
             ? WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId)
             : request.InvocationId.Trim();
+        var childRunId = invocationId;
 
         try
         {
-            var childActor = await ResolveOrCreateSubWorkflowActorAsync(workflowName, lifecycle, state, ct);
-            var childRunId = invocationId;
+            var childActor = await ResolveOrCreateSubWorkflowActorAsync(
+                workflowName,
+                lifecycle,
+                state,
+                childRunId,
+                ct);
 
             await _persistDomainEventAsync(new SubWorkflowInvocationRegisteredEvent
             {
@@ -145,7 +150,7 @@ internal sealed class SubWorkflowOrchestrator
     public async Task<bool> TryHandleCompletionAsync(
         WorkflowCompletedEvent completed,
         string? publisherActorId,
-        WorkflowState state,
+        WorkflowRunState state,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(completed);
@@ -207,7 +212,7 @@ internal sealed class SubWorkflowOrchestrator
         return true;
     }
 
-    public async Task CleanupPendingInvocationsForRunAsync(string runId, WorkflowState state, CancellationToken ct)
+    public async Task CleanupPendingInvocationsForRunAsync(string runId, WorkflowRunState state, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(state);
 
@@ -235,7 +240,7 @@ internal sealed class SubWorkflowOrchestrator
             await TryFinalizeNonSingletonChildAsync(staleInvocation, ct);
     }
 
-    public static WorkflowState ApplySubWorkflowBindingUpserted(WorkflowState current, SubWorkflowBindingUpsertedEvent evt)
+    public static WorkflowRunState ApplySubWorkflowBindingUpserted(WorkflowRunState current, SubWorkflowBindingUpsertedEvent evt)
     {
         var next = current.Clone();
         var workflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(evt.WorkflowName);
@@ -250,7 +255,7 @@ internal sealed class SubWorkflowOrchestrator
             if (string.Equals(existing.WorkflowName, workflowName, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(WorkflowCallLifecycle.Normalize(existing.Lifecycle), lifecycle, StringComparison.OrdinalIgnoreCase))
             {
-                next.SubWorkflowBindings[i] = new WorkflowState.Types.SubWorkflowBinding
+                next.SubWorkflowBindings[i] = new WorkflowRunState.Types.SubWorkflowBinding
                 {
                     WorkflowName = workflowName,
                     ChildActorId = childActorId,
@@ -260,7 +265,7 @@ internal sealed class SubWorkflowOrchestrator
             }
         }
 
-        next.SubWorkflowBindings.Add(new WorkflowState.Types.SubWorkflowBinding
+        next.SubWorkflowBindings.Add(new WorkflowRunState.Types.SubWorkflowBinding
         {
             WorkflowName = workflowName,
             ChildActorId = childActorId,
@@ -269,7 +274,7 @@ internal sealed class SubWorkflowOrchestrator
         return next;
     }
 
-    public static WorkflowState ApplySubWorkflowInvocationRegistered(WorkflowState current, SubWorkflowInvocationRegisteredEvent evt)
+    public static WorkflowRunState ApplySubWorkflowInvocationRegistered(WorkflowRunState current, SubWorkflowInvocationRegisteredEvent evt)
     {
         var next = current.Clone();
         var invocationId = evt.InvocationId?.Trim() ?? string.Empty;
@@ -277,7 +282,7 @@ internal sealed class SubWorkflowOrchestrator
         if (string.IsNullOrWhiteSpace(invocationId) || string.IsNullOrWhiteSpace(childRunId))
             return next;
 
-        var pending = new WorkflowState.Types.PendingSubWorkflowInvocation
+        var pending = new WorkflowRunState.Types.PendingSubWorkflowInvocation
         {
             InvocationId = invocationId,
             ParentRunId = WorkflowRunIdNormalizer.Normalize(evt.ParentRunId),
@@ -292,7 +297,7 @@ internal sealed class SubWorkflowOrchestrator
         return next;
     }
 
-    public static WorkflowState ApplySubWorkflowInvocationCompleted(WorkflowState current, SubWorkflowInvocationCompletedEvent evt)
+    public static WorkflowRunState ApplySubWorkflowInvocationCompleted(WorkflowRunState current, SubWorkflowInvocationCompletedEvent evt)
     {
         var next = current.Clone();
         RemovePendingInvocation(
@@ -302,7 +307,7 @@ internal sealed class SubWorkflowOrchestrator
         return next;
     }
 
-    public static void PruneIdleSubWorkflowBindings(WorkflowState state, WorkflowDefinition workflow)
+    public static void PruneIdleSubWorkflowBindings(WorkflowRunState state, WorkflowDefinition workflow)
     {
         if (state.SubWorkflowBindings.Count == 0)
             return;
@@ -318,13 +323,22 @@ internal sealed class SubWorkflowOrchestrator
     private async Task<IActor> ResolveOrCreateSubWorkflowActorAsync(
         string workflowName,
         string lifecycle,
-        WorkflowState state,
+        WorkflowRunState state,
+        string childRunId,
         CancellationToken ct)
     {
         var normalizedWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(workflowName);
         var normalizedLifecycle = WorkflowCallLifecycle.Normalize(lifecycle);
         if (!string.Equals(normalizedLifecycle, WorkflowCallLifecycle.Singleton, StringComparison.OrdinalIgnoreCase))
-            return await CreateSubWorkflowActorAsync(normalizedWorkflowName, normalizedLifecycle, state, persistBinding: false, ct);
+        {
+            return await CreateSubWorkflowActorAsync(
+                normalizedWorkflowName,
+                normalizedLifecycle,
+                state,
+                childRunId,
+                persistBinding: false,
+                ct);
+        }
 
         var existingBinding = state.SubWorkflowBindings.FirstOrDefault(x =>
             string.Equals(x.WorkflowName, normalizedWorkflowName, StringComparison.OrdinalIgnoreCase) &&
@@ -341,13 +355,20 @@ internal sealed class SubWorkflowOrchestrator
             }
         }
 
-        return await CreateSubWorkflowActorAsync(normalizedWorkflowName, normalizedLifecycle, state, persistBinding: true, ct);
+        return await CreateSubWorkflowActorAsync(
+            normalizedWorkflowName,
+            normalizedLifecycle,
+            state,
+            childRunId,
+            persistBinding: true,
+            ct);
     }
 
     private async Task<IActor> CreateSubWorkflowActorAsync(
         string workflowName,
         string lifecycle,
-        WorkflowState state,
+        WorkflowRunState state,
+        string childRunId,
         bool persistBinding,
         CancellationToken ct)
     {
@@ -358,7 +379,7 @@ internal sealed class SubWorkflowOrchestrator
         var childActorId = BuildSubWorkflowActorId(workflowName, lifecycle);
         var childActor = await ResolveOrCreateWorkflowActorByIdAsync(childActorId);
         await _runtime.LinkAsync(_ownerActorIdAccessor(), childActor.Id);
-        await childActor.HandleEventAsync(CreateWorkflowDefinitionBindEnvelope(workflowYaml, workflowName, state));
+        await childActor.HandleEventAsync(CreateWorkflowRunBindEnvelope(workflowYaml, workflowName, childRunId, state));
 
         if (persistBinding)
         {
@@ -373,7 +394,7 @@ internal sealed class SubWorkflowOrchestrator
         return childActor;
     }
 
-    private async Task<string?> ResolveWorkflowYamlAsync(string workflowName, WorkflowState state, CancellationToken ct)
+    private async Task<string?> ResolveWorkflowYamlAsync(string workflowName, WorkflowRunState state, CancellationToken ct)
     {
         var inlineYaml = TryResolveInlineWorkflowYaml(workflowName, state);
         if (!string.IsNullOrWhiteSpace(inlineYaml))
@@ -392,7 +413,7 @@ internal sealed class SubWorkflowOrchestrator
     private IWorkflowDefinitionResolver? ResolveWorkflowDefinitionResolver() =>
         _workflowDefinitionResolver ?? _serviceProviderAccessor()?.GetService<IWorkflowDefinitionResolver>();
 
-    private static string? TryResolveInlineWorkflowYaml(string workflowName, WorkflowState state)
+    private static string? TryResolveInlineWorkflowYaml(string workflowName, WorkflowRunState state)
     {
         if (state.InlineWorkflowYamls.Count == 0)
             return null;
@@ -422,7 +443,7 @@ internal sealed class SubWorkflowOrchestrator
     }
 
     private async Task TryFinalizeNonSingletonChildAsync(
-        WorkflowState.Types.PendingSubWorkflowInvocation pending,
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
         CancellationToken ct)
     {
         if (string.Equals(
@@ -467,7 +488,7 @@ internal sealed class SubWorkflowOrchestrator
 
         try
         {
-            return await _runtime.CreateAsync(typeof(WorkflowGAgent), actorId);
+            return await _runtime.CreateAsync(typeof(WorkflowRunGAgent), actorId);
         }
         catch (Exception ex)
         {
@@ -487,16 +508,22 @@ internal sealed class SubWorkflowOrchestrator
         }
     }
 
-    private EventEnvelope CreateWorkflowDefinitionBindEnvelope(string workflowYaml, string workflowName, WorkflowState state)
+    private EventEnvelope CreateWorkflowRunBindEnvelope(
+        string workflowYaml,
+        string workflowName,
+        string runId,
+        WorkflowRunState state)
     {
         var inlineWorkflowYamls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, value) in state.InlineWorkflowYamls)
             inlineWorkflowYamls[key] = value;
 
-        var bindDefinition = new BindWorkflowDefinitionEvent
+        var bindDefinition = new BindWorkflowRunDefinitionEvent
         {
+            DefinitionActorId = string.Empty,
             WorkflowYaml = workflowYaml ?? string.Empty,
             WorkflowName = workflowName ?? string.Empty,
+            RunId = runId ?? string.Empty,
             InlineWorkflowYamls = { inlineWorkflowYamls },
         };
 
@@ -512,8 +539,8 @@ internal sealed class SubWorkflowOrchestrator
     }
 
     private static bool ShouldEvictBinding(
-        WorkflowState state,
-        WorkflowState.Types.SubWorkflowBinding binding,
+        WorkflowRunState state,
+        WorkflowRunState.Types.SubWorkflowBinding binding,
         ISet<string> referencedSingletonWorkflows)
     {
         var lifecycle = WorkflowCallLifecycle.Normalize(binding.Lifecycle);
@@ -537,7 +564,7 @@ internal sealed class SubWorkflowOrchestrator
     }
 
     private static bool HasPendingInvocationForChildActor(
-        IEnumerable<WorkflowState.Types.PendingSubWorkflowInvocation> pendingInvocations,
+        IEnumerable<WorkflowRunState.Types.PendingSubWorkflowInvocation> pendingInvocations,
         string childActorId)
     {
         return pendingInvocations.Any(x =>
@@ -590,11 +617,11 @@ internal sealed class SubWorkflowOrchestrator
         });
     }
 
-    private static List<WorkflowState.Types.PendingSubWorkflowInvocation> CollectPendingInvocationsByParentRunId(
-        WorkflowState state,
+    private static List<WorkflowRunState.Types.PendingSubWorkflowInvocation> CollectPendingInvocationsByParentRunId(
+        WorkflowRunState state,
         string parentRunId)
     {
-        var pendingByRun = new List<WorkflowState.Types.PendingSubWorkflowInvocation>();
+        var pendingByRun = new List<WorkflowRunState.Types.PendingSubWorkflowInvocation>();
         var indexedChildRunIds = new HashSet<string>(StringComparer.Ordinal);
         if (state.PendingChildRunIdsByParentRunId.TryGetValue(parentRunId, out var childRunIdSet) &&
             childRunIdSet.ChildRunIds.Count > 0)
@@ -625,9 +652,9 @@ internal sealed class SubWorkflowOrchestrator
     }
 
     private static bool TryGetPendingInvocationByChildRunId(
-        WorkflowState state,
+        WorkflowRunState state,
         string childRunId,
-        out WorkflowState.Types.PendingSubWorkflowInvocation pending)
+        out WorkflowRunState.Types.PendingSubWorkflowInvocation pending)
     {
         if (TryGetPendingInvocationIndexByChildRunId(state, childRunId, out var index))
         {
@@ -640,7 +667,7 @@ internal sealed class SubWorkflowOrchestrator
     }
 
     private static bool TryGetPendingInvocationIndexByChildRunId(
-        WorkflowState state,
+        WorkflowRunState state,
         string childRunId,
         out int index)
     {
@@ -670,8 +697,8 @@ internal sealed class SubWorkflowOrchestrator
     }
 
     private static void AddPendingInvocation(
-        WorkflowState state,
-        WorkflowState.Types.PendingSubWorkflowInvocation pending)
+        WorkflowRunState state,
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(pending);
@@ -689,7 +716,7 @@ internal sealed class SubWorkflowOrchestrator
     }
 
     private static void RemovePendingInvocation(
-        WorkflowState state,
+        WorkflowRunState state,
         string invocationId,
         string childRunId)
     {
@@ -718,7 +745,7 @@ internal sealed class SubWorkflowOrchestrator
         }
     }
 
-    private static void RemovePendingInvocationAt(WorkflowState state, int index)
+    private static void RemovePendingInvocationAt(WorkflowRunState state, int index)
     {
         var pendingInvocations = state.PendingSubWorkflowInvocations;
         if (index < 0 || index >= pendingInvocations.Count)
@@ -760,7 +787,7 @@ internal sealed class SubWorkflowOrchestrator
     }
 
     private static void AddChildRunIdToParentIndex(
-        MapField<string, WorkflowState.Types.ChildRunIdSet> parentIndex,
+        MapField<string, WorkflowRunState.Types.ChildRunIdSet> parentIndex,
         string parentRunId,
         string childRunId)
     {
@@ -774,7 +801,7 @@ internal sealed class SubWorkflowOrchestrator
 
         if (!parentIndex.TryGetValue(normalizedParentRunId, out var childRuns))
         {
-            childRuns = new WorkflowState.Types.ChildRunIdSet();
+            childRuns = new WorkflowRunState.Types.ChildRunIdSet();
             parentIndex[normalizedParentRunId] = childRuns;
         }
 
@@ -783,7 +810,7 @@ internal sealed class SubWorkflowOrchestrator
     }
 
     private static void RemoveChildRunIdFromParentIndex(
-        MapField<string, WorkflowState.Types.ChildRunIdSet> parentIndex,
+        MapField<string, WorkflowRunState.Types.ChildRunIdSet> parentIndex,
         string parentRunId,
         string childRunId)
     {

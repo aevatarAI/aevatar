@@ -22,7 +22,8 @@
 
 1. `bash tools/ci/solution_split_guards.sh`
 2. `bash tools/ci/solution_split_test_guards.sh`
-3. 逐个构建上述 5 个 `.slnf`（全部通过）
+3. `bash tools/ci/slow_test_guards.sh`
+4. 逐个构建上述 5 个 `.slnf`（全部通过）
 
 ## 3. 目标物理拆仓模型（推荐）
 
@@ -55,6 +56,7 @@ flowchart LR
 1. 逻辑分片：新增/修复 `.slnf`，支持分域独立构建。
 2. 增加分片守卫脚本：`tools/ci/solution_split_guards.sh`。
 3. 增加分片测试守卫脚本：`tools/ci/solution_split_test_guards.sh`（Foundation/CQRS/Workflow）。
+4. 将分钟级脚本自治演化 E2E 拆到独立项目 `test/Aevatar.Integration.Slow.Tests`，并新增 `tools/ci/slow_test_guards.sh`。
 
 ### Phase 1（P1）
 
@@ -97,3 +99,4 @@ flowchart LR
 2. `Host` 不承载业务编排，能力组合只经 Infrastructure/Application 暴露。
 3. CQRS/Projection 仍为单一主链路，禁止并行第二套读侧实现。
 4. 中间层不维护进程内事实态映射（`actor/run/session -> context`）。
+5. 默认全量回归保持快速可用；分钟级慢测必须走独立慢测入口，不回流到默认 `aevatar.slnx` 主链路。

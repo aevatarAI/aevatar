@@ -8,6 +8,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -15,7 +16,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>循环模块。处理 type=while 的步骤。</summary>
 public sealed class WhileModule : IEventModule
 {
-    private readonly Dictionary<string, WhileRuntimeState> _states = [];
+    private const string ModuleStateKey = "while";
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
 
     public string Name => "while";
@@ -63,7 +64,9 @@ public sealed class WhileModule : IEventModule
                 Iteration: 0,
                 MaxIterations: maxIterations,
                 ConditionExpression: condition);
-            _states[whileKey] = state;
+            var runtimeState = WorkflowRunModuleStateAccess.Load<WhileModuleState>(ctx, ModuleStateKey);
+            runtimeState.Loops[whileKey] = state;
+            await SaveStateAsync(runtimeState, ctx, ct);
 
             ctx.Logger.LogInformation(
                 "While 循环 {StepId}: 开始，max_iterations={Max}, condition={Condition}",
@@ -81,11 +84,13 @@ public sealed class WhileModule : IEventModule
             var whileStepId = GetWhileStepId(completed.StepId);
             var runId = WorkflowRunIdNormalizer.Normalize(completed.RunId);
             var whileKey = whileStepId == null ? null : BuildRunStepKey(runId, whileStepId);
-            if (whileStepId == null || whileKey == null || !_states.TryGetValue(whileKey, out var state)) return;
+            var runtimeState = WorkflowRunModuleStateAccess.Load<WhileModuleState>(ctx, ModuleStateKey);
+            if (whileStepId == null || whileKey == null || !runtimeState.Loops.TryGetValue(whileKey, out var state)) return;
 
             if (!completed.Success)
             {
-                _states.Remove(whileKey);
+                runtimeState.Loops.Remove(whileKey);
+                await SaveStateAsync(runtimeState, ctx, ct);
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = state.StepId,
@@ -104,7 +109,8 @@ public sealed class WhileModule : IEventModule
             if (shouldContinue)
             {
                 var nextState = state with { Iteration = nextIteration };
-                _states[whileKey] = nextState;
+                runtimeState.Loops[whileKey] = nextState;
+                await SaveStateAsync(runtimeState, ctx, ct);
 
                 ctx.Logger.LogInformation("While 循环 {StepId}: 迭代 {Iter}/{Max}",
                     whileStepId, nextIteration, state.MaxIterations);
@@ -113,7 +119,8 @@ public sealed class WhileModule : IEventModule
             }
             else
             {
-                _states.Remove(whileKey);
+                runtimeState.Loops.Remove(whileKey);
+                await SaveStateAsync(runtimeState, ctx, ct);
                 ctx.Logger.LogInformation(
                     "While 循环 {StepId}: 完成，iteration={Iter}/{Max}, condition={Condition}",
                     whileStepId,
@@ -196,7 +203,23 @@ public sealed class WhileModule : IEventModule
         return true;
     }
 
-    private sealed record WhileRuntimeState(
+    public sealed class WhileModuleState
+    {
+        public Dictionary<string, WhileRuntimeState> Loops { get; set; } = [];
+    }
+
+    private static Task SaveStateAsync(
+        WhileModuleState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        if (state.Loops.Count == 0)
+            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+
+        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
+    public sealed record WhileRuntimeState(
         string StepId,
         string RunId,
         string SubStepType,

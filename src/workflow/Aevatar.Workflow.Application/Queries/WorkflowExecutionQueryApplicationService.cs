@@ -29,8 +29,8 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         return snapshots
             .Select(snapshot => new WorkflowAgentSummary(
                 snapshot.ActorId,
-                "WorkflowGAgent",
-                $"WorkflowGAgent[{snapshot.WorkflowName}]"))
+                "WorkflowRunGAgent",
+                $"WorkflowRunGAgent[{snapshot.WorkflowName}]"))
             .ToList();
     }
 

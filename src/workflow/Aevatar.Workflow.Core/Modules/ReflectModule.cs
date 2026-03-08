@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Runtime;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -12,7 +13,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class ReflectModule : IEventModule
 {
-    private readonly Dictionary<string, ReflectState> _pendingLLM = [];
+    private const string ModuleStateKey = "reflect";
 
     public string Name => "reflect";
     public int Priority => 5;
@@ -44,7 +45,8 @@ public sealed class ReflectModule : IEventModule
             var state = new ReflectState(request.StepId, runId, request.TargetRole ?? "", request.Input ?? "",
                 criteria, maxRounds, 0, ReflectPhase.Critique);
 
-            await SendCritiqueAsync(state, request.Input ?? "", ctx, ct);
+            var runtimeState = WorkflowRunModuleStateAccess.Load<ReflectModuleState>(ctx, ModuleStateKey);
+            await SendCritiqueAsync(runtimeState, state, request.Input ?? "", ctx, ct);
             return;
         }
 
@@ -61,7 +63,13 @@ public sealed class ReflectModule : IEventModule
             content = evt.Content; sid = evt.SessionId;
         }
 
-        if (sid == null || !_pendingLLM.Remove(sid, out var state2)) return;
+        if (sid == null)
+            return;
+
+        var runtimeStateForCompletion = WorkflowRunModuleStateAccess.Load<ReflectModuleState>(ctx, ModuleStateKey);
+        if (!runtimeStateForCompletion.PendingBySessionId.Remove(sid, out var state2))
+            return;
+        await SaveStateAsync(runtimeStateForCompletion, ctx, ct);
         content ??= "";
 
         if (state2.Phase == ReflectPhase.Critique)
@@ -85,16 +93,21 @@ public sealed class ReflectModule : IEventModule
             }
 
             var next = state2 with { Round = round, Phase = ReflectPhase.Improve };
-            await SendImproveAsync(next, content, ctx, ct);
+            await SendImproveAsync(runtimeStateForCompletion, next, content, ctx, ct);
         }
         else
         {
             var next = state2 with { CurrentDraft = content, Phase = ReflectPhase.Critique };
-            await SendCritiqueAsync(next, content, ctx, ct);
+            await SendCritiqueAsync(runtimeStateForCompletion, next, content, ctx, ct);
         }
     }
 
-    private async Task SendCritiqueAsync(ReflectState state, string draft, IEventHandlerContext ctx, CancellationToken ct)
+    private async Task SendCritiqueAsync(
+        ReflectModuleState runtimeState,
+        ReflectState state,
+        string draft,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
     {
         var prompt = $"""
             Review the following content against these criteria: {state.Criteria}
@@ -106,7 +119,8 @@ public sealed class ReflectModule : IEventModule
             """;
 
         var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, state.RunId, $"{state.StepId}_r{state.Round}_critique");
-        _pendingLLM[sessionId] = state;
+        runtimeState.PendingBySessionId[sessionId] = state;
+        await SaveStateAsync(runtimeState, ctx, ct);
 
         if (!string.IsNullOrEmpty(state.TargetRole))
         {
@@ -117,7 +131,12 @@ public sealed class ReflectModule : IEventModule
             await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, EventDirection.Self, ct);
     }
 
-    private async Task SendImproveAsync(ReflectState state, string critique, IEventHandlerContext ctx, CancellationToken ct)
+    private async Task SendImproveAsync(
+        ReflectModuleState runtimeState,
+        ReflectState state,
+        string critique,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
     {
         var prompt = $"""
             Improve the following content based on this feedback.
@@ -130,7 +149,8 @@ public sealed class ReflectModule : IEventModule
             """;
 
         var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, state.RunId, $"{state.StepId}_r{state.Round}_improve");
-        _pendingLLM[sessionId] = state;
+        runtimeState.PendingBySessionId[sessionId] = state;
+        await SaveStateAsync(runtimeState, ctx, ct);
 
         if (!string.IsNullOrEmpty(state.TargetRole))
         {
@@ -141,9 +161,25 @@ public sealed class ReflectModule : IEventModule
             await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, EventDirection.Self, ct);
     }
 
-    private enum ReflectPhase { Critique, Improve }
+    public enum ReflectPhase { Critique, Improve }
 
-    private sealed record ReflectState(
+    public sealed record ReflectState(
         string StepId, string RunId, string TargetRole, string CurrentDraft,
         string Criteria, int MaxRounds, int Round, ReflectPhase Phase);
+
+    public sealed class ReflectModuleState
+    {
+        public Dictionary<string, ReflectState> PendingBySessionId { get; set; } = [];
+    }
+
+    private static Task SaveStateAsync(
+        ReflectModuleState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        if (state.PendingBySessionId.Count == 0)
+            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+
+        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
 }

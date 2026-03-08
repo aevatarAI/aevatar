@@ -6,7 +6,7 @@ namespace Aevatar.Workflow.Projection.ReadModels;
 
 public enum WorkflowExecutionProjectionScope
 {
-    ActorShared = 0,
+    RunIsolated = 0,
 }
 
 public enum WorkflowExecutionTopologySource
@@ -47,7 +47,7 @@ public sealed class WorkflowExecutionReport
     public string RootActorId { get; set; } = "";
     public string CommandId { get; set; } = "";
     public string ReportVersion { get; set; } = "1.0";
-    public WorkflowExecutionProjectionScope ProjectionScope { get; set; } = WorkflowExecutionProjectionScope.ActorShared;
+    public WorkflowExecutionProjectionScope ProjectionScope { get; set; } = WorkflowExecutionProjectionScope.RunIsolated;
     public WorkflowExecutionTopologySource TopologySource { get; set; } = WorkflowExecutionTopologySource.RuntimeSnapshot;
     public WorkflowExecutionCompletionStatus CompletionStatus { get; set; } = WorkflowExecutionCompletionStatus.Unknown;
     public string WorkflowName { get; set; } = "";

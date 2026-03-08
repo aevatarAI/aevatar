@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -12,8 +13,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class MapReduceModule : IEventModule
 {
-    private readonly Dictionary<(string RunId, string StepId), MapReduceState> _states = [];
-    private readonly Dictionary<(string RunId, string StepId), (string RunId, string StepId)> _reduceToParent = [];
+    private const string ModuleStateKey = "map_reduce";
 
     public string Name => "map_reduce";
     public int Priority => 4;
@@ -73,8 +73,16 @@ public sealed class MapReduceModule : IEventModule
                 "reduce_prompt_prefix",
                 "reduce_prefix");
 
-            _states[parentKey] = new MapReduceState(
-                items.Length, [], reduceType, reduceRole ?? "", reducePrefix);
+            var state = WorkflowRunModuleStateAccess.Load<MapReduceModuleState>(ctx, ModuleStateKey);
+            state.Parents[parentKey.StepId] = new MapReduceParentState
+            {
+                MapCount = items.Length,
+                Results = [],
+                ReduceType = reduceType,
+                ReduceRole = reduceRole ?? string.Empty,
+                ReducePromptPrefix = reducePrefix,
+            };
+            await SaveStateAsync(state, ctx, ct);
 
             ctx.Logger.LogInformation("MapReduce {StepId}: map {Count} items via {Type}", request.StepId, items.Length, mapType);
 
@@ -95,13 +103,15 @@ public sealed class MapReduceModule : IEventModule
             var evt = payload.Unpack<StepCompletedEvent>();
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
 
-            var reduceKey = (runId, evt.StepId);
-            if (_reduceToParent.Remove(reduceKey, out var reduceParent))
+            var state = WorkflowRunModuleStateAccess.Load<MapReduceModuleState>(ctx, ModuleStateKey);
+            if (state.ReduceStepToParent.TryGetValue(evt.StepId, out var reduceParent))
             {
-                _states.Remove(reduceParent);
+                state.ReduceStepToParent.Remove(evt.StepId);
+                state.Parents.Remove(reduceParent);
+                await SaveStateAsync(state, ctx, ct);
                 var completed = new StepCompletedEvent
                 {
-                    StepId = reduceParent.StepId, RunId = reduceParent.RunId, Success = evt.Success, Output = evt.Output, Error = evt.Error,
+                    StepId = reduceParent, RunId = runId, Success = evt.Success, Output = evt.Output, Error = evt.Error,
                 };
                 completed.Metadata["map_reduce.phase"] = "reduce";
                 await ctx.PublishAsync(completed, EventDirection.Self, ct);
@@ -110,18 +120,23 @@ public sealed class MapReduceModule : IEventModule
 
             var parent = ExtractMapParent(evt.StepId);
             if (parent == null) return;
-            var parentKey = (runId, parent);
-            if (!_states.TryGetValue(parentKey, out var state)) return;
+            if (!state.Parents.TryGetValue(parent, out var parentState)) return;
 
-            state.Results.Add(evt);
-            if (state.Results.Count < state.MapCount) return;
-
-            var allSuccess = state.Results.All(r => r.Success);
-            var merged = string.Join("\n---\n", state.Results.Select(r => r.Output));
-
-            if (!allSuccess || string.IsNullOrWhiteSpace(state.ReduceType))
+            parentState.Results.Add(MapReduceItemResult.From(evt));
+            state.Parents[parent] = parentState;
+            if (parentState.Results.Count < parentState.MapCount)
             {
-                _states.Remove(parentKey);
+                await SaveStateAsync(state, ctx, ct);
+                return;
+            }
+
+            var allSuccess = parentState.Results.All(r => r.Success);
+            var merged = string.Join("\n---\n", parentState.Results.Select(r => r.Output));
+
+            if (!allSuccess || string.IsNullOrWhiteSpace(parentState.ReduceType))
+            {
+                state.Parents.Remove(parent);
+                await SaveStateAsync(state, ctx, ct);
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = parent, RunId = runId, Success = allSuccess, Output = merged,
@@ -130,23 +145,23 @@ public sealed class MapReduceModule : IEventModule
                 return;
             }
 
-            var reduceInput = string.IsNullOrEmpty(state.ReducePromptPrefix)
+            var reduceInput = string.IsNullOrEmpty(parentState.ReducePromptPrefix)
                 ? merged
-                : state.ReducePromptPrefix.TrimEnd() + "\n\n" + merged;
+                : parentState.ReducePromptPrefix.TrimEnd() + "\n\n" + merged;
 
             var reduceStepId = $"{parent}_reduce";
-            var reduceKey2 = (runId, reduceStepId);
-            _reduceToParent[reduceKey2] = parentKey;
+            state.ReduceStepToParent[reduceStepId] = parent;
+            await SaveStateAsync(state, ctx, ct);
 
-            ctx.Logger.LogInformation("MapReduce {StepId}: reduce via {Type}", parent, state.ReduceType);
+            ctx.Logger.LogInformation("MapReduce {StepId}: reduce via {Type}", parent, parentState.ReduceType);
 
             await ctx.PublishAsync(new StepRequestEvent
             {
                 StepId = reduceStepId,
-                StepType = state.ReduceType,
+                StepType = parentState.ReduceType,
                 RunId = runId,
                 Input = reduceInput,
-                TargetRole = state.ReduceRole,
+                TargetRole = parentState.ReduceRole,
             }, EventDirection.Self, ct);
         }
     }
@@ -157,17 +172,41 @@ public sealed class MapReduceModule : IEventModule
         return idx > 0 ? stepId[..idx] : null;
     }
 
-    private sealed class MapReduceState(
-        int mapCount,
-        List<StepCompletedEvent> results,
-        string reduceType,
-        string reduceRole,
-        string reducePromptPrefix)
+    private static Task SaveStateAsync(
+        MapReduceModuleState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
     {
-        public int MapCount => mapCount;
-        public List<StepCompletedEvent> Results { get; } = results;
-        public string ReduceType => reduceType;
-        public string ReduceRole => reduceRole;
-        public string ReducePromptPrefix => reducePromptPrefix;
+        if (state.Parents.Count == 0 && state.ReduceStepToParent.Count == 0)
+            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+
+        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
+    public sealed class MapReduceModuleState
+    {
+        public Dictionary<string, MapReduceParentState> Parents { get; set; } = [];
+        public Dictionary<string, string> ReduceStepToParent { get; set; } = [];
+    }
+
+    public sealed class MapReduceParentState
+    {
+        public int MapCount { get; set; }
+        public List<MapReduceItemResult> Results { get; set; } = [];
+        public string ReduceType { get; set; } = string.Empty;
+        public string ReduceRole { get; set; } = string.Empty;
+        public string ReducePromptPrefix { get; set; } = string.Empty;
+    }
+
+    public sealed class MapReduceItemResult
+    {
+        public bool Success { get; set; }
+        public string Output { get; set; } = string.Empty;
+
+        public static MapReduceItemResult From(StepCompletedEvent evt) => new()
+        {
+            Success = evt.Success,
+            Output = evt.Output ?? string.Empty,
+        };
     }
 }

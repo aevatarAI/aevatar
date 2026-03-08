@@ -16,6 +16,10 @@ public sealed record ChatInput
     /// </summary>
     public string? Workflow { get; init; }
 
+    /// <summary>
+    /// Existing workflow definition source actor id for a new run.
+    /// Resume/signal APIs must target the returned run actor id instead.
+    /// </summary>
     public string? AgentId { get; init; }
 
     /// <summary>

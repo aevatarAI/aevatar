@@ -105,6 +105,7 @@ flowchart LR
 1. `bash tools/ci/architecture_guards.sh`
 2. `dotnet build aevatar.slnx --nologo`
 3. `dotnet test aevatar.slnx --nologo`
+4. `bash tools/ci/slow_test_guards.sh`
 
 关键门禁：
 
@@ -113,3 +114,4 @@ flowchart LR
 3. 禁止 Host/Infrastructure 直接 `AddCqrsCore(...)`
 4. 禁止独立 Maker Capability 工程与路由回流
 5. 强制 Mainnet 插件化装配 Maker
+6. 默认全量测试只承载快速主链路；分钟级脚本自治演化回归独立执行，避免把慢测静默耗时混入常规门禁。

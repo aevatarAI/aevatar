@@ -195,10 +195,25 @@ public sealed class WorkflowInfrastructureCoverageTests
         got.Should().NotBeNull();
         runtime.GetCalls.Should().ContainSingle().Which.Should().Be("actor-1");
 
-        runtime.ActorToCreate = new StubActor("created", new StubAgent("agent-created"));
-        var created = await port.CreateAsync(CancellationToken.None);
-        created.Id.Should().Be("created");
+        runtime.ActorToCreate = new StubActor("definition-created", new StubAgent("agent-created"));
+        var createdDefinition = await port.CreateDefinitionAsync(ct: CancellationToken.None);
+        createdDefinition.Id.Should().Be("definition-created");
         runtime.LastGenericCreateType.Should().Be(typeof(WorkflowGAgent));
+
+        var createdRunActor = new StubActor("run-created", new StubAgent("run-agent"));
+        runtime.ActorToCreate = createdRunActor;
+        var createdRun = await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-created",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+        createdRun.Id.Should().Be("run-created");
+        runtime.LastGenericCreateType.Should().Be(typeof(WorkflowRunGAgent));
+        createdRunActor.LastHandledEnvelope.Should().NotBeNull();
+        createdRunActor.LastHandledEnvelope!.Payload.Should().NotBeNull();
+        createdRunActor.LastHandledEnvelope.Payload!.Is(BindWorkflowRunDefinitionEvent.Descriptor).Should().BeTrue();
 
         var destroyAct = async () => await port.DestroyAsync(" ", CancellationToken.None);
         await destroyAct.Should().ThrowAsync<ArgumentException>();
@@ -207,8 +222,10 @@ public sealed class WorkflowInfrastructureCoverageTests
         runtime.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
 
         var unknownActor = new StubActor("x", new StubAgent("a"));
-        (await port.IsWorkflowActorAsync(unknownActor, CancellationToken.None)).Should().BeFalse();
+        (await port.IsWorkflowDefinitionActorAsync(unknownActor, CancellationToken.None)).Should().BeFalse();
+        (await port.IsWorkflowRunActorAsync(unknownActor, CancellationToken.None)).Should().BeFalse();
         (await port.GetBoundWorkflowNameAsync(unknownActor, CancellationToken.None)).Should().BeNull();
+        (await port.DescribeAsync(unknownActor, CancellationToken.None)).ActorKind.Should().Be(WorkflowActorKind.Unsupported);
 
         var recordingActor = new StubActor("wf-actor", new StubAgent("wf-agent"));
         await port.BindWorkflowDefinitionAsync(recordingActor, "name: x", "x", null, CancellationToken.None);
@@ -224,11 +241,30 @@ public sealed class WorkflowInfrastructureCoverageTests
         var port = CreatePort(runtime);
         var actor = new StubActor(
             "wf-actor",
-            new WorkflowGAgent(runtime, new FakeRoleAgentTypeResolver(), new FakeEventModuleFactory(), [new WorkflowCoreModulePack()]));
+            new WorkflowGAgent());
         runtime.ActorToReturn = actor;
 
-        (await port.IsWorkflowActorAsync(actor, CancellationToken.None)).Should().BeTrue();
+        (await port.IsWorkflowDefinitionActorAsync(actor, CancellationToken.None)).Should().BeTrue();
         (await port.GetBoundWorkflowNameAsync(actor, CancellationToken.None)).Should().BeNull();
+        (await port.DescribeAsync(actor, CancellationToken.None)).ActorKind.Should().Be(WorkflowActorKind.Definition);
+    }
+
+    [Fact]
+    public async Task WorkflowRunActorPort_WhenRuntimeTypeMatchesRunActor_ShouldRecognizeWorkflowRunAgent()
+    {
+        var runtime = new FakeActorRuntime();
+        var port = CreatePort(runtime);
+        var actor = new StubActor(
+            "wf-run-actor",
+            new WorkflowRunGAgent(
+                runtime,
+                new FakeRoleAgentTypeResolver(),
+                new FakeEventModuleFactory(),
+                [new WorkflowCoreModulePack()]));
+        runtime.ActorToReturn = actor;
+
+        (await port.IsWorkflowRunActorAsync(actor, CancellationToken.None)).Should().BeTrue();
+        (await port.DescribeAsync(actor, CancellationToken.None)).ActorKind.Should().Be(WorkflowActorKind.Run);
     }
 
     [Fact]
@@ -238,7 +274,8 @@ public sealed class WorkflowInfrastructureCoverageTests
         var port = CreatePort(runtime);
         var actor = new StubActor("wf-actor", new StubAgent("wf-agent"));
 
-        (await port.IsWorkflowActorAsync(actor, CancellationToken.None)).Should().BeFalse();
+        (await port.IsWorkflowDefinitionActorAsync(actor, CancellationToken.None)).Should().BeFalse();
+        (await port.IsWorkflowRunActorAsync(actor, CancellationToken.None)).Should().BeFalse();
     }
 
     [Fact]

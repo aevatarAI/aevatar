@@ -186,8 +186,10 @@ public class ConnectorCallIntegrationTests
         string workflowYaml,
         string input)
     {
-        var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-root-" + Guid.NewGuid().ToString("N")[..8]);
-        await actor.HandleEventAsync(new EventEnvelope
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-root-definition-" + Guid.NewGuid().ToString("N")[..8]);
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-root-run-" + Guid.NewGuid().ToString("N")[..8]);
+
+        await definitionActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
@@ -201,7 +203,23 @@ public class ConnectorCallIntegrationTests
             CorrelationId = Guid.NewGuid().ToString("N"),
         });
 
-        var stream = provider.GetRequiredService<IStreamProvider>().GetStream(actor.Id);
+        await runActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = definitionActor.Id,
+                WorkflowYaml = workflowYaml,
+                WorkflowName = "connector_flow",
+                RunId = "connector-flow-run",
+            }),
+            PublisherId = "test",
+            Direction = EventDirection.Self,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        });
+
+        var stream = provider.GetRequiredService<IStreamProvider>().GetStream(runActor.Id);
         var stepCompletions = new List<StepCompletedEvent>();
         var workflowCompleted = new TaskCompletionSource<WorkflowCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -222,7 +240,7 @@ public class ConnectorCallIntegrationTests
             return Task.CompletedTask;
         });
 
-        await actor.HandleEventAsync(new EventEnvelope
+        await runActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
@@ -233,7 +251,8 @@ public class ConnectorCallIntegrationTests
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var completed = await workflowCompleted.Task.WaitAsync(timeout.Token);
-        await runtime.DestroyAsync(actor.Id);
+        await runtime.DestroyAsync(runActor.Id);
+        await runtime.DestroyAsync(definitionActor.Id);
         return new WorkflowRunResult(completed, stepCompletions);
     }
 

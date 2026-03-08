@@ -12,6 +12,7 @@ using PbValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Integration.Tests;
 
+[Trait("Category", "Slow")]
 public class ScriptAutonomousEvolutionComprehensiveE2ETests
 {
     [Fact]

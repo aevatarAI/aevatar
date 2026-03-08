@@ -10,7 +10,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
 /// <summary>
-/// Infrastructure adapter for workflow actor lifecycle and binding operations.
+/// Infrastructure adapter for workflow definition actor lifecycle and run actor creation.
 /// </summary>
 internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
 {
@@ -41,8 +41,63 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         return _runtime.GetAsync(actorId);
     }
 
-    public Task<IActor> CreateAsync(CancellationToken ct = default) =>
-        _runtime.CreateAsync<WorkflowGAgent>(ct: ct);
+    public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
+        _runtime.CreateAsync<WorkflowGAgent>(actorId, ct: ct);
+
+    public Task<WorkflowActorBinding> DescribeAsync(IActor actor, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ct.ThrowIfCancellationRequested();
+
+        var binding = actor.Agent switch
+        {
+            WorkflowGAgent definitionActor => new WorkflowActorBinding(
+                WorkflowActorKind.Definition,
+                actor.Id,
+                actor.Id,
+                string.Empty,
+                definitionActor.State.WorkflowName,
+                definitionActor.State.WorkflowYaml,
+                new Dictionary<string, string>(definitionActor.State.InlineWorkflowYamls, StringComparer.OrdinalIgnoreCase)),
+            WorkflowRunGAgent runActor => new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                actor.Id,
+                runActor.State.DefinitionActorId,
+                runActor.State.RunId,
+                runActor.State.WorkflowName,
+                runActor.State.WorkflowYaml,
+                new Dictionary<string, string>(runActor.State.InlineWorkflowYamls, StringComparer.OrdinalIgnoreCase)),
+            _ => WorkflowActorBinding.Unsupported(actor.Id),
+        };
+
+        return Task.FromResult(binding);
+    }
+
+    public async Task<IActor> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        if (string.IsNullOrWhiteSpace(definition.WorkflowYaml) ||
+            string.IsNullOrWhiteSpace(definition.WorkflowName))
+        {
+            throw new InvalidOperationException(
+                "Workflow run creation requires a valid workflow definition binding.");
+        }
+
+        var definitionActorId = await EnsureDefinitionActorAsync(definition, ct);
+        var runActor = await _runtime.CreateAsync<WorkflowRunGAgent>(ct: ct);
+        if (!string.IsNullOrWhiteSpace(definitionActorId))
+            await _runtime.LinkAsync(definitionActorId, runActor.Id);
+
+        await runActor.HandleEventAsync(
+            CreateWorkflowRunBindEnvelope(
+                definitionActorId,
+                runActor.Id,
+                definition.WorkflowYaml,
+                definition.WorkflowName,
+                definition.InlineWorkflowYamls),
+            ct);
+        return runActor;
+    }
 
     public Task DestroyAsync(string actorId, CancellationToken ct = default)
     {
@@ -52,23 +107,34 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         return _runtime.DestroyAsync(actorId, ct);
     }
 
-    public async Task<bool> IsWorkflowActorAsync(IActor actor, CancellationToken ct = default)
+    public async Task<bool> IsWorkflowDefinitionActorAsync(IActor actor, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(actor);
         return await _agentTypeVerifier.IsExpectedAsync(actor.Id, typeof(WorkflowGAgent), ct);
+    }
+
+    public async Task<bool> IsWorkflowRunActorAsync(IActor actor, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        return await _agentTypeVerifier.IsExpectedAsync(actor.Id, typeof(WorkflowRunGAgent), ct);
     }
 
     public Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ct.ThrowIfCancellationRequested();
-        if (actor.Agent is not WorkflowGAgent workflowAgent)
-            return Task.FromResult<string?>(null);
 
-        var workflowName = string.IsNullOrWhiteSpace(workflowAgent.State.WorkflowName)
-            ? null
-            : workflowAgent.State.WorkflowName.Trim();
-        return Task.FromResult(workflowName);
+        var workflowName = actor.Agent switch
+        {
+            WorkflowGAgent definitionActor => definitionActor.State.WorkflowName,
+            WorkflowRunGAgent runActor => runActor.State.WorkflowName,
+            _ => string.Empty,
+        };
+
+        return Task.FromResult(
+            string.IsNullOrWhiteSpace(workflowName)
+                ? null
+                : workflowName.Trim());
     }
 
     public Task BindWorkflowDefinitionAsync(
@@ -117,6 +183,95 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         }
     }
 
+    private async Task<string> EnsureDefinitionActorAsync(
+        WorkflowDefinitionBinding definition,
+        CancellationToken ct)
+    {
+        var requestedDefinitionActorId = definition.DefinitionActorId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(requestedDefinitionActorId))
+        {
+            var existingActor = await _runtime.GetAsync(requestedDefinitionActorId);
+            if (existingActor != null &&
+                await _agentTypeVerifier.IsExpectedAsync(existingActor.Id, typeof(WorkflowGAgent), ct))
+            {
+                var binding = await DescribeAsync(existingActor, ct);
+                if (!binding.HasDefinitionPayload)
+                {
+                    await BindWorkflowDefinitionAsync(
+                        existingActor,
+                        definition.WorkflowYaml,
+                        definition.WorkflowName,
+                        definition.InlineWorkflowYamls,
+                        ct);
+                }
+                else if (IsSameDefinition(binding, definition))
+                {
+                    return existingActor.Id;
+                }
+                else
+                {
+                    return await CreateBoundDefinitionActorAsync(definition, preferredActorId: null, ct);
+                }
+
+                return existingActor.Id;
+            }
+
+            return await CreateBoundDefinitionActorAsync(definition, preferredActorId: null, ct);
+        }
+
+        return await CreateBoundDefinitionActorAsync(definition, requestedDefinitionActorId, ct);
+    }
+
+    private async Task<string> CreateBoundDefinitionActorAsync(
+        WorkflowDefinitionBinding definition,
+        string? preferredActorId,
+        CancellationToken ct)
+    {
+        var definitionActor = await CreateDefinitionAsync(preferredActorId, ct);
+        await BindWorkflowDefinitionAsync(
+            definitionActor,
+            definition.WorkflowYaml,
+            definition.WorkflowName,
+            definition.InlineWorkflowYamls,
+            ct);
+        return definitionActor.Id;
+    }
+
+    private static bool IsSameDefinition(
+        WorkflowActorBinding binding,
+        WorkflowDefinitionBinding definition)
+    {
+        if (!string.Equals(
+                binding.WorkflowName?.Trim(),
+                definition.WorkflowName?.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.Equals(
+                binding.WorkflowYaml ?? string.Empty,
+                definition.WorkflowYaml ?? string.Empty,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (binding.InlineWorkflowYamls.Count != definition.InlineWorkflowYamls.Count)
+            return false;
+
+        foreach (var (key, value) in definition.InlineWorkflowYamls)
+        {
+            if (!binding.InlineWorkflowYamls.TryGetValue(key, out var boundValue) ||
+                !string.Equals(boundValue, value, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static EventEnvelope CreateWorkflowDefinitionBindEnvelope(
         string workflowYaml,
         string workflowName,
@@ -126,6 +281,22 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(BuildBindWorkflowDefinitionEvent(workflowYaml, workflowName, inlineWorkflowYamls)),
+            PublisherId = WorkflowRunActorPortPublisherId,
+            Direction = EventDirection.Self,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        };
+
+    private static EventEnvelope CreateWorkflowRunBindEnvelope(
+        string definitionActorId,
+        string runId,
+        string workflowYaml,
+        string workflowName,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls)),
             PublisherId = WorkflowRunActorPortPublisherId,
             Direction = EventDirection.Self,
             CorrelationId = Guid.NewGuid().ToString("N"),
@@ -147,6 +318,27 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             foreach (var (key, value) in inlineWorkflowYamls)
                 bind.InlineWorkflowYamls[key] = value;
         }
+
+        return bind;
+    }
+
+    private static BindWorkflowRunDefinitionEvent BuildBindWorkflowRunDefinitionEvent(
+        string definitionActorId,
+        string runId,
+        string workflowYaml,
+        string workflowName,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls)
+    {
+        var bind = new BindWorkflowRunDefinitionEvent
+        {
+            DefinitionActorId = definitionActorId ?? string.Empty,
+            RunId = runId ?? string.Empty,
+            WorkflowYaml = workflowYaml ?? string.Empty,
+            WorkflowName = workflowName ?? string.Empty,
+        };
+
+        foreach (var (key, value) in inlineWorkflowYamls)
+            bind.InlineWorkflowYamls[key] = value;
 
         return bind;
     }

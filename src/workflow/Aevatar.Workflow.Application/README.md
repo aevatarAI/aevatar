@@ -1,103 +1,73 @@
 # Aevatar.Workflow.Application
 
-工作流应用层：承载 run 用例编排（启动/执行/流式输出/收敛/回滚）与查询门面，不做协议适配与基础设施细节。
+工作流应用层。负责 run 用例编排、projection lease 建立、live sink 挂接、输出泵送与查询门面，不直接持有 workflow 业务事实。
 
-## 目录结构
+## 关键职责
+
+- 解析请求来源：registry / inline bundle / source actor
+- 生成 `WorkflowDefinitionBinding`
+- 通过 `IWorkflowRunActorPort` 创建 definition actor 或 run actor
+- 为 run actor 建立 projection lifecycle 和 live sink
+- 发送 `ChatRequestEvent`
+- 把 `WorkflowRunEvent` 映射成 `WorkflowOutputFrame`
+- 暴露读侧查询门面
+
+## Run 主链路
+
+### WorkflowRunActorResolver
+
+把所有输入统一折叠成可执行 binding：
+
+- `workflowYamls` 优先于 `workflow`
+- `workflow` 走 `IWorkflowDefinitionRegistry`
+- `actorId` 作为 definition source lookup
+- source actor 会先经 `DescribeAsync()` 解析成 `WorkflowActorBinding`
+- 真正执行永远落到新的 `WorkflowRunGAgent`
+
+### WorkflowRunContextFactory
+
+- 调用 resolver 拿到 run actor
+- 为 run actor 创建 `CommandContext`
+- 创建 `EventChannel<WorkflowRunEvent>`
+- 通过 projection lifecycle port 建立 run-isolated projection lease
+
+### WorkflowRunExecutionEngine
+
+- 构造 `ChatRequestEvent` 信封
+- 将请求投递到 run actor
+- 消费 sink 并持续输出 `WorkflowOutputFrame`
+- 完成后补发 state snapshot，并统一清理 lease/sink
+
+## Query 语义
+
+`WorkflowExecutionQueryApplicationService` 当前查询的是 run actor 快照：
+
+- `ListAgentsAsync()` 返回 `WorkflowRunGAgent[...]`
+- `GetActorSnapshotAsync()` 的 `actorId` 是 run actor id
+- timeline / graph 也以 run actor 为根节点
+
+## 当前边界
+
+- 不直接依赖 Infrastructure 实现
+- 不直接操作 `WorkflowRunState`
+- 不维护 `actorId -> context` 进程内事实映射
+- 所有读写都经 abstraction ports
+
+## 主要目录
 
 ```
 Aevatar.Workflow.Application/
-├── DependencyInjection/
-│   └── ServiceCollectionExtensions.cs    # AddWorkflowApplication()
-├── Runs/                                 # run 用例编排
-│   ├── WorkflowChatRunApplicationService.cs  # 主入口：ExecuteAsync
-│   ├── WorkflowRunActorResolver.cs           # 解析/创建 workflow actor
-│   ├── WorkflowChatRequestEnvelopeFactory.cs # 构造 ChatRequestEvent 信封
-│   ├── WorkflowRunRequestExecutor.cs         # 投递请求事件 + 异常补偿
-│   ├── WorkflowRunOutputStreamer.cs           # 读取 run 事件 -> WorkflowOutputFrame
-│   ├── WorkflowOutputFrameMapper.cs          # WorkflowRunEvent -> WorkflowOutputFrame
-│   ├── WorkflowRunContext.cs                 # run 内部上下文
-│   ├── IWorkflowRunActorResolver.cs
-│   ├── IWorkflowRunRequestExecutor.cs
-│   ├── IWorkflowRunOutputStreamer.cs
-│   └── IWorkflowChatRequestEnvelopeFactory.cs
-├── Orchestration/                        # 投影 run 生命周期
-│   ├── WorkflowExecutionRunOrchestrator.cs       # start/finalize/rollback
-│   ├── WorkflowExecutionTopologyResolver.cs      # 读取 actor 拓扑
-│   ├── WorkflowRunOrchestrationOptions.cs        # 编排选项
-│   ├── IWorkflowExecutionRunOrchestrator.cs
-│   └── IWorkflowExecutionTopologyResolver.cs
+├── Runs/
+│   ├── WorkflowChatRunApplicationService.cs
+│   ├── WorkflowRunActorResolver.cs
+│   ├── WorkflowRunContextFactory.cs
+│   ├── WorkflowRunExecutionEngine.cs
+│   ├── WorkflowRunRequestExecutor.cs
+│   ├── WorkflowRunOutputStreamer.cs
+│   └── WorkflowRunStateSnapshotEmitter.cs
 ├── Queries/
-│   └── WorkflowExecutionQueryApplicationService.cs # agents/workflows/runs 查询门面
+│   └── WorkflowExecutionQueryApplicationService.cs
 ├── Workflows/
-│   ├── WorkflowDefinitionRegistry.cs     # 名称 -> YAML 内存注册表
-│   └── WorkflowDefinitionRegistryOptions.cs
+│   └── WorkflowDefinitionRegistry.cs
 └── Reporting/
-    └── NoopWorkflowExecutionReportArtifactSink.cs  # 默认空实现
 ```
-
-## 核心服务
-
-- `WorkflowChatRunApplicationService`
-  - `ExecuteAsync` 单入口：参数校验 + 获取 run context + 委托执行引擎。
-  - `direct` 回退由 `WorkflowDirectFallbackPolicy` 控制：仅白名单 workflow + 白名单异常触发一次回退。
-  - inline `workflowYamls` 请求默认不参与自动回退，避免掩盖编排配置错误。
-- `WorkflowRunContextFactory`
-  - 负责 actor 解析、command context 构造、projection lease 初始化与 live sink attach。
-- `WorkflowRunExecutionEngine`
-  - 负责请求执行、输出泵送、终态收敛与最终资源回收触发。
-- `WorkflowRunCompletionPolicy`
-  - 负责输出帧终态判定（`RUN_FINISHED` / `RUN_ERROR`）。
-- `WorkflowRunResourceFinalizer`
-  - 负责 `detach/release/complete/dispose` 兜底清理。
-- `WorkflowRunActorResolver`
-  - 解析优先级：`workflowYamls`（inline bundle，首项入口） > `workflow`（registry 名称） > 默认 workflow（`WorkflowRunBehaviorOptions.DefaultWorkflowName`，默认 `direct`）。
-  - 可通过 `UseAutoAsDefaultWhenWorkflowUnspecified=true` 切换为默认 `auto` 路由。
-  - inline bundle 会把 `name -> yaml` 注入运行态，`workflow_call` 解析顺序为：inline bundle > 外部 resolver。
-  - 无 `actorId` 时创建并绑定 workflow actor。
-  - 有 `actorId` 时仅复用既有 actor，不负责切换 workflow。
-- `WorkflowRunRequestExecutor`
-  - 投递请求事件并处理异常补偿。
-- `WorkflowRunOutputStreamer`
-  - 读取 run 事件并映射 `WorkflowOutputFrame`。
-- `WorkflowExecutionQueryApplicationService`
-  - `agents/workflows/runs` 查询门面（经 `IWorkflowExecutionProjectionQueryPort` 读取读侧模型）。
-  - `ListAgentsAsync` 仅返回 `WorkflowGAgent`，不扫描暴露非 Workflow actor。
-- `WorkflowDefinitionRegistry`
-  - 维护 workflow 名称到 YAML 的内存注册表。
-
-## 分层约束
-
-- 本层不依赖 Presentation 协议实现（AGUI/SSE/WS）
-- 本层不包含文件系统扫描逻辑
-- 报告落盘通过 `IWorkflowExecutionReportArtifactSink` 端口交给 Infrastructure
-- 默认注册 `NoopWorkflowExecutionReportArtifactSink`，Infrastructure 可 Replace 为真实实现
-
-## DI 入口
-
-```csharp
-services.AddWorkflowApplication(
-    configureRegistry: opt => opt.RegisterBuiltInDirectWorkflow = true,
-    configureRunBehavior: opt =>
-    {
-        opt.UseAutoAsDefaultWhenWorkflowUnspecified = false; // default
-        opt.DirectFallbackWorkflowWhitelist.Add("auto");
-    });
-```
-
-注册内容：
-- `IWorkflowChatRunApplicationService`
-- `IWorkflowExecutionQueryApplicationService`
-- `IWorkflowDefinitionRegistry`
-- `WorkflowRunBehaviorOptions` + `WorkflowDirectFallbackPolicy`
-- `IWorkflowExecutionRunOrchestrator` + `IWorkflowExecutionTopologyResolver`
-- `IWorkflowRunActorResolver`、`IWorkflowRunRequestExecutor`、`IWorkflowRunOutputStreamer`
-- `IWorkflowChatRequestEnvelopeFactory`
-- `IWorkflowExecutionReportArtifactSink`（Noop 默认）
-
-## 依赖
-
-- `Aevatar.Workflow.Application.Abstractions`
-- `Aevatar.Workflow.Core`
-- `Aevatar.AI.Abstractions`、`Aevatar.Foundation.Abstractions`
-- `Google.Protobuf`
-- `Microsoft.Extensions.DependencyInjection.Abstractions`、`Microsoft.Extensions.Logging.Abstractions`

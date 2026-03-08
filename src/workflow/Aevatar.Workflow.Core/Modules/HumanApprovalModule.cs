@@ -8,6 +8,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -18,7 +19,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class HumanApprovalModule : IEventModule
 {
-    private readonly Dictionary<(string RunId, string StepId), StepRequestEvent> _pending = [];
+    private const string ModuleStateKey = "human_approval";
 
     public string Name => "human_approval";
     public int Priority => 5;
@@ -52,7 +53,15 @@ public sealed class HumanApprovalModule : IEventModule
                 request.Parameters,
                 defaultSeconds: 3600);
 
-            _pending[(runId, request.StepId)] = request;
+            var state = WorkflowRunModuleStateAccess.Load<HumanApprovalModuleState>(ctx, ModuleStateKey);
+            state.Pending[BuildPendingKey(runId, request.StepId)] = new PendingApprovalState
+            {
+                StepId = request.StepId,
+                RunId = runId,
+                Input = request.Input ?? string.Empty,
+                OnReject = request.Parameters.GetValueOrDefault("on_reject", "fail"),
+            };
+            await SaveStateAsync(state, ctx, ct);
 
             ctx.Logger.LogInformation(
                 "HumanApproval: run={RunId} step={StepId} suspended, prompt=\"{Prompt}\", timeout={Timeout}s",
@@ -73,10 +82,11 @@ public sealed class HumanApprovalModule : IEventModule
         if (payload.Is(WorkflowResumedEvent.Descriptor))
         {
             var resumed = payload.Unpack<WorkflowResumedEvent>();
-            if (!TryResolvePending(resumed, out var pendingKey, out var pending))
+            var state = WorkflowRunModuleStateAccess.Load<HumanApprovalModuleState>(ctx, ModuleStateKey);
+            if (!TryResolvePending(state, resumed, out var pendingKey, out var pending))
                 return;
 
-            var onReject = pending.Parameters.GetValueOrDefault("on_reject", "fail");
+            var onReject = pending.OnReject;
 
             if (resumed.Approved)
             {
@@ -93,7 +103,8 @@ public sealed class HumanApprovalModule : IEventModule
                 };
                 approved.Metadata["branch"] = "true";
                 await ctx.PublishAsync(approved, EventDirection.Self, ct);
-                _pending.Remove(pendingKey);
+                state.Pending.Remove(pendingKey);
+                await SaveStateAsync(state, ctx, ct);
             }
             else
             {
@@ -117,23 +128,60 @@ public sealed class HumanApprovalModule : IEventModule
                 };
                 rejected.Metadata["branch"] = "false";
                 await ctx.PublishAsync(rejected, EventDirection.Self, ct);
-                _pending.Remove(pendingKey);
+                state.Pending.Remove(pendingKey);
+                await SaveStateAsync(state, ctx, ct);
             }
         }
     }
 
     private bool TryResolvePending(
+        HumanApprovalModuleState state,
         WorkflowResumedEvent resumed,
-        out (string RunId, string StepId) pendingKey,
-        out StepRequestEvent pending)
+        out string pendingKey,
+        out PendingApprovalState pending)
     {
-        pendingKey = default;
-        pending = default!;
+        pendingKey = string.Empty;
+        pending = new PendingApprovalState();
         if (string.IsNullOrWhiteSpace(resumed.RunId))
             return false;
 
-        pendingKey = (WorkflowRunIdNormalizer.Normalize(resumed.RunId), resumed.StepId);
-        return _pending.TryGetValue(pendingKey, out pending!);
+        pendingKey = BuildPendingKey(
+            WorkflowRunIdNormalizer.Normalize(resumed.RunId),
+            resumed.StepId ?? string.Empty);
+        if (!state.Pending.TryGetValue(pendingKey, out var resolvedPending))
+            return false;
+
+        pending = resolvedPending;
+        return string.Equals(
+            pending.RunId,
+            WorkflowRunIdNormalizer.Normalize(resumed.RunId),
+            StringComparison.Ordinal);
     }
 
+    private static string BuildPendingKey(string runId, string stepId) =>
+        $"{WorkflowRunIdNormalizer.Normalize(runId)}::{stepId}";
+
+    private static Task SaveStateAsync(
+        HumanApprovalModuleState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        if (state.Pending.Count == 0)
+            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+
+        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
+    public sealed class HumanApprovalModuleState
+    {
+        public Dictionary<string, PendingApprovalState> Pending { get; set; } = [];
+    }
+
+    public sealed class PendingApprovalState
+    {
+        public string StepId { get; set; } = string.Empty;
+        public string RunId { get; set; } = string.Empty;
+        public string Input { get; set; } = string.Empty;
+        public string OnReject { get; set; } = "fail";
+    }
 }

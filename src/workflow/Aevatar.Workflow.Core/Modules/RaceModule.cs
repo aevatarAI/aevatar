@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -13,7 +14,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class RaceModule : IEventModule
 {
-    private readonly Dictionary<(string RunId, string StepId), RaceState> _races = [];
+    private const string ModuleStateKey = "race";
 
     public string Name => "race";
     public int Priority => 5;
@@ -32,7 +33,7 @@ public sealed class RaceModule : IEventModule
             var request = payload.Unpack<StepRequestEvent>();
             if (request.StepType != "race") return;
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
-            var parentKey = (runId, request.StepId);
+            var raceKey = BuildRaceKey(runId, request.StepId);
 
             var workers = WorkflowParameterValueParser.GetStringList(request.Parameters, "workers", "worker_roles");
 
@@ -51,7 +52,14 @@ public sealed class RaceModule : IEventModule
                 return;
             }
 
-            _races[parentKey] = new RaceState(count, 0, false);
+            var state = WorkflowRunModuleStateAccess.Load<RaceModuleState>(ctx, ModuleStateKey);
+            state.Races[raceKey] = new RaceState
+            {
+                Total = count,
+                Received = 0,
+                Resolved = false,
+            };
+            await SaveStateAsync(state, ctx, ct);
 
             ctx.Logger.LogInformation("Race {StepId}: dispatching {Count} branches", request.StepId, count);
 
@@ -74,15 +82,18 @@ public sealed class RaceModule : IEventModule
             var parent = ExtractParent(evt.StepId);
             if (parent == null) return;
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
-            var parentKey = (runId, parent);
-            if (!_races.TryGetValue(parentKey, out var state)) return;
+            var raceKey = BuildRaceKey(runId, parent);
+            var stateContainer = WorkflowRunModuleStateAccess.Load<RaceModuleState>(ctx, ModuleStateKey);
+            if (!stateContainer.Races.TryGetValue(raceKey, out var state)) return;
 
-            state = state with { Received = state.Received + 1 };
-            _races[parentKey] = state;
+            state.Received++;
+            stateContainer.Races[raceKey] = state;
 
             if (evt.Success && !state.Resolved)
             {
-                _races[parentKey] = state with { Resolved = true };
+                state.Resolved = true;
+                stateContainer.Races[raceKey] = state;
+                await SaveStateAsync(stateContainer, ctx, ct);
                 ctx.Logger.LogInformation("Race {StepId}: winner={Winner}", parent, evt.StepId);
 
                 var completed = new StepCompletedEvent
@@ -93,13 +104,17 @@ public sealed class RaceModule : IEventModule
                 await ctx.PublishAsync(completed, EventDirection.Self, ct);
 
                 if (state.Received >= state.Total)
-                    _races.Remove(parentKey);
+                {
+                    stateContainer.Races.Remove(raceKey);
+                    await SaveStateAsync(stateContainer, ctx, CancellationToken.None);
+                }
                 return;
             }
 
             if (state.Received >= state.Total)
             {
-                _races.Remove(parentKey);
+                stateContainer.Races.Remove(raceKey);
+                await SaveStateAsync(stateContainer, ctx, ct);
                 if (!state.Resolved)
                 {
                     ctx.Logger.LogWarning("Race {StepId}: all {Count} branches failed", parent, state.Total);
@@ -108,7 +123,10 @@ public sealed class RaceModule : IEventModule
                         StepId = parent, RunId = runId, Success = false, Error = "all race branches failed",
                     }, EventDirection.Self, ct);
                 }
+                return;
             }
+
+            await SaveStateAsync(stateContainer, ctx, ct);
         }
     }
 
@@ -118,5 +136,29 @@ public sealed class RaceModule : IEventModule
         return idx > 0 ? stepId[..idx] : null;
     }
 
-    private sealed record RaceState(int Total, int Received, bool Resolved);
+    private static string BuildRaceKey(string runId, string stepId) =>
+        $"{WorkflowRunIdNormalizer.Normalize(runId)}::{stepId}";
+
+    private static Task SaveStateAsync(
+        RaceModuleState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        if (state.Races.Count == 0)
+            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+
+        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
+    public sealed class RaceModuleState
+    {
+        public Dictionary<string, RaceState> Races { get; set; } = [];
+    }
+
+    public sealed class RaceState
+    {
+        public int Total { get; set; }
+        public int Received { get; set; }
+        public bool Resolved { get; set; }
+    }
 }

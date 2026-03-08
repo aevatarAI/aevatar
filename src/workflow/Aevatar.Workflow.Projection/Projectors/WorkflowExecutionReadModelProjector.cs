@@ -39,7 +39,7 @@ public sealed class WorkflowExecutionReadModelProjector
         {
             Id = context.RootActorId,
             ReportVersion = "1.0",
-            ProjectionScope = WorkflowExecutionProjectionScope.ActorShared,
+            ProjectionScope = WorkflowExecutionProjectionScope.RunIsolated,
             TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot,
             CompletionStatus = WorkflowExecutionCompletionStatus.Running,
             WorkflowName = context.WorkflowName,

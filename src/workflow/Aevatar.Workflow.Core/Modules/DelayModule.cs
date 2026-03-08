@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -13,7 +14,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class DelayModule : IEventModule
 {
-    private readonly Dictionary<DelayPendingKey, PendingDelay> _pending = [];
+    private const string ModuleStateKey = "delay";
 
     public string Name => "delay";
     public int Priority => 5;
@@ -62,7 +63,8 @@ public sealed class DelayModule : IEventModule
                 "delay_ms");
 
             var pendingKey = new DelayPendingKey(runId, stepId);
-            await CancelPendingAsync(pendingKey, ctx, CancellationToken.None);
+            var state = WorkflowRunModuleStateAccess.Load<DelayModuleState>(ctx, ModuleStateKey);
+            await CancelPendingAsync(state, pendingKey, ctx, CancellationToken.None);
 
             ctx.Logger.LogInformation(
                 "Delay {StepId}: schedule runtime callback after {Ms}ms (run={RunId})",
@@ -94,9 +96,12 @@ public sealed class DelayModule : IEventModule
                 },
                 ct: ct);
 
-            _pending[pendingKey] = new PendingDelay(
-                lease,
-                request.Input ?? string.Empty);
+            state.Pending[BuildPendingKey(pendingKey)] = new PendingDelayState
+            {
+                Lease = lease,
+                Input = request.Input ?? string.Empty,
+            };
+            await SaveStateAsync(state, ctx, ct);
             return;
         }
 
@@ -110,7 +115,8 @@ public sealed class DelayModule : IEventModule
             return;
 
         var firedKey = new DelayPendingKey(runIdFired, stepIdFired);
-        if (!_pending.TryGetValue(firedKey, out var pending))
+        var stateForCallback = WorkflowRunModuleStateAccess.Load<DelayModuleState>(ctx, ModuleStateKey);
+        if (!stateForCallback.Pending.TryGetValue(BuildPendingKey(firedKey), out var pending))
             return;
 
         if (!RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, pending.Lease))
@@ -122,6 +128,9 @@ public sealed class DelayModule : IEventModule
             return;
         }
 
+        stateForCallback.Pending.Remove(BuildPendingKey(firedKey));
+        await SaveStateAsync(stateForCallback, ctx, ct);
+
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = stepIdFired,
@@ -129,20 +138,22 @@ public sealed class DelayModule : IEventModule
             Success = true,
             Output = pending.Input,
         }, EventDirection.Self, ct);
-        _pending.Remove(firedKey);
     }
 
     private async Task CancelPendingAsync(
+        DelayModuleState state,
         DelayPendingKey key,
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
-        if (!_pending.Remove(key, out var pending))
+        if (!state.Pending.Remove(BuildPendingKey(key), out var pending))
             return;
 
         await ctx.CancelDurableCallbackAsync(
             pending.Lease,
             ct);
+
+        await SaveStateAsync(state, ctx, ct);
     }
 
     private static string BuildDelayCallbackId(string runId, string stepId) =>
@@ -150,7 +161,28 @@ public sealed class DelayModule : IEventModule
 
     private readonly record struct DelayPendingKey(string RunId, string StepId);
 
-    private sealed record PendingDelay(
-        RuntimeCallbackLease Lease,
-        string Input);
+    private static string BuildPendingKey(DelayPendingKey key) =>
+        $"{key.RunId}:{key.StepId}";
+
+    private static Task SaveStateAsync(
+        DelayModuleState state,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        if (state.Pending.Count == 0)
+            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+
+        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
+    public sealed class DelayModuleState
+    {
+        public Dictionary<string, PendingDelayState> Pending { get; set; } = [];
+    }
+
+    public sealed class PendingDelayState
+    {
+        public RuntimeCallbackLease Lease { get; set; } = null!;
+        public string Input { get; set; } = string.Empty;
+    }
 }

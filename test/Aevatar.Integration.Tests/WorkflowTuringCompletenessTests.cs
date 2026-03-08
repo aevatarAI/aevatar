@@ -266,6 +266,7 @@ public sealed class WorkflowTuringCompletenessTests
         };
 
         var queue = new Queue<IMessage>();
+        var workflowRunAgent = new TestWorkflowRunAgent("workflow-turing-proof-agent", "proof-run");
         queue.Enqueue(new StartWorkflowEvent
         {
             RunId = "proof-run",
@@ -280,7 +281,7 @@ public sealed class WorkflowTuringCompletenessTests
             if (message is not StartWorkflowEvent && message is not StepCompletedEvent)
                 continue;
 
-            var loopCtx = CreateContext();
+            var loopCtx = CreateContext(workflowRunAgent);
             await loop.HandleAsync(Envelope(message), loopCtx, CancellationToken.None);
             foreach (var (evt, _) in loopCtx.Published)
             {
@@ -293,7 +294,7 @@ public sealed class WorkflowTuringCompletenessTests
                         break;
                     case StepRequestEvent request:
                     {
-                        var completedStep = await ExecuteStepAsync(request, modules);
+                        var completedStep = await ExecuteStepAsync(request, modules, workflowRunAgent);
                         queue.Enqueue(completedStep);
                         break;
                     }
@@ -306,12 +307,13 @@ public sealed class WorkflowTuringCompletenessTests
 
     private static async Task<StepCompletedEvent> ExecuteStepAsync(
         StepRequestEvent request,
-        IReadOnlyDictionary<string, IEventModule> modules)
+        IReadOnlyDictionary<string, IEventModule> modules,
+        TestWorkflowRunAgent workflowRunAgent)
     {
         if (!modules.TryGetValue(request.StepType, out var module))
             throw new InvalidOperationException($"No closed-world executor for step type '{request.StepType}'.");
 
-        var ctx = CreateContext();
+        var ctx = CreateContext(workflowRunAgent);
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
         return ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
@@ -329,11 +331,11 @@ public sealed class WorkflowTuringCompletenessTests
         };
     }
 
-    private static TestEventHandlerContext CreateContext()
+    private static TestEventHandlerContext CreateContext(TestWorkflowRunAgent workflowRunAgent)
     {
         return new TestEventHandlerContext(
             new ServiceCollection().BuildServiceProvider(),
-            new TestAgent("workflow-turing-proof-agent"),
+            workflowRunAgent,
             NullLogger.Instance);
     }
 

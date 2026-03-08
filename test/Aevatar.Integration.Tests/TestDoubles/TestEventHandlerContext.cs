@@ -2,6 +2,7 @@ using System.Globalization;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Workflow.Core.Runtime;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -141,13 +142,81 @@ internal sealed record CanceledCallback(
     public long ExpectedGeneration => Lease.Generation;
 }
 
-internal sealed class TestAgent(string id) : IAgent
+internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWorkflowRunModuleStateHost
 {
+    private readonly Dictionary<string, string> _moduleStateJson = new(StringComparer.Ordinal);
+
     public string Id { get; } = id;
+
+    public string RunId { get; } = string.IsNullOrWhiteSpace(runId) ? id : runId;
+
+    public string? GetModuleStateJson(string moduleName) =>
+        _moduleStateJson.TryGetValue(moduleName, out var json) ? json : null;
+
+    public Task UpsertModuleStateJsonAsync(
+        string moduleName,
+        string stateJson,
+        CancellationToken ct = default)
+    {
+        _ = ct;
+        _moduleStateJson[moduleName] = stateJson;
+        return Task.CompletedTask;
+    }
+
+    public Task ClearModuleStateAsync(
+        string moduleName,
+        CancellationToken ct = default)
+    {
+        _ = ct;
+        _moduleStateJson.Remove(moduleName);
+        return Task.CompletedTask;
+    }
 
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 
     public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
+
+    public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+        Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+    public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+}
+
+internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowRunModuleStateHost
+{
+    private readonly Dictionary<string, string> _moduleStateJson = new(StringComparer.Ordinal);
+
+    public string Id { get; } = id;
+
+    public string RunId { get; } = runId;
+
+    public string? GetModuleStateJson(string moduleName) =>
+        _moduleStateJson.TryGetValue(moduleName, out var json) ? json : null;
+
+    public Task UpsertModuleStateJsonAsync(
+        string moduleName,
+        string stateJson,
+        CancellationToken ct = default)
+    {
+        _ = ct;
+        _moduleStateJson[moduleName] = stateJson;
+        return Task.CompletedTask;
+    }
+
+    public Task ClearModuleStateAsync(
+        string moduleName,
+        CancellationToken ct = default)
+    {
+        _ = ct;
+        _moduleStateJson.Remove(moduleName);
+        return Task.CompletedTask;
+    }
+
+    public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+    public Task<string> GetDescriptionAsync() => Task.FromResult("stub-workflow-run");
 
     public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
         Task.FromResult<IReadOnlyList<System.Type>>([]);

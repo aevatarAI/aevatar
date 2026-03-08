@@ -2,14 +2,14 @@
 
 ## 1. 文档元信息
 
-- 状态：Proposed
+- 状态：Implemented
 - 版本：R1
 - 日期：2026-03-08
 - 目标分支：`refactor/workflow-run-actorized-state-boundary-20260308`
 - 关联蓝图：
   - `docs/architecture/workflow-run-actorized-state-boundary-blueprint-2026-03-08.md`
 - 文档定位：
-  - 本文描述 `workflow` 子系统重构完成后的目标架构形态
+  - 本文描述 `workflow` 子系统本轮重构完成后的目标架构形态
   - 本文关注“最终职责边界与主链路”
   - 本文不展开分阶段迁移细节，迁移计划见关联蓝图
 
@@ -453,7 +453,7 @@ sequenceDiagram
 - `Steps`
 - `Summary`
 
-兼容阶段可额外保留：
+如需支持历史读侧迁移，可选保留：
 
 - `DefinitionRootActorId`
 - `LegacyActorSharedLookupKeys`

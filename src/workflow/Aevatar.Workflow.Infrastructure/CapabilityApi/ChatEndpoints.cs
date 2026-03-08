@@ -270,10 +270,10 @@ public static class WorkflowCapabilityEndpoints
                 return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
             }
 
-            if (!await actorPort.IsWorkflowActorAsync(actor, ct))
+            if (!await actorPort.IsWorkflowRunActorAsync(actor, ct))
             {
                 scope.MarkResult(StatusCodes.Status400BadRequest);
-                return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow actor." });
+                return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow run actor." });
             }
 
             var resumed = new WorkflowResumedEvent
@@ -349,10 +349,10 @@ public static class WorkflowCapabilityEndpoints
                 return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
             }
 
-            if (!await actorPort.IsWorkflowActorAsync(actor, ct))
+            if (!await actorPort.IsWorkflowRunActorAsync(actor, ct))
             {
                 scope.MarkResult(StatusCodes.Status400BadRequest);
-                return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow actor." });
+                return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow run actor." });
             }
 
             var commandId = (input.CommandId ?? string.Empty).Trim();

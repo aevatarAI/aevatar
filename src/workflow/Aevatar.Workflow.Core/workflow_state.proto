@@ -42,3 +42,47 @@ message WorkflowState
   map<string, int32> pending_sub_workflow_invocation_index_by_child_run_id = 12;
   map<string, ChildRunIdSet> pending_child_run_ids_by_parent_run_id = 13;
 }
+
+message WorkflowRunState
+{
+  message SubWorkflowBinding
+  {
+    string workflow_name = 1;
+    string child_actor_id = 2;
+    string lifecycle = 3;
+  }
+
+  message PendingSubWorkflowInvocation
+  {
+    string invocation_id = 1;
+    string parent_run_id = 2;
+    string parent_step_id = 3;
+    string workflow_name = 4;
+    string child_actor_id = 5;
+    string child_run_id = 6;
+    string lifecycle = 7;
+  }
+
+  message ChildRunIdSet
+  {
+    repeated string child_run_ids = 1;
+  }
+
+  string definition_actor_id = 1;
+  string workflow_yaml = 2;
+  string workflow_name = 3;
+  bool compiled = 4;
+  string compilation_error = 5;
+  map<string, string> inline_workflow_yamls = 6;
+  string run_id = 7;
+  string status = 8;
+  string input = 9;
+  string final_output = 10;
+  string final_error = 11;
+  map<string, string> module_state_json = 12;
+
+  repeated SubWorkflowBinding sub_workflow_bindings = 13;
+  repeated PendingSubWorkflowInvocation pending_sub_workflow_invocations = 14;
+  map<string, int32> pending_sub_workflow_invocation_index_by_child_run_id = 15;
+  map<string, ChildRunIdSet> pending_child_run_ids_by_parent_run_id = 16;
+}

@@ -15,19 +15,72 @@ public sealed record WorkflowYamlParseResult(
         new(string.Empty, error ?? "Workflow YAML is invalid.");
 }
 
+public enum WorkflowActorKind
+{
+    Unsupported = 0,
+    Definition = 1,
+    Run = 2,
+}
+
+public sealed record WorkflowDefinitionBinding(
+    string DefinitionActorId,
+    string WorkflowName,
+    string WorkflowYaml,
+    IReadOnlyDictionary<string, string> InlineWorkflowYamls);
+
+public sealed record WorkflowActorBinding(
+    WorkflowActorKind ActorKind,
+    string ActorId,
+    string DefinitionActorId,
+    string RunId,
+    string WorkflowName,
+    string WorkflowYaml,
+    IReadOnlyDictionary<string, string> InlineWorkflowYamls)
+{
+    public static WorkflowActorBinding Unsupported(string actorId) =>
+        new(
+            WorkflowActorKind.Unsupported,
+            actorId ?? string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+    public bool IsWorkflowCapable => ActorKind != WorkflowActorKind.Unsupported;
+
+    public bool HasWorkflowName => !string.IsNullOrWhiteSpace(WorkflowName);
+
+    public bool HasDefinitionPayload =>
+        !string.IsNullOrWhiteSpace(WorkflowYaml) || InlineWorkflowYamls.Count > 0;
+
+    public string EffectiveDefinitionActorId =>
+        !string.IsNullOrWhiteSpace(DefinitionActorId)
+            ? DefinitionActorId
+            : ActorKind == WorkflowActorKind.Definition
+                ? ActorId
+                : string.Empty;
+}
+
 /// <summary>
-/// Port for resolving, creating, and binding workflow definitions for workflow-capable actors.
+/// Port for resolving workflow definition actors and creating workflow execution actors.
 /// Implemented by infrastructure to avoid Application depending on Workflow.Core.
 /// </summary>
 public interface IWorkflowRunActorPort
 {
     Task<IActor?> GetAsync(string actorId, CancellationToken ct = default);
 
-    Task<IActor> CreateAsync(CancellationToken ct = default);
+    Task<WorkflowActorBinding> DescribeAsync(IActor actor, CancellationToken ct = default);
+
+    Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default);
+
+    Task<IActor> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default);
 
     Task DestroyAsync(string actorId, CancellationToken ct = default);
 
-    Task<bool> IsWorkflowActorAsync(IActor actor, CancellationToken ct = default);
+    Task<bool> IsWorkflowDefinitionActorAsync(IActor actor, CancellationToken ct = default);
+
+    Task<bool> IsWorkflowRunActorAsync(IActor actor, CancellationToken ct = default);
 
     Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default);
 
