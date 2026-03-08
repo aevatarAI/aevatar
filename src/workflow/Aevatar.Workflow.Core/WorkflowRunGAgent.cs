@@ -5,9 +5,9 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Composition;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using Aevatar.Workflow.Core.Validation;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -17,7 +17,7 @@ namespace Aevatar.Workflow.Core;
 
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
-      IWorkflowRunModuleStateHost
+      IWorkflowExecutionStateHost
 {
     private const string RunningStatus = "running";
     private const string CompletedStatus = "completed";
@@ -28,7 +28,7 @@ public sealed class WorkflowRunGAgent
     private readonly List<string> _childAgentIds = [];
     private readonly IActorRuntime _runtime;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
-    private readonly IEventModuleFactory _eventModuleFactory;
+    private readonly IEventModuleFactory<IWorkflowExecutionContext> _stepExecutorFactory;
     private readonly IWorkflowDefinitionResolver? _workflowDefinitionResolver;
     private readonly IReadOnlyList<IWorkflowModuleDependencyExpander> _moduleDependencyExpanders;
     private readonly IReadOnlyList<IWorkflowModuleConfigurator> _moduleConfigurators;
@@ -38,13 +38,13 @@ public sealed class WorkflowRunGAgent
     public WorkflowRunGAgent(
         IActorRuntime runtime,
         IRoleAgentTypeResolver roleAgentTypeResolver,
-        IEventModuleFactory eventModuleFactory,
+        IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory,
         IEnumerable<IWorkflowModulePack> modulePacks,
         IWorkflowDefinitionResolver? workflowDefinitionResolver = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
-        _eventModuleFactory = eventModuleFactory ?? throw new ArgumentNullException(nameof(eventModuleFactory));
+        _stepExecutorFactory = stepExecutorFactory ?? throw new ArgumentNullException(nameof(stepExecutorFactory));
         _workflowDefinitionResolver = workflowDefinitionResolver;
 
         var packs = modulePacks?.ToList()
@@ -85,39 +85,42 @@ public sealed class WorkflowRunGAgent
         ? Id
         : State.RunId;
 
-    public string? GetModuleStateJson(string moduleName)
+    public Any? GetExecutionState(string scopeKey)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
-        return State.ModuleStateJson.TryGetValue(moduleName, out var json)
-            ? json
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeKey);
+        return State.ExecutionStates.TryGetValue(scopeKey, out var state)
+            ? state
             : null;
     }
 
-    public Task UpsertModuleStateJsonAsync(
-        string moduleName,
-        string stateJson,
+    public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
+        State.ExecutionStates.ToList();
+
+    public Task UpsertExecutionStateAsync(
+        string scopeKey,
+        Any state,
         CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
-        ArgumentNullException.ThrowIfNull(stateJson);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeKey);
+        ArgumentNullException.ThrowIfNull(state);
         return PersistDomainEventAsync(
-            new WorkflowRunModuleStateUpsertedEvent
+            new WorkflowExecutionStateUpsertedEvent
             {
-                ModuleName = moduleName,
-                StateJson = stateJson,
+                ScopeKey = scopeKey,
+                State = state,
             },
             ct);
     }
 
-    public Task ClearModuleStateAsync(
-        string moduleName,
+    public Task ClearExecutionStateAsync(
+        string scopeKey,
         CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeKey);
         return PersistDomainEventAsync(
-            new WorkflowRunModuleStateClearedEvent
+            new WorkflowExecutionStateClearedEvent
             {
-                ModuleName = moduleName,
+                ScopeKey = scopeKey,
             },
             ct);
     }
@@ -348,8 +351,22 @@ public sealed class WorkflowRunGAgent
 
     private void InstallCognitiveModules()
     {
-        if (_moduleDependencyExpanders.Count == 0)
+        if (_compiledWorkflow == null)
+        {
+            Logger.LogDebug("Workflow run definition is not bound yet; skipping module installation for actor {ActorId}.", Id);
+            SetModules([]);
             return;
+        }
+
+        if (_moduleDependencyExpanders.Count == 0)
+        {
+            SetModules(
+            [
+                new WorkflowExecutionKernel(_compiledWorkflow, this),
+                new WorkflowExecutionBridgeModule([], this),
+            ]);
+            return;
+        }
 
         var needed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var expander in _moduleDependencyExpanders)
@@ -357,13 +374,13 @@ public sealed class WorkflowRunGAgent
 
         Logger.LogInformation("Installing workflow run modules: {Modules}", string.Join(", ", needed));
 
-        var modules = new List<IEventModule>();
+        var executors = new List<IEventModule<IWorkflowExecutionContext>>();
         foreach (var name in needed)
         {
-            if (_eventModuleFactory.TryCreate(name, out var module) && module != null)
+            if (_stepExecutorFactory.TryCreate(name, out var module) && module != null)
             {
                 ConfigureModule(module);
-                modules.Add(module);
+                executors.Add(module);
                 continue;
             }
 
@@ -372,11 +389,17 @@ public sealed class WorkflowRunGAgent
                 $"Workflow '{workflowName}' requires module '{name}', but no module registration was found.");
         }
 
-        if (modules.Count > 0)
-            SetModules(modules);
+        var workflowModules = new List<IEventModule<IEventHandlerContext>>
+        {
+            new WorkflowExecutionKernel(_compiledWorkflow, this),
+            new WorkflowExecutionBridgeModule(
+                executors,
+                this),
+        };
+        SetModules(workflowModules);
     }
 
-    private void ConfigureModule(IEventModule module)
+    private void ConfigureModule(IEventModule<IWorkflowExecutionContext> module)
     {
         if (_compiledWorkflow == null)
             return;
@@ -390,8 +413,8 @@ public sealed class WorkflowRunGAgent
             .Match(current, evt)
             .On<BindWorkflowRunDefinitionEvent>(ApplyBindWorkflowRunDefinition)
             .On<WorkflowRunExecutionStartedEvent>(ApplyWorkflowRunExecutionStarted)
-            .On<WorkflowRunModuleStateUpsertedEvent>(ApplyWorkflowRunModuleStateUpserted)
-            .On<WorkflowRunModuleStateClearedEvent>(ApplyWorkflowRunModuleStateCleared)
+            .On<WorkflowExecutionStateUpsertedEvent>(ApplyWorkflowExecutionStateUpserted)
+            .On<WorkflowExecutionStateClearedEvent>(ApplyWorkflowExecutionStateCleared)
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
             .On<SubWorkflowBindingUpsertedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted)
             .On<SubWorkflowInvocationRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered)
@@ -446,25 +469,25 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
-    private static WorkflowRunState ApplyWorkflowRunModuleStateUpserted(WorkflowRunState current, WorkflowRunModuleStateUpsertedEvent evt)
+    private static WorkflowRunState ApplyWorkflowExecutionStateUpserted(WorkflowRunState current, WorkflowExecutionStateUpsertedEvent evt)
     {
         var next = current.Clone();
-        var moduleName = evt.ModuleName?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(moduleName))
+        var scopeKey = evt.ScopeKey?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(scopeKey) || evt.State == null)
             return next;
 
-        next.ModuleStateJson[moduleName] = evt.StateJson ?? string.Empty;
+        next.ExecutionStates[scopeKey] = evt.State;
         return next;
     }
 
-    private static WorkflowRunState ApplyWorkflowRunModuleStateCleared(WorkflowRunState current, WorkflowRunModuleStateClearedEvent evt)
+    private static WorkflowRunState ApplyWorkflowExecutionStateCleared(WorkflowRunState current, WorkflowExecutionStateClearedEvent evt)
     {
         var next = current.Clone();
-        var moduleName = evt.ModuleName?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(moduleName))
+        var scopeKey = evt.ScopeKey?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(scopeKey))
             return next;
 
-        next.ModuleStateJson.Remove(moduleName);
+        next.ExecutionStates.Remove(scopeKey);
         return next;
     }
 
@@ -605,7 +628,7 @@ public sealed class WorkflowRunGAgent
             if (string.IsNullOrWhiteSpace(canonical) || knownStepTypes.Contains(canonical))
                 continue;
 
-            if (_eventModuleFactory.TryCreate(canonical, out _))
+            if (_stepExecutorFactory.TryCreate(canonical, out _))
                 knownStepTypes.Add(canonical);
         }
     }

@@ -13,17 +13,18 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
-using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -475,11 +476,10 @@ public class WorkflowIntegrationTests
         var services = new ServiceCollection();
         services.AddAevatarWorkflow();
         using var provider = services.BuildServiceProvider();
-        var factory = provider.GetRequiredService<IEventModuleFactory>();
+        var factory = provider.GetRequiredService<IEventModuleFactory<IWorkflowExecutionContext>>();
 
         // ─── 流程控制 ───
-        factory.TryCreate("workflow_loop", out var m).Should().BeTrue(); m!.Name.Should().Be("workflow_loop");
-        factory.TryCreate("conditional", out m).Should().BeTrue(); m!.Name.Should().Be("conditional");
+        factory.TryCreate("conditional", out var m).Should().BeTrue(); m!.Name.Should().Be("conditional");
         factory.TryCreate("while", out m).Should().BeTrue(); m!.Name.Should().Be("while");
         factory.TryCreate("workflow_call", out m).Should().BeTrue(); m!.Name.Should().Be("workflow_call");
         factory.TryCreate("checkpoint", out m).Should().BeTrue(); m!.Name.Should().Be("checkpoint");

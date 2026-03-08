@@ -8,7 +8,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.Core.Pipeline;
 
-internal sealed class StaticHandlerAdapter : IEventModule
+internal sealed class StaticHandlerAdapter : IEventModule<IEventHandlerContext>
 {
     private readonly EventHandlerMetadata _meta;
     private readonly IAgent _agent;

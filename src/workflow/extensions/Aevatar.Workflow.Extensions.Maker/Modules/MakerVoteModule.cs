@@ -10,7 +10,7 @@ namespace Aevatar.Workflow.Extensions.Maker.Modules;
 /// MAKER voting primitive:
 /// first-to-ahead-by-k with red-flag filtering by response length.
 /// </summary>
-public sealed class MakerVoteModule : IEventModule
+public sealed class MakerVoteModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "maker_vote";
     public int Priority => 6;
@@ -18,7 +18,7 @@ public sealed class MakerVoteModule : IEventModule
     public bool CanHandle(EventEnvelope envelope) =>
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (!string.Equals(request.StepType, "maker_vote", StringComparison.OrdinalIgnoreCase))
@@ -110,7 +110,7 @@ public sealed class MakerVoteModule : IEventModule
     }
 
     private static async Task PublishFailureAsync(
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         StepRequestEvent request,
         string error,
         CancellationToken ct,

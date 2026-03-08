@@ -101,7 +101,7 @@ public class PingToPongAgent : TestGAgentBase<CounterState>
 
 // ─── Test Module: Fixed reply ───
 
-public class ReplyModule : IEventModule
+public class ReplyModule : IEventModule<IEventHandlerContext>
 {
     private readonly string _reply;
     public string Name { get; }

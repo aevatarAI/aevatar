@@ -4,22 +4,28 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.Workflow.Core.Modules;
+namespace Aevatar.Workflow.Core.Execution;
 
-public sealed class WorkflowLoopModule : IEventModule
+internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContext>
 {
-    private const string ModuleStateKey = "workflow_loop";
+    private const string ModuleStateKey = "workflow_execution_kernel";
 
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
-    private WorkflowDefinition? _workflow;
+    private readonly WorkflowDefinition _workflow;
+    private readonly IWorkflowExecutionStateHost _stateHost;
 
-    public string Name => "workflow_loop";
+    public WorkflowExecutionKernel(
+        WorkflowDefinition workflow,
+        IWorkflowExecutionStateHost stateHost)
+    {
+        _workflow = workflow ?? throw new ArgumentNullException(nameof(workflow));
+        _stateHost = stateHost ?? throw new ArgumentNullException(nameof(stateHost));
+    }
+
+    public string Name => "workflow_execution_kernel";
     public int Priority => 0;
-
-    public void SetWorkflow(WorkflowDefinition workflow) => _workflow = workflow;
 
     public bool CanHandle(EventEnvelope envelope)
     {
@@ -33,35 +39,36 @@ public sealed class WorkflowLoopModule : IEventModule
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
-        if (_workflow == null || envelope.Payload == null)
+        if (envelope.Payload == null)
             return;
 
+        var workflowContext = WorkflowExecutionContextAdapter.Create(ctx, _stateHost);
         var payload = envelope.Payload;
         if (payload.Is(StartWorkflowEvent.Descriptor))
         {
-            await HandleStartWorkflowAsync(payload.Unpack<StartWorkflowEvent>(), ctx, ct);
+            await HandleStartWorkflowAsync(payload.Unpack<StartWorkflowEvent>(), workflowContext, ct);
             return;
         }
 
         if (payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor))
         {
-            await HandleTimeoutFiredAsync(payload.Unpack<WorkflowStepTimeoutFiredEvent>(), envelope, ctx, ct);
+            await HandleTimeoutFiredAsync(payload.Unpack<WorkflowStepTimeoutFiredEvent>(), envelope, workflowContext, ct);
             return;
         }
 
         if (payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor))
         {
-            await HandleRetryBackoffFiredAsync(payload.Unpack<WorkflowStepRetryBackoffFiredEvent>(), envelope, ctx, ct);
+            await HandleRetryBackoffFiredAsync(payload.Unpack<WorkflowStepRetryBackoffFiredEvent>(), envelope, workflowContext, ct);
             return;
         }
 
         if (payload.Is(StepCompletedEvent.Descriptor))
-            await HandleStepCompletedAsync(payload.Unpack<StepCompletedEvent>(), ctx, ct);
+            await HandleStepCompletedAsync(payload.Unpack<StepCompletedEvent>(), workflowContext, ct);
     }
 
     private async Task HandleStartWorkflowAsync(
         StartWorkflowEvent evt,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var runId = ResolveRunIdOrCurrent(evt.RunId, ctx);
@@ -70,7 +77,7 @@ public sealed class WorkflowLoopModule : IEventModule
         {
             await ctx.PublishAsync(new WorkflowCompletedEvent
             {
-                WorkflowName = _workflow!.Name,
+                WorkflowName = _workflow.Name,
                 RunId = runId,
                 Success = false,
                 Error = "workflow run is already active",
@@ -89,7 +96,7 @@ public sealed class WorkflowLoopModule : IEventModule
         state.Variables["input"] = evt.Input ?? string.Empty;
         await SaveStateAsync(state, ctx, ct);
 
-        var entry = _workflow!.Steps.FirstOrDefault();
+        var entry = _workflow.Steps.FirstOrDefault();
         if (entry == null)
         {
             await CleanupRunAsync(state, ctx, ct);
@@ -109,7 +116,7 @@ public sealed class WorkflowLoopModule : IEventModule
         }
         catch
         {
-            await WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, CancellationToken.None);
+            await WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, CancellationToken.None);
             throw;
         }
     }
@@ -117,7 +124,7 @@ public sealed class WorkflowLoopModule : IEventModule
     private async Task HandleTimeoutFiredAsync(
         WorkflowStepTimeoutFiredEvent evt,
         EventEnvelope envelope,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var runId = NormalizeRunId(evt.RunId);
@@ -138,7 +145,7 @@ public sealed class WorkflowLoopModule : IEventModule
             return;
         }
 
-        if (!RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, expectedLease))
+        if (!WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, expectedLease))
         {
             ctx.Logger.LogDebug(
                 "workflow_loop: ignore timeout without matching lease metadata run={RunId} step={StepId}",
@@ -172,7 +179,7 @@ public sealed class WorkflowLoopModule : IEventModule
 
     private async Task HandleStepCompletedAsync(
         StepCompletedEvent evt,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(evt.RunId))
@@ -188,7 +195,7 @@ public sealed class WorkflowLoopModule : IEventModule
         if (!IsActiveRun(state, runId))
             return;
 
-        var current = _workflow!.GetStep(evt.StepId);
+        var current = _workflow.GetStep(evt.StepId);
         if (current == null)
         {
             ctx.Logger.LogDebug("workflow_loop: ignore internal completion step={StepId}", evt.StepId);
@@ -353,8 +360,8 @@ public sealed class WorkflowLoopModule : IEventModule
     private async Task<bool> TryRetryAsync(
         StepDefinition step,
         StepCompletedEvent evt,
-        WorkflowLoopModuleState state,
-        IEventHandlerContext ctx,
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var policy = step.Retry;
@@ -415,7 +422,7 @@ public sealed class WorkflowLoopModule : IEventModule
     private async Task HandleRetryBackoffFiredAsync(
         WorkflowStepRetryBackoffFiredEvent evt,
         EventEnvelope envelope,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var runId = NormalizeRunId(evt.RunId);
@@ -430,7 +437,7 @@ public sealed class WorkflowLoopModule : IEventModule
         if (!state.RetryBackoffsByStepId.TryGetValue(stepId, out var pending))
             return;
 
-        if (!RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, pending.Lease))
+        if (!WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.Lease))
         {
             ctx.Logger.LogDebug(
                 "workflow_loop: ignore retry backoff without matching lease metadata run={RunId} step={StepId}",
@@ -449,7 +456,7 @@ public sealed class WorkflowLoopModule : IEventModule
             return;
         }
 
-        var step = _workflow!.GetStep(stepId);
+        var step = _workflow.GetStep(stepId);
         if (step == null)
         {
             ctx.Logger.LogWarning(
@@ -483,11 +490,11 @@ public sealed class WorkflowLoopModule : IEventModule
     }
 
     private async Task StartRetryBackoffAsync(
-        WorkflowLoopModuleState state,
+        WorkflowExecutionKernelState state,
         string stepId,
         int delayMs,
         int nextAttempt,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         await CancelRetryBackoffAsync(state, stepId, ctx, CancellationToken.None);
@@ -506,7 +513,7 @@ public sealed class WorkflowLoopModule : IEventModule
 
         state.RetryBackoffsByStepId[stepId] = new RetryBackoffState
         {
-            Lease = lease,
+            Lease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease),
             NextAttempt = nextAttempt,
             DelayMs = delayMs,
         };
@@ -516,8 +523,8 @@ public sealed class WorkflowLoopModule : IEventModule
     private async Task<bool> TryOnErrorAsync(
         StepDefinition step,
         StepCompletedEvent evt,
-        WorkflowLoopModuleState state,
-        IEventHandlerContext ctx,
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var policy = step.OnError;
@@ -537,7 +544,7 @@ public sealed class WorkflowLoopModule : IEventModule
                 state.RetryAttemptsByStepId.Remove(step.Id);
                 await SaveStateAsync(state, ctx, ct);
 
-                var next = _workflow!.GetNextStep(step.Id);
+                var next = _workflow.GetNextStep(step.Id);
                 if (next == null)
                 {
                     await CleanupRunAsync(state, ctx, ct);
@@ -558,7 +565,7 @@ public sealed class WorkflowLoopModule : IEventModule
             }
             case "fallback" when !string.IsNullOrWhiteSpace(policy.FallbackStep):
             {
-                var fallback = _workflow!.GetStep(policy.FallbackStep);
+                var fallback = _workflow.GetStep(policy.FallbackStep);
                 if (fallback == null)
                     return false;
 
@@ -580,8 +587,8 @@ public sealed class WorkflowLoopModule : IEventModule
     private async Task DispatchStepAsync(
         StepDefinition step,
         string input,
-        WorkflowLoopModuleState state,
-        IEventHandlerContext ctx,
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
@@ -666,7 +673,7 @@ public sealed class WorkflowLoopModule : IEventModule
         state.CurrentStepId = step.Id;
         state.CurrentStepInput = input;
         if (timeoutLease != null)
-            state.TimeoutsByStepId[step.Id] = timeoutLease;
+            state.TimeoutsByStepId[step.Id] = WorkflowRuntimeCallbackLeaseStateCodec.ToState(timeoutLease);
 
         await SaveStateAsync(state, ctx, ct);
     }
@@ -683,7 +690,7 @@ public sealed class WorkflowLoopModule : IEventModule
     private async Task<RuntimeCallbackLease?> ScheduleStepTimeoutLeaseAsync(
         StepDefinition step,
         string runId,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (step.TimeoutMs is not > 0)
@@ -704,7 +711,7 @@ public sealed class WorkflowLoopModule : IEventModule
 
     private static async Task TryCancelLeaseAsync(
         RuntimeCallbackLease lease,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         try
@@ -722,34 +729,34 @@ public sealed class WorkflowLoopModule : IEventModule
     }
 
     private async Task CancelTimeoutAsync(
-        WorkflowLoopModuleState state,
+        WorkflowExecutionKernelState state,
         string stepId,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (!state.TimeoutsByStepId.Remove(stepId, out var lease))
             return;
 
         await SaveStateAsync(state, ctx, ct);
-        await ctx.CancelDurableCallbackAsync(lease, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, lease, ct);
     }
 
     private async Task CancelRetryBackoffAsync(
-        WorkflowLoopModuleState state,
+        WorkflowExecutionKernelState state,
         string stepId,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (!state.RetryBackoffsByStepId.Remove(stepId, out var pending))
             return;
 
         await SaveStateAsync(state, ctx, ct);
-        await ctx.CancelDurableCallbackAsync(pending.Lease, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.Lease, ct);
     }
 
     private async Task CleanupRunAsync(
-        WorkflowLoopModuleState state,
-        IEventHandlerContext ctx,
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var timeoutLeases = state.TimeoutsByStepId.Values.ToList();
@@ -766,17 +773,17 @@ public sealed class WorkflowLoopModule : IEventModule
         await SaveStateAsync(state, ctx, ct);
 
         foreach (var lease in timeoutLeases)
-            await ctx.CancelDurableCallbackAsync(lease, ct);
+            await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, lease, ct);
         foreach (var lease in retryLeases)
-            await ctx.CancelDurableCallbackAsync(lease, ct);
+            await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, lease, ct);
     }
 
-    private static WorkflowLoopModuleState LoadState(IEventHandlerContext ctx) =>
-        WorkflowRunModuleStateAccess.Load<WorkflowLoopModuleState>(ctx, ModuleStateKey);
+    private static WorkflowExecutionKernelState LoadState(IWorkflowExecutionContext ctx) =>
+        WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(ctx, ModuleStateKey);
 
     private static Task SaveStateAsync(
-        WorkflowLoopModuleState state,
-        IEventHandlerContext ctx,
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (!state.Active &&
@@ -788,26 +795,26 @@ public sealed class WorkflowLoopModule : IEventModule
             state.TimeoutsByStepId.Count == 0 &&
             state.RetryBackoffsByStepId.Count == 0)
         {
-            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
         }
 
-        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    private static bool MatchesCurrentStep(WorkflowLoopModuleState state, string? stepId) =>
+    private static bool MatchesCurrentStep(WorkflowExecutionKernelState state, string? stepId) =>
         !string.IsNullOrWhiteSpace(stepId) &&
         string.Equals(state.CurrentStepId, stepId, StringComparison.Ordinal);
 
-    private static bool IsActiveRun(WorkflowLoopModuleState state, string runId) =>
+    private static bool IsActiveRun(WorkflowExecutionKernelState state, string runId) =>
         state.Active &&
         !string.IsNullOrWhiteSpace(runId) &&
         string.Equals(state.RunId, runId, StringComparison.Ordinal);
 
-    private static string ResolveRunIdOrCurrent(string? runId, IEventHandlerContext ctx)
+    private static string ResolveRunIdOrCurrent(string? runId, IWorkflowExecutionContext ctx)
     {
         var normalized = NormalizeRunId(runId);
         return string.IsNullOrWhiteSpace(normalized)
-            ? NormalizeRunId(WorkflowRunModuleStateAccess.GetRunId(ctx))
+            ? NormalizeRunId(WorkflowExecutionStateAccess.GetRunId(ctx))
             : normalized;
     }
 
@@ -822,22 +829,4 @@ public sealed class WorkflowLoopModule : IEventModule
     private static string BuildStepRetryBackoffCallbackId(string runId, string stepId) =>
         RuntimeCallbackKeyComposer.BuildCallbackId("workflow-step-retry-backoff", runId, stepId);
 
-    public sealed class WorkflowLoopModuleState
-    {
-        public bool Active { get; set; }
-        public string RunId { get; set; } = string.Empty;
-        public string CurrentStepId { get; set; } = string.Empty;
-        public string CurrentStepInput { get; set; } = string.Empty;
-        public Dictionary<string, string> Variables { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-        public Dictionary<string, int> RetryAttemptsByStepId { get; set; } = new(StringComparer.Ordinal);
-        public Dictionary<string, RuntimeCallbackLease> TimeoutsByStepId { get; set; } = new(StringComparer.Ordinal);
-        public Dictionary<string, RetryBackoffState> RetryBackoffsByStepId { get; set; } = new(StringComparer.Ordinal);
-    }
-
-    public sealed class RetryBackoffState
-    {
-        public RuntimeCallbackLease Lease { get; set; } = null!;
-        public int NextAttempt { get; set; }
-        public int DelayMs { get; set; }
-    }
 }

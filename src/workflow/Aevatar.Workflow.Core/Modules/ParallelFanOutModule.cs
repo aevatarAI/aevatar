@@ -7,7 +7,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -15,7 +14,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>
 /// 并行扇出模块。处理 parallel 类型步骤：拆分 N 个子步骤并行下发，收齐后合并结果并发布 StepCompletedEvent。
 /// </summary>
-public sealed class ParallelFanOutModule : IEventModule
+public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "parallel_fanout";
 
@@ -44,7 +43,7 @@ public sealed class ParallelFanOutModule : IEventModule
     /// <param name="envelope">事件信封。</param>
     /// <param name="ctx">事件处理上下文。</param>
     /// <param name="ct">取消令牌。</param>
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -55,7 +54,7 @@ public sealed class ParallelFanOutModule : IEventModule
             if (evt.StepType != "parallel") return;
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var count = evt.Parameters.TryGetValue("parallel_count", out var cs) && int.TryParse(cs, out var n) ? n : 3;
-            var state = WorkflowRunModuleStateAccess.Load<ParallelFanOutModuleState>(ctx, ModuleStateKey);
+            var state = WorkflowExecutionStateAccess.Load<ParallelFanOutModuleState>(ctx, ModuleStateKey);
             // Resolve which worker roles to fan out to
             // If step has workers param (comma-separated role IDs), use those; else generate generic sub-steps
             var workerRoles = new List<string>();
@@ -89,16 +88,18 @@ public sealed class ParallelFanOutModule : IEventModule
                 if (key.StartsWith("vote_param_", StringComparison.OrdinalIgnoreCase))
                     voteParams[key["vote_param_".Length..]] = value;
             }
-            state.Parents[evt.StepId] = new ParallelParentState
+            var parentState = new ParallelParentState
             {
                 Expected = count,
-                Collected = [],
                 VoteConfig = new VoteConfigState
                 {
                     StepType = voteStepType,
-                    Parameters = voteParams,
                 },
             };
+            foreach (var (key, value) in voteParams)
+                parentState.VoteConfig.Parameters[key] = value;
+
+            state.Parents[evt.StepId] = parentState;
             await SaveStateAsync(state, ctx, ct);
 
             var inputPreview = evt.Input.Length > 150 ? evt.Input[..150] + "..." : evt.Input;
@@ -122,7 +123,7 @@ public sealed class ParallelFanOutModule : IEventModule
         {
             var evt = payload.Unpack<StepCompletedEvent>();
             var eventRunId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
-            var state = WorkflowRunModuleStateAccess.Load<ParallelFanOutModuleState>(ctx, ModuleStateKey);
+            var state = WorkflowExecutionStateAccess.Load<ParallelFanOutModuleState>(ctx, ModuleStateKey);
 
             // Vote result: map back to parent parallel step.
             if (state.VoteStepToParent.TryGetValue(evt.StepId, out var voteParentStepId))
@@ -157,7 +158,7 @@ public sealed class ParallelFanOutModule : IEventModule
             var parent = evt.StepId.LastIndexOf("_sub_", StringComparison.Ordinal) is var idx and > 0 ? evt.StepId[..idx] : null;
             if (parent == null) return;
             if (!state.Parents.TryGetValue(parent, out var parentState)) return;
-            parentState.Collected.Add(ParallelItemResult.From(evt));
+            parentState.Collected.Add(evt.ToParallelItemResult());
             state.Parents[parent] = parentState;
             ctx.Logger.LogInformation("ParallelFanOut: collected {StepId} ({Count}/{Expected})",
                 evt.StepId, parentState.Collected.Count, parentState.Expected);
@@ -216,54 +217,17 @@ public sealed class ParallelFanOutModule : IEventModule
 
     private static Task SaveStateAsync(
         ParallelFanOutModuleState state,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (state.Parents.Count == 0 &&
             state.VoteStepToParent.Count == 0 &&
             state.ParentWorkerSuccess.Count == 0)
         {
-            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
         }
 
-        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    public sealed class ParallelFanOutModuleState
-    {
-        public Dictionary<string, ParallelParentState> Parents { get; set; } = [];
-        public Dictionary<string, string> VoteStepToParent { get; set; } = [];
-        public Dictionary<string, bool> ParentWorkerSuccess { get; set; } = [];
-    }
-
-    public sealed class ParallelParentState
-    {
-        public int Expected { get; set; }
-        public List<ParallelItemResult> Collected { get; set; } = [];
-        public VoteConfigState VoteConfig { get; set; } = new();
-    }
-
-    public sealed class VoteConfigState
-    {
-        public string StepType { get; set; } = string.Empty;
-        public Dictionary<string, string> Parameters { get; set; } = [];
-    }
-
-    public sealed class ParallelItemResult
-    {
-        public bool Success { get; set; }
-        public string Output { get; set; } = string.Empty;
-        public string Error { get; set; } = string.Empty;
-        public string WorkerId { get; set; } = string.Empty;
-        public Dictionary<string, string> Metadata { get; set; } = [];
-
-        public static ParallelItemResult From(StepCompletedEvent evt) => new()
-        {
-            Success = evt.Success,
-            Output = evt.Output ?? string.Empty,
-            Error = evt.Error ?? string.Empty,
-            WorkerId = evt.WorkerId ?? string.Empty,
-            Metadata = evt.Metadata.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
-        };
-    }
 }

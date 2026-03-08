@@ -126,7 +126,7 @@ public class AIHooksAndRoleFactoryCoverageTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
-        services.AddSingleton<IEventModuleFactory, StubEventModuleFactory>();
+        services.AddSingleton<IEventModuleFactory<IEventHandlerContext>, StubEventModuleFactory>();
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
@@ -209,7 +209,7 @@ public class AIHooksAndRoleFactoryCoverageTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILLMProviderFactory, StubLLMProviderFactory>();
-        services.AddSingleton<IEventModuleFactory, StubEventModuleFactory>();
+        services.AddSingleton<IEventModuleFactory<IEventHandlerContext>, StubEventModuleFactory>();
         services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
@@ -256,9 +256,9 @@ public class AIHooksAndRoleFactoryCoverageTests
         public int Priority => 0;
     }
 
-    private sealed class StubEventModuleFactory : IEventModuleFactory
+    private sealed class StubEventModuleFactory : IEventModuleFactory<IEventHandlerContext>
     {
-        public bool TryCreate(string name, out IEventModule? module)
+        public bool TryCreate(string name, out IEventModule<IEventHandlerContext>? module)
         {
             module = name switch
             {
@@ -270,7 +270,7 @@ public class AIHooksAndRoleFactoryCoverageTests
         }
     }
 
-    private sealed class StubRoutableModule : IEventModule
+    private sealed class StubRoutableModule : IEventModule<IEventHandlerContext>
     {
         public string Name => "routable";
         public int Priority => 0;
@@ -278,7 +278,7 @@ public class AIHooksAndRoleFactoryCoverageTests
         public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class StubBypassModule : IEventModule, IRouteBypassModule
+    private sealed class StubBypassModule : IEventModule<IEventHandlerContext>, IRouteBypassModule
     {
         public string Name => "bypass";
         public int Priority => 0;

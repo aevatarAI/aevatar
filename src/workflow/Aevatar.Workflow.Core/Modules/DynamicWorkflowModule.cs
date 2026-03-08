@@ -14,7 +14,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <see cref="ReplaceWorkflowDefinitionAndExecuteEvent"/> so the owning
 /// workflow run actor replaces its bound definition snapshot and restarts execution.
 /// </summary>
-public sealed class DynamicWorkflowModule : IEventModule
+public sealed class DynamicWorkflowModule : IEventModule<IWorkflowExecutionContext>
 {
     private static readonly Regex YamlFenceRegex = new(
         @"```ya?ml\s*\n([\s\S]*?)```",
@@ -29,7 +29,7 @@ public sealed class DynamicWorkflowModule : IEventModule
         return payload != null && payload.Is(StepRequestEvent.Descriptor);
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -105,7 +105,7 @@ public sealed class DynamicWorkflowModule : IEventModule
         return string.IsNullOrWhiteSpace(lastYaml) ? null : lastYaml;
     }
 
-    internal static List<string> ValidateWorkflowYaml(string yaml, IEventHandlerContext ctx)
+    internal static List<string> ValidateWorkflowYaml(string yaml, IWorkflowExecutionContext ctx)
     {
         WorkflowDefinition parsed;
         try
@@ -122,7 +122,7 @@ public sealed class DynamicWorkflowModule : IEventModule
                 .SelectMany(pack => pack.Modules)
                 .SelectMany(module => module.Names));
 
-        var moduleFactory = ctx.Services.GetService<IEventModuleFactory>();
+        var moduleFactory = ctx.Services.GetService<IEventModuleFactory<IWorkflowExecutionContext>>();
         if (moduleFactory != null)
             ExpandKnownStepTypesFromFactory(parsed.Steps, knownStepTypes, moduleFactory);
 
@@ -139,7 +139,7 @@ public sealed class DynamicWorkflowModule : IEventModule
     private static void ExpandKnownStepTypesFromFactory(
         IEnumerable<StepDefinition> steps,
         ISet<string> knownStepTypes,
-        IEventModuleFactory moduleFactory)
+        IEventModuleFactory<IWorkflowExecutionContext> moduleFactory)
     {
         foreach (var stepType in EnumerateReferencedStepTypes(steps))
         {

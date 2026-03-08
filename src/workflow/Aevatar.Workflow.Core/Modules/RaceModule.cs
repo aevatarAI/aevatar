@@ -2,7 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -12,7 +11,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// successful result, discarding the rest. If all fail, the step fails.
 /// Unlike <see cref="ParallelFanOutModule"/>, race does not wait for all branches.
 /// </summary>
-public sealed class RaceModule : IEventModule
+public sealed class RaceModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "race";
 
@@ -23,7 +22,7 @@ public sealed class RaceModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
         envelope.Payload?.Is(StepCompletedEvent.Descriptor) == true;
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -52,7 +51,7 @@ public sealed class RaceModule : IEventModule
                 return;
             }
 
-            var state = WorkflowRunModuleStateAccess.Load<RaceModuleState>(ctx, ModuleStateKey);
+            var state = WorkflowExecutionStateAccess.Load<RaceModuleState>(ctx, ModuleStateKey);
             state.Races[raceKey] = new RaceState
             {
                 Total = count,
@@ -83,7 +82,7 @@ public sealed class RaceModule : IEventModule
             if (parent == null) return;
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var raceKey = BuildRaceKey(runId, parent);
-            var stateContainer = WorkflowRunModuleStateAccess.Load<RaceModuleState>(ctx, ModuleStateKey);
+            var stateContainer = WorkflowExecutionStateAccess.Load<RaceModuleState>(ctx, ModuleStateKey);
             if (!stateContainer.Races.TryGetValue(raceKey, out var state)) return;
 
             state.Received++;
@@ -141,24 +140,13 @@ public sealed class RaceModule : IEventModule
 
     private static Task SaveStateAsync(
         RaceModuleState state,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (state.Races.Count == 0)
-            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
 
-        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    public sealed class RaceModuleState
-    {
-        public Dictionary<string, RaceState> Races { get; set; } = [];
-    }
-
-    public sealed class RaceState
-    {
-        public int Total { get; set; }
-        public int Received { get; set; }
-        public bool Resolved { get; set; }
-    }
 }

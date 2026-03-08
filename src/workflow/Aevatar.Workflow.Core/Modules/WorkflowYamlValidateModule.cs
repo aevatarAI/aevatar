@@ -7,7 +7,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Validates workflow YAML from step input.
 /// Emits success with canonical fenced YAML when valid, or failure with validation details.
 /// </summary>
-public sealed class WorkflowYamlValidateModule : IEventModule
+public sealed class WorkflowYamlValidateModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "workflow_yaml_validate";
     public int Priority => 5;
@@ -15,7 +15,7 @@ public sealed class WorkflowYamlValidateModule : IEventModule
     public bool CanHandle(EventEnvelope envelope) =>
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null || !payload.Is(StepRequestEvent.Descriptor))

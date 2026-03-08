@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>工具调用模块。处理 type=tool_call 的步骤。</summary>
-public sealed class ToolCallModule : IEventModule
+public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private readonly Dictionary<string, IAgentTool> _toolIndex = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _toolIndexLock = new(1, 1);
@@ -27,7 +27,7 @@ public sealed class ToolCallModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -92,7 +92,7 @@ public sealed class ToolCallModule : IEventModule
         }
     }
 
-    private async Task<IAgentTool?> ResolveToolAsync(string toolName, IEventHandlerContext ctx, CancellationToken ct)
+    private async Task<IAgentTool?> ResolveToolAsync(string toolName, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         if (_toolIndex.TryGetValue(toolName, out var cached))
             return cached;
@@ -135,7 +135,7 @@ public sealed class ToolCallModule : IEventModule
     }
 
     private static async Task PublishToolFailureAsync(
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         StepRequestEvent request,
         string toolName,
         string error,

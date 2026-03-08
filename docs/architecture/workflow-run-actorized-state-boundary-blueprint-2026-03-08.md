@@ -165,7 +165,7 @@
 | ID | 需求 | 验收标准 | 当前状态 | 证据 | 差距 |
 |---|---|---|---|---|---|
 | WR-01 | run 必须有唯一 Actor 事实源 | 一个 run 一个 `WorkflowRunGAgent`，所有 run 状态在 `WorkflowRunState` | 已实现 | `WorkflowRunGAgent.cs`、`workflow_state.proto`、`WorkflowRunActorPort.cs` | 无 |
-| WR-02 | `IEventModule` 不得持有权威状态 | 所有 run/step/session 事实从模块字段迁出 | 已实现 | `WorkflowRunModuleStateAccess.cs`、`DelayModule.cs`、`WaitSignalModule.cs`、`WorkflowLoopModule.cs`、`LLMCallModule.cs` 等 | 无 |
+| WR-02 | `IEventModule` 不得持有权威状态 | 所有 run/step/session 事实从模块字段迁出 | 已实现 | `WorkflowExecutionKernel.cs`、`WorkflowExecutionContextAdapter.cs`、`DelayModule.cs`、`WaitSignalModule.cs`、`LLMCallModule.cs` 等 | 无 |
 | WR-03 | 定义与执行分离 | definition actor 只管模板和 run 派生 | 已实现 | `WorkflowGAgent.cs`、`WorkflowRunGAgent.cs` | 无 |
 | WR-04 | timeout/retry/wait 全事件化 | 所有异步触发只发布内部事件，由 run actor 对账 | 已实现 | `DelayModule.cs`、`WaitSignalModule.cs`、`WorkflowLoopModule.cs`、`RuntimeCallbackEventizationTests.cs` | 无 |
 | WR-05 | Projection 继续单链路 | run actor 事件继续进入统一 projection | 已实现 | `WorkflowExecutionReadModel.cs`、`WorkflowExecutionReadModelProjector.cs`、`WorkflowExecutionQueryApplicationService.cs` | 无 |
@@ -333,10 +333,11 @@ flowchart LR
 
 ### 9.3 Step Executor 模型
 
-本次不强制立即废弃 `IEventModule`。目标是两阶段演进：
+本次重构已经确定保留统一的 `IEventModule<TContext>` 机制：
 
-1. 第一阶段：保留 `IEventModule`，但模块内部不再持有权威状态。
-2. 第二阶段：如有必要，引入更语义化的 `IWorkflowStepExecutor`，再由 adapter 接入统一 pipeline。
+1. `Foundation` 使用 `IEventModule<IEventHandlerContext>`。
+2. workflow step 使用 `IEventModule<IWorkflowExecutionContext>`。
+3. 两者通过共享的 `IEventContext` 根抽象统一，而不是再引入第二套 executor 接口。
 
 各类 executor 的边界如下：
 

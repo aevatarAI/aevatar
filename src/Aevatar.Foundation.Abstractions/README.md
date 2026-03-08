@@ -40,7 +40,8 @@ Aevatar.Foundation.Abstractions/
 - `IActorRuntime`：Actor 创建、销毁、查询、链接
 - `IEventPublisher`：按方向发布或点对点发送事件
 - `IEnvelopePropagationPolicy` / `ICorrelationLinkPolicy`：基于 Raw `EventEnvelope` 的关联字段传播策略
-- `IEventModule`：可插拔事件处理模块（含优先级）
+- `IEventContext`：模块上下文的共性根接口
+- `IEventModule<TContext>`：可插拔事件处理模块（含优先级）
 - `IConnector` / `IConnectorRegistry`：命名 connector 调用契约与注册表
 - `IStateStore<TState>` / `IEventStore`：状态与事件持久化契约
 

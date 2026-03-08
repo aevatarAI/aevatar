@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -82,7 +83,6 @@ public class WorkflowModuleCompositionTests
         var moduleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         IWorkflowModuleDependencyExpander[] expanders =
         [
-            new WorkflowLoopModuleDependencyExpander(),
             new WorkflowStepTypeModuleDependencyExpander(),
             new WorkflowImplicitModuleDependencyExpander(),
         ];
@@ -90,7 +90,6 @@ public class WorkflowModuleCompositionTests
         foreach (var expander in expanders.OrderBy(x => x.Order))
             expander.Expand(workflow, moduleNames);
 
-        moduleNames.Should().Contain("workflow_loop");
         moduleNames.Should().Contain("foreach");
         moduleNames.Should().Contain("parallel");
         moduleNames.Should().Contain("llm_call");
@@ -121,7 +120,6 @@ public class WorkflowModuleCompositionTests
         var moduleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         IWorkflowModuleDependencyExpander[] expanders =
         [
-            new WorkflowLoopModuleDependencyExpander(),
             new WorkflowStepTypeModuleDependencyExpander(),
             new WorkflowImplicitModuleDependencyExpander(),
         ];
@@ -129,7 +127,6 @@ public class WorkflowModuleCompositionTests
         foreach (var expander in expanders.OrderBy(x => x.Order))
             expander.Expand(workflow, moduleNames);
 
-        moduleNames.Should().Contain("workflow_loop");
         moduleNames.Should().Contain("cache");
         moduleNames.Should().Contain("llm_call");
     }
@@ -142,13 +139,12 @@ public class WorkflowModuleCompositionTests
             .BuildServiceProvider();
 
         var packs = provider.GetServices<IWorkflowModulePack>().ToList();
-        var moduleFactory = provider.GetRequiredService<IEventModuleFactory>();
+        var moduleFactory = provider.GetRequiredService<IEventModuleFactory<IWorkflowExecutionContext>>();
         var corePack = packs.Should().ContainSingle(x => x.GetType() == typeof(WorkflowCoreModulePack)).Subject;
 
         moduleFactory.Should().BeOfType<WorkflowModuleFactory>();
-        corePack.DependencyExpanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowLoopModuleDependencyExpander));
         corePack.DependencyExpanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowStepTypeModuleDependencyExpander));
         corePack.DependencyExpanders.Should().ContainSingle(x => x.GetType() == typeof(WorkflowImplicitModuleDependencyExpander));
-        corePack.Configurators.Should().ContainSingle(x => x.GetType() == typeof(WorkflowLoopModuleConfigurator));
+        corePack.Configurators.Should().BeEmpty();
     }
 }

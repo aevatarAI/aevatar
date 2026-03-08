@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -11,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>LLM call module. Sends ChatRequestEvent to a specific RoleGAgent by ID.</summary>
-public sealed class LLMCallModule : IEventModule
+public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;
     private const string LlmTimeoutMetadataKey = "aevatar.llm_timeout_ms";
@@ -32,7 +31,7 @@ public sealed class LLMCallModule : IEventModule
                 || payload.Is(LlmCallWatchdogTimeoutFiredEvent.Descriptor));
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null)
@@ -62,7 +61,7 @@ public sealed class LLMCallModule : IEventModule
 
     private async Task HandleStepRequestAsync(
         StepRequestEvent request,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (request.StepType != "llm_call")
@@ -93,7 +92,7 @@ public sealed class LLMCallModule : IEventModule
             return;
         }
 
-        var runtimeState = WorkflowRunModuleStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
         var attempt = runtimeState.AttemptsByStepId.GetValueOrDefault(stepId, 0) + 1;
         runtimeState.AttemptsByStepId[stepId] = attempt;
 
@@ -143,10 +142,10 @@ public sealed class LLMCallModule : IEventModule
                 },
                 ct: ct);
 
-            runtimeState = WorkflowRunModuleStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+            runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
             if (runtimeState.PendingBySessionId.TryGetValue(chatSessionId, out var pendingState))
             {
-                pendingState.WatchdogLease = lease;
+                pendingState.WatchdogLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
                 runtimeState.PendingBySessionId[chatSessionId] = pendingState;
                 await SaveStateAsync(runtimeState, ctx, ct);
             }
@@ -161,14 +160,14 @@ public sealed class LLMCallModule : IEventModule
     private async Task HandleTextMessageEndAsync(
         TextMessageEndEvent evt,
         EventEnvelope envelope,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var sessionId = evt.SessionId;
         if (string.IsNullOrEmpty(sessionId))
             return;
 
-        var runtimeState = WorkflowRunModuleStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
         if (!runtimeState.PendingBySessionId.Remove(sessionId, out var pending))
             return;
 
@@ -199,14 +198,14 @@ public sealed class LLMCallModule : IEventModule
 
     private async Task HandleChatResponseAsync(
         ChatResponseEvent evt,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var sessionId = evt.SessionId;
         if (string.IsNullOrEmpty(sessionId))
             return;
 
-        var runtimeState = WorkflowRunModuleStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
         if (!runtimeState.PendingBySessionId.Remove(sessionId, out var pending))
             return;
 
@@ -271,18 +270,18 @@ public sealed class LLMCallModule : IEventModule
     private async Task HandleWatchdogTimeoutFiredAsync(
         LlmCallWatchdogTimeoutFiredEvent evt,
         EventEnvelope envelope,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(evt.SessionId))
             return;
 
-        var runtimeState = WorkflowRunModuleStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
         if (!runtimeState.PendingBySessionId.TryGetValue(evt.SessionId, out var pending))
             return;
 
         if (pending.WatchdogLease == null ||
-            !RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, pending.WatchdogLease))
+            !WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.WatchdogLease))
         {
             ctx.Logger.LogDebug(
                 "LLMCallModule: ignore watchdog without matching lease session={SessionId}",
@@ -322,10 +321,10 @@ public sealed class LLMCallModule : IEventModule
         string sessionId,
         string error,
         string workerId,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        var runtimeState = WorkflowRunModuleStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
         if (!runtimeState.PendingBySessionId.Remove(sessionId, out var pending))
             return;
 
@@ -340,7 +339,7 @@ public sealed class LLMCallModule : IEventModule
         PendingLlmCallState pending,
         string error,
         string workerId,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct) =>
         ctx.PublishAsync(
             new StepCompletedEvent
@@ -359,7 +358,7 @@ public sealed class LLMCallModule : IEventModule
 
     private async Task StopWatchdogAsync(
         PendingLlmCallState pending,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (pending.WatchdogLease == null)
@@ -367,7 +366,7 @@ public sealed class LLMCallModule : IEventModule
 
         try
         {
-            await ctx.CancelDurableCallbackAsync(pending.WatchdogLease, ct);
+            await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.WatchdogLease, ct);
         }
         catch (Exception ex)
         {
@@ -381,26 +380,13 @@ public sealed class LLMCallModule : IEventModule
 
     private static Task SaveStateAsync(
         LLMCallModuleState state,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (state.PendingBySessionId.Count == 0 && state.AttemptsByStepId.Count == 0)
-            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
 
-        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    public sealed class LLMCallModuleState
-    {
-        public Dictionary<string, PendingLlmCallState> PendingBySessionId { get; set; } = [];
-        public Dictionary<string, int> AttemptsByStepId { get; set; } = [];
-    }
-
-    public sealed class PendingLlmCallState
-    {
-        public string StepId { get; set; } = string.Empty;
-        public string RunId { get; set; } = string.Empty;
-        public string TargetRole { get; set; } = string.Empty;
-        public RuntimeCallbackLease? WatchdogLease { get; set; }
-    }
 }

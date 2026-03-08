@@ -2,14 +2,15 @@ using System.Globalization;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
-using Aevatar.Workflow.Core.Runtime;
+using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core.Execution;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Integration.Tests;
 
-internal sealed class TestEventHandlerContext : IEventHandlerContext
+internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowExecutionContext
 {
     private readonly Dictionary<string, long> _generations = new(StringComparer.Ordinal);
 
@@ -31,6 +32,66 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext
     public IAgent Agent { get; }
     public IServiceProvider Services { get; }
     public ILogger Logger { get; }
+    public string RunId => Agent is IWorkflowExecutionStateHost host ? host.RunId : Agent.Id;
+
+    public TState LoadState<TState>(string scopeKey)
+        where TState : class, IMessage<TState>, new()
+    {
+        if (Agent is not IWorkflowExecutionStateHost host)
+            return new TState();
+
+        var packed = host.GetExecutionState(scopeKey);
+        if (packed == null || !packed.Is(new TState().Descriptor))
+            return new TState();
+
+        return packed.Unpack<TState>() ?? new TState();
+    }
+
+    public IReadOnlyList<KeyValuePair<string, TState>> LoadStates<TState>(string scopeKeyPrefix = "")
+        where TState : class, IMessage<TState>, new()
+    {
+        if (Agent is not IWorkflowExecutionStateHost host)
+            return [];
+
+        var states = new List<KeyValuePair<string, TState>>();
+        foreach (var (scopeKey, packed) in host.GetExecutionStates())
+        {
+            if (!string.IsNullOrEmpty(scopeKeyPrefix) &&
+                !scopeKey.StartsWith(scopeKeyPrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!packed.Is(new TState().Descriptor))
+                continue;
+
+            states.Add(new KeyValuePair<string, TState>(scopeKey, packed.Unpack<TState>() ?? new TState()));
+        }
+
+        return states;
+    }
+
+    public Task SaveStateAsync<TState>(
+        string scopeKey,
+        TState state,
+        CancellationToken ct = default)
+        where TState : class, IMessage<TState>
+    {
+        if (Agent is not IWorkflowExecutionStateHost host)
+            throw new InvalidOperationException("Workflow execution state host is required.");
+
+        return host.UpsertExecutionStateAsync(scopeKey, Any.Pack(state), ct);
+    }
+
+    public Task ClearStateAsync(
+        string scopeKey,
+        CancellationToken ct = default)
+    {
+        if (Agent is not IWorkflowExecutionStateHost host)
+            throw new InvalidOperationException("Workflow execution state host is required.");
+
+        return host.ClearExecutionStateAsync(scopeKey, ct);
+    }
 
     public Task PublishAsync<TEvent>(
         TEvent evt,
@@ -41,6 +102,16 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext
         Published.Add((evt, direction));
         OnPublish?.Invoke(evt, direction);
         return Task.CompletedTask;
+    }
+
+    public Task SendToAsync<TEvent>(
+        string targetActorId,
+        TEvent evt,
+        CancellationToken ct = default)
+        where TEvent : IMessage
+    {
+        _ = targetActorId;
+        return PublishAsync(evt, EventDirection.Self, ct);
     }
 
     public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
@@ -142,33 +213,36 @@ internal sealed record CanceledCallback(
     public long ExpectedGeneration => Lease.Generation;
 }
 
-internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWorkflowRunModuleStateHost
+internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWorkflowExecutionStateHost
 {
-    private readonly Dictionary<string, string> _moduleStateJson = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
 
     public string Id { get; } = id;
 
     public string RunId { get; } = string.IsNullOrWhiteSpace(runId) ? id : runId;
 
-    public string? GetModuleStateJson(string moduleName) =>
-        _moduleStateJson.TryGetValue(moduleName, out var json) ? json : null;
+    public Any? GetExecutionState(string scopeKey) =>
+        _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 
-    public Task UpsertModuleStateJsonAsync(
-        string moduleName,
-        string stateJson,
+    public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
+        _executionStates.ToList();
+
+    public Task UpsertExecutionStateAsync(
+        string scopeKey,
+        Any state,
         CancellationToken ct = default)
     {
         _ = ct;
-        _moduleStateJson[moduleName] = stateJson;
+        _executionStates[scopeKey] = state;
         return Task.CompletedTask;
     }
 
-    public Task ClearModuleStateAsync(
-        string moduleName,
+    public Task ClearExecutionStateAsync(
+        string scopeKey,
         CancellationToken ct = default)
     {
         _ = ct;
-        _moduleStateJson.Remove(moduleName);
+        _executionStates.Remove(scopeKey);
         return Task.CompletedTask;
     }
 
@@ -184,33 +258,36 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
     public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
 
-internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowRunModuleStateHost
+internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowExecutionStateHost
 {
-    private readonly Dictionary<string, string> _moduleStateJson = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
 
     public string Id { get; } = id;
 
     public string RunId { get; } = runId;
 
-    public string? GetModuleStateJson(string moduleName) =>
-        _moduleStateJson.TryGetValue(moduleName, out var json) ? json : null;
+    public Any? GetExecutionState(string scopeKey) =>
+        _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 
-    public Task UpsertModuleStateJsonAsync(
-        string moduleName,
-        string stateJson,
+    public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
+        _executionStates.ToList();
+
+    public Task UpsertExecutionStateAsync(
+        string scopeKey,
+        Any state,
         CancellationToken ct = default)
     {
         _ = ct;
-        _moduleStateJson[moduleName] = stateJson;
+        _executionStates[scopeKey] = state;
         return Task.CompletedTask;
     }
 
-    public Task ClearModuleStateAsync(
-        string moduleName,
+    public Task ClearExecutionStateAsync(
+        string scopeKey,
         CancellationToken ct = default)
     {
         _ = ct;
-        _moduleStateJson.Remove(moduleName);
+        _executionStates.Remove(scopeKey);
         return Task.CompletedTask;
     }
 

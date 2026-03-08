@@ -8,6 +8,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Workflows;
@@ -259,7 +260,7 @@ public sealed class WorkflowInfrastructureCoverageTests
             new WorkflowRunGAgent(
                 runtime,
                 new FakeRoleAgentTypeResolver(),
-                new FakeEventModuleFactory(),
+                new FakeStepExecutorFactory(),
                 [new WorkflowCoreModulePack()]));
         runtime.ActorToReturn = actor;
 
@@ -492,9 +493,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         public Type ResolveRoleAgentType() => typeof(StubAgent);
     }
 
-    private sealed class FakeEventModuleFactory : IEventModuleFactory
+    private sealed class FakeStepExecutorFactory : IEventModuleFactory<IWorkflowExecutionContext>
     {
-        public bool TryCreate(string name, out IEventModule? module)
+        public bool TryCreate(string name, out IEventModule<IWorkflowExecutionContext>? module)
         {
             _ = name;
             module = null;

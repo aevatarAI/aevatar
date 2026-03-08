@@ -4,7 +4,8 @@
 
 - `WorkflowGAgent` 只承载 workflow definition facts。
 - `WorkflowRunGAgent` 一次 run 一个 actor，承载全部运行事实。
-- `IEventModule` 只做事件处理与 effect adapter，不再持有权威运行态。
+- `Foundation` 统一只保留 `IEventModule<TContext>`；workflow step 模块实现 `IEventModule<IWorkflowExecutionContext>`，再通过 bridge 接入 Foundation pipeline。
+- `IEventContext` 是通用上下文根接口；`IEventHandlerContext` 与 `IWorkflowExecutionContext` 在此基础上做能力特化。
 - workflow 读侧与 AGUI 继续共用同一条 Projection Pipeline。
 
 更完整的设计说明见：
@@ -62,9 +63,9 @@ flowchart LR
   - `DefinitionActorId`
   - `Status/Input/FinalOutput/FinalError`
   - 子工作流绑定与调用关系
-  - 所有模块运行态（通过 `module_state_json` 由 run actor 持久化）
+  - 所有模块运行态（通过 `WorkflowRunState.ExecutionStates` 以 `scope_key -> google.protobuf.Any` 形式持久化）
 
-模块私有字段不再作为 `run/step/session` 的事实源。`delay / wait_signal / workflow_loop / human_* / parallel* / map_reduce / llm_call` 等运行态都必须落到 run actor 状态里。
+模块私有字段不再作为 `run/step/session` 的事实源。`delay / wait_signal / human_* / parallel* / map_reduce / llm_call / evaluate / reflect / while / foreach / race / cache` 等运行态都必须落到 run actor 状态里。
 
 ## Projection 语义
 

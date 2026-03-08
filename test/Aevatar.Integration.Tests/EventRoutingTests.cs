@@ -127,7 +127,7 @@ public class EventRoutingTests
 
 // ─── 测试用模块 ───
 
-public class TrackingModule : IEventModule
+public class TrackingModule : IEventModule<IEventHandlerContext>
 {
     public string Name { get; }
     public int Priority => 0;
@@ -137,7 +137,7 @@ public class TrackingModule : IEventModule
         => Task.CompletedTask;
 }
 
-public class BypassTrackingModule : IEventModule, IRouteBypassModule
+public class BypassTrackingModule : IEventModule<IEventHandlerContext>, IRouteBypassModule
 {
     public string Name { get; }
     public int Priority => 0;

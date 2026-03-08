@@ -651,7 +651,7 @@ src/workflow/
 - 是否将 `WorkflowGAgent` 重命名为 `WorkflowDefinitionGAgent`
 - 是否全面采用 run-scoped role actors
 - 是否将 approval/signal/human 会话进一步拆为专门 Actor
-- 是否将 `IEventModule` 收敛为更语义化的 `IWorkflowStepExecutor`
+- 是否进一步把 `IEventModule<TContext>` 的注册与发现机制做得更声明式
 
 ## 15. 目标态判定标准
 

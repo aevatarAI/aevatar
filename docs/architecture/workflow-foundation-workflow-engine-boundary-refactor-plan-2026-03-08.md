@@ -2,8 +2,8 @@
 
 ## 1. 文档元信息
 
-- 状态：Planned
-- 版本：R1
+- 状态：Implemented
+- 版本：R2
 - 日期：2026-03-08
 - 目标分支：`refactor/workflow-run-actorized-state-boundary-20260308`
 - 关联文档：
@@ -13,8 +13,22 @@
   - `docs/WORKFLOW.md`
 - 文档定位：
   - 本文定义 `Foundation` 事件管线抽象与 `Workflow` 有状态执行抽象的最终边界
-  - 本文是后续代码重构、目录调整、接口迁移、测试门禁和文档同步的执行依据
+  - 本文记录 2026-03-08 的最终决议与已落地重构
   - 本文默认“不保留兼容层”，以清晰正确为第一目标
+
+## 1.1 R2 最终决议
+
+本轮重构的最终抽象不是新增 `IWorkflowStepExecutor`，而是统一收敛为一套泛型模块机制：
+
+1. `Foundation` 只保留一个根接口：`IEventModule<TContext>`。
+2. `TContext` 统一约束到 `IEventContext`。
+3. `IEventHandlerContext : IEventContext` 继续服务 Foundation pipeline。
+4. `IWorkflowExecutionContext : IEventContext` 承载 workflow 的 `run / durable state / callback` 语义。
+5. workflow step 模块统一实现 `IEventModule<IWorkflowExecutionContext>`。
+6. `WorkflowExecutionBridgeModule` 负责把 workflow 模块桥接到 `GAgentBase` 的 `IEventModule<IEventHandlerContext>` 管线。
+7. `WorkflowExecutionKernel` 取代 `WorkflowLoopModule`，成为 run actor 内的推进内核。
+
+下文中早期出现的 `IWorkflowStepExecutor` 方案视为历史备选；如与本节冲突，以本节为准。
 
 ## 2. 问题定义
 

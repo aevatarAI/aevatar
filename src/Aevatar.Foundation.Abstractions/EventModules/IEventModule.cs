@@ -1,14 +1,17 @@
 // ─────────────────────────────────────────────────────────────
-// IEventModule - event module contract.
+// IEventModule<TContext> - event module contract.
 // Pluggable pipeline component with priority and filtering.
 // ─────────────────────────────────────────────────────────────
+
+using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.Foundation.Abstractions.EventModules;
 
 /// <summary>
-/// Event module contract for pluggable event processing.
+/// Generic event module contract for pluggable event processing.
 /// </summary>
-public interface IEventModule
+public interface IEventModule<in TContext>
+    where TContext : IEventContext
 {
     /// <summary>Module name.</summary>
     string Name { get; }
@@ -20,7 +23,7 @@ public interface IEventModule
     bool CanHandle(EventEnvelope envelope);
 
     /// <summary>Handles the event asynchronously.</summary>
-    Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct);
+    Task HandleAsync(EventEnvelope envelope, TContext ctx, CancellationToken ct);
 }
 
 /// <summary>

@@ -12,7 +12,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Runs a configurable check against the input. On failure, applies <c>on_fail</c> strategy.
 /// Supported checks: not_empty, json_valid, regex, max_length, contains.
 /// </summary>
-public sealed class GuardModule : IEventModule
+public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "guard";
     public int Priority => 5;
@@ -20,7 +20,7 @@ public sealed class GuardModule : IEventModule
     public bool CanHandle(EventEnvelope envelope) =>
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "guard") return;

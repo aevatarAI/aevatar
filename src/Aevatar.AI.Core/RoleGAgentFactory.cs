@@ -3,7 +3,7 @@
 //
 // 从 YAML 初始化 RoleGAgent：
 // 1. 初始化字段：名称、SystemPrompt、Provider、Model
-// 2. EventModules：按名字从 IEventModuleFactory 创建
+// 2. EventModules：按名字从 IEventModuleFactory<IEventHandlerContext> 创建
 // 3. EventRoutes：解析路由规则，用 RoutedEventModule 包装非 bypass 模块
 //
 // YAML 示例:
@@ -95,14 +95,14 @@ public static class RoleGAgentFactory
         if (string.IsNullOrWhiteSpace(eventModules))
             return;
 
-        var factories = services.GetServices<IEventModuleFactory>().ToList();
+        var factories = services.GetServices<IEventModuleFactory<IEventHandlerContext>>().ToList();
         var moduleNames = eventModules
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (moduleNames.Length == 0)
             return;
 
         var logger = services.GetService<ILoggerFactory>()?.CreateLogger("RoleGAgentFactory");
-        var rawModules = new List<IEventModule>();
+        var rawModules = new List<IEventModule<IEventHandlerContext>>();
         foreach (var name in moduleNames)
         {
             var created = false;
@@ -124,7 +124,7 @@ public static class RoleGAgentFactory
         var evaluator = services.GetService<IEventRouteEvaluator>()
                         ?? DefaultEventRouteEvaluator.Instance;
 
-        var finalModules = new List<IEventModule>();
+        var finalModules = new List<IEventModule<IEventHandlerContext>>();
         foreach (var module in rawModules)
         {
             if (routes.Length > 0 && module is not IRouteBypassModule)

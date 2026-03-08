@@ -1,8 +1,8 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Extensions.Maker.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -173,9 +173,9 @@ public class MakerVoteModuleCoverageTests
         completed.Metadata["maker_vote.used_majority_fallback"].Should().Be("False");
     }
 
-    private static RecordingEventHandlerContext CreateContext()
+    private static RecordingWorkflowExecutionContext CreateContext()
     {
-        return new RecordingEventHandlerContext(
+        return new RecordingWorkflowExecutionContext(
             new ServiceCollection().BuildServiceProvider(),
             new StubAgent("maker-module-test"),
             NullLogger.Instance);
@@ -193,22 +193,52 @@ public class MakerVoteModuleCoverageTests
         };
     }
 
-    private sealed class RecordingEventHandlerContext : IEventHandlerContext
+    private sealed class RecordingWorkflowExecutionContext : IWorkflowExecutionContext
     {
-        public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
+        public RecordingWorkflowExecutionContext(IServiceProvider services, IAgent agent, ILogger logger)
         {
             Services = services;
-            Agent = agent;
+            AgentId = agent.Id;
             Logger = logger;
             InboundEnvelope = new EventEnvelope();
         }
 
         public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
         public EventEnvelope InboundEnvelope { get; }
-        public string AgentId => Agent.Id;
-        public IAgent Agent { get; }
+        public string AgentId { get; }
+        public string RunId => AgentId;
         public IServiceProvider Services { get; }
         public ILogger Logger { get; }
+
+        public TState LoadState<TState>(string scopeKey)
+            where TState : class, IMessage<TState>, new()
+        {
+            _ = scopeKey;
+            return new TState();
+        }
+
+        public IReadOnlyList<KeyValuePair<string, TState>> LoadStates<TState>(string scopeKeyPrefix = "")
+            where TState : class, IMessage<TState>, new()
+        {
+            _ = scopeKeyPrefix;
+            return [];
+        }
+
+        public Task SaveStateAsync<TState>(string scopeKey, TState state, CancellationToken ct = default)
+            where TState : class, IMessage<TState>
+        {
+            _ = scopeKey;
+            _ = state;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearStateAsync(string scopeKey, CancellationToken ct = default)
+        {
+            _ = scopeKey;
+            _ = ct;
+            return Task.CompletedTask;
+        }
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -218,6 +248,13 @@ public class MakerVoteModuleCoverageTests
         {
             Published.Add((evt, direction));
             return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default)
+            where TEvent : IMessage
+        {
+            _ = targetActorId;
+            return PublishAsync(evt, EventDirection.Self, ct);
         }
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(

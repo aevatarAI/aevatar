@@ -12,7 +12,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Publishes <c>StepCompletedEvent</c> with <c>metadata["branch"]</c> indicating the chosen key.
 /// The <c>WorkflowLoopModule</c> uses the branch value to resolve the next step.
 /// </summary>
-public sealed class SwitchModule : IEventModule
+public sealed class SwitchModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "switch";
     public int Priority => 5;
@@ -22,7 +22,7 @@ public sealed class SwitchModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "switch") return;

@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -13,7 +12,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// On <c>StepRequestEvent(type=wait_signal)</c>, publishes <c>WaitingForSignalEvent</c> and suspends.
 /// On <c>SignalReceivedEvent</c> matching the expected signal name, resumes by publishing <c>StepCompletedEvent</c>.
 /// </summary>
-public sealed class WaitSignalModule : IEventModule
+public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "wait_signal";
 
@@ -29,7 +28,7 @@ public sealed class WaitSignalModule : IEventModule
                 p.Is(WaitSignalTimeoutFiredEvent.Descriptor));
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -63,7 +62,7 @@ public sealed class WaitSignalModule : IEventModule
                 timeoutMs = Math.Clamp(timeoutSeconds * 1000, 0, 3_600_000);
             }
             var pendingKey = new PendingSignalKey(runId, signalName, stepId);
-            var state = WorkflowRunModuleStateAccess.Load<WaitSignalModuleState>(ctx, ModuleStateKey);
+            var state = WorkflowExecutionStateAccess.Load<WaitSignalModuleState>(ctx, ModuleStateKey);
 
             ctx.Logger.LogInformation(
                 "WaitSignal: step={StepId} run={RunId} waiting for signal={Signal}",
@@ -83,7 +82,7 @@ public sealed class WaitSignalModule : IEventModule
             if (state.Pending.Remove(BuildPendingKey(pendingKey), out var existingPending) &&
                 existingPending.TimeoutLease != null)
             {
-                await ctx.CancelDurableCallbackAsync(existingPending.TimeoutLease, CancellationToken.None);
+                await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, existingPending.TimeoutLease, CancellationToken.None);
             }
 
             if (timeoutMs > 0)
@@ -107,7 +106,7 @@ public sealed class WaitSignalModule : IEventModule
                     RunId = runId,
                     Input = request.Input ?? string.Empty,
                     SignalName = signalName,
-                    TimeoutLease = lease,
+                    TimeoutLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease),
                 };
             }
             else
@@ -134,12 +133,12 @@ public sealed class WaitSignalModule : IEventModule
 
             var signalName = NormalizeSignalName(timeout.SignalName);
             var pendingKey = new PendingSignalKey(runId, signalName, stepId);
-            var state = WorkflowRunModuleStateAccess.Load<WaitSignalModuleState>(ctx, ModuleStateKey);
+            var state = WorkflowExecutionStateAccess.Load<WaitSignalModuleState>(ctx, ModuleStateKey);
             if (!state.Pending.TryGetValue(BuildPendingKey(pendingKey), out var pending))
                 return;
 
             if (pending.TimeoutLease == null ||
-                !RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, pending.TimeoutLease))
+                !WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.TimeoutLease))
             {
                 ctx.Logger.LogDebug(
                     "WaitSignal: ignore timeout without matching lease run={RunId} step={StepId} signal={Signal}",
@@ -168,7 +167,7 @@ public sealed class WaitSignalModule : IEventModule
         else if (payload.Is(SignalReceivedEvent.Descriptor))
         {
             var signal = payload.Unpack<SignalReceivedEvent>();
-            var state = WorkflowRunModuleStateAccess.Load<WaitSignalModuleState>(ctx, ModuleStateKey);
+            var state = WorkflowExecutionStateAccess.Load<WaitSignalModuleState>(ctx, ModuleStateKey);
             if (!TryResolvePending(state, signal, out var pendingKey, out var pending))
             {
                 ctx.Logger.LogWarning(
@@ -200,7 +199,7 @@ public sealed class WaitSignalModule : IEventModule
             {
                 try
                 {
-                    await ctx.CancelDurableCallbackAsync(pending.TimeoutLease, CancellationToken.None);
+                    await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.TimeoutLease, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -273,26 +272,13 @@ public sealed class WaitSignalModule : IEventModule
 
     private static Task SaveStateAsync(
         WaitSignalModuleState state,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (state.Pending.Count == 0)
-            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
 
-        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    public sealed class WaitSignalModuleState
-    {
-        public Dictionary<string, PendingSignalState> Pending { get; set; } = [];
-    }
-
-    public sealed class PendingSignalState
-    {
-        public string StepId { get; set; } = string.Empty;
-        public string RunId { get; set; } = string.Empty;
-        public string Input { get; set; } = string.Empty;
-        public string SignalName { get; set; } = string.Empty;
-        public RuntimeCallbackLease? TimeoutLease { get; set; }
-    }
 }

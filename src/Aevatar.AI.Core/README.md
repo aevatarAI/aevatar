@@ -28,7 +28,7 @@
 ### 相关类型
 
 - `EventRoute`：路由规则模型与解析器
-- `RoutedEventModule`：对 `IEventModule` 的过滤包装器
+- `RoutedEventModule`：对 `IEventModule<IEventHandlerContext>` 的过滤包装器
 - `IEventRouteEvaluator`：从 `EventEnvelope` 提取匹配字段（默认支持 `event.type`）
 
 ### 生效机制

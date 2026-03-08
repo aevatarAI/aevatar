@@ -1,3 +1,4 @@
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Extensions.Maker;
@@ -19,7 +20,7 @@ public class MakerModulePackTests
         services.AddWorkflowMakerExtensions();
         using var provider = services.BuildServiceProvider();
 
-        var factory = provider.GetRequiredService<IEventModuleFactory>();
+        var factory = provider.GetRequiredService<IEventModuleFactory<IWorkflowExecutionContext>>();
         var created = factory.TryCreate(moduleName, out var module);
 
         created.Should().BeTrue();
@@ -34,7 +35,7 @@ public class MakerModulePackTests
         services.AddWorkflowMakerExtensions();
         using var provider = services.BuildServiceProvider();
 
-        var factory = provider.GetRequiredService<IEventModuleFactory>();
+        var factory = provider.GetRequiredService<IEventModuleFactory<IWorkflowExecutionContext>>();
         var created = factory.TryCreate("unknown", out var module);
 
         created.Should().BeFalse();

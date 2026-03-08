@@ -9,6 +9,7 @@ using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Primitives;
@@ -495,7 +496,9 @@ public class WorkflowGAgentCoverageTests
             BuildValidWorkflowYaml("role_a", "RoleA"),
             "wf_activate",
             runId: "run-activate");
-        await agent1.UpsertModuleStateJsonAsync("module_on_activate", "{\"status\":\"hot\"}");
+        await agent1.UpsertExecutionStateAsync(
+            "module_on_activate",
+            Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "{\"status\":\"hot\"}" }));
         await agent1.DeactivateAsync();
 
         var agent2 = CreateRunAgent(
@@ -506,8 +509,15 @@ public class WorkflowGAgentCoverageTests
 
         agent2.State.Compiled.Should().BeTrue();
         agent2.State.RunId.Should().Be("run-activate");
-        agent2.GetModules().Should().ContainSingle(x => x.Name == "module_on_activate");
-        agent2.GetModuleStateJson("module_on_activate").Should().Be("{\"status\":\"hot\"}");
+        agent2.GetModules().Select(x => x.Name).Should().BeEquivalentTo(
+            "workflow_execution_kernel",
+            "workflow_execution_bridge");
+        factory.CreatedNames.Count(x => x == "module_on_activate").Should().Be(2);
+        agent2.GetExecutionState("module_on_activate")!
+            .Unpack<Google.Protobuf.WellKnownTypes.StringValue>()
+            .Value
+            .Should()
+            .Be("{\"status\":\"hot\"}");
         configurator.Configured.Should().Contain("module_on_activate:wf_valid");
     }
 
@@ -527,7 +537,7 @@ public class WorkflowGAgentCoverageTests
     private static WorkflowRunGAgent CreateRunAgent(
         RecordingActorRuntime? runtime = null,
         IRoleAgentTypeResolver? roleResolver = null,
-        IEventModuleFactory? eventModuleFactory = null,
+        IEventModuleFactory<IWorkflowExecutionContext>? eventModuleFactory = null,
         IEnumerable<IWorkflowModulePack>? packs = null,
         IEventStore? eventStore = null,
         IWorkflowDefinitionResolver? workflowResolver = null)
@@ -806,11 +816,11 @@ public class WorkflowGAgentCoverageTests
         public Type ResolveRoleAgentType() => roleAgentType;
     }
 
-    private sealed class RecordingEventModuleFactory : IEventModuleFactory
+    private sealed class RecordingEventModuleFactory : IEventModuleFactory<IWorkflowExecutionContext>
     {
         public List<string> CreatedNames { get; } = [];
 
-        public bool TryCreate(string name, out IEventModule? module)
+        public bool TryCreate(string name, out IEventModule<IWorkflowExecutionContext>? module)
         {
             CreatedNames.Add(name);
             module = new RecordingEventModule(name);
@@ -818,12 +828,12 @@ public class WorkflowGAgentCoverageTests
         }
     }
 
-    private sealed class RecordingEventModule(string name) : IEventModule
+    private sealed class RecordingEventModule(string name) : IEventModule<IWorkflowExecutionContext>
     {
         public string Name { get; } = name;
         public int Priority => 0;
         public bool CanHandle(EventEnvelope envelope) => false;
-        public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct) => Task.CompletedTask;
+        public Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed class StaticDependencyExpander(int order, params string[] moduleNames) : IWorkflowModuleDependencyExpander
@@ -843,7 +853,7 @@ public class WorkflowGAgentCoverageTests
         public int Order => 0;
         public List<string> Configured { get; } = [];
 
-        public void Configure(IEventModule module, WorkflowDefinition workflow)
+        public void Configure(IEventModule<IWorkflowExecutionContext> module, WorkflowDefinition workflow)
         {
             Configured.Add($"{module.Name}:{workflow.Name}");
         }

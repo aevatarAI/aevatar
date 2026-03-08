@@ -10,7 +10,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// user-defined event type and payload for observability, inter-workflow signaling, or webhooks.
 /// The step completes immediately after emitting.
 /// </summary>
-public sealed class EmitModule : IEventModule
+public sealed class EmitModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "emit";
     public int Priority => 5;
@@ -18,7 +18,7 @@ public sealed class EmitModule : IEventModule
     public bool CanHandle(EventEnvelope envelope) =>
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "emit") return;

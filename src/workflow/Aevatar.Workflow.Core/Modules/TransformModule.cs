@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>确定性变换模块。处理 type=transform 的步骤。</summary>
-public sealed class TransformModule : IEventModule
+public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "transform";
     public int Priority => 5;
@@ -23,7 +23,7 @@ public sealed class TransformModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "transform") return;

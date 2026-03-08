@@ -2,10 +2,9 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -46,10 +45,8 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             ],
         };
 
-        var module = new WorkflowLoopModule();
-        module.SetWorkflow(workflow);
-
         var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
         const string runId = "run-1";
 
         await module.HandleAsync(Wrap(new StartWorkflowEvent
@@ -155,28 +152,31 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         }
     }
 
-    private sealed class StubWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowRunModuleStateHost
+    private sealed class StubWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowExecutionStateHost
     {
-        private readonly Dictionary<string, string> _moduleStateJson = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
 
         public string Id => id;
 
         public string RunId { get; } = runId;
 
-        public string? GetModuleStateJson(string moduleName) =>
-            _moduleStateJson.TryGetValue(moduleName, out var json) ? json : null;
+        public Any? GetExecutionState(string scopeKey) =>
+            _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 
-        public Task UpsertModuleStateJsonAsync(string moduleName, string stateJson, CancellationToken ct = default)
+        public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
+            _executionStates.ToList();
+
+        public Task UpsertExecutionStateAsync(string scopeKey, Any state, CancellationToken ct = default)
         {
             _ = ct;
-            _moduleStateJson[moduleName] = stateJson;
+            _executionStates[scopeKey] = state;
             return Task.CompletedTask;
         }
 
-        public Task ClearModuleStateAsync(string moduleName, CancellationToken ct = default)
+        public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default)
         {
             _ = ct;
-            _moduleStateJson.Remove(moduleName);
+            _executionStates.Remove(scopeKey);
             return Task.CompletedTask;
         }
 

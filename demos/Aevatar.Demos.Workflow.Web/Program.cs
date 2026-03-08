@@ -20,6 +20,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
@@ -71,7 +72,11 @@ builder.Services.AddWorkflowDefinitionFileSource(options =>
 builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, HttpConnectorBuilder>());
 builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, CliConnectorBuilder>());
 builder.Services.AddSingleton<IWorkflowModulePack, DemoWorkflowModulePack>();
-builder.Services.Replace(ServiceDescriptor.Singleton<IEventModuleFactory, DemoWorkflowModuleFactory>());
+builder.Services.AddSingleton<DemoWorkflowModuleFactory>();
+builder.Services.Replace(ServiceDescriptor.Singleton<IEventModuleFactory<IWorkflowExecutionContext>>(sp =>
+    sp.GetRequiredService<DemoWorkflowModuleFactory>()));
+builder.Services.AddSingleton<IEventModuleFactory<IEventHandlerContext>>(sp =>
+    sp.GetRequiredService<DemoWorkflowModuleFactory>());
 builder.Services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
 var config = new ConfigurationBuilder()
@@ -1350,7 +1355,7 @@ static List<string> ValidateWorkflowDefinitionForRuntime(WorkflowDefinition defi
     var knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
         modulePacks.SelectMany(pack => pack.Modules).SelectMany(module => module.Names));
 
-    var moduleFactory = services.GetRequiredService<IEventModuleFactory>();
+    var moduleFactory = services.GetRequiredService<IEventModuleFactory<IWorkflowExecutionContext>>();
     foreach (var stepType in EnumerateReferencedStepTypes(definition.Steps))
     {
         var canonical = WorkflowPrimitiveCatalog.ToCanonicalType(stepType);

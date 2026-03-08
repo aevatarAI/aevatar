@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>条件分支模块。处理 type=conditional 的步骤。</summary>
-public sealed class ConditionalModule : IEventModule
+public sealed class ConditionalModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "conditional";
     public int Priority => 5;
@@ -21,7 +21,7 @@ public sealed class ConditionalModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "conditional") return;

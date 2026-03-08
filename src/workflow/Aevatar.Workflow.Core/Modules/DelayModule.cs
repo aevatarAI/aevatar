@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -12,7 +11,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Timed delay module. Pauses for a configurable duration before completing.
 /// Useful for rate limiting and spacing between API calls.
 /// </summary>
-public sealed class DelayModule : IEventModule
+public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "delay";
 
@@ -27,7 +26,7 @@ public sealed class DelayModule : IEventModule
                 payload.Is(DelayStepTimeoutFiredEvent.Descriptor));
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null)
@@ -63,7 +62,7 @@ public sealed class DelayModule : IEventModule
                 "delay_ms");
 
             var pendingKey = new DelayPendingKey(runId, stepId);
-            var state = WorkflowRunModuleStateAccess.Load<DelayModuleState>(ctx, ModuleStateKey);
+            var state = WorkflowExecutionStateAccess.Load<DelayModuleState>(ctx, ModuleStateKey);
             await CancelPendingAsync(state, pendingKey, ctx, CancellationToken.None);
 
             ctx.Logger.LogInformation(
@@ -98,7 +97,7 @@ public sealed class DelayModule : IEventModule
 
             state.Pending[BuildPendingKey(pendingKey)] = new PendingDelayState
             {
-                Lease = lease,
+                Lease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease),
                 Input = request.Input ?? string.Empty,
             };
             await SaveStateAsync(state, ctx, ct);
@@ -115,11 +114,11 @@ public sealed class DelayModule : IEventModule
             return;
 
         var firedKey = new DelayPendingKey(runIdFired, stepIdFired);
-        var stateForCallback = WorkflowRunModuleStateAccess.Load<DelayModuleState>(ctx, ModuleStateKey);
+        var stateForCallback = WorkflowExecutionStateAccess.Load<DelayModuleState>(ctx, ModuleStateKey);
         if (!stateForCallback.Pending.TryGetValue(BuildPendingKey(firedKey), out var pending))
             return;
 
-        if (!RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, pending.Lease))
+        if (!WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.Lease))
         {
             ctx.Logger.LogDebug(
                 "Delay {StepId}: ignore callback without matching lease metadata run={RunId}",
@@ -143,15 +142,13 @@ public sealed class DelayModule : IEventModule
     private async Task CancelPendingAsync(
         DelayModuleState state,
         DelayPendingKey key,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (!state.Pending.Remove(BuildPendingKey(key), out var pending))
             return;
 
-        await ctx.CancelDurableCallbackAsync(
-            pending.Lease,
-            ct);
+        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.Lease, ct);
 
         await SaveStateAsync(state, ctx, ct);
     }
@@ -166,23 +163,13 @@ public sealed class DelayModule : IEventModule
 
     private static Task SaveStateAsync(
         DelayModuleState state,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (state.Pending.Count == 0)
-            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
 
-        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    public sealed class DelayModuleState
-    {
-        public Dictionary<string, PendingDelayState> Pending { get; set; } = [];
-    }
-
-    public sealed class PendingDelayState
-    {
-        public RuntimeCallbackLease Lease { get; set; } = null!;
-        public string Input { get; set; } = string.Empty;
-    }
 }

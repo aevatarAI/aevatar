@@ -12,7 +12,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Connector invocation module.
 /// Handles step_type == "connector_call" and delegates execution to a named connector.
 /// </summary>
-public sealed class ConnectorCallModule : IEventModule
+public sealed class ConnectorCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private readonly IConnectorRegistry _registry;
 
@@ -29,7 +29,7 @@ public sealed class ConnectorCallModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (!string.Equals(request.StepType, "connector_call", StringComparison.OrdinalIgnoreCase)) return;
@@ -180,7 +180,7 @@ public sealed class ConnectorCallModule : IEventModule
     }
 
     private static async Task PublishFailureAsync(
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         StepRequestEvent request,
         string error,
         CancellationToken ct)
@@ -195,7 +195,7 @@ public sealed class ConnectorCallModule : IEventModule
     }
 
     private static async Task PublishSkippedAsync(
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         StepRequestEvent request,
         string connectorName,
         string operation,

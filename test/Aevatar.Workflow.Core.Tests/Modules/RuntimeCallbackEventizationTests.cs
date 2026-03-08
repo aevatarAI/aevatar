@@ -2,9 +2,10 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -154,8 +155,13 @@ public class RuntimeCallbackEventizationTests
     [Fact]
     public async Task WorkflowLoop_ShouldReplayTimeoutCompletion_WhenPublishFailsTransiently()
     {
-        var module = new WorkflowLoopModule();
-        module.SetWorkflow(new WorkflowDefinition
+        var ctx = new SchedulingContext
+        {
+            FailPublishOnce = evt => evt is StepCompletedEvent completed &&
+                                     string.Equals(completed.StepId, "step-1", StringComparison.Ordinal) &&
+                                     completed.Error.Contains("TIMEOUT", StringComparison.OrdinalIgnoreCase),
+        };
+        var module = CreateKernel(new WorkflowDefinition
         {
             Name = "wf",
             Roles = [],
@@ -168,13 +174,7 @@ public class RuntimeCallbackEventizationTests
                     TimeoutMs = 800,
                 },
             ],
-        });
-        var ctx = new SchedulingContext
-        {
-            FailPublishOnce = evt => evt is StepCompletedEvent completed &&
-                                     string.Equals(completed.StepId, "step-1", StringComparison.Ordinal) &&
-                                     completed.Error.Contains("TIMEOUT", StringComparison.OrdinalIgnoreCase),
-        };
+        }, ctx);
 
         await module.HandleAsync(
             Wrap(new StartWorkflowEvent
@@ -218,8 +218,8 @@ public class RuntimeCallbackEventizationTests
     [Fact]
     public async Task WorkflowLoop_ShouldScheduleRetryBackoffAndDispatchOnMatchingGeneration()
     {
-        var module = new WorkflowLoopModule();
-        module.SetWorkflow(new WorkflowDefinition
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
         {
             Name = "wf",
             Roles = [],
@@ -237,8 +237,7 @@ public class RuntimeCallbackEventizationTests
                     },
                 },
             ],
-        });
-        var ctx = new SchedulingContext();
+        }, ctx);
 
         await module.HandleAsync(
             Wrap(new StartWorkflowEvent
@@ -307,8 +306,8 @@ public class RuntimeCallbackEventizationTests
     [Fact]
     public async Task WorkflowLoop_ShouldReplayRetryBackoff_WhenRedispatchFailsTransiently()
     {
-        var module = new WorkflowLoopModule();
-        module.SetWorkflow(new WorkflowDefinition
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
         {
             Name = "wf",
             Roles = [],
@@ -327,8 +326,7 @@ public class RuntimeCallbackEventizationTests
                     },
                 },
             ],
-        });
-        var ctx = new SchedulingContext();
+        }, ctx);
 
         await module.HandleAsync(
             Wrap(new StartWorkflowEvent
@@ -427,7 +425,12 @@ public class RuntimeCallbackEventizationTests
                 .ToString(CultureInfo.InvariantCulture),
         };
 
-    private sealed class SchedulingContext : IEventHandlerContext
+    private static WorkflowExecutionKernel CreateKernel(
+        WorkflowDefinition workflow,
+        SchedulingContext ctx) =>
+        new(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+    private sealed class SchedulingContext : IEventHandlerContext, IWorkflowExecutionContext
     {
         private readonly Dictionary<string, long> _generations = new(StringComparer.Ordinal);
         private bool _publishFailureConsumed;
@@ -445,6 +448,8 @@ public class RuntimeCallbackEventizationTests
         public IServiceProvider Services { get; } = new NullServiceProvider();
 
         public ILogger Logger { get; } = NullLogger.Instance;
+
+        public string RunId => ((IWorkflowExecutionStateHost)Agent).RunId;
 
         public List<(IMessage Event, EventDirection Direction)> Published { get; } = [];
 
@@ -470,6 +475,51 @@ public class RuntimeCallbackEventizationTests
             Published.Add((evt, direction));
             return Task.CompletedTask;
         }
+
+        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default)
+            where TEvent : IMessage
+        {
+            _ = targetActorId;
+            return PublishAsync(evt, EventDirection.Self, ct);
+        }
+
+        public TState LoadState<TState>(string scopeKey)
+            where TState : class, IMessage<TState>, new()
+        {
+            var packed = ((IWorkflowExecutionStateHost)Agent).GetExecutionState(scopeKey);
+            if (packed == null || !packed.Is(new TState().Descriptor))
+                return new TState();
+
+            return packed.Unpack<TState>() ?? new TState();
+        }
+
+        public IReadOnlyList<KeyValuePair<string, TState>> LoadStates<TState>(string scopeKeyPrefix = "")
+            where TState : class, IMessage<TState>, new()
+        {
+            var result = new List<KeyValuePair<string, TState>>();
+            foreach (var (scopeKey, packed) in ((IWorkflowExecutionStateHost)Agent).GetExecutionStates())
+            {
+                if (!string.IsNullOrEmpty(scopeKeyPrefix) &&
+                    !scopeKey.StartsWith(scopeKeyPrefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!packed.Is(new TState().Descriptor))
+                    continue;
+
+                result.Add(new KeyValuePair<string, TState>(scopeKey, packed.Unpack<TState>() ?? new TState()));
+            }
+
+            return result;
+        }
+
+        public Task SaveStateAsync<TState>(string scopeKey, TState state, CancellationToken ct = default)
+            where TState : class, IMessage<TState> =>
+            ((IWorkflowExecutionStateHost)Agent).UpsertExecutionStateAsync(scopeKey, Any.Pack(state), ct);
+
+        public Task ClearStateAsync(string scopeKey, CancellationToken ct = default) =>
+            ((IWorkflowExecutionStateHost)Agent).ClearExecutionStateAsync(scopeKey, ct);
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
             string callbackId,
@@ -515,28 +565,31 @@ public class RuntimeCallbackEventizationTests
         }
     }
 
-    private sealed class StubWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowRunModuleStateHost
+    private sealed class StubWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowExecutionStateHost
     {
-        private readonly Dictionary<string, string> _moduleStateJson = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
 
         public string Id => id;
 
         public string RunId { get; } = runId;
 
-        public string? GetModuleStateJson(string moduleName) =>
-            _moduleStateJson.TryGetValue(moduleName, out var json) ? json : null;
+        public Any? GetExecutionState(string scopeKey) =>
+            _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 
-        public Task UpsertModuleStateJsonAsync(string moduleName, string stateJson, CancellationToken ct = default)
+        public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
+            _executionStates.ToList();
+
+        public Task UpsertExecutionStateAsync(string scopeKey, Any state, CancellationToken ct = default)
         {
             _ = ct;
-            _moduleStateJson[moduleName] = stateJson;
+            _executionStates[scopeKey] = state;
             return Task.CompletedTask;
         }
 
-        public Task ClearModuleStateAsync(string moduleName, CancellationToken ct = default)
+        public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default)
         {
             _ = ct;
-            _moduleStateJson.Remove(moduleName);
+            _executionStates.Remove(scopeKey);
             return Task.CompletedTask;
         }
 

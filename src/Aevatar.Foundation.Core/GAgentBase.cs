@@ -2,7 +2,7 @@
 // GAgentBase - stateless base class for GAgent.
 //
 // Responsibilities:
-// 1. Unified event pipeline ([EventHandler] + IEventModule interleaved by priority)
+// 1. Unified event pipeline ([EventHandler] + IEventModule<IEventHandlerContext> interleaved by priority)
 // 2. Module management APIs (RegisterModule / SetModules)
 // 3. Dual hook channels (virtual methods + IGAgentExecutionHook pipeline)
 // 4. Publishing helpers (PublishAsync / SendToAsync)
@@ -28,7 +28,7 @@ namespace Aevatar.Foundation.Core;
 public abstract class GAgentBase : IAgent
 {
     private EventHandlerMetadata[]? _staticHandlers;
-    private volatile IEventModule[] _modules = [];
+    private volatile IEventModule<IEventHandlerContext>[] _modules = [];
     private volatile IGAgentExecutionHook[] _hooks = [];
     private EventEnvelope? _activeInboundEnvelope;
 
@@ -196,23 +196,23 @@ public abstract class GAgentBase : IAgent
     // Module management APIs
 
     /// <summary>Registers a dynamic event module.</summary>
-    public void RegisterModule(IEventModule module)
+    public void RegisterModule(IEventModule<IEventHandlerContext> module)
     {
         var current = _modules;
-        var next = new IEventModule[current.Length + 1];
+        var next = new IEventModule<IEventHandlerContext>[current.Length + 1];
         current.CopyTo(next, 0);
         next[current.Length] = module;
         _modules = next;
     }
 
     /// <summary>Replaces dynamic event modules in batch.</summary>
-    public void SetModules(IEnumerable<IEventModule> modules)
+    public void SetModules(IEnumerable<IEventModule<IEventHandlerContext>> modules)
     {
         _modules = modules.ToArray();
     }
 
     /// <summary>Gets all currently registered dynamic modules.</summary>
-    public IReadOnlyList<IEventModule> GetModules() => _modules;
+    public IReadOnlyList<IEventModule<IEventHandlerContext>> GetModules() => _modules;
 
     // Publishing helper methods
 

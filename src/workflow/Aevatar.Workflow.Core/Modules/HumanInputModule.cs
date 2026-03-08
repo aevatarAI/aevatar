@@ -8,7 +8,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -17,7 +16,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Human input module. Handles step_type == "human_input".
 /// Suspends workflow and waits for a WorkflowResumedEvent carrying user input.
 /// </summary>
-public sealed class HumanInputModule : IEventModule
+public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "human_input";
 
@@ -32,7 +31,7 @@ public sealed class HumanInputModule : IEventModule
                 payload.Is(WorkflowResumedEvent.Descriptor));
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -57,7 +56,7 @@ public sealed class HumanInputModule : IEventModule
                 request.Parameters,
                 defaultSeconds: 1800);
 
-            var state = WorkflowRunModuleStateAccess.Load<HumanInputModuleState>(ctx, ModuleStateKey);
+            var state = WorkflowExecutionStateAccess.Load<HumanInputModuleState>(ctx, ModuleStateKey);
             state.Pending[BuildPendingKey(runId, request.StepId)] = new PendingHumanInputState
             {
                 StepId = request.StepId,
@@ -89,7 +88,7 @@ public sealed class HumanInputModule : IEventModule
         if (payload.Is(WorkflowResumedEvent.Descriptor))
         {
             var resumed = payload.Unpack<WorkflowResumedEvent>();
-            var state = WorkflowRunModuleStateAccess.Load<HumanInputModuleState>(ctx, ModuleStateKey);
+            var state = WorkflowExecutionStateAccess.Load<HumanInputModuleState>(ctx, ModuleStateKey);
             if (!TryResolvePending(state, resumed, out var pendingKey, out var pending))
                 return;
 
@@ -162,25 +161,13 @@ public sealed class HumanInputModule : IEventModule
 
     private static Task SaveStateAsync(
         HumanInputModuleState state,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (state.Pending.Count == 0)
-            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
 
-        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    public sealed class HumanInputModuleState
-    {
-        public Dictionary<string, PendingHumanInputState> Pending { get; set; } = [];
-    }
-
-    public sealed class PendingHumanInputState
-    {
-        public string StepId { get; set; } = string.Empty;
-        public string RunId { get; set; } = string.Empty;
-        public string Input { get; set; } = string.Empty;
-        public string OnTimeout { get; set; } = "fail";
-    }
 }

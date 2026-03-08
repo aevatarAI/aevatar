@@ -12,7 +12,7 @@ namespace Aevatar.Workflow.Extensions.Maker.Modules;
 /// Recursive MAKER solver module.
 /// Implements atomicity decision + recursive decomposition + per-stage voting.
 /// </summary>
-public sealed class MakerRecursiveModule : IEventModule
+public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContext>
 {
     private readonly Dictionary<StepRunKey, NodeState> _nodes = [];
     private readonly Dictionary<StepRunKey, InternalStageRef> _internalStages = [];
@@ -25,7 +25,7 @@ public sealed class MakerRecursiveModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
         envelope.Payload?.Is(StepCompletedEvent.Descriptor) == true;
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -42,7 +42,7 @@ public sealed class MakerRecursiveModule : IEventModule
         await HandleStepCompletedAsync(completed, ctx, ct);
     }
 
-    private async Task HandleRecursiveRequestAsync(StepRequestEvent request, IEventHandlerContext ctx, CancellationToken ct)
+    private async Task HandleRecursiveRequestAsync(StepRequestEvent request, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
         var nodeKey = new StepRunKey(runId, request.StepId);
@@ -68,7 +68,7 @@ public sealed class MakerRecursiveModule : IEventModule
         await DispatchAtomicVoteAsync(state, ctx, ct);
     }
 
-    private async Task HandleStepCompletedAsync(StepCompletedEvent completed, IEventHandlerContext ctx, CancellationToken ct)
+    private async Task HandleStepCompletedAsync(StepCompletedEvent completed, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var runId = WorkflowRunIdNormalizer.Normalize(completed.RunId);
         var completionKey = new StepRunKey(runId, completed.StepId);
@@ -119,7 +119,7 @@ public sealed class MakerRecursiveModule : IEventModule
     private async Task HandleAtomicVoteCompletedAsync(
         NodeState node,
         StepCompletedEvent atomicVoteResult,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (!atomicVoteResult.Success)
@@ -144,7 +144,7 @@ public sealed class MakerRecursiveModule : IEventModule
     private async Task HandleDecomposeVoteCompletedAsync(
         NodeState node,
         StepCompletedEvent decomposeVoteResult,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (!decomposeVoteResult.Success)
@@ -195,7 +195,7 @@ public sealed class MakerRecursiveModule : IEventModule
             node.ChildStepIds.Count);
     }
 
-    private async Task HandleAllChildrenDoneAsync(NodeState node, IEventHandlerContext ctx, CancellationToken ct)
+    private async Task HandleAllChildrenDoneAsync(NodeState node, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var orderedChildResults = node.ChildStepIds
             .Where(node.ChildResults.ContainsKey)
@@ -226,7 +226,7 @@ public sealed class MakerRecursiveModule : IEventModule
         NodeState node,
         StepCompletedEvent stageResult,
         string stage,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var completed = new StepCompletedEvent
@@ -252,7 +252,7 @@ public sealed class MakerRecursiveModule : IEventModule
         CleanupNode(node.Key);
     }
 
-    private async Task FailNodeAsync(NodeState node, string error, IEventHandlerContext ctx, CancellationToken ct)
+    private async Task FailNodeAsync(NodeState node, string error, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         await ctx.PublishAsync(new StepCompletedEvent
         {
@@ -286,21 +286,21 @@ public sealed class MakerRecursiveModule : IEventModule
         }
     }
 
-    private async Task DispatchAtomicVoteAsync(NodeState node, IEventHandlerContext ctx, CancellationToken ct)
+    private async Task DispatchAtomicVoteAsync(NodeState node, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var atomicInput = BuildAtomicPrompt(node);
         var stepId = $"{node.StepId}_atomic_vote";
         await DispatchParallelVoteStepAsync(node, stepId, atomicInput, node.AtomicWorkers, InternalStage.AtomicVote, ctx, ct);
     }
 
-    private async Task DispatchDecomposeVoteAsync(NodeState node, IEventHandlerContext ctx, CancellationToken ct)
+    private async Task DispatchDecomposeVoteAsync(NodeState node, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var decomposeInput = BuildDecomposePrompt(node);
         var stepId = $"{node.StepId}_decompose_vote";
         await DispatchParallelVoteStepAsync(node, stepId, decomposeInput, node.DecomposeWorkers, InternalStage.DecomposeVote, ctx, ct);
     }
 
-    private async Task DispatchLeafSolveVoteAsync(NodeState node, IEventHandlerContext ctx, CancellationToken ct)
+    private async Task DispatchLeafSolveVoteAsync(NodeState node, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var solveInput = BuildSolvePrompt(node);
         var stepId = $"{node.StepId}_leaf_vote";
@@ -313,7 +313,7 @@ public sealed class MakerRecursiveModule : IEventModule
         string input,
         string workers,
         InternalStage stage,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var workerList = ParseWorkers(workers);

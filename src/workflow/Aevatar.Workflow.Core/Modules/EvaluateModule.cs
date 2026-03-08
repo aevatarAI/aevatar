@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -12,7 +11,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Sends a structured evaluation prompt to the target role, parses the numeric score
 /// from the response, and applies threshold-based branching.
 /// </summary>
-public sealed class EvaluateModule : IEventModule
+public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "evaluate";
 
@@ -28,7 +27,7 @@ public sealed class EvaluateModule : IEventModule
                 p.Is(ChatResponseEvent.Descriptor));
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -53,7 +52,7 @@ public sealed class EvaluateModule : IEventModule
                 {request.Input}
                 """;
 
-            var state = WorkflowRunModuleStateAccess.Load<EvaluateModuleState>(ctx, ModuleStateKey);
+            var state = WorkflowExecutionStateAccess.Load<EvaluateModuleState>(ctx, ModuleStateKey);
             var stepKey = request.StepId ?? string.Empty;
             var attempt = state.AttemptsByStepId.GetValueOrDefault(stepKey, 0) + 1;
             state.AttemptsByStepId[stepKey] = attempt;
@@ -118,7 +117,7 @@ public sealed class EvaluateModule : IEventModule
         if (sid == null)
             return;
 
-        var stateForCompletion = WorkflowRunModuleStateAccess.Load<EvaluateModuleState>(ctx, ModuleStateKey);
+        var stateForCompletion = WorkflowExecutionStateAccess.Load<EvaluateModuleState>(ctx, ModuleStateKey);
         if (!stateForCompletion.PendingBySessionId.Remove(sid, out var evalCtx))
             return;
         stateForCompletion.AttemptsByStepId.Remove(evalCtx.StepId);
@@ -160,27 +159,13 @@ public sealed class EvaluateModule : IEventModule
 
     private static Task SaveStateAsync(
         EvaluateModuleState state,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (state.PendingBySessionId.Count == 0 && state.AttemptsByStepId.Count == 0)
-            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
 
-        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    public sealed class EvaluateModuleState
-    {
-        public Dictionary<string, EvalContextState> PendingBySessionId { get; set; } = [];
-        public Dictionary<string, int> AttemptsByStepId { get; set; } = [];
-    }
-
-    public sealed class EvalContextState
-    {
-        public string StepId { get; set; } = string.Empty;
-        public string RunId { get; set; } = string.Empty;
-        public string OriginalInput { get; set; } = string.Empty;
-        public double Threshold { get; set; }
-        public string OnBelow { get; set; } = string.Empty;
-    }
 }

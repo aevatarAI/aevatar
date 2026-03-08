@@ -7,7 +7,6 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
 {
     private static readonly IReadOnlyList<WorkflowModuleRegistration> ModuleRegistrations =
     [
-        WorkflowModuleRegistration.Create<WorkflowLoopModule>("workflow_loop"),
         WorkflowModuleRegistration.Create<ConditionalModule>("conditional"),
         WorkflowModuleRegistration.Create<SwitchModule>("switch"),
         WorkflowModuleRegistration.Create<WhileModule>("while", "loop"),
@@ -39,15 +38,11 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
 
     private static readonly IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanderRegistrations =
     [
-        new WorkflowLoopModuleDependencyExpander(),
         new WorkflowStepTypeModuleDependencyExpander(),
         new WorkflowImplicitModuleDependencyExpander(),
     ];
 
-    private static readonly IReadOnlyList<IWorkflowModuleConfigurator> ConfiguratorRegistrations =
-    [
-        new WorkflowLoopModuleConfigurator(),
-    ];
+    private static readonly IReadOnlyList<IWorkflowModuleConfigurator> ConfiguratorRegistrations = [];
 
     public string Name => "workflow.core";
 

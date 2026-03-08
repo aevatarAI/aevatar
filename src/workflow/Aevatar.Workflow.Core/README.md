@@ -4,7 +4,9 @@
 
 - `WorkflowGAgent`：definition actor，只承载 workflow 定义事实。
 - `WorkflowRunGAgent`：run actor，一次 run 一个 actor，承载全部执行事实。
-- `IEventModule`：事件处理插件与 effect adapter。
+- `IEventModule<IWorkflowExecutionContext>`：workflow step 模块统一抽象。
+- `WorkflowExecutionBridgeModule`：把 `IEventModule<IWorkflowExecutionContext>` 适配进 `Foundation` 的 `IEventModule<IEventHandlerContext>` 管线。
+- `WorkflowExecutionKernel`：run actor 内的执行内核，负责主循环、推进、完成与失败收敛。
 
 ## 核心对象
 
@@ -17,7 +19,7 @@
   - 安装 workflow modules
   - 创建 run-scoped `RoleGAgent` 子 actor
   - 处理 `ChatRequestEvent`、`ReplaceWorkflowDefinitionAndExecuteEvent`、`WorkflowCompletedEvent`
-  - 通过 event sourcing 持久化 run lifecycle 与模块状态
+  - 通过 event sourcing 持久化 run lifecycle 与 `ExecutionStates`
 - `SubWorkflowOrchestrator`
   - 管理 `workflow_call` 的子 run 创建、绑定、完成与对账
 
@@ -28,10 +30,10 @@
 - `DefinitionActorId`
 - `WorkflowYaml / WorkflowName / InlineWorkflowYamls`
 - `RunId / Status / Input / FinalOutput / FinalError`
-- `ModuleStateJson`
+- `ExecutionStates`
 - 子工作流 binding / invocation 关系
 
-模块运行态通过 `IWorkflowRunModuleStateHost` 暴露给模块，再通过 `WorkflowRunModuleStateAccess` 统一读写 `ModuleStateJson`。这意味着：
+模块运行态通过 `IWorkflowExecutionContext.LoadState/SaveState/ClearState` 读写 `WorkflowRunState.ExecutionStates`。这意味着：
 
 - 模块状态跟随 run actor replay
 - callback fired 事件能在 actor 内完成对账
@@ -39,8 +41,8 @@
 
 ## 关键模块语义
 
-- `WorkflowLoopModule`
-  - 主循环、current step、variables、retry、timeout 都在 actor-owned module state 中
+- `WorkflowExecutionKernel`
+  - 主循环、current step、variables、retry、timeout 都在 actor-owned execution state 中
 - `DelayModule`
   - 仅调度 durable timeout，pending lease 保存在 run actor
 - `WaitSignalModule`
@@ -58,8 +60,8 @@
   - definition actor
 - `WorkflowRunGAgent.cs`
   - run actor
-- `Runtime/`
-  - 模块状态宿主与统一访问器
+- `Execution/`
+  - workflow execution context adapter、bridge module、execution kernel
 - `Modules/`
   - 所有内置步骤模块
 - `Primitives/`

@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
@@ -256,7 +257,7 @@ public sealed class WorkflowTuringCompletenessTests
         var loop = new WorkflowLoopModule();
         loop.SetWorkflow(workflow);
 
-        var modules = new Dictionary<string, IEventModule>(StringComparer.OrdinalIgnoreCase)
+        var modules = new Dictionary<string, IEventModule<IWorkflowExecutionContext>>(StringComparer.OrdinalIgnoreCase)
         {
             ["assign"] = new AssignModule(),
             ["conditional"] = new ConditionalModule(),
@@ -307,7 +308,7 @@ public sealed class WorkflowTuringCompletenessTests
 
     private static async Task<StepCompletedEvent> ExecuteStepAsync(
         StepRequestEvent request,
-        IReadOnlyDictionary<string, IEventModule> modules,
+        IReadOnlyDictionary<string, IEventModule<IWorkflowExecutionContext>> modules,
         TestWorkflowRunAgent workflowRunAgent)
     {
         if (!modules.TryGetValue(request.StepType, out var module))

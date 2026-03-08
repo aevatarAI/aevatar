@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Runtime;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -11,7 +10,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Self-reflection loop: draft → critique → improve → critique → ...
 /// Repeats until critique says "PASS" or max rounds reached.
 /// </summary>
-public sealed class ReflectModule : IEventModule
+public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "reflect";
 
@@ -27,7 +26,7 @@ public sealed class ReflectModule : IEventModule
                 p.Is(ChatResponseEvent.Descriptor));
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -42,10 +41,19 @@ public sealed class ReflectModule : IEventModule
             maxRounds = Math.Clamp(maxRounds, 1, 10);
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
 
-            var state = new ReflectState(request.StepId, runId, request.TargetRole ?? "", request.Input ?? "",
-                criteria, maxRounds, 0, ReflectPhase.Critique);
+            var state = new ReflectState
+            {
+                StepId = request.StepId,
+                RunId = runId,
+                TargetRole = request.TargetRole ?? string.Empty,
+                CurrentDraft = request.Input ?? string.Empty,
+                Criteria = criteria,
+                MaxRounds = maxRounds,
+                Round = 0,
+                Phase = ReflectPhaseState.Critique,
+            };
 
-            var runtimeState = WorkflowRunModuleStateAccess.Load<ReflectModuleState>(ctx, ModuleStateKey);
+            var runtimeState = WorkflowExecutionStateAccess.Load<ReflectModuleState>(ctx, ModuleStateKey);
             await SendCritiqueAsync(runtimeState, state, request.Input ?? "", ctx, ct);
             return;
         }
@@ -66,13 +74,13 @@ public sealed class ReflectModule : IEventModule
         if (sid == null)
             return;
 
-        var runtimeStateForCompletion = WorkflowRunModuleStateAccess.Load<ReflectModuleState>(ctx, ModuleStateKey);
+        var runtimeStateForCompletion = WorkflowExecutionStateAccess.Load<ReflectModuleState>(ctx, ModuleStateKey);
         if (!runtimeStateForCompletion.PendingBySessionId.Remove(sid, out var state2))
             return;
         await SaveStateAsync(runtimeStateForCompletion, ctx, ct);
         content ??= "";
 
-        if (state2.Phase == ReflectPhase.Critique)
+        if (state2.Phase == ReflectPhaseState.Critique)
         {
             var passed = content.Contains("PASS", StringComparison.OrdinalIgnoreCase);
             var round = state2.Round + 1;
@@ -92,12 +100,16 @@ public sealed class ReflectModule : IEventModule
                 return;
             }
 
-            var next = state2 with { Round = round, Phase = ReflectPhase.Improve };
+            var next = state2.Clone();
+            next.Round = round;
+            next.Phase = ReflectPhaseState.Improve;
             await SendImproveAsync(runtimeStateForCompletion, next, content, ctx, ct);
         }
         else
         {
-            var next = state2 with { CurrentDraft = content, Phase = ReflectPhase.Critique };
+            var next = state2.Clone();
+            next.CurrentDraft = content;
+            next.Phase = ReflectPhaseState.Critique;
             await SendCritiqueAsync(runtimeStateForCompletion, next, content, ctx, ct);
         }
     }
@@ -106,7 +118,7 @@ public sealed class ReflectModule : IEventModule
         ReflectModuleState runtimeState,
         ReflectState state,
         string draft,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var prompt = $"""
@@ -135,7 +147,7 @@ public sealed class ReflectModule : IEventModule
         ReflectModuleState runtimeState,
         ReflectState state,
         string critique,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var prompt = $"""
@@ -161,25 +173,14 @@ public sealed class ReflectModule : IEventModule
             await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, EventDirection.Self, ct);
     }
 
-    public enum ReflectPhase { Critique, Improve }
-
-    public sealed record ReflectState(
-        string StepId, string RunId, string TargetRole, string CurrentDraft,
-        string Criteria, int MaxRounds, int Round, ReflectPhase Phase);
-
-    public sealed class ReflectModuleState
-    {
-        public Dictionary<string, ReflectState> PendingBySessionId { get; set; } = [];
-    }
-
     private static Task SaveStateAsync(
         ReflectModuleState state,
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (state.PendingBySessionId.Count == 0)
-            return WorkflowRunModuleStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
 
-        return WorkflowRunModuleStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 }
