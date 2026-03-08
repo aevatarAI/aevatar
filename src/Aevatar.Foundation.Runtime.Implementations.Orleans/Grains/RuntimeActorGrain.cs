@@ -123,10 +123,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
-        using var instrumentation = TracingContextHelpers.BeginHandleEnvelopeInstrumentation(
-            _logger,
-            this.GetPrimaryKeyString(),
-            envelope);
         if (await TryHandleCompatibilityRetryAsync(envelope))
             return;
 
@@ -165,6 +161,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 return;
         }
 
+        using var scope = EventHandleScope.Begin(_logger, this.GetPrimaryKeyString(), envelope);
         try
         {
             using var stateBinding = _stateBindingAccessor?.Bind(_state);
@@ -172,6 +169,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
         catch (Exception ex)
         {
+            scope.MarkError(ex);
             if (await TryScheduleRetryAsync(envelope, ex))
                 return;
 

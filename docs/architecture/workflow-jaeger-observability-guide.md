@@ -37,15 +37,10 @@ Expected runtime logging behavior:
 
 ## 3. Local Setup
 
-Start Jaeger all-in-one:
+Start the local observability stack:
 
 ```bash
-docker run --rm --name jaeger \
-  -e COLLECTOR_OTLP_ENABLED=true \
-  -p 16686:16686 \
-  -p 4317:4317 \
-  -p 4318:4318 \
-  jaegertracing/all-in-one:latest
+docker compose -f docker-compose.observability.yml up -d jaeger otel-collector prometheus grafana
 ```
 
 Set OTEL environment variables before host startup:
@@ -88,7 +83,8 @@ Validate all checks:
 2. Response body includes `correlationId` for async accepted flow.
 3. Runtime logs include `trace_id`, `correlation_id`, and `causation_id`.
 4. Jaeger UI (`http://localhost:16686`) shows trace under `Aevatar.Workflow.Host.Api`.
-5. Log `trace_id` equals Jaeger trace id (trace_id is not exposed in API responses, only in logs).
+5. Prometheus target page (`http://localhost:9090/targets`) shows `aevatar-otel-collector` as `UP`.
+6. Log `trace_id` equals Jaeger trace id (trace_id is not exposed in API responses, only in logs).
 
 ## 5. Automated Test Checklist
 
@@ -105,7 +101,7 @@ Recommended minimum checks:
 
 No traces in Jaeger:
 
-- verify Jaeger container is healthy and OTLP ports are reachable
+- verify the collector and Jaeger containers are healthy and OTLP ports are reachable
 - verify OTEL environment variables are visible to host process
 - verify sampling is not effectively zero
 

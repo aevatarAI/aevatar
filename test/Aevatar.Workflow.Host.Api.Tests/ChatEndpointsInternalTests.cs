@@ -6,6 +6,7 @@ using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Host.Api.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -381,6 +382,7 @@ public class ChatEndpointsInternalTests
     [Fact]
     public async Task HandleResume_WhenValid_ShouldDispatchWorkflowResumedEvent()
     {
+        using var metricCapture = new ApiMetricCapture();
         var actor = new RecordingActor("actor-1");
         var actorPort = new FakeWorkflowRunActorPort
         {
@@ -420,11 +422,15 @@ public class ChatEndpointsInternalTests
         resumed.UserInput.Should().Be("approved");
         resumed.Metadata["operator"].Should().Be("alice");
         actor.LastHandledEnvelope.CorrelationId.Should().Be("cmd-1");
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }
 
     [Fact]
     public async Task HandleResume_WhenActorMissing_ShouldReturnNotFound()
     {
+        using var metricCapture = new ApiMetricCapture();
         var actorPort = new FakeWorkflowRunActorPort
         {
             ActorToReturn = null,
@@ -442,11 +448,14 @@ public class ChatEndpointsInternalTests
 
         var (statusCode, _) = await ExecuteResultAsync(result);
         statusCode.Should().Be(StatusCodes.Status404NotFound);
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }
 
     [Fact]
     public async Task HandleSignal_WhenValid_ShouldDispatchSignalReceivedEvent()
     {
+        using var metricCapture = new ApiMetricCapture();
         var actor = new RecordingActor("actor-1");
         var actorPort = new FakeWorkflowRunActorPort
         {
@@ -479,6 +488,9 @@ public class ChatEndpointsInternalTests
         signal.SignalName.Should().Be("ops_window_open");
         signal.Payload.Should().Be("window=2026-02-26T10:00:00Z");
         actor.LastHandledEnvelope.CorrelationId.Should().Be("cmd-s1");
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
     }
 
     [Fact]
@@ -621,6 +633,7 @@ public class ChatEndpointsInternalTests
     [Fact]
     public async Task HandleChat_WithEmptyPrompt_ShouldReturn400()
     {
+        using var metricCapture = new ApiMetricCapture();
         var http = CreateHttpContext();
         var service = new FakeChatRunApplicationService();
 
@@ -631,6 +644,215 @@ public class ChatEndpointsInternalTests
             CancellationToken.None);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        metricCapture.FirstResponseMeasurements.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleChat_WhenStreaming_ShouldRecordFirstResponseMetric()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        var http = CreateHttpContext();
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = async (_, emitAsync, onStartedAsync, ct) =>
+            {
+                var started = new WorkflowChatRunStarted("actor-1", "direct", "cmd-1");
+                if (onStartedAsync != null)
+                    await onStartedAsync(started, ct);
+
+                await emitAsync(new WorkflowOutputFrame
+                {
+                    Type = WorkflowRunEventTypes.RunStarted,
+                    ThreadId = "actor-1",
+                }, ct);
+
+                return ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.None,
+                        started,
+                        new WorkflowChatRunFinalizeResult(
+                            WorkflowProjectionCompletionStatus.Completed,
+                            true)));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        metricCapture.FirstResponseMeasurements.Should().ContainSingle();
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+    }
+
+    [Fact]
+    public async Task HandleChat_WhenOnlyRunContextIsWritten_ShouldRecordFirstResponseMetric()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        var http = CreateHttpContext();
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = async (_, _, onStartedAsync, ct) =>
+            {
+                var started = new WorkflowChatRunStarted("actor-1", "direct", "cmd-context-only");
+                if (onStartedAsync != null)
+                    await onStartedAsync(started, ct);
+
+                return ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.None,
+                        started,
+                        new WorkflowChatRunFinalizeResult(
+                            WorkflowProjectionCompletionStatus.Completed,
+                            true)));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        metricCapture.FirstResponseMeasurements.Should().ContainSingle();
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
+        metricCapture.FirstResponseMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+    }
+
+    [Fact]
+    public async Task HandleChat_WhenWorkflowNotFound_ShouldClassify404AsResultOk()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        var http = CreateHttpContext();
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) => Task.FromResult(ToCoreResult(
+                new WorkflowChatRunExecutionResult(
+                    WorkflowChatRunStartError.WorkflowNotFound,
+                    null,
+                    null))),
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello", Workflow = "missing" },
+            service,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+    }
+
+    [Fact]
+    public async Task HandleCommand_WhenStarted_ShouldRecordRequestMetric()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = async (_, _, onStartedAsync, ct) =>
+            {
+                var started = new WorkflowChatRunStarted("actor-1", "direct", "cmd-1");
+                if (onStartedAsync != null)
+                    await onStartedAsync(started, ct);
+
+                return ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.None,
+                        started,
+                        new WorkflowChatRunFinalizeResult(
+                            WorkflowProjectionCompletionStatus.Completed,
+                            true)));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "transport" && Equals(t.Value, "http"));
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+    }
+
+    [Fact]
+    public async Task HandleCommand_WhenExecutionThrows_ShouldRecordRequestMetricAsError()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) => throw new InvalidOperationException("boom"),
+        };
+
+        await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "error"));
+    }
+
+    [Fact]
+    public async Task HandleCommand_WhenExecutionCanceled_ShouldRecordRequestMetricAsOk()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) => throw new OperationCanceledException(),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, _) = await ExecuteResultAsync(result);
+        statusCode.Should().Be(499);
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "ok"));
+    }
+
+    [Fact]
+    public async Task HandleCommand_WhenProjectionDisabled_ShouldClassify503AsResultError()
+    {
+        using var metricCapture = new ApiMetricCapture();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (_, _, _, _) => Task.FromResult(ToCoreResult(
+                new WorkflowChatRunExecutionResult(
+                    WorkflowChatRunStartError.ProjectionDisabled,
+                    null,
+                    null))),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
+            service,
+            loggerFactory,
+            CancellationToken.None);
+
+        var (statusCode, _) = await ExecuteResultAsync(result);
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        metricCapture.RequestMeasurements.Should().ContainSingle();
+        metricCapture.RequestMeasurements[0].Tags.Should().Contain(t => t.Key == "result" && Equals(t.Value, "error"));
     }
 
     [Fact]
@@ -1098,4 +1320,5 @@ public class ChatEndpointsInternalTests
     private static CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> ToCoreResult(
         WorkflowChatRunExecutionResult source) =>
         new(source.Error, source.Started, source.FinalizeResult);
+
 }

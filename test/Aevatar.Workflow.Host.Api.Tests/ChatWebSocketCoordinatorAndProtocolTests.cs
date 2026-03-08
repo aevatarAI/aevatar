@@ -35,6 +35,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             },
         };
 
+        var scope = ApiRequestScope.BeginWebSocket();
         await ChatWebSocketRunCoordinator.ExecuteAsync(
             socket,
             new ChatWebSocketCommandEnvelope("req-1", new ChatInput
@@ -45,6 +46,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 AgentId = "actor-1",
             }, WebSocketMessageType.Text),
             service,
+            scope,
             CancellationToken.None);
 
         var types = socket.SentTexts
@@ -84,10 +86,12 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                     null)),
         };
 
+        var scope = ApiRequestScope.BeginWebSocket();
         await ChatWebSocketRunCoordinator.ExecuteAsync(
             socket,
             new ChatWebSocketCommandEnvelope("req-2", new ChatInput { Prompt = "hello" }, WebSocketMessageType.Text),
             service,
+            scope,
             CancellationToken.None);
 
         socket.SentTexts.Should().ContainSingle();
@@ -114,6 +118,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                     null)),
         };
 
+        var scope = ApiRequestScope.BeginWebSocket();
         await ChatWebSocketRunCoordinator.ExecuteAsync(
             socket,
             new ChatWebSocketCommandEnvelope(
@@ -125,6 +130,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 },
                 WebSocketMessageType.Text),
             service,
+            scope,
             CancellationToken.None);
 
         service.LastCommand.Should().NotBeNull();
@@ -156,10 +162,12 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             },
         };
 
+        var scope = ApiRequestScope.BeginWebSocket();
         await ChatWebSocketRunCoordinator.ExecuteAsync(
             socket,
             new ChatWebSocketCommandEnvelope("req-fallback", new ChatInput { Prompt = "hello" }, WebSocketMessageType.Text),
             service,
+            scope,
             CancellationToken.None);
 
         socket.SentTexts.Should().HaveCount(2);
