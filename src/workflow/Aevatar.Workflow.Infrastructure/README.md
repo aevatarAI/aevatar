@@ -24,6 +24,7 @@ Aevatar.Workflow.Infrastructure/
   - 注册报告工件 sink。
 - `AddWorkflowDefinitionFileSource(...)`
   - 注册 workflow 文件源与启动加载 HostedService。
+  - 启动加载只扫描当前配置的 source set，然后对 catalog 做幂等 upsert；不在 host 启动链上先做分布式 names query。
 - `AddWorkflowCapability(IServiceCollection, IConfiguration)`
   - 能力一键组合（Application + Projection + AGUIAdapter + Infrastructure + workflow 文件源）。
   - 不负责具体 ReadModel Provider 注册（Provider 组合下沉到 Host/Extensions 层）。
@@ -52,7 +53,7 @@ Aevatar.Workflow.Infrastructure/
 | 选项 | 默认 | 说明 |
 |------|------|------|
 | `WorkflowDirectories` | `[]` | workflow YAML 扫描目录列表 |
-| `DuplicatePolicy` | `Throw` | 重名处理策略：`Throw` / `Skip` / `Override` |
+| `DuplicatePolicy` | `Throw` | 当前 bootstrap source set 内的重名处理策略：`Throw` / `Skip` / `Override` |
 
 ## DI 入口
 

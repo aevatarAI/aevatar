@@ -24,6 +24,12 @@ public sealed class WorkflowDefinitionCatalogGAgent : GAgentBase<WorkflowDefinit
         if (string.IsNullOrWhiteSpace(evt.WorkflowYaml))
             throw new InvalidOperationException($"WorkflowYaml is required for workflow `{workflowName}`.");
 
+        if (State.Entries.TryGetValue(workflowName, out var existingEntry) &&
+            string.Equals(existingEntry.WorkflowYaml, evt.WorkflowYaml, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         await PersistDomainEventAsync(new WorkflowDefinitionCatalogEntryUpsertedEvent
         {
             WorkflowName = workflowName,

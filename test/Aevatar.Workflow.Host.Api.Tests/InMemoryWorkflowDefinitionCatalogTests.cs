@@ -1,5 +1,6 @@
 // ─── InMemoryWorkflowDefinitionCatalog 测试 ───
 
+using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using FluentAssertions;
@@ -147,6 +148,55 @@ public class InMemoryWorkflowDefinitionCatalogTests
         finally
         {
             Directory.Delete(tmpDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task FileLoader_ShouldNotQueryCatalogNamesBeforeLoading()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), $"wf_test_no_query_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmpDir);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tmpDir, "demo.yaml"), "name: demo");
+
+            var registry = new ThrowOnGetNamesWorkflowDefinitionCatalog();
+            var loader = new WorkflowDefinitionFileLoader();
+
+            var count = await loader.LoadIntoAsync(registry, [tmpDir], NullLogger.Instance);
+
+            count.Should().Be(1);
+            (await registry.GetYamlAsync("demo")).Should().Contain("name: demo");
+        }
+        finally
+        {
+            Directory.Delete(tmpDir, true);
+        }
+    }
+
+    private sealed class ThrowOnGetNamesWorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
+    {
+        private readonly Dictionary<string, string> _entries = new(StringComparer.OrdinalIgnoreCase);
+
+        public Task UpsertAsync(string name, string yaml, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _entries[name] = yaml;
+            return Task.CompletedTask;
+        }
+
+        public Task<string?> GetYamlAsync(string name, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _entries.TryGetValue(name, out var yaml);
+            return Task.FromResult<string?>(yaml);
+        }
+
+        public Task<IReadOnlyList<string>> GetNamesAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("Loader must not query catalog names during bootstrap.");
         }
     }
 }

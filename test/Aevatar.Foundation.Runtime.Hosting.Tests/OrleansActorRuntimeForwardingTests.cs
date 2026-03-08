@@ -239,6 +239,12 @@ public sealed class OrleansActorRuntimeForwardingTests
             return Task.FromResult(ParentId);
         }
 
+        public Task<RuntimeActorStateSnapshot?> GetStateSnapshotAsync()
+        {
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
+            return Task.FromResult<RuntimeActorStateSnapshot?>(null);
+        }
+
         public Task<string> GetDescriptionAsync() =>
             Task.FromResult("recording");
 

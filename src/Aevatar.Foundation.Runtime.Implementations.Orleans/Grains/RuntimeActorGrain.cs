@@ -226,6 +226,35 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     public Task<string> GetAgentTypeNameAsync() =>
         Task.FromResult(_state.State.AgentTypeName ?? string.Empty);
 
+    public Task<RuntimeActorStateSnapshot?> GetStateSnapshotAsync()
+    {
+        if (_agent is IAgentStateSnapshotSource liveSnapshotSource)
+        {
+            return Task.FromResult<RuntimeActorStateSnapshot?>(new RuntimeActorStateSnapshot
+            {
+                AgentTypeName = _state.State.AgentTypeName,
+                StateTypeName = liveSnapshotSource.StateTypeName,
+                StateBytes = liveSnapshotSource.GetStateSnapshotBytes(),
+                StateVersion = liveSnapshotSource.StateVersion,
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(_state.State.AgentTypeName) ||
+            string.IsNullOrWhiteSpace(_state.State.AgentStateTypeName) ||
+            _state.State.AgentStateSnapshot == null)
+        {
+            return Task.FromResult<RuntimeActorStateSnapshot?>(null);
+        }
+
+        return Task.FromResult<RuntimeActorStateSnapshot?>(new RuntimeActorStateSnapshot
+        {
+            AgentTypeName = _state.State.AgentTypeName,
+            StateTypeName = _state.State.AgentStateTypeName,
+            StateBytes = _state.State.AgentStateSnapshot,
+            StateVersion = _state.State.AgentStateSnapshotVersion,
+        });
+    }
+
     public async Task DeactivateAsync()
     {
         if (_agent != null)

@@ -14,6 +14,7 @@ using Orleans.Streams;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Streaming;
 using Orleans.Configuration;
+using Orleans.Serialization;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 
@@ -66,6 +67,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
         services.TryAddSingleton<IStreamRequestReplyClient, RuntimeStreamRequestReplyClient>();
         services.TryAddSingleton<IActorRuntimeCallbackScheduler, OrleansActorRuntimeDurableCallbackScheduler>();
+        services.TryAddSingleton<IActorStateSnapshotReader, OrleansActorStateSnapshotReader>();
+        services.TryAddSingleton<IActorEnvelopeDispatcher, OrleansActorEnvelopeDispatcher>();
         services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
         services.AddAevatarFoundationRuntimeOrleansStreaming();
 
@@ -112,6 +115,7 @@ public static class ServiceCollectionExtensions
 
         builder.ConfigureServices(services =>
         {
+            services.AddSerializer(serializerBuilder => serializerBuilder.AddProtobufSerializer());
             services.AddAevatarFoundationRuntimeOrleans(orleansOptions =>
             {
                 orleansOptions.StreamBackend = options.StreamBackend;

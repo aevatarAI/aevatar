@@ -27,6 +27,8 @@ public interface IRuntimeActorGrain : IGrainWithStringKey
 
     Task<string> GetAgentTypeNameAsync();
 
+    Task<RuntimeActorStateSnapshot?> GetStateSnapshotAsync();
+
     Task DeactivateAsync();
 
     Task PurgeAsync();

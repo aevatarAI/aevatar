@@ -18,16 +18,34 @@ public sealed class WorkflowDefinitionFileLoader
         ArgumentNullException.ThrowIfNull(logger);
 
         var loaded = 0;
-        var registeredNames = new HashSet<string>(
-            await catalog.GetNamesAsync(CancellationToken.None),
-            StringComparer.OrdinalIgnoreCase);
+        var registeredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var seedSource in seedSources ?? [])
         {
             foreach (var (name, yaml) in seedSource.GetSeedDefinitions())
             {
+                if (!registeredNames.Add(name))
+                {
+                    if (duplicatePolicy == WorkflowDefinitionDuplicatePolicy.Throw)
+                    {
+                        throw new InvalidOperationException(
+                            $"Duplicate workflow definition name '{name}' detected in seed sources.");
+                    }
+
+                    if (duplicatePolicy == WorkflowDefinitionDuplicatePolicy.Skip)
+                    {
+                        logger.LogWarning(
+                            "Skipping duplicate seeded workflow definition '{Name}'.",
+                            name);
+                        continue;
+                    }
+
+                    logger.LogWarning(
+                        "Overriding existing seeded workflow definition '{Name}'.",
+                        name);
+                }
+
                 await catalog.UpsertAsync(name, yaml, CancellationToken.None);
-                registeredNames.Add(name);
             }
         }
 

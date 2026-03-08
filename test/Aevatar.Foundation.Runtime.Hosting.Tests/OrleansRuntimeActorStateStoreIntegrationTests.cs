@@ -44,6 +44,35 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task RuntimeActorGrain_ShouldReturnLiveStateSnapshotWhileActivated()
+    {
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        var host = await StartSiloHostAsync(siloPort, gatewayPort);
+
+        try
+        {
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var agentType = typeof(StateStoreAwareActivationAgent).AssemblyQualifiedName!;
+
+            (await grain.InitializeAgentAsync(agentType)).Should().BeTrue();
+
+            var snapshot = await grain.GetStateSnapshotAsync();
+
+            snapshot.Should().NotBeNull();
+            snapshot!.StateTypeName.Should().Be(typeof(Int32Value).FullName);
+            Int32Value.Parser.ParseFrom(snapshot.StateBytes).Value.Should().Be(1);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
     private static async Task<IHost> StartSiloHostAsync(int siloPort, int gatewayPort)
     {
         var host = Host.CreateDefaultBuilder()

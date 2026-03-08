@@ -19,6 +19,7 @@
     <PackageReference Include="Microsoft.Orleans.Runtime" />
     <PackageReference Include="Microsoft.Orleans.Reminders" />
     <PackageReference Include="Microsoft.Orleans.Reminders.Redis" />
+    <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
     <PackageReference Include="Microsoft.Orleans.Server" />
     <PackageReference Include="Microsoft.Orleans.Streaming" />
     <PackageReference Include="Microsoft.Orleans.Sdk" PrivateAssets="all" />

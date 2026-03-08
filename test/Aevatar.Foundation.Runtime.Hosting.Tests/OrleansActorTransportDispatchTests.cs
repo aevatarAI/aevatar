@@ -71,6 +71,8 @@ public sealed class OrleansActorTransportDispatchTests
 
         public Task<string> GetAgentTypeNameAsync() => Task.FromResult(string.Empty);
 
+        public Task<RuntimeActorStateSnapshot?> GetStateSnapshotAsync() => Task.FromResult<RuntimeActorStateSnapshot?>(null);
+
         public Task DeactivateAsync() => Task.CompletedTask;
 
         public Task PurgeAsync() => Task.CompletedTask;

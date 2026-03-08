@@ -13,7 +13,7 @@ namespace Aevatar.Foundation.Core;
 /// Stateful GAgent base class with Protobuf state and mandatory Event Sourcing lifecycle.
 /// </summary>
 /// <typeparam name="TState">Protobuf-generated state type.</typeparam>
-public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSourcingFactoryBinding
+public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSourcingFactoryBinding, IAgentStateSnapshotSource
     where TState : class, IMessage<TState>, new()
 {
     private TState _state = new();
@@ -162,5 +162,11 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
             .ToArray();
         return _appliers;
     }
+
+    string IAgentStateSnapshotSource.StateTypeName => typeof(TState).FullName ?? typeof(TState).Name;
+
+    byte[] IAgentStateSnapshotSource.GetStateSnapshotBytes() => _state.ToByteArray();
+
+    long IAgentStateSnapshotSource.StateVersion => EventSourcing?.CurrentVersion ?? 0;
 
 }

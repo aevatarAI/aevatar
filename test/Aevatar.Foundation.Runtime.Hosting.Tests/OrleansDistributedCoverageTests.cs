@@ -646,6 +646,8 @@ public sealed class OrleansDistributedCoverageTests
 
         public Task<string> GetAgentTypeNameAsync() => Task.FromResult(AgentTypeName);
 
+        public Task<RuntimeActorStateSnapshot?> GetStateSnapshotAsync() => Task.FromResult<RuntimeActorStateSnapshot?>(null);
+
         public Task DeactivateAsync() => Task.CompletedTask;
 
         public Task PurgeAsync() => Task.CompletedTask;

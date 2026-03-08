@@ -170,13 +170,9 @@ probe_event_path() {
   fi
 
   echo "Running event-path probe against old node on port ${old_node_port}..."
-  workflow_payload="$(curl --max-time 3 -sS "http://127.0.0.1:${old_node_port}/api/workflows" || true)"
-  if [[ -z "${workflow_payload}" ]]; then
-    echo "Unable to query workflows from old node."
-    return 1
-  fi
-
-  workflow_name="$(WORKFLOW_JSON="${workflow_payload}" python3 - <<'PY'
+  extract_first_workflow_name() {
+    local raw_json="$1"
+    WORKFLOW_JSON="${raw_json}" python3 - <<'PY'
 import json
 import os
 
@@ -196,10 +192,24 @@ if isinstance(data, list) and data:
 else:
     print("")
 PY
-)"
+  }
+
+  workflow_name=""
+  workflow_payload=""
+  for _ in $(seq 1 30); do
+    workflow_payload="$(curl --max-time 5 -sS "http://127.0.0.1:${old_node_port}/api/workflows" || true)"
+    if [[ -n "${workflow_payload}" ]]; then
+      workflow_name="$(extract_first_workflow_name "${workflow_payload}")"
+      if [[ -n "${workflow_name}" ]]; then
+        break
+      fi
+    fi
+
+    sleep 1
+  done
 
   if [[ -z "${workflow_name}" ]]; then
-    echo "No workflow available for event-path probe."
+    echo "No workflow available for event-path probe after waiting for bootstrap convergence."
     return 1
   fi
 

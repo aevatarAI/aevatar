@@ -10,17 +10,24 @@ namespace Aevatar.Workflow.Infrastructure.Workflows;
 public sealed class ActorWorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
 {
     private const string CatalogActorId = "workflow-definition-catalog";
+    private const string CatalogClientPublisherId = "workflow-definition-catalog-client";
     private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(5);
 
     private readonly IActorRuntime _runtime;
     private readonly RuntimeWorkflowQueryClient _queryClient;
+    private readonly IActorStateSnapshotReader? _snapshotReader;
+    private readonly IActorEnvelopeDispatcher? _envelopeDispatcher;
 
     public ActorWorkflowDefinitionCatalog(
         IActorRuntime runtime,
-        RuntimeWorkflowQueryClient queryClient)
+        RuntimeWorkflowQueryClient queryClient,
+        IActorStateSnapshotReader? snapshotReader = null,
+        IActorEnvelopeDispatcher? envelopeDispatcher = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
+        _snapshotReader = snapshotReader;
+        _envelopeDispatcher = envelopeDispatcher;
     }
 
     public async Task UpsertAsync(string name, string yaml, CancellationToken ct = default)
@@ -34,14 +41,19 @@ public sealed class ActorWorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             throw new ArgumentException("Workflow yaml is required.", nameof(yaml));
 
         var actor = await GetOrCreateCatalogActorAsync(ct);
-        await actor.HandleEventAsync(
-            CreateEnvelope(
-                new UpsertWorkflowDefinitionRequestedEvent
-                {
-                    WorkflowName = workflowName,
-                    WorkflowYaml = yaml,
-                }),
-            ct);
+        var envelope = CreateEnvelope(
+            new UpsertWorkflowDefinitionRequestedEvent
+            {
+                WorkflowName = workflowName,
+                WorkflowYaml = yaml,
+            });
+        if (_envelopeDispatcher != null)
+        {
+            await _envelopeDispatcher.DispatchAsync(actor.Id, envelope, ct);
+            return;
+        }
+
+        await actor.HandleEventAsync(envelope, ct);
     }
 
     public async Task<string?> GetYamlAsync(string name, CancellationToken ct = default)
@@ -51,6 +63,14 @@ public sealed class ActorWorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
         var workflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(name);
         if (string.IsNullOrWhiteSpace(workflowName))
             return null;
+
+        var state = await TryGetCatalogStateAsync(ct);
+        if (state != null)
+        {
+            return state.Entries.TryGetValue(workflowName, out var entry)
+                ? entry.WorkflowYaml
+                : null;
+        }
 
         var actor = await _runtime.GetAsync(CatalogActorId);
         if (actor == null)
@@ -78,6 +98,14 @@ public sealed class ActorWorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     {
         ct.ThrowIfCancellationRequested();
 
+        var state = await TryGetCatalogStateAsync(ct);
+        if (state != null)
+        {
+            return state.Entries.Keys
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
         var actor = await _runtime.GetAsync(CatalogActorId);
         if (actor == null)
             return [];
@@ -101,6 +129,14 @@ public sealed class ActorWorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             .ToList();
     }
 
+    private Task<WorkflowDefinitionCatalogState?> TryGetCatalogStateAsync(CancellationToken ct)
+    {
+        if (_snapshotReader == null)
+            return Task.FromResult<WorkflowDefinitionCatalogState?>(null);
+
+        return _snapshotReader.GetStateAsync<WorkflowDefinitionCatalogState>(CatalogActorId, ct);
+    }
+
     private async Task<IActor> GetOrCreateCatalogActorAsync(CancellationToken ct)
     {
         var existing = await _runtime.GetAsync(CatalogActorId);
@@ -116,8 +152,9 @@ public sealed class ActorWorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(message),
-            PublisherId = CatalogActorId,
-            Direction = EventDirection.Self,
+            PublisherId = CatalogClientPublisherId,
+            Direction = EventDirection.Down,
+            TargetActorId = CatalogActorId,
             CorrelationId = Guid.NewGuid().ToString("N"),
         };
 }
