@@ -21,10 +21,16 @@
 - registry 注册的 named workflow 必须绑定到规范 definition actor id：`workflow-definition:{workflow_name_lower}`。普通按 workflow name 启动会复用这个 definition actor，不再为每次 run 隐式生成不可达 definition actor。
 - inline workflow bundle 不走 registry，也不分配固定 definition actor id；只有在真正创建 run 时才按该次请求派生 definition actor。
 - `POST /api/chat` 会解析 workflow source，然后创建新的 run actor 执行。
-- source actor inspection 采用 runtime-neutral 的 type/state probing；本地运行时可直接读取实例，Orleans 通过 runtime probe 读取 agent type 和 state snapshot，不再依赖 `actor.Agent` 必然暴露真实 `WorkflowGAgent/WorkflowRunGAgent`。
+- source actor inspection 统一走 workflow 专用 `IWorkflowActorBindingReader`；command path 通过 actor-owned query/reply 读取 binding，不再依赖 `actor.Agent` 具体实例形状，也不再暴露 generic raw-state probing。
 - `/api/workflows/resume` 与 `/api/workflows/signal` 必须指向 run actor id，而不是 definition actor id。
 - run actor 的投影、实时输出、查询默认都以 run actor id 为作用域。
 - 显式传入的 definition actor id 是强约束：若该 actor 不存在，则按该 id 创建；若已存在且是 `WorkflowGAgent`，则原地复用或重绑；若已存在但不是 workflow definition actor，则直接失败，不再静默退化成新的隐藏 definition actor。
+
+补充口径：
+
+- workflow 主链路运行在 **stream-backed actor message runtime** 之上。
+- Host 输入会先规范化为应用命令模型，再被包装成 `EventEnvelope` 投递到目标 Actor。
+- Event Sourcing 的事实层仍然是 `WorkflowRunGAgent` / `WorkflowGAgent` 显式持久化的领域事件，而不是运行时 envelope 流本身。
 
 ## 分层关系
 
@@ -52,9 +58,9 @@ flowchart LR
 2. Application 通过 `WorkflowRunActorResolver` 解析 workflow source。
 3. Infrastructure 通过 `IWorkflowRunActorPort` 创建 definition actor 或复用 source binding，并创建新的 run actor。
 4. Application 为 run actor 建立 projection lease 与 live sink。
-5. `WorkflowRunExecutionEngine` 向 run actor 发送 `ChatRequestEvent`。
+5. `WorkflowRunExecutionEngine` 把 `ChatRequestEvent` 包进 `EventEnvelope`，投递到 run actor。
 6. `WorkflowRunGAgent` 在自己的事件管线中驱动 `StartWorkflowEvent -> StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`。
-7. Projection 与 AGUI 从同一条 run actor 事件流投影出查询模型和实时事件。
+7. Projection 与 AGUI 从同一条 run actor envelope 流投影出查询模型和实时事件。
 
 ## 状态边界
 

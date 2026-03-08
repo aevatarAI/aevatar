@@ -121,12 +121,17 @@ flowchart LR
 |---|---|---|
 | Agent | `IAgent` / `IAgent<TState>` | 业务逻辑单元，处理事件、维护状态 |
 | Actor | `IActor` | Agent 的运行容器，提供串行处理保证与父子层级关系 |
-| Runtime | `IActorRuntime` | Actor 生命周期与拓扑管理器（创建、销毁、链接、解链） |
-| Stream | `IStream` / `IStreamProvider` | 事件传播通道，支持方向路由（Self / Down / Up / Both） |
-| EventEnvelope | `EventEnvelope` (Proto) | 统一传输契约，包含 payload、publisher、direction、correlation 等元数据 |
+| Runtime | `IActorRuntime` | 构建在 stream 之上的 Actor 语义层，负责生命周期、寻址、邮箱串行与拓扑管理 |
+| Stream | `IStream` / `IStreamProvider` | `EventEnvelope` 的传播通道，支持方向路由（Self / Down / Up / Both） |
+| EventEnvelope | `EventEnvelope` (Proto) | 统一运行时消息包络，包含 payload、publisher、direction、correlation 等元数据 |
 | EventModule | `IEventModule` | 可插拔事件处理器，`CanHandle` 过滤 + `HandleAsync` 执行，按 `Priority` 排序 |
 
-主链路：所有业务事件先包入 `EventEnvelope.payload` → 按 `EventDirection` 路由到目标 Stream → `GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule` 合并后按优先级执行。
+主链路：外部输入先规范化为 command / request → 包入 `EventEnvelope.payload` → 按 `EventDirection` 路由到目标 Stream → `GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule` 合并后按优先级执行 → Actor 视情况显式持久化领域事件。
+
+边界澄清：
+
+1. `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的 `StateEvent`。
+2. Stream 是传输骨架，Runtime 是让这些 envelope 获得 Actor 语义的那一层。
 
 ---
 
@@ -553,7 +558,7 @@ AI Native App 开发者可在 SDK 请求中提交 `agent_profile`。该 profile 
 
 ## 7. CQRS 与投影管线
 
-系统遵循 CQRS 模式：`Command → Event`（写路径）、`Query → ReadModel`（读路径）。CQRS 读模型与 AGUI 实时推送共享同一套 Projection Pipeline，统一入口、一对多分发。
+系统遵循 CQRS 模式：`Application Command → EventEnvelope → Domain Event`（写路径）、`Query → ReadModel`（读路径）。CQRS 读模型与 AGUI 实时推送共享同一套 Projection Pipeline，统一入口、一对多分发。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -561,7 +566,7 @@ flowchart LR
     subgraph write_side ["写路径"]
         Cmd["Command (ChatRequest)"]
         WFAgent["WorkflowGAgent"]
-        Events["EventEnvelope Stream"]
+        Events["Actor Envelope Stream"]
     end
 
     subgraph projection ["Projection Pipeline"]
@@ -600,11 +605,11 @@ flowchart LR
 
 | 组件 | 职责 |
 |---|---|
-| `ProjectionCoordinator` | 接收 Actor 事件流，协调投影生命周期 |
+| `ProjectionCoordinator` | 接收 Actor envelope 流，协调投影生命周期 |
 | `ProjectionDispatcher` | 一对多分发，将事件分发到所有注册的 Projector |
 | `WorkflowExecutionReadModelProjector` | 将事件归约为 `WorkflowExecutionReport` 读模型 |
 | `WorkflowExecutionAGUIEventProjector` | 将事件转换为 AGUI 协议事件 |
-| `EventEnvelopeToAGUIEventMapper` | 事件映射器链，域事件 → AGUI 事件 |
+| `EventEnvelopeToAGUIEventMapper` | 事件映射器链，运行时 envelope → AGUI 事件 |
 | `IEventSink<WorkflowRunEvent>` | 实时事件通道，对接 SSE / WebSocket 端点 |
 
 读模型 Reducer 按事件类型精确路由（基于 `TypeUrl`）：
@@ -1040,7 +1045,7 @@ flowchart TB
 
 本节给出对现有设计的性能评审结论与重构后的目标架构。重构遵循三条红线：
 
-1. 保持 `Command -> Event` 与 `Query -> ReadModel` 的读写分离语义。
+1. 保持 `Application Command -> EventEnvelope -> Domain Event` 与 `Query -> ReadModel` 的读写分离语义。
 2. CQRS 与 AGUI 继续共享同一套 Projection Pipeline，不走双轨。
 3. 运行态事实状态继续由 Actor 持久态或分布式状态承载，不在中间层引入 `runId -> context` 进程内事实映射。
 
@@ -1090,7 +1095,7 @@ flowchart LR
     WF --> Connector["Connector Calls"]
     Connector --> Chrono["Chrono Platform Capabilities"]
     WF --> LLM["LLM Calls"]
-    WF --> Events["EventEnvelope Stream"]
+    WF --> Events["Actor Envelope Stream"]
 
     Events --> Kafka["Kafka Topic (key=RunId)"]
     Kafka --> Coord["ProjectionCoordinator"]
@@ -1386,7 +1391,7 @@ sequenceDiagram
 ### 11.1 对照结论（可作为沟通口径）
 
 - 对外叙事可类比为：`Aevatar Mainnet ~= Agent Execution Network`，`Chrono Platform ~= Oracle-like Capability Network`，`AI Native App ~= DApp`。
-- 对内实现必须坚持现有主链路：`Command -> Event -> Projection -> Push`，不引入平行执行体系。
+- 对内实现必须坚持现有主链路：`Application Command -> EventEnvelope -> Domain Event -> Projection -> Push`，不引入平行执行体系。
 - Mainnet 保持轻量 Agent Host，不承载高变能力细节；能力扩展默认下沉到 Chrono Platform。
 - SDK 的职责是“标准化接入与能力封装”，而不是在客户端重做编排引擎或维护事实状态。
 

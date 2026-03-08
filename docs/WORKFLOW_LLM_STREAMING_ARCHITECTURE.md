@@ -17,10 +17,15 @@
 ## 2. 架构约束（本链路必须满足）
 
 1. Host 只做协议适配与依赖组合，不承载业务状态机。
-2. `Command -> Event` 与 `Query -> ReadModel` 严格分离。
+2. `Application Command -> EventEnvelope -> Domain Event` 与 `Query -> ReadModel` 严格分离。
 3. CQRS 与 AGUI/SSE/WS 共享同一 Projection 输入链路，禁止双轨实现。
 4. 投影运行态通过 lease/session 显式句柄管理，禁止中间层 `actorId -> context` 事实态反查。
 5. 跨请求一致性事实必须落在 Actor 持久态/分布式状态，不依赖中间层进程内字典。
+
+补充口径：
+
+- 本文里的 `EventEnvelope` 是 runtime message envelope。
+- LLM streaming 链路消费的是 actor envelope 流；Event Sourcing 领域事件仍由 Actor 显式持久化。
 
 相关架构基线：
 
@@ -65,7 +70,7 @@ flowchart TB
     ENG --> FAC["WorkflowChatRequestEnvelopeFactory"]
     ENG --> EXE["IWorkflowRunRequestExecutor"]
     EXE --> ACT["WorkflowGAgent / RoleGAgent"]
-    ACT --> EVT["EventEnvelope Stream"]
+    ACT --> EVT["Actor Envelope Stream"]
     EVT --> COOR["ProjectionCoordinator"]
     COOR --> RM["WorkflowExecutionReadModelProjector"]
     COOR --> AGP["WorkflowExecutionAGUIEventProjector"]

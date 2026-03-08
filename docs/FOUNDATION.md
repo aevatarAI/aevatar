@@ -18,8 +18,8 @@ src/
 |---|---|---|
 | Agent | 业务逻辑单元，处理事件、维护状态 | `IAgent` / `IAgent<TState>` |
 | Actor | Agent 的运行容器，提供串行处理与层级关系 | `IActor` |
-| Runtime | Actor 生命周期与拓扑管理器 | `IActorRuntime` |
-| Stream | 事件传播通道 | `IStream` / `IStreamProvider` |
+| Runtime | 构建在 Stream 之上的 Actor 语义层，负责生命周期、寻址、邮箱串行与拓扑管理 | `IActorRuntime` |
+| Stream | `EventEnvelope` 的传输骨架与传播通道 | `IStream` / `IStreamProvider` |
 
 ## Aevatar.Foundation.Abstractions
 
@@ -35,19 +35,27 @@ src/
 
 `EventEnvelope` 保持最小语义字段（id、timestamp、payload、publisher、direction、correlation、target、metadata），路由传播细节放在运行时实现中。
 
+这里要明确一个经常被混淆的边界：
+
+- `EventEnvelope` 虽然名字叫 “Event”，但在 Foundation 语义上它是 **runtime message envelope**。
+- 它承载的是 Actor 之间通过 Stream 传递的入站/出站消息；payload 既可能是 command-like request、signal、reply、timeout fired，也可能是业务事件。
+- Event Sourcing 里的持久化事实是 `StateEvent` + `EventStore`，不是运行时消息流本身。
+
 ## 核心主链路（框架最关键理解）
 
 可以把框架主线理解为：
 
-1. **统一传输契约**：所有业务事件先被包进 `EventEnvelope.payload`，再进入运行时流。
-2. **统一路由执行**：`LocalActorPublisher` 按 `EventDirection`（`Self/Down/Up/Both`）路由到目标 Stream。
-3. **统一处理管线**：`GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule<IEventHandlerContext>` 合并后按优先级执行。
-4. **统一读侧投影**：同一条 `EventEnvelope` 可被投影为多个读模型（例如 AG-UI SSE 事件、运行报告、业务只读模型）。
+1. **统一消息传输契约**：外部 command、内部 signal、reply、timeout、业务事件等，都以 `EventEnvelope.payload` 形式进入 Actor 消息流。
+2. **Runtime 赋予 Actor 语义**：`IActorRuntime` / `IActor` 在 Stream 之上提供 Actor 创建、寻址、激活、邮箱串行和父子拓扑。
+3. **统一路由执行**：`LocalActorPublisher` 按 `EventDirection`（`Self/Down/Up/Both`）路由到目标 Stream，`GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule<IEventHandlerContext>` 合并后按优先级执行。
+4. **领域事实显式持久化**：有状态 Actor 只有在显式调用 `PersistDomainEventAsync(...)` / `PersistDomainEventsAsync(...)` 后，领域事件才进入 `EventStore` 成为事实源。
+5. **统一读侧投影**：同一条 Actor `EventEnvelope` 消息流可被投影为多个读模型（例如 AG-UI SSE 事件、运行报告、业务只读模型）。
 
 关键澄清：
 
 - 当前 AG-UI 主要是 **事件投影**，不是直接把 `State` 映射到前端。
 - `State` 是写侧运行态；读侧建议由投影生成独立只读模型（CQRS）。
+- Stream 上的 `EventEnvelope` 是运行时消息层；Event Sourcing 的 `StateEvent` 是事实层。两者有关联，但不是同一个概念。
 
 ## Aevatar.Foundation.Core
 
@@ -67,7 +75,7 @@ src/
 - 业务编排能力统一收敛到 workflow 主链路（`Aevatar.Workflow.Core` 的模块与 YAML）。
 - 需要顺序/并行/投票/分支等流程控制时，优先通过 workflow 模块组合实现，不在 Foundation 复刻第二套机制。
 
-### 统一事件 Pipeline
+### 统一消息 Pipeline
 
 Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
@@ -128,7 +136,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 2. 当前 Actor 先处理事件
 3. 按 `EventDirection` 转发到父/子节点
 
-这让路由逻辑和运行时实现解耦：Actor 可以专注于消费和传播，层级快照则交给 Store 管理。
+这让路由逻辑和运行时实现解耦：Actor 可以专注于消费和传播 envelope 消息，层级快照则交给 Store 管理。
 
 ## CQRS 与 Projection 落点
 
@@ -168,13 +176,14 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - 暴露 `/api/agents`、`/api/workflows`（运行查询按配置开关）
 - **输出分支**：
   - `WorkflowExecutionReadModelProjector` 写入 read model store
-  - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS），与 CQRS 读模型共享同一输入事件流
+  - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS），与 CQRS 读模型共享同一输入 envelope 流
 
 运行语义约束（当前实现）：
 
 - Stream 订阅粒度是 actor 级；run 输出分发粒度是 command/correlation 级。
 - `WorkflowExecutionAGUIEventProjector` 仅在 `EventEnvelope.CorrelationId` 非空时发布 run-event，并按 `workflow-run:{actorId}:{commandId}` 事件流路由。
 - `WorkflowExecutionReadModelProjector` 仅在 read model 发生实际变更时记录 `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
+- Projection 消费的是 Actor 运行时 envelope 流；EventStore 仍只用于写侧事实持久化与重放。
 - 编排层守卫：
   - `tools/ci/architecture_guards.sh` 强制关键编排类保持轻量（行数与依赖数上限），防止职责反弹。
 
@@ -209,7 +218,7 @@ var child = await runtime.CreateAsync<MyWorkerAgent>("child");
 await runtime.LinkAsync("parent", "child");
 ```
 
-### 3) 发布事件
+### 3) 发布消息 payload（运行时会包装为 `EventEnvelope`）
 
 ```csharp
 await ((GAgentBase)parent.Agent).EventPublisher

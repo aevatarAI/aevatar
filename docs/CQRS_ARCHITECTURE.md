@@ -4,7 +4,7 @@
 
 定义当前 CQRS 基线：
 
-1. 写侧：`Command -> Event`
+1. 写侧：`Application Command -> Actor Mailbox Message(EventEnvelope) -> Domain Event`
 2. 读侧：`Projection -> ReadModel -> Query`
 3. 插件：Maker 仅扩展 Workflow 模块，不新增第二套 CQRS 主链路
 
@@ -12,7 +12,7 @@
 
 1. Host 只做协议与组合，不做业务编排。
 2. 命令执行走 Application 服务，不引入额外命令总线壳层。
-3. 读写分离保持单一事实源：事件流 + 投影读模型。
+3. 读写分离保持单一事实源：`EventStore` 中的领域事件 + 投影读模型。
 4. 中间层禁止维护 actor/run/session 事实态内存映射。
 
 ## 3. 项目分层
@@ -32,11 +32,19 @@
 flowchart LR
     API["Host API"] --> APP["Application Service"]
     APP --> ACT["Actor/GAgent"]
-    ACT --> EVT["EventEnvelope Stream"]
+    ACT --> EVT["Actor Envelope Stream"]
+    ACT --> ES["EventStore"]
     EVT --> PROJ["Projection Pipeline"]
     PROJ --> RM["ReadModel"]
     RM --> Q["Query API / SSE / WS"]
 ```
+
+口径澄清：
+
+1. `EventEnvelope Stream` 是 runtime message stream，不是 Event Sourcing 的事实流。
+2. Command 进入 Application 后，会被包装成 `EventEnvelope` 投递到目标 Actor 邮箱。
+3. Actor 在自己的串行上下文里做决策，只有显式持久化的领域事件才进入 `EventStore`。
+4. Projection 当前消费的是 Actor envelope 流，并把其中有业务语义的 payload 映射为 read model 与实时输出。
 
 ## 5. 投影约束
 
@@ -95,8 +103,9 @@ flowchart LR
 ## 7. Runtime 口径
 
 1. 当前默认 `ActorRuntime:Provider=InMemory`（开发/测试）。
-2. 生产目标：分布式 Actor Runtime + 非 InMemory 持久化（state/event/read model）。
-3. 本口径下 `InMemory` 与 `Actor Local` 均不作为架构扣分项。
+2. `ActorRuntime` 不是额外的“第二套通道”，而是构建在 stream 之上的 Actor 语义层，负责寻址、激活、邮箱串行与拓扑。
+3. 生产目标：分布式 Actor Runtime + 非 InMemory 持久化（state/event/read model）。
+4. 本口径下 `InMemory` 与 `Actor Local` 均不作为架构扣分项。
 
 ## 8. 门禁与验证
 

@@ -19,6 +19,11 @@
   - workflow 主链路已经移除 `IActorStateProbe / ActorStateSnapshot` 一类 generic raw-state 依赖
   - 本文默认“不保留兼容层”，以读写边界清晰为第一目标
 
+补充口径：
+
+- workflow command path 运行在 stream-backed actor message runtime 上。
+- binding 读取修复的是 runtime message path 的边界问题，不改变 Event Sourcing 事实层的语义。
+
 ## 2. 问题定义
 
 本轮重构已经修复 “Orleans 下 existing actor inspection 失效” 与 “默认 workflow-name 启动隐式创建 definition actor” 两个生产问题，并进一步消除了当时暴露出来的长期架构风险：

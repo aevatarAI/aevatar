@@ -14,12 +14,17 @@
 
 | Endpoint | 协议 | 作用 |
 |---|---|---|
-| `POST /api/chat` | HTTP + SSE | 发起一次 run，并持续接收事件流 |
+| `POST /api/chat` | HTTP + SSE | 发起一次 run，并持续接收运行时 envelope 投影流 |
 | `GET /api/ws/chat` | WebSocket | 与 `/api/chat` 同能力，使用 WS 封装 |
 | `POST /api/workflows/resume` | HTTP JSON | 恢复 `human_input/human_approval` 挂起步骤 |
 | `POST /api/workflows/signal` | HTTP JSON | 向等待信号的步骤发送 signal |
 
 说明：`/api/chat` 与 `/api/ws/chat` 走同一套执行链路，差别只有传输协议。
+
+口径补充：
+
+- API 输入会先规范化为应用命令模型，再包装成 `EventEnvelope` 投递到目标 Actor。
+- 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 
 ## 2. 输入模型（chat）
 
@@ -76,7 +81,7 @@
 
 ## 4. Human Approval / Human Input 如何继续
 
-当 run 到 `human_input` 或 `human_approval`，事件流会发出 `HUMAN_INPUT_REQUEST`，包含：
+当 run 到 `human_input` 或 `human_approval`，运行时 envelope 投影流会发出 `HUMAN_INPUT_REQUEST`，包含：
 
 - `runId`
 - `stepId`

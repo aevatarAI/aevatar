@@ -51,7 +51,9 @@
 
 ## 运行语义
 
-- 运行时通过 `workflow-run:{actorId}:{commandId}` 事件流订阅输出，避免同 Actor 并发 run 串流。
+- API 输入先被规范化为 `WorkflowChatRunRequest` 等应用命令模型，再包装成 `EventEnvelope` 投递到目标 Actor。
+- 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
+- 运行时通过 `workflow-run:{actorId}:{commandId}` 会话流订阅输出，避免同 Actor 并发 run 串流。
 - 单次请求在终止事件（`RUN_FINISHED`/`RUN_ERROR`）后收尾。
 - 客户端可通过 `actorId` 查询对应 ReadModel 视图（`/api/actors/*`）。
 

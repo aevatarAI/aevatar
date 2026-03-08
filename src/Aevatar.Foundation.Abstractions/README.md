@@ -36,7 +36,7 @@ Aevatar.Foundation.Abstractions/
 ## 核心接口
 
 - `IAgent` / `IAgent<TState>`：生命周期、事件处理、订阅类型、强类型状态
-- `IActor`：Agent 包装容器，父子关系与事件分发入口
+- `IActor`：Agent 包装容器，父子关系与消息分发入口
 - `IActorRuntime`：Actor 创建、销毁、查询、链接
 - `IEventPublisher`：按方向发布或点对点发送事件
 - `IEnvelopePropagationPolicy` / `ICorrelationLinkPolicy`：基于 Raw `EventEnvelope` 的关联字段传播策略
@@ -53,6 +53,12 @@ Aevatar.Foundation.Abstractions/
 - `EventEnvelope`
 - `StateEvent`
 - 层级变更事件（`ParentChangedEvent`、`ChildAddedEvent`、`ChildRemovedEvent`）
+
+语义边界：
+
+- `EventEnvelope` 是 runtime message envelope，是 Actor 之间通过 stream 传递的统一包络。
+- `StateEvent` 是 Event Sourcing 的持久化事实记录。
+- 两者都叫 “event”，但不在同一层：前者服务 transport/runtime，后者服务事实持久化与 replay。
 
 ## 依赖
 

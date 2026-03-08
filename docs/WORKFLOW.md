@@ -35,6 +35,12 @@
 
 一句话：**硬编码 Agent 适合固定逻辑，工作流适合可编排、可调整、可复用的流程逻辑。**
 
+口径先说清楚：
+
+- workflow 运行主链路建立在 `EventEnvelope` 消息流之上。
+- `EventEnvelope` 在这里是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
+- `WorkflowRunGAgent` / `WorkflowGAgent` 只有在显式 `PersistDomainEventAsync(...)` 时，才把领域事实写入 EventStore。
+
 ---
 
 ## 二、核心概念
@@ -51,7 +57,7 @@
    - 一次 run 一个 actor
    - 按 `roles` 创建 run-scoped `RoleGAgent` 树
    - 通过依赖推导（`IWorkflowModuleDependencyExpander`）确定所需模块，经 `WorkflowModuleFactory` 创建并安装
-   - 收到 `ChatRequestEvent` 后发布 `StartWorkflowEvent`
+   - 收到 `ChatRequestEvent` envelope 后发布 `StartWorkflowEvent`
    - 由 `WorkflowExecutionKernel` 推进 `StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`
 
 ```
@@ -192,9 +198,9 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │     ├── WorkflowRunActorResolver: workflowYaml 优先；否则按 workflow 名查 registry；仅当 workflow/workflowYaml 同时为空时走默认 workflow（默认 direct，可配置为 auto）
   │     ├── WorkflowChatRunApplicationService: fallback 由白名单策略控制（workflow + exception type），direct 本身不再二次回退
   │     ├── WorkflowExecutionRunOrchestrator.StartAsync: 启动投影 run
-  │     └── WorkflowRunRequestExecutor: 投递 ChatRequestEvent
+  │     └── WorkflowRunRequestExecutor: 将 `ChatRequestEvent` 包装为 `EventEnvelope` 并投递到 run actor
   │
-  ├── WorkflowRunGAgent 收到 ChatRequestEvent
+  ├── WorkflowRunGAgent 收到 `ChatRequestEvent` envelope
   │     ├── EnsureAgentTreeAsync: 按 roles 创建子 RoleGAgent
   │     └── 发布 StartWorkflowEvent (EventDirection.Self)
   │
@@ -211,7 +217,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │     ├── 有下一步 → 再发 StepRequestEvent（循环）
   │     └── 无下一步 → 发布 WorkflowCompletedEvent
   │
-  ├── 事件进入统一 Projection Pipeline（一对多分发）
+  ├── run actor envelope 流进入统一 Projection Pipeline（一对多分发）
   │     ├── WorkflowExecutionReadModelProjector: reducer 链更新 ReadModel
   │     └── WorkflowExecutionAGUIEventProjector: 映射 AGUI 事件 → run event sink
   │

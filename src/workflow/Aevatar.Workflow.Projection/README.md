@@ -4,7 +4,12 @@ Workflow 领域的 CQRS 读侧实现。当前投影已经切到 run-isolated 语
 
 - Projection root 是 `WorkflowRunGAgent` actor id
 - `WorkflowExecutionReport.ProjectionScope = RunIsolated`
-- ReadModel / Graph / AGUI 都消费同一条 run actor 事件流
+- ReadModel / Graph / AGUI 都消费同一条 run actor envelope 流
+
+口径说明：
+
+- 这里消费的是 run actor 的 runtime message stream。
+- `EventEnvelope` 不是 Event Sourcing 的 `StateEvent`；Projection 当前面向的是运行时 envelope 主链路。
 
 ## 组成
 
@@ -20,7 +25,7 @@ Workflow 领域的 CQRS 读侧实现。当前投影已经切到 run-isolated 语
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-  ES["WorkflowRunGAgent Event Stream"]
+  ES["WorkflowRunGAgent Envelope Stream"]
   COOR["ProjectionCoordinator"]
   RM["WorkflowExecutionReadModelProjector"]
   AG["WorkflowExecutionAGUIEventProjector"]

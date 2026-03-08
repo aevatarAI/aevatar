@@ -4,14 +4,21 @@
 - 目标：统一 Aevatar 有状态 Actor 的写侧事实源，强制 `Command -> Domain Event -> Apply -> State`。
 - 适用范围：`Aevatar.Foundation.Core`、`Aevatar.Foundation.Runtime`、`Aevatar.Foundation.Runtime.Implementations.Local`、`Aevatar.Foundation.Runtime.Implementations.Orleans`。
 - 非目标：本文件不定义 ReadModel Provider 细节；统一要求与重构计划见 `docs/architecture/generic-event-sourcing-elasticsearch-readmodel-requirements.md`。
+- 非目标：本文件不定义 Actor `EventEnvelope` 消息流的 transport 细节；运行时 envelope 流不是 Event Sourcing 事实源。
 
 ## 2. 当前强制语义
-1. `EventStore` 是唯一业务事实源。
+1. `EventStore` / `StateEvent` 是唯一业务事实源。
 2. `GAgentBase<TState>` 不提供 `StateStore` 事实通道；恢复仅允许来自 EventStore Replay。
 3. 领域事件必须由开发者显式构建并持久化，不允许在线自动反推事件。
 4. 有状态 Actor 激活必须 Replay；停用必须 flush pending events。
 5. ES 行为构造走静态泛型路径，不走 Runtime 反射注入。
 6. 默认启用自动快照（可配置），并在快照成功后按版本裁剪历史事件流（可配置）。
+
+## 2.1 与 Runtime 消息流的边界
+1. Actor 之间通过 Stream 传递的是 `EventEnvelope`，这是 runtime message envelope。
+2. `EventEnvelope` 可以承载 command-like request、signal、reply、timeout fired 或业务事件 payload。
+3. 只有 Actor 在处理这些入站消息后显式调用 `PersistDomainEventAsync(...)` / `PersistDomainEventsAsync(...)` 持久化的领域事件，才会成为 `StateEvent` 并进入 `EventStore`。
+4. 因此，`EventEnvelope` 流与 `StateEvent` 流不是同一层：前者是 transport/runtime 层，后者是事实/event-sourcing 层。
 
 ## 3. 当前代码事实（权威路径）
 - ES 行为契约：`src/Aevatar.Foundation.Core/EventSourcing/IEventSourcingBehavior.cs`
@@ -36,7 +43,7 @@
 - `GAgentBase<TState>.ActivateAsync` 先调用 `base.ActivateAsync` 恢复模块。
 - 然后调用 `EnsureEventSourcingConfigured()`：
   - 若已设置 `EventSourcing`，直接使用。
-  - 若未设置，则通过 `Services.GetService(typeof(IEventStore))` 解析 `IEventStore`，并静态构造 `AgentBackedEventSourcingBehavior`（继承 `EventSourcingBehavior<TState>`）。
+  - 若未设置，则必须通过已绑定的 `IEventSourcingBehaviorFactory<TState>` 创建。
 - 最后执行 `ReplayAsync(actorId)`，以 Replay 结果恢复 `State`。
 
 ### 4.2 Deactivate
@@ -53,9 +60,10 @@
 
 ## 5. 开发者实现规范
 1. 命令处理代码必须显式构建领域事件：`RaiseEvent(domainEvent)`。
-2. 推荐直接使用 `PersistDomainEventAsync(...)` / `PersistDomainEventsAsync(...)` 完成“提交 + apply”。
-3. 必须保证“可重放同态”：`Replay` 后状态与在线运行状态一致。
-4. 推荐通过以下两种方式之一定义 `event -> state`：
+2. 即使命令入口是通过 `EventEnvelope` 抵达 Actor，也必须在 Actor 内显式构建并持久化领域事件。
+3. 推荐直接使用 `PersistDomainEventAsync(...)` / `PersistDomainEventsAsync(...)` 完成“提交 + apply”。
+4. 必须保证“可重放同态”：`Replay` 后状态与在线运行状态一致。
+5. 推荐通过以下两种方式之一定义 `event -> state`：
    - 在 Agent 中重写 `TransitionState`
    - 通过 DI 注册 `IStateEventApplier<TState>`（复杂领域推荐）
 
@@ -95,6 +103,7 @@ public async Task Handle(IncrementRequested evt)
 4. 事件裁剪只在“快照写入成功”后触发，避免清理后无快照可恢复。
 5. 裁剪执行为异步延迟任务，默认在 Actor 空闲停用阶段触发，不阻塞命令写入主路径。
 6. 裁剪后事件流版本号必须保持单调递增，后续 append 继续基于最新版本并发控制。
+7. Event Sourcing 快照只服务于 replay 优化，不等于 runtime 层任何 `EventEnvelope`/message snapshot 或 inspection 视图。
 
 ## 8. 明确禁止项
 1. 把 `TState` 本体当事件写入 `EventStore`。
