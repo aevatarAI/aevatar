@@ -129,6 +129,11 @@ public sealed class GarnetEventStore : IEventStore
         {
             var diagParts = string.Join(", ", result.Select(
                 (r, i) => $"result[{i}]={{raw={r}, type={r.Resp2Type}}}"));
+            var eventDump = string.Join("|", pendingEvents.Select(
+                (e, idx) => $"ev[{idx}]={{ver={e.Version},b64={Convert.ToBase64String(e.ToByteArray())}}}"));
+            _logger.LogError(
+                "Garnet Lua ARGV loss. agentId={AgentId} expectedVersion={ExpectedVersion} eventCount={EventCount} events={EventDump}",
+                agentId, expectedVersion, pendingEvents.Count, eventDump);
             throw new InvalidOperationException(
                 $"Garnet Lua ARGV loss: agentId={agentId}, expectedVersion={expectedVersion}, " +
                 $"argvCount={scriptArgs.Length}, rawResult=[{diagParts}]");
