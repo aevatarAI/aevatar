@@ -2,9 +2,9 @@
 
 ## 1. 文档元信息
 
-- 状态：Implemented
-- 版本：R1
-- 日期：2026-03-08
+- 状态：Implemented with Follow-up Hardening Planned
+- 版本：R2
+- 日期：2026-03-09
 - 目标分支：`refactor/workflow-run-actorized-state-boundary-20260308`
 - 适用范围：
   - `src/workflow/Aevatar.Workflow.Core`
@@ -33,6 +33,18 @@
 说明：
 
 - 下文第 6 节到第 8 节保留的是本轮重构启动前的基线分析，用于解释为何要做本次调整；这些段落不是当前实现现状。
+
+## 1.2 后续边界收敛（2026-03-09）
+
+本轮落地后，出现了一个需要继续收敛的边界问题：
+
+- 为修复 Orleans 下的 existing actor inspection，当前实现引入了 generic actor state probing。
+- 这条路径能解决当前 bug，但不是目标架构。
+- 下一阶段必须把 workflow binding 读取收敛成 workflow 专用窄契约，并从 workflow command path 移除 generic raw-state 依赖。
+
+后续计划见：
+
+- `docs/architecture/workflow-actor-binding-read-boundary-refactor-plan-2026-03-09.md`
 
 ## 2. 背景与关键决策（统一认知）
 

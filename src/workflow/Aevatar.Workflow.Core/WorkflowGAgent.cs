@@ -49,6 +49,10 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
     public Task HandleBindWorkflowDefinition(BindWorkflowDefinitionEvent request) =>
         BindWorkflowDefinitionAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls);
 
+    [EventHandler]
+    public Task HandleQueryWorkflowActorBindingRequested(QueryWorkflowActorBindingRequestedEvent request) =>
+        RespondWorkflowActorBindingAsync(request);
+
     public override Task<string> GetDescriptionAsync()
     {
         var status = State.Compiled ? "compiled" : "invalid";
@@ -162,6 +166,29 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             throw new InvalidOperationException(
                 $"WorkflowGAgent '{Id}' is already bound to workflow '{State.WorkflowName}' and cannot switch to '{workflowName}'.");
         }
+    }
+
+    private Task RespondWorkflowActorBindingAsync(
+        QueryWorkflowActorBindingRequestedEvent request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.RequestId) || string.IsNullOrWhiteSpace(request.ReplyStreamId))
+            return Task.CompletedTask;
+
+        var response = new WorkflowActorBindingRespondedEvent
+        {
+            RequestId = request.RequestId,
+            ActorId = Id,
+            ActorKind = "definition",
+            DefinitionActorId = Id,
+            WorkflowName = State.WorkflowName ?? string.Empty,
+            WorkflowYaml = State.WorkflowYaml ?? string.Empty,
+        };
+        foreach (var (key, value) in State.InlineWorkflowYamls)
+            response.InlineWorkflowYamls[key] = value;
+
+        return EventPublisher.SendToAsync(request.ReplyStreamId, response, ct, sourceEnvelope: null);
     }
 
     private readonly record struct WorkflowCompilationResult(bool Compiled, string CompilationError, WorkflowDefinition? Workflow)

@@ -44,6 +44,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WorkflowDirectFallbackPolicy>();
         services.AddSingleton<IWorkflowRunActorResolver>(sp =>
             new WorkflowRunActorResolver(
+                sp.GetRequiredService<IWorkflowActorBindingReader>(),
                 sp.GetRequiredService<IWorkflowRunActorPort>(),
                 sp.GetRequiredService<IWorkflowDefinitionRegistry>(),
                 sp.GetRequiredService<WorkflowRunBehaviorOptions>()));

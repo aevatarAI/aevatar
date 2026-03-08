@@ -19,10 +19,17 @@
 把所有输入统一折叠成可执行 binding：
 
 - `workflowYamls` 优先于 `workflow`
-- `workflow` 走 `IWorkflowDefinitionRegistry`
+- `workflow` 走 `IWorkflowDefinitionRegistry`，并解析出规范 definition actor id `workflow-definition:{workflow_name_lower}`
 - `actorId` 作为 definition source lookup
-- source actor 会先经 `DescribeAsync()` 解析成 `WorkflowActorBinding`
+- source actor 会先经 `IWorkflowActorBindingReader.GetAsync()` 解析成 `WorkflowActorBinding`
+- 若 source actor 是 run actor 且缺失 `DefinitionActorId`，resolver 会回落到 registry 中该 workflow 的规范 definition actor id
 - 真正执行永远落到新的 `WorkflowRunGAgent`
+
+额外约束：
+
+- registry-backed workflow 必须复用稳定 definition actor id，避免默认 workflow-name 启动路径不断堆积不可达 definition actor。
+- inline workflow bundle 不注册固定 definition actor id；其 definition 只对当前 run 创建过程负责。
+- resolver 只向 infrastructure 传递“权威 definition actor id”或空值，不再传递语义不明的占位空 id。
 
 ### WorkflowRunContextFactory
 
@@ -53,6 +60,7 @@
 - 不直接操作 `WorkflowRunState`
 - 不维护 `actorId -> context` 进程内事实映射
 - 所有读写都经 abstraction ports
+- 不从 Application 层猜测 definition actor 的匿名生命周期；registry 定义与 source actor binding 是唯一入口
 
 ## 主要目录
 

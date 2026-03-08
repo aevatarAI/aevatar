@@ -1,9 +1,12 @@
 using System.Diagnostics;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Runtime.Observability;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Runtime.Implementations.Local.TypeSystem;
+using Aevatar.Foundation.Runtime.Observability;
 using FluentAssertions;
+using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -148,7 +151,7 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent => throw new NotSupportedException();
 
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DestroyAsync(string id, CancellationToken ct = default) =>
@@ -214,8 +217,8 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
 
         public Task<string> GetDescriptionAsync() => Task.FromResult("recording-agent");
 
-        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() =>
-            Task.FromResult<IReadOnlyList<Type>>([]);
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
 
         public Task ActivateAsync(CancellationToken ct = default)
         {
@@ -228,5 +231,9 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class StatefulRecordingAgent : GAgentBase<StringValue>
+    {
     }
 }

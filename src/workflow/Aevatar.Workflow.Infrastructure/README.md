@@ -1,6 +1,6 @@
 # Aevatar.Workflow.Infrastructure
 
-工作流基础设施层。负责 IO、配置装配、Host 能力接线，以及 `IWorkflowRunActorPort` 的运行时适配。
+工作流基础设施层。负责 IO、配置装配、Host 能力接线，以及 workflow actor binding 查询和 `IWorkflowRunActorPort` 的运行时适配。
 
 ## 当前职责
 
@@ -14,20 +14,29 @@
 当前基础设施端口已经按 definition/run split 落地：
 
 - `CreateDefinitionAsync()` 创建 `WorkflowGAgent`
-- `DescribeAsync()` 读取 source actor binding，输出 `WorkflowActorBinding`
 - `CreateRunAsync(WorkflowDefinitionBinding)` 创建 `WorkflowRunGAgent`，并返回本次创建的 actor 集合用于失败回滚
-- `IsWorkflowDefinitionActorAsync()` / `IsWorkflowRunActorAsync()` 区分 actor 类型
+- `BindWorkflowDefinitionAsync()` 负责向 definition actor 发送权威绑定事件
+- `ParseWorkflowYamlAsync()` 负责入口 YAML 校验
 
 `CreateRunAsync()` 会把 definition snapshot 绑定到新的 run actor，而不是复用 source actor 直接执行；若 definition actor 由这次调用新建，也会一并纳入 rollback 元数据。
+
+当前实现约束：
+
+- source actor binding 读取统一通过 `IWorkflowActorBindingReader`。其基础设施实现 `RuntimeWorkflowActorBindingReader` 使用 workflow actor 自身的 query/reply 协议读取 binding，而不是读取 generic raw state payload；因此 Local / Orleans 共用同一套语义。
+- 对显式传入的 `DefinitionActorId`，端口采用强约束复用策略：
+  - actor 不存在：按该 id 创建新的 `WorkflowGAgent`
+  - actor 已存在且是 `WorkflowGAgent`：若 definition 已一致则直接复用，不一致则原地重绑
+  - actor 已存在但不是 `WorkflowGAgent`：立即失败
+- 只有 `DefinitionActorId` 为空时，端口才允许创建无固定 id 的 definition actor；这一路径只用于 inline/ad-hoc workflow，不用于 registry-backed named workflow。
 
 ## API 语义
 
 - `/api/chat`
   - 创建并驱动新的 run actor
 - `/api/workflows/resume`
-  - 仅接受 run actor id
+  - 通过 `IWorkflowActorBindingReader` 校验目标必须是 run actor
 - `/api/workflows/signal`
-  - 仅接受 run actor id
+  - 通过 `IWorkflowActorBindingReader` 校验目标必须是 run actor
 
 ## 目录
 

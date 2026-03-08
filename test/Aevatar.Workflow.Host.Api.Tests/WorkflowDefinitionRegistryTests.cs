@@ -18,6 +18,7 @@ public class WorkflowDefinitionRegistryTests
         registry.GetYaml("test").Should().Contain("name: test");
         registry.GetYaml("TEST").Should().NotBeNull(); // 不区分大小写
         registry.GetYaml("nonexistent").Should().BeNull();
+        registry.GetDefinition("test")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("test"));
     }
 
     [Fact]

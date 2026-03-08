@@ -2,13 +2,14 @@
 
 ## 1. 文档元信息
 
-- 状态：Implemented
-- 版本：R2
-- 日期：2026-03-08
+- 状态：R2 Implemented, R3 Planned
+- 版本：R3
+- 日期：2026-03-09
 - 目标分支：`refactor/workflow-run-actorized-state-boundary-20260308`
 - 关联文档：
   - `docs/architecture/workflow-run-actorized-state-boundary-blueprint-2026-03-08.md`
   - `docs/architecture/workflow-run-actorized-target-architecture-2026-03-08.md`
+  - `docs/architecture/workflow-actor-binding-read-boundary-refactor-plan-2026-03-09.md`
   - `docs/FOUNDATION.md`
   - `docs/WORKFLOW.md`
 - 文档定位：
@@ -30,6 +31,18 @@
 
 下文中早期出现的 `IWorkflowStepExecutor` 方案视为历史备选；如与本节冲突，以本节为准。
 
+## 1.2 R3 后续边界收敛决议
+
+R2 完成后，`workflow` 主链路里出现了一个不应固化为长期方案的抽象：`IActorStateProbe / ActorStateSnapshot`。
+
+R3 的明确决议如下：
+
+1. `Foundation` 不应向 workflow command path 暴露 generic actor raw-state 读取能力。
+2. workflow binding 读取必须是 workflow 专用窄契约，而不是 `actorId -> protobuf payload`。
+3. command path 读取当前权威 binding 时，应走 actor-owned workflow query/reply 协议。
+4. query/read 场景应由 projection/read model 提供 binding index。
+5. generic actor raw-state probe 已从 workflow 主链路和 Foundation runtime 注册面移除，不再保留为正式能力。
+
 ## 2. 问题定义
 
 当前代码已经完成 `run actor` 化，但抽象层次仍然混叠：
@@ -39,6 +52,7 @@
 3. 模块状态访问通过 `WorkflowRunModuleStateAccess -> ctx.Agent as IWorkflowRunModuleStateHost` 侧向注入。
 4. `WorkflowRunModuleStateUpsertedEvent` 仍以 `module_name + state_json` 表达状态写入。
 5. 状态作用域仍偏向 “module bucket”，而不是 “run -> step -> protobuf state”。
+6. tactical 修复路径引入了 generic actor state probing，给业务层留下了绕过 read side 直接读取 write-side 原始状态的可能。
 
 这会导致以下架构问题：
 
@@ -47,6 +61,7 @@
 - `IEventModule` 既像跨领域插件，又像 workflow 专用 step executor，语义不纯。
 - `module state json` 是存储导向接口，不是领域语义接口。
 - Protobuf 已经是主事件协议，但模块持久态仍残留 JSON。
+- workflow binding inspection 若继续依赖 generic raw-state read，会削弱 CQRS 和 actor 边界。
 
 ## 3. 重构目标
 
@@ -59,6 +74,7 @@
 5. 删除 `module_name + state_json` 模式，改为 `run -> step -> typed protobuf state`。
 6. `WorkflowLoopModule` 这类内核推进逻辑从模块体系退出，收敛到 workflow engine kernel。
 7. 新增 Actor 只按事实源边界，不按模块数量切分。
+8. workflow command path 不再依赖 Foundation generic actor raw-state read。
 
 ### 3.2 非目标
 
@@ -76,6 +92,7 @@
 5. 所有持久态、内部消息、状态快照统一采用 `Protobuf`。
 6. Workflow 内核负责推进，executor 负责单步语义，port 负责外部能力。
 7. 删除优于兼容，不保留双轨抽象。
+8. 读写边界优先于短期便捷性，禁止把 write-side 原始状态导出当成业务契约。
 
 ## 5. 目标分层
 

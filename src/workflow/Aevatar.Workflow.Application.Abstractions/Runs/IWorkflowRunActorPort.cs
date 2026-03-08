@@ -68,26 +68,24 @@ public sealed record WorkflowActorBinding(
 }
 
 /// <summary>
+/// Narrow read contract for resolving workflow actor bindings without exposing raw actor state.
+/// </summary>
+public interface IWorkflowActorBindingReader
+{
+    Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default);
+}
+
+/// <summary>
 /// Port for resolving workflow definition actors and creating workflow execution actors.
 /// Implemented by infrastructure to avoid Application depending on Workflow.Core.
 /// </summary>
 public interface IWorkflowRunActorPort
 {
-    Task<IActor?> GetAsync(string actorId, CancellationToken ct = default);
-
-    Task<WorkflowActorBinding> DescribeAsync(IActor actor, CancellationToken ct = default);
-
     Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default);
 
     Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default);
 
     Task DestroyAsync(string actorId, CancellationToken ct = default);
-
-    Task<bool> IsWorkflowDefinitionActorAsync(IActor actor, CancellationToken ct = default);
-
-    Task<bool> IsWorkflowRunActorAsync(IActor actor, CancellationToken ct = default);
-
-    Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default);
 
     Task BindWorkflowDefinitionAsync(
         IActor actor,

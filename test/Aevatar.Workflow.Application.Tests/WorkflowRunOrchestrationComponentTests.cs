@@ -397,12 +397,6 @@ public sealed class WorkflowRunOrchestrationComponentTests
         public List<string> DestroyedActorIds { get; } = [];
         public HashSet<string> FailDestroyIds { get; } = new(StringComparer.Ordinal);
 
-        public Task<IActor?> GetAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult<IActor?>(null);
-
-        public Task<WorkflowActorBinding> DescribeAsync(IActor actor, CancellationToken ct = default) =>
-            Task.FromResult(WorkflowActorBinding.Unsupported(actor.Id));
-
         public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
@@ -416,15 +410,6 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 throw new InvalidOperationException($"destroy failed: {actorId}");
             return Task.CompletedTask;
         }
-
-        public Task<bool> IsWorkflowDefinitionActorAsync(IActor actor, CancellationToken ct = default) =>
-            Task.FromResult(false);
-
-        public Task<bool> IsWorkflowRunActorAsync(IActor actor, CancellationToken ct = default) =>
-            Task.FromResult(false);
-
-        public Task<string?> GetBoundWorkflowNameAsync(IActor actor, CancellationToken ct = default) =>
-            Task.FromResult<string?>(null);
 
         public Task BindWorkflowDefinitionAsync(
             IActor actor,

@@ -28,6 +28,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
         var yaml = registry.GetYaml("direct");
         yaml.Should().NotBeNullOrWhiteSpace();
+        registry.GetDefinition("direct")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("direct"));
     }
 
     [Fact]
@@ -53,6 +54,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
         var yaml = registry.GetYaml("auto");
         yaml.Should().NotBeNullOrWhiteSpace();
+        registry.GetDefinition("auto")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("auto"));
         yaml.Should().Contain("name: auto");
         yaml.Should().Contain("dynamic_workflow");
         yaml!.IndexOf("- id: done", StringComparison.Ordinal)
@@ -82,6 +84,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
         var yaml = registry.GetYaml("auto_review");
         yaml.Should().NotBeNullOrWhiteSpace();
+        registry.GetDefinition("auto_review")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("auto_review"));
         yaml.Should().Contain("name: auto_review");
         yaml.Should().Contain("\"true\": done");
         yaml.Should().Contain("Approve to finalize YAML for manual run");

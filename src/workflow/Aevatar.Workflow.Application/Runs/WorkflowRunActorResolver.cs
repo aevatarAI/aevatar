@@ -6,17 +6,20 @@ namespace Aevatar.Workflow.Application.Runs;
 
 public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 {
+    private readonly IWorkflowActorBindingReader _bindingReader;
     private readonly IWorkflowRunActorPort _actorPort;
     private readonly IWorkflowDefinitionRegistry _workflowRegistry;
     private readonly WorkflowRunBehaviorOptions _behaviorOptions;
 
     public WorkflowRunActorResolver(
+        IWorkflowActorBindingReader bindingReader,
         IWorkflowRunActorPort actorPort,
         IWorkflowDefinitionRegistry workflowRegistry,
         WorkflowRunBehaviorOptions? behaviorOptions = null)
     {
-        _actorPort = actorPort;
-        _workflowRegistry = workflowRegistry;
+        _bindingReader = bindingReader ?? throw new ArgumentNullException(nameof(bindingReader));
+        _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _workflowRegistry = workflowRegistry ?? throw new ArgumentNullException(nameof(workflowRegistry));
         _behaviorOptions = behaviorOptions ?? new WorkflowRunBehaviorOptions();
     }
 
@@ -34,6 +37,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 ? requestedWorkflowName
                 : ResolveDefaultWorkflowName();
         var workflowYamlForRun = string.Empty;
+        WorkflowDefinitionRegistration? registryDefinitionForRun = null;
         IReadOnlyDictionary<string, string> inlineWorkflowYamlMapForRun =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -63,16 +67,16 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
         if (!hasInlineWorkflowYamls)
         {
-            var yaml = _workflowRegistry.GetYaml(workflowNameForRun);
-            if (yaml == null)
+            registryDefinitionForRun = _workflowRegistry.GetDefinition(workflowNameForRun);
+            if (registryDefinitionForRun == null)
                 return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.WorkflowNotFound);
 
-            workflowYamlForRun = yaml;
+            workflowYamlForRun = registryDefinitionForRun.WorkflowYaml;
         }
 
         var createdRun = await CreateRunActorAsync(
             new WorkflowDefinitionBinding(
-                string.Empty,
+                registryDefinitionForRun?.DefinitionActorId ?? string.Empty,
                 workflowNameForRun,
                 workflowYamlForRun,
                 inlineWorkflowYamlMapForRun),
@@ -96,17 +100,14 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         IReadOnlyDictionary<string, string> inlineWorkflowYamlMapForRun,
         CancellationToken ct)
     {
-        var sourceActor = await _actorPort.GetAsync(actorId, ct);
-        if (sourceActor == null)
+        var sourceBinding = await _bindingReader.GetAsync(actorId, ct);
+        if (sourceBinding == null)
             return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentNotFound);
 
-        var sourceBinding = await _actorPort.DescribeAsync(sourceActor, ct);
         if (!sourceBinding.IsWorkflowCapable)
             return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.AgentTypeNotSupported);
 
-        var boundWorkflowName = sourceBinding.HasWorkflowName
-            ? WorkflowRunNameNormalizer.NormalizeWorkflowName(sourceBinding.WorkflowName)
-            : WorkflowRunNameNormalizer.NormalizeWorkflowName(await _actorPort.GetBoundWorkflowNameAsync(sourceActor, ct));
+        var boundWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(sourceBinding.WorkflowName);
 
         if (hasInlineWorkflowYamls)
         {
@@ -151,7 +152,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 WorkflowChatRunStartError.WorkflowBindingMismatch);
         }
 
-        var workflowYamlFromSource = ResolveWorkflowYamlForExecution(boundWorkflowName, sourceBinding);
+        var registryDefinition = _workflowRegistry.GetDefinition(boundWorkflowName);
+        var workflowYamlFromSource = ResolveWorkflowYamlForExecution(boundWorkflowName, sourceBinding, registryDefinition);
         if (string.IsNullOrWhiteSpace(workflowYamlFromSource))
         {
             return new WorkflowActorResolutionResult(
@@ -162,7 +164,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
         var runActor = await CreateRunActorAsync(
             new WorkflowDefinitionBinding(
-                sourceBinding.EffectiveDefinitionActorId,
+                ResolveDefinitionActorIdForExecution(sourceBinding, registryDefinition),
                 boundWorkflowName,
                 workflowYamlFromSource,
                 sourceBinding.InlineWorkflowYamls),
@@ -250,12 +252,25 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
     private string ResolveWorkflowYamlForExecution(
         string workflowName,
-        WorkflowActorBinding sourceBinding)
+        WorkflowActorBinding sourceBinding,
+        WorkflowDefinitionRegistration? registryDefinition)
     {
         if (!string.IsNullOrWhiteSpace(sourceBinding.WorkflowYaml))
             return sourceBinding.WorkflowYaml;
 
-        return _workflowRegistry.GetYaml(workflowName) ?? string.Empty;
+        return registryDefinition?.WorkflowYaml
+               ?? _workflowRegistry.GetYaml(workflowName)
+               ?? string.Empty;
+    }
+
+    private static string ResolveDefinitionActorIdForExecution(
+        WorkflowActorBinding sourceBinding,
+        WorkflowDefinitionRegistration? registryDefinition)
+    {
+        if (!string.IsNullOrWhiteSpace(sourceBinding.EffectiveDefinitionActorId))
+            return sourceBinding.EffectiveDefinitionActorId;
+
+        return registryDefinition?.DefinitionActorId ?? string.Empty;
     }
 
     private readonly record struct InlineWorkflowBundle(

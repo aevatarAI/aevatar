@@ -3,11 +3,12 @@
 ## 1. 文档元信息
 
 - 状态：Implemented
-- 版本：R1
-- 日期：2026-03-08
+- 版本：R2
+- 日期：2026-03-09
 - 目标分支：`refactor/workflow-run-actorized-state-boundary-20260308`
 - 关联蓝图：
   - `docs/architecture/workflow-run-actorized-state-boundary-blueprint-2026-03-08.md`
+  - `docs/architecture/workflow-actor-binding-read-boundary-refactor-plan-2026-03-09.md`
 - 文档定位：
   - 本文描述 `workflow` 子系统本轮重构完成后的目标架构形态
   - 本文关注“最终职责边界与主链路”
@@ -88,6 +89,7 @@ flowchart TB
 
 职责：
 
+- 对 registry-backed named workflow 使用稳定 actor id：`workflow-definition:{workflow_name_lower}`
 - 绑定 `workflow_yaml`
 - 维护编译结果与版本
 - 维护 inline workflow definitions
@@ -106,6 +108,12 @@ flowchart TB
 - run 终态聚合事实
 
 definition actor 的状态只表达“定义事实”，不表达“执行事实”。
+
+Definition identity 规则：
+
+- registry 注册的 workflow name 必须映射到单一规范 definition actor id；默认按 workflow name 启动时必须复用该 actor。
+- inline/ad-hoc workflow 不注册稳定 definition actor id，可以在 run 创建时临时派生 definition actor。
+- 显式指定的 definition actor id 具有权威性：存在则复用或原地重绑，不存在则按该 id 创建；若该 id 已被非 `WorkflowGAgent` 占用则直接失败。
 
 ### 4.2 `WorkflowRunGAgent`：Run Actor
 
@@ -127,6 +135,8 @@ definition actor 的状态只表达“定义事实”，不表达“执行事实
 - 一个 run 一个权威状态对象
 - 所有业务推进只在 actor 事件处理中完成
 - 所有内部 callback 都转成内部事件后再由 actor 对账
+
+当 source actor 是 run actor 时，run actor 必须显式携带 `DefinitionActorId`；若历史状态缺失该字段，只允许应用层基于 registry 的 workflow-name -> canonical definition id 规则恢复，不允许在基础设施层静默新建匿名 definition actor。
 
 ### 4.3 `IEventModule`：Step Executor / Effect Adapter
 
@@ -245,6 +255,17 @@ definition actor 的状态只表达“定义事实”，不表达“执行事实
 - projection state 只保留 projection lifecycle facts
 - 中间层不保留事实态
 - `IEventModule` 不保留事实态
+
+### 5.5 Actor Inspection 规则
+
+source actor 的 workflow binding 识别必须是 runtime-neutral 的：
+
+- 不允许把 `actor.Agent` 必然是本地具体 `WorkflowGAgent/WorkflowRunGAgent` 当成唯一前提。
+- 但 runtime-neutral 不等于允许业务层读取 generic raw state payload。workflow binding 读取必须走 workflow 专用窄契约，而不是 Foundation 通用状态导出。
+- command path 若要求“当前权威 binding”，必须通过 actor-owned workflow query/reply 协议读取。
+- query / inspection / UI 场景优先通过 projection/read model 提供 binding index。
+- definition reuse 判定、`/api/workflows/resume`、`/api/workflows/signal` 都必须基于同一套 workflow 专用 binding contract，避免本地/Orleans 双轨行为分叉。
+- workflow 目标架构不允许向主链路暴露 generic actor raw-state 导出能力。
 
 ## 6. 事件模型
 

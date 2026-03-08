@@ -1,8 +1,6 @@
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Foundation.Abstractions.TypeSystem;
-using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
@@ -38,9 +36,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         var services = new ServiceCollection();
         services.AddSingleton<IWorkflowExecutionReportArtifactSink>(new FakeReportSink());
         services.AddLogging();
-        services.AddSingleton<IActorRuntime>(new FakeActorRuntime());
-        services.AddSingleton<IActorTypeProbe, RuntimeBackedActorTypeProbe>();
-        services.AddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
+        var runtime = new FakeActorRuntime();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IWorkflowActorBindingReader>(new RuntimeBackedWorkflowActorBindingReader(runtime));
         var registry = new WorkflowDefinitionRegistry();
         registry.Register("sub_flow", "name: sub_flow\nroles: []\nsteps: []\n");
         services.AddSingleton<IWorkflowDefinitionRegistry>(registry);
@@ -191,16 +189,12 @@ public sealed class WorkflowInfrastructureCoverageTests
         var runtime = new FakeActorRuntime();
         var port = CreatePort(runtime);
 
-        runtime.ActorToReturn = new StubActor("actor-1", new StubAgent("agent-1"));
-        var got = await port.GetAsync("actor-1", CancellationToken.None);
-        got.Should().NotBeNull();
-        runtime.GetCalls.Should().ContainSingle().Which.Should().Be("actor-1");
-
         runtime.ActorToCreate = new StubActor("definition-created", new StubAgent("agent-created"));
         var createdDefinition = await port.CreateDefinitionAsync(ct: CancellationToken.None);
         createdDefinition.Id.Should().Be("definition-created");
         runtime.LastGenericCreateType.Should().Be(typeof(WorkflowGAgent));
 
+        runtime.StoredActors["definition-created"] = new StubActor("definition-created", new WorkflowGAgent());
         var createdRunActor = new StubActor("run-created", new StubAgent("run-agent"));
         runtime.ActorToCreate = createdRunActor;
         var createdRun = await port.CreateRunAsync(
@@ -223,12 +217,6 @@ public sealed class WorkflowInfrastructureCoverageTests
         await port.DestroyAsync("actor-1", CancellationToken.None);
         runtime.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
 
-        var unknownActor = new StubActor("x", new StubAgent("a"));
-        (await port.IsWorkflowDefinitionActorAsync(unknownActor, CancellationToken.None)).Should().BeFalse();
-        (await port.IsWorkflowRunActorAsync(unknownActor, CancellationToken.None)).Should().BeFalse();
-        (await port.GetBoundWorkflowNameAsync(unknownActor, CancellationToken.None)).Should().BeNull();
-        (await port.DescribeAsync(unknownActor, CancellationToken.None)).ActorKind.Should().Be(WorkflowActorKind.Unsupported);
-
         var recordingActor = new StubActor("wf-actor", new StubAgent("wf-agent"));
         await port.BindWorkflowDefinitionAsync(recordingActor, "name: x", "x", null, CancellationToken.None);
         recordingActor.LastHandledEnvelope.Should().NotBeNull();
@@ -237,47 +225,36 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunActorPort_WhenRuntimeTypeMatches_ShouldRecognizeWorkflowAgent()
+    public async Task WorkflowRunActorPort_WhenBindingReaderIdentifiesDefinitionActor_ShouldReuseExistingDefinition()
     {
         var runtime = new FakeActorRuntime();
-        var port = CreatePort(runtime);
-        var actor = new StubActor(
-            "wf-actor",
-            new WorkflowGAgent());
-        runtime.ActorToReturn = actor;
+        var existingDefinition = new StubActor("wf-actor", new StubAgent("proxy"));
+        runtime.StoredActors["wf-actor"] = existingDefinition;
+        runtime.ActorToCreate = new StubActor("run-created", new StubAgent("run-agent"));
+        var port = CreatePort(
+            runtime,
+            new StaticWorkflowActorBindingReader(new Dictionary<string, WorkflowActorBinding?>
+            {
+                ["wf-actor"] = new WorkflowActorBinding(
+                    WorkflowActorKind.Definition,
+                    "wf-actor",
+                    "wf-actor",
+                    string.Empty,
+                    "direct",
+                    "name: direct\nroles: []\nsteps: []\n",
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            }));
 
-        (await port.IsWorkflowDefinitionActorAsync(actor, CancellationToken.None)).Should().BeTrue();
-        (await port.GetBoundWorkflowNameAsync(actor, CancellationToken.None)).Should().BeNull();
-        (await port.DescribeAsync(actor, CancellationToken.None)).ActorKind.Should().Be(WorkflowActorKind.Definition);
-    }
+        var result = await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "wf-actor",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
 
-    [Fact]
-    public async Task WorkflowRunActorPort_WhenRuntimeTypeMatchesRunActor_ShouldRecognizeWorkflowRunAgent()
-    {
-        var runtime = new FakeActorRuntime();
-        var port = CreatePort(runtime);
-        var actor = new StubActor(
-            "wf-run-actor",
-            new WorkflowRunGAgent(
-                runtime,
-                new FakeRoleAgentTypeResolver(),
-                new FakeStepExecutorFactory(),
-                [new WorkflowCoreModulePack()]));
-        runtime.ActorToReturn = actor;
-
-        (await port.IsWorkflowRunActorAsync(actor, CancellationToken.None)).Should().BeTrue();
-        (await port.DescribeAsync(actor, CancellationToken.None)).ActorKind.Should().Be(WorkflowActorKind.Run);
-    }
-
-    [Fact]
-    public async Task WorkflowRunActorPort_WhenRuntimeTypeLooksSimilar_ShouldRejectWorkflowAgentMatch()
-    {
-        var runtime = new FakeActorRuntime();
-        var port = CreatePort(runtime);
-        var actor = new StubActor("wf-actor", new StubAgent("wf-agent"));
-
-        (await port.IsWorkflowDefinitionActorAsync(actor, CancellationToken.None)).Should().BeFalse();
-        (await port.IsWorkflowRunActorAsync(actor, CancellationToken.None)).Should().BeFalse();
+        result.DefinitionActorId.Should().Be("wf-actor");
+        runtime.CreateRequests.Should().ContainSingle(x => x.AgentType == typeof(WorkflowRunGAgent));
     }
 
     [Fact]
@@ -424,11 +401,10 @@ public sealed class WorkflowInfrastructureCoverageTests
         options.DuplicatePolicy.Should().Be(WorkflowDefinitionDuplicatePolicy.Override);
     }
 
-    private static WorkflowRunActorPort CreatePort(FakeActorRuntime runtime)
-    {
-        var verifier = new DefaultAgentTypeVerifier(new RuntimeBackedActorTypeProbe(runtime));
-        return new WorkflowRunActorPort(runtime, verifier, [new WorkflowCoreModulePack()]);
-    }
+    private static WorkflowRunActorPort CreatePort(
+        FakeActorRuntime runtime,
+        IWorkflowActorBindingReader? bindingReader = null) =>
+        new(runtime, bindingReader ?? new RuntimeBackedWorkflowActorBindingReader(runtime), [new WorkflowCoreModulePack()]);
 
     private sealed class FakeReportSink : IWorkflowExecutionReportArtifactSink
     {
@@ -442,6 +418,7 @@ public sealed class WorkflowInfrastructureCoverageTests
 
     private sealed class FakeActorRuntime : IActorRuntime
     {
+        public Dictionary<string, IActor> StoredActors { get; } = new(StringComparer.Ordinal);
         public IActor? ActorToReturn { get; set; }
         public IActor? ActorToCreate { get; set; }
         public Type? LastGenericCreateType { get; private set; }
@@ -476,6 +453,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         public Task<IActor?> GetAsync(string id)
         {
             GetCalls.Add(id);
+            if (StoredActors.TryGetValue(id, out var actor))
+                return Task.FromResult<IActor?>(actor);
+
             return Task.FromResult(ActorToReturn);
         }
 
@@ -568,21 +548,59 @@ public sealed class WorkflowInfrastructureCoverageTests
         public IReadOnlyList<IWorkflowModuleConfigurator> Configurators { get; } = [];
     }
 
-    private sealed class RuntimeBackedActorTypeProbe : IActorTypeProbe
+    private sealed class RuntimeBackedWorkflowActorBindingReader : IWorkflowActorBindingReader
     {
         private readonly IActorRuntime _runtime;
 
-        public RuntimeBackedActorTypeProbe(IActorRuntime runtime)
+        public RuntimeBackedWorkflowActorBindingReader(IActorRuntime runtime)
         {
             _runtime = runtime;
         }
 
-        public async Task<string?> GetRuntimeAgentTypeNameAsync(string actorId, CancellationToken ct = default)
+        public async Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
         {
             _ = ct;
             var actor = await _runtime.GetAsync(actorId);
-            var runtimeType = actor?.Agent.GetType();
-            return runtimeType?.AssemblyQualifiedName ?? runtimeType?.FullName;
+            if (actor == null)
+                return null;
+
+            return actor.Agent switch
+            {
+                WorkflowGAgent definition => new WorkflowActorBinding(
+                    WorkflowActorKind.Definition,
+                    actor.Id,
+                    actor.Id,
+                    string.Empty,
+                    definition.State.WorkflowName ?? string.Empty,
+                    definition.State.WorkflowYaml ?? string.Empty,
+                    new Dictionary<string, string>(definition.State.InlineWorkflowYamls, StringComparer.OrdinalIgnoreCase)),
+                WorkflowRunGAgent run => new WorkflowActorBinding(
+                    WorkflowActorKind.Run,
+                    actor.Id,
+                    run.State.DefinitionActorId ?? string.Empty,
+                    run.State.RunId ?? string.Empty,
+                    run.State.WorkflowName ?? string.Empty,
+                    run.State.WorkflowYaml ?? string.Empty,
+                    new Dictionary<string, string>(run.State.InlineWorkflowYamls, StringComparer.OrdinalIgnoreCase)),
+                _ => WorkflowActorBinding.Unsupported(actor.Id),
+            };
+        }
+    }
+
+    private sealed class StaticWorkflowActorBindingReader : IWorkflowActorBindingReader
+    {
+        private readonly IReadOnlyDictionary<string, WorkflowActorBinding?> _bindings;
+
+        public StaticWorkflowActorBindingReader(IReadOnlyDictionary<string, WorkflowActorBinding?> bindings)
+        {
+            _bindings = bindings;
+        }
+
+        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = ct;
+            _bindings.TryGetValue(actorId, out var binding);
+            return Task.FromResult(binding);
         }
     }
 }

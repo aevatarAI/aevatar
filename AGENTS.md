@@ -23,6 +23,14 @@
 - 删除优于兼容：重构以清晰正确为第一目标；无业务价值或重复层应直接删除，不为历史包袱保留空壳。
 - 治理前置：架构规则必须可自动化验证（门禁、测试、文档一致性），避免依赖口头约定。
 
+## 复盘抽象（强制）
+- 运行时形态不是业务事实：不得把本地实例类型、代理类型、对象可见结构当成业务绑定依据；业务事实必须来自 actor-owned contract 或 read model。
+- 身份与事实必须分离：稳定 ID 只负责寻址与复用键，不承载可变业务事实；可变绑定必须显式建模、显式读取。
+- 读写边界不能混合：写侧端口只负责 lifecycle / command；读取必须走窄 query contract 或 projection，禁止在 Application / Infrastructure 直接读取 write-model 内部状态。
+- 默认路径必须先定义资源语义：任何“缺失即创建”的默认策略，都必须同时定义稳定归属、复用规则和清理责任；禁止生成不可达、不可复用、不可回收的隐式资源。
+- 本地可用不等于分布式正确：凡是依赖本地 runtime 偶然细节才能成立的实现，都视为未完成设计，必须收敛到 runtime-neutral 协议。
+- 抽象一旦能被滥用，就等于设计未完成：若某个通用接口允许绕过读写分离、绕过 actor 边界或绕过权威事实源，应继续收窄，而不是靠约定克制。
+
 ## Actor 化执行哲学（强制）
 - 单线程事实源：Actor/模块运行态只能在事件处理主线程修改；禁止在模块内使用 `lock/Monitor/ConcurrentDictionary` 作为并发补丁来维护事实状态。
 - 回调只发信号：`Task.Run`、`Timer`、线程池回调不得直接读写运行态，也不得直接推进业务分支；只能发布“内部触发事件”（如 timeout/retry fired）。
@@ -56,6 +64,7 @@
 - `dotnet build aevatar.slnx --nologo`：编译全部项目。
 - `dotnet test aevatar.slnx --nologo`：运行全量测试。
 - `bash tools/ci/architecture_guards.sh`：本地执行 CI 架构门禁（与 CI 同步）。
+- `bash tools/ci/workflow_binding_boundary_guard.sh`：单独执行 workflow binding 边界门禁。
 - `bash tools/ci/projection_route_mapping_guard.sh`：单独执行“事件类型 -> reducer 路由映射正确性”静态门禁。
 - `bash tools/ci/solution_split_guards.sh`：执行分片构建门禁（Foundation/AI/CQRS/Workflow/Hosting）。
 - `bash tools/ci/solution_split_test_guards.sh`：执行分片测试门禁（Foundation/CQRS/Workflow）。
@@ -77,6 +86,7 @@
 - 轮询等待门禁（`tools/ci/test_stability_guards.sh`）为强制项：测试中禁止随意引入 `Task.Delay(...)`/`WaitUntilAsync(...)`。
 - 若确属跨进程/跨节点最终一致性探测且无法改为确定性同步（如 `TaskCompletionSource`/`Channel`），必须将测试文件路径显式加入 `tools/ci/test_polling_allowlist.txt`，并在变更说明里写明原因。
 - 涉及测试新增/修改时，提交前必须执行：`bash tools/ci/test_stability_guards.sh`。
+- 涉及 workflow actor binding、definition identity、resume/signal 路径的变更时，提交前必须执行：`bash tools/ci/workflow_binding_boundary_guard.sh`。
 - CI 守卫（full-scan）：禁止 `GetAwaiter().GetResult()`；禁止 `TypeUrl.Contains(...)` 字符串路由；禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`；禁止中间层 `actor/entity/run/session` ID 映射 Dic 事实态字段（仅扫描 Projection/Application/Orchestration 中间层）；禁止投影端口回退到 `actorId` 反查上下文模型；要求新增非抽象 `Reducer` 类必须被测试引用；要求事件类型到 reducer 的路由采用 `TypeUrl` 派生 + 精确键路由（由 `tools/ci/projection_route_mapping_guard.sh` 专项校验，含 `EventTypeUrl` 分组与 `TryGetValue` 命中）。
 
 ## 提交与 PR 规范

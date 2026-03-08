@@ -8,7 +8,7 @@ namespace Aevatar.Workflow.Application.Workflows;
 /// </summary>
 public sealed class WorkflowDefinitionRegistry : IWorkflowDefinitionRegistry
 {
-    private readonly ConcurrentDictionary<string, string> _workflows = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, WorkflowDefinitionRegistration> _workflows = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Built-in direct workflow used for explicit direct runs and fallback recovery.
@@ -54,12 +54,34 @@ public sealed class WorkflowDefinitionRegistry : IWorkflowDefinitionRegistry
         approveTarget: "done",
         includeExecuteStep: false);
 
-    public void Register(string name, string yaml) => _workflows[name] = yaml;
+    public void Register(string name, string yaml)
+    {
+        var normalizedName = NormalizeName(name);
+        _workflows[normalizedName] = new WorkflowDefinitionRegistration(
+            normalizedName,
+            yaml,
+            WorkflowDefinitionActorId.Format(normalizedName));
+    }
+
+    public WorkflowDefinitionRegistration? GetDefinition(string name)
+    {
+        var normalizedName = NormalizeName(name);
+        return _workflows.GetValueOrDefault(normalizedName);
+    }
 
     public string? GetYaml(string name) =>
-        _workflows.GetValueOrDefault(name);
+        GetDefinition(name)?.WorkflowYaml;
 
-    public IReadOnlyList<string> GetNames() => _workflows.Keys.ToList();
+    public IReadOnlyList<string> GetNames() =>
+        _workflows.Keys.OrderBy(static x => x, StringComparer.OrdinalIgnoreCase).ToList();
+
+    private static string NormalizeName(string? workflowName)
+    {
+        if (string.IsNullOrWhiteSpace(workflowName))
+            throw new ArgumentException("Workflow name is required.", nameof(workflowName));
+
+        return workflowName.Trim();
+    }
 
     private static string BuildAutoWorkflowYaml(
         string workflowName,

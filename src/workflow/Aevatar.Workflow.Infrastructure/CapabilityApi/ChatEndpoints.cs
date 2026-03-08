@@ -243,12 +243,14 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task<IResult> HandleResume(
         WorkflowResumeInput input,
-        IWorkflowRunActorPort actorPort,
+        [FromServices] IActorRuntime runtime,
+        [FromServices] IWorkflowActorBindingReader bindingReader,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
         ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(actorPort);
+        ArgumentNullException.ThrowIfNull(runtime);
+        ArgumentNullException.ThrowIfNull(bindingReader);
 
         try
         {
@@ -263,14 +265,15 @@ public static class WorkflowCapabilityEndpoints
                 return Results.BadRequest(new { error = "actorId, runId and stepId are required." });
             }
 
-            var actor = await actorPort.GetAsync(actorId, ct);
+            var actor = await runtime.GetAsync(actorId);
             if (actor == null)
             {
                 scope.MarkResult(StatusCodes.Status404NotFound);
                 return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
             }
 
-            if (!await actorPort.IsWorkflowRunActorAsync(actor, ct))
+            var binding = await bindingReader.GetAsync(actorId, ct);
+            if (binding?.ActorKind != WorkflowActorKind.Run)
             {
                 scope.MarkResult(StatusCodes.Status400BadRequest);
                 return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow run actor." });
@@ -322,12 +325,14 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task<IResult> HandleSignal(
         WorkflowSignalInput input,
-        IWorkflowRunActorPort actorPort,
+        [FromServices] IActorRuntime runtime,
+        [FromServices] IWorkflowActorBindingReader bindingReader,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
         ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(actorPort);
+        ArgumentNullException.ThrowIfNull(runtime);
+        ArgumentNullException.ThrowIfNull(bindingReader);
 
         try
         {
@@ -342,14 +347,15 @@ public static class WorkflowCapabilityEndpoints
                 return Results.BadRequest(new { error = "actorId, runId and signalName are required." });
             }
 
-            var actor = await actorPort.GetAsync(actorId, ct);
+            var actor = await runtime.GetAsync(actorId);
             if (actor == null)
             {
                 scope.MarkResult(StatusCodes.Status404NotFound);
                 return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
             }
 
-            if (!await actorPort.IsWorkflowRunActorAsync(actor, ct))
+            var binding = await bindingReader.GetAsync(actorId, ct);
+            if (binding?.ActorKind != WorkflowActorKind.Run)
             {
                 scope.MarkResult(StatusCodes.Status400BadRequest);
                 return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow run actor." });
