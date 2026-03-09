@@ -112,6 +112,7 @@ public class ActorProjectionOwnershipCoordinatorTests
         runtime.SetActor(actorId, new RuntimeActor(actorId, new PlainTestAgent("agent-1")));
         var coordinator = new ActorProjectionOwnershipCoordinator(
             runtime,
+            runtime,
             new DefaultAgentTypeVerifier(new NullActorTypeProbe()));
 
         Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
@@ -126,7 +127,7 @@ public class ActorProjectionOwnershipCoordinatorTests
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         runtime.SetActor(actorId, new RuntimeActor(actorId, new ProjectionOwnershipCoordinatorGAgent()));
         var verifier = new DefaultAgentTypeVerifier(new NullActorTypeProbe());
-        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, verifier);
+        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, runtime, verifier);
 
         Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -138,7 +139,11 @@ public class ActorProjectionOwnershipCoordinatorTests
         ProjectionOwnershipCoordinatorOptions? options = null)
     {
         var verifier = new DefaultAgentTypeVerifier(new RuntimeActorTypeProbe(runtime));
-        return new ActorProjectionOwnershipCoordinator(runtime, verifier, options);
+        return new ActorProjectionOwnershipCoordinator(
+            runtime,
+            (IActorDispatchPort)runtime,
+            verifier,
+            options);
     }
 }
 
@@ -544,7 +549,7 @@ public class ProjectionSessionEventHubTests
     }
 }
 
-internal sealed class OwnershipCoordinatorRuntime : IActorRuntime
+internal sealed class OwnershipCoordinatorRuntime : IActorRuntime, IActorDispatchPort
 {
     private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RuntimeActor> _raceCreateActors = new(StringComparer.Ordinal);
@@ -590,6 +595,13 @@ internal sealed class OwnershipCoordinatorRuntime : IActorRuntime
     {
         _actors.TryGetValue(id, out var actor);
         return Task.FromResult(actor);
+    }
+
+    public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
+        await actor.HandleEventAsync(envelope, ct);
     }
 
     public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));

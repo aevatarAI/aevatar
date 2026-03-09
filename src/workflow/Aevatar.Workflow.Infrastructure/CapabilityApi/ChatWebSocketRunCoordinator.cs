@@ -1,5 +1,4 @@
 using System.Net.WebSockets;
-using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -9,7 +8,7 @@ internal static class ChatWebSocketRunCoordinator
     public static async Task ExecuteAsync(
         WebSocket socket,
         ChatWebSocketCommandEnvelope command,
-        ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        IWorkflowRunInteractionService chatRunService,
         ApiRequestScope scope,
         CancellationToken ct = default)
     {
@@ -38,7 +37,7 @@ internal static class ChatWebSocketRunCoordinator
         var executionResult = await chatRunService.ExecuteAsync(
             normalizedRequest.Request!,
             SendAguiEventAndRecordAsync,
-            onStartedAsync: SendAckAndRecordAsync,
+            onAcceptedAsync: SendAckAndRecordAsync,
             ct);
 
         if (executionResult.Error != WorkflowChatRunStartError.None)
@@ -57,8 +56,8 @@ internal static class ChatWebSocketRunCoordinator
             return;
         }
 
-        if (executionResult.Started != null)
-            correlationId = executionResult.Started.CommandId;
+        if (executionResult.Receipt != null)
+            correlationId = executionResult.Receipt.CorrelationId;
         return;
 
         async ValueTask SendAguiEventAndRecordAsync(WorkflowOutputFrame frame, CancellationToken token)
@@ -73,12 +72,12 @@ internal static class ChatWebSocketRunCoordinator
             scope.RecordFirstResponse();
         }
 
-        async ValueTask SendAckAndRecordAsync(WorkflowChatRunStarted started, CancellationToken token)
+        async ValueTask SendAckAndRecordAsync(WorkflowChatRunAcceptedReceipt receipt, CancellationToken token)
         {
-            correlationId = started.CommandId;
+            correlationId = receipt.CorrelationId;
             await ChatWebSocketProtocol.SendAsync(
                 socket,
-                ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, started),
+                ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, receipt),
                 token,
                 responseMessageType);
             scope.RecordFirstResponse();

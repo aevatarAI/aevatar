@@ -1,6 +1,6 @@
-using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Adapters;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
 
@@ -14,6 +14,7 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
         var policy = new WorkflowCommandContextPolicy();
 
         Action act = () => policy.Create(" ");
+
         act.Should().Throw<ArgumentException>();
     }
 
@@ -52,46 +53,88 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
     }
 
     [Fact]
-    public async Task WorkflowCommandExecutionServiceAdapter_ShouldBridgeInnerResult()
+    public void WorkflowRunAcceptedReceiptFactory_ShouldCreateReceiptFromTargetAndContext()
     {
-        var inner = new FakeWorkflowRunCommandService
-        {
-            Result = new WorkflowChatRunExecutionResult(
-                WorkflowChatRunStartError.None,
-                new WorkflowChatRunStarted("actor-1", "direct", "cmd-1"),
-                new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true)),
-        };
+        var projectionPort = new NoOpProjectionPort();
+        var actor = new FakeActor("actor-1");
+        var target = new WorkflowRunCommandTarget(
+            actor,
+            "direct",
+            createdActorIds: [],
+            projectionPort);
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>());
+        var factory = new WorkflowRunAcceptedReceiptFactory();
 
-        var adapter = new WorkflowCommandExecutionServiceAdapter(inner);
+        var receipt = factory.Create(target, context);
 
-        var result = await adapter.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", "actor-1"),
-            static (_, _) => ValueTask.CompletedTask,
-            onStartedAsync: static (_, _) => ValueTask.CompletedTask,
-            CancellationToken.None);
-
-        inner.ExecuteCalls.Should().Be(1);
-        result.Error.Should().Be(WorkflowChatRunStartError.None);
-        result.Started.Should().NotBeNull();
-        result.Started!.ActorId.Should().Be("actor-1");
-        result.FinalizeResult!.ProjectionCompleted.Should().BeTrue();
+        receipt.Should().Be(new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"));
     }
 
-    private sealed class FakeWorkflowRunCommandService : IWorkflowRunCommandService
+    private sealed class NoOpProjectionPort : IWorkflowExecutionProjectionLifecyclePort
     {
-        public WorkflowChatRunExecutionResult Result { get; set; } =
-            new(WorkflowChatRunStartError.None, null, null);
+        public bool ProjectionEnabled => true;
 
-        public int ExecuteCalls { get; private set; }
+        public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
+            string rootActorId,
+            string workflowName,
+            string input,
+            string commandId,
+            CancellationToken ct = default) =>
+            Task.FromResult<IWorkflowExecutionProjectionLease?>(null);
 
-        public Task<WorkflowChatRunExecutionResult> ExecuteAsync(
-            WorkflowChatRunRequest request,
-            Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
-            Func<WorkflowChatRunStarted, CancellationToken, ValueTask>? onStartedAsync = null,
-            CancellationToken ct = default)
+        public Task AttachLiveSinkAsync(
+            IWorkflowExecutionProjectionLease lease,
+            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEvent> sink,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task DetachLiveSinkAsync(
+            IWorkflowExecutionProjectionLease lease,
+            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEvent> sink,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task ReleaseActorProjectionAsync(
+            IWorkflowExecutionProjectionLease lease,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class FakeActor : IActor
+    {
+        public FakeActor(string id)
         {
-            ExecuteCalls++;
-            return Task.FromResult(Result);
+            Id = id;
+            Agent = new FakeAgent(id + "-agent");
         }
+
+        public string Id { get; }
+        public IAgent Agent { get; }
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class FakeAgent : IAgent
+    {
+        public FakeAgent(string id)
+        {
+            Id = id;
+        }
+
+        public string Id { get; }
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult("fake");
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 }

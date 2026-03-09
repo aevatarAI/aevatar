@@ -24,6 +24,7 @@ internal sealed class SubWorkflowOrchestrator
     private const string WorkflowCallParentStepIdMetadataKey = WorkflowCallMetadataPrefix + "parent_step_id";
 
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IWorkflowDefinitionResolver? _workflowDefinitionResolver;
     private readonly Func<IServiceProvider?> _serviceProviderAccessor;
     private readonly Func<string> _ownerActorIdAccessor;
@@ -35,6 +36,7 @@ internal sealed class SubWorkflowOrchestrator
 
     public SubWorkflowOrchestrator(
         IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
         IWorkflowDefinitionResolver? workflowDefinitionResolver,
         Func<IServiceProvider?> serviceProviderAccessor,
         Func<string> ownerActorIdAccessor,
@@ -45,6 +47,7 @@ internal sealed class SubWorkflowOrchestrator
         Func<string, IMessage, Task> sendToAsync)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _workflowDefinitionResolver = workflowDefinitionResolver;
         _serviceProviderAccessor = serviceProviderAccessor ?? throw new ArgumentNullException(nameof(serviceProviderAccessor));
         _ownerActorIdAccessor = ownerActorIdAccessor ?? throw new ArgumentNullException(nameof(ownerActorIdAccessor));
@@ -379,7 +382,10 @@ internal sealed class SubWorkflowOrchestrator
         var childActorId = BuildSubWorkflowActorId(workflowName, lifecycle);
         var childActor = await ResolveOrCreateWorkflowActorByIdAsync(childActorId);
         await _runtime.LinkAsync(_ownerActorIdAccessor(), childActor.Id);
-        await childActor.HandleEventAsync(CreateWorkflowRunBindEnvelope(workflowYaml, workflowName, childRunId, state));
+        await _dispatchPort.DispatchAsync(
+            childActor.Id,
+            CreateWorkflowRunBindEnvelope(workflowYaml, workflowName, childRunId, state),
+            ct);
 
         if (persistBinding)
         {

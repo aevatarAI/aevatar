@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
+        services.Replace(ServiceDescriptor.Singleton<IActorDispatchPort, OrleansActorDispatchPort>());
         services.TryAddSingleton<EventSourcingRuntimeOptions>();
         services.RemoveAll(typeof(IStateStore<>));
         services.RemoveAll(typeof(IEventSourcingSnapshotStore<>));

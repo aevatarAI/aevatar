@@ -163,6 +163,16 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
             return Task.FromResult(Actor);
         }
 
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            if (Actor == null)
+                throw new InvalidOperationException("Actor not configured.");
+
+            await Actor.HandleEventAsync(envelope, ct);
+        }
+
         public Task<bool> ExistsAsync(string id) => throw new NotSupportedException();
 
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>

@@ -218,18 +218,18 @@ sequenceDiagram
     participant User as "终端用户"
     participant App as "AI Native App"
     participant API as "Mainnet API"
-    participant AppSvc as "Application Service"
-    participant WFAgent as "WorkflowGAgent"
+    participant AppSvc as "WorkflowRunInteractionService"
+    participant WFAgent as "WorkflowRunGAgent"
     participant Role1 as "RoleGAgent:analyst"
     participant Role2 as "RoleGAgent:reviewer"
     participant LLM as "LLM Provider"
 
     User->>App: 发送对话请求
     App->>API: POST /api/chat (workflow_yaml + agent_profile + input + run_id?)
-    API->>AppSvc: 路由到 WorkflowChatRunApplicationService
+    API->>AppSvc: 路由到 CQRS dispatch pipeline
     AppSvc->>AppSvc: 解析 workflow_yaml + agent_profile（可兼容 workflow_name）
-    AppSvc->>WFAgent: 创建 / 激活 WorkflowGAgent
-    WFAgent->>WFAgent: BindWorkflowDefinition(workflow_yaml) → 编译/校验
+    AppSvc->>WFAgent: 通过 IActorRuntime 创建 / 激活 WorkflowRunGAgent
+    WFAgent->>WFAgent: BindWorkflowRunDefinition(workflow_yaml) → 编译/校验
     WFAgent->>Role1: 创建子 Actor (analyst)
     WFAgent->>Role2: 创建子 Actor (reviewer)
     WFAgent->>WFAgent: 发布 StartWorkflowEvent
@@ -1536,7 +1536,7 @@ Mainnet 的职责是将该 YAML 编译为可执行工作流，并按 `agent_prof
 sequenceDiagram
     participant AppSdk as "AI Native App SDK"
     participant MainnetApi as "Mainnet API"
-    participant AppService as "WorkflowChatRunApplicationService"
+    participant AppService as "WorkflowRunInteractionService"
     participant Resolver as "WorkflowRunActorResolver"
     participant WfAgent as "WorkflowGAgent"
     participant Chrono as "Chrono Platform"
@@ -1544,10 +1544,9 @@ sequenceDiagram
 
     AppSdk->>MainnetApi: CreateRun(workflow_yaml,agent_profile,input,run_id?)
     MainnetApi->>AppService: ExecuteAsync(request)
-    AppService->>AppService: ValidateYaml + ValidateAgentProfile
-    AppService->>AppService: ComputeWorkflowHash + ResolveAgentProfile
-    AppService->>Resolver: ResolveOrCreateActor(workflow_hash)
-    Resolver->>WfAgent: BindWorkflowDefinition(workflow_yaml) + StartRun
+    AppService->>AppService: Normalize + Validate input
+    AppService->>Resolver: Resolve command target + definition binding
+    Resolver->>WfAgent: BindWorkflowRunDefinition(workflow_yaml) + StartRun
     WfAgent->>Chrono: connector_call (storage/notification/...)
     Chrono-->>WfAgent: capability response
     WfAgent->>Projection: EmitDomainEvents

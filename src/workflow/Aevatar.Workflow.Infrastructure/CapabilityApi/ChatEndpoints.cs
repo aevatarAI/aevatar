@@ -53,7 +53,7 @@ public static class WorkflowCapabilityEndpoints
     internal static async Task HandleChat(
         HttpContext http,
         ChatInput input,
-        ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        IWorkflowRunInteractionService chatRunService,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
@@ -87,11 +87,11 @@ public static class WorkflowCapabilityEndpoints
                     await writer.WriteAsync(frame, token);
                     scope.RecordFirstResponse();
                 },
-                onStartedAsync: async (started, token) =>
+                onAcceptedAsync: async (receipt, token) =>
                 {
-                    CapabilityTraceContext.ApplyCorrelationHeader(http.Response, started.CommandId);
+                    CapabilityTraceContext.ApplyCorrelationHeader(http.Response, receipt.CorrelationId);
                     await writer.StartAsync(token);
-                    await writer.WriteAsync(BuildRunContextFrame(started), token);
+                    await writer.WriteAsync(BuildRunContextFrame(receipt), token);
                     scope.RecordFirstResponse();
                 },
                 ct);
@@ -128,14 +128,12 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task<IResult> HandleCommand(
         ChatInput input,
-        ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
-        var startSignal = new TaskCompletionSource<WorkflowChatRunStarted>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>> executionTask;
 
         if (string.IsNullOrWhiteSpace(input.Prompt))
         {
@@ -157,15 +155,23 @@ public static class WorkflowCapabilityEndpoints
 
         try
         {
-            executionTask = chatRunService.ExecuteAsync(
+            var dispatchResult = await chatRunService.DispatchAsync(
                 normalizedRequest.Request!,
-                static (_, _) => ValueTask.CompletedTask,
-                onStartedAsync: (started, _) =>
-                {
-                    startSignal.TrySetResult(started);
-                    return ValueTask.CompletedTask;
-                },
                 ct);
+
+            if (!dispatchResult.Succeeded || dispatchResult.Receipt == null)
+            {
+                var mappedError = ChatRunStartErrorMapper.ToCommandError(dispatchResult.Error);
+                var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(dispatchResult.Error);
+                scope.MarkResult(statusCode);
+                return Results.Json(
+                    new { code = mappedError.Code, message = mappedError.Message },
+                    statusCode: statusCode);
+            }
+
+            return Results.Accepted(
+                $"/api/actors/{dispatchResult.Receipt.ActorId}",
+                CapabilityTraceContext.CreateAcceptedPayload(dispatchResult.Receipt));
         }
         catch (OperationCanceledException)
         {
@@ -179,77 +185,19 @@ public static class WorkflowCapabilityEndpoints
                 new { code = "EXECUTION_FAILED", message = "Command execution failed." },
                 statusCode: StatusCodes.Status500InternalServerError);
         }
-
-        var completed = await Task.WhenAny(startSignal.Task, executionTask);
-
-        if (completed == startSignal.Task)
-        {
-            var started = await startSignal.Task;
-            _ = executionTask.ContinueWith(
-                t =>
-                {
-                    if (t.IsFaulted && t.Exception != null)
-                    {
-                        logger.LogWarning(t.Exception, "Background workflow command failed. commandId={CommandId}", started.CommandId);
-                    }
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-
-            return Results.Accepted(
-                $"/api/actors/{started.ActorId}",
-                CapabilityTraceContext.CreateAcceptedPayload(started));
-        }
-
-        CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> result;
-        try
-        {
-            result = await executionTask;
-        }
-        catch (OperationCanceledException)
-        {
-            return Results.StatusCode(499);
-        }
-        catch (Exception ex)
-        {
-            scope.MarkError();
-            logger.LogError(ex, "Workflow command execution failed before start signal");
-            return Results.Json(
-                new { code = "EXECUTION_FAILED", message = "Command execution failed." },
-                statusCode: StatusCodes.Status500InternalServerError);
-        }
-
-        if (result.Error != WorkflowChatRunStartError.None)
-        {
-            var mappedError = ChatRunStartErrorMapper.ToCommandError(result.Error);
-            var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
-            scope.MarkResult(statusCode);
-            return Results.Json(
-                new { code = mappedError.Code, message = mappedError.Message },
-                statusCode: statusCode);
-        }
-
-        if (result.Started != null)
-        {
-            return Results.Accepted(
-                $"/api/actors/{result.Started.ActorId}",
-                CapabilityTraceContext.CreateAcceptedPayload(result.Started));
-        }
-
-        scope.MarkError();
-        return Results.StatusCode(StatusCodes.Status500InternalServerError);
     }
 
     internal static async Task<IResult> HandleResume(
         WorkflowResumeInput input,
         [FromServices] IActorRuntime runtime,
+        [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] IWorkflowActorBindingReader bindingReader,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(runtime);
+        ArgumentNullException.ThrowIfNull(dispatchPort);
         ArgumentNullException.ThrowIfNull(bindingReader);
 
         try
@@ -296,16 +244,19 @@ public static class WorkflowCapabilityEndpoints
                 ? Guid.NewGuid().ToString("N")
                 : commandId;
 
-            await actor.HandleEventAsync(new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                Payload = Any.Pack(resumed),
-                PublisherId = "api.workflow.resume",
-                Direction = EventDirection.Self,
-                CorrelationId = correlationId,
-                TargetActorId = actor.Id,
-            }, ct);
+            await dispatchPort.DispatchAsync(
+                actor.Id,
+                new EventEnvelope
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Payload = Any.Pack(resumed),
+                    PublisherId = "api.workflow.resume",
+                    Direction = EventDirection.Self,
+                    CorrelationId = correlationId,
+                    TargetActorId = actor.Id,
+                },
+                ct);
 
             return Results.Ok(new
             {
@@ -326,12 +277,14 @@ public static class WorkflowCapabilityEndpoints
     internal static async Task<IResult> HandleSignal(
         WorkflowSignalInput input,
         [FromServices] IActorRuntime runtime,
+        [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] IWorkflowActorBindingReader bindingReader,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(runtime);
+        ArgumentNullException.ThrowIfNull(dispatchPort);
         ArgumentNullException.ThrowIfNull(bindingReader);
 
         try
@@ -366,21 +319,24 @@ public static class WorkflowCapabilityEndpoints
                 ? Guid.NewGuid().ToString("N")
                 : commandId;
 
-            await actor.HandleEventAsync(new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                Payload = Any.Pack(new SignalReceivedEvent
+            await dispatchPort.DispatchAsync(
+                actor.Id,
+                new EventEnvelope
                 {
-                    RunId = runId,
-                    SignalName = signalName,
-                    Payload = input.Payload ?? string.Empty,
-                }),
-                PublisherId = "api.workflow.signal",
-                Direction = EventDirection.Self,
-                CorrelationId = correlationId,
-                TargetActorId = actor.Id,
-            }, ct);
+                    Id = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Payload = Any.Pack(new SignalReceivedEvent
+                    {
+                        RunId = runId,
+                        SignalName = signalName,
+                        Payload = input.Payload ?? string.Empty,
+                    }),
+                    PublisherId = "api.workflow.signal",
+                    Direction = EventDirection.Self,
+                    CorrelationId = correlationId,
+                    TargetActorId = actor.Id,
+                },
+                ct);
 
             return Results.Ok(new
             {
@@ -398,7 +354,7 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
-    private static WorkflowOutputFrame BuildRunContextFrame(WorkflowChatRunStarted started) =>
+    private static WorkflowOutputFrame BuildRunContextFrame(WorkflowChatRunAcceptedReceipt receipt) =>
         new()
         {
             Type = WorkflowRunEventTypes.Custom,
@@ -406,9 +362,9 @@ public static class WorkflowCapabilityEndpoints
             Name = "aevatar.run.context",
             Value = new
             {
-                started.ActorId,
-                started.WorkflowName,
-                started.CommandId,
+                receipt.ActorId,
+                receipt.WorkflowName,
+                receipt.CommandId,
             },
         };
 
@@ -467,7 +423,7 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task HandleChatWebSocket(
         HttpContext http,
-        ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        IWorkflowRunInteractionService chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {

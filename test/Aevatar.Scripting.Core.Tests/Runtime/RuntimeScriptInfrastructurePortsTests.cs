@@ -20,7 +20,7 @@ public class RuntimeScriptInfrastructurePortsTests
     {
         var runtime = new TestActorRuntime();
         var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = new RuntimeScriptExecutionLifecycleService(runtime, accessor);
 
         var actorId = await service.SpawnRuntimeAsync(
             definitionActorId: "definition-1",
@@ -38,7 +38,7 @@ public class RuntimeScriptInfrastructurePortsTests
         var runtime = new TestActorRuntime();
         runtime.RegisterActor(new TestActor("runtime-existing"));
         var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = new RuntimeScriptExecutionLifecycleService(runtime, accessor);
 
         var actorId = await service.SpawnRuntimeAsync(
             definitionActorId: "definition-1",
@@ -55,7 +55,7 @@ public class RuntimeScriptInfrastructurePortsTests
     {
         var runtime = new TestActorRuntime();
         var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = new RuntimeScriptExecutionLifecycleService(runtime, accessor);
 
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: string.Empty,
@@ -74,7 +74,7 @@ public class RuntimeScriptInfrastructurePortsTests
     {
         var runtime = new TestActorRuntime();
         var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = new RuntimeScriptExecutionLifecycleService(runtime, accessor);
 
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: "runtime-1",
@@ -93,7 +93,7 @@ public class RuntimeScriptInfrastructurePortsTests
     {
         var runtime = new TestActorRuntime();
         var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = new RuntimeScriptExecutionLifecycleService(runtime, accessor);
 
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: "runtime-missing",
@@ -120,7 +120,7 @@ public class RuntimeScriptInfrastructurePortsTests
             return Task.CompletedTask;
         }));
         var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = new RuntimeScriptExecutionLifecycleService(runtime, accessor);
 
         await service.RunRuntimeAsync(
             runtimeActorId: "runtime-1",
@@ -373,6 +373,7 @@ public class RuntimeScriptInfrastructurePortsTests
             }),
         };
         var service = new RuntimeScriptCatalogLifecycleService(
+            runtime,
             new RuntimeScriptActorAccessor(runtime),
             new RuntimeScriptQueryClient(new InMemoryStreamProvider(), new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
@@ -408,6 +409,7 @@ public class RuntimeScriptInfrastructurePortsTests
             }),
         };
         var service = new RuntimeScriptCatalogLifecycleService(
+            runtime,
             new RuntimeScriptActorAccessor(runtime),
             new RuntimeScriptQueryClient(new InMemoryStreamProvider(), new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
@@ -726,6 +728,7 @@ public class RuntimeScriptInfrastructurePortsTests
             }));
 
         return new RuntimeScriptCatalogLifecycleService(
+            runtime,
             new RuntimeScriptActorAccessor(runtime),
             new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
@@ -772,7 +775,7 @@ public class RuntimeScriptInfrastructurePortsTests
             timeouts ?? new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(200) });
     }
 
-    private sealed class TestActorRuntime : IActorRuntime
+    private sealed class TestActorRuntime : IActorRuntime, IActorDispatchPort
     {
         private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
 
@@ -817,6 +820,13 @@ public class RuntimeScriptInfrastructurePortsTests
         {
             _actors.TryGetValue(id, out var actor);
             return Task.FromResult(actor);
+        }
+
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
+            await actor.HandleEventAsync(envelope, ct);
         }
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));

@@ -14,7 +14,7 @@ public class RuntimeGAgentRuntimePortInvocationTests
         var runtime = new FakeRuntime();
         var actor = new FakeActor("actor-1");
         runtime.Actor = actor;
-        var port = new RuntimeGAgentRuntimePort(runtime);
+        var port = new RuntimeGAgentRuntimePort(runtime, runtime);
 
         await port.InvokeAsync("actor-1", new StringValue { Value = "hello" }, "run-1", CancellationToken.None);
 
@@ -30,7 +30,7 @@ public class RuntimeGAgentRuntimePortInvocationTests
     public async Task InvokeAsync_ShouldThrow_WhenTargetActorNotFound()
     {
         var runtime = new FakeRuntime();
-        var port = new RuntimeGAgentRuntimePort(runtime);
+        var port = new RuntimeGAgentRuntimePort(runtime, runtime);
 
         var act = () => port.InvokeAsync("missing", new StringValue { Value = "x" }, "run-2", CancellationToken.None);
 
@@ -38,7 +38,7 @@ public class RuntimeGAgentRuntimePortInvocationTests
             .WithMessage("*Target GAgent not found*");
     }
 
-    private sealed class FakeRuntime : IActorRuntime
+    private sealed class FakeRuntime : IActorRuntime, IActorDispatchPort
     {
         public IActor? Actor { get; set; }
 
@@ -54,6 +54,13 @@ public class RuntimeGAgentRuntimePortInvocationTests
         public Task<IActor?> GetAsync(string id) =>
             Task.FromResult(Actor?.Id == id ? Actor : null);
 
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
+            await actor.HandleEventAsync(envelope, ct);
+        }
+
         public Task<bool> ExistsAsync(string id) =>
             Task.FromResult(Actor?.Id == id);
 
@@ -63,8 +70,6 @@ public class RuntimeGAgentRuntimePortInvocationTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
             Task.CompletedTask;
 
-        public Task RestoreAllAsync(CancellationToken ct = default) =>
-            Task.CompletedTask;
     }
 
     private sealed class FakeActor(string id) : IActor

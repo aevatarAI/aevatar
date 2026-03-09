@@ -194,11 +194,10 @@ steps:
 ```
 POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │
-  ├── WorkflowChatRunApplicationService.ExecuteAsync
-  │     ├── WorkflowRunActorResolver: workflowYaml 优先；否则按 workflow 名查 registry；仅当 workflow/workflowYaml 同时为空时走默认 workflow（默认 direct，可配置为 auto）
-  │     ├── WorkflowChatRunApplicationService: fallback 由白名单策略控制（workflow + exception type），direct 本身不再二次回退
-  │     ├── WorkflowExecutionRunOrchestrator.StartAsync: 启动投影 run
-  │     └── WorkflowRunRequestExecutor: 将 `ChatRequestEvent` 包装为 `EventEnvelope` 并投递到 run actor
+  ├── IWorkflowRunInteractionService.ExecuteAsync
+  │     ├── WorkflowRunCommandTargetResolver: workflowYaml 优先；否则按 workflow 名查 registry；仅当 workflow/workflowYaml 同时为空时走默认 workflow（默认 direct，可配置为 auto）
+  │     ├── WorkflowRunCommandTargetBinder: 建立 projection lease + live sink + accepted receipt
+  │     └── DefaultCommandDispatchPipeline / ActorCommandTargetDispatcher: 将 `ChatRequestEvent` 包装为 `EventEnvelope`，由 `IActorDispatchPort` 投递到 run actor；目标 actor 的获取/创建仍由 `IActorRuntime` 负责
   │
   ├── WorkflowRunGAgent 收到 `ChatRequestEvent` envelope
   │     ├── EnsureAgentTreeAsync: 按 roles 创建子 RoleGAgent
@@ -476,7 +475,7 @@ steps:
 | 4 | `src/workflow/Aevatar.Workflow.Core/Modules/ParallelFanOutModule.cs` | 并行：扇出/收集/合并/投票 |
 | 5 | `src/workflow/Aevatar.Workflow.Core/Modules/ConnectorCallModule.cs` | Connector：安全校验、重试、容错 |
 | 6 | `src/workflow/Aevatar.Workflow.Core/Composition/` | 模块装配策略：expander + configurator |
-| 7 | `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRunApplicationService.cs` | 应用层编排：start → execute → stream → finalize |
+| 7 | `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunInteractionService.cs` | 应用层交互编排：dispatch → stream → finalize |
 | 8 | `src/workflow/Aevatar.Workflow.Projection/` | 投影管线：reducer → ReadModel、AGUI 输出 |
 | 9 | `src/Aevatar.Foundation.Core/GAgentBase.cs` | 模块如何进入统一事件管线 |
 

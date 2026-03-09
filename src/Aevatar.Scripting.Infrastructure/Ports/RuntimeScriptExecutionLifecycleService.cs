@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Google.Protobuf.WellKnownTypes;
@@ -6,11 +7,15 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptExecutionLifecycleService
 {
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly RunScriptActorRequestAdapter _runScriptAdapter = new();
 
-    public RuntimeScriptExecutionLifecycleService(RuntimeScriptActorAccessor actorAccessor)
+    public RuntimeScriptExecutionLifecycleService(
+        IActorDispatchPort dispatchPort,
+        RuntimeScriptActorAccessor actorAccessor)
     {
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
     }
 
@@ -51,7 +56,8 @@ public sealed class RuntimeScriptExecutionLifecycleService
         var runtimeActor = await _actorAccessor.GetAsync(runtimeActorId)
             ?? throw new InvalidOperationException($"Script runtime actor not found: {runtimeActorId}");
 
-        await runtimeActor.HandleEventAsync(
+        await _dispatchPort.DispatchAsync(
+            runtimeActor.Id,
             _runScriptAdapter.Map(
                 new RunScriptActorRequest(
                     RunId: runId,

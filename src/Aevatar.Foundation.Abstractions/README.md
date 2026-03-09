@@ -18,6 +18,7 @@
 Aevatar.Foundation.Abstractions/
 ├── IAgent.cs
 ├── IActor.cs
+├── IActorDispatchPort.cs
 ├── IActorRuntime.cs
 ├── IEventPublisher.cs
 ├── IStream.cs
@@ -38,6 +39,7 @@ Aevatar.Foundation.Abstractions/
 - `IAgent` / `IAgent<TState>`：生命周期、事件处理、订阅类型、强类型状态
 - `IActor`：Agent 包装容器，父子关系与消息分发入口
 - `IActorRuntime`：Actor 创建、销毁、查询、链接
+- `IActorDispatchPort`：向目标 Actor 定向投递 `EventEnvelope`
 - `IEventPublisher`：按方向发布或点对点发送事件
 - `IEnvelopePropagationPolicy` / `ICorrelationLinkPolicy`：基于 Raw `EventEnvelope` 的关联字段传播策略
 - `IEventContext`：模块上下文的共性根接口

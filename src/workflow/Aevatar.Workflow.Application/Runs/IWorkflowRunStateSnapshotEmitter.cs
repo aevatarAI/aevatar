@@ -5,7 +5,7 @@ namespace Aevatar.Workflow.Application.Runs;
 public interface IWorkflowRunStateSnapshotEmitter
 {
     Task EmitAsync(
-        WorkflowRunContext runContext,
+        WorkflowChatRunAcceptedReceipt receipt,
         WorkflowProjectionCompletionStatus projectionCompletionStatus,
         bool projectionCompleted,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,

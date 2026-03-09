@@ -1,8 +1,9 @@
 # Aevatar.Foundation.Runtime.Implementations.Local
 
-`Aevatar.Foundation.Runtime.Implementations.Local` 提供 `IActorRuntime` 的本地进程内实现，负责：
+`Aevatar.Foundation.Runtime.Implementations.Local` 提供 `IActorRuntime` 与 `IActorDispatchPort` 的本地进程内实现，负责：
 
 - `LocalActorRuntime`：Actor 创建/销毁/按需物化（local activation index 驱动）。
+- `LocalActorDispatchPort`：向目标 Actor mailbox 定向投递 `EventEnvelope`。
 - `LocalActor`：单 Actor mailbox 串行执行与订阅管理。
 - `LocalActorPublisher`：按 `EventDirection` 做本地路由与转发。
 - `LocalActorTypeProbe`：本地运行时类型探测。

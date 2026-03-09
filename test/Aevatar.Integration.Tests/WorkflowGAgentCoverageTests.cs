@@ -639,7 +639,7 @@ public class WorkflowGAgentCoverageTests
         eventStore ??= new InMemoryEventStore();
 
         var services = BuildServices(eventStore, workflowResolver);
-        var agent = new WorkflowRunGAgent(runtime, roleResolver, eventModuleFactory, packs, workflowResolver)
+        var agent = new WorkflowRunGAgent(runtime, runtime, roleResolver, eventModuleFactory, packs, workflowResolver)
         {
             Services = services,
         };
@@ -754,7 +754,7 @@ public class WorkflowGAgentCoverageTests
         }
     }
 
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     {
         public int CreateCalls { get; private set; }
         public List<FakeActor> CreatedActors { get; } = [];
@@ -798,6 +798,14 @@ public class WorkflowGAgentCoverageTests
 
         public Task<IActor?> GetAsync(string id) =>
             Task.FromResult<IActor?>(CreatedActors.FirstOrDefault(x => x.Id == id));
+
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var actor = CreatedActors.FirstOrDefault(x => x.Id == actorId)
+                        ?? throw new InvalidOperationException($"Actor {actorId} not found.");
+            await actor.HandleEventAsync(envelope, ct);
+        }
 
         public Task<bool> ExistsAsync(string id) =>
             Task.FromResult(CreatedActors.Any(x => x.Id == id));

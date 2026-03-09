@@ -23,9 +23,9 @@
 
 口径补充：
 
-- API 输入会先规范化为应用命令模型，再走 CQRS 标准命令骨架：`target resolve -> command context -> envelope -> runtime dispatch -> accepted receipt`。
+- API 输入会先规范化为应用命令模型，再走 CQRS 标准命令骨架：`target resolve -> command context -> envelope -> dispatch port -> accepted receipt`。
 - Workflow capability 只提供 workflow 特有的目标解析、payload 映射与观察映射；命令生命周期契约属于 CQRS Core，而不是 workflow 私有协议。
-- 命令最终会被包装成 `EventEnvelope`，并通过 `IActorRuntime` 获取/创建目标 Actor 后投递。
+- 命令最终会被包装成 `EventEnvelope`；目标 Actor 的获取/创建由 `IActorRuntime` 负责，envelope 投递由 `IActorDispatchPort` 完成。
 - 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - 命令主链路不额外经过 ingress queue/stream；stream 保留给 actor envelope 的投影、实时输出与读侧观察。
 - `command.ack` / `accepted=true` 对外只应被解释为“系统接受了该次交互并返回追踪句柄”，不应被解释为领域事件已提交或 ReadModel 已可见。

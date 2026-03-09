@@ -45,18 +45,18 @@ internal static class ChatWebSocketEnvelopeFactory
 {
     public static ChatWebSocketCommandAckEnvelope CreateCommandAck(
         string requestId,
-        WorkflowChatRunStarted started)
+        WorkflowChatRunAcceptedReceipt receipt)
     {
-        ArgumentNullException.ThrowIfNull(started);
+        ArgumentNullException.ThrowIfNull(receipt);
         return new ChatWebSocketCommandAckEnvelope
         {
             RequestId = requestId,
-            CorrelationId = started.CommandId,
+            CorrelationId = receipt.CorrelationId,
             Payload = new ChatWebSocketCommandAckPayload
             {
-                CommandId = started.CommandId,
-                ActorId = started.ActorId,
-                Workflow = started.WorkflowName,
+                CommandId = receipt.CommandId,
+                ActorId = receipt.ActorId,
+                Workflow = receipt.WorkflowName,
             },
         };
     }

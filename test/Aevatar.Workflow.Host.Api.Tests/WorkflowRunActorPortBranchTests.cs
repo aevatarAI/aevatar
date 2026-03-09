@@ -231,10 +231,12 @@ public sealed class WorkflowRunActorPortBranchTests
     private static WorkflowRunActorPort CreatePort(
         RecordingActorRuntime runtime,
         IWorkflowActorBindingReader? bindingReader = null) =>
-        new(runtime, bindingReader ?? new RuntimeBackedWorkflowActorBindingReader(runtime), [new WorkflowCoreModulePack()]);
+        new(runtime, runtime, bindingReader ?? new RuntimeBackedWorkflowActorBindingReader(runtime), [new WorkflowCoreModulePack()]);
 
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     {
+        private IActor? _lastCreatedActor;
+
         public Dictionary<string, IActor> StoredActors { get; } = new(StringComparer.Ordinal);
 
         public Queue<IActor> ActorsToCreate { get; } = new();
@@ -252,9 +254,17 @@ public sealed class WorkflowRunActorPortBranchTests
             ct.ThrowIfCancellationRequested();
             CreateRequests.Add((agentType, id));
             if (ActorsToCreate.Count > 0)
-                return Task.FromResult(ActorsToCreate.Dequeue());
+            {
+                var createdActor = ActorsToCreate.Dequeue();
+                StoredActors[createdActor.Id] = createdActor;
+                _lastCreatedActor = createdActor;
+                return Task.FromResult(createdActor);
+            }
 
-            return Task.FromResult<IActor>(new RecordingActor(id ?? Guid.NewGuid().ToString("N"), new StubAgent("generated")));
+            var generatedActor = new RecordingActor(id ?? Guid.NewGuid().ToString("N"), new StubAgent("generated"));
+            StoredActors[generatedActor.Id] = generatedActor;
+            _lastCreatedActor = generatedActor;
+            return Task.FromResult<IActor>(generatedActor);
         }
 
         public Task DestroyAsync(string id, CancellationToken ct = default)
@@ -265,7 +275,19 @@ public sealed class WorkflowRunActorPortBranchTests
         }
 
         public Task<IActor?> GetAsync(string id) =>
-            Task.FromResult(StoredActors.TryGetValue(id, out var actor) ? actor : null);
+            Task.FromResult(
+                StoredActors.TryGetValue(id, out var actor)
+                    ? actor
+                    : _lastCreatedActor != null && string.Equals(_lastCreatedActor.Id, id, StringComparison.Ordinal)
+                        ? _lastCreatedActor
+                        : null);
+
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
+            await actor.HandleEventAsync(envelope, ct);
+        }
 
         public Task<bool> ExistsAsync(string id) =>
             Task.FromResult(StoredActors.ContainsKey(id));

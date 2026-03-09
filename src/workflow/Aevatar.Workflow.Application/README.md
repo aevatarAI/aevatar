@@ -1,22 +1,22 @@
 # Aevatar.Workflow.Application
 
-工作流应用层。负责 run 用例编排、projection lease 建立、live sink 挂接、输出泵送与查询门面，不直接持有 workflow 业务事实。
+工作流应用层。负责 workflow 命令目标解析、projection lease 建立、live sink 挂接、accepted receipt 生成、输出泵送与查询门面，不直接持有 workflow 业务事实。
 
 ## 关键职责
 
 - 解析请求来源：registry / inline bundle / source actor
-- 生成 `WorkflowDefinitionBinding`
+- 生成 `WorkflowRunCommandTarget`
 - 通过 `IWorkflowRunActorPort` 创建 definition actor 或 run actor
 - 为 run actor 建立 projection lifecycle 和 live sink
-- 发送 `ChatRequestEvent`
+- 生成 `WorkflowChatRunAcceptedReceipt`
 - 把 `WorkflowRunEvent` 映射成 `WorkflowOutputFrame`
 - 暴露读侧查询门面
 
 ## Run 主链路
 
-### WorkflowRunActorResolver
+### WorkflowRunCommandTargetResolver
 
-把所有输入统一折叠成可执行 binding：
+把所有输入统一折叠成可执行 target：
 
 - `workflowYamls` 优先于 `workflow`
 - `workflow` 走 `IWorkflowDefinitionRegistry`，并解析出规范 definition actor id `workflow-definition:{workflow_name_lower}`
@@ -31,20 +31,21 @@
 - inline workflow bundle 不注册固定 definition actor id；其 definition 只对当前 run 创建过程负责。
 - resolver 只向 infrastructure 传递“权威 definition actor id”或空值，不再传递语义不明的占位空 id。
 
-### WorkflowRunContextFactory
+### WorkflowRunCommandTargetBinder
 
 - 调用 resolver 拿到 run actor
 - 若 resolver 本次新建了 actor，而 projection 不可用或 attach 失败，负责回滚这些新建 actor
 - 为 run actor 创建 `CommandContext`
 - 创建 `EventChannel<WorkflowRunEvent>`
 - 通过 projection lifecycle port 建立 run-isolated projection lease
+- 产出供 CQRS Core 继续 dispatch 的 `CommandTargetBindingResult`
 
-### WorkflowRunExecutionEngine
+### WorkflowRunInteractionService / WorkflowRunDetachedDispatchService
 
-- 构造 `ChatRequestEvent` 信封
-- 将请求投递到 run actor
-- 消费 sink 并持续输出 `WorkflowOutputFrame`
-- 完成后补发 state snapshot，并统一清理 lease/sink
+- `WorkflowRunInteractionService` 走完整交互路径：驱动 dispatch pipeline、接收 accepted receipt、消费 sink 并持续输出 `WorkflowOutputFrame`
+- `WorkflowRunDetachedDispatchService` 走 accepted-only 路径：只返回 `Accepted + commandId + actorId`
+- 真正的 envelope 投递由 CQRS Core 的 `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 完成，`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑
+- 状态快照由 `WorkflowRunStateSnapshotEmitter` 统一在收尾阶段补发
 
 ## Query 语义
 
@@ -67,12 +68,13 @@
 ```
 Aevatar.Workflow.Application/
 ├── Runs/
-│   ├── WorkflowChatRunApplicationService.cs
+│   ├── WorkflowRunAcceptedReceiptFactory.cs
 │   ├── WorkflowRunActorResolver.cs
-│   ├── WorkflowRunContextFactory.cs
-│   ├── WorkflowRunExecutionEngine.cs
-│   ├── WorkflowRunRequestExecutor.cs
-│   ├── WorkflowRunOutputStreamer.cs
+│   ├── WorkflowRunCommandTarget.cs
+│   ├── WorkflowRunCommandTargetBinder.cs
+│   ├── WorkflowRunCommandTargetResolver.cs
+│   ├── WorkflowRunDetachedDispatchService.cs
+│   ├── WorkflowRunInteractionService.cs
 │   └── WorkflowRunStateSnapshotEmitter.cs
 ├── Queries/
 │   └── WorkflowExecutionQueryApplicationService.cs

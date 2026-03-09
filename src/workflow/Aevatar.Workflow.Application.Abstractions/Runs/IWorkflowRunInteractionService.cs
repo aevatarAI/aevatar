@@ -1,10 +1,10 @@
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
-public interface IWorkflowRunCommandService
+public interface IWorkflowRunInteractionService
 {
-    Task<WorkflowChatRunExecutionResult> ExecuteAsync(
+    Task<WorkflowChatRunInteractionResult> ExecuteAsync(
         WorkflowChatRunRequest request,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
-        Func<WorkflowChatRunStarted, CancellationToken, ValueTask>? onStartedAsync = null,
+        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
         CancellationToken ct = default);
 }

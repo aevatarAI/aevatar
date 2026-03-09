@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;

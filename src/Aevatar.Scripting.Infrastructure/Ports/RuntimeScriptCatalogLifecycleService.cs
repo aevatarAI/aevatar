@@ -9,6 +9,7 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptCatalogLifecycleService
 {
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly RuntimeScriptQueryClient _queryClient;
     private readonly IScriptingActorAddressResolver _addressResolver;
@@ -18,11 +19,13 @@ public sealed class RuntimeScriptCatalogLifecycleService
     private readonly QueryScriptCatalogEntryRequestAdapter _queryCatalogEntryAdapter = new();
 
     public RuntimeScriptCatalogLifecycleService(
+        IActorDispatchPort dispatchPort,
         RuntimeScriptActorAccessor actorAccessor,
         RuntimeScriptQueryClient queryClient,
         IScriptingActorAddressResolver addressResolver,
         IScriptingPortTimeouts timeouts)
     {
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
@@ -40,9 +43,10 @@ public sealed class RuntimeScriptCatalogLifecycleService
         string proposalId,
         CancellationToken ct)
     {
-        var (resolvedCatalogActorId, actor) = await ResolveAndGetOrCreateCatalogActorAsync(catalogActorId, ct);
+        var (resolvedCatalogActorId, _) = await ResolveAndGetOrCreateCatalogActorAsync(catalogActorId, ct);
 
-        await actor.HandleEventAsync(
+        await _dispatchPort.DispatchAsync(
+            resolvedCatalogActorId,
             _promoteRevisionAdapter.Map(
                 new PromoteScriptRevisionActorRequest(
                     ScriptId: scriptId ?? string.Empty,
@@ -64,9 +68,10 @@ public sealed class RuntimeScriptCatalogLifecycleService
         string expectedCurrentRevision,
         CancellationToken ct)
     {
-        var (resolvedCatalogActorId, actor) = await ResolveAndGetOrCreateCatalogActorAsync(catalogActorId, ct);
+        var (resolvedCatalogActorId, _) = await ResolveAndGetOrCreateCatalogActorAsync(catalogActorId, ct);
 
-        await actor.HandleEventAsync(
+        await _dispatchPort.DispatchAsync(
+            resolvedCatalogActorId,
             _rollbackRevisionAdapter.Map(
                 new RollbackScriptRevisionActorRequest(
                     ScriptId: scriptId ?? string.Empty,

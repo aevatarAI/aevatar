@@ -578,10 +578,12 @@ public class WorkflowExecutionProjectionServiceTests
             streams,
             runtimeProvider,
             streams);
+        var dispatchPort = new LocalActorDispatchPort(runtime);
         var runtimeTypeProbe = new RuntimeActorTypeProbe(runtime);
         var ownershipTypeVerifier = new DefaultAgentTypeVerifier(runtimeTypeProbe);
         var ownershipCoordinator = new ActorProjectionOwnershipCoordinator(
             runtime,
+            dispatchPort,
             ownershipTypeVerifier);
         runEventStreamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
             streams,

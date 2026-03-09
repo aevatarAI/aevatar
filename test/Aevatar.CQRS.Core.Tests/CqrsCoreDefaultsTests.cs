@@ -53,23 +53,104 @@ public class DefaultCommandContextPolicyTests
     }
 }
 
-public class DefaultCommandExecutorTests
+public class CommandDispatchPipelineTests
 {
     [Fact]
-    public async Task ExecuteAsync_ShouldDispatchEnvelopeBuiltByFactory()
+    public async Task DispatchAsync_ShouldResolveBindDispatchAndCreateReceipt()
     {
-        var expectedEnvelope = new EventEnvelope { Id = "evt-1" };
-        var factory = new FakeEnvelopeFactory(expectedEnvelope);
-        var actor = new FakeActor("actor-1");
-        var executor = new DefaultCommandExecutor<string>(factory);
-        var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
+        var target = new FakeCommandTarget("actor-1");
+        var resolver = new RecordingResolver(target);
+        var binder = new RecordingBinder();
+        var envelopeFactory = new RecordingEnvelopeFactory(new EventEnvelope { Id = "evt-1" });
+        var dispatcher = new RecordingTargetDispatcher();
+        var receiptFactory = new RecordingReceiptFactory("receipt-1");
+        var pipeline = new DefaultCommandDispatchPipeline<string, FakeCommandTarget, string, FakeError>(
+            resolver,
+            new DefaultCommandContextPolicy(),
+            binder,
+            envelopeFactory,
+            dispatcher,
+            receiptFactory);
 
-        await executor.ExecuteAsync(actor, "hello", context, CancellationToken.None);
+        var result = await pipeline.DispatchAsync("hello");
 
-        factory.Calls.Should().ContainSingle();
-        factory.Calls.Single().Command.Should().Be("hello");
-        factory.Calls.Single().Context.Should().Be(context);
-        actor.HandledEnvelopes.Should().ContainSingle().Which.Should().BeSameAs(expectedEnvelope);
+        result.Succeeded.Should().BeTrue();
+        result.Target.Should().NotBeNull();
+        result.Target!.Target.TargetId.Should().Be("actor-1");
+        result.Target.Context.TargetId.Should().Be("actor-1");
+        result.Target.Envelope.Id.Should().Be("evt-1");
+        result.Target.Receipt.Should().Be("receipt-1");
+        binder.Calls.Should().ContainSingle(x => x.Command == "hello" && x.Target == target);
+        dispatcher.Calls.Should().ContainSingle(x => x.Target == target && x.Envelope.Id == "evt-1");
+        receiptFactory.Calls.Should().ContainSingle(x => x.Target == target);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldCleanupTarget_WhenDispatcherFails()
+    {
+        var target = new FakeCommandTarget("actor-1");
+        var pipeline = new DefaultCommandDispatchPipeline<string, FakeCommandTarget, string, FakeError>(
+            new RecordingResolver(target),
+            new DefaultCommandContextPolicy(),
+            new RecordingBinder(),
+            new RecordingEnvelopeFactory(new EventEnvelope { Id = "evt-1" }),
+            new ThrowingTargetDispatcher(),
+            new RecordingReceiptFactory("unused"));
+
+        var act = () => pipeline.DispatchAsync("hello");
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        target.CleanupCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DispatchService_ShouldMapSuccessfulPipelineExecutionToReceipt()
+    {
+        var target = new FakeCommandTarget("actor-1");
+        var pipeline = new DefaultCommandDispatchPipeline<string, FakeCommandTarget, string, FakeError>(
+            new RecordingResolver(target),
+            new DefaultCommandContextPolicy(),
+            new RecordingBinder(),
+            new RecordingEnvelopeFactory(new EventEnvelope { Id = "evt-1" }),
+            new RecordingTargetDispatcher(),
+            new RecordingReceiptFactory("receipt-1"));
+        var service = new DefaultCommandDispatchService<string, FakeCommandTarget, string, FakeError>(pipeline);
+
+        var result = await service.DispatchAsync("hello");
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt.Should().Be("receipt-1");
+    }
+
+    [Fact]
+    public async Task NoOpTargetBinder_ShouldAlwaysSucceed()
+    {
+        var binder = new NoOpCommandTargetBinder<string, FakeCommandTarget, FakeError>();
+
+        var result = await binder.BindAsync(
+            "hello",
+            new FakeCommandTarget("actor-1"),
+            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+    }
+}
+
+public class ActorCommandTargetDispatcherTests
+{
+    [Fact]
+    public async Task DispatchAsync_ShouldUseActorRuntimeDispatch()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatcher = new ActorCommandTargetDispatcher<FakeActorCommandTarget>(runtime);
+        var target = new FakeActorCommandTarget("actor-1");
+        var envelope = new EventEnvelope { Id = "evt-1" };
+
+        await dispatcher.DispatchAsync(target, envelope, CancellationToken.None);
+
+        runtime.DispatchCalls.Should().ContainSingle()
+            .Which.Should().Be(("actor-1", envelope));
     }
 }
 
@@ -119,6 +200,8 @@ public class CqrsCoreServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<ICommandContextPolicy>().Should().BeOfType<DefaultCommandContextPolicy>();
         provider.GetRequiredService<IEventOutputStream<int, string>>().Should().BeOfType<DefaultEventOutputStream<int, string>>();
+        provider.GetRequiredService<ICommandTargetBinder<string, FakeCommandTarget, FakeError>>()
+            .Should().BeOfType<NoOpCommandTargetBinder<string, FakeCommandTarget, FakeError>>();
     }
 
     [Fact]
@@ -134,11 +217,75 @@ public class CqrsCoreServiceCollectionExtensionsTests
     }
 }
 
-internal sealed class FakeEnvelopeFactory : ICommandEnvelopeFactory<string>
+internal sealed class FakeCommandTarget : ICommandDispatchTarget, ICommandDispatchCleanupAware
+{
+    public FakeCommandTarget(string targetId)
+    {
+        TargetId = targetId;
+    }
+
+    public string TargetId { get; }
+    public int CleanupCalls { get; private set; }
+
+    public Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default)
+    {
+        CleanupCalls++;
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class FakeActorCommandTarget : IActorCommandDispatchTarget
+{
+    public FakeActorCommandTarget(string targetId)
+    {
+        TargetId = targetId;
+        Actor = new FakeActor(targetId);
+    }
+
+    public string TargetId { get; }
+    public IActor Actor { get; }
+}
+
+internal sealed class RecordingResolver : ICommandTargetResolver<string, FakeCommandTarget, FakeError>
+{
+    private readonly FakeCommandTarget _target;
+
+    public RecordingResolver(FakeCommandTarget target)
+    {
+        _target = target;
+    }
+
+    public Task<CommandTargetResolution<FakeCommandTarget, FakeError>> ResolveAsync(
+        string command,
+        CancellationToken ct = default)
+    {
+        _ = command;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(CommandTargetResolution<FakeCommandTarget, FakeError>.Success(_target));
+    }
+}
+
+internal sealed class RecordingBinder : ICommandTargetBinder<string, FakeCommandTarget, FakeError>
+{
+    public List<(string Command, FakeCommandTarget Target, CommandContext Context)> Calls { get; } = [];
+
+    public Task<CommandTargetBindingResult<FakeError>> BindAsync(
+        string command,
+        FakeCommandTarget target,
+        CommandContext context,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        Calls.Add((command, target, context));
+        return Task.FromResult(CommandTargetBindingResult<FakeError>.Success());
+    }
+}
+
+internal sealed class RecordingEnvelopeFactory : ICommandEnvelopeFactory<string>
 {
     private readonly EventEnvelope _envelope;
 
-    public FakeEnvelopeFactory(EventEnvelope envelope)
+    public RecordingEnvelopeFactory(EventEnvelope envelope)
     {
         _envelope = envelope;
     }
@@ -152,6 +299,80 @@ internal sealed class FakeEnvelopeFactory : ICommandEnvelopeFactory<string>
     }
 }
 
+internal sealed class RecordingTargetDispatcher : ICommandTargetDispatcher<FakeCommandTarget>
+{
+    public List<(FakeCommandTarget Target, EventEnvelope Envelope)> Calls { get; } = [];
+
+    public Task DispatchAsync(FakeCommandTarget target, EventEnvelope envelope, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        Calls.Add((target, envelope));
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class ThrowingTargetDispatcher : ICommandTargetDispatcher<FakeCommandTarget>
+{
+    public Task DispatchAsync(FakeCommandTarget target, EventEnvelope envelope, CancellationToken ct = default)
+    {
+        _ = target;
+        _ = envelope;
+        ct.ThrowIfCancellationRequested();
+        throw new InvalidOperationException("dispatch failed");
+    }
+}
+
+internal sealed class RecordingReceiptFactory : ICommandReceiptFactory<FakeCommandTarget, string>
+{
+    private readonly string _receipt;
+
+    public RecordingReceiptFactory(string receipt)
+    {
+        _receipt = receipt;
+    }
+
+    public List<(FakeCommandTarget Target, CommandContext Context)> Calls { get; } = [];
+
+    public string Create(FakeCommandTarget target, CommandContext context)
+    {
+        Calls.Add((target, context));
+        return _receipt;
+    }
+}
+
+internal sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
+{
+    public List<(string ActorId, EventEnvelope Envelope)> DispatchCalls { get; } = [];
+
+    public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
+        throw new NotSupportedException();
+
+    public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    public Task DestroyAsync(string id, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    public Task<IActor?> GetAsync(string id) =>
+        throw new NotSupportedException();
+
+    public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        DispatchCalls.Add((actorId, envelope));
+        return Task.CompletedTask;
+    }
+
+    public Task<bool> ExistsAsync(string id) =>
+        throw new NotSupportedException();
+
+    public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+}
+
 internal sealed class FakeActor : IActor
 {
     public FakeActor(string id)
@@ -162,16 +383,10 @@ internal sealed class FakeActor : IActor
 
     public string Id { get; }
     public IAgent Agent { get; }
-    public List<EventEnvelope> HandledEnvelopes { get; } = [];
 
     public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-    public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
-    {
-        HandledEnvelopes.Add(envelope);
-        return Task.CompletedTask;
-    }
-
+    public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
     public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
     public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
 }
@@ -213,4 +428,10 @@ internal sealed class CustomCommandContextPolicy : ICommandContextPolicy
     {
         return new CommandContext(targetId, "custom-cmd", "custom-corr", metadata ?? new Dictionary<string, string>());
     }
+}
+
+internal enum FakeError
+{
+    None = 0,
+    Failed = 1,
 }

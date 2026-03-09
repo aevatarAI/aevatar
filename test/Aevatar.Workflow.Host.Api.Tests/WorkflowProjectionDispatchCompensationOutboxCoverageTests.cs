@@ -17,7 +17,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         var runtime = new RecordingActorRuntime();
         runtime.EnqueueGetResult(actor);
         var verifier = new RecordingAgentTypeVerifier { Result = true };
-        var outbox = new ActorProjectionDispatchCompensationOutbox(runtime, verifier);
+        var outbox = new ActorProjectionDispatchCompensationOutbox(runtime, runtime, verifier);
         var evt = new ProjectionCompensationEnqueuedEvent
         {
             RecordId = "record-1",
@@ -54,7 +54,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         };
         runtime.EnqueueGetResult(null);
         var verifier = new RecordingAgentTypeVerifier { Result = true };
-        var outbox = new ActorProjectionDispatchCompensationOutbox(runtime, verifier);
+        var outbox = new ActorProjectionDispatchCompensationOutbox(runtime, runtime, verifier);
 
         await outbox.TriggerReplayAsync(17);
 
@@ -79,6 +79,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
 
         var outbox = new ActorProjectionDispatchCompensationOutbox(
             runtime,
+            runtime,
             new RecordingAgentTypeVerifier { Result = true });
 
         await outbox.TriggerReplayAsync(9);
@@ -95,6 +96,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         var runtime = new RecordingActorRuntime();
         runtime.EnqueueGetResult(actor);
         var outbox = new ActorProjectionDispatchCompensationOutbox(
+            runtime,
             runtime,
             new RecordingAgentTypeVerifier { Result = false });
 
@@ -116,6 +118,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         runtime.EnqueueGetResult(null);
         var outbox = new ActorProjectionDispatchCompensationOutbox(
             runtime,
+            runtime,
             new RecordingAgentTypeVerifier { Result = true });
 
         Func<Task> act = () => outbox.TriggerReplayAsync(3);
@@ -126,8 +129,10 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
     [Fact]
     public async Task EnqueueAsync_WhenEventIsNull_ShouldThrowArgumentNullException()
     {
+        var runtime = new RecordingActorRuntime();
         var outbox = new ActorProjectionDispatchCompensationOutbox(
-            new RecordingActorRuntime(),
+            runtime,
+            runtime,
             new RecordingAgentTypeVerifier { Result = true });
 
         Func<Task> act = () => outbox.EnqueueAsync(null!);
@@ -135,9 +140,10 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     {
         private readonly Queue<IActor?> _getResults = new();
+        private readonly Dictionary<string, IActor> _knownActors = new(StringComparer.Ordinal);
 
         public IActor? CreatedActor { get; init; }
 
@@ -160,7 +166,9 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
             if (CreateException != null)
                 throw CreateException;
 
-            return Task.FromResult(CreatedActor ?? new RecordingActor(id ?? Guid.NewGuid().ToString("N")));
+            var actor = CreatedActor ?? new RecordingActor(id ?? Guid.NewGuid().ToString("N"));
+            _knownActors[actor.Id] = actor;
+            return Task.FromResult(actor);
         }
 
         public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
@@ -171,7 +179,25 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         public Task<IActor?> GetAsync(string id)
         {
             GetCalls++;
-            return Task.FromResult(_getResults.Count > 0 ? _getResults.Dequeue() : null);
+            if (_getResults.Count > 0)
+            {
+                var queuedActor = _getResults.Dequeue();
+                if (queuedActor != null)
+                    _knownActors[id] = queuedActor;
+
+                return Task.FromResult(queuedActor);
+            }
+
+            return Task.FromResult(_knownActors.TryGetValue(id, out var actor) ? actor : null);
+        }
+
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!_knownActors.TryGetValue(actorId, out var actor))
+                actor = CreatedActor ?? throw new InvalidOperationException($"Actor {actorId} not found.");
+
+            await actor.HandleEventAsync(envelope, ct);
         }
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(false);

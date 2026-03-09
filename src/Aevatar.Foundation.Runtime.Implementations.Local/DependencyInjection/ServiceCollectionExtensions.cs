@@ -68,6 +68,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IStreamLifecycleManager>(),
                 sp.GetService<ILogger<LocalActorRuntime>>());
         });
+        services.TryAddSingleton<IActorDispatchPort, LocalActorDispatchPort>();
 
         // Persistence
         var eventSourcingOptions = new EventSourcingRuntimeOptions();

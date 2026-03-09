@@ -219,7 +219,8 @@ public sealed class SubWorkflowOrchestratorTests
             new WorkflowRunState(),
             CancellationToken.None);
 
-        harness.Sent.Should().ContainSingle(x => x.TargetActorId == childActorId);
+        racedActor.LastHandledEnvelope.Should().NotBeNull();
+        racedActor.LastHandledEnvelope!.Payload!.Is(BindWorkflowRunDefinitionEvent.Descriptor).Should().BeTrue();
         harness.Persisted.Should().Contain(x => x is SubWorkflowBindingUpsertedEvent);
         harness.Published.Should().BeEmpty();
     }
@@ -558,6 +559,7 @@ public sealed class SubWorkflowOrchestratorTests
 
         var orchestrator = new SubWorkflowOrchestrator(
             runtime,
+            runtime,
             resolver,
             () => serviceProvider,
             () => "owner-1",
@@ -620,7 +622,7 @@ public sealed class SubWorkflowOrchestratorTests
         List<PublishedMessage> Published,
         List<SentMessage> Sent);
 
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     {
         private readonly Dictionary<string, Queue<IActor?>> _queuedGets = new(StringComparer.Ordinal);
         private int _createdCount;
@@ -676,9 +678,22 @@ public sealed class SubWorkflowOrchestratorTests
         public Task<IActor?> GetAsync(string id)
         {
             if (_queuedGets.TryGetValue(id, out var queue) && queue.Count > 0)
-                return Task.FromResult(queue.Dequeue());
+            {
+                var queuedActor = queue.Dequeue();
+                if (queuedActor is RecordingActor recordingActor)
+                    StoredActors[id] = recordingActor;
+
+                return Task.FromResult(queuedActor);
+            }
 
             return Task.FromResult<IActor?>(StoredActors.TryGetValue(id, out var actor) ? actor : null);
+        }
+
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
+            await actor.HandleEventAsync(envelope, ct);
         }
 
         public Task<bool> ExistsAsync(string id) =>

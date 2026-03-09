@@ -12,10 +12,12 @@ public sealed class RuntimeGAgentRuntimePort : IGAgentRuntimePort
     private const string RoutingPublisherId = "scripting.gagent.routing";
 
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
 
-    public RuntimeGAgentRuntimePort(IActorRuntime runtime)
+    public RuntimeGAgentRuntimePort(IActorRuntime runtime, IActorDispatchPort dispatchPort)
     {
         _runtime = runtime;
+        _dispatchPort = dispatchPort;
     }
 
     public async Task PublishAsync(
@@ -58,8 +60,7 @@ public sealed class RuntimeGAgentRuntimePort : IGAgentRuntimePort
         ArgumentException.ThrowIfNullOrWhiteSpace(targetAgentId);
         ArgumentNullException.ThrowIfNull(eventPayload);
 
-        var actor = await _runtime.GetAsync(targetAgentId);
-        if (actor == null)
+        if (!await _runtime.ExistsAsync(targetAgentId))
             throw new InvalidOperationException($"Target GAgent not found: {targetAgentId}");
 
         var envelope = new EventEnvelope
@@ -73,7 +74,7 @@ public sealed class RuntimeGAgentRuntimePort : IGAgentRuntimePort
             CorrelationId = correlationId ?? string.Empty,
         };
 
-        await actor.HandleEventAsync(envelope, ct);
+        await _dispatchPort.DispatchAsync(targetAgentId, envelope, ct);
     }
 
     public async Task<string> CreateAsync(

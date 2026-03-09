@@ -31,18 +31,19 @@ public enum WorkflowProjectionCompletionStatus
     Unknown = 99,
 }
 
-public sealed record WorkflowChatRunStarted(
+public sealed record WorkflowChatRunAcceptedReceipt(
     string ActorId,
     string WorkflowName,
-    string CommandId);
+    string CommandId,
+    string CorrelationId);
 
 public sealed record WorkflowChatRunFinalizeResult(
     WorkflowProjectionCompletionStatus ProjectionCompletionStatus,
     bool ProjectionCompleted);
 
-public sealed record WorkflowChatRunExecutionResult(
+public sealed record WorkflowChatRunInteractionResult(
     WorkflowChatRunStartError Error,
-    WorkflowChatRunStarted? Started,
+    WorkflowChatRunAcceptedReceipt? Receipt,
     WorkflowChatRunFinalizeResult? FinalizeResult)
 {
     public bool Succeeded => Error == WorkflowChatRunStartError.None;

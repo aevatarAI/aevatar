@@ -12,15 +12,18 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
 {
     private const string CoordinatorPublisherId = "projection.ownership.coordinator";
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IAgentTypeVerifier _agentTypeVerifier;
     private readonly ProjectionOwnershipCoordinatorOptions _options;
 
     public ActorProjectionOwnershipCoordinator(
         IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
         IAgentTypeVerifier agentTypeVerifier,
         ProjectionOwnershipCoordinatorOptions? options = null)
     {
         _runtime = runtime;
+        _dispatchPort = dispatchPort;
         _agentTypeVerifier = agentTypeVerifier;
         _options = options ?? new ProjectionOwnershipCoordinatorOptions();
     }
@@ -41,7 +44,7 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
                 OccurredAtUtc = occurredAtUtc,
             },
             sessionId);
-        await coordinatorActor.HandleEventAsync(envelope, ct);
+        await _dispatchPort.DispatchAsync(coordinatorActor.Id, envelope, ct);
     }
 
     public async Task ReleaseAsync(
@@ -59,7 +62,7 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
                 OccurredAtUtc = occurredAtUtc,
             },
             sessionId);
-        await coordinatorActor.HandleEventAsync(envelope, ct);
+        await _dispatchPort.DispatchAsync(coordinatorActor.Id, envelope, ct);
     }
 
     private async Task<IActor> ResolveCoordinatorActorAsync(string scopeId, CancellationToken ct)

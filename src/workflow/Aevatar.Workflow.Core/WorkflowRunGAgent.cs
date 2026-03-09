@@ -27,6 +27,7 @@ public sealed class WorkflowRunGAgent
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IEventModuleFactory<IWorkflowExecutionContext> _stepExecutorFactory;
     private readonly IWorkflowDefinitionResolver? _workflowDefinitionResolver;
@@ -37,12 +38,14 @@ public sealed class WorkflowRunGAgent
 
     public WorkflowRunGAgent(
         IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
         IRoleAgentTypeResolver roleAgentTypeResolver,
         IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory,
         IEnumerable<IWorkflowModulePack> modulePacks,
         IWorkflowDefinitionResolver? workflowDefinitionResolver = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
         _stepExecutorFactory = stepExecutorFactory ?? throw new ArgumentNullException(nameof(stepExecutorFactory));
         _workflowDefinitionResolver = workflowDefinitionResolver;
@@ -71,6 +74,7 @@ public sealed class WorkflowRunGAgent
 
         _subWorkflowOrchestrator = new SubWorkflowOrchestrator(
             _runtime,
+            _dispatchPort,
             _workflowDefinitionResolver,
             () => Services,
             () => Id,
@@ -338,7 +342,7 @@ public sealed class WorkflowRunGAgent
                         ?? await _runtime.CreateAsync(roleAgentType, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
 
-            await actor.HandleEventAsync(CreateRoleAgentInitializeEnvelope(role));
+            await _dispatchPort.DispatchAsync(actor.Id, CreateRoleAgentInitializeEnvelope(role));
             _childAgentIds.Add(actor.Id);
         }
 

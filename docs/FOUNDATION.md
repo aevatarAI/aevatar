@@ -18,14 +18,14 @@ src/
 |---|---|---|
 | Agent | 业务逻辑单元，处理事件、维护状态 | `IAgent` / `IAgent<TState>` |
 | Actor | Agent 的运行容器，提供串行处理与层级关系 | `IActor` |
-| Runtime | 构建在 Stream 之上的 Actor 语义层，负责生命周期、寻址、邮箱串行与拓扑管理 | `IActorRuntime` |
+| Runtime | 构建在 Stream 之上的 Actor 语义层，负责生命周期、寻址、邮箱串行与拓扑管理 | `IActorRuntime` / `IActorDispatchPort` |
 | Stream | `EventEnvelope` 的传输骨架与传播通道 | `IStream` / `IStreamProvider` |
 
 ## Aevatar.Foundation.Abstractions
 
 `Aevatar.Foundation.Abstractions` 只放契约，不放实现。主要包括：
 
-- Agent/Actor/Runtime 基础接口：`IAgent`、`IActor`、`IActorRuntime`
+- Agent/Actor/Runtime 基础接口：`IAgent`、`IActor`、`IActorRuntime`、`IActorDispatchPort`
 - 事件发布与流接口：`IEventPublisher`、`IStream`、`IStreamProvider`
 - 事件模块体系：`IEventModule<TContext>`、`IEventModuleFactory<TContext>`、`IEventContext` / `IEventHandlerContext`
 - 持久化接口：`IStateStore<TState>`、`IEventStore`
@@ -46,7 +46,7 @@ src/
 可以把框架主线理解为：
 
 1. **统一消息传输契约**：外部 command、内部 signal、reply、timeout、业务事件等，都以 `EventEnvelope.payload` 形式进入 Actor 消息流。
-2. **Runtime 赋予 Actor 语义**：`IActorRuntime` / `IActor` 在 Stream 之上提供 Actor 创建、寻址、激活、邮箱串行和父子拓扑。
+2. **Runtime 赋予 Actor 语义**：`IActorRuntime` / `IActor` 在 Stream 之上提供 Actor 创建、寻址、激活、邮箱串行和父子拓扑；`IActorDispatchPort` 负责 envelope 的定向投递。
 3. **统一路由执行**：`LocalActorPublisher` 按 `EventDirection`（`Self/Down/Up/Both`）路由到目标 Stream，`GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule<IEventHandlerContext>` 合并后按优先级执行。
 4. **领域事实显式持久化**：有状态 Actor 只有在显式调用 `PersistDomainEventAsync(...)` / `PersistDomainEventsAsync(...)` 后，领域事件才进入 `EventStore` 成为事实源。
 5. **统一读侧投影**：同一条 Actor `EventEnvelope` 消息流可被投影为多个读模型（例如 AG-UI SSE 事件、运行报告、业务只读模型）。
@@ -118,7 +118,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 ### 分布式目标态（生产）
 
-1. `IActorRuntime` 在生产环境提供分布式部署能力，保证同一 `actorId` 全局单激活与邮箱串行。
+1. `IActorRuntime` 在生产环境提供分布式部署能力，保证同一 `actorId` 全局单激活与邮箱串行；`IActorDispatchPort` 负责把 envelope 投递到目标 actor mailbox。
 2. `IStateStore<TState>` / `IEventStore` 使用非 InMemory 持久化实现。
 3. 投影相关编排运行态通过 Actor 化承载；中间层服务不持有跨节点事实态。
 4. `InMemory*` 仅保留本地开发与自动化测试使用。
@@ -164,11 +164,11 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `WorkflowExecutionReadModelProjector` 负责事件驱动 read model 落库
   - 业务字段映射通过 `IProjectionEventApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext, TEvent>` 扩展
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
-  - `WorkflowChatRunApplicationService` 仅做请求校验与流程入口编排
-  - `WorkflowRunContextFactory` 负责 run 上下文与 projection lease 初始化
-  - `WorkflowRunExecutionEngine` 负责执行/输出泵送/终态收敛
-  - `WorkflowRunCompletionPolicy` 负责终态判定（`RUN_FINISHED` / `RUN_ERROR`）
-  - `WorkflowRunResourceFinalizer` 负责 detach/release/sink dispose 兜底
+  - `WorkflowRunInteractionService` 负责完整交互路径（dispatch + sink consume + finalize）
+  - `WorkflowRunDetachedDispatchService` 负责 accepted-only 路径
+  - `WorkflowRunCommandTargetResolver` 负责 workflow source 解析与 run target 构建
+  - `WorkflowRunCommandTargetBinder` 负责 projection lease/live sink 绑定与清理兜底
+  - `WorkflowRunAcceptedReceiptFactory` 负责 `actorId + commandId + correlationId` receipt 生成
   - `WorkflowExecutionQueryApplicationService` 提供读侧查询
 - **宿主职责** 在 `Aevatar.Workflow.Host.Api`：
   - 仅做协议适配（HTTP/SSE/WebSocket）
@@ -208,6 +208,7 @@ var services = new ServiceCollection();
 services.AddAevatarRuntime();
 var sp = services.BuildServiceProvider();
 var runtime = sp.GetRequiredService<IActorRuntime>();
+var dispatchPort = sp.GetRequiredService<IActorDispatchPort>();
 ```
 
 ### 2) 创建与连接 Actor

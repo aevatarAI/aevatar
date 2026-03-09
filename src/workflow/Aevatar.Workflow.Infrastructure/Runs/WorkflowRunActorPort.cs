@@ -15,16 +15,19 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
 {
     private const string WorkflowRunActorPortPublisherId = "workflow.run.actor.port";
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IWorkflowActorBindingReader _bindingReader;
     private readonly ISet<string> _knownStepTypes;
     private readonly WorkflowParser _workflowParser = new();
 
     public WorkflowRunActorPort(
         IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
         IWorkflowActorBindingReader bindingReader,
         IEnumerable<IWorkflowModulePack> modulePacks)
     {
         _runtime = runtime;
+        _dispatchPort = dispatchPort;
         _bindingReader = bindingReader;
         var packs = modulePacks?.ToList()
             ?? throw new ArgumentNullException(nameof(modulePacks));
@@ -52,7 +55,8 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         if (!string.IsNullOrWhiteSpace(definitionResolution.ActorId))
             await _runtime.LinkAsync(definitionResolution.ActorId, runActor.Id);
 
-        await runActor.HandleEventAsync(
+        await _dispatchPort.DispatchAsync(
+            runActor.Id,
             CreateWorkflowRunBindEnvelope(
                 definitionResolution.ActorId,
                 runActor.Id,
@@ -87,7 +91,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
     {
         ArgumentNullException.ThrowIfNull(actor);
         var envelope = CreateWorkflowDefinitionBindEnvelope(workflowYaml, workflowName, inlineWorkflowYamls);
-        return actor.HandleEventAsync(envelope, ct);
+        return _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 
     public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default)

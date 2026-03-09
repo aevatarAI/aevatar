@@ -17,21 +17,21 @@ public sealed class WorkflowRunStateSnapshotEmitter : IWorkflowRunStateSnapshotE
     }
 
     public async Task EmitAsync(
-        WorkflowRunContext runContext,
+        WorkflowChatRunAcceptedReceipt receipt,
         WorkflowProjectionCompletionStatus projectionCompletionStatus,
         bool projectionCompleted,
         Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(runContext);
+        ArgumentNullException.ThrowIfNull(receipt);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
-        var snapshot = await TryGetSnapshotAsync(runContext.ActorId, ct);
+        var snapshot = await TryGetSnapshotAsync(receipt.ActorId, ct);
         var snapshotPayload = new WorkflowStateSnapshotPayload
         {
-            ActorId = runContext.ActorId,
-            WorkflowName = runContext.WorkflowName,
-            CommandId = runContext.CommandId,
+            ActorId = receipt.ActorId,
+            WorkflowName = receipt.WorkflowName,
+            CommandId = receipt.CommandId,
             ProjectionCompleted = projectionCompleted,
             ProjectionCompletionStatus = projectionCompletionStatus.ToString(),
             SnapshotAvailable = snapshot != null,

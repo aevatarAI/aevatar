@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
@@ -7,14 +8,17 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptDefinitionLifecycleService
 {
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly UpsertScriptDefinitionActorRequestAdapter _upsertDefinitionAdapter = new();
 
     public RuntimeScriptDefinitionLifecycleService(
+        IActorDispatchPort dispatchPort,
         RuntimeScriptActorAccessor actorAccessor,
         IScriptingActorAddressResolver addressResolver)
     {
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }
@@ -35,12 +39,13 @@ public sealed class RuntimeScriptDefinitionLifecycleService
             ? _addressResolver.GetDefinitionActorId(scriptId)
             : definitionActorId;
 
-        var actor = await _actorAccessor.GetOrCreateAsync<ScriptDefinitionGAgent>(
+        _ = await _actorAccessor.GetOrCreateAsync<ScriptDefinitionGAgent>(
             actorId,
             "Script definition actor not found",
             ct);
 
-        await actor.HandleEventAsync(
+        await _dispatchPort.DispatchAsync(
+            actorId,
             _upsertDefinitionAdapter.Map(
                 new UpsertScriptDefinitionActorRequest(
                     ScriptId: scriptId,

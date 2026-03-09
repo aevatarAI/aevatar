@@ -55,12 +55,12 @@ flowchart LR
 ## 命令侧主链路
 
 1. Host/API 把输入规范化为 `WorkflowChatRunRequest`。
-2. Application 通过 `WorkflowRunActorResolver` 解析 workflow source。
-3. Infrastructure 通过 `IWorkflowRunActorPort` 创建 definition actor 或复用 source binding，并创建新的 run actor。
-4. Application 为 run actor 建立 projection lease 与 live sink。
-5. `WorkflowRunExecutionEngine` 把 `ChatRequestEvent` 包进 `EventEnvelope`，投递到 run actor。
+2. CQRS Core 通过 `ICommandDispatchService` / `DefaultCommandDispatchPipeline` 驱动这次命令。
+3. Application 通过 `WorkflowRunCommandTargetResolver` 解析 workflow source，并把目标统一折叠成 `WorkflowRunCommandTarget`。
+4. `WorkflowRunCommandTargetBinder` 为 run actor 建立 projection lease 与 live sink，并由 `WorkflowRunAcceptedReceiptFactory` 生成 accepted receipt。
+5. `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 把 `ChatRequestEvent` 包进 `EventEnvelope` 后投递到 run actor；目标 actor 的获取/创建仍由 `IActorRuntime` 负责。
 6. `WorkflowRunGAgent` 在自己的事件管线中驱动 `StartWorkflowEvent -> StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`。
-7. Projection 与 AGUI 从同一条 run actor envelope 流投影出查询模型和实时事件。
+7. Projection 与 AGUI 从同一条 run actor envelope 流投影出查询模型和实时事件；SSE/WS 路径由 `IWorkflowRunInteractionService` 负责把输出帧持续回推给客户端。
 
 ## 状态边界
 
