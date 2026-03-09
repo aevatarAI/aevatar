@@ -240,7 +240,7 @@ public sealed class GarnetEventStore : IEventStore
         var rawDeleted = await _database.ScriptEvaluateAsync(
             DeleteScript,
             [keys.EventIndexKey, keys.EventDataKey],
-            [(RedisValue)toVersion.ToString()]);
+            [toVersion]);
         ct.ThrowIfCancellationRequested();
 
         var deleted = (long)rawDeleted;
@@ -274,11 +274,11 @@ public sealed class GarnetEventStore : IEventStore
         IReadOnlyList<StateEvent> pendingEvents)
     {
         var values = new RedisValue[2 + (pendingEvents.Count * 2)];
-        values[0] = expectedVersion.ToString();
-        values[1] = pendingEvents.Count.ToString();
+        values[0] = expectedVersion;
+        values[1] = pendingEvents.Count;
         for (var i = 0; i < pendingEvents.Count; i++)
         {
-            values[2 + (i * 2)] = pendingEvents[i].Version.ToString();
+            values[2 + (i * 2)] = pendingEvents[i].Version;
             values[3 + (i * 2)] = pendingEvents[i].ToByteArray();
         }
 
