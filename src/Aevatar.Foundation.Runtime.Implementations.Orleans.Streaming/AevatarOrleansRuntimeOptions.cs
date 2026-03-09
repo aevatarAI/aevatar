@@ -7,6 +7,7 @@ public sealed class AevatarOrleansRuntimeOptions
     public const string PersistenceBackendInMemory = "InMemory";
     public const string PersistenceBackendGarnet = "Garnet";
     public const string DefaultGarnetConnectionString = "localhost:6379";
+    public const string DefaultGarnetEventStoreKeyPrefix = "aevatar:eventstore";
 
     public string StreamBackend { get; set; } = StreamBackendInMemory;
 
@@ -17,6 +18,8 @@ public sealed class AevatarOrleansRuntimeOptions
     public string PersistenceBackend { get; set; } = PersistenceBackendInMemory;
 
     public string GarnetConnectionString { get; set; } = DefaultGarnetConnectionString;
+
+    public string GarnetEventStoreKeyPrefix { get; set; } = DefaultGarnetEventStoreKeyPrefix;
 
     public int QueueCount { get; set; } = 8;
 

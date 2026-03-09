@@ -58,23 +58,26 @@ public static class AppElasticsearchProjectionExtensions
         => new(name, EmptyDict, EmptyDict, EmptyDict);
 
     /// <summary>
-    /// Entities is a Dictionary keyed by dynamic clientId strings.
-    /// Each key generates unique ES field mappings, quickly exceeding the
-    /// default 1000 total_fields limit. Setting <c>enabled: false</c> on
-    /// the Entities property tells ES to store the JSON as-is without
-    /// creating per-key field mappings.
+    /// Both <c>Entities</c> and <c>SyncResults</c> are dictionaries keyed by
+    /// dynamic strings (clientId / syncId). Each unique key generates a
+    /// separate ES field mapping, quickly exceeding the default 1000
+    /// total_fields limit. Setting <c>enabled: false</c> tells ES to store
+    /// the JSON as-is without creating per-key field mappings.
     /// </summary>
     private static DocumentIndexMetadata SyncEntitiesIndexMeta()
     {
+        var disabledObject = new Dictionary<string, object?>
+        {
+            ["type"] = "object",
+            ["enabled"] = false
+        };
+
         var mappings = new Dictionary<string, object?>
         {
             ["properties"] = new Dictionary<string, object?>
             {
-                ["Entities"] = new Dictionary<string, object?>
-                {
-                    ["type"] = "object",
-                    ["enabled"] = false
-                }
+                ["Entities"] = disabledObject,
+                ["SyncResults"] = disabledObject
             }
         };
         return new DocumentIndexMetadata("sync-entities", mappings, EmptyDict, EmptyDict);

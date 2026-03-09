@@ -36,6 +36,7 @@ public static class AppDistributedHostBuilderExtensions
                 o.ActorEventNamespace = runtimeOptions.OrleansActorEventNamespace;
                 o.PersistenceBackend = runtimeOptions.OrleansPersistenceBackend;
                 o.GarnetConnectionString = runtimeOptions.OrleansGarnetConnectionString;
+                o.GarnetEventStoreKeyPrefix = runtimeOptions.OrleansGarnetEventStoreKeyPrefix;
                 o.QueueCount = hostOptions.QueueCount;
                 o.QueueCacheSize = hostOptions.QueueCacheSize;
             });
@@ -108,7 +109,7 @@ public static class AppDistributedHostBuilderExtensions
         Bind(configuration[$"{section}:OrleansActorEventNamespace"], v => options.OrleansActorEventNamespace = v);
         Bind(configuration[$"{section}:OrleansPersistenceBackend"], v => options.OrleansPersistenceBackend = v);
         Bind(configuration[$"{section}:OrleansGarnetConnectionString"], v => options.OrleansGarnetConnectionString = v);
-
+        Bind(configuration[$"{section}:OrleansGarnetEventStoreKeyPrefix"], v => options.OrleansGarnetEventStoreKeyPrefix = v);
         return options;
     }
 

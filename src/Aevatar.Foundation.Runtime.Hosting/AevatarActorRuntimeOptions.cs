@@ -14,6 +14,7 @@ public sealed class AevatarActorRuntimeOptions
     public const string DefaultOrleansStreamProviderName = "AevatarOrleansStreamProvider";
     public const string DefaultOrleansActorEventNamespace = "aevatar.actor.events";
     public const string DefaultOrleansGarnetConnectionString = "localhost:6379";
+    public const string DefaultOrleansGarnetEventStoreKeyPrefix = "aevatar:eventstore";
 
     public string Provider { get; set; } = ProviderInMemory;
 
@@ -26,6 +27,8 @@ public sealed class AevatarActorRuntimeOptions
     public string OrleansPersistenceBackend { get; set; } = OrleansPersistenceBackendInMemory;
 
     public string OrleansGarnetConnectionString { get; set; } = DefaultOrleansGarnetConnectionString;
+
+    public string OrleansGarnetEventStoreKeyPrefix { get; set; } = DefaultOrleansGarnetEventStoreKeyPrefix;
 
     public string MassTransitTransportBackend { get; set; } = MassTransitTransportBackendKafka;
 

@@ -165,6 +165,7 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
                     options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendInMemory;
                     options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendGarnet;
                     options.GarnetConnectionString = garnetConnectionString;
+                    options.GarnetEventStoreKeyPrefix = "aevatar:eventstore";
                 });
             })
             .Build();

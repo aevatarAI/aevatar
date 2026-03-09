@@ -51,6 +51,9 @@ public static class ServiceCollectionExtensions
         var configuredOrleansGarnetConnectionString = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"];
         if (!string.IsNullOrWhiteSpace(configuredOrleansGarnetConnectionString))
             options.OrleansGarnetConnectionString = configuredOrleansGarnetConnectionString;
+        var configuredOrleansGarnetEventStoreKeyPrefix = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetEventStoreKeyPrefix"];
+        if (!string.IsNullOrWhiteSpace(configuredOrleansGarnetEventStoreKeyPrefix))
+            options.OrleansGarnetEventStoreKeyPrefix = configuredOrleansGarnetEventStoreKeyPrefix;
         var configuredEventSourcingEnableSnapshots = configuration[$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:EnableSnapshots"];
         if (bool.TryParse(configuredEventSourcingEnableSnapshots, out var eventSourcingEnableSnapshots))
             options.EventSourcingEnableSnapshots = eventSourcingEnableSnapshots;
@@ -91,6 +94,7 @@ public static class ServiceCollectionExtensions
                 orleansOptions.ActorEventNamespace = options.OrleansActorEventNamespace;
                 orleansOptions.PersistenceBackend = options.OrleansPersistenceBackend;
                 orleansOptions.GarnetConnectionString = options.OrleansGarnetConnectionString;
+                orleansOptions.GarnetEventStoreKeyPrefix = options.OrleansGarnetEventStoreKeyPrefix;
             });
 
             if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendInMemory, StringComparison.OrdinalIgnoreCase))
