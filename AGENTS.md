@@ -23,6 +23,15 @@
 - 删除优于兼容：重构以清晰正确为第一目标；无业务价值或重复层应直接删除，不为历史包袱保留空壳。
 - 治理前置：架构规则必须可自动化验证（门禁、测试、文档一致性），避免依赖口头约定。
 
+## Command / Envelope / Dispatch 抽象（强制）
+- 统一包络不等于统一语义：`Envelope` 只是 Actor System 的统一消息包络，可承载 `command/reply/internal signal/domain event/query`；是否可持久化、可投影、可对外观察必须由消息契约显式定义，禁止因“都走 Envelope”而混淆语义。
+- 命令骨架必须内聚：标准命令生命周期应收敛为 `Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt -> Observe`；业务模块只负责目标解析、载荷映射和结果映射，禁止各能力入口各自拼装一套流程。
+- 传输载体必须可替换：直接远程调用、`IActorDispatchPort`、stream/broker 都只是消息传输机制；上层依赖投递契约，不依赖具体载体，确保链路可从直投切换为异步传输而不污染应用语义。
+- Runtime 与 Dispatch 必须分责：`Runtime` 负责 actor 的 lifecycle / topology / lookup，`Dispatch Port` 负责消息投递；禁止把创建、查询、投递、观察等职责揉进一个全能接口。
+- ACK 语义必须诚实：同步返回只能承诺已经真实达到的阶段，默认应是 `accepted for dispatch + stable command id`；`committed`、`read-model observed` 等更强保证必须通过独立契约或异步观察获取，禁止在弱语义 ACK 中暗示强保证。
+- 追踪标识与目标身份必须分离：`commandId/correlationId` 用于追踪一次请求，`actorId` 用于标识处理实体；禁止把追踪 ID 与目标身份混成同一语义，也不得假设二者天然一一对应。
+- 命名必须跟随职责语义：接口、类型、目录命名应描述职责与边界，而不是绑定暂时实现路径；一旦底层实现可替换，命名不得泄露 `runtime/stream/protocol` 偶然细节。
+
 ## 复盘抽象（强制）
 - 运行时形态不是业务事实：不得把本地实例类型、代理类型、对象可见结构当成业务绑定依据；业务事实必须来自 actor-owned contract 或 read model。
 - 身份与事实必须分离：稳定 ID 只负责寻址与复用键，不承载可变业务事实；可变绑定必须显式建模、显式读取。
