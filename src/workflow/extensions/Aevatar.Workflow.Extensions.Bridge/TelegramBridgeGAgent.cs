@@ -3,22 +3,23 @@ using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Core;
+using Aevatar.Foundation.Core;
 
 namespace Aevatar.Workflow.Extensions.Bridge;
 
 /// <summary>
 /// Telegram channel bridge agent.
-/// Reuses <see cref="BridgeGAgent"/> callback handling and adds ChatRequestEvent -> Telegram sendMessage dispatch.
+/// Handles ChatRequestEvent -> Telegram sendMessage and waitReply polling.
 /// </summary>
-public class TelegramBridgeGAgent : BridgeGAgent
+public class TelegramBridgeGAgent : GAgentBase
 {
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const string WaitReplyOperation = "/waitReply";
     private const int DefaultWaitReplyTimeoutMs = 120_000;
     private const int DefaultConnectorExecutionWatchdogMs = 20_000;
     private const int DefaultPollTimeoutSeconds = 8;
+    private const int DefaultSettlePollsAfterMatch = 1;
+    private const int MaxSettlePollsAfterMatch = 5;
     private const int MaxPollTimeoutSeconds = 25;
     private readonly IConnectorRegistry _connectorRegistry;
 
@@ -26,11 +27,11 @@ public class TelegramBridgeGAgent : BridgeGAgent
 
     public TelegramBridgeGAgent(
         IActorRuntime runtime,
-        IBridgeCallbackTokenService tokenService,
         IConnectorRegistry connectorRegistry)
-        : base(runtime, tokenService)
     {
+        _ = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _connectorRegistry = connectorRegistry ?? throw new ArgumentNullException(nameof(connectorRegistry));
+        InitializeId();
     }
 
     [EventHandler]
@@ -127,6 +128,8 @@ public class TelegramBridgeGAgent : BridgeGAgent
 
         var waitTimeoutMs = ResolveWaitReplyTimeoutMs(request.Metadata);
         var pollTimeoutSeconds = ResolvePollTimeoutSeconds(request.Metadata);
+        var settlePollsAfterMatch = ResolveSettlePollsAfterMatch(request.Metadata);
+        var collectAllReplies = ResolveCollectAllReplies(request.Metadata);
         var startFromLatest = ResolveStartFromLatest(request.Metadata);
         var bootstrapRecentCutoffUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             - Math.Max(30, Math.Min(600, waitTimeoutMs / 1000 + 10));
@@ -135,6 +138,14 @@ public class TelegramBridgeGAgent : BridgeGAgent
         long? offset = TryReadInt64(
             ReadMetadata(request.Metadata, "telegram.offset", "offset"),
             minimum: 0);
+        var collectedByIdentity = collectAllReplies
+            ? new Dictionary<string, TelegramInboundUpdate>(StringComparer.Ordinal)
+            : null;
+        var collectedIdentityOrder = collectAllReplies
+            ? new List<string>()
+            : null;
+        TelegramInboundUpdate? pendingMatchedUpdate = null;
+        var pollsSinceLastMatch = 0;
 
         if (startFromLatest && offset == null)
         {
@@ -166,22 +177,40 @@ public class TelegramBridgeGAgent : BridgeGAgent
                 return;
             }
 
-            foreach (var update in bootstrapUpdates)
+            var bootstrapMatchedUpdates = SelectMatchedUpdates(
+                bootstrapUpdates,
+                expectedChatId,
+                expectedFromUserId,
+                expectedFromUsername,
+                correlationContains,
+                minimumUpdateId: null,
+                minimumDateUnixExclusive: bootstrapRecentCutoffUnix);
+            if (bootstrapMatchedUpdates.Count > 0)
             {
-                if (update.DateUnix > 0 && update.DateUnix < bootstrapRecentCutoffUnix)
-                    continue;
-                if (!IsMatchedUpdate(
-                        update,
-                        expectedChatId,
-                        expectedFromUserId,
-                        expectedFromUsername,
-                        correlationContains))
+                pendingMatchedUpdate = bootstrapMatchedUpdates[^1];
+                pollsSinceLastMatch = 0;
+                if (collectAllReplies)
                 {
-                    continue;
+                    MergeMatchedUpdates(
+                        bootstrapMatchedUpdates,
+                        collectedByIdentity!,
+                        collectedIdentityOrder!);
+                    if (settlePollsAfterMatch <= 0)
+                    {
+                        await PublishSuccessAsync(
+                            request,
+                            BuildMatchedReplyContent(
+                                collectedByIdentity!,
+                                collectedIdentityOrder!,
+                                pendingMatchedUpdate));
+                        return;
+                    }
                 }
-
-                await PublishSuccessAsync(request, update.Content);
-                return;
+                else
+                {
+                    await PublishSuccessAsync(request, pendingMatchedUpdate.Content);
+                    return;
+                }
             }
 
             if (bootstrapMaxUpdateId.HasValue)
@@ -192,11 +221,13 @@ public class TelegramBridgeGAgent : BridgeGAgent
         while (DateTimeOffset.UtcNow < deadline)
         {
             var remaining = deadline - DateTimeOffset.UtcNow;
+            var currentPollMaxSeconds = pendingMatchedUpdate != null ? 1 : pollTimeoutSeconds;
             var currentPollSeconds = Math.Clamp(
                 (int)Math.Ceiling(Math.Max(1, remaining.TotalSeconds)),
                 1,
-                pollTimeoutSeconds);
+                currentPollMaxSeconds);
             var perCallTimeoutMs = (currentPollSeconds + 3) * 1_000;
+            var requestedOffset = offset;
 
             var poll = await ExecuteGetUpdatesAsync(
                 request,
@@ -225,26 +256,169 @@ public class TelegramBridgeGAgent : BridgeGAgent
             if (maxUpdateId.HasValue)
                 offset = maxUpdateId.Value + 1;
 
-            foreach (var update in updates)
+            var matchedUpdatesInBatch = SelectMatchedUpdates(
+                updates,
+                expectedChatId,
+                expectedFromUserId,
+                expectedFromUsername,
+                correlationContains,
+                minimumUpdateId: requestedOffset,
+                minimumDateUnixExclusive: null);
+            if (matchedUpdatesInBatch.Count > 0)
             {
-                if (!IsMatchedUpdate(
-                        update,
-                        expectedChatId,
-                        expectedFromUserId,
-                        expectedFromUsername,
-                        correlationContains))
+                var latestMatchedInBatch = matchedUpdatesInBatch[^1];
+                pendingMatchedUpdate = latestMatchedInBatch;
+                pollsSinceLastMatch = 0;
+                if (collectAllReplies)
                 {
-                    continue;
+                    MergeMatchedUpdates(
+                        matchedUpdatesInBatch,
+                        collectedByIdentity!,
+                        collectedIdentityOrder!);
+                }
+                if (settlePollsAfterMatch <= 0)
+                {
+                    await PublishSuccessAsync(
+                        request,
+                        collectAllReplies
+                            ? BuildMatchedReplyContent(
+                                collectedByIdentity!,
+                                collectedIdentityOrder!,
+                                pendingMatchedUpdate)
+                            : pendingMatchedUpdate.Content);
+                    return;
                 }
 
-                await PublishSuccessAsync(request, update.Content);
-                return;
+                continue;
             }
+
+            if (pendingMatchedUpdate != null)
+            {
+                pollsSinceLastMatch++;
+                if (pollsSinceLastMatch >= settlePollsAfterMatch)
+                {
+                    await PublishSuccessAsync(
+                        request,
+                        collectAllReplies
+                            ? BuildMatchedReplyContent(
+                                collectedByIdentity!,
+                                collectedIdentityOrder!,
+                                pendingMatchedUpdate)
+                            : pendingMatchedUpdate.Content);
+                    return;
+                }
+            }
+        }
+
+        if (pendingMatchedUpdate != null)
+        {
+            await PublishSuccessAsync(
+                request,
+                collectAllReplies
+                    ? BuildMatchedReplyContent(
+                        collectedByIdentity!,
+                        collectedIdentityOrder!,
+                        pendingMatchedUpdate)
+                    : pendingMatchedUpdate.Content);
+            return;
         }
 
         await PublishFailureAsync(
             request,
             $"telegram group stream timeout after {waitTimeoutMs}ms without matched reply");
+    }
+
+    private static List<TelegramInboundUpdate> SelectMatchedUpdates(
+        IEnumerable<TelegramInboundUpdate> updates,
+        string expectedChatId,
+        string expectedFromUserId,
+        string expectedFromUsername,
+        string correlationContains,
+        long? minimumUpdateId,
+        long? minimumDateUnixExclusive)
+    {
+        var matches = new List<TelegramInboundUpdate>();
+        foreach (var update in updates)
+        {
+            if (minimumUpdateId.HasValue &&
+                update.UpdateId >= 0 &&
+                update.UpdateId < minimumUpdateId.Value)
+            {
+                continue;
+            }
+
+            if (minimumDateUnixExclusive.HasValue &&
+                update.DateUnix > 0 &&
+                update.DateUnix < minimumDateUnixExclusive.Value)
+            {
+                continue;
+            }
+
+            if (!IsMatchedUpdate(
+                    update,
+                    expectedChatId,
+                    expectedFromUserId,
+                    expectedFromUsername,
+                    correlationContains))
+            {
+                continue;
+            }
+
+            matches.Add(update);
+        }
+
+        return matches;
+    }
+
+    private static void MergeMatchedUpdates(
+        IEnumerable<TelegramInboundUpdate> matchedUpdates,
+        IDictionary<string, TelegramInboundUpdate> latestByIdentity,
+        IList<string> identityOrder)
+    {
+        foreach (var update in matchedUpdates)
+        {
+            var identity = BuildMatchedReplyIdentity(update);
+            if (!latestByIdentity.ContainsKey(identity))
+                identityOrder.Add(identity);
+            latestByIdentity[identity] = update;
+        }
+    }
+
+    private static string BuildMatchedReplyContent(
+        IReadOnlyDictionary<string, TelegramInboundUpdate> latestByIdentity,
+        IReadOnlyList<string> identityOrder,
+        TelegramInboundUpdate? fallback)
+    {
+        if (latestByIdentity.Count == 0 || identityOrder.Count == 0)
+            return fallback?.Content ?? string.Empty;
+
+        var orderedReplies = new List<string>(identityOrder.Count);
+        foreach (var identity in identityOrder)
+        {
+            if (!latestByIdentity.TryGetValue(identity, out var update))
+                continue;
+            if (string.IsNullOrWhiteSpace(update.Content))
+                continue;
+
+            orderedReplies.Add(update.Content);
+        }
+
+        if (orderedReplies.Count == 0)
+            return fallback?.Content ?? string.Empty;
+        if (orderedReplies.Count == 1)
+            return orderedReplies[0];
+
+        return string.Join("\n\n---\n\n", orderedReplies);
+    }
+
+    private static string BuildMatchedReplyIdentity(TelegramInboundUpdate update)
+    {
+        if (update.MessageId > 0)
+            return $"msg:{update.ChatId}:{update.MessageId}";
+        if (update.UpdateId >= 0)
+            return $"update:{update.UpdateId}";
+
+        return $"raw:{update.ChatId}:{update.FromUserId}:{update.DateUnix}:{update.Content}";
     }
 
     private async Task<ConnectorResponse> ExecuteGetUpdatesAsync(
@@ -364,12 +538,14 @@ public class TelegramBridgeGAgent : BridgeGAgent
                 if (string.IsNullOrWhiteSpace(text))
                     text = TryGetString(message, "caption");
 
+                var messageId = TryGetInt64(message, "message_id") ?? 0;
                 var dateUnix = TryGetInt64(message, "date") ?? 0;
                 var fromUserId = TryGetNestedStringOrNumber(message, "from", "id");
                 var fromUsername = TryGetNestedStringOrNumber(message, "from", "username");
 
                 updates.Add(new TelegramInboundUpdate(
                     UpdateId: updateId ?? -1,
+                    MessageId: messageId,
                     DateUnix: dateUnix,
                     ChatId: chatId,
                     FromUserId: fromUserId,
@@ -493,6 +669,27 @@ public class TelegramBridgeGAgent : BridgeGAgent
         }
 
         return DefaultPollTimeoutSeconds;
+    }
+
+    private static int ResolveSettlePollsAfterMatch(Google.Protobuf.Collections.MapField<string, string> metadata)
+    {
+        var raw = ReadMetadata(
+            metadata,
+            "telegram.settle_polls_after_match",
+            "settle_polls_after_match");
+        if (int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+            return Math.Clamp(parsed, 0, MaxSettlePollsAfterMatch);
+
+        return DefaultSettlePollsAfterMatch;
+    }
+
+    private static bool ResolveCollectAllReplies(Google.Protobuf.Collections.MapField<string, string> metadata)
+    {
+        var raw = ReadMetadata(
+            metadata,
+            "telegram.collect_all_replies",
+            "collect_all_replies");
+        return TryParseBool(raw, out var parsed) && parsed;
     }
 
     private static bool ResolveStartFromLatest(Google.Protobuf.Collections.MapField<string, string> metadata)
@@ -832,6 +1029,7 @@ public class TelegramBridgeGAgent : BridgeGAgent
 
     private sealed record TelegramInboundUpdate(
         long UpdateId,
+        long MessageId,
         long DateUnix,
         string ChatId,
         string FromUserId,

@@ -103,7 +103,7 @@ public sealed class WorkflowDefinitionRegistry : IWorkflowDefinitionRegistry
             "      - Do NOT add unsupported step-level fields such as description, title, summary, notes, input_schema, output_schema, metadata, or examples",
             "      - Available step types: llm_call, transform, assign, guard, conditional, switch,",
             "        while, foreach, parallel, race, map_reduce, evaluate, reflect, connector_call, secure_connector_call,",
-            "        aevatar_call, secure_aevatar_call, human_input, secure_input, human_approval,",
+            "        human_input, secure_input, human_approval,",
             "        cache, delay, emit, checkpoint, retrieve_facts",
             "      - NEVER use dynamic_workflow in generated YAML. dynamic_workflow is engine-internal and expects a nested ```yaml block input.",
             "      - Use snake_case for all keys.",

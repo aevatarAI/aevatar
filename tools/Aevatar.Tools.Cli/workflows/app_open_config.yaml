@@ -1,8 +1,0 @@
-name: app_open_config
-description: Ensure local aevatar config UI is running and return the jump URL.
-steps:
-  - id: ensure_config_ui
-    type: aevatar
-    parameters:
-      args: "config ui ensure --no-browser --port __CONFIG_UI_PORT__ --json"
-      timeout_ms: "30000"

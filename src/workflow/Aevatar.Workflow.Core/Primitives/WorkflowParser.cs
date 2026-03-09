@@ -220,7 +220,7 @@ public sealed class WorkflowParser
     }
 
     private static bool ShouldLiftTimeoutMsToParameter(string canonicalType) =>
-        canonicalType is "wait_signal" or "connector_call" or "secure_connector_call" or "aevatar_call" or "secure_aevatar_call" or "llm_call" or "human_input" or "secure_input" or "human_approval";
+        canonicalType is "wait_signal" or "connector_call" or "secure_connector_call" or "llm_call" or "human_input" or "secure_input" or "human_approval";
 
     private static void AddIfMissing(
         IDictionary<string, string> parameters,

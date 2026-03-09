@@ -217,46 +217,6 @@ public class WorkflowParserConfigurationTests
     }
 
     [Fact]
-    public void Parse_WhenUsingAevatarAlias_WithBrowserArgs_ShouldCanonicalizeToAevatarCall()
-    {
-        var yaml = """
-            name: aevatar_alias
-            roles: []
-            steps:
-              - id: s_aevatar
-                type: aevatar
-                parameters:
-                  args: "browser status --json"
-            """;
-
-        var workflow = new WorkflowParser().Parse(yaml);
-
-        workflow.Steps.Should().ContainSingle();
-        workflow.Steps[0].Type.Should().Be("aevatar_call");
-        workflow.Steps[0].Parameters["args"].Should().Be("browser status --json");
-    }
-
-    [Fact]
-    public void Parse_WhenUsingAevatarAlias_ShouldCanonicalizeToAevatarCall()
-    {
-        var yaml = """
-            name: aevatar_alias
-            roles: []
-            steps:
-              - id: s_aevatar
-                type: aevatar
-                parameters:
-                  args: "config ui ensure --json"
-            """;
-
-        var workflow = new WorkflowParser().Parse(yaml);
-
-        workflow.Steps.Should().ContainSingle();
-        workflow.Steps[0].Type.Should().Be("aevatar_call");
-        workflow.Steps[0].Parameters["args"].Should().Be("config ui ensure --json");
-    }
-
-    [Fact]
     public void Parse_WhenUsingSecureConnectorAlias_ShouldCanonicalizeToSecureConnectorCall()
     {
         var yaml = """

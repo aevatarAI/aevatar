@@ -140,6 +140,8 @@ aevatar app restart
 - `wait_timeout_ms: "120000"`
 - `poll_timeout_sec: "8"`
 - `start_from_latest: "true"`
+- `collect_all_replies: "true"`（收集同一轮回复的多条消息）
+- `settle_polls_after_match: "2"`（命中后再轮询 2 次，尽量收齐分段回复）
 - `correlation_contains: "${telegram.correlation_contains}"`（可选；留空则按发送者匹配）
 
 ## 8. 常见问题

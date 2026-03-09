@@ -1,21 +1,16 @@
 using System.Net.WebSockets;
-using System.Reflection;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Infrastructure.Bridge;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -56,12 +51,6 @@ public static class WorkflowCapabilityEndpoints
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/bridge/callback-token", HandleBridgeCallbackTokenIssue)
-            .Produces(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest);
-        group.MapPost("/bridge/callbacks", HandleBridgeIngress)
-            .Produces(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest);
     }
 
     internal static async Task HandleChat(
@@ -589,204 +578,4 @@ public static class WorkflowCapabilityEndpoints
             .Replace(':', '.');
     }
 
-    internal static IResult HandleBridgeCallbackTokenIssue(
-        [FromBody] BridgeCallbackTokenIssueInput input,
-        [FromServices] IBridgeCallbackTokenService tokenService,
-        [FromServices] IOptions<WorkflowBridgeOptions> bridgeOptions)
-    {
-        ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(tokenService);
-        ArgumentNullException.ThrowIfNull(bridgeOptions);
-
-        var actorId = (input.ActorId ?? string.Empty).Trim();
-        var runId = (input.RunId ?? string.Empty).Trim();
-        var stepId = (input.StepId ?? string.Empty).Trim();
-        var signalName = (input.SignalName ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(actorId) ||
-            string.IsNullOrWhiteSpace(runId) ||
-            string.IsNullOrWhiteSpace(stepId) ||
-            string.IsNullOrWhiteSpace(signalName))
-        {
-            return Results.BadRequest(new { error = "actorId, runId, stepId and signalName are required." });
-        }
-
-        var options = bridgeOptions.Value;
-        var timeoutMs = input.TimeoutMs ?? options.DefaultTokenTtlMs;
-        if (timeoutMs <= 0)
-            return Results.BadRequest(new { error = "timeoutMs must be positive." });
-
-        var maxTokenTtlMs = Math.Clamp(options.MaxTokenTtlMs, 1_000, 86_400_000);
-        timeoutMs = Math.Clamp(timeoutMs, 1_000, maxTokenTtlMs);
-        var issueResult = tokenService.Issue(
-            new BridgeCallbackTokenIssueRequest
-            {
-                ActorId = actorId,
-                RunId = runId,
-                StepId = stepId,
-                SignalName = signalName,
-                TimeoutMs = timeoutMs,
-                ChannelId = (input.ChannelId ?? string.Empty).Trim(),
-                SessionId = (input.SessionId ?? string.Empty).Trim(),
-                Metadata = NormalizeMetadata(input.Metadata),
-            },
-            DateTimeOffset.UtcNow);
-
-        return Results.Ok(new
-        {
-            token = issueResult.Token,
-            tokenId = issueResult.TokenId,
-            bridgeActorId = options.BridgeActorId,
-            actorId = issueResult.Claims.ActorId,
-            runId = issueResult.Claims.RunId,
-            stepId = issueResult.Claims.StepId,
-            signalName = issueResult.Claims.SignalName,
-            issuedAtUnixTimeMs = issueResult.Claims.IssuedAtUnixTimeMs,
-            expiresAtUnixTimeMs = issueResult.Claims.ExpiresAtUnixTimeMs,
-            nonce = issueResult.Claims.Nonce,
-            channelId = issueResult.Claims.ChannelId,
-            sessionId = issueResult.Claims.SessionId,
-        });
-    }
-
-    internal static async Task<IResult> HandleBridgeIngress(
-        [FromBody] BridgeIngressInput input,
-        [FromServices] IActorRuntime runtime,
-        [FromServices] IOptions<WorkflowBridgeOptions> bridgeOptions,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(runtime);
-        ArgumentNullException.ThrowIfNull(bridgeOptions);
-
-        var source = (input.Source ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(input.CallbackToken) || string.IsNullOrWhiteSpace(source))
-            return Results.BadRequest(new { error = "callbackToken and source are required." });
-
-        var options = bridgeOptions.Value;
-        if (options.RequireSourceAllowList &&
-            options.AllowedSources.Count > 0 &&
-            !options.AllowedSources.Any(allowed => string.Equals(allowed, source, StringComparison.OrdinalIgnoreCase)))
-        {
-            return Results.BadRequest(new { error = $"source '{source}' is not allowed." });
-        }
-
-        var bridgeActor = await GetOrCreateBridgeActorAsync(
-            runtime,
-            options.BridgeActorId,
-            options.BridgeAgentType,
-            ct);
-        var commandId = (input.CommandId ?? string.Empty).Trim();
-        var correlationId = string.IsNullOrWhiteSpace(commandId)
-            ? Guid.NewGuid().ToString("N")
-            : commandId;
-
-        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        await bridgeActor.HandleEventAsync(new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new BridgeInboundCallbackReceivedEvent
-            {
-                CallbackToken = input.CallbackToken.Trim(),
-                Payload = input.Payload ?? string.Empty,
-                Source = source,
-                SourceMessageId = (input.SourceMessageId ?? string.Empty).Trim(),
-                SourceChatId = (input.SourceChatId ?? string.Empty).Trim(),
-                SourceUserId = (input.SourceUserId ?? string.Empty).Trim(),
-                ReceivedAtUnixTimeMs = input.ReceivedAtUnixTimeMs.GetValueOrDefault(nowMs),
-            }),
-            PublisherId = "api.bridge.ingress",
-            Direction = EventDirection.Self,
-            CorrelationId = correlationId,
-            TargetActorId = bridgeActor.Id,
-        }, ct);
-
-        return Results.Ok(new
-        {
-            accepted = true,
-            commandId = correlationId,
-            bridgeActorId = bridgeActor.Id,
-        });
-    }
-
-    private static async Task<IActor> GetOrCreateBridgeActorAsync(
-        IActorRuntime runtime,
-        string bridgeActorId,
-        string bridgeAgentType,
-        CancellationToken ct)
-    {
-        var normalizedActorId = string.IsNullOrWhiteSpace(bridgeActorId)
-            ? "bridge:default"
-            : bridgeActorId.Trim();
-        var actor = await runtime.GetAsync(normalizedActorId);
-        if (actor != null)
-            return actor;
-
-        var resolvedAgentType = ResolveBridgeActorType(bridgeAgentType);
-        return await runtime.CreateAsync(resolvedAgentType, normalizedActorId, ct);
-    }
-
-    private static System.Type ResolveBridgeActorType(string configuredType)
-    {
-        if (string.IsNullOrWhiteSpace(configuredType))
-            return typeof(BridgeGAgent);
-
-        var normalized = configuredType.Trim();
-        var resolved = System.Type.GetType(normalized, throwOnError: false, ignoreCase: true);
-        if (resolved == null)
-        {
-            var matches = AppDomain.CurrentDomain
-                .GetAssemblies()
-                .SelectMany(static assembly =>
-                {
-                    try
-                    {
-                        return assembly.GetTypes();
-                    }
-                    catch (ReflectionTypeLoadException ex)
-                    {
-                        return ex.Types.OfType<System.Type>();
-                    }
-                })
-                .Where(type =>
-                    string.Equals(type.FullName, normalized, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(type.Name, normalized, StringComparison.OrdinalIgnoreCase))
-                .Distinct()
-                .ToArray();
-
-            if (matches.Length == 1)
-                resolved = matches[0];
-            else if (matches.Length > 1)
-                throw new InvalidOperationException(
-                    $"Configured bridge agent type '{normalized}' is ambiguous. Use assembly-qualified name.");
-        }
-
-        if (resolved == null)
-            throw new InvalidOperationException($"Configured bridge agent type '{normalized}' was not found.");
-        if (!typeof(BridgeGAgent).IsAssignableFrom(resolved))
-        {
-            throw new InvalidOperationException(
-                $"Configured bridge agent type '{resolved.FullName}' must inherit {nameof(BridgeGAgent)}.");
-        }
-
-        return resolved;
-    }
-
-    private static IReadOnlyDictionary<string, string> NormalizeMetadata(IDictionary<string, string>? metadata)
-    {
-        if (metadata == null || metadata.Count == 0)
-            return new Dictionary<string, string>(StringComparer.Ordinal);
-
-        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (key, value) in metadata)
-        {
-            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
-            var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
-            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
-                continue;
-            normalized[normalizedKey] = normalizedValue;
-        }
-
-        return normalized;
-    }
 }

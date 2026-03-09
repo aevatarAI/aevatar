@@ -25,8 +25,6 @@ internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWor
         "wait_signal",
         "connector_call",
         "secure_connector_call",
-        "aevatar_call",
-        "secure_aevatar_call",
     };
 
     private static readonly IReadOnlyDictionary<string, PrimitiveMetadataDescriptor> PrimitiveMetadata =
@@ -55,18 +53,6 @@ internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWor
                 [
                     new PrimitiveParameterDescriptor("connector", "string", true, "Connector name."),
                     new PrimitiveParameterDescriptor("operation", "string", false, "Connector-specific operation or method."),
-                ]),
-            ["aevatar_call"] = new(
-                "Invokes Aevatar runtime capability from a workflow step.",
-                [
-                    new PrimitiveParameterDescriptor("operation", "string", true, "Aevatar operation name."),
-                    new PrimitiveParameterDescriptor("payload", "string", false, "Operation payload."),
-                ]),
-            ["secure_aevatar_call"] = new(
-                "Invokes Aevatar runtime capability with secure payload handling.",
-                [
-                    new PrimitiveParameterDescriptor("operation", "string", true, "Aevatar operation name."),
-                    new PrimitiveParameterDescriptor("payload", "string", false, "Operation payload."),
                 ]),
             ["llm_call"] = new(
                 "Runs an LLM role step and returns generated output.",
@@ -463,7 +449,7 @@ internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWor
             "guard" or "conditional" or "switch" or "while" or "delay" or "wait_signal" or "checkpoint" or "workflow_loop" or "workflow_yaml_validate" => "control",
             "foreach" or "parallel" or "race" or "map_reduce" or "workflow_call" or "vote" or "dynamic_workflow" => "composition",
             "llm_call" or "tool_call" or "evaluate" or "reflect" => "ai",
-            "connector_call" or "secure_connector_call" or "aevatar_call" or "secure_aevatar_call" or "emit" => "integration",
+            "connector_call" or "secure_connector_call" or "emit" => "integration",
             "human_input" or "human_approval" or "secure_input" => "human",
             _ => "general",
         };

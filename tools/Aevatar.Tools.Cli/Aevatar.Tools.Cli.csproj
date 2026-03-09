@@ -7,10 +7,11 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>aevatar</ToolCommandName>
     <PackageId>aevatar</PackageId>
-    <Version>1.0.0</Version>
+    <Version>0.0.1</Version>
     <Authors>Aevatar</Authors>
     <Description>Unified Aevatar CLI with config and app playground commands.</Description>
     <PackageTags>aevatar;cli;workflow;playground;config</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <IsPackable>true</IsPackable>
   </PropertyGroup>
 
@@ -32,6 +33,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+
     <Content Update="wwwroot/playground/**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

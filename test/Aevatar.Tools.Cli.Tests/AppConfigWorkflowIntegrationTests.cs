@@ -4,8 +4,6 @@ using System.Text.Json;
 using System.CommandLine;
 using Aevatar.Tools.Cli.Commands;
 using Aevatar.Tools.Cli.Hosting;
-using Aevatar.Workflow.Sdk;
-using Aevatar.Workflow.Sdk.Contracts;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -42,48 +40,28 @@ public class AppConfigWorkflowIntegrationTests
     }
 
     [Fact]
-    public async Task HandleOpenConfigAsync_WhenEmbeddedModeAndWorkflowReturnsUrl_ShouldReturnJumpUrl()
+    public async Task HandleOpenConfigAsync_WhenEmbeddedModeAndConfigUiHealthy_ShouldReturnJumpUrl()
     {
-        var terminalResult = JsonDocument.Parse(
-            """
-            {
-              "output": "{\"ok\":true,\"code\":\"OK\",\"data\":{\"url\":\"http://localhost:6677\",\"started\":true}}"
-            }
-            """).RootElement.Clone();
-        var runResult = new WorkflowRunResult(
-            [
-                WorkflowEvent.FromFrame(new WorkflowOutputFrame
-                {
-                    Type = WorkflowEventTypes.RunFinished,
-                    Result = terminalResult,
-                }),
-            ]);
-        var client = new StubWorkflowClient(runResult);
+        var port = AllocateTcpPort();
+        await using var app = await StartConfigHealthServerAsync(port);
 
         var result = await AppDemoPlaygroundEndpoints.HandleOpenConfigAsync(
-            new AppDemoPlaygroundEndpoints.AppConfigOpenRequest(6677),
-            client,
+            new AppDemoPlaygroundEndpoints.AppConfigOpenRequest(port),
             embeddedWorkflowMode: true,
             CancellationToken.None);
 
         var payload = ExtractResultPayload(result);
         payload.StatusCode.Should().Be(StatusCodes.Status200OK);
         payload.Json.RootElement.GetProperty("ok").GetBoolean().Should().BeTrue();
-        payload.Json.RootElement.GetProperty("configUrl").GetString().Should().Be("http://localhost:6677");
-        payload.Json.RootElement.GetProperty("started").GetBoolean().Should().BeTrue();
-        client.LastRunRequest.Should().NotBeNull();
-        client.LastRunRequest!.WorkflowYamls.Should().ContainSingle();
-        client.LastRunRequest.WorkflowYamls![0].Should().Contain("config ui ensure --no-browser --port 6677 --json");
-        client.LastRunRequest.WorkflowYamls![0].Should().NotContain("__CONFIG_UI_PORT__");
+        payload.Json.RootElement.GetProperty("configUrl").GetString().Should().Be($"http://localhost:{port}");
+        payload.Json.RootElement.GetProperty("started").GetBoolean().Should().BeFalse();
     }
 
     [Fact]
     public async Task HandleOpenConfigAsync_WhenProxyMode_ShouldReject()
     {
-        var client = new StubWorkflowClient(new WorkflowRunResult([]));
         var result = await AppDemoPlaygroundEndpoints.HandleOpenConfigAsync(
             new AppDemoPlaygroundEndpoints.AppConfigOpenRequest(null),
-            client,
             embeddedWorkflowMode: false,
             CancellationToken.None);
 
@@ -134,48 +112,4 @@ public class AppConfigWorkflowIntegrationTests
         return app;
     }
 
-    private sealed class StubWorkflowClient(WorkflowRunResult result) : IAevatarWorkflowClient
-    {
-        public ChatRunRequest? LastRunRequest { get; private set; }
-
-        public IAsyncEnumerable<WorkflowEvent> StartRunStreamAsync(ChatRunRequest request, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunResult> RunToCompletionAsync(ChatRunRequest request, CancellationToken cancellationToken = default)
-        {
-            LastRunRequest = request;
-            return Task.FromResult(result);
-        }
-
-        public Task<WorkflowResumeResponse> ResumeAsync(WorkflowResumeRequest request, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowSignalResponse> SignalAsync(WorkflowSignalRequest request, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<BridgeCallbackTokenIssueResponse> IssueBridgeCallbackTokenAsync(
-            BridgeCallbackTokenIssueRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<BridgeIngressResponse> PostBridgeCallbackAsync(
-            BridgeIngressRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<IReadOnlyList<JsonElement>> GetWorkflowCatalogAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<JsonElement?> GetCapabilitiesAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<JsonElement?> GetWorkflowDetailAsync(string workflowName, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<JsonElement?> GetActorSnapshotAsync(string actorId, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<IReadOnlyList<JsonElement>> GetActorTimelineAsync(string actorId, int take = 200, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-    }
 }

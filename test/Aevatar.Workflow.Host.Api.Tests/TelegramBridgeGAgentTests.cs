@@ -3,7 +3,6 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Extensions.Bridge;
 using FluentAssertions;
 using Google.Protobuf;
@@ -26,7 +25,6 @@ public sealed class TelegramBridgeGAgentTests
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
             new NoopActorRuntime(),
-            new NoopBridgeCallbackTokenService(),
             registry)
         {
             EventPublisher = publisher,
@@ -61,7 +59,6 @@ public sealed class TelegramBridgeGAgentTests
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
             new NoopActorRuntime(),
-            new NoopBridgeCallbackTokenService(),
             new InMemoryConnectorRegistry())
         {
             EventPublisher = publisher,
@@ -93,7 +90,6 @@ public sealed class TelegramBridgeGAgentTests
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
             new NoopActorRuntime(),
-            new NoopBridgeCallbackTokenService(),
             registry)
         {
             EventPublisher = publisher,
@@ -129,7 +125,6 @@ public sealed class TelegramBridgeGAgentTests
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramUserBridgeGAgent(
             new NoopActorRuntime(),
-            new NoopBridgeCallbackTokenService(),
             registry)
         {
             EventPublisher = publisher,
@@ -174,7 +169,6 @@ public sealed class TelegramBridgeGAgentTests
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
             new NoopActorRuntime(),
-            new NoopBridgeCallbackTokenService(),
             registry)
         {
             EventPublisher = publisher,
@@ -205,6 +199,139 @@ public sealed class TelegramBridgeGAgentTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_WhenWaitReplyGetsEditedMessage_ShouldReturnLatestMatchedContent()
+    {
+        var connector = new RecordingConnector(
+            new ConnectorResponse
+            {
+                Success = true,
+                Output =
+                    """{"ok":true,"result":[{"update_id":400,"message":{"chat":{"id":"10001"},"from":{"id":"1000","username":"aevatar_bot"},"text":"old-message"}}]}""",
+            },
+            new ConnectorResponse
+            {
+                Success = true,
+                Output =
+                    """{"ok":true,"result":[{"update_id":401,"message":{"chat":{"id":"10001"},"from":{"id":"2002","username":"openclaw_bot"},"text":"openclaw-reply-partial"}}]}""",
+            },
+            new ConnectorResponse
+            {
+                Success = true,
+                Output =
+                    """{"ok":true,"result":[{"update_id":402,"message":{"chat":{"id":"10001"},"from":{"id":"2002","username":"openclaw_bot"},"text":"openclaw-reply-final"}}]}""",
+            },
+            new ConnectorResponse
+            {
+                Success = true,
+                Output = """{"ok":true,"result":[]}""",
+            });
+        var registry = new InMemoryConnectorRegistry();
+        registry.Register(connector);
+        var publisher = new RecordingEventPublisher();
+        var agent = new TelegramBridgeGAgent(
+            new NoopActorRuntime(),
+            registry)
+        {
+            EventPublisher = publisher,
+        };
+
+        var request = new ChatRequestEvent
+        {
+            Prompt = "wait-edited",
+            SessionId = "session-wait-edited",
+        };
+        request.Metadata["chat_id"] = "10001";
+        request.Metadata["operation"] = "/waitReply";
+        request.Metadata["expected_from_username"] = "openclaw_bot";
+        request.Metadata["wait_timeout_ms"] = "5000";
+        request.Metadata["poll_timeout_sec"] = "1";
+        request.Metadata["start_from_latest"] = "true";
+
+        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+
+        connector.Received.Count.Should().BeGreaterThanOrEqualTo(4);
+        connector.Received.Should().OnlyContain(x => x.Operation == "/getUpdates");
+
+        var secondPayload = JsonDocument.Parse(connector.Received[1].Payload).RootElement;
+        secondPayload.GetProperty("offset").GetInt64().Should().Be(401);
+        var thirdPayload = JsonDocument.Parse(connector.Received[2].Payload).RootElement;
+        thirdPayload.GetProperty("offset").GetInt64().Should().Be(402);
+
+        var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
+        textEnd.SessionId.Should().Be("session-wait-edited");
+        textEnd.Content.Should().Be("openclaw-reply-final");
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_WhenCollectAllRepliesEnabled_ShouldReturnMergedReplies()
+    {
+        var connector = new RecordingConnector(
+            new ConnectorResponse
+            {
+                Success = true,
+                Output =
+                    """{"ok":true,"result":[{"update_id":500,"message":{"chat":{"id":"10001"},"from":{"id":"1000","username":"aevatar_bot"},"text":"old-message"}}]}""",
+            },
+            new ConnectorResponse
+            {
+                Success = true,
+                Output =
+                    """{"ok":true,"result":[{"update_id":501,"message":{"message_id":9001,"chat":{"id":"10001"},"from":{"id":"2002","username":"openclaw_bot"},"text":"openclaw-reply-part-1"}}]}""",
+            },
+            new ConnectorResponse
+            {
+                Success = true,
+                Output =
+                    """{"ok":true,"result":[{"update_id":502,"message":{"message_id":9002,"chat":{"id":"10001"},"from":{"id":"2002","username":"openclaw_bot"},"text":"openclaw-reply-part-2-draft"}}]}""",
+            },
+            new ConnectorResponse
+            {
+                Success = true,
+                Output =
+                    """{"ok":true,"result":[{"update_id":503,"message":{"message_id":9002,"chat":{"id":"10001"},"from":{"id":"2002","username":"openclaw_bot"},"text":"openclaw-reply-part-2-final"}}]}""",
+            },
+            new ConnectorResponse
+            {
+                Success = true,
+                Output = """{"ok":true,"result":[]}""",
+            },
+            new ConnectorResponse
+            {
+                Success = true,
+                Output = """{"ok":true,"result":[]}""",
+            });
+        var registry = new InMemoryConnectorRegistry();
+        registry.Register(connector);
+        var publisher = new RecordingEventPublisher();
+        var agent = new TelegramBridgeGAgent(
+            new NoopActorRuntime(),
+            registry)
+        {
+            EventPublisher = publisher,
+        };
+
+        var request = new ChatRequestEvent
+        {
+            Prompt = "wait-collect-all",
+            SessionId = "session-wait-collect-all",
+        };
+        request.Metadata["chat_id"] = "10001";
+        request.Metadata["operation"] = "/waitReply";
+        request.Metadata["expected_from_username"] = "openclaw_bot";
+        request.Metadata["wait_timeout_ms"] = "5000";
+        request.Metadata["poll_timeout_sec"] = "1";
+        request.Metadata["start_from_latest"] = "true";
+        request.Metadata["collect_all_replies"] = "true";
+        request.Metadata["settle_polls_after_match"] = "2";
+
+        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+
+        var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
+        textEnd.SessionId.Should().Be("session-wait-collect-all");
+        textEnd.Content.Should().Be("openclaw-reply-part-1\n\n---\n\nopenclaw-reply-part-2-final");
+    }
+
+    [Fact]
     public async Task HandleChatRequest_WhenWaitReplyMatchAppearsInBootstrapBatch_ShouldReturnImmediately()
     {
         var connector = new RecordingConnector(
@@ -219,7 +346,6 @@ public sealed class TelegramBridgeGAgentTests
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
             new NoopActorRuntime(),
-            new NoopBridgeCallbackTokenService(),
             registry)
         {
             EventPublisher = publisher,
@@ -263,7 +389,6 @@ public sealed class TelegramBridgeGAgentTests
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
             new NoopActorRuntime(),
-            new NoopBridgeCallbackTokenService(),
             registry)
         {
             EventPublisher = publisher,
@@ -298,7 +423,6 @@ public sealed class TelegramBridgeGAgentTests
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
             new NoopActorRuntime(),
-            new NoopBridgeCallbackTokenService(),
             registry)
         {
             EventPublisher = publisher,
@@ -339,7 +463,6 @@ public sealed class TelegramBridgeGAgentTests
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramUserBridgeGAgent(
             new NoopActorRuntime(),
-            new NoopBridgeCallbackTokenService(),
             registry)
         {
             EventPublisher = publisher,
@@ -422,16 +545,7 @@ public sealed class TelegramBridgeGAgentTests
         {
             _ = request;
             _ = ct;
-            return Task.Delay(TimeSpan.FromSeconds(30), CancellationToken.None)
-                .ContinueWith(
-                    static _ => new ConnectorResponse
-                    {
-                        Success = true,
-                        Output = """{"ok":true}""",
-                    },
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
+            return new TaskCompletionSource<ConnectorResponse>(TaskCreationOptions.RunContinuationsAsynchronously).Task;
         }
     }
 
@@ -507,47 +621,4 @@ public sealed class TelegramBridgeGAgentTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class NoopBridgeCallbackTokenService : IBridgeCallbackTokenService
-    {
-        public BridgeCallbackTokenIssueResult Issue(BridgeCallbackTokenIssueRequest request, DateTimeOffset nowUtc)
-        {
-            _ = request;
-            _ = nowUtc;
-            return new BridgeCallbackTokenIssueResult
-            {
-                Token = "noop",
-                TokenId = "noop",
-                Claims = new BridgeCallbackTokenClaims
-                {
-                    TokenId = "noop",
-                    ActorId = "a",
-                    RunId = "r",
-                    StepId = "s",
-                    SignalName = "signal",
-                    IssuedAtUnixTimeMs = 0,
-                    ExpiresAtUnixTimeMs = 1,
-                    Nonce = "n",
-                },
-            };
-        }
-
-        public bool TryValidate(string token, DateTimeOffset nowUtc, out BridgeCallbackTokenClaims claims, out string error)
-        {
-            _ = token;
-            _ = nowUtc;
-            claims = new BridgeCallbackTokenClaims
-            {
-                TokenId = "noop",
-                ActorId = "a",
-                RunId = "r",
-                StepId = "s",
-                SignalName = "signal",
-                IssuedAtUnixTimeMs = 0,
-                ExpiresAtUnixTimeMs = 1,
-                Nonce = "n",
-            };
-            error = "not used";
-            return false;
-        }
-    }
 }

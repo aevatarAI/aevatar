@@ -2,7 +2,19 @@
 
 Unified `aevatar` global tool.
 
-## Install (optional, as dotnet tool)
+## Install from NuGet
+
+```bash
+dotnet tool install --global aevatar
+```
+
+Update existing install:
+
+```bash
+dotnet tool update --global aevatar
+```
+
+## Install from local package (optional)
 
 ```bash
 # from repo root
@@ -95,6 +107,8 @@ Bundled Telegram/OpenClaw bridge demo workflow is available in app library:
 - treats Telegram group itself as the conversation stream (no OpenClaw callback required)
 - supports `${telegram.chat_id}` / `${telegram.openclaw_bot_username}` from `WorkflowRuntimeDefaults` in `config.json`
 - supports two-phase login: trigger code first, then collect verification code via `human_input`
+- `telegram_openclaw_file_operator`
+- uses multiple `human_input` checkpoints to capture small human decisions, then asks OpenClaw to write files and return file feedback JSON + file addresses
 
 ```bash
 # open app UI and auto-send chat prompt
@@ -137,6 +151,26 @@ URL precedence for both `aevatar chat` and `aevatar app`:
 1. command line override (`chat --url` / `app --api-base`)
 2. persisted config key `Cli:App:ApiBaseUrl` in `~/.aevatar/config.json`
 3. local embedded host URL (`http://localhost:<port>`)
+
+## Publish to NuGet (GitHub Actions)
+
+Workflow file: `.github/workflows/publish-aevatar-cli.yml`.
+
+Before first publish, configure repository secret:
+
+- `NUGET_API_KEY`: API key generated from [nuget.org](https://www.nuget.org/)
+
+Version behavior:
+
+- manual run (`workflow_dispatch`) with no input version:
+  - automatically queries NuGet for package `aevatar`
+  - uses fixed base `0.0`
+  - publishes next patch version (`0.0.1`, `0.0.2`, `0.0.3`, ...)
+- manual run with input `version`:
+  - publishes exactly that version (`x.y.z`)
+- git tag trigger:
+  - push tag `aevatar-vx.y.z` to publish exact version from tag
+  - example: `git tag aevatar-v0.0.5 && git push origin aevatar-v0.0.5`
 
 ## Compatibility
 

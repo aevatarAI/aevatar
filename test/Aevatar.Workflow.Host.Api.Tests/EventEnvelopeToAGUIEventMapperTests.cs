@@ -362,31 +362,6 @@ public class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
-    public void BridgeCallbackForwardedEvent_ProjectsTo_CustomBridgeForwardedEvent()
-    {
-        var envelope = Wrap(new BridgeCallbackForwardedEvent
-        {
-            TokenId = "tok-1",
-            ActorId = "actor-1",
-            RunId = "run-1",
-            StepId = "wait-1",
-            SignalName = "reply",
-            Late = true,
-            Source = "telegram.openclaw",
-            SourceMessageId = "msg-1",
-        });
-
-        var events = CreateMapper().Map(envelope);
-
-        events.Should().ContainSingle().Which.Should().BeOfType<CustomEvent>();
-        var custom = (CustomEvent)events[0];
-        custom.Name.Should().Be("aevatar.bridge.callback.forwarded");
-        var value = JsonSerializer.SerializeToElement(custom.Value);
-        value.GetProperty("TokenId").GetString().Should().Be("tok-1");
-        value.GetProperty("Late").GetBoolean().Should().BeTrue();
-    }
-
-    [Fact]
     public void UnknownPayload_ReturnsEmpty()
     {
         // ParentChangedEvent 没有投影规则
@@ -424,7 +399,6 @@ public class EventEnvelopeToAGUIEventMapperTests
             new WorkflowSuspendedAGUIEventEnvelopeMappingHandler(),
             new WorkflowWaitingSignalAGUIEventEnvelopeMappingHandler(),
             new WorkflowSignalBufferedAGUIEventEnvelopeMappingHandler(),
-            new BridgeCallbackAGUIEventEnvelopeMappingHandler(),
         ]);
     }
 }

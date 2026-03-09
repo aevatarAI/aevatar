@@ -8,6 +8,7 @@ using Aevatar.Workflow.Extensions.Bridge;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Sdk.DependencyInjection;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -79,6 +80,12 @@ internal static class AppToolHost
             builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
             builder.Services.AddWorkflowCapability(builder.Configuration);
             builder.Services.AddWorkflowBridgeExtensions();
+            builder.Services.PostConfigure<WorkflowDefinitionFileSourceOptions>(options =>
+            {
+                AddWorkflowDirectoryIfMissing(options.WorkflowDirectories, Path.Combine(toolDir, "workflows"));
+                AddWorkflowDirectoryIfMissing(options.WorkflowDirectories, Path.Combine(AevatarPaths.RepoRoot, "tools", "Aevatar.Tools.Cli", "workflows"));
+                AddWorkflowDirectoryIfMissing(options.WorkflowDirectories, Path.Combine(Environment.CurrentDirectory, "tools", "Aevatar.Tools.Cli", "workflows"));
+            });
         }
 
         var app = builder.Build();
@@ -160,6 +167,45 @@ internal static class AppToolHost
         Console.WriteLine("║  Press Ctrl+C to stop                                      ║");
         Console.WriteLine("╚═══════════════════════════════════════════════════════════╝");
         Console.WriteLine();
+    }
+
+    private static void AddWorkflowDirectoryIfMissing(ICollection<string> directories, string candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+            return;
+
+        string normalizedCandidate;
+        try
+        {
+            normalizedCandidate = Path.GetFullPath(candidate);
+        }
+        catch
+        {
+            return;
+        }
+
+        foreach (var existing in directories)
+        {
+            if (string.IsNullOrWhiteSpace(existing))
+                continue;
+
+            try
+            {
+                if (string.Equals(
+                        Path.GetFullPath(existing),
+                        normalizedCandidate,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+            catch
+            {
+                // Ignore malformed existing paths and continue.
+            }
+        }
+
+        directories.Add(candidate);
     }
 
     internal static IReadOnlyList<string> LoadNamedConnectors(IServiceProvider services, string? connectorsJsonPath = null)

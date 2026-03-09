@@ -10,7 +10,6 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Sdk;
 using Aevatar.Workflow.Sdk.Contracts;
-using Aevatar.Workflow.Sdk.Errors;
 using QueryWorkflowCatalogItem = Aevatar.Workflow.Application.Abstractions.Queries.WorkflowCatalogItem;
 using QueryWorkflowCatalogItemDetail = Aevatar.Workflow.Application.Abstractions.Queries.WorkflowCatalogItemDetail;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,9 +21,6 @@ internal static class AppDemoPlaygroundEndpoints
     private const int AutoResumeDelayMs = 50;
     internal const string AppConfigOpenRoute = "/api/app/config/open";
     private const int DefaultConfigUiPort = 6677;
-    private const string AppConfigOpenWorkflowName = "app_open_config";
-    private const string AppConfigOpenWorkflowFileName = AppConfigOpenWorkflowName + ".yaml";
-    private const string ConfigUiPortToken = "__CONFIG_UI_PORT__";
     private static readonly UTF8Encoding Utf8NoBom = new(false);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -45,7 +41,6 @@ internal static class AppDemoPlaygroundEndpoints
         "human_approval",
         "wait_signal",
         "connector_call",
-        "aevatar_call",
     };
 
     private static readonly IReadOnlyDictionary<string, string[]> CuratedPrimitiveExamples =
@@ -89,7 +84,6 @@ internal static class AppDemoPlaygroundEndpoints
             ["emit"] = ["emit", "publish"],
             ["wait_signal"] = ["wait_signal", "wait"],
             ["connector_call"] = ["connector_call", "bridge_call", "cli_call", "mcp_call", "http_get", "http_post", "http_put", "http_delete"],
-            ["aevatar_call"] = ["aevatar_call", "aevatar"],
             ["vote"] = ["vote", "vote_consensus"],
             ["workflow_call"] = ["workflow_call", "sub_workflow"],
             ["while"] = ["while", "loop"],
@@ -221,12 +215,6 @@ internal static class AppDemoPlaygroundEndpoints
                 [
                     new PrimitiveParameter("tool", "Tool name to execute.", null, null),
                 ]),
-            ["aevatar_call"] = new(
-                "Executes an Aevatar CLI command from the workflow runtime.",
-                [
-                    new PrimitiveParameter("args", "Arguments passed to the aevatar CLI command.", null, null),
-                    new PrimitiveParameter("timeout_ms", "Maximum allowed runtime for the command.", null, null),
-                ]),
             ["emit"] = new(
                 "Publishes an event or message to another part of the system so downstream consumers can react asynchronously.",
                 [
@@ -257,11 +245,6 @@ internal static class AppDemoPlaygroundEndpoints
                 Array.Empty<PrimitiveParameter>()),
         };
 
-    private static readonly HashSet<string> HiddenWorkflowCatalogNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        AppConfigOpenWorkflowName,
-    };
-
     public static void Map(IEndpointRouteBuilder app, bool embeddedWorkflowMode)
     {
         app.MapGet("/api/workflows", (IAevatarWorkflowClient client, IServiceProvider services, CancellationToken ct) =>
@@ -279,8 +262,8 @@ internal static class AppDemoPlaygroundEndpoints
             HandlePrimitivesAsync(client, services, embeddedWorkflowMode, ct));
         app.MapPost("/api/playground/parse", HandlePlaygroundParseAsync);
         app.MapPost("/api/playground/workflows", HandleSavePlaygroundWorkflowAsync);
-        app.MapPost(AppConfigOpenRoute, (AppConfigOpenRequest? input, IAevatarWorkflowClient client, CancellationToken ct) =>
-            HandleOpenConfigAsync(input, client, embeddedWorkflowMode, ct));
+        app.MapPost(AppConfigOpenRoute, (AppConfigOpenRequest? input, CancellationToken ct) =>
+            HandleOpenConfigAsync(input, embeddedWorkflowMode, ct));
     }
 
     private static async Task<IResult> HandleListWorkflows(
@@ -1059,7 +1042,6 @@ internal static class AppDemoPlaygroundEndpoints
 
     internal static async Task<IResult> HandleOpenConfigAsync(
         AppConfigOpenRequest? input,
-        IAevatarWorkflowClient client,
         bool embeddedWorkflowMode,
         CancellationToken ct)
     {
@@ -1076,50 +1058,37 @@ internal static class AppDemoPlaygroundEndpoints
             });
         }
 
-        if (!TryLoadAppConfigOpenWorkflowTemplate(out var workflowTemplate, out var loadError))
-        {
-            return Results.Json(
-                new
-                {
-                    ok = false,
-                    code = "APP_CONFIG_OPEN_WORKFLOW_MISSING",
-                    message = loadError,
-                },
-                statusCode: StatusCodes.Status500InternalServerError);
-        }
-
-        var workflowYaml = workflowTemplate.Replace(
-            ConfigUiPortToken,
-            normalizedPort.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            StringComparison.Ordinal);
-
         try
         {
-            var runResult = await client.RunToCompletionAsync(
-                new ChatRunRequest
-                {
-                    Prompt = $"Open local config UI on port {normalizedPort}.",
-                    WorkflowYamls = [workflowYaml],
-                },
+            var ensureResult = await ConfigCommandHandler.EnsureUiAsync(
+                normalizedPort,
+                noBrowser: true,
                 ct);
-            var workflowOutput = ExtractWorkflowOutput(runResult);
-            var configUrl = TryExtractConfigUiUrl(workflowOutput) ?? fallbackConfigUrl;
-            var started = TryExtractConfigUiStarted(workflowOutput);
 
             return Results.Json(new
             {
                 ok = true,
-                configUrl,
-                port = normalizedPort,
-                started = started ?? false,
+                configUrl = ensureResult.Url,
+                port = ensureResult.Port,
+                started = ensureResult.Started,
             });
         }
-        catch (AevatarWorkflowException ex)
+        catch (InvalidOperationException ex)
         {
             return Results.BadRequest(new
             {
                 ok = false,
-                code = ex.Kind.ToString(),
+                code = "APP_CONFIG_OPEN_FAILED",
+                message = ex.Message,
+                configUrl = fallbackConfigUrl,
+            });
+        }
+        catch (TimeoutException ex)
+        {
+            return Results.BadRequest(new
+            {
+                ok = false,
+                code = "APP_CONFIG_OPEN_TIMEOUT",
                 message = ex.Message,
                 configUrl = fallbackConfigUrl,
             });
@@ -1146,169 +1115,6 @@ internal static class AppDemoPlaygroundEndpoints
     }
 
     private static string BuildConfigUiUrl(int port) => $"http://localhost:{port}";
-
-    private static bool TryLoadAppConfigOpenWorkflowTemplate(
-        out string workflowTemplate,
-        out string error)
-    {
-        var candidates = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "workflows", AppConfigOpenWorkflowFileName),
-            Path.Combine(AevatarPaths.RepoRoot, "tools", "Aevatar.Tools.Cli", "workflows", AppConfigOpenWorkflowFileName),
-            Path.Combine(Environment.CurrentDirectory, "tools", "Aevatar.Tools.Cli", "workflows", AppConfigOpenWorkflowFileName),
-            Path.Combine(Environment.CurrentDirectory, "workflows", AppConfigOpenWorkflowFileName),
-        };
-
-        foreach (var candidate in candidates)
-        {
-            if (!File.Exists(candidate))
-                continue;
-
-            workflowTemplate = File.ReadAllText(candidate);
-            if (!string.IsNullOrWhiteSpace(workflowTemplate))
-            {
-                error = string.Empty;
-                return true;
-            }
-        }
-
-        workflowTemplate = string.Empty;
-        error = $"Workflow template '{AppConfigOpenWorkflowFileName}' was not found in expected locations.";
-        return false;
-    }
-
-    private static string ExtractWorkflowOutput(WorkflowRunResult runResult)
-    {
-        var terminalResult = runResult.TerminalEvent?.Frame.Result;
-        var output = ExtractRunOutput(terminalResult);
-        if (!string.IsNullOrWhiteSpace(output))
-            return output;
-
-        foreach (var evt in runResult.Events.Reverse())
-        {
-            if (!string.Equals(evt.Frame.Type, WorkflowEventTypes.Custom, StringComparison.Ordinal))
-                continue;
-            if (!string.Equals(evt.Frame.Name, "aevatar.step.completed", StringComparison.Ordinal))
-                continue;
-            if (evt.Frame.Value is not { } value)
-                continue;
-
-            var candidate = ReadJsonValue(value, "output", "Output");
-            if (!string.IsNullOrWhiteSpace(candidate))
-                return candidate;
-        }
-
-        return string.Empty;
-    }
-
-    private static string? TryExtractConfigUiUrl(string output)
-    {
-        if (string.IsNullOrWhiteSpace(output))
-            return null;
-
-        var trimmed = output.Trim();
-        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var directUrl))
-            return directUrl.ToString();
-
-        try
-        {
-            using var doc = JsonDocument.Parse(trimmed);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                return null;
-
-            if (TryReadJsonString(doc.RootElement, out var topUrl, "configUrl", "url"))
-                return topUrl;
-
-            if (!doc.RootElement.TryGetProperty("data", out var data) ||
-                data.ValueKind != JsonValueKind.Object)
-            {
-                return null;
-            }
-
-            return TryReadJsonString(data, out var nestedUrl, "configUrl", "url")
-                ? nestedUrl
-                : null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static bool? TryExtractConfigUiStarted(string output)
-    {
-        if (string.IsNullOrWhiteSpace(output))
-            return null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(output);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                return null;
-
-            if (TryReadJsonBool(doc.RootElement, out var topStarted, "started"))
-                return topStarted;
-
-            if (!doc.RootElement.TryGetProperty("data", out var data) ||
-                data.ValueKind != JsonValueKind.Object)
-            {
-                return null;
-            }
-
-            return TryReadJsonBool(data, out var nestedStarted, "started")
-                ? nestedStarted
-                : null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static bool TryReadJsonString(JsonElement element, out string value, params string[] keys)
-    {
-        foreach (var key in keys)
-        {
-            if (element.TryGetProperty(key, out var property) &&
-                property.ValueKind == JsonValueKind.String)
-            {
-                var candidate = property.GetString();
-                if (!string.IsNullOrWhiteSpace(candidate))
-                {
-                    value = candidate.Trim();
-                    return true;
-                }
-            }
-        }
-
-        value = string.Empty;
-        return false;
-    }
-
-    private static bool TryReadJsonBool(JsonElement element, out bool value, params string[] keys)
-    {
-        foreach (var key in keys)
-        {
-            if (!element.TryGetProperty(key, out var property))
-                continue;
-
-            if (property.ValueKind is JsonValueKind.True or JsonValueKind.False)
-            {
-                value = property.GetBoolean();
-                return true;
-            }
-
-            if (property.ValueKind == JsonValueKind.String &&
-                bool.TryParse(property.GetString(), out var parsed))
-            {
-                value = parsed;
-                return true;
-            }
-        }
-
-        value = false;
-        return false;
-    }
 
     private static async Task TryAutoResumeAsync(
         IReadOnlyDictionary<string, object?> suspendedData,
@@ -1676,9 +1482,6 @@ internal static class AppDemoPlaygroundEndpoints
         foreach (var workflowFile in DiscoverWorkflowFiles().Values
                      .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
         {
-            if (HiddenWorkflowCatalogNames.Contains(workflowFile.Name))
-                continue;
-
             try
             {
                 var yaml = File.ReadAllText(workflowFile.FilePath);
@@ -1960,7 +1763,7 @@ internal static class AppDemoPlaygroundEndpoints
             "guard" or "conditional" or "switch" or "while" or "delay" or "wait_signal" or "checkpoint" => "control",
             "foreach" or "parallel" or "race" or "map_reduce" or "workflow_call" or "vote" => "composition",
             "llm_call" or "tool_call" or "evaluate" or "reflect" => "ai",
-            "connector_call" or "aevatar_call" or "emit" => "integration",
+            "connector_call" or "emit" => "integration",
             "human_input" or "human_approval" => "human",
             _ => "general",
         };

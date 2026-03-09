@@ -52,30 +52,6 @@ public sealed record WorkflowSignalInput
     public string? Payload { get; init; }
 }
 
-public sealed record BridgeCallbackTokenIssueInput
-{
-    public required string ActorId { get; init; }
-    public required string RunId { get; init; }
-    public required string StepId { get; init; }
-    public required string SignalName { get; init; }
-    public int? TimeoutMs { get; init; }
-    public string? ChannelId { get; init; }
-    public string? SessionId { get; init; }
-    public IDictionary<string, string>? Metadata { get; init; }
-}
-
-public sealed record BridgeIngressInput
-{
-    public required string CallbackToken { get; init; }
-    public string? Payload { get; init; }
-    public required string Source { get; init; }
-    public string? SourceMessageId { get; init; }
-    public string? SourceChatId { get; init; }
-    public string? SourceUserId { get; init; }
-    public long? ReceivedAtUnixTimeMs { get; init; }
-    public string? CommandId { get; init; }
-}
-
 internal sealed record ChatWsCommand
 {
     public string Type { get; init; } = ChatCapabilityMessageTypes.ChatCommand;

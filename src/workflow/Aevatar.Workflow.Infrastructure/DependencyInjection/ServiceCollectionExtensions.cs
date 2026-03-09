@@ -2,7 +2,6 @@ using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Infrastructure.Bridge;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Infrastructure.Workflows;
@@ -19,7 +18,6 @@ public static class ServiceCollectionExtensions
         Action<WorkflowExecutionReportArtifactOptions>? configureReports = null)
     {
         services.AddOptions<WorkflowExecutionReportArtifactOptions>();
-        services.AddOptions<WorkflowBridgeOptions>();
         if (configureReports != null)
             services.Configure(configureReports);
 
@@ -28,7 +26,6 @@ public static class ServiceCollectionExtensions
         // Infrastructure must use Replace to override it.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>());
         services.TryAddSingleton<IWorkflowRunActorPort, WorkflowRunActorPort>();
-        services.TryAddSingleton<IBridgeCallbackTokenService, HmacBridgeCallbackTokenService>();
         services.TryAddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
         return services;
     }

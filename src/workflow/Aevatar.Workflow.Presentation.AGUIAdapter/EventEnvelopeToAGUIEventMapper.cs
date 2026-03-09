@@ -497,68 +497,6 @@ public sealed class WorkflowSignalBufferedAGUIEventEnvelopeMappingHandler : IAGU
     }
 }
 
-public sealed class BridgeCallbackAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
-{
-    public int Order => 48;
-
-    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
-    {
-        if (envelope.Payload?.Is(BridgeCallbackForwardedEvent.Descriptor) == true)
-        {
-            var evt = envelope.Payload.Unpack<BridgeCallbackForwardedEvent>();
-            events =
-            [
-                new CustomEvent
-                {
-                    Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
-                    Name = "aevatar.bridge.callback.forwarded",
-                    Value = new
-                    {
-                        evt.TokenId,
-                        evt.ActorId,
-                        evt.RunId,
-                        evt.StepId,
-                        evt.SignalName,
-                        evt.Late,
-                        evt.Source,
-                        evt.SourceMessageId,
-                        evt.SourceChatId,
-                        evt.SourceUserId,
-                        evt.ReceivedAtUnixTimeMs,
-                        evt.ForwardedAtUnixTimeMs,
-                    },
-                },
-            ];
-            return true;
-        }
-
-        if (envelope.Payload?.Is(BridgeCallbackRejectedEvent.Descriptor) == true)
-        {
-            var evt = envelope.Payload.Unpack<BridgeCallbackRejectedEvent>();
-            events =
-            [
-                new CustomEvent
-                {
-                    Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
-                    Name = "aevatar.bridge.callback.rejected",
-                    Value = new
-                    {
-                        evt.TokenId,
-                        evt.Reason,
-                        evt.Source,
-                        evt.SourceMessageId,
-                        evt.ReceivedAtUnixTimeMs,
-                    },
-                },
-            ];
-            return true;
-        }
-
-        events = [];
-        return false;
-    }
-}
-
 internal static class AGUIEventEnvelopeMappingHelpers
 {
     public static long? ToUnixMs(Timestamp? ts)

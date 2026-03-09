@@ -35,7 +35,7 @@
     retrieve_facts: "#3b82f6", emit: "#f43f5e", delay: "#f59e0b", checkpoint: "#6366f1",
     wait_signal: "#f59e0b", human_approval: "#f97316", human_input: "#f97316", secure_input: "#dc2626",
     workflow_call: "#6366f1", vote_consensus: "#22c55e", tool_call: "#a855f7",
-    connector_call: "#14b8a6", secure_connector_call: "#0f766e", secure_aevatar_call: "#0f766e", workflow_loop: "#64748b",
+    connector_call: "#14b8a6", secure_connector_call: "#0f766e", workflow_loop: "#64748b",
   };
   const WORKFLOW_GROUP_ORDER = [
     "your-workflows",
@@ -1819,6 +1819,18 @@
     const stepId = interaction.stepId || "";
     const signalName = interaction.signalName || "";
 
+    const clearIfStillCurrentInteraction = () => {
+      const current = prefix === "pg" ? pgPendingInteraction : pendingInteraction;
+      if (!current) return;
+      if (String(current.runId || "") !== String(runId || "")) return;
+      if (String(current.stepId || "") !== String(stepId || "")) return;
+      if (String(current.type || "").toLowerCase() !== type) return;
+      if (type === "wait_signal" &&
+          String(current.signalName || "") !== String(signalName || ""))
+        return;
+      clearFn();
+    };
+
     if (!runId || !actorId) return;
 
     if (type === "human_approval") {
@@ -1841,7 +1853,7 @@
             userInput: comment,
           });
           logFn("action", approved ? "✍ Approval submitted" : "✍ Rejection submitted", comment || "(no comment)");
-          clearFn();
+          clearIfStillCurrentInteraction();
         } catch (e) {
           logFn("error", "\u274C Resume failed", e.message || String(e));
         } finally {
@@ -1876,7 +1888,7 @@
           }
           await postJson("/api/workflows/signal", signalRequest);
           logFn("action", "✍ Signal submitted", payload || "(empty payload)");
-          clearFn();
+          clearIfStillCurrentInteraction();
         } catch (e) {
           logFn("error", "\u274C Signal failed", e.message || String(e));
         } finally {
@@ -1906,7 +1918,7 @@
           "action",
           isSecureInteraction(interaction) ? "✍ Secure input submitted" : "✍ Human input submitted",
           isSecureInteraction(interaction) ? "(secure input hidden)" : (userInput || "(empty input)"));
-          clearFn();
+          clearIfStillCurrentInteraction();
         } catch (e) {
           logFn("error", "\u274C Resume failed", e.message || String(e));
         } finally {

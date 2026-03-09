@@ -31,8 +31,6 @@ public static class WorkflowPrimitiveCatalog
             ["http_put"] = "connector_call",
             ["http_delete"] = "connector_call",
             ["secure_connector"] = "secure_connector_call",
-            ["aevatar"] = "aevatar_call",
-            ["secure_aevatar"] = "secure_aevatar_call",
             ["secret_input"] = "secure_input",
             // Keep runtime module matching stable: VoteConsensusModule currently handles "vote".
             ["vote_consensus"] = "vote",
@@ -44,8 +42,6 @@ public static class WorkflowPrimitiveCatalog
         "tool_call",
         "connector_call",
         "secure_connector_call",
-        "aevatar_call",
-        "secure_aevatar_call",
         "evaluate",
         "reflect",
         "human_input",

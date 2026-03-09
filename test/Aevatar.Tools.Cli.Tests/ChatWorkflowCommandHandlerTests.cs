@@ -283,16 +283,6 @@ public class ChatWorkflowCommandHandlerTests
         public Task<WorkflowSignalResponse> SignalAsync(WorkflowSignalRequest request, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<BridgeCallbackTokenIssueResponse> IssueBridgeCallbackTokenAsync(
-            BridgeCallbackTokenIssueRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<BridgeIngressResponse> PostBridgeCallbackAsync(
-            BridgeIngressRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
         public Task<IReadOnlyList<JsonElement>> GetWorkflowCatalogAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 

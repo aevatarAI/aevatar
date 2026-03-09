@@ -166,13 +166,6 @@ public sealed class RunSessionTracker
             _lastSignalName = bufferedSignal.SignalName ?? _lastSignalName;
             return;
         }
-
-        if (WorkflowCustomEventParser.TryParseBridgeCallbackForwarded(customEventName, value, out var forwarded))
-        {
-            _runId = forwarded.RunId ?? _runId;
-            _stepId = forwarded.StepId ?? _stepId;
-            _lastSignalName = forwarded.SignalName ?? _lastSignalName;
-        }
     }
 
     private void EnsureResumeContext()

@@ -87,28 +87,6 @@ public sealed class WorkflowCustomEventParserTests
         data.ReceivedAtUnixTimeMs.Should().Be(1710000000000);
     }
 
-    [Fact]
-    public void TryParseBridgeCallbackForwarded_ShouldReturnTypedPayload()
-    {
-        var frame = new WorkflowOutputFrame
-        {
-            Type = WorkflowEventTypes.Custom,
-            Name = WorkflowCustomEventNames.BridgeCallbackForwarded,
-            Value = ParseObject("""{"tokenId":"tok-1","actorId":"actor-1","runId":"run-1","stepId":"wait-1","signalName":"ready","late":true,"source":"telegram.openclaw"}"""),
-        };
-
-        var ok = WorkflowCustomEventParser.TryParseBridgeCallbackForwarded(frame, out var data);
-
-        ok.Should().BeTrue();
-        data.TokenId.Should().Be("tok-1");
-        data.ActorId.Should().Be("actor-1");
-        data.RunId.Should().Be("run-1");
-        data.StepId.Should().Be("wait-1");
-        data.SignalName.Should().Be("ready");
-        data.Late.Should().BeTrue();
-        data.Source.Should().Be("telegram.openclaw");
-    }
-
     private static JsonElement ParseObject(string json)
     {
         using var document = JsonDocument.Parse(json);

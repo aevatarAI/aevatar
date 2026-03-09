@@ -1,7 +1,6 @@
 using Aevatar.Configuration;
 using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Infrastructure.Bridge;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
@@ -27,8 +26,6 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.AddWorkflowDefinitionFileSource(options =>
         {
             options.WorkflowDirectories.Add(Path.Combine(AppContext.BaseDirectory, "workflows"));
-            options.WorkflowDirectories.Add(Path.Combine(AevatarPaths.RepoRoot, "tools", "Aevatar.Tools.Cli", "workflows"));
-            options.WorkflowDirectories.Add(Path.Combine(Directory.GetCurrentDirectory(), "tools", "Aevatar.Tools.Cli", "workflows"));
             options.WorkflowDirectories.Add(Path.Combine(AevatarPaths.RepoRoot, "demos", "Aevatar.Demos.Workflow", "workflows"));
             options.WorkflowDirectories.Add(Path.Combine(AevatarPaths.RepoRoot, "workflows", "turing-completeness"));
             options.WorkflowDirectories.Add(AevatarPaths.RepoRootWorkflows);
@@ -38,7 +35,6 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         });
         services.AddWorkflowInfrastructure(options =>
             configuration.GetSection("WorkflowExecutionReportArtifacts").Bind(options));
-        services.Configure<WorkflowBridgeOptions>(configuration.GetSection("WorkflowBridge"));
         return services;
     }
 }

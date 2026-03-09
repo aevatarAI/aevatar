@@ -46,76 +46,9 @@ public sealed class AppBridgeEndpointsTests
         result.Should().NotBeNull();
     }
 
-    [Fact]
-    public async Task HandleBridgeCallbackTokenIssueAsync_WhenRequestIsValid_ShouldForwardToClient()
-    {
-        var method = typeof(AppBridgeEndpoints).GetMethod(
-            "HandleBridgeCallbackTokenIssueAsync",
-            BindingFlags.Static | BindingFlags.NonPublic);
-        method.Should().NotBeNull();
-
-        var client = new CapturingWorkflowClient();
-        var request = new BridgeCallbackTokenIssueRequest
-        {
-            ActorId = "actor-bridge",
-            RunId = "run-bridge",
-            StepId = "wait_openclaw_reply",
-            SignalName = "openclaw_reply",
-            TimeoutMs = 120000,
-            ChannelId = "telegram-group-1",
-        };
-
-        var task = method!
-            .Invoke(null, new object?[] { request, client, CancellationToken.None })
-            .Should()
-            .BeAssignableTo<Task<IResult>>()
-            .Subject;
-
-        var result = await task;
-        client.LastBridgeTokenIssueRequest.Should().NotBeNull();
-        client.LastBridgeTokenIssueRequest!.ActorId.Should().Be("actor-bridge");
-        client.LastBridgeTokenIssueRequest.RunId.Should().Be("run-bridge");
-        client.LastBridgeTokenIssueRequest.StepId.Should().Be("wait_openclaw_reply");
-        client.LastBridgeTokenIssueRequest.SignalName.Should().Be("openclaw_reply");
-        result.Should().NotBeNull();
-    }
-
-    [Fact]
-    public async Task HandleBridgeCallbackAsync_WhenRequestIsValid_ShouldForwardToClient()
-    {
-        var method = typeof(AppBridgeEndpoints).GetMethod(
-            "HandleBridgeCallbackAsync",
-            BindingFlags.Static | BindingFlags.NonPublic);
-        method.Should().NotBeNull();
-
-        var client = new CapturingWorkflowClient();
-        var request = new BridgeIngressRequest
-        {
-            CallbackToken = "token-123",
-            Source = "telegram.openclaw",
-            Payload = """{"text":"done"}""",
-            SourceMessageId = "msg-1",
-        };
-
-        var task = method!
-            .Invoke(null, new object?[] { request, client, CancellationToken.None })
-            .Should()
-            .BeAssignableTo<Task<IResult>>()
-            .Subject;
-
-        var result = await task;
-        client.LastBridgeIngressRequest.Should().NotBeNull();
-        client.LastBridgeIngressRequest!.CallbackToken.Should().Be("token-123");
-        client.LastBridgeIngressRequest.Source.Should().Be("telegram.openclaw");
-        client.LastBridgeIngressRequest.Payload.Should().Be("""{"text":"done"}""");
-        result.Should().NotBeNull();
-    }
-
     private sealed class CapturingWorkflowClient : IAevatarWorkflowClient
     {
         public WorkflowSignalRequest? LastSignalRequest { get; private set; }
-        public BridgeCallbackTokenIssueRequest? LastBridgeTokenIssueRequest { get; private set; }
-        public BridgeIngressRequest? LastBridgeIngressRequest { get; private set; }
 
         public IAsyncEnumerable<WorkflowEvent> StartRunStreamAsync(
             ChatRunRequest request,
@@ -145,36 +78,6 @@ public sealed class AppBridgeEndpointsTests
                 SignalName = request.SignalName,
                 StepId = request.StepId,
                 CommandId = request.CommandId,
-            });
-        }
-
-        public Task<BridgeCallbackTokenIssueResponse> IssueBridgeCallbackTokenAsync(
-            BridgeCallbackTokenIssueRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            LastBridgeTokenIssueRequest = request;
-            return Task.FromResult(new BridgeCallbackTokenIssueResponse
-            {
-                Token = "token-123",
-                TokenId = "token-id-123",
-                ActorId = request.ActorId,
-                RunId = request.RunId,
-                StepId = request.StepId,
-                SignalName = request.SignalName,
-                BridgeActorId = "bridge:telegram:openclaw",
-            });
-        }
-
-        public Task<BridgeIngressResponse> PostBridgeCallbackAsync(
-            BridgeIngressRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            LastBridgeIngressRequest = request;
-            return Task.FromResult(new BridgeIngressResponse
-            {
-                Accepted = true,
-                CommandId = "bridge-cmd-1",
-                BridgeActorId = "bridge:telegram:openclaw",
             });
         }
 

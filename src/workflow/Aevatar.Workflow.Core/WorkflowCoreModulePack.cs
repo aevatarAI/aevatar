@@ -22,7 +22,6 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<LLMCallModule>("llm_call"),
         WorkflowModuleRegistration.Create<ToolCallModule>("tool_call"),
         WorkflowModuleRegistration.Create<ConnectorCallModule>("connector_call", "bridge_call", "secure_connector_call", "secure_connector"),
-        WorkflowModuleRegistration.Create<AevatarCallModule>("aevatar_call", "aevatar", "secure_aevatar_call", "secure_aevatar"),
         WorkflowModuleRegistration.Create<TransformModule>("transform"),
         WorkflowModuleRegistration.Create<RetrieveFactsModule>("retrieve_facts"),
         WorkflowModuleRegistration.Create<WaitSignalModule>("wait_signal", "wait"),

@@ -41,8 +41,6 @@ public class ChatEndpointsInternalTests
         routePatterns.Should().Contain("/api/chat");
         routePatterns.Should().Contain("/api/workflows/resume");
         routePatterns.Should().Contain("/api/workflows/signal");
-        routePatterns.Should().Contain("/api/bridge/callback-token");
-        routePatterns.Should().Contain("/api/bridge/callbacks");
         routePatterns.Should().Contain("/api/agents");
         routePatterns.Should().Contain("/api/workflows");
         routePatterns.Should().Contain("/api/ws/chat");

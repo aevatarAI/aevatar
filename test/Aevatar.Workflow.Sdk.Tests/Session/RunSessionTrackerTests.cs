@@ -118,7 +118,7 @@ public sealed class RunSessionTrackerTests
     }
 
     [Fact]
-    public void Track_ShouldCaptureSignalContextFromBufferedAndBridgeForwardedEvents()
+    public void Track_ShouldCaptureSignalContextFromBufferedEvents()
     {
         var tracker = new RunSessionTracker();
         tracker.Track(new WorkflowOutputFrame
@@ -137,17 +137,6 @@ public sealed class RunSessionTrackerTests
         tracker.Snapshot.RunId.Should().Be("run-buf");
         tracker.Snapshot.StepId.Should().Be("wait-buf");
         tracker.Snapshot.LastSignalName.Should().Be("buffered_ready");
-
-        tracker.Track(new WorkflowOutputFrame
-        {
-            Type = WorkflowEventTypes.Custom,
-            Name = WorkflowCustomEventNames.BridgeCallbackForwarded,
-            Value = ParseObject("""{"tokenId":"tok-1","runId":"run-forward","stepId":"wait-forward","signalName":"forwarded_ready"}"""),
-        });
-
-        tracker.Snapshot.RunId.Should().Be("run-forward");
-        tracker.Snapshot.StepId.Should().Be("wait-forward");
-        tracker.Snapshot.LastSignalName.Should().Be("forwarded_ready");
     }
 
     private static JsonElement ParseObject(string json)

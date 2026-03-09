@@ -131,45 +131,13 @@ if (snapshot.CanSignal)
 - `aevatar.human_input.request`
 - `aevatar.workflow.waiting_signal`
 - `aevatar.workflow.signal.buffered`
-- `aevatar.bridge.callback.forwarded`
 - `aevatar.llm.reasoning`
 
 解析工具见 `WorkflowCustomEventParser`。
 
 ---
 
-## 5. Bridge 回调（外部系统接入）
-
-典型流程：
-
-1. 在等待信号步骤签发 callback token
-2. 外部系统拿 token 回调 `/api/bridge/callbacks`
-
-```csharp
-var token = await client.IssueBridgeCallbackTokenAsync(
-    new BridgeCallbackTokenIssueRequest
-    {
-        ActorId = "actor-1",
-        RunId = "run-1",
-        StepId = "wait-openclaw",
-        SignalName = "openclaw_reply",
-        TimeoutMs = 30_000,
-    },
-    cancellationToken);
-
-await client.PostBridgeCallbackAsync(
-    new BridgeIngressRequest
-    {
-        CallbackToken = token.Token!,
-        Source = "telegram.openclaw",
-        Payload = "openclaw answer",
-    },
-    cancellationToken);
-```
-
----
-
-## 6. 查询接口
+## 5. 查询接口
 
 ```csharp
 var catalog = await client.GetWorkflowCatalogAsync(cancellationToken);
@@ -187,7 +155,7 @@ var timeline = await client.GetActorTimelineAsync("actor-1", take: 200, cancella
 
 ---
 
-## 7. 错误模型
+## 6. 错误模型
 
 统一抛出 `AevatarWorkflowException`，按 `Kind` 区分错误类别：
 
@@ -199,7 +167,7 @@ var timeline = await client.GetActorTimelineAsync("actor-1", take: 200, cancella
 
 ---
 
-## 8. 非 DI 场景（手动构造）
+## 7. 非 DI 场景（手动构造）
 
 ```csharp
 using Aevatar.Workflow.Sdk.Options;
@@ -224,13 +192,11 @@ IAevatarWorkflowClient client = new AevatarWorkflowClient(
 
 ---
 
-## 9. 与 Host 端点的对应关系
+## 8. 与 Host 端点的对应关系
 
 - `StartRunStreamAsync` / `RunToCompletionAsync` -> `POST /api/chat`（SSE）
 - `ResumeAsync` -> `POST /api/workflows/resume`
 - `SignalAsync` -> `POST /api/workflows/signal`
-- `IssueBridgeCallbackTokenAsync` -> `POST /api/bridge/callback-token`
-- `PostBridgeCallbackAsync` -> `POST /api/bridge/callbacks`
 - `GetWorkflowCatalogAsync` -> `GET /api/workflow-catalog`
 - `GetCapabilitiesAsync` -> `GET /api/capabilities`
 - `GetWorkflowDetailAsync` -> `GET /api/workflows/{workflowName}`
