@@ -38,6 +38,7 @@ public static class ServiceCollectionExtensions
             services.AddGarnetEventStore(garnetOptions =>
             {
                 garnetOptions.ConnectionString = options.GarnetConnectionString;
+                garnetOptions.KeyPrefix = options.GarnetEventStoreKeyPrefix;
             });
         }
         else
@@ -96,6 +97,7 @@ public static class ServiceCollectionExtensions
                 orleansOptions.ActorEventNamespace = options.ActorEventNamespace;
                 orleansOptions.PersistenceBackend = options.PersistenceBackend;
                 orleansOptions.GarnetConnectionString = options.GarnetConnectionString;
+                orleansOptions.GarnetEventStoreKeyPrefix = options.GarnetEventStoreKeyPrefix;
                 orleansOptions.QueueCount = options.QueueCount;
                 orleansOptions.QueueCacheSize = options.QueueCacheSize;
             });
@@ -118,6 +120,8 @@ public static class ServiceCollectionExtensions
 
         if (isGarnetPersistence && string.IsNullOrWhiteSpace(options.GarnetConnectionString))
             throw new InvalidOperationException("ActorRuntime Orleans Garnet connection string is required.");
+        if (isGarnetPersistence && string.IsNullOrWhiteSpace(options.GarnetEventStoreKeyPrefix))
+            throw new InvalidOperationException("ActorRuntime Orleans Garnet EventStore key prefix is required.");
     }
 
     private static void ConfigureGrainStateStorage(ISiloBuilder builder, AevatarOrleansRuntimeOptions options)

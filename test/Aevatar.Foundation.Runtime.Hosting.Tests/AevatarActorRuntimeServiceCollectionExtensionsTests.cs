@@ -218,6 +218,7 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
             [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "garnet.local:6379,abortConnect=false",
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetEventStoreKeyPrefix"] = "aevatar:eventstore",
         });
 
         services.AddAevatarActorRuntime(configuration);
@@ -226,6 +227,7 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
         options.OrleansPersistenceBackend.Should().Be(AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet);
         options.OrleansGarnetConnectionString.Should().Be("garnet.local:6379,abortConnect=false");
+        options.OrleansGarnetEventStoreKeyPrefix.Should().Be("aevatar:eventstore");
     }
 
     [Fact]
@@ -253,6 +255,7 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
             [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "garnet.local:6379,abortConnect=false",
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetEventStoreKeyPrefix"] = "aevatar:eventstore"
         });
 
         services.AddAevatarActorRuntime(configuration);
@@ -309,11 +312,33 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         var act = () => services.AddAevatarActorRuntime(configuration, options =>
         {
             options.OrleansGarnetConnectionString = "   ";
+            options.OrleansGarnetEventStoreKeyPrefix = "aevatar:eventstore";
         });
 
         act.Should()
             .Throw<InvalidOperationException>()
             .WithMessage("*Garnet connection string is required*");
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenOrleansPersistenceBackendIsGarnetWithoutKeyPrefix_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "garnet.local:6379,abortConnect=false",
+        });
+
+        var act = () => services.AddAevatarActorRuntime(configuration, options =>
+        {
+            options.OrleansGarnetEventStoreKeyPrefix = "   ";
+        });
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*Garnet EventStore key prefix is required*");
     }
 
     private static IConfiguration BuildConfiguration(Dictionary<string, string?>? values = null)
